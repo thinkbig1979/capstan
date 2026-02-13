@@ -23,22 +23,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
       }
     }
     init()
-
-    setAuthCallbacks(
-      () => sessionStorage.getItem('token'),
-      () => {
-        sessionStorage.removeItem('token')
-        window.location.href = '/login'
-      },
-    )
   }, [checkAuth, checkStatus])
-
-  useEffect(() => {
-    const handleAuthCheck = async () => {
-      await checkStatus()
-    }
-    handleAuthCheck()
-  }, [checkStatus])
 
   if (!canAccess) {
     return <Navigate to="/login" state={{ from: location }} replace />
@@ -49,6 +34,16 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
 function App() {
   const { authDisabled, needsSetup, isAuthenticated } = useAuth()
+
+  useEffect(() => {
+    setAuthCallbacks(
+      () => sessionStorage.getItem('token'),
+      () => {
+        sessionStorage.removeItem('token')
+        window.location.href = '/login'
+      },
+    )
+  }, [])
 
   if (authDisabled) {
     return (
