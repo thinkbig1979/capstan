@@ -1,0 +1,139 @@
+package config
+
+import (
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+type Config struct {
+	StacksDir     string
+	DataDir       string
+	Port          string
+	JWTSecret     string
+	LogLevel      string
+	GitSSHKey     string
+	GitHTTPSToken string
+	GitHTTPSUser  string
+	AuthDisabled  bool
+	CORSOrigins   string
+}
+
+func Load() (*Config, error) {
+	cfg := &Config{
+		Port:         "5001",
+		LogLevel:     "info",
+		GitSSHKey:    filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa"),
+		GitHTTPSUser: "git",
+		AuthDisabled: os.Getenv("AUTH_DISABLED") == "true",
+	}
+
+	if stacksDir := os.Getenv("STACKS_DIR"); stacksDir != "" {
+		cfg.StacksDir = stacksDir
+	} else if dockgeStacksDir := os.Getenv("DOCKGE_STACKS_DIR"); dockgeStacksDir != "" {
+		cfg.StacksDir = dockgeStacksDir
+	} else {
+		cfg.StacksDir = "/opt/stacks"
+	}
+
+	if dataDir := os.Getenv("DATA_DIR"); dataDir != "" {
+		cfg.DataDir = dataDir
+	} else {
+		cfg.DataDir = "/app/data"
+	}
+
+	cfg.JWTSecret = os.Getenv("JWT_SECRET")
+
+	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
+		cfg.LogLevel = logLevel
+	}
+
+	if gitSSHKey := os.Getenv("GIT_SSH_KEY"); gitSSHKey != "" {
+		cfg.GitSSHKey = gitSSHKey
+	}
+
+	cfg.GitHTTPSToken = os.Getenv("GIT_HTTPS_TOKEN")
+
+	if gitHTTPSUser := os.Getenv("GIT_HTTPS_USER"); gitHTTPSUser != "" {
+		cfg.GitHTTPSUser = gitHTTPSUser
+	}
+
+	cfg.CORSOrigins = os.Getenv("CORS_ORIGINS")
+
+	if err := validate(cfg); err != nil {
+		return nil, err
+	}
+
+	if err := os.MkdirAll(cfg.StacksDir, 0755); err != nil {
+		return nil, err
+	}
+
+	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
+		return nil, err
+	}
+
+	slog.Warn("Volume path identity: STACKS_DIR must be the same path inside and outside the container for Docker Compose operations to work correctly")
+
+	redactedSecret := cfg.JWTSecret
+	if len(redactedSecret) > 4 {
+		redactedSecret = redactedSecret[:4] + "..."
+	}
+
+	slog.Info("Configuration loaded",
+		"stacks_dir", cfg.StacksDir,
+		"data_dir", cfg.DataDir,
+		"port", cfg.Port,
+		"jwt_secret", redactedSecret,
+		"log_level", cfg.LogLevel,
+		"auth_disabled", cfg.AuthDisabled,
+	)
+
+	return cfg, nil
+}
+
+func validate(cfg *Config) error {
+	if !cfg.AuthDisabled {
+		if cfg.JWTSecret == "" {
+			return &ConfigError{Field: "JWT_SECRET", Message: "required when AUTH_DISABLED is not set"}
+		}
+		if len(cfg.JWTSecret) < 32 {
+			return &ConfigError{Field: "JWT_SECRET", Message: "must be at least 32 characters"}
+		}
+	}
+
+	if cfg.StacksDir == "" {
+		return &ConfigError{Field: "STACKS_DIR", Message: "required"}
+	}
+
+	if cfg.DataDir == "" {
+		return &ConfigError{Field: "DATA_DIR", Message: "required"}
+	}
+
+	return nil
+}
+
+type ConfigError struct {
+	Field   string
+	Message string
+}
+
+func (e *ConfigError) Error() string {
+	return e.Field + ": " + e.Message
+}
+
+func NormalizeOrigins(origins string) []string {
+	if origins == "" {
+		return nil
+	}
+
+	originList := strings.Split(origins, ",")
+	result := make([]string, 0, len(originList))
+	for _, origin := range originList {
+		origin = strings.TrimSpace(origin)
+		if origin != "" {
+			result = append(result, origin)
+		}
+	}
+	return result
+}
