@@ -9,20 +9,22 @@ import (
 	"github.com/docker-manager/backend/internal/database"
 	"github.com/docker-manager/backend/internal/models"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
+	jwtv5 "github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthHandler struct {
-	db        *database.DB
-	jwtSecret string
+	db           *database.DB
+	jwtSecret    string
+	authDisabled bool
 }
 
-func NewAuthHandler(db *database.DB, jwtSecret string) *AuthHandler {
+func NewAuthHandler(db *database.DB, jwtSecret string, authDisabled bool) *AuthHandler {
 	return &AuthHandler{
-		db:        db,
-		jwtSecret: jwtSecret,
+		db:           db,
+		jwtSecret:    jwtSecret,
+		authDisabled: authDisabled,
 	}
 }
 
@@ -39,7 +41,8 @@ func (h *AuthHandler) Status(c *gin.Context) {
 	needsSetup := userCount == 0
 
 	c.JSON(http.StatusOK, gin.H{
-		"needsSetup": needsSetup,
+		"needsSetup":   needsSetup,
+		"authDisabled": h.authDisabled,
 	})
 }
 
@@ -294,7 +297,7 @@ func validatePassword(password string) *models.AppError {
 }
 
 func generateJWT(userID, username, sessionID, secret string) (string, error) {
-	claims := jwt.MapClaims{
+	claims := jwtv5.MapClaims{
 		"sub":      userID,
 		"username": username,
 		"jti":      sessionID,
@@ -302,14 +305,14 @@ func generateJWT(userID, username, sessionID, secret string) (string, error) {
 		"exp":      time.Now().Add(24 * time.Hour).Unix(),
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims)
 	return token.SignedString([]byte(secret))
 }
 
-func parseJWT(token, secret string) (jwt.MapClaims, error) {
-	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, jwt.ErrSignatureInvalid
+func parseJWT(token, secret string) (jwtv5.MapClaims, error) {
+	parsedToken, err := jwtv5.Parse(token, func(token *jwtv5.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwtv5.SigningMethodHMAC); !ok {
+			return nil, jwtv5.ErrSignatureInvalid
 		}
 		return []byte(secret), nil
 	})
@@ -318,9 +321,9 @@ func parseJWT(token, secret string) (jwt.MapClaims, error) {
 		return nil, err
 	}
 
-	if claims, ok := parsedToken.Claims.(jwt.MapClaims); ok && parsedToken.Valid {
+	if claims, ok := parsedToken.Claims.(jwtv5.MapClaims); ok && parsedToken.Valid {
 		return claims, nil
 	}
 
-	return nil, jwt.ErrInvalidKey
+	return nil, jwtv5.ErrInvalidKey
 }

@@ -47,10 +47,12 @@ func (h *StacksHandler) List(c *gin.Context) {
 	}
 
 	for i := range stacks {
-		status, containers, err := h.docker.Status(stacks[i])
-		if err == nil {
-			stacks[i].Status = status
-			stacks[i].Containers = containers
+		if h.docker != nil {
+			status, containers, err := h.docker.Status(stacks[i])
+			if err == nil {
+				stacks[i].Status = status
+				stacks[i].Containers = containers
+			}
 		}
 	}
 
@@ -72,10 +74,12 @@ func (h *StacksHandler) Get(c *gin.Context) {
 		return
 	}
 
-	status, containers, err := h.docker.Status(*stack)
-	if err == nil {
-		stack.Status = status
-		stack.Containers = containers
+	if h.docker != nil {
+		status, containers, err := h.docker.Status(*stack)
+		if err == nil {
+			stack.Status = status
+			stack.Containers = containers
+		}
 	}
 
 	c.JSON(http.StatusOK, stack)

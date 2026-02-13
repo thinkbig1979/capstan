@@ -89,7 +89,7 @@ func (s *DockerService) Restart(stack models.Stack) (*models.CommandResult, erro
 	for i := 0; i < 60; i++ {
 		time.Sleep(500 * time.Millisecond)
 		status, _, err := s.Status(stack)
-		if err != nil || status == "exited" {
+		if err != nil || status == "stopped" {
 			break
 		}
 	}

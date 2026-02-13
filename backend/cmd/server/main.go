@@ -21,6 +21,7 @@ import (
 
 func main() {
 	slog.Info("Starting Docker Manager backend")
+	startTime := time.Now()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -61,7 +62,10 @@ func main() {
 
 	scannerService := services.NewScannerService(cfg, db)
 
-	_, _ = scannerService.ScanAll()
+	hasGlobalEnv, _ := scannerService.ScanAll()
+	if hasGlobalEnv {
+		slog.Info("Global .env file detected")
+	}
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -81,13 +85,13 @@ func main() {
 			"docker":         dockerStatus,
 			"database":       "connected",
 			"version":        "1.0.0",
-			"uptime_seconds": time.Since(time.Now()).Seconds(),
+			"uptime_seconds": time.Since(startTime).Seconds(),
 		})
 	})
 
 	api := r.Group("/api/v1")
 
-	authHandler := handlers.NewAuthHandler(db, cfg.JWTSecret)
+	authHandler := handlers.NewAuthHandler(db, cfg.JWTSecret, cfg.AuthDisabled)
 	authGroup := api.Group("/auth")
 	authHandler.RegisterRoutes(authGroup)
 
