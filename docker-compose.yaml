@@ -1,0 +1,46 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: docker-manager-backend
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - stacks_data:/opt/stacks
+      - app_data:/app/data
+      - ./backend/.env:/app/.env:ro
+    environment:
+      - STACKS_DIR=/opt/stacks
+      - DATA_DIR=/app/data
+    env_file:
+      - ./backend/.env
+    networks:
+      - docker-manager-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: docker-manager-frontend
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_BASE_URL=http://localhost:5001
+    networks:
+      - docker-manager-network
+
+volumes:
+  stacks_data:
+    driver: local
+  app_data:
+    driver: local
+
+networks:
+  docker-manager-network:
+    driver: bridge

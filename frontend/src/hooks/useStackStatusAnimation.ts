@@ -1,0 +1,62 @@
+import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import type { Stack } from '@/types'
+import type { QueryCacheNotifyEvent } from '@tanstack/react-query'
+
+interface AnimatedStack {
+  id: string
+  timestamp: number
+}
+
+export function useStackStatusAnimation() {
+  const [animatedStacks, setAnimatedStacks] = useState<AnimatedStack[]>([])
+  const queryClient = useQueryClient()
+  const previousStacksRef = useRef<Map<string, string>>(new Map())
+
+  useEffect(() => {
+    const unsubscribe = queryClient.getQueryCache().subscribe((event: QueryCacheNotifyEvent) => {
+      if (
+        event.type === 'success' &&
+        event.query.queryKey[0] === 'stacks' &&
+        Array.isArray(event.query.state.data)
+      ) {
+        const stacks = event.query.state.data as Stack[]
+        const newAnimatedStacks: AnimatedStack[] = []
+
+        stacks.forEach((stack) => {
+          const previousStatus = previousStacksRef.current.get(stack.id)
+          if (previousStatus && previousStatus !== stack.status) {
+            newAnimatedStacks.push({
+              id: stack.id,
+              timestamp: Date.now(),
+            })
+          }
+          previousStacksRef.current.set(stack.id, stack.status)
+        })
+
+        if (newAnimatedStacks.length > 0) {
+          setAnimatedStacks((prev) => [...prev, ...newAnimatedStacks])
+        }
+      }
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [queryClient])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now()
+      setAnimatedStacks((prev) => prev.filter((s) => now - s.timestamp < 1000))
+    }, 100)
+
+    return () => clearInterval(interval)
+  }, [])
+
+  const isAnimating = (stackId: string): boolean => {
+    return animatedStacks.some((s) => s.id === stackId)
+  }
+
+  return { isAnimating }
+}

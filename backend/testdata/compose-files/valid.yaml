@@ -1,0 +1,17 @@
+services:
+  web:
+    image: nginx:1.21
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+  db:
+    image: postgres:14
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G

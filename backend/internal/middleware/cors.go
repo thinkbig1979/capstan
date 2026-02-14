@@ -20,7 +20,7 @@ func CORSMiddleware(allowedOrigins string) gin.HandlerFunc {
 
 		for _, allowed := range allowedList {
 			allowed = strings.TrimSpace(allowed)
-			if allowed == "*" || allowed == origin {
+			if allowed == origin {
 				isAllowed = true
 				break
 			}
@@ -28,8 +28,9 @@ func CORSMiddleware(allowedOrigins string) gin.HandlerFunc {
 
 		if isAllowed {
 			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Credentials", "true")
 			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept")
+			c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, X-CSRF-Token")
 			c.Header("Access-Control-Expose-Headers", "Content-Length")
 			c.Header("Access-Control-Max-Age", "3600")
 		}

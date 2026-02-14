@@ -62,13 +62,13 @@ type ContainerMetrics struct {
 	ContainerID string  `json:"containerId"`
 	Name        string  `json:"name"`
 	CPUPercent  float64 `json:"cpuPercent"`
-	MemUsage    string  `json:"memUsage"`
-	MemLimit    string  `json:"memLimit"`
+	MemUsage    float64 `json:"memUsage"`
+	MemLimit    float64 `json:"memLimit"`
 	MemPercent  float64 `json:"memPercent"`
-	NetRx       string  `json:"netRx"`
-	NetTx       string  `json:"netTx"`
-	BlockRead   string  `json:"blockRead"`
-	BlockWrite  string  `json:"blockWrite"`
+	NetRx       float64 `json:"netRx"`
+	NetTx       float64 `json:"netTx"`
+	BlockRead   float64 `json:"blockRead"`
+	BlockWrite  float64 `json:"blockWrite"`
 }
 
 type GitCommit struct {
@@ -106,5 +106,42 @@ type DockerEvent struct {
 	ContainerID string    `json:"containerId"`
 	Action      string    `json:"action"`
 	Type        string    `json:"type"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
+type GitStatusResult struct {
+	Branch         string     `json:"branch"`
+	Commit         *GitCommit `json:"commit"`
+	Dirty          bool       `json:"dirty"`
+	Ahead          int        `json:"ahead"`
+	Behind         int        `json:"behind"`
+	RemoteURL      string     `json:"remoteUrl"`
+	TrackingBranch string     `json:"trackingBranch"`
+}
+
+type PullResult struct {
+	PreviousCommit string   `json:"previousCommit"`
+	CurrentCommit  string   `json:"currentCommit"`
+	ChangedFiles   []string `json:"changedFiles"`
+}
+
+type LogResult struct {
+	Commits []GitCommit `json:"commits"`
+	Total   int         `json:"total"`
+	HasMore bool        `json:"hasMore"`
+}
+
+type DiffResult struct {
+	Commit *GitCommit `json:"commit"`
+	Diff   string     `json:"diff"`
+	Files  []string   `json:"files"`
+}
+
+type StackEvent struct {
+	Type        string    `json:"type"`
+	StackID     string    `json:"stackId,omitempty"`
+	ContainerID string    `json:"containerId,omitempty"`
+	Event       string    `json:"event,omitempty"`
+	Status      string    `json:"status,omitempty"`
 	Timestamp   time.Time `json:"timestamp"`
 }

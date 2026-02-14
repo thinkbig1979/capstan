@@ -1,0 +1,21 @@
+services:
+  app:
+    container_name: docker-manager
+    image: docker-manager:latest
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./stacks:/opt/stacks
+      - ./data:/app/data
+    env_file:
+      - .env
+    networks:
+      - docker-manager-network
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+networks:
+  docker-manager-network:
+    external: true

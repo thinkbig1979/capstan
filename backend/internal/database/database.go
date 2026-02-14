@@ -21,6 +21,11 @@ func New(dataDir string) (*DB, error) {
 		return nil, err
 	}
 
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(1 * time.Minute)
+
 	_, err = db.Exec("PRAGMA journal_mode=WAL")
 	if err != nil {
 		return nil, err
@@ -76,6 +81,12 @@ func (d *DB) GetUserByID(id string) (*models.User, error) {
 		return nil, err
 	}
 	return &user, nil
+}
+
+func (d *DB) UpdateUserPassword(id, password string, updatedAt time.Time) error {
+	query := `UPDATE users SET password = ?, updated_at = ? WHERE id = ?`
+	_, err := d.db.Exec(query, password, updatedAt, id)
+	return err
 }
 
 func (d *DB) CreateSession(session models.Session) error {
@@ -249,6 +260,20 @@ func (d *DB) UpdateStackStatus(id, status string) error {
 	query := `UPDATE stacks SET status = ? WHERE id = ?`
 	_, err := d.db.Exec(query, status, id)
 	return err
+}
+
+func (d *DB) GetStackByProjectName(projectName string) (*models.Stack, error) {
+	var stack models.Stack
+	query := `SELECT id, directory, compose_file, env_file, project_name, status,
+	           is_git_repo, git_branch, git_commit, git_dirty, git_ahead, git_behind
+	          FROM stacks WHERE project_name = ?`
+	err := d.db.QueryRow(query, projectName).Scan(&stack.ID, &stack.Directory, &stack.ComposeFile, &stack.EnvFile,
+		&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
+		&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind)
+	if err != nil {
+		return nil, err
+	}
+	return &stack, nil
 }
 
 func (d *DB) LogAction(log models.ActionLog) error {

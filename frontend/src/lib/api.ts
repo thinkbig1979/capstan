@@ -12,8 +12,14 @@ import type {
 
 const API_BASE_URL = '/api/v1'
 
+const getCSRFToken = () => {
+  const meta = document.querySelector('meta[name="csrf-token"]')
+  return meta?.getAttribute('content')
+}
+
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -27,6 +33,10 @@ apiClient.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  const csrfToken = getCSRFToken()
+  if (csrfToken) {
+    config.headers['X-CSRF-Token'] = csrfToken
+  }
   return config
 })
 
@@ -37,9 +47,20 @@ apiClient.interceptors.response.use(
       logout()
       window.location.href = '/login'
     }
-    return Promise.reject(error.response?.data || { error: 'Unknown error', code: 'UNKNOWN' })
+    const safeError = error.response?.data || { error: 'Unknown error', code: 'UNKNOWN' }
+    return Promise.reject(safeError)
   },
 )
+
+export const safeErrorMessage = (error: any): string => {
+  if (error?.response?.status === 401) return 'Authentication failed'
+  if (error?.response?.status === 403) return 'Access denied'
+  if (error?.response?.status === 404) return 'Resource not found'
+  if (error?.response?.status === 429) return 'Too many requests'
+  if (error?.response?.status === 500) return 'Server error occurred'
+  if (error?.response?.status === 503) return 'Service unavailable'
+  return 'An error occurred'
+}
 
 export function setAuthCallbacks(getTokenFn: () => string | null, logoutFn: () => void) {
   getToken = getTokenFn
@@ -69,6 +90,24 @@ export const authApi = {
 
   status: async () => {
     const response = await apiClient.get<{ needsSetup: boolean; authDisabled: boolean }>('/auth/status')
+    return response.data
+  },
+
+  changePassword: async (currentPassword: string, newPassword: string) => {
+    const response = await apiClient.put<void>('/auth/password', {
+      currentPassword,
+      newPassword,
+    })
+    return response.data
+  },
+
+  getGlobalEnv: async () => {
+    const response = await apiClient.get<{ vars: Array<{ key: string; value: string }> }>('/settings/global-env')
+    return response.data
+  },
+
+  updateGlobalEnv: async (vars: Array<{ key: string; value: string }>) => {
+    const response = await apiClient.put<void>('/settings/global-env', { vars })
     return response.data
   },
 }

@@ -388,7 +388,7 @@ func calculateCPUPercent(stats *types.StatsJSON) float64 {
 	return cpuPercent
 }
 
-func calculateMemPercent(stats *types.StatsJSON) (float64, string, string) {
+func calculateMemPercent(stats *types.StatsJSON) (float64, float64, float64) {
 	memPercent := 0.0
 	memUsage := float64(stats.MemoryStats.Usage - stats.MemoryStats.Stats["cache"])
 	memLimit := float64(stats.MemoryStats.Limit)
@@ -397,10 +397,10 @@ func calculateMemPercent(stats *types.StatsJSON) (float64, string, string) {
 		memPercent = (memUsage / memLimit) * 100.0
 	}
 
-	return memPercent, formatBytes(memUsage), formatBytes(memLimit)
+	return memPercent, memUsage, memLimit
 }
 
-func calculateNetwork(stats *types.StatsJSON) (string, string) {
+func calculateNetwork(stats *types.StatsJSON) (float64, float64) {
 	var netRx, netTx uint64
 
 	for _, network := range stats.Networks {
@@ -408,10 +408,10 @@ func calculateNetwork(stats *types.StatsJSON) (string, string) {
 		netTx += network.TxBytes
 	}
 
-	return formatBytes(float64(netRx)), formatBytes(float64(netTx))
+	return float64(netRx), float64(netTx)
 }
 
-func calculateBlockIO(stats *types.StatsJSON) (string, string) {
+func calculateBlockIO(stats *types.StatsJSON) (float64, float64) {
 	var read, write uint64
 
 	for _, stat := range stats.BlkioStats.IoServiceBytesRecursive {
@@ -422,7 +422,7 @@ func calculateBlockIO(stats *types.StatsJSON) (string, string) {
 		}
 	}
 
-	return formatBytes(float64(read)), formatBytes(float64(write))
+	return float64(read), float64(write)
 }
 
 func parsePorts(portsStr string) []models.PortBinding {

@@ -1,0 +1,6 @@
+services:
+  web:
+    image: nginx:1.21
+    restart: unless-stopped
+    ports:
+      - "80:80"

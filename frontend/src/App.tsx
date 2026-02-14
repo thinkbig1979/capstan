@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
@@ -33,7 +33,8 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
-  const { authDisabled, needsSetup, isAuthenticated } = useAuth()
+  const { authDisabled, needsSetup, isAuthenticated, checkStatus } = useAuth()
+  const [statusChecked, setStatusChecked] = useState(false)
 
   useEffect(() => {
     setAuthCallbacks(
@@ -44,6 +45,22 @@ function App() {
       },
     )
   }, [])
+
+  useEffect(() => {
+    const init = async () => {
+      await checkStatus()
+      setStatusChecked(true)
+    }
+    init()
+  }, [])
+
+  if (!statusChecked) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-lg">Loading...</div>
+      </div>
+    )
+  }
 
   if (authDisabled) {
     return (

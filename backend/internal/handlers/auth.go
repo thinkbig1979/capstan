@@ -40,6 +40,10 @@ func (h *AuthHandler) Status(c *gin.Context) {
 	userCount, _ := h.db.UserCount()
 	needsSetup := userCount == 0
 
+	if h.authDisabled {
+		slog.Warn("AUTHENTICATION DISABLED - Only safe on trusted networks!")
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"needsSetup":   needsSetup,
 		"authDisabled": h.authDisabled,
@@ -166,6 +170,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	user, err := h.db.GetUserByUsername(req.Username)
 	if err != nil || user == nil {
+		slog.Warn("Failed authentication attempt",
+			"ip", c.ClientIP(),
+			"username", req.Username,
+			"timestamp", time.Now(),
+			"reason", "user_not_found")
 		c.JSON(http.StatusUnauthorized, models.NewAppError(
 			http.StatusUnauthorized,
 			models.ErrUnauthorized,
@@ -176,6 +185,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password))
 	if err != nil {
+		slog.Warn("Failed authentication attempt",
+			"ip", c.ClientIP(),
+			"username", req.Username,
+			"timestamp", time.Now(),
+			"reason", "invalid_password")
 		c.JSON(http.StatusUnauthorized, models.NewAppError(
 			http.StatusUnauthorized,
 			models.ErrUnauthorized,

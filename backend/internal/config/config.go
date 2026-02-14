@@ -100,6 +100,9 @@ func validate(cfg *Config) error {
 		if len(cfg.JWTSecret) < 32 {
 			return &ConfigError{Field: "JWT_SECRET", Message: "must be at least 32 characters"}
 		}
+		if cfg.JWTSecret == "change-this-secret-in-production" {
+			return &ConfigError{Field: "JWT_SECRET", Message: "must be changed from default value"}
+		}
 	}
 
 	if cfg.StacksDir == "" {

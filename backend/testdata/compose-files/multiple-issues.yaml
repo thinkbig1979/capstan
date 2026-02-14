@@ -1,0 +1,9 @@
+services:
+  web:
+    image: nginx:latest
+  db:
+    image: postgres:latest
+    privileged: true
+    network_mode: host
+  cache:
+    image: redis

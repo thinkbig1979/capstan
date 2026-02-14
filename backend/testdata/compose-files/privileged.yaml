@@ -1,0 +1,4 @@
+services:
+  web:
+    image: nginx:1.21
+    privileged: true

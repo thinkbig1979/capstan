@@ -1,0 +1,9 @@
+services:
+  web:
+    image: nginx:1.21
+    restart: unless-stopped
+  db:
+    image: postgres:14
+    restart: unless-stopped
+    environment:
+      - POSTGRES_PASSWORD=password
