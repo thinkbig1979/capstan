@@ -2,16 +2,26 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { EditorView, basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
 import { yaml } from '@codemirror/lang-yaml'
-import { linter, lintGutter } from '@codemirror/lint'
+import { linter, lintGutter, type Diagnostic } from '@codemirror/lint'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { keymap } from '@codemirror/view'
 import { search } from '@codemirror/search'
 import { autocompletion } from '@codemirror/autocomplete'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { LoadingSpinner } from '@/components/LoadingSkeleton'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Save, FileCheck, AlertCircle, AlertTriangle, Info } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '@/lib/api'
+import { classifyError } from '@/lib/error-handler'
 import { toast } from 'sonner'
 import type { LintResult } from '@/types'
 import { useUIStore } from '@/stores/uiStore'
@@ -27,6 +37,8 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   const [content, setContent] = useState('')
   const [lastSaved, setLastSaved] = useState('')
   const [lintResults, setLintResults] = useState<LintResult[]>([])
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false)
+  const [isLintingBeforeSave, setIsLintingBeforeSave] = useState(false)
 
   const isDark = useMemo(
     () =>
@@ -39,13 +51,16 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
 
   const queryClient = useQueryClient()
 
-  const { isLoading } = useQuery({
+  const { isLoading, data } = useQuery({
     queryKey: ['stack', stackId, 'compose'],
     queryFn: async () => {
       const response = await apiClient.get(`/stacks/${stackId}/compose`)
       return response.data as string
     },
-    onSuccess: (data) => {
+  })
+
+  useEffect(() => {
+    if (data) {
       setContent(data)
       setLastSaved(data)
       if (viewRef.current) {
@@ -53,8 +68,8 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
           changes: { from: 0, to: viewRef.current.state.doc.length, insert: data },
         })
       }
-    },
-  })
+    }
+  }, [data])
 
   const saveMutation = useMutation({
     mutationFn: async (content: string) => {
@@ -73,20 +88,46 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       queryClient.invalidateQueries({ queryKey: ['stack', stackId] })
     },
     onError: (error: { response?: { data?: { lintResults?: LintResult[] } } }) => {
+      const appError = classifyError(error)
       if (error.response?.data?.lintResults) {
         setLintResults(error.response.data.lintResults)
         toast.error('Lint errors detected')
       } else {
-        toast.error('Failed to save compose file')
+        toast.error(appError.message)
       }
     },
   })
 
-  const handleSave = useCallback(() => {
-    if (!viewRef.current) return
-    const currentContent = viewRef.current.state.doc.toString()
-    saveMutation.mutate(currentContent)
-  }, [saveMutation])
+  const handleSave = useCallback(
+    async (forceSave = false) => {
+      if (!viewRef.current) return
+      const currentContent = viewRef.current.state.doc.toString()
+
+      if (forceSave) {
+        saveMutation.mutate(currentContent)
+        setShowSaveConfirm(false)
+        return
+      }
+
+      setIsLintingBeforeSave(true)
+      try {
+        const response = await apiClient.post(`/stacks/${stackId}/compose/lint`, { content: currentContent })
+        const results = response.data.lintResults || []
+        setLintResults(results)
+
+        if (results.some((r: LintResult) => r.level === 'error')) {
+          setShowSaveConfirm(true)
+        } else {
+          saveMutation.mutate(currentContent)
+        }
+      } catch {
+        saveMutation.mutate(currentContent)
+      } finally {
+        setIsLintingBeforeSave(false)
+      }
+    },
+    [saveMutation, stackId],
+  )
 
   const lintMutation = useMutation({
     mutationFn: async (content: string) => {
@@ -125,7 +166,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
         yaml(),
         lintGutter(),
         linter(() => {
-          const diagnostics = lintResults.map((result) => ({
+          const diagnostics: Diagnostic[] = lintResults.map((result) => ({
             from: 0,
             to: 0,
             severity: result.level === 'error' ? 'error' : result.level === 'warning' ? 'warning' : 'info',
@@ -161,7 +202,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
 
       const view = new EditorView({
         state,
-        parent: editorRef.current,
+        parent: editorRef.current || undefined,
       })
 
       return view
@@ -195,6 +236,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   }, [lintResults]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasUnsavedChanges = content !== lastSaved
+  const errorCount = lintResults.filter((r) => r.level === 'error').length
 
   const getLintIcon = (level: string) => {
     switch (level) {
@@ -208,16 +250,26 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   }
 
   if (isLoading) {
-    return <div className="flex items-center justify-center py-8">Loading...</div>
+    return (
+      <div className="flex items-center justify-center py-8">
+        <div className="flex items-center gap-2">
+          <LoadingSpinner size="default" />
+          <span className="text-muted-foreground">Loading compose file...</span>
+        </div>
+      </div>
+    )
   }
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Button onClick={handleSave} disabled={saveMutation.isPending || !hasUnsavedChanges}>
+          <Button
+            onClick={() => handleSave()}
+            disabled={saveMutation.isPending || !hasUnsavedChanges || isLintingBeforeSave}
+          >
             <Save className="mr-2 h-4 w-4" />
-            {saveMutation.isPending ? 'Saving...' : 'Save'}
+            {isLintingBeforeSave ? 'Validating...' : saveMutation.isPending ? 'Saving...' : 'Save'}
           </Button>
           <Button variant="outline" onClick={handleLint} disabled={lintMutation.isPending}>
             <FileCheck className="mr-2 h-4 w-4" />
@@ -225,7 +277,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
           </Button>
           {hasUnsavedChanges && (
             <Badge variant="secondary" className="text-xs">
-              Unsaved changes
+              {errorCount > 0 ? `Unsaved changes (${errorCount} errors)` : 'Unsaved changes'}
             </Badge>
           )}
         </div>
@@ -265,6 +317,45 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
           </div>
         </div>
       )}
+
+      <Dialog open={showSaveConfirm} onOpenChange={setShowSaveConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-yellow-500" />
+              Save with Lint Errors?
+            </DialogTitle>
+            <DialogDescription>
+              Your compose file has <span className="font-semibold text-destructive">{errorCount} error(s)</span>.
+              Would you like to save anyway or fix the errors first?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-60 overflow-y-auto rounded-md border bg-muted/50 p-3">
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Errors found:</div>
+              {lintResults
+                .filter((r) => r.level === 'error')
+                .map((result, index) => (
+                  <div key={index} className="flex items-start gap-2 text-sm">
+                    <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium">{result.message}</div>
+                      {result.rule && <div className="text-xs text-muted-foreground">{result.rule}</div>}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSaveConfirm(false)}>
+              Fix errors first
+            </Button>
+            <Button onClick={() => handleSave(true)}>
+              Save anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

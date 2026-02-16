@@ -15,27 +15,26 @@ export function useStackStatusAnimation() {
 
   useEffect(() => {
     const unsubscribe = queryClient.getQueryCache().subscribe((event: QueryCacheNotifyEvent) => {
-      if (
-        event.type === 'success' &&
-        event.query.queryKey[0] === 'stacks' &&
-        Array.isArray(event.query.state.data)
-      ) {
-        const stacks = event.query.state.data as Stack[]
-        const newAnimatedStacks: AnimatedStack[] = []
+      if (event.type === 'updated') {
+        const query = event.query
+        if (query.queryKey[0] === 'stacks' && Array.isArray(query.state.data)) {
+          const stacks = query.state.data as Stack[]
+          const newAnimatedStacks: AnimatedStack[] = []
 
-        stacks.forEach((stack) => {
-          const previousStatus = previousStacksRef.current.get(stack.id)
-          if (previousStatus && previousStatus !== stack.status) {
-            newAnimatedStacks.push({
-              id: stack.id,
-              timestamp: Date.now(),
-            })
+          stacks.forEach((stack) => {
+            const previousStatus = previousStacksRef.current.get(stack.id)
+            if (previousStatus && previousStatus !== stack.status) {
+              newAnimatedStacks.push({
+                id: stack.id,
+                timestamp: Date.now(),
+              })
+            }
+            previousStacksRef.current.set(stack.id, stack.status)
+          })
+
+          if (newAnimatedStacks.length > 0) {
+            setAnimatedStacks((prev) => [...prev, ...newAnimatedStacks])
           }
-          previousStacksRef.current.set(stack.id, stack.status)
-        })
-
-        if (newAnimatedStacks.length > 0) {
-          setAnimatedStacks((prev) => [...prev, ...newAnimatedStacks])
         }
       }
     })

@@ -1,9 +1,12 @@
-import { useMemo } from 'react'
+import { useMemo, useState, useCallback } from 'react'
 import { AreaChart, Area, ResponsiveContainer, XAxis, YAxis } from 'recharts'
 import { Cpu, HardDrive, Network, Activity } from 'lucide-react'
 import { useMonitoring, type AggregateMetrics } from '@/hooks/useMonitoring'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+
+type TimeRange = '1m' | '5m' | '15m' | '1h'
 
 interface MetricsPanelProps {
   stackId: string
@@ -33,14 +36,14 @@ function getChartColor(percent: number): string {
   return '#22c55e'
 }
 
-function AggregateRow({ aggregates }: { aggregates: AggregateMetrics }) {
+function AggregateRow({ aggregates, timeRangeLabel }: { aggregates: AggregateMetrics; timeRangeLabel: string }) {
   const cpuColor = getColorForThreshold(aggregates.totalCpuPercent)
   const memColor = getColorForThreshold(aggregates.totalMemPercent)
 
   return (
     <Card className="mb-6">
       <CardHeader>
-        <CardTitle className="text-base">Aggregate Totals</CardTitle>
+        <CardTitle className="text-base">Aggregate Totals ({timeRangeLabel})</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-2 gap-4">
@@ -78,19 +81,37 @@ function AggregateRow({ aggregates }: { aggregates: AggregateMetrics }) {
 
 function ContainerCard({
   container,
+  timeRange,
 }: {
   container: ReturnType<typeof useMonitoring>['containers'][number]
+  timeRange: TimeRange
 }) {
-  const latestMetric = container.metrics[container.metrics.length - 1]
+  const rangeSeconds = {
+    '1m': 60,
+    '5m': 5 * 60,
+    '15m': 15 * 60,
+    '1h': 60 * 60,
+  }[timeRange]
+
+  const filteredMetrics = useMemo(() => {
+    const metricsCount = container.metrics.length
+    
+    return container.metrics.filter((_, index) => {
+      const secondsAgo = metricsCount - 1 - index
+      return secondsAgo >= 0 && secondsAgo * 1000 <= rangeSeconds * 1000
+    })
+  }, [container.metrics, rangeSeconds])
+
+  const latestMetric = filteredMetrics[filteredMetrics.length - 1]
   const cpuColor = getChartColor(latestMetric?.cpuPercent || 0)
   const memColor = getColorForThreshold(latestMetric?.memPercent || 0)
 
   const chartData = useMemo(() => {
-    return container.metrics.map((metric, index) => ({
+    return filteredMetrics.map((metric, index) => ({
       index,
       cpu: metric.cpuPercent,
     }))
-  }, [container.metrics])
+  }, [filteredMetrics])
 
   return (
     <Card>
@@ -184,7 +205,22 @@ function ContainerCard({
 }
 
 export function MetricsPanel({ stackId }: MetricsPanelProps) {
+  const [timeRange, setTimeRange] = useState<TimeRange>('1m')
   const { containers, aggregates, isConnected, ws } = useMonitoring(stackId)
+
+  const handleTimeRangeChange = useCallback((value: string) => {
+    setTimeRange(value as TimeRange)
+  }, [])
+
+  const timeRangeLabel = useMemo(() => {
+    const labels = {
+      '1m': '1 min',
+      '5m': '5 min',
+      '15m': '15 min',
+      '1h': '1 hour',
+    }
+    return labels[timeRange]
+  }, [timeRange])
 
   if (!isConnected && ws.status === 'connecting') {
     return (
@@ -253,10 +289,24 @@ export function MetricsPanel({ stackId }: MetricsPanelProps) {
 
   return (
     <div className="space-y-4">
-      <AggregateRow aggregates={aggregates} />
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold">Metrics</h3>
+        <Select value={timeRange} onValueChange={handleTimeRangeChange}>
+          <SelectTrigger className="w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="1m">1 min</SelectItem>
+            <SelectItem value="5m">5 min</SelectItem>
+            <SelectItem value="15m">15 min</SelectItem>
+            <SelectItem value="1h">1 hour</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <AggregateRow aggregates={aggregates} timeRangeLabel={timeRangeLabel} />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {containers.map((container) => (
-          <ContainerCard key={container.containerId} container={container} />
+          <ContainerCard key={container.containerId} container={container} timeRange={timeRange} />
         ))}
       </div>
     </div>

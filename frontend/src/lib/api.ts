@@ -8,6 +8,7 @@ import type {
   StackStatus,
   CommandResult,
   ApiError,
+  LintResult,
 } from '@/types'
 
 const API_BASE_URL = '/api/v1'
@@ -114,8 +115,8 @@ export const authApi = {
 
 export const directoriesApi = {
   list: async () => {
-    const response = await apiClient.get<Directory[]>('/directories')
-    return response.data
+    const response = await apiClient.get<{ directories: Directory[] }>('/directories')
+    return response.data.directories
   },
 
   scan: async () => {
@@ -132,7 +133,27 @@ export const directoriesApi = {
 export const stacksApi = {
   list: async (status?: StackStatus) => {
     const params = status ? { status } : undefined
-    const response = await apiClient.get<Stack[]>('/stacks', { params })
+    const response = await apiClient.get<{ stacks: Stack[] }>('/stacks', { params })
+    return response.data.stacks
+  },
+
+  create: async (input: {
+    name: string
+    composeContent: string
+    envContent?: string
+    deploy: boolean
+  }) => {
+    const response = await apiClient.post<{
+      stack: Stack
+      lintResults?: LintResult[]
+      deployed?: boolean
+      deployOutput?: string
+    }>('/stacks', input)
+    return response.data
+  },
+
+  lint: async (compose: string) => {
+    const response = await apiClient.post<{ valid: boolean; lintResults: LintResult[] }>('/stacks/lint', { compose })
     return response.data
   },
 
@@ -167,4 +188,5 @@ export const stacksApi = {
   },
 }
 
+export { apiClient }
 export default apiClient

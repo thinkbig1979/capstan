@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -11,7 +12,46 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool) gin.HandlerFunc {
+func isTrustedIP(clientIP string, trustedNetworks string) bool {
+	if clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" {
+		return true
+	}
+
+	if trustedNetworks == "" {
+		return false
+	}
+
+	networks := strings.Split(trustedNetworks, ",")
+	for _, networkStr := range networks {
+		networkStr = strings.TrimSpace(networkStr)
+		if networkStr == "" {
+			continue
+		}
+
+		if networkStr == clientIP {
+			return true
+		}
+
+		_, network, err := net.ParseCIDR(networkStr)
+		if err != nil {
+			slog.Warn("Invalid trusted network CIDR", "network", networkStr, "error", err)
+			continue
+		}
+
+		ip := net.ParseIP(clientIP)
+		if ip == nil {
+			continue
+		}
+
+		if network.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, trustedNetworks string) gin.HandlerFunc {
 	if authDisabled {
 		slog.Warn("WARNING: AUTHENTICATION DISABLED - Only safe on trusted networks!")
 	}
@@ -19,7 +59,8 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool) gin.Ha
 	return func(c *gin.Context) {
 		if authDisabled {
 			clientIP := c.ClientIP()
-			if clientIP != "127.0.0.1" && clientIP != "::1" && clientIP != "localhost" {
+			if !isTrustedIP(clientIP, trustedNetworks) {
+				slog.Warn("Untrusted IP attempt with auth disabled", "ip", clientIP, "trusted_networks", trustedNetworks)
 				c.JSON(403, models.NewAppError(403, "FORBIDDEN", "Authentication disabled - only local connections allowed"))
 				c.Abort()
 				return

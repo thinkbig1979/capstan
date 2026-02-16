@@ -46,6 +46,7 @@ export function LoginForm({ onSubmit, isLoading = false, error, buttonText = 'Lo
       <div className="space-y-2">
         <Label htmlFor="password">Password</Label>
         <Input id="password" type="password" placeholder="Enter your password" {...register('password')} />
+        <p className="text-sm text-muted-foreground">Minimum 8 characters</p>
         {errors.password && <p className="text-sm text-destructive">{errors.password.message}</p>}
       </div>
 

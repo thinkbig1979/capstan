@@ -81,6 +81,13 @@ CREATE INDEX IF NOT EXISTS idx_action_log_stack_id ON action_log(stack_id);
 CREATE INDEX IF NOT EXISTS idx_action_log_created_at ON action_log(created_at);
 `,
 	},
+	{
+		Version: 2,
+		Name:    "default_log_retention",
+		SQL: `
+INSERT OR IGNORE INTO settings (key, value) VALUES ('max_log_retention_days', '90');
+`,
+	},
 }
 
 func RunMigrations(db *DB) error {

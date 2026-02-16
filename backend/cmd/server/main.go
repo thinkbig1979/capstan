@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
@@ -65,6 +66,39 @@ func main() {
 			select {
 			case <-ticker.C:
 				db.DeleteExpiredSessions()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				retentionStr, err := db.GetSetting("max_log_retention_days")
+				if err != nil {
+					slog.Error("Failed to get log retention setting", "error", err)
+					continue
+				}
+				retentionDays := 90
+				if retentionStr != "" {
+					if _, err := fmt.Sscanf(retentionStr, "%d", &retentionDays); err != nil {
+						slog.Error("Failed to parse log retention days", "error", err)
+						continue
+					}
+				}
+				if retentionDays < 7 {
+					retentionDays = 7
+				}
+				if err := db.DeleteOldActionLogs(retentionDays); err != nil {
+					slog.Error("Failed to delete old action logs", "error", err)
+				} else {
+					slog.Info("Cleaned up old action logs", "retention_days", retentionDays)
+				}
 			case <-ctx.Done():
 				return
 			}
@@ -138,7 +172,7 @@ func main() {
 	settingsHandler := handlers.NewSettingsHandler(db, cfg.StacksDir, cfg.JWTSecret, cfg.AuthDisabled)
 
 	protected := api.Group("")
-	protected.Use(middleware.AuthMiddleware(db, cfg.JWTSecret, cfg.AuthDisabled))
+	protected.Use(middleware.AuthMiddleware(db, cfg.JWTSecret, cfg.AuthDisabled, cfg.TrustedNetworks))
 	protected.Use(middleware.RateLimitByUser())
 	settingsHandler.RegisterRoutes(protected)
 
@@ -177,7 +211,8 @@ func main() {
 		go handlers.StartEventBroadcaster(ctx, monitorService)
 	}
 
-	r.Static("/static", "./frontend")
+	r.Static("/assets", "./frontend/assets")
+	r.StaticFile("/vite.svg", "./frontend/vite.svg")
 
 	timeoutMiddleware := func(timeout time.Duration) gin.HandlerFunc {
 		return func(c *gin.Context) {
@@ -196,7 +231,7 @@ func main() {
 	terminalHandler.RegisterRoutes(terminalGroup)
 
 	r.NoRoute(func(c *gin.Context) {
-		if c.Request.URL.Path != "/" && !strings.HasPrefix(c.Request.URL.Path, "/api/") {
+		if !strings.HasPrefix(c.Request.URL.Path, "/api/") {
 			c.File("./frontend/index.html")
 		}
 	})

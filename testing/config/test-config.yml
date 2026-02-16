@@ -1,0 +1,198 @@
+# Test Configuration for Docker Manager E2E Tests
+
+# Application settings
+app:
+  base_url: "http://localhost:3001"
+  timeout: 30000
+  wait_after_load: 2000
+
+# Test credentials
+credentials:
+  username: "testadmin@example.com"
+  password: "TestPass123!"
+
+# Test environment
+environment:
+  stacks_dir: "/tmp/docker-manager-test-stacks"
+  reports_dir: "./testing/reports"
+  screenshots_dir: "./testing/reports/screenshots"
+  logs_dir: "./testing/reports/logs"
+
+# Test tiers
+tiers:
+  smoke:
+    name: "Smoke Tests"
+    description: "Critical path validation"
+    timeout_minutes: 3
+    stop_on_failure: true
+    domains:
+      - auth
+      - dashboard
+      - stack-ops
+  
+  core:
+    name: "Core Tests"
+    description: "Main feature validation"
+    timeout_minutes: 15
+    stop_on_failure: false
+    domains:
+      - compose-editor
+      - env-editor
+      - git-integration
+      - terminal
+      - logs
+      - metrics
+  
+  regression:
+    name: "Regression Tests"
+    description: "Edge cases and bug fixes"
+    timeout_minutes: 45
+    stop_on_failure: false
+    domains:
+      - auth
+      - dashboard
+      - stack-ops
+      - compose-editor
+      - env-editor
+      - git-integration
+      - terminal
+      - logs
+      - metrics
+      - dark-mode
+      - responsive
+      - accessibility
+
+# Test domains
+domains:
+  auth:
+    name: "Authentication"
+    description: "Login, logout, and protected routes"
+    tests:
+      - "tests/smoke/auth.test.sh"
+    priority: "high"
+  
+  dashboard:
+    name: "Dashboard"
+    description: "Stack discovery and display"
+    tests:
+      - "tests/smoke/dashboard.test.sh"
+    priority: "high"
+  
+  stack-ops:
+    name: "Stack Operations"
+    description: "Start, stop, restart, and pull operations"
+    tests:
+      - "tests/smoke/stack-ops.test.sh"
+    priority: "high"
+  
+  compose-editor:
+    name: "Compose Editor"
+    description: "Docker Compose file editing"
+    tests:
+      - "tests/core/compose-editor.test.sh"
+    priority: "medium"
+  
+  env-editor:
+    name: "Environment Editor"
+    description: "Environment variable management"
+    tests:
+      - "tests/core/env-editor.test.sh"
+    priority: "medium"
+  
+  git-integration:
+    name: "Git Integration"
+    description: "Git status, history, and operations"
+    tests:
+      - "tests/core/git-integration.test.sh"
+    priority: "medium"
+  
+  terminal:
+    name: "Terminal"
+    description: "Container terminal access"
+    tests:
+      - "tests/core/terminal.test.sh"
+    priority: "low"
+  
+  logs:
+    name: "Logs"
+    description: "Container log viewing"
+    tests:
+      - "tests/core/logs.test.sh"
+    priority: "low"
+  
+  metrics:
+    name: "Metrics"
+    description: "Container metrics display"
+    tests:
+      - "tests/core/metrics.test.sh"
+    priority: "low"
+  
+  dark-mode:
+    name: "Dark Mode"
+    description: "Dark/light theme toggle"
+    tests:
+      - "tests/ui/dark-mode.test.sh"
+    priority: "low"
+  
+  responsive:
+    name: "Responsive Design"
+    description: "Layout adaptation to screen sizes"
+    tests:
+      - "tests/ui/responsive.test.sh"
+    priority: "low"
+  
+  accessibility:
+    name: "Accessibility"
+    description: "Accessibility features and keyboard navigation"
+    tests:
+      - "tests/ui/accessibility.test.sh"
+    priority: "low"
+
+# Parallel execution settings
+parallel:
+  enabled: true
+  max_workers: 5
+  timeout_per_domain: 300  # seconds
+
+# Reporting
+reporting:
+  format: ["json", "html"]
+  output_dir: "./testing/reports"
+  include_screenshots: true
+  include_logs: true
+
+# Screenshot settings
+screenshots:
+  on_failure: true
+  on_success: false
+  format: "png"
+  full_page: true
+
+# Browser settings
+browser:
+  headless: true
+  viewport_width: 1280
+  viewport_height: 720
+  user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+
+# Retry settings
+retry:
+  max_attempts: 3
+  backoff_ms: 1000
+  retry_on_timeout: true
+  retry_on_failure: false
+
+# Cleanup
+cleanup:
+  auto_cleanup: false
+  keep_results: true
+  keep_screenshots: true
+  keep_logs: true
+  retention_days: 7
+
+# CI/CD integration
+cicd:
+  enabled: false
+  platform: "github"  # github, gitlab, jenkins
+  artifacts_path: "./test-results"
+  fail_on_test_failure: true

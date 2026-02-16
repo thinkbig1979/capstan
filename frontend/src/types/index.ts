@@ -17,6 +17,8 @@ export interface Directory {
   gitBranch?: string
   gitRemote?: string
   scannedAt: string
+  gitAhead?: number
+  gitBehind?: number
 }
 
 export type StackStatus = 'running' | 'stopped' | 'partial' | 'unknown' | 'error'

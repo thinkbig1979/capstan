@@ -1,6 +1,28 @@
 import { create } from 'zustand'
 import type { User } from '@/types'
 
+const isTokenExpired = (token: string): boolean => {
+  try {
+    const payload = token.split('.')[1]
+    const decoded = JSON.parse(atob(payload))
+    const exp = decoded.exp * 1000
+    return Date.now() >= exp
+  } catch {
+    return true
+  }
+}
+
+const getStoredToken = (): string | null => {
+  const token = sessionStorage.getItem('token')
+  if (token && !isTokenExpired(token)) {
+    return token
+  }
+  if (token) {
+    sessionStorage.removeItem('token')
+  }
+  return null
+}
+
 interface AuthState {
   token: string | null
   user: User | null
@@ -15,9 +37,9 @@ interface AuthState {
 }
 
 export const useAuthStore = create<AuthState>()((set) => ({
-  token: null,
+  token: getStoredToken(),
   user: null,
-  isAuthenticated: false,
+  isAuthenticated: !!getStoredToken(),
   authDisabled: false,
   needsSetup: false,
 
@@ -65,6 +87,12 @@ export const useAuthStore = create<AuthState>()((set) => ({
   checkAuth: async () => {
     const token = sessionStorage.getItem('token')
     if (!token) {
+      set({ token: null, user: null, isAuthenticated: false })
+      return
+    }
+
+    if (isTokenExpired(token)) {
+      sessionStorage.removeItem('token')
       set({ token: null, user: null, isAuthenticated: false })
       return
     }

@@ -65,6 +65,10 @@ func validateRateLimitKey(key string) bool {
 		return true
 	}
 
+	if key == "::1" {
+		return true
+	}
+
 	if uuidRegex.MatchString(key) {
 		return true
 	}
@@ -77,9 +81,6 @@ func validateRateLimitKey(key string) bool {
 }
 
 func evictLRU(rl *RateLimiter) {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
 	if len(rl.requests) <= rl.maxEntries {
 		return
 	}
@@ -200,15 +201,41 @@ func InitRateLimiters() {
 }
 
 func RateLimitByIP() gin.HandlerFunc {
-	return authRateLimiter.Middleware(func(c *gin.Context) string {
-		return c.ClientIP()
-	})
+	return func(c *gin.Context) {
+		key := c.ClientIP()
+
+		if !validateRateLimitKey(key) {
+			slog.Warn("Invalid rate limit key", "key", key)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_KEY",
+				"message": "Invalid request identifier",
+			})
+			c.Abort()
+			return
+		}
+
+		if !authRateLimiter.check(key) {
+			slog.Warn("Rate limit exceeded", "key", key)
+			c.Header("Retry-After", "60")
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"code":    "RATE_LIMITED",
+				"message": "Too many requests. Please try again later.",
+			})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
 }
 
 func RateLimitByUser() gin.HandlerFunc {
 	return apiRateLimiter.Middleware(func(c *gin.Context) string {
 		if userID, exists := c.Get("userID"); exists {
-			return userID.(string)
+			userIDStr := userID.(string)
+			if userIDStr == "anonymous" {
+				return c.ClientIP()
+			}
+			return userIDStr
 		}
 		return c.ClientIP()
 	})

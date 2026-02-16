@@ -340,3 +340,9 @@ func (d *DB) SetSetting(key, value string) error {
 	_, err := d.db.Exec(query, key, value)
 	return err
 }
+
+func (d *DB) DeleteOldActionLogs(retentionDays int) error {
+	query := `DELETE FROM action_log WHERE created_at < datetime('now', '-' || ? || ' days')`
+	_, err := d.db.Exec(query, retentionDays)
+	return err
+}

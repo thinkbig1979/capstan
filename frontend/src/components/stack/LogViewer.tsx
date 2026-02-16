@@ -11,7 +11,9 @@ import {
   Trash2, 
   Download, 
   RotateCcw,
-  AlertCircle
+  AlertCircle,
+  Calendar,
+  X
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -19,6 +21,14 @@ interface LogMessage {
   container: string
   timestamp: string
   message: string
+}
+
+type TimeRange = 'all' | '5m' | '15m' | '1h' | 'custom'
+
+interface TimeRangeConfig {
+  label: string
+  value: TimeRange
+  getStartTime: () => Date | null
 }
 
 interface LogViewerProps {
@@ -46,6 +56,43 @@ function getContainerColor(containerName: string): string {
     hash = containerName.charCodeAt(i) + ((hash << 5) - hash)
   }
   return CONTAINER_COLORS[Math.abs(hash) % CONTAINER_COLORS.length]
+}
+
+const TIME_RANGE_OPTIONS: TimeRangeConfig[] = [
+  {
+    label: 'All',
+    value: 'all',
+    getStartTime: () => null,
+  },
+  {
+    label: 'Last 5 min',
+    value: '5m',
+    getStartTime: () => new Date(Date.now() - 5 * 60 * 1000),
+  },
+  {
+    label: 'Last 15 min',
+    value: '15m',
+    getStartTime: () => new Date(Date.now() - 15 * 60 * 1000),
+  },
+  {
+    label: 'Last 1 hr',
+    value: '1h',
+    getStartTime: () => new Date(Date.now() - 60 * 60 * 1000),
+  },
+  {
+    label: 'Custom',
+    value: 'custom',
+    getStartTime: () => null,
+  },
+]
+
+function formatDateTimeLocal(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day}T${hours}:${minutes}`
 }
 
 function getLogLevelColor(message: string): string {
@@ -87,6 +134,9 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
   )
   const [uniqueContainers, setUniqueContainers] = useState<Set<string>>(new Set())
   const [scrolledUp, setScrolledUp] = useState(false)
+  const [timeRange, setTimeRange] = useState<TimeRange>('all')
+  const [customStartTime, setCustomStartTime] = useState<Date | null>(null)
+  const [customEndTime, setCustomEndTime] = useState<Date | null>(null)
   
   const logsRef = useRef<LogMessage[]>([])
   const batchRef = useRef<LogMessage[]>([])
@@ -94,11 +144,25 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
   const logContainerRef = useRef<HTMLDivElement>(null)
   const isAutoScrollingRef = useRef(false)
 
-  const filteredLogs = logs.filter(
-    (log) =>
-      (!searchTerm || log.message.toLowerCase().includes(searchTerm.toLowerCase())) &&
-      (selectedContainers.length === 0 || selectedContainers.includes(log.container))
-  )
+  const filterStartTime = useCallback((): Date | null => {
+    if (timeRange === 'all') return null
+    if (timeRange === 'custom') return customStartTime
+    const config = TIME_RANGE_OPTIONS.find((opt) => opt.value === timeRange)
+    return config?.getStartTime() || null
+  }, [timeRange, customStartTime])
+
+  const filteredLogs = logs.filter((log) => {
+    const matchesSearch =
+      !searchTerm || log.message.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesContainer =
+      selectedContainers.length === 0 || selectedContainers.includes(log.container)
+    
+    const startTime = filterStartTime()
+    const matchesTimeRange =
+      !startTime || new Date(log.timestamp) >= startTime
+    
+    return matchesSearch && matchesContainer && matchesTimeRange
+  })
 
   const handleLogMessage = useCallback((data: LogMessage) => {
     batchRef.current.push(data)
@@ -218,6 +282,21 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
 
   const isDisconnected = status === 'disconnected' || status === 'reconnecting'
 
+  const handleTimeRangeChange = useCallback((value: string) => {
+    const range = value as TimeRange
+    setTimeRange(range)
+    if (range !== 'custom') {
+      setCustomStartTime(null)
+      setCustomEndTime(null)
+    }
+  }, [])
+
+  const handleClearTimeRange = useCallback(() => {
+    setTimeRange('all')
+    setCustomStartTime(null)
+    setCustomEndTime(null)
+  }, [])
+
   return (
     <div className="flex h-full flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -255,6 +334,26 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
           </SelectContent>
         </Select>
 
+        <Select value={timeRange} onValueChange={handleTimeRangeChange}>
+          <SelectTrigger className="w-40">
+            <Clock className="mr-2 h-4 w-4" />
+            <SelectValue placeholder="All time" />
+          </SelectTrigger>
+          <SelectContent>
+            {TIME_RANGE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {timeRange !== 'all' && (
+          <Button variant="outline" size="sm" onClick={handleClearTimeRange} title="Clear time filter">
+            <X className="h-4 w-4" />
+          </Button>
+        )}
+
         <Button
           variant={showTimestamps ? 'default' : 'outline'}
           size="sm"
@@ -272,6 +371,25 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
           <Download className="h-4 w-4" />
         </Button>
       </div>
+
+      {timeRange === 'custom' && (
+        <div className="flex items-center gap-2 rounded-lg border bg-muted/50 p-2">
+          <Calendar className="h-4 w-4 text-muted-foreground" />
+          <Input
+            type="datetime-local"
+            className="w-auto"
+            value={customStartTime ? formatDateTimeLocal(customStartTime) : ''}
+            onChange={(e) => setCustomStartTime(e.target.value ? new Date(e.target.value) : null)}
+          />
+          <span className="text-sm text-muted-foreground">to</span>
+          <Input
+            type="datetime-local"
+            className="w-auto"
+            value={customEndTime ? formatDateTimeLocal(customEndTime) : ''}
+            onChange={(e) => setCustomEndTime(e.target.value ? new Date(e.target.value) : null)}
+          />
+        </div>
+      )}
 
       {isDisconnected && (
         <div className="flex items-center justify-between rounded-lg border border-yellow-500/50 bg-yellow-500/10 px-4 py-2 text-yellow-600 dark:text-yellow-400">
@@ -296,7 +414,9 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
       >
         {filteredLogs.length === 0 ? (
           <div className="flex h-full items-center justify-center text-muted-foreground">
-            {logs.length === 0 ? 'Waiting for logs...' : 'No logs match current filters'}
+            {logs.length === 0 ? 'Waiting for logs...' : 
+             timeRange !== 'all' ? 'No logs in selected time range' :
+             'No logs match current filters'}
           </div>
         ) : (
           filteredLogs.map((log, index) => {

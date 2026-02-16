@@ -12,11 +12,11 @@ Start everything with a single command:
 
 This will:
 - Build and start backend on `http://localhost:5001`
-- Build and start frontend on `http://localhost:3000`
+- Build and start frontend on `http://localhost:3001`
 - Create necessary directories
 - Set up environment variables
 
-**Access the application:** http://localhost:3000
+**Access the application:** http://localhost:3001
 
 ### Option 2: Backend Only (Native Go)
 
@@ -127,7 +127,7 @@ docker run -d \
 cd frontend
 docker build -t docker-manager-frontend .
 docker run -d \
-  -p 3000:80 \
+  -p 3001:80 \
   --name docker-manager-frontend \
   docker-manager-frontend
 ```

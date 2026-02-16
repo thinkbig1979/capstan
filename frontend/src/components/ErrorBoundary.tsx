@@ -1,4 +1,8 @@
 import React, { type ErrorInfo, type ReactNode } from 'react'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { AlertCircle, RefreshCw, Copy, Bug } from 'lucide-react'
+import { toast } from 'sonner'
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -9,68 +13,58 @@ interface ErrorBoundaryProps {
 interface ErrorBoundaryState {
   hasError: boolean
   error?: Error
+  errorInfo?: ErrorInfo
 }
 
-function sanitizeErrorMessage(message: string): string {
-  if (!message) return 'An unexpected error occurred'
-  
-  let sanitized = message.replace(/<[^>]*>/g, '')
-  
-  sanitized = sanitized.replace(/&/g, '&amp;')
-  sanitized = sanitized.replace(/</g, '&lt;')
-  sanitized = sanitized.replace(/>/g, '&gt;')
-  sanitized = sanitized.replace(/"/g, '&quot;')
-  sanitized = sanitized.replace(/'/g, '&#x27;')
-  
-  if (sanitized.length > 200) {
-    sanitized = sanitized.substring(0, 200) + '...'
-  }
-  
-  return sanitized
-}
+function getErrorType(error?: Error): 'network' | 'auth' | 'validation' | 'server' | 'unknown' {
+  if (!error) return 'unknown'
 
-function getSafeErrorMessage(error?: Error): string {
-  if (!error) return 'An unexpected error occurred'
-  
   const message = error.message.toLowerCase()
-  
-  const safeMessages: Record<string, string> = {
-    'network': 'A network error occurred. Please check your connection.',
-    'timeout': 'The request timed out. Please try again.',
-    'unauthorized': 'You are not authorized to perform this action.',
-    'forbidden': 'Access denied.',
-    'not found': 'The requested resource was not found.',
-    'parse': 'There was a problem processing the data.',
-    'validation': 'Please check your input and try again.',
-  }
-  
-  for (const [key, safeMsg] of Object.entries(safeMessages)) {
-    if (message.includes(key)) {
-      return safeMsg
-    }
-  }
-  
-  return sanitizeErrorMessage(error.message)
+
+  if (message.includes('network') || message.includes('fetch')) return 'network'
+  if (message.includes('401') || message.includes('unauthorized')) return 'auth'
+  if (message.includes('403') || message.includes('forbidden')) return 'auth'
+  if (message.includes('validation') || message.includes('invalid')) return 'validation'
+  if (message.includes('500') || message.includes('502') || message.includes('503')) return 'server'
+
+  return 'unknown'
 }
 
-const ErrorIcon = () => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    width="48"
-    height="48"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    className="mx-auto mb-4 text-destructive"
-  >
-    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-    <path d="M12 9v4" />
-    <path d="M12 17h.01" />
-  </svg>
-)
+function getUserFriendlyMessage(error?: Error): string {
+  if (!error) return 'An unexpected error occurred'
+
+  const errorType = getErrorType(error)
+
+  const messages: Record<string, string> = {
+    network: 'Check your connection and try again',
+    auth: 'Log in again to continue',
+    validation: 'Please check your input and try again',
+    server: 'Something went wrong on our end. Please try again later',
+    unknown: 'An unexpected error occurred. Please try refreshing the page',
+  }
+
+  return messages[errorType]
+}
+
+function getErrorAction(errorType: string): string {
+  const actions: Record<string, string> = {
+    network: 'Retry',
+    auth: 'Log In',
+    validation: 'Fix',
+    server: 'Retry',
+    unknown: 'Contact Support',
+  }
+
+  return actions[errorType] || 'Retry'
+}
+
+function copyToClipboard(text: string) {
+  navigator.clipboard.writeText(text).then(() => {
+    toast.success('Error details copied to clipboard')
+  }).catch(() => {
+    toast.error('Failed to copy error details')
+  })
+}
 
 export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
@@ -83,11 +77,36 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    this.setState({ errorInfo })
+    
     const isDev = import.meta.env.DEV
     if (isDev) {
       console.error('ErrorBoundary caught an error:', error, errorInfo)
     }
     this.props.onError?.(error, errorInfo)
+  }
+
+  handleRetry = () => {
+    window.location.reload()
+  }
+
+  handleReportIssue = () => {
+    const errorDetails = this.getErrorDetails()
+    const subject = encodeURIComponent('Bug Report - Docker Manager')
+    const body = encodeURIComponent(errorDetails)
+    window.open(`mailto:support@example.com?subject=${subject}&body=${body}`, '_blank')
+  }
+
+  getErrorDetails = (): string => {
+    const { error, errorInfo } = this.state
+    return `
+Error: ${error?.message || 'Unknown error'}
+Stack: ${error?.stack || 'No stack trace'}
+Component Stack: ${errorInfo?.componentStack || 'No component stack'}
+URL: ${window.location.href}
+User Agent: ${navigator.userAgent}
+Timestamp: ${new Date().toISOString()}
+    `.trim()
   }
 
   render() {
@@ -96,21 +115,87 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
         return this.props.fallback
       }
 
+      const errorType = getErrorType(this.state.error)
+      const userMessage = getUserFriendlyMessage(this.state.error)
+      const errorAction = getErrorAction(errorType)
+
       return (
-        <div className="flex min-h-[400px] items-center justify-center">
-          <div className="text-center">
-            <ErrorIcon />
-            <h3 className="text-lg font-semibold mb-2">Something went wrong</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              {getSafeErrorMessage(this.state.error)}
-            </p>
-            <button
-              onClick={() => window.location.reload()}
-              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 min-h-[44px]"
-            >
-              Retry
-            </button>
-          </div>
+        <div className="flex min-h-[400px] items-center justify-center p-4">
+          <Card className="max-w-2xl w-full">
+            <CardHeader>
+              <div className="flex items-center justify-center mb-4">
+                <AlertCircle className="h-12 w-12 text-destructive" />
+              </div>
+              <CardTitle className="text-center">Something went wrong</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-center text-muted-foreground">{userMessage}</p>
+
+              <div className="flex flex-wrap gap-2 justify-center">
+                {errorAction !== 'Contact Support' && errorAction !== 'Log In' && (
+                  <Button onClick={this.handleRetry} className="min-h-[44px]">
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    {errorAction}
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  onClick={this.handleReportIssue}
+                  className="min-h-[44px]"
+                >
+                  <Bug className="mr-2 h-4 w-4" />
+                  Contact Support
+                </Button>
+              </div>
+
+              {import.meta.env.DEV && this.state.error && (
+                <details className="mt-4">
+                  <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
+                    Show Error Details
+                  </summary>
+                  <div className="mt-2 p-4 bg-muted rounded-md">
+                    <div className="space-y-2">
+                      <div>
+                        <p className="text-sm font-medium mb-1">Error Type:</p>
+                        <code className="text-xs bg-background px-2 py-1 rounded">{errorType}</code>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium mb-1">Error Message:</p>
+                        <pre className="text-xs bg-background p-2 rounded overflow-x-auto">
+                          {this.state.error.message}
+                        </pre>
+                      </div>
+                      {this.state.error.stack && (
+                        <div>
+                          <p className="text-sm font-medium mb-1">Stack Trace:</p>
+                          <pre className="text-xs bg-background p-2 rounded overflow-x-auto max-h-48">
+                            {this.state.error.stack}
+                          </pre>
+                        </div>
+                      )}
+                      {this.state.errorInfo?.componentStack && (
+                        <div>
+                          <p className="text-sm font-medium mb-1">Component Stack:</p>
+                          <pre className="text-xs bg-background p-2 rounded overflow-x-auto max-h-48">
+                            {this.state.errorInfo.componentStack}
+                          </pre>
+                        </div>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => copyToClipboard(this.getErrorDetails())}
+                        className="mt-2"
+                      >
+                        <Copy className="mr-2 h-4 w-4" />
+                        Copy Error Details
+                      </Button>
+                    </div>
+                  </div>
+                </details>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )
     }

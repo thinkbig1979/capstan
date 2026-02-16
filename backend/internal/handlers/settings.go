@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -34,6 +35,8 @@ func (h *SettingsHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.PUT("/auth/password", h.ChangePassword)
 	group.GET("/settings/global-env", h.GetGlobalEnv)
 	group.PUT("/settings/global-env", h.UpdateGlobalEnv)
+	group.GET("/settings/log-retention", h.GetLogRetention)
+	group.PUT("/settings/log-retention", h.UpdateLogRetention)
 }
 
 func (h *SettingsHandler) ChangePassword(c *gin.Context) {
@@ -253,4 +256,56 @@ func parseEnvFile(path string) ([]map[string]string, error) {
 	}
 
 	return vars, nil
+}
+
+func (h *SettingsHandler) GetLogRetention(c *gin.Context) {
+	retentionStr, err := h.db.GetSetting("max_log_retention_days")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.NewAppError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to get log retention setting",
+		))
+		return
+	}
+
+	retentionDays := 90
+	if retentionStr != "" {
+		if _, err := fmt.Sscanf(retentionStr, "%d", &retentionDays); err != nil {
+			slog.Error("Failed to parse log retention days", "error", err)
+			retentionDays = 90
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"retentionDays": retentionDays,
+	})
+}
+
+func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {
+	var req struct {
+		RetentionDays int `json:"retentionDays" binding:"required,min=7"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			"VALIDATION_ERROR",
+			"Retention days must be at least 7",
+		))
+		return
+	}
+
+	if err := h.db.SetSetting("max_log_retention_days", fmt.Sprintf("%d", req.RetentionDays)); err != nil {
+		slog.Error("Failed to update log retention setting", "error", err)
+		c.JSON(http.StatusInternalServerError, models.NewAppError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to update log retention setting",
+		))
+		return
+	}
+
+	slog.Info("Log retention updated", "retention_days", req.RetentionDays)
+	c.Status(http.StatusNoContent)
 }

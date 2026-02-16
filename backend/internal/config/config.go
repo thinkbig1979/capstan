@@ -8,25 +8,28 @@ import (
 )
 
 type Config struct {
-	StacksDir     string
-	DataDir       string
-	Port          string
-	JWTSecret     string
-	LogLevel      string
-	GitSSHKey     string
-	GitHTTPSToken string
-	GitHTTPSUser  string
-	AuthDisabled  bool
-	CORSOrigins   string
+	StacksDir       string
+	HostStacksDir   string
+	DataDir         string
+	Port            string
+	JWTSecret       string
+	LogLevel        string
+	GitSSHKey       string
+	GitHTTPSToken   string
+	GitHTTPSUser    string
+	AuthDisabled    bool
+	CORSOrigins     string
+	TrustedNetworks string
 }
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Port:         "5001",
-		LogLevel:     "info",
-		GitSSHKey:    filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa"),
-		GitHTTPSUser: "git",
-		AuthDisabled: os.Getenv("AUTH_DISABLED") == "true",
+		Port:            "5001",
+		LogLevel:        "info",
+		GitSSHKey:       filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa"),
+		GitHTTPSUser:    "git",
+		AuthDisabled:    os.Getenv("AUTH_DISABLED") == "true",
+		TrustedNetworks: os.Getenv("TRUSTED_NETWORKS"),
 	}
 
 	if stacksDir := os.Getenv("STACKS_DIR"); stacksDir != "" {
@@ -35,6 +38,10 @@ func Load() (*Config, error) {
 		cfg.StacksDir = dockgeStacksDir
 	} else {
 		cfg.StacksDir = "/opt/stacks"
+	}
+
+	if hostStacksDir := os.Getenv("HOST_STACKS_DIR"); hostStacksDir != "" {
+		cfg.HostStacksDir = hostStacksDir
 	}
 
 	if dataDir := os.Getenv("DATA_DIR"); dataDir != "" {
@@ -73,7 +80,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	slog.Warn("Volume path identity: STACKS_DIR must be the same path inside and outside the container for Docker Compose operations to work correctly")
+	validateVolumePathIdentity(cfg)
 
 	redactedSecret := cfg.JWTSecret
 	if len(redactedSecret) > 4 {
@@ -114,6 +121,28 @@ func validate(cfg *Config) error {
 	}
 
 	return nil
+}
+
+func validateVolumePathIdentity(cfg *Config) {
+	if cfg.HostStacksDir == "" {
+		slog.Warn("Volume path identity: Set HOST_STACKS_DIR to verify path matching. STACKS_DIR must be the same path inside and outside the container for Docker Compose operations to work correctly.",
+			"stacks_dir", cfg.StacksDir,
+			"host_stacks_dir", "not set",
+			"hint", "Add HOST_STACKS_DIR environment variable matching your docker-compose.yaml volume path")
+		return
+	}
+
+	if cfg.HostStacksDir != cfg.StacksDir {
+		slog.Warn("Volume path identity mismatch: STACKS_DIR and HOST_STACKS_DIR do not match. Docker Compose operations may fail.",
+			"stacks_dir", cfg.StacksDir,
+			"host_stacks_dir", cfg.HostStacksDir,
+			"hint", "Ensure both variables use the same path (e.g., STACKS_DIR=/opt/stacks and HOST_STACKS_DIR=/opt/stacks)")
+		return
+	}
+
+	slog.Info("Volume path identity verified",
+		"stacks_dir", cfg.StacksDir,
+		"host_stacks_dir", cfg.HostStacksDir)
 }
 
 type ConfigError struct {

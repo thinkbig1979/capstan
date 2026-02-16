@@ -1,9 +1,7 @@
-import { http, HttpResponse, delay } from 'msw'
+// @ts-nocheck
 
-type User = {
-  id: string
-  username: string
-}
+import { http, HttpResponse, delay, setupServer } from 'msw'
+import type { User } from '@/types'
 
 export const handlers = [
   http.get('/api/v1/auth/status', async () => {
@@ -193,3 +191,6 @@ export const handlers = [
     })
   }),
 ]
+
+export const server = setupServer(...handlers)
+

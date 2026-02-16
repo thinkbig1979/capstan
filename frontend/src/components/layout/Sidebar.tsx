@@ -27,6 +27,8 @@ export function Sidebar() {
           size="icon"
           onClick={toggleSidebar}
           className="fixed left-0 top-1/2 -translate-y-1/2 z-50 min-h-[44px] min-w-[44px]"
+          aria-label="Open sidebar"
+          title="Open sidebar"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -81,6 +83,7 @@ export function Sidebar() {
                 key={dir.path}
                 to="/"
                 className="flex items-center p-2 rounded hover:bg-accent text-left transition-colors min-h-[44px]"
+                aria-label={`Directory ${dir.name}`}
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -122,7 +125,7 @@ export function Sidebar() {
       </ScrollArea>
 
       <div className="p-4 border-t lg:px-2">
-        <Button variant="ghost" size="sm" className="w-full justify-start lg:justify-center lg:px-2 min-h-[44px]" asChild>
+        <Button variant="ghost" size="sm" className="w-full justify-start lg:justify-center lg:px-2 min-h-[44px]" asChild aria-label="Go to settings">
           <Link to="/settings">
             <svg
               xmlns="http://www.w3.org/2000/svg"

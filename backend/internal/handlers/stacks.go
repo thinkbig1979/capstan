@@ -37,6 +37,7 @@ func NewStacksHandler(docker *services.DockerService, scanner *services.ScannerS
 
 func (h *StacksHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.POST("", h.Create)
+	group.POST("/lint", h.Lint)
 	group.GET("", h.List)
 	group.GET("/:id", h.Get)
 	group.POST("/:id/start", h.Start)
@@ -51,6 +52,10 @@ type CreateStackRequest struct {
 	ComposeContent string `json:"composeContent" binding:"required"`
 	EnvContent     string `json:"envContent"`
 	Deploy         bool   `json:"deploy"`
+}
+
+type LintRequest struct {
+	Compose string `json:"compose" binding:"required"`
 }
 
 func (h *StacksHandler) Create(c *gin.Context) {
@@ -260,6 +265,41 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		"lintResults":  lintResults,
 		"deployed":     deployed,
 		"deployOutput": deployOutput,
+	})
+}
+
+func (h *StacksHandler) Lint(c *gin.Context) {
+	var req LintRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid request body",
+		))
+		return
+	}
+
+	lintResults, err := h.linter.Lint(req.Compose)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.NewAppError(
+			http.StatusInternalServerError,
+			"LINT_ERROR",
+			"Failed to lint compose file",
+		))
+		return
+	}
+
+	hasErrors := false
+	for _, result := range lintResults {
+		if result.Level == "error" {
+			hasErrors = true
+			break
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"valid":       !hasErrors,
+		"lintResults": lintResults,
 	})
 }
 

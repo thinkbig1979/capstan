@@ -1,7 +1,16 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useGitDiff } from '@/hooks/useGit'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select'
+
+type DiffView = 'unified' | 'split'
 
 interface DiffViewerProps {
   directoryPath: string
@@ -30,7 +39,19 @@ interface DiffLine {
 
 export function DiffViewer({ directoryPath, commitHash }: DiffViewerProps) {
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set())
+  const [viewMode, setViewMode] = useState<DiffView>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('diff-view-preference') as DiffView
+      return saved === 'split' ? 'split' : 'unified'
+    }
+    return 'unified'
+  })
+
   const { data: diffData, isLoading, error } = useGitDiff(directoryPath, commitHash)
+
+  useEffect(() => {
+    localStorage.setItem('diff-view-preference', viewMode)
+  }, [viewMode])
 
   const parseDiff = (diff: string): DiffFile[] => {
     const lines = diff.split('\n')
@@ -124,6 +145,19 @@ export function DiffViewer({ directoryPath, commitHash }: DiffViewerProps) {
 
   return (
     <div className="space-y-2 rounded-lg border">
+      <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/50">
+        <span className="text-sm font-medium">Diff View</span>
+        <Select value={viewMode} onValueChange={(value) => setViewMode(value as DiffView)}>
+          <SelectTrigger className="w-[140px] h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="unified">Unified</SelectItem>
+            <SelectItem value="split">Split</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
       {files.map((file, fileIndex) => {
         const isCollapsed = collapsedFiles.has(file.path)
         return (
@@ -149,48 +183,99 @@ export function DiffViewer({ directoryPath, commitHash }: DiffViewerProps) {
 
             {!isCollapsed && (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm font-mono">
-                  <tbody>
-                    {file.hunks.map((hunk, hunkIndex) => (
-                      <tr key={hunkIndex}>
-                        <td className="p-0">
-                          <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
-                            {hunk.header}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {file.hunks.flatMap((hunk, hunkIndex) =>
-                      hunk.lines.map((line, lineIndex) => (
-                        <tr
-                          key={`${hunkIndex}-${lineIndex}`}
-                          className={`${
-                            line.type === 'added'
-                              ? 'bg-green-100 dark:bg-green-900/30'
-                              : line.type === 'removed'
-                              ? 'bg-red-100 dark:bg-red-900/30'
-                              : ''
-                          }`}
-                        >
-                          <td className="px-4 py-0.5 whitespace-nowrap">
-                            <span
-                              className={`${
-                                line.type === 'added'
-                                  ? 'text-green-600'
-                                  : line.type === 'removed'
-                                  ? 'text-red-600'
-                                  : 'text-muted-foreground'
-                              }`}
-                            >
-                              {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
-                              {line.content}
-                            </span>
+                {viewMode === 'unified' ? (
+                  <table className="w-full text-sm font-mono">
+                    <tbody>
+                      {file.hunks.map((hunk, hunkIndex) => (
+                        <tr key={hunkIndex}>
+                          <td className="p-0">
+                            <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
+                              {hunk.header}
+                            </div>
                           </td>
                         </tr>
-                      )),
-                    )}
-                  </tbody>
-                </table>
+                      ))}
+                      {file.hunks.flatMap((hunk, hunkIndex) =>
+                        hunk.lines.map((line, lineIndex) => (
+                          <tr
+                            key={`${hunkIndex}-${lineIndex}`}
+                            className={`${
+                              line.type === 'added'
+                                ? 'bg-green-100 dark:bg-green-900/30'
+                                : line.type === 'removed'
+                                ? 'bg-red-100 dark:bg-red-900/30'
+                                : ''
+                            }`}
+                          >
+                            <td className="px-4 py-0.5 whitespace-nowrap">
+                              <span
+                                className={`${
+                                  line.type === 'added'
+                                    ? 'text-green-600'
+                                    : line.type === 'removed'
+                                    ? 'text-red-600'
+                                    : 'text-muted-foreground'
+                                }`}
+                              >
+                                {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
+                                {line.content}
+                              </span>
+                            </td>
+                          </tr>
+                        )),
+                      )}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="w-full text-sm font-mono">
+                    <tbody>
+                      {file.hunks.map((hunk, hunkIndex) => (
+                        <tr key={hunkIndex}>
+                          <td colSpan={2} className="p-0">
+                            <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
+                              {hunk.header}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {file.hunks.flatMap((hunk, hunkIndex) =>
+                        hunk.lines.map((line, lineIndex) => (
+                          <tr
+                            key={`${hunkIndex}-${lineIndex}`}
+                            className="border-b"
+                          >
+                            {line.type === 'removed' || line.type === 'context' ? (
+                              <td
+                                className={`px-4 py-0.5 whitespace-nowrap ${
+                                  line.type === 'removed'
+                                    ? 'bg-red-100 dark:bg-red-900/30 text-red-600'
+                                    : 'bg-muted/50'
+                                }`}
+                              >
+                                {line.type === 'removed' ? '-' : ' '}{line.content}
+                              </td>
+                            ) : (
+                              <td className="px-4 py-0.5 whitespace-nowrap bg-muted/30"></td>
+                            )}
+                            {line.type === 'added' || line.type === 'context' ? (
+                              <td
+                                className={`px-4 py-0.5 whitespace-nowrap ${
+                                  line.type === 'added'
+                                    ? 'bg-green-100 dark:bg-green-900/30 text-green-600'
+                                    : 'bg-muted/50'
+                                }`}
+                              >
+                                {line.type === 'added' ? '+' : ' '}{line.content}
+                              </td>
+                            ) : (
+                              <td className="px-4 py-0.5 whitespace-nowrap bg-muted/30"></td>
+                            )}
+                          </tr>
+                        )),
+                      )}
+                    </tbody>
+                  </table>
+                )}
               </div>
             )}
           </div>

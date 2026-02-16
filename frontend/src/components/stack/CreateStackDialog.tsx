@@ -1,10 +1,16 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from '@/components/ui/sheet'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { toast } from 'sonner'
 import { useCreateStack } from '@/hooks/useCreateStack'
 import { useNavigate } from 'react-router-dom'
@@ -46,6 +52,8 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
   const [nameError, setNameError] = useState('')
   const editorViewRef = useRef<EditorView | null>(null)
   const editorRef = useRef<HTMLDivElement>(null)
+  const nameInputRef = useRef<HTMLInputElement>(null)
+  const composeRef = useRef<HTMLDivElement>(null)
 
   const isDarkTheme = useMemo(
     () =>
@@ -130,11 +138,12 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
           setShowEnv(false)
           setLintResults([])
         },
-        onError: (error: { response?: { data?: { lintResults?: LintResult[]; error?: string } } }) => {
-          if (error.response?.data?.lintResults) {
-            setLintResults(error.response.data.lintResults)
+        onError: (error) => {
+          const errorData = (error as { response?: { data?: { lintResults?: LintResult[]; error?: string } } }).response?.data
+          if (errorData?.lintResults) {
+            setLintResults(errorData.lintResults)
             toast.error('Lint errors detected')
-          } else if (error.response?.data?.error?.includes('already exists')) {
+          } else if (errorData?.error?.includes('already exists')) {
             toast.error('Stack name already exists')
           } else {
             toast.error('Failed to create stack')
@@ -219,18 +228,37 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
 
   const hasLintErrors = lintResults.some((r) => r.level === 'error')
 
+  const getValidationErrors = useCallback(() => {
+    const errors: { field: string; message: string }[] = []
+    if (nameError) {
+      errors.push({ field: 'name', message: nameError })
+    }
+    if (hasLintErrors) {
+      errors.push({
+        field: 'compose',
+        message: `${lintResults.filter((r) => r.level === 'error').length} lint error(s)`,
+      })
+    }
+    return errors
+  }, [nameError, hasLintErrors, lintResults])
+
+
+  const validationErrors = getValidationErrors()
+  const isCreateDisabled = createMutation.isPending || validationErrors.length > 0
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-[600px] sm:max-w-[600px] overflow-y-auto">
-        <SheetHeader>
-          <SheetTitle>Create New Stack</SheetTitle>
-        </SheetHeader>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[600px] sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Create New Stack</DialogTitle>
+        </DialogHeader>
 
         <div className="mt-6 space-y-6">
           <div className="space-y-2">
             <Label htmlFor="name">Stack Name</Label>
             <Input
               id="name"
+              ref={nameInputRef}
               value={name}
               onChange={(e) => handleNameChange(e.target.value)}
               placeholder="my-stack"
@@ -244,7 +272,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
             )}
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-2" ref={composeRef}>
             <div className="flex items-center justify-between">
               <Label>Docker Compose</Label>
               <Button variant="outline" size="sm" onClick={handleLint}>
@@ -252,7 +280,16 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
                 Lint
               </Button>
             </div>
-            <div ref={editorRef} className="rounded-md border overflow-hidden" style={{ minHeight: '300px' }} />
+            <div
+              ref={editorRef}
+              className={`rounded-md border overflow-hidden ${hasLintErrors ? 'border-red-500' : ''}`}
+              style={{ minHeight: '300px' }}
+            />
+            {hasLintErrors && (
+              <p className="text-sm text-red-500">
+                {lintResults.filter((r) => r.level === 'error').length} error(s) found - fix before creating
+              </p>
+            )}
           </div>
 
           {lintResults.length > 0 && (
@@ -326,18 +363,48 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
           </div>
         </div>
 
-        <SheetFooter className="mt-6">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            onClick={handleCreate}
-            disabled={createMutation.isPending || !!nameError || hasLintErrors}
-          >
-            {createMutation.isPending ? 'Creating...' : 'Create Stack'}
-          </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+        <DialogFooter className="mt-6 flex-col items-stretch gap-2">
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button onClick={handleCreate} disabled={isCreateDisabled}>
+                    {createMutation.isPending ? 'Creating...' : 'Create Stack'}
+                  </Button>
+                </TooltipTrigger>
+                {isCreateDisabled && !createMutation.isPending && (
+                  <TooltipContent>
+                    <p>Fix validation errors to create stack</p>
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+          {validationErrors.length > 0 && (
+            <div className="rounded-md border border-red-200 bg-red-50 dark:bg-red-950 dark:border-red-900 p-3">
+              <div className="text-sm font-medium text-red-900 dark:text-red-100 mb-2">
+                Please fix the following errors:
+              </div>
+              <ul className="space-y-1">
+                 {validationErrors.map((error, index) => (
+                   <li key={index}>
+                     <button
+                       type="button"
+                       className="text-sm text-red-700 dark:text-red-300 hover:underline flex items-center gap-1"
+                     >
+                       <AlertCircle className="h-3 w-3" />
+                       {error.message}
+                     </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

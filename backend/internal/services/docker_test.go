@@ -136,7 +136,9 @@ func TestDockerService_ValidateName(t *testing.T) {
 func TestCalculateCPUPercent(t *testing.T) {
 	stats := &types.StatsJSON{}
 	stats.CPUStats.CPUUsage.TotalUsage = 10000000
+	stats.CPUStats.CPUUsage.PercpuUsage = []uint64{5000000, 5000000}
 	stats.PreCPUStats.CPUUsage.TotalUsage = 5000000
+	stats.PreCPUStats.CPUUsage.PercpuUsage = []uint64{2500000, 2500000}
 	stats.CPUStats.SystemUsage = 100000000
 	stats.PreCPUStats.SystemUsage = 50000000
 	stats.CPUStats.OnlineCPUs = 2
