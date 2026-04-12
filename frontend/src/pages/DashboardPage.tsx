@@ -11,6 +11,7 @@ import { useStackStatusAnimation } from '@/hooks/useStackStatusAnimation'
 import { classifyError } from '@/lib/error-handler'
 import { toast } from 'sonner'
 import { useConfirm } from '@/components/ConfirmDialog'
+import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import {
   Select,
   SelectContent,
@@ -483,21 +484,7 @@ export function DashboardPage() {
                   </CardHeader>
                   <CardContent>
                     <div className="flex items-center gap-2 mb-3">
-                      <Badge
-                        variant={
-                          stack.status === 'running'
-                            ? 'default'
-                            : stack.status === 'stopped'
-                            ? 'secondary'
-                            : 'outline'
-                        }
-                        className={isAnimating(stack.id) ? 'animate-pulse' : ''}
-                      >
-                        {stack.status === 'running' && <Play className="mr-1 h-3 w-3" aria-hidden="true" />}
-                        {stack.status === 'stopped' && <Square className="mr-1 h-3 w-3" aria-hidden="true" />}
-                        {stack.status === 'error' && <AlertCircle className="mr-1 h-3 w-3" aria-hidden="true" />}
-                        <span className="capitalize">{stack.status}</span>
-                      </Badge>
+                      <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'unknown'} pulse={isAnimating(stack.id)} />
                       {stack.containerCount !== undefined && (
                         <Badge variant="outline">{stack.containerCount} containers</Badge>
                       )}

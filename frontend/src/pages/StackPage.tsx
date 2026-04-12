@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
 import { StackDetail } from '@/components/stack/StackDetail'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -11,6 +11,7 @@ import { classifyError } from '@/lib/error-handler'
 import { useParams, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useConfirm } from '@/components/ConfirmDialog'
+import { useStackStore } from '@/stores/stackStore'
 
 export function StackPage() {
   const { id, tab = 'overview' } = useParams<{ id: string; tab?: string }>()
@@ -18,6 +19,12 @@ export function StackPage() {
   const queryClient = useQueryClient()
   const { confirm, ConfirmComponent } = useConfirm()
   const [isDeleting, setIsDeleting] = useState(false)
+  const { setSelectedStack, setActiveTab } = useStackStore()
+
+  useEffect(() => {
+    setSelectedStack(id ?? null)
+    setActiveTab(tab || 'overview')
+  }, [id, tab, setSelectedStack, setActiveTab])
 
   const handleTabChange = (newTab: string) => {
     navigate(`/stacks/${id}/${newTab}`)

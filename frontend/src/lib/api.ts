@@ -153,7 +153,7 @@ export const stacksApi = {
   },
 
   lint: async (compose: string) => {
-    const response = await apiClient.post<{ valid: boolean; lintResults: LintResult[] }>('/stacks/lint', { compose })
+    const response = await apiClient.post<{ valid: boolean; lintResults: LintResult[] }>('/compose/lint', { compose })
     return response.data
   },
 

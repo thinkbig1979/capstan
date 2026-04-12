@@ -38,9 +38,7 @@ func NewTerminalService(cfg *config.Config) *TerminalService {
 	}
 }
 
-func (s *TerminalService) CreateSession(stackID, containerName string) (*TerminalSession, error) {
-	stackDir := s.config.StacksDir + "/" + stackID
-
+func (s *TerminalService) CreateSession(stackID, containerName, composeFile, stackDir string) (*TerminalSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -56,7 +54,7 @@ func (s *TerminalService) CreateSession(stackID, containerName string) (*Termina
 	var ptyFile *os.File
 
 	for _, shell := range shells {
-		cmd := exec.Command("docker", "compose", "-f", "docker-compose.yml", "-p", stackID, "exec", containerName, shell)
+		cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", stackID, "exec", containerName, shell)
 		cmd.Dir = stackDir
 
 		ptyFile, err = pty.Start(cmd)

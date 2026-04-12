@@ -1,45 +1,87 @@
-// @ts-nocheck
-
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { renderWithProviders } from '../../../test/utils'
 
+const mockUseGitStatus = vi.fn()
+const mockUseGitPull = vi.fn(() => ({ mutate: vi.fn(), isPending: false }))
+
+vi.mock('@/hooks/useGit', () => ({
+  useGitStatus: (...args: unknown[]) => mockUseGitStatus(...args),
+  useGitPull: () => mockUseGitPull(),
+}))
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+}))
+
+import { GitStatus } from '../GitStatus'
+
 describe('GitStatus', () => {
-  it('renders git status information', () => {
-    const props = {
-      branch: 'main',
-      commit: 'abc123',
-      dirty: false,
-      ahead: 0,
-      behind: 0,
-    }
-
-    renderWithProviders(
-      <div data-testid="git-status">
-        <span>Branch: {props.branch}</span>
-        <span>Commit: {props.commit}</span>
-      </div>
-    )
-
-    expect(screen.getByTestId('git-status')).toHaveTextContent('Branch: main')
-    expect(screen.getByTestId('git-status')).toHaveTextContent('Commit: abc123')
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUseGitPull.mockReturnValue({ mutate: vi.fn(), isPending: false })
   })
 
-  it('shows dirty state when there are uncommitted changes', () => {
-    const props = {
-      branch: 'main',
-      commit: 'abc123',
-      dirty: true,
-      ahead: 0,
-      behind: 0,
-    }
+  it('shows loading state', () => {
+    mockUseGitStatus.mockReturnValue({ isLoading: true, error: null, data: null })
+    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    expect(screen.getByText('Loading git status...')).toBeInTheDocument()
+  })
 
-    renderWithProviders(
-      <div data-testid="git-status">
-        <span>Dirty: {props.dirty.toString()}</span>
-      </div>
-    )
+  it('shows error state when fetch fails', () => {
+    mockUseGitStatus.mockReturnValue({ isLoading: false, error: new Error('fail'), data: null })
+    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    expect(screen.getByText('Failed to load git status')).toBeInTheDocument()
+  })
 
-    expect(screen.getByTestId('git-status')).toHaveTextContent('Dirty: true')
+  it('renders branch name', () => {
+    mockUseGitStatus.mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { branch: 'main', commit: 'abc123', dirty: false, ahead: 0, behind: 0 },
+    })
+    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    expect(screen.getByText('main')).toBeInTheDocument()
+  })
+
+  it('shows ahead badge when ahead > 0', () => {
+    mockUseGitStatus.mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { branch: 'feature', commit: 'def456', dirty: false, ahead: 3, behind: 0 },
+    })
+    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    expect(screen.getByText('↑ 3')).toBeInTheDocument()
+  })
+
+  it('shows behind badge when behind > 0', () => {
+    mockUseGitStatus.mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { branch: 'main', commit: 'abc123', dirty: false, ahead: 0, behind: 2 },
+    })
+    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    expect(screen.getByText('↓ 2')).toBeInTheDocument()
+  })
+
+  it('shows dirty badge when dirty is true', () => {
+    mockUseGitStatus.mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { branch: 'main', commit: 'abc123', dirty: true, ahead: 0, behind: 0 },
+    })
+    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    expect(screen.getByText('dirty')).toBeInTheDocument()
+  })
+
+  it('renders pull buttons', () => {
+    mockUseGitStatus.mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { branch: 'main', commit: 'abc123', dirty: false, ahead: 0, behind: 0 },
+    })
+    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    expect(screen.getByText('Pull')).toBeInTheDocument()
+    expect(screen.getByText('Pull & Redeploy')).toBeInTheDocument()
   })
 })

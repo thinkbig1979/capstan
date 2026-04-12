@@ -184,6 +184,9 @@ func main() {
 	stacksGroup := protected.Group("/stacks")
 	stacksHandler.RegisterRoutes(stacksGroup)
 
+	composeGroup := protected.Group("/compose")
+	composeGroup.POST("/lint", stacksHandler.Lint)
+
 	envHandler := handlers.NewEnvHandler(db, cfg)
 	envHandler.RegisterRoutes(stacksGroup)
 

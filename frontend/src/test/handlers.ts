@@ -183,6 +183,14 @@ export const handlers = [
     })
   }),
 
+  http.post('/api/v1/compose/lint', async () => {
+    await delay(100)
+    return HttpResponse.json({
+      valid: true,
+      lintResults: [],
+    })
+  }),
+
   http.post('/api/v1/stacks/:id/compose/lint', async () => {
     await delay(100)
     return HttpResponse.json({

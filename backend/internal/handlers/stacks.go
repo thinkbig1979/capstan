@@ -37,7 +37,6 @@ func NewStacksHandler(docker *services.DockerService, scanner *services.ScannerS
 
 func (h *StacksHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.POST("", h.Create)
-	group.POST("/lint", h.Lint)
 	group.GET("", h.List)
 	group.GET("/:id", h.Get)
 	group.POST("/:id/start", h.Start)

@@ -1,39 +1,65 @@
-// @ts-nocheck
-
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { renderWithProviders } from '../../../test/utils'
+import { StatusBadge } from '../StatusBadge'
 
 describe('StatusBadge', () => {
-  it('renders running status with correct color', () => {
-    renderWithProviders(<div data-testid="status-badge" data-status="running">Running</div>)
-
-    const badge = screen.getByTestId('status-badge')
-    expect(badge).toHaveTextContent('Running')
-    expect(badge).toHaveAttribute('data-status', 'running')
+  it('renders running status', () => {
+    renderWithProviders(<StatusBadge status="running" pulse={false} />)
+    expect(screen.getByText('Running')).toBeInTheDocument()
   })
 
-  it('renders stopped status with correct color', () => {
-    renderWithProviders(<div data-testid="status-badge" data-status="stopped">Stopped</div>)
-
-    const badge = screen.getByTestId('status-badge')
-    expect(badge).toHaveTextContent('Stopped')
-    expect(badge).toHaveAttribute('data-status', 'stopped')
+  it('renders stopped status', () => {
+    renderWithProviders(<StatusBadge status="stopped" pulse={false} />)
+    expect(screen.getByText('Stopped')).toBeInTheDocument()
   })
 
-  it('renders partial status with correct color', () => {
-    renderWithProviders(<div data-testid="status-badge" data-status="partial">Partial</div>)
-
-    const badge = screen.getByTestId('status-badge')
-    expect(badge).toHaveTextContent('Partial')
-    expect(badge).toHaveAttribute('data-status', 'partial')
+  it('renders partial status', () => {
+    renderWithProviders(<StatusBadge status="partial" pulse={false} />)
+    expect(screen.getByText('Partial')).toBeInTheDocument()
   })
 
-  it('renders unknown status with correct color', () => {
-    renderWithProviders(<div data-testid="status-badge" data-status="unknown">Unknown</div>)
+  it('renders unknown status', () => {
+    renderWithProviders(<StatusBadge status="unknown" pulse={false} />)
+    expect(screen.getByText('Unknown')).toBeInTheDocument()
+  })
 
-    const badge = screen.getByTestId('status-badge')
-    expect(badge).toHaveTextContent('Unknown')
-    expect(badge).toHaveAttribute('data-status', 'unknown')
+  it('applies pulse animation when running and pulse is true', () => {
+    renderWithProviders(<StatusBadge status="running" pulse={true} />)
+    const badge = screen.getByText('Running')
+    expect(badge.closest('[class]')?.className).toContain('animate-pulse')
+  })
+
+  it('does not pulse when pulse is false', () => {
+    renderWithProviders(<StatusBadge status="running" pulse={false} />)
+    const badge = screen.getByText('Running')
+    expect(badge.closest('[class]')?.className).not.toContain('animate-pulse')
+  })
+
+  it('does not pulse for non-running statuses even with pulse=true', () => {
+    renderWithProviders(<StatusBadge status="stopped" pulse={true} />)
+    const badge = screen.getByText('Stopped')
+    expect(badge.closest('[class]')?.className).not.toContain('animate-pulse')
+  })
+
+  it('applies green color classes for running', () => {
+    renderWithProviders(<StatusBadge status="running" pulse={false} />)
+    const badge = screen.getByText('Running')
+    const cls = badge.closest('[class]')?.className || ''
+    expect(cls).toContain('green')
+  })
+
+  it('applies red color classes for stopped', () => {
+    renderWithProviders(<StatusBadge status="stopped" pulse={false} />)
+    const badge = screen.getByText('Stopped')
+    const cls = badge.closest('[class]')?.className || ''
+    expect(cls).toContain('red')
+  })
+
+  it('applies yellow color classes for partial', () => {
+    renderWithProviders(<StatusBadge status="partial" pulse={false} />)
+    const badge = screen.getByText('Partial')
+    const cls = badge.closest('[class]')?.className || ''
+    expect(cls).toContain('yellow')
   })
 })

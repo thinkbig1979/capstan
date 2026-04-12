@@ -31,3 +31,14 @@ build/
 # Dependencies
 node_modules/
 vendor/
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
+
+# Local environment overrides
+backend/.env
+frontend/.env
+
+# Backend embedded frontend (built during Docker build)
+backend/frontend/assets/

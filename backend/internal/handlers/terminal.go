@@ -47,22 +47,22 @@ func (h *TerminalHandler) WSTerminal(c *gin.Context) {
 		models.HandleError(c, err)
 		return
 	}
-	defer h.terminal.CloseSession(conn.ID)
 	defer conn.Conn.Close()
 
-	_, err = h.db.GetStack(stackID)
-	if err != nil {
+	stack, err := h.db.GetStack(stackID)
+	if err != nil || stack == nil {
 		slog.Error("Failed to get stack", "stack_id", stackID, "error", err)
 		writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Stack not found")
 		return
 	}
 
-	session, err := h.terminal.CreateSession(stackID, containerName)
+	session, err := h.terminal.CreateSession(stackID, containerName, stack.ComposeFile, stack.Directory)
 	if err != nil {
 		slog.Error("Failed to create terminal session", "stack_id", stackID, "container", containerName, "error", err)
 		writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Failed to create terminal session")
 		return
 	}
+	defer h.terminal.CloseSession(session.ID)
 
 	done := make(chan struct{})
 	readDone := make(chan struct{})
