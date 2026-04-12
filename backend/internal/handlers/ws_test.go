@@ -129,7 +129,7 @@ func TestAuthenticateWS_MissingToken(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	db, err := database.New(tempDir)
+	db, err := database.NewWithMigrations(tempDir)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -145,11 +145,10 @@ func TestAuthenticateWS_ValidToken(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	db, err := database.New(tempDir)
+	db, err := database.NewWithMigrations(tempDir)
 	require.NoError(t, err)
 	defer db.Close()
 
-	err = database.RunMigrations(db)
 	require.NoError(t, err)
 
 	userID := uuid.New().String()
@@ -198,7 +197,7 @@ func TestAuthenticateWS_AuthDisabled(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	db, err := database.New(tempDir)
+	db, err := database.NewWithMigrations(tempDir)
 	require.NoError(t, err)
 	defer db.Close()
 

@@ -24,10 +24,9 @@ func TestNewScannerService(t *testing.T) {
 
 func TestScannerService_ScanAll_EmptyDirectory(t *testing.T) {
 	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
 	cfg := &config.Config{StacksDir: tempDir}
 
-	db, err := database.New(dataDir)
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	service := NewScannerService(cfg, db)
@@ -43,14 +42,13 @@ func TestScannerService_ScanAll_EmptyDirectory(t *testing.T) {
 
 func TestScannerService_ScanAll_WithGlobalEnv(t *testing.T) {
 	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
 	cfg := &config.Config{StacksDir: tempDir}
 
 	globalEnvPath := filepath.Join(tempDir, "global.env")
 	err := os.WriteFile(globalEnvPath, []byte("TEST=value\n"), 0644)
 	require.NoError(t, err)
 
-	db, err := database.New(dataDir)
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	service := NewScannerService(cfg, db)
@@ -62,7 +60,6 @@ func TestScannerService_ScanAll_WithGlobalEnv(t *testing.T) {
 
 func TestScannerService_ScanAll_SingleStack(t *testing.T) {
 	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
 
 	stackDir := filepath.Join(tempDir, "my-stack")
 	err := os.MkdirAll(stackDir, 0755)
@@ -77,7 +74,7 @@ func TestScannerService_ScanAll_SingleStack(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: tempDir}
-	db, err := database.New(dataDir)
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	service := NewScannerService(cfg, db)
@@ -93,7 +90,6 @@ func TestScannerService_ScanAll_SingleStack(t *testing.T) {
 
 func TestScannerService_ScanAll_MultipleStacks(t *testing.T) {
 	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
 
 	stack1Dir := filepath.Join(tempDir, "stack1")
 	err := os.MkdirAll(stack1Dir, 0755)
@@ -112,7 +108,7 @@ func TestScannerService_ScanAll_MultipleStacks(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: tempDir}
-	db, err := database.New(dataDir)
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	service := NewScannerService(cfg, db)
@@ -127,7 +123,6 @@ func TestScannerService_ScanAll_MultipleStacks(t *testing.T) {
 
 func TestScannerService_ScanAll_HiddenDirectories(t *testing.T) {
 	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
 
 	hiddenDir := filepath.Join(tempDir, ".hidden")
 	err := os.MkdirAll(hiddenDir, 0755)
@@ -138,7 +133,7 @@ func TestScannerService_ScanAll_HiddenDirectories(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: tempDir}
-	db, err := database.New(dataDir)
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	service := NewScannerService(cfg, db)
@@ -153,7 +148,6 @@ func TestScannerService_ScanAll_HiddenDirectories(t *testing.T) {
 
 func TestScannerService_ScanAll_MultipleComposeFiles(t *testing.T) {
 	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
 
 	stackDir := filepath.Join(tempDir, "multi-stack")
 	err := os.MkdirAll(stackDir, 0755)
@@ -168,7 +162,7 @@ func TestScannerService_ScanAll_MultipleComposeFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: tempDir}
-	db, err := database.New(dataDir)
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	service := NewScannerService(cfg, db)
@@ -190,7 +184,6 @@ func TestScannerService_ScanAll_MultipleComposeFiles(t *testing.T) {
 
 func TestScannerService_ScanAll_WithGitRepo(t *testing.T) {
 	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
 	cfg := &config.Config{StacksDir: tempDir}
 
 	stackDir := filepath.Join(tempDir, "git-stack")
@@ -209,7 +202,7 @@ func TestScannerService_ScanAll_WithGitRepo(t *testing.T) {
 	err = os.WriteFile(composePath, []byte("services:\n  web:\n    image: nginx\n"), 0644)
 	require.NoError(t, err)
 
-	db, err := database.New(dbPath)
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	service := NewScannerService(cfg, db)
@@ -226,7 +219,6 @@ func TestScannerService_ScanAll_WithGitRepo(t *testing.T) {
 
 func TestScannerService_ScanAll_WithEnvFile(t *testing.T) {
 	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
 
 	stackDir := filepath.Join(tempDir, "stack-with-env")
 	err := os.MkdirAll(stackDir, 0755)
@@ -241,9 +233,8 @@ func TestScannerService_ScanAll_WithEnvFile(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: tempDir}
-	db, err := database.New(dataDir)
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
-	defer os.RemoveAll(dataDir)
 
 	service := NewScannerService(cfg, db)
 
@@ -258,7 +249,6 @@ func TestScannerService_ScanAll_WithEnvFile(t *testing.T) {
 
 func TestScannerService_ScanAll_WithOverrideFiles(t *testing.T) {
 	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
 
 	stackDir := filepath.Join(tempDir, "stack-override")
 	err := os.MkdirAll(stackDir, 0755)
@@ -273,9 +263,8 @@ func TestScannerService_ScanAll_WithOverrideFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: tempDir}
-	db, err := database.New(dataDir)
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
-	defer os.RemoveAll(dataDir)
 
 	service := NewScannerService(cfg, db)
 
@@ -289,16 +278,14 @@ func TestScannerService_ScanAll_WithOverrideFiles(t *testing.T) {
 
 func TestScannerService_ScanAll_NonDirectoryEntries(t *testing.T) {
 	tempDir := t.TempDir()
-	dataDir := filepath.Join(tempDir, "data")
 
 	filePath := filepath.Join(tempDir, "not-a-dir.txt")
 	err := os.WriteFile(filePath, []byte("test"), 0644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: tempDir}
-	db, err := database.New(dataDir)
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
-	defer os.RemoveAll(dataDir)
 
 	service := NewScannerService(cfg, db)
 

@@ -15,7 +15,7 @@ import (
 )
 
 func TestAuthHandler_Status_NeedsSetup(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
@@ -36,7 +36,7 @@ func TestAuthHandler_Status_NeedsSetup(t *testing.T) {
 }
 
 func TestAuthHandler_Status_NoSetupNeeded(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	createTestUser(t, db, "testuser", "password123")
@@ -58,7 +58,7 @@ func TestAuthHandler_Status_NoSetupNeeded(t *testing.T) {
 }
 
 func TestAuthHandler_Status_AuthDisabled(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	handler := NewAuthHandler(db, "test-secret-key-32-chars", true)
@@ -78,7 +78,7 @@ func TestAuthHandler_Status_AuthDisabled(t *testing.T) {
 }
 
 func TestAuthHandler_Setup_Success(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
@@ -103,7 +103,7 @@ func TestAuthHandler_Setup_Success(t *testing.T) {
 }
 
 func TestAuthHandler_Setup_AlreadyDone(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	createTestUser(t, db, "existing", "password")
@@ -127,7 +127,7 @@ func TestAuthHandler_Setup_AlreadyDone(t *testing.T) {
 }
 
 func TestAuthHandler_Setup_InvalidUsername(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
@@ -149,7 +149,7 @@ func TestAuthHandler_Setup_InvalidUsername(t *testing.T) {
 }
 
 func TestAuthHandler_Setup_InvalidPassword(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
@@ -171,7 +171,7 @@ func TestAuthHandler_Setup_InvalidPassword(t *testing.T) {
 }
 
 func TestAuthHandler_Login_Success(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	createTestUser(t, db, "testuser", "password123")
@@ -197,7 +197,7 @@ func TestAuthHandler_Login_Success(t *testing.T) {
 }
 
 func TestAuthHandler_Login_InvalidCredentials(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	createTestUser(t, db, "testuser", "password123")
@@ -221,7 +221,7 @@ func TestAuthHandler_Login_InvalidCredentials(t *testing.T) {
 }
 
 func TestAuthHandler_Logout_Success(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	user := createTestUser(t, db, "testuser", "password123")
@@ -240,7 +240,7 @@ func TestAuthHandler_Logout_Success(t *testing.T) {
 }
 
 func TestAuthHandler_Me_Success(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	user := createTestUser(t, db, "testuser", "password123")
@@ -266,7 +266,7 @@ func TestAuthHandler_Me_Success(t *testing.T) {
 }
 
 func TestAuthHandler_Me_Unauthenticated(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)

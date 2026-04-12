@@ -19,7 +19,7 @@ import (
 
 func TestEnvHandler_Get_Success(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
@@ -64,7 +64,7 @@ func TestEnvHandler_Get_Success(t *testing.T) {
 
 func TestEnvHandler_Get_NoEnvFile(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
@@ -102,7 +102,7 @@ func TestEnvHandler_Get_NoEnvFile(t *testing.T) {
 
 func TestEnvHandler_Put_Success(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
@@ -155,7 +155,7 @@ func TestEnvHandler_Put_Success(t *testing.T) {
 
 func TestEnvHandler_Put_WithEntries(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")

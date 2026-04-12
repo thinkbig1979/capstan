@@ -16,7 +16,7 @@ import (
 )
 
 func TestDirectoriesHandler_List_Success(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: "/tmp/test"}
@@ -52,7 +52,7 @@ func TestDirectoriesHandler_List_Success(t *testing.T) {
 
 func TestDirectoriesHandler_Scan_Success(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: tempDir}
@@ -79,7 +79,7 @@ func TestDirectoriesHandler_Scan_Success(t *testing.T) {
 }
 
 func TestDirectoriesHandler_Get_Success(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: "/tmp/test"}
@@ -126,7 +126,7 @@ func TestDirectoriesHandler_Get_Success(t *testing.T) {
 }
 
 func TestDirectoriesHandler_Get_NotFound(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: "/tmp/test"}

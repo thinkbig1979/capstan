@@ -166,10 +166,15 @@ func (s *ScannerService) ScanDirectory(path string) error {
 func extractStackName(filename string) string {
 	name := filename
 
-	name = strings.TrimPrefix(name, "compose.")
-	name = strings.TrimPrefix(name, "docker-compose.")
 	name = strings.TrimSuffix(name, ".yaml")
 	name = strings.TrimSuffix(name, ".yml")
+
+	if name == "compose" || name == "docker-compose" {
+		return "default"
+	}
+
+	name = strings.TrimPrefix(name, "compose.")
+	name = strings.TrimPrefix(name, "docker-compose.")
 
 	if name == "" {
 		return "default"

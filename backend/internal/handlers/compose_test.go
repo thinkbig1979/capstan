@@ -20,7 +20,7 @@ import (
 
 func TestComposeHandler_Get_Success(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
@@ -66,7 +66,7 @@ func TestComposeHandler_Get_Success(t *testing.T) {
 }
 
 func TestComposeHandler_Get_NotFound(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: "/tmp/test"}
@@ -92,7 +92,7 @@ func TestComposeHandler_Get_NotFound(t *testing.T) {
 
 func TestComposeHandler_Put_Success(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
@@ -145,7 +145,7 @@ func TestComposeHandler_Put_Success(t *testing.T) {
 
 func TestComposeHandler_Put_ValidationError(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
@@ -191,7 +191,7 @@ func TestComposeHandler_Put_ValidationError(t *testing.T) {
 }
 
 func TestComposeHandler_Lint_Valid(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: "/tmp/test"}
@@ -221,7 +221,7 @@ func TestComposeHandler_Lint_Valid(t *testing.T) {
 }
 
 func TestComposeHandler_Lint_Invalid(t *testing.T) {
-	db, err := database.New(":memory:")
+	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: "/tmp/test"}

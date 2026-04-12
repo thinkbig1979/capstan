@@ -24,11 +24,10 @@ func setupSettingsRouter(handler *SettingsHandler) *gin.Engine {
 
 func TestSettingsHandler_GetLogRetention_Default(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(tempDir)
+	db, err := database.NewWithMigrations(tempDir)
 	require.NoError(t, err)
 	defer db.Close()
 
-	err = database.RunMigrations(db)
 	require.NoError(t, err)
 
 	handler := NewSettingsHandler(db, "", "test-secret", false)
@@ -49,11 +48,10 @@ func TestSettingsHandler_GetLogRetention_Default(t *testing.T) {
 
 func TestSettingsHandler_GetLogRetention_Custom(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(tempDir)
+	db, err := database.NewWithMigrations(tempDir)
 	require.NoError(t, err)
 	defer db.Close()
 
-	err = database.RunMigrations(db)
 	require.NoError(t, err)
 
 	err = db.SetSetting("max_log_retention_days", "60")
@@ -77,11 +75,10 @@ func TestSettingsHandler_GetLogRetention_Custom(t *testing.T) {
 
 func TestSettingsHandler_UpdateLogRetention(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(tempDir)
+	db, err := database.NewWithMigrations(tempDir)
 	require.NoError(t, err)
 	defer db.Close()
 
-	err = database.RunMigrations(db)
 	require.NoError(t, err)
 
 	handler := NewSettingsHandler(db, "", "test-secret", false)
@@ -102,11 +99,10 @@ func TestSettingsHandler_UpdateLogRetention(t *testing.T) {
 
 func TestSettingsHandler_UpdateLogRetention_Minimum(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(tempDir)
+	db, err := database.NewWithMigrations(tempDir)
 	require.NoError(t, err)
 	defer db.Close()
 
-	err = database.RunMigrations(db)
 	require.NoError(t, err)
 
 	handler := NewSettingsHandler(db, "", "test-secret", false)
@@ -127,11 +123,10 @@ func TestSettingsHandler_UpdateLogRetention_Minimum(t *testing.T) {
 
 func TestSettingsHandler_UpdateLogRetention_BelowMinimum(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(tempDir)
+	db, err := database.NewWithMigrations(tempDir)
 	require.NoError(t, err)
 	defer db.Close()
 
-	err = database.RunMigrations(db)
 	require.NoError(t, err)
 
 	handler := NewSettingsHandler(db, "", "test-secret", false)
@@ -153,11 +148,10 @@ func TestSettingsHandler_UpdateLogRetention_BelowMinimum(t *testing.T) {
 
 func TestSettingsHandler_UpdateLogRetention_InvalidInput(t *testing.T) {
 	tempDir := t.TempDir()
-	db, err := database.New(tempDir)
+	db, err := database.NewWithMigrations(tempDir)
 	require.NoError(t, err)
 	defer db.Close()
 
-	err = database.RunMigrations(db)
 	require.NoError(t, err)
 
 	handler := NewSettingsHandler(db, "", "test-secret", false)

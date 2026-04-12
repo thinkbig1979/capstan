@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"os"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -14,7 +15,15 @@ type DB struct {
 }
 
 func New(dataDir string) (*DB, error) {
-	dbPath := dataDir + "/docker-manager.db"
+	var dbPath string
+	if dataDir == ":memory:" {
+		dbPath = ":memory:"
+	} else {
+		if err := os.MkdirAll(dataDir, 0755); err != nil {
+			return nil, err
+		}
+		dbPath = dataDir + "/docker-manager.db"
+	}
 
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -42,6 +51,18 @@ func New(dataDir string) (*DB, error) {
 	}
 
 	return &DB{db: db}, nil
+}
+
+func NewWithMigrations(dataDir string) (*DB, error) {
+	db, err := New(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := RunMigrations(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 func (d *DB) Close() error {

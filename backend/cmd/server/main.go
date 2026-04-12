@@ -45,15 +45,11 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
-	db, err := database.New(cfg.DataDir)
+	db, err := database.NewWithMigrations(cfg.DataDir)
 	if err != nil {
-		log.Fatal("Failed to open database:", err)
+		log.Fatal("Failed to initialize database:", err)
 	}
 	defer db.Close()
-
-	if err := database.RunMigrations(db); err != nil {
-		log.Fatal("Failed to run migrations:", err)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
