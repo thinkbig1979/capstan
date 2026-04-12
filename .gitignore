@@ -42,3 +42,4 @@ frontend/.env
 
 # Backend embedded frontend (built during Docker build)
 backend/frontend/assets/
+:memory:
