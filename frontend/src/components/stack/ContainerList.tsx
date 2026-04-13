@@ -43,6 +43,11 @@ export function ContainerList({ containers, onContainerAction, onContainerNameAc
     return <Badge variant="outline">{health}</Badge>
   }
 
+  const formatPort = (p: { host: string; container: string; protocol: string }) => {
+    const containerPart = p.container.replace(/\/(tcp|udp|sctp)$/i, '')
+    return `${p.host}:${containerPart}/${p.protocol}`
+  }
+
   return (
     <>
       <div className="hidden md:block rounded-md border">
@@ -77,7 +82,7 @@ export function ContainerList({ containers, onContainerAction, onContainerNameAc
                   {container.ports.length > 0
                     ? container.ports.map((p, i) => (
                         <div key={i}>
-                          {p.host}:{p.container}/{p.protocol}
+                          {formatPort(p)}
                         </div>
                       ))
                     : '-'}
@@ -90,7 +95,7 @@ export function ContainerList({ containers, onContainerAction, onContainerNameAc
                       size="icon"
                       onClick={() => handleTerminal(container.id, container.name)}
                       title="Open Terminal"
-                      aria-label="Open terminal for {container.name}"
+                      aria-label={`Open terminal for ${container.name}`}
                     >
                       <Terminal className="h-4 w-4" />
                     </Button>
@@ -99,7 +104,7 @@ export function ContainerList({ containers, onContainerAction, onContainerNameAc
                       size="icon"
                       onClick={() => handleLogs(container.id, container.name)}
                       title="View Logs"
-                      aria-label="View logs for {container.name}"
+                      aria-label={`View logs for ${container.name}`}
                     >
                       <FileText className="h-4 w-4" />
                     </Button>
@@ -143,7 +148,7 @@ export function ContainerList({ containers, onContainerAction, onContainerNameAc
                   <div className="flex flex-col gap-1 text-sm">
                     {container.ports.map((p, i) => (
                       <span key={i}>
-                        {p.host}:{p.container}/{p.protocol}
+                        {formatPort(p)}
                       </span>
                     ))}
                   </div>

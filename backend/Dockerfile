@@ -26,6 +26,7 @@ WORKDIR /app
 # Install runtime dependencies
 RUN apk add --no-cache \
     docker-cli \
+    docker-cli-compose \
     ca-certificates \
     wget
 

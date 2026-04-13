@@ -238,14 +238,6 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 func (h *ComposeHandler) validatePath(path string) error {
 	cleanPath := filepath.Clean(path)
 
-	if !filepath.IsLocal(cleanPath) {
-		return &models.AppError{
-			Code:    models.ErrPathTraversal,
-			Message: "Path traversal detected",
-			Status:  http.StatusBadRequest,
-		}
-	}
-
 	absPath, err := filepath.Abs(cleanPath)
 	if err != nil {
 		return err
@@ -261,7 +253,7 @@ func (h *ComposeHandler) validatePath(path string) error {
 		return err
 	}
 
-	if strings.HasPrefix(rel, "..") {
+	if strings.HasPrefix(rel, "..") || strings.HasPrefix(rel, "/") {
 		return &models.AppError{
 			Code:    models.ErrPathTraversal,
 			Message: "Path is outside stacks directory",

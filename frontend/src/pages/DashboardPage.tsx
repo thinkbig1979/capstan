@@ -120,7 +120,7 @@ export function DashboardPage() {
 
   const runningCount = stacks?.filter((s) => s.status === 'running').length || 0
   const stoppedCount = stacks?.filter((s) => s.status === 'stopped').length || 0
-  const containerCount = stacks?.reduce((sum, s) => sum + (s.containerCount || 0), 0) || 0
+  const containerCount = stacks?.reduce((sum, s) => sum + (s.containers?.length || s.containerCount || 0), 0) || 0
 
   const isLoading = isLoadingDirectories || isLoadingStacks
 

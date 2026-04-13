@@ -45,10 +45,15 @@ export function StatusBadge({ status, pulse = true, className }: StatusBadgeProp
             variant="outline"
             className={cn(
               config.className,
-              pulse && status === 'running' && 'animate-pulse',
               className,
             )}
           >
+            {status === 'running' && (
+              <span className={cn(
+                'mr-1.5 inline-block h-2 w-2 rounded-full bg-green-500',
+                pulse && 'animate-pulse',
+              )} />
+            )}
             {config.label}
           </Badge>
         </TooltipTrigger>

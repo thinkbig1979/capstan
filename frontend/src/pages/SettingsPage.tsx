@@ -315,7 +315,7 @@ function GlobalEnvContent({
 }
 
 export function SettingsPage() {
-  const { user, logout } = useAuth()
+  const { user, logout, authDisabled } = useAuth()
   const { theme, setTheme } = useUIStore()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -426,6 +426,22 @@ export function SettingsPage() {
           expanded={isSectionExpanded('account-security')}
           onToggle={() => toggleSection('account-security')}
         >
+          {authDisabled ? (
+            <div className="py-4">
+              <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950">
+                <Shield className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                <div>
+                  <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                    Authentication is disabled
+                  </p>
+                  <p className="text-sm text-blue-700 dark:text-blue-300">
+                    Account security settings are not available because authentication is disabled. 
+                    Enable authentication to manage account settings.
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : (
           <div className="space-y-6">
             <div className="space-y-4">
               <h3 className="text-lg font-medium">Account Information</h3>
@@ -514,6 +530,7 @@ export function SettingsPage() {
               </form>
             </div>
           </div>
+          )}
         </CollapsibleSection>
 
         <Dialog open={showPasswordConfirmDialog} onOpenChange={setShowPasswordConfirmDialog}>

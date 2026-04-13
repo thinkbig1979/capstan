@@ -120,6 +120,12 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     const error = validateName(name)
     if (error) {
       setNameError(error)
+      toast.error(error)
+      return
+    }
+
+    if (!composeContent.trim()) {
+      toast.error('Compose content cannot be empty')
       return
     }
 

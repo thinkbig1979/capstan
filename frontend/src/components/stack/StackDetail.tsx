@@ -147,7 +147,7 @@ export function StackDetail({ stack, activeTab, onTabChange, onContainerAction }
     <div className="h-full flex flex-col">
       {stack.isGitRepo && <GitStatusComponent directoryPath={stack.directory} />}
       <Tabs value={activeTab} onValueChange={onTabChange} className="flex-1">
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="compose">Compose</TabsTrigger>
           <TabsTrigger value="environment">Environment</TabsTrigger>

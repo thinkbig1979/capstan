@@ -311,12 +311,12 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
 
         <div className="relative">
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search logs..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-64 pl-8"
-          />
+            <Input
+              placeholder="Search logs..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full sm:w-64 pl-8"
+            />
         </div>
 
         <Select value={selectedContainers[0] || 'all'} onValueChange={handleContainerFilterChange}>

@@ -21,7 +21,7 @@ export function useWebSocket(
   onMessage: (data: string | ArrayBuffer) => void,
   options: UseWebSocketOptions = {}
 ): UseWebSocketReturn {
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, authDisabled } = useAuthStore()
   const wsClientRef = useRef<WSClient | null>(null)
   const onMessageRef = useRef(onMessage)
   const [lastMessage, setLastMessage] = useState<string | ArrayBuffer | null>(null)
@@ -39,7 +39,7 @@ export function useWebSocket(
   }, [])
 
   useEffect(() => {
-    if (!isAuthenticated || options.skip) {
+    if ((!isAuthenticated && !authDisabled) || options.skip) {
       return
     }
 
@@ -88,14 +88,14 @@ export function useWebSocket(
       setWsState('CLOSED')
       setReconnectAttempts(0)
     }
-  }, [path, isAuthenticated, options.skip, options, wrappedOnMessage])
+  }, [path, isAuthenticated, authDisabled, options.skip, options, wrappedOnMessage])
 
   const send = useCallback((data: string | ArrayBuffer) => {
     wsClientRef.current?.send(data)
   }, [])
 
   const reconnect = useCallback(() => {
-    if (!isAuthenticated || options.skip) {
+    if ((!isAuthenticated && !authDisabled) || options.skip) {
       return
     }
     wsClientRef.current?.close()
@@ -104,7 +104,7 @@ export function useWebSocket(
     setTimeout(() => {
       wsClientRef.current?.connect(path, wrappedOnMessage, options)
     }, 100)
-  }, [path, isAuthenticated, options, wrappedOnMessage])
+  }, [path, isAuthenticated, authDisabled, options, wrappedOnMessage])
 
   const disconnect = useCallback(() => {
     wsClientRef.current?.close()

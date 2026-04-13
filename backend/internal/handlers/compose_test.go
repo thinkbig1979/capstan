@@ -220,6 +220,118 @@ func TestComposeHandler_Lint_Valid(t *testing.T) {
 	assert.True(t, response["valid"].(bool))
 }
 
+func TestComposeHandler_validatePath(t *testing.T) {
+	cfg := &config.Config{StacksDir: "/opt/stacks"}
+	linter := services.NewLinterService()
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	handler := NewComposeHandler(linter, db, cfg)
+
+	tests := []struct {
+		name        string
+		path        string
+		expectError bool
+	}{
+		{
+			name:        "valid path within stacks dir",
+			path:        "/opt/stacks/test-stack/compose.yaml",
+			expectError: false,
+		},
+		{
+			name:        "path traversal escapes stacks dir",
+			path:        "/opt/stacks/../../etc/passwd",
+			expectError: true,
+		},
+		{
+			name:        "valid path in nested subdirectory",
+			path:        "/opt/stacks/myapp/config/compose.yaml",
+			expectError: false,
+		},
+		{
+			name:        "path traversal with intermediate dots",
+			path:        "/opt/stacks/../etc/shadow",
+			expectError: true,
+		},
+		{
+			name:        "absolute path outside stacks dir",
+			path:        "/etc/passwd",
+			expectError: true,
+		},
+		{
+			name:        "valid path at stacks dir root",
+			path:        "/opt/stacks/compose.yaml",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := handler.validatePath(tt.path)
+			if tt.expectError {
+				assert.Error(t, err)
+				var appErr *models.AppError
+				assert.ErrorAs(t, err, &appErr)
+				assert.Equal(t, models.ErrPathTraversal, appErr.Code)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestEnvHandler_validatePath(t *testing.T) {
+	cfg := &config.Config{StacksDir: "/opt/stacks"}
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	handler := NewEnvHandler(db, cfg)
+
+	tests := []struct {
+		name        string
+		path        string
+		expectError bool
+	}{
+		{
+			name:        "valid env path within stacks dir",
+			path:        "/opt/stacks/test-stack/.env",
+			expectError: false,
+		},
+		{
+			name:        "path traversal escapes stacks dir",
+			path:        "/opt/stacks/../../etc/passwd",
+			expectError: true,
+		},
+		{
+			name:        "valid path in nested subdirectory",
+			path:        "/opt/stacks/myapp/config/.env",
+			expectError: false,
+		},
+		{
+			name:        "absolute path outside stacks dir",
+			path:        "/etc/shadow",
+			expectError: true,
+		},
+		{
+			name:        "valid path at stacks dir root",
+			path:        "/opt/stacks/.env",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := handler.validatePath(tt.path)
+			if tt.expectError {
+				assert.Error(t, err)
+				var appErr *models.AppError
+				assert.ErrorAs(t, err, &appErr)
+				assert.Equal(t, models.ErrPathTraversal, appErr.Code)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestComposeHandler_Lint_Invalid(t *testing.T) {
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)

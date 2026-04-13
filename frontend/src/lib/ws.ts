@@ -24,7 +24,9 @@ export class WSClient {
 
   connect(path: string, onMessage: (data: string | ArrayBuffer) => void, options: WSClientOptions = {}) {
     const token = useAuthStore.getState().token
-    if (!token) {
+    const authDisabled = useAuthStore.getState().authDisabled
+
+    if (!token && !authDisabled) {
       console.error('Cannot connect: no JWT token available')
       return
     }
@@ -35,7 +37,9 @@ export class WSClient {
     this.state = 'CONNECTING'
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${protocol}//${window.location.host}/api/v1${path}?token=${token}`
+    const url = token
+      ? `${protocol}//${window.location.host}/api/v1${path}?token=${token}`
+      : `${protocol}//${window.location.host}/api/v1${path}`
 
     this.ws = new WebSocket(url)
     this.ws.binaryType = options.binary ? 'arraybuffer' : 'blob'
