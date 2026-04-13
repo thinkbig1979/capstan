@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
 import { StackDetail } from '@/components/stack/StackDetail'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -8,26 +8,34 @@ import { AlertCircle, RefreshCw, Home, Trash2 } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { classifyError } from '@/lib/error-handler'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useConfirm } from '@/components/ConfirmDialog'
 import { useStackStore } from '@/stores/stackStore'
 
 export function StackPage() {
-  const { id, tab = 'overview' } = useParams<{ id: string; tab?: string }>()
+  const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
   const { confirm, ConfirmComponent } = useConfirm()
   const [isDeleting, setIsDeleting] = useState(false)
-  const { setSelectedStack, setActiveTab } = useStackStore()
+  const { setSelectedStack } = useStackStore()
+  const initialTabRef = useRef<string | null>(null)
+
+  const tabFromPath = location.pathname.split('/').slice(3).join('/') || 'overview'
+  if (initialTabRef.current === null) {
+    initialTabRef.current = tabFromPath
+  }
+  const [activeTab, setActiveTab] = useState(initialTabRef.current)
 
   useEffect(() => {
     setSelectedStack(id ?? null)
-    setActiveTab(tab || 'overview')
-  }, [id, tab, setSelectedStack, setActiveTab])
+  }, [id, setSelectedStack])
 
   const handleTabChange = (newTab: string) => {
-    navigate(`/stacks/${id}/${newTab}`)
+    setActiveTab(newTab)
+    navigate(`/stacks/${id}/${newTab}`, { replace: true })
   }
 
   const { data: stack, isLoading, error, refetch } = useQuery({
@@ -172,7 +180,7 @@ export function StackPage() {
 
         <StackDetail
           stack={stack}
-          activeTab={tab || 'overview'}
+          activeTab={activeTab}
           onTabChange={handleTabChange}
           onContainerAction={handleContainerAction}
         />

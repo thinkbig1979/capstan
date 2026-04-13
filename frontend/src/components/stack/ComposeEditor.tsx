@@ -55,7 +55,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     queryKey: ['stack', stackId, 'compose'],
     queryFn: async () => {
       const response = await apiClient.get(`/stacks/${stackId}/compose`)
-      return response.data as string
+      return (response.data as { content: string }).content
     },
   })
 
