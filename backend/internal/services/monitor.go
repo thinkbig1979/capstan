@@ -50,16 +50,21 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 		defer close(statsChan)
 
 		var wg sync.WaitGroup
-		containerChans := make([]<-chan models.ContainerMetrics, len(containerIDs))
+		containerChans := make([]chan models.ContainerMetrics, len(containerIDs))
+		for i := range containerChans {
+			containerChans[i] = make(chan models.ContainerMetrics, 10)
+		}
 		errors := make(chan error, len(containerIDs))
 
 		for i, containerID := range containerIDs {
 			wg.Add(1)
 			i := i
 			containerID := containerID
+			ch := containerChans[i]
 
 			go func() {
 				defer wg.Done()
+				defer close(ch)
 
 				stats, err := s.client.ContainerStats(ctx, containerID, true)
 				if err != nil {
@@ -68,9 +73,6 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 					return
 				}
 				defer stats.Body.Close()
-
-				ch := make(chan models.ContainerMetrics, 10)
-				containerChans[i] = ch
 
 				decoder := json.NewDecoder(stats.Body)
 
@@ -119,9 +121,6 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 		metricsMu := sync.Mutex{}
 
 		for _, ch := range containerChans {
-			if ch == nil {
-				continue
-			}
 			go func(c <-chan models.ContainerMetrics) {
 				for metrics := range c {
 					metricsMu.Lock()

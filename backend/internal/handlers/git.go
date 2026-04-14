@@ -35,41 +35,62 @@ func NewGitHandler(git *services.GitService, docker *services.DockerService, db 
 }
 
 func (h *GitHandler) RegisterRoutes(group *gin.RouterGroup) {
-	group.GET("/:path/git", h.GetStatus)
-	group.POST("/:path/git/pull", h.Pull)
-	group.GET("/:path/git/log", h.GetLog)
-	group.GET("/:path/git/diff/:hash", h.GetDiff)
+	group.GET("", h.GetStatus)
+	group.POST("/pull", h.Pull)
+	group.GET("/log", h.GetLog)
+	group.GET("/diff/:hash", h.GetDiff)
 }
 
-func (h *GitHandler) resolvePath(c *gin.Context) (string, error) {
-	pathParam := c.Param("path")
-
-	decodedPath, err := url.PathUnescape(pathParam)
-	if err != nil {
-		return "", models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid path encoding")
+func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error) {
+	stackID := c.Query("stackId")
+	if stackID != "" {
+		stack, err := h.db.GetStack(stackID)
+		if err != nil {
+			return "", "", models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found")
+		}
+		normalizedDir, err := filepath.Abs(stack.Directory)
+		if err != nil {
+			return "", "", models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve stack directory")
+		}
+		return normalizedDir, stackID, nil
 	}
 
-	absPath := filepath.Join(h.config.StacksDir, decodedPath)
+	dirParam := c.Query("dir")
+	if dirParam == "" {
+		return "", "", models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Missing stackId or dir query parameter")
+	}
+
+	decodedPath, err := url.PathUnescape(dirParam)
+	if err != nil {
+		return "", "", models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid path encoding")
+	}
+
+	var absPath string
+	if filepath.IsAbs(decodedPath) {
+		absPath = decodedPath
+	} else {
+		absPath = filepath.Join(h.config.StacksDir, decodedPath)
+	}
 
 	normalizedAbs, err := filepath.Abs(absPath)
 	if err != nil {
-		return "", models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid path")
+		return "", "", models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid path")
 	}
 
 	normalizedStacks, err := filepath.Abs(h.config.StacksDir)
 	if err != nil {
-		return "", models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve stacks directory")
+		return "", "", models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve stacks directory")
 	}
 
 	if !strings.HasPrefix(normalizedAbs, normalizedStacks) {
-		return "", models.NewAppError(http.StatusForbidden, models.ErrPathTraversal, "Path traversal not allowed")
+		return "", "", models.NewAppError(http.StatusForbidden, models.ErrPathTraversal, "Path traversal not allowed")
 	}
 
-	return normalizedAbs, nil
+	return normalizedAbs, "", nil
 }
 
 func (h *GitHandler) GetStatus(c *gin.Context) {
-	absPath, err := h.resolvePath(c)
+	absPath, _, err := h.resolvePathFromStack(c)
 	if err != nil {
 		models.HandleError(c, err)
 		return
@@ -96,7 +117,7 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 }
 
 func (h *GitHandler) Pull(c *gin.Context) {
-	absPath, err := h.resolvePath(c)
+	absPath, _, err := h.resolvePathFromStack(c)
 	if err != nil {
 		models.HandleError(c, err)
 		return
@@ -184,7 +205,7 @@ func (h *GitHandler) formatPullDetail(result *models.PullResult, redeployedStack
 }
 
 func (h *GitHandler) GetLog(c *gin.Context) {
-	absPath, err := h.resolvePath(c)
+	absPath, _, err := h.resolvePathFromStack(c)
 	if err != nil {
 		models.HandleError(c, err)
 		return
@@ -227,7 +248,7 @@ func (h *GitHandler) GetLog(c *gin.Context) {
 }
 
 func (h *GitHandler) GetDiff(c *gin.Context) {
-	absPath, err := h.resolvePath(c)
+	absPath, _, err := h.resolvePathFromStack(c)
 	if err != nil {
 		models.HandleError(c, err)
 		return

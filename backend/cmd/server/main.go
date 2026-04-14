@@ -27,7 +27,7 @@ func SecurityHeaders() gin.HandlerFunc {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-XSS-Protection", "1; mode=block")
 		c.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none';")
+		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://localhost:* wss://localhost:*; frame-ancestors 'none';")
 		c.Next()
 	}
 }
@@ -190,7 +190,8 @@ func main() {
 	composeHandler.RegisterRoutes(stacksGroup)
 
 	gitHandler := handlers.NewGitHandler(services.NewGitService(cfg), dockerService, db, cfg)
-	gitHandler.RegisterRoutes(directoriesGroup)
+	gitGroup := protected.Group("/git")
+	gitHandler.RegisterRoutes(gitGroup)
 
 	logsHandler := handlers.NewLogsHandler(dockerService, db, cfg.JWTSecret, cfg.AuthDisabled)
 	logsHandler.RegisterRoutes(protected)

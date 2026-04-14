@@ -3,7 +3,9 @@ package services
 import (
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,7 +32,21 @@ func NewGitService(cfg *config.Config) *GitService {
 }
 
 func (s *GitService) GetStatus(dirPath string) (*models.GitStatusResult, error) {
-	slog.Debug("Getting git status", "path", dirPath)
+	result, err := s.getStatusGoGit(dirPath)
+	if err != nil {
+		slog.Debug("go-git failed, falling back to CLI", "path", dirPath, "error", err)
+		return s.getStatusCLI(dirPath)
+	}
+	return result, nil
+}
+
+func (s *GitService) getStatusGoGit(dirPath string) (result *models.GitStatusResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Debug("go-git panicked", "path", dirPath, "panic", r)
+			err = fmt.Errorf("go-git panic: %v", r)
+		}
+	}()
 
 	repo, err := s.openRepo(dirPath)
 	if err != nil {
@@ -84,58 +100,94 @@ func (s *GitService) GetStatus(dirPath string) (*models.GitStatusResult, error) 
 	}, nil
 }
 
-func (s *GitService) Pull(dirPath string) (*models.PullResult, error) {
-	slog.Debug("Pulling git changes", "path", dirPath)
-
-	repo, err := s.openRepo(dirPath)
+func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, error) {
+	branch, err := s.gitCommand(dirPath, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("not a git repository: %w", err)
 	}
 
-	worktree, err := repo.Worktree()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get worktree: %w", err)
-	}
-
-	status, err := worktree.Status()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get status: %w", err)
-	}
-
-	if !status.IsClean() {
-		return nil, models.NewAppError(400, models.ErrGitDirty, "Working directory has uncommitted changes")
-	}
-
-	head, err := repo.Head()
+	commitHash, err := s.gitCommand(dirPath, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
-	previousCommit := head.Hash().String()
+	subject, _ := s.gitCommand(dirPath, "log", "-1", "--format=%s")
+	author, _ := s.gitCommand(dirPath, "log", "-1", "--format=%an")
+	email, _ := s.gitCommand(dirPath, "log", "-1", "--format=%ae")
+	dateStr, _ := s.gitCommand(dirPath, "log", "-1", "--format=%aI")
 
-	auth, err := s.getAuthMethod(dirPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get auth: %w", err)
+	shortHash := commitHash
+	if len(shortHash) > 7 {
+		shortHash = shortHash[:7]
 	}
 
-	pullOpts := &git.PullOptions{
-		RemoteName:      "origin",
-		SingleBranch:    true,
-		Force:           false,
-		Progress:        nil,
-		Auth:            auth,
-		InsecureSkipTLS: false,
+	dirty := false
+	if output, err := s.gitCommand(dirPath, "status", "--porcelain"); err == nil {
+		dirty = strings.TrimSpace(output) != ""
 	}
 
-	if auth == nil {
-		pullOpts.Auth = s.getPublicAuth()
-	}
-
-	if err := worktree.Pull(pullOpts); err != nil {
-		if err == transport.ErrEmptyRemoteRepository {
-			return nil, models.NewAppError(400, models.ErrGitConflict, "Remote repository is empty")
+	ahead := 0
+	behind := 0
+	if output, err := s.gitCommand(dirPath, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"); err == nil {
+		parts := strings.Fields(output)
+		if len(parts) == 2 {
+			behind, _ = strconv.Atoi(parts[0])
+			ahead, _ = strconv.Atoi(parts[1])
 		}
-		if err == git.NoErrAlreadyUpToDate {
+	}
+
+	remoteURL, _ := s.gitCommand(dirPath, "remote", "get-url", "origin")
+
+	return &models.GitStatusResult{
+		Branch: branch,
+		Commit: &models.GitCommit{
+			Hash:    commitHash,
+			Short:   shortHash,
+			Author:  author,
+			Email:   email,
+			Message: subject,
+			Date:    dateStr,
+		},
+		Dirty:     dirty,
+		Ahead:     ahead,
+		Behind:    behind,
+		RemoteURL: remoteURL,
+	}, nil
+}
+
+func (s *GitService) gitCommand(dirPath string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-c", "safe.directory=*"}, args...)...)
+	cmd.Dir = dirPath
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w (%s)", args[0], err, strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func (s *GitService) Pull(dirPath string) (*models.PullResult, error) {
+	return s.pullCLI(dirPath)
+}
+
+func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
+	slog.Debug("Pulling git changes (CLI)", "path", dirPath)
+
+	dirtyOutput, err := s.gitCommand(dirPath, "status", "--porcelain")
+	if err != nil {
+		return nil, fmt.Errorf("failed to check status: %w", err)
+	}
+	if strings.TrimSpace(dirtyOutput) != "" {
+		return nil, models.NewAppError(400, models.ErrGitDirty, "Working directory has uncommitted changes")
+	}
+
+	previousCommit, err := s.gitCommand(dirPath, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get HEAD: %w", err)
+	}
+
+	_, err = s.gitCommand(dirPath, "pull", "--ff-only")
+	if err != nil {
+		if strings.Contains(err.Error(), "Already up to date") || strings.Contains(err.Error(), "Already up-to-date") {
 			return &models.PullResult{
 				PreviousCommit: previousCommit,
 				CurrentCommit:  previousCommit,
@@ -145,17 +197,14 @@ func (s *GitService) Pull(dirPath string) (*models.PullResult, error) {
 		return nil, models.NewAppErrorWithDetails(500, models.ErrGitConflict, "Failed to pull", err.Error())
 	}
 
-	head, err = repo.Head()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get new HEAD: %w", err)
-	}
+	currentCommit, _ := s.gitCommand(dirPath, "rev-parse", "HEAD")
 
-	currentCommit := head.Hash().String()
-
-	changedFiles, err := s.getChangedFiles(repo, previousCommit, currentCommit)
-	if err != nil {
-		slog.Warn("Failed to get changed files", "error", err)
-		changedFiles = []string{}
+	changedFiles := []string{}
+	if previousCommit != currentCommit {
+		diffOutput, err := s.gitCommand(dirPath, "diff", "--name-only", previousCommit, currentCommit)
+		if err == nil && diffOutput != "" {
+			changedFiles = strings.Split(diffOutput, "\n")
+		}
 	}
 
 	return &models.PullResult{
@@ -173,49 +222,46 @@ func (s *GitService) GetLog(dirPath string, limit, offset int) (*models.LogResul
 		limit = 200
 	}
 
-	slog.Debug("Getting git log", "path", dirPath, "limit", limit, "offset", offset)
+	return s.getLogCLI(dirPath, limit, offset)
+}
 
-	repo, err := s.openRepo(dirPath)
+func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogResult, error) {
+	totalStr, err := s.gitCommand(dirPath, "rev-list", "--count", "HEAD")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to count commits: %w", err)
 	}
+	total, _ := strconv.Atoi(totalStr)
 
-	head, err := repo.Head()
+	skip := offset
+	fetchCount := limit
+	logFormat := "%H%n%h%n%an%n%ae%n%s%n%aI%n---COMMIT_SEP---"
+	output, err := s.gitCommand(dirPath, "log", fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("--max-count=%d", fetchCount), fmt.Sprintf("--format=%s", logFormat))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get HEAD: %w", err)
-	}
-
-	commit, err := repo.CommitObject(head.Hash())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get commit: %w", err)
+		return nil, fmt.Errorf("failed to get log: %w", err)
 	}
 
 	commits := []models.GitCommit{}
-	count := 0
-	total := 0
-	current := commit
-
-	for current != nil {
-		total++
-		if count < offset {
-			current = s.getParent(current)
+	entries := strings.Split(output, "---COMMIT_SEP---")
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
 			continue
 		}
-
-		if len(commits) >= limit {
-			break
+		lines := strings.SplitN(entry, "\n", 6)
+		if len(lines) < 6 {
+			continue
 		}
-
-		commits = append(commits, *s.mapCommit(current))
-		count++
-
-		current = s.getParent(current)
+		commits = append(commits, models.GitCommit{
+			Hash:    strings.TrimSpace(lines[0]),
+			Short:   strings.TrimSpace(lines[1]),
+			Author:  strings.TrimSpace(lines[2]),
+			Email:   strings.TrimSpace(lines[3]),
+			Message: strings.TrimSpace(lines[4]),
+			Date:    strings.TrimSpace(lines[5]),
+		})
 	}
 
-	hasMore := false
-	if current != nil {
-		hasMore = true
-	}
+	hasMore := offset+len(commits) < total
 
 	return &models.LogResult{
 		Commits: commits,
@@ -225,62 +271,42 @@ func (s *GitService) GetLog(dirPath string, limit, offset int) (*models.LogResul
 }
 
 func (s *GitService) GetDiff(dirPath string, commitHash string) (*models.DiffResult, error) {
-	slog.Debug("Getting git diff", "path", dirPath, "commit", commitHash)
+	return s.getDiffCLI(dirPath, commitHash)
+}
 
-	repo, err := s.openRepo(dirPath)
-	if err != nil {
-		return nil, err
-	}
-
-	hash := plumbing.NewHash(commitHash)
-	commit, err := repo.CommitObject(hash)
+func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.DiffResult, error) {
+	logOutput, err := s.gitCommand(dirPath, "log", "-1", "--format=%H%n%h%n%an%n%ae%n%s%n%aI", commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get commit: %w", err)
 	}
 
-	parent := s.getParent(commit)
-
-	var patch *object.Patch
-	var files []string
-
-	if parent != nil {
-		patch, err = commit.Patch(parent)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate patch: %w", err)
-		}
-
-		filePatches := patch.FilePatches()
-		for _, filePatch := range filePatches {
-			from, to := filePatch.Files()
-			if from != nil {
-				files = append(files, from.Path())
-			}
-			if to != nil && (from == nil || from.Path() != to.Path()) {
-				files = append(files, to.Path())
-			}
-		}
-	} else {
-		tree, err := commit.Tree()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get tree: %w", err)
-		}
-
-		tree.Files().ForEach(func(f *object.File) error {
-			files = append(files, f.Name)
-			return nil
-		})
-
-		patch = nil
+	lines := strings.SplitN(logOutput, "\n", 6)
+	if len(lines) < 6 {
+		return nil, fmt.Errorf("unexpected log format")
+	}
+	commit := &models.GitCommit{
+		Hash:    strings.TrimSpace(lines[0]),
+		Short:   strings.TrimSpace(lines[1]),
+		Author:  strings.TrimSpace(lines[2]),
+		Email:   strings.TrimSpace(lines[3]),
+		Message: strings.TrimSpace(lines[4]),
+		Date:    strings.TrimSpace(lines[5]),
 	}
 
-	diffStr := ""
-	if patch != nil {
-		diffStr = patch.String()
+	diffOutput, err := s.gitCommand(dirPath, "show", "--format=", commitHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get diff: %w", err)
+	}
+
+	filesOutput, _ := s.gitCommand(dirPath, "diff-tree", "--no-commit-id", "--name-only", "-r", commitHash)
+	var files []string
+	if filesOutput != "" {
+		files = strings.Split(filesOutput, "\n")
 	}
 
 	return &models.DiffResult{
-		Commit: s.mapCommit(commit),
-		Diff:   diffStr,
+		Commit: commit,
+		Diff:   diffOutput,
 		Files:  files,
 	}, nil
 }
@@ -293,41 +319,31 @@ func (s *GitService) GetLogForFile(dirPath, filePath string, limit int) (*models
 		limit = 200
 	}
 
-	slog.Debug("Getting git log for file", "path", dirPath, "file", filePath, "limit", limit)
-
-	repo, err := s.openRepo(dirPath)
+	logFormat := "%H%n%h%n%an%n%ae%n%s%n%aI%n---COMMIT_SEP---"
+	output, err := s.gitCommand(dirPath, "log", fmt.Sprintf("--max-count=%d", limit), fmt.Sprintf("--format=%s", logFormat), "--", filePath)
 	if err != nil {
-		return nil, err
-	}
-
-	head, err := repo.Head()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get HEAD: %w", err)
-	}
-
-	headCommit, err := repo.CommitObject(head.Hash())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get commit: %w", err)
+		return nil, fmt.Errorf("failed to get log: %w", err)
 	}
 
 	commits := []models.GitCommit{}
-	current := headCommit
-
-	for current != nil {
-		if len(commits) >= limit {
-			break
+	entries := strings.Split(output, "---COMMIT_SEP---")
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
 		}
-
-		affected, err := s.fileAffectedByCommit(current, filePath)
-		if err != nil {
-			slog.Warn("Failed to check if file affected", "error", err)
+		lines := strings.SplitN(entry, "\n", 6)
+		if len(lines) < 6 {
+			continue
 		}
-
-		if affected {
-			commits = append(commits, *s.mapCommit(current))
-		}
-
-		current = s.getParent(current)
+		commits = append(commits, models.GitCommit{
+			Hash:    strings.TrimSpace(lines[0]),
+			Short:   strings.TrimSpace(lines[1]),
+			Author:  strings.TrimSpace(lines[2]),
+			Email:   strings.TrimSpace(lines[3]),
+			Message: strings.TrimSpace(lines[4]),
+			Date:    strings.TrimSpace(lines[5]),
+		})
 	}
 
 	return &models.LogResult{
@@ -338,9 +354,10 @@ func (s *GitService) GetLogForFile(dirPath, filePath string, limit int) (*models
 }
 
 func (s *GitService) openRepo(dirPath string) (*git.Repository, error) {
-	fs := osfs.New(dirPath)
-	stor := filesystem.NewStorage(fs, nil)
-	repo, err := git.Open(stor, fs)
+	dotGit := osfs.New(filepath.Join(dirPath, ".git"))
+	stor := filesystem.NewStorage(dotGit, nil)
+	worktree := osfs.New(dirPath)
+	repo, err := git.Open(stor, worktree)
 	if err != nil {
 		if err == git.ErrRepositoryNotExists {
 			return nil, models.NewAppError(404, models.ErrGitNotRepo, "Not a git repository")

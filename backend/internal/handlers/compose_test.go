@@ -31,6 +31,8 @@ func TestComposeHandler_Get_Success(t *testing.T) {
 	err = os.WriteFile(composePath, []byte(composeContent), 0644)
 	require.NoError(t, err)
 
+	createTestDirectory(t, db, stackDir)
+
 	stack := models.Stack{
 		ID:          "stack1:default",
 		Directory:   stackDir,
@@ -103,6 +105,8 @@ func TestComposeHandler_Put_Success(t *testing.T) {
 	err = os.WriteFile(composePath, []byte(composeContent), 0644)
 	require.NoError(t, err)
 
+	createTestDirectory(t, db, stackDir)
+
 	stack := models.Stack{
 		ID:          "stack1:default",
 		Directory:   stackDir,
@@ -123,7 +127,7 @@ func TestComposeHandler_Put_Success(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.PUT("/stacks/:id/compose", handler.Put)
+	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), handler.Put)
 
 	req := httptest.NewRequest(http.MethodPut, "/stacks/stack1:default/compose", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
@@ -156,6 +160,8 @@ func TestComposeHandler_Put_ValidationError(t *testing.T) {
 	err = os.WriteFile(composePath, []byte(composeContent), 0644)
 	require.NoError(t, err)
 
+	createTestDirectory(t, db, stackDir)
+
 	stack := models.Stack{
 		ID:          "stack1:default",
 		Directory:   stackDir,
@@ -176,7 +182,7 @@ func TestComposeHandler_Put_ValidationError(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.PUT("/stacks/:id/compose", handler.Put)
+	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), handler.Put)
 
 	req := httptest.NewRequest(http.MethodPut, "/stacks/stack1:default/compose", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
@@ -340,7 +346,7 @@ func TestComposeHandler_Lint_Invalid(t *testing.T) {
 	linter := services.NewLinterService()
 	handler := NewComposeHandler(linter, db, cfg)
 
-	content := "services:\n  web:\n    image: nginx:latest"
+	content := "services:\n  web:\n    restart: unless-stopped"
 	reqBody := map[string]string{"content": content}
 	reqBytes, _ := json.Marshal(reqBody)
 

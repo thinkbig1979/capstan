@@ -30,6 +30,8 @@ func TestEnvHandler_Get_Success(t *testing.T) {
 	err = os.WriteFile(envPath, []byte(envContent), 0644)
 	require.NoError(t, err)
 
+	createTestDirectory(t, db, stackDir)
+
 	stack := models.Stack{
 		ID:          "stack1:default",
 		Directory:   stackDir,
@@ -69,6 +71,8 @@ func TestEnvHandler_Get_NoEnvFile(t *testing.T) {
 
 	stackDir := filepath.Join(tempDir, "stack1")
 	os.MkdirAll(stackDir, 0755)
+
+	createTestDirectory(t, db, stackDir)
 
 	stack := models.Stack{
 		ID:          "stack1:default",
@@ -113,6 +117,8 @@ func TestEnvHandler_Put_Success(t *testing.T) {
 	err = os.WriteFile(envPath, []byte(envContent), 0644)
 	require.NoError(t, err)
 
+	createTestDirectory(t, db, stackDir)
+
 	stack := models.Stack{
 		ID:          "stack1:default",
 		Directory:   stackDir,
@@ -132,7 +138,7 @@ func TestEnvHandler_Put_Success(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.PUT("/stacks/:id/env", handler.Put)
+	router.PUT("/stacks/:id/env", authContextMiddleware("test-user-id"), handler.Put)
 
 	req := httptest.NewRequest(http.MethodPut, "/stacks/stack1:default/env", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
@@ -166,6 +172,8 @@ func TestEnvHandler_Put_WithEntries(t *testing.T) {
 	err = os.WriteFile(envPath, []byte(envContent), 0644)
 	require.NoError(t, err)
 
+	createTestDirectory(t, db, stackDir)
+
 	stack := models.Stack{
 		ID:          "stack1:default",
 		Directory:   stackDir,
@@ -188,7 +196,7 @@ func TestEnvHandler_Put_WithEntries(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.PUT("/stacks/:id/env", handler.Put)
+	router.PUT("/stacks/:id/env", authContextMiddleware("test-user-id"), handler.Put)
 
 	req := httptest.NewRequest(http.MethodPut, "/stacks/stack1:default/env", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")

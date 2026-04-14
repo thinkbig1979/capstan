@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +44,50 @@ func createTestUser(t *testing.T, db *database.DB, username, password string) mo
 
 func authHeader(token string) string {
 	return "Bearer " + token
+}
+
+func createTestDirectory(t *testing.T, db *database.DB, path string) {
+	dir := models.Directory{
+		Path:      path,
+		Name:      filepath.Base(path),
+		IsGitRepo: false,
+		ScannedAt: time.Now(),
+	}
+	err := db.UpsertDirectory(dir)
+	require.NoError(t, err)
+}
+
+func authContextMiddleware(userID string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set("userID", userID)
+		c.Next()
+	}
+}
+
+func setupTestRouterWithAuth(handler *AuthHandler, jwtSecret string) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	jwtAuth := func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader != "" {
+			token := strings.TrimPrefix(authHeader, "Bearer ")
+			claims, err := parseJWT(token, jwtSecret)
+			if err == nil {
+				if sub, ok := claims["sub"].(string); ok {
+					c.Set("userID", sub)
+				}
+			}
+		}
+		c.Next()
+	}
+
+	router.GET("/auth/status", handler.Status)
+	router.POST("/auth/setup", handler.Setup)
+	router.POST("/auth/login", handler.Login)
+	router.POST("/auth/logout", jwtAuth, handler.Logout)
+	router.GET("/auth/me", jwtAuth, handler.Me)
+	return router
 }
 
 var testTime = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)

@@ -87,7 +87,7 @@ func TestDirectoriesHandler_Get_Success(t *testing.T) {
 	handler := NewDirectoriesHandler(scanner, db)
 
 	dir := models.Directory{
-		Path:      "/tmp/test/stack1",
+		Path:      "stack1",
 		Name:      "stack1",
 		IsGitRepo: false,
 		ScannedAt: testTime,
@@ -97,7 +97,7 @@ func TestDirectoriesHandler_Get_Success(t *testing.T) {
 
 	stack := models.Stack{
 		ID:          "stack1:default",
-		Directory:   "/tmp/test/stack1",
+		Directory:   "stack1",
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
 		ProjectName: "stack1-default",
@@ -110,7 +110,7 @@ func TestDirectoriesHandler_Get_Success(t *testing.T) {
 	router := gin.New()
 	router.GET("/directories/:path", handler.Get)
 
-	req := httptest.NewRequest(http.MethodGet, "/directories/tmp/test/stack1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/directories/stack1", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 

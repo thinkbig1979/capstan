@@ -140,7 +140,7 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 		return
 	}
 
-	lintResults, err := h.linter.Lint(req.Content)
+	lintResults, err := h.linter.LintWithDir(req.Content, stack.Directory)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.NewAppError(
 			http.StatusInternalServerError,
@@ -201,6 +201,10 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 }
 
 func (h *ComposeHandler) Lint(c *gin.Context) {
+	id := c.Param("id")
+
+	stack, _ := h.db.GetStack(id)
+
 	var req ComposeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
@@ -211,7 +215,12 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 		return
 	}
 
-	lintResults, err := h.linter.Lint(req.Content)
+	workingDir := "/tmp"
+	if stack != nil {
+		workingDir = stack.Directory
+	}
+
+	lintResults, err := h.linter.LintWithDir(req.Content, workingDir)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.NewAppError(
 			http.StatusInternalServerError,

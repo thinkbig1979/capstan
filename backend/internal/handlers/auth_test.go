@@ -227,7 +227,7 @@ func TestAuthHandler_Logout_Success(t *testing.T) {
 	user := createTestUser(t, db, "testuser", "password123")
 
 	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
-	router := setupTestRouter(handler)
+	router := setupTestRouterWithAuth(handler, "test-secret-key-32-chars")
 
 	token := generateTestToken(user.ID, user.Username, "session-123", "test-secret-key-32-chars")
 
@@ -246,7 +246,7 @@ func TestAuthHandler_Me_Success(t *testing.T) {
 	user := createTestUser(t, db, "testuser", "password123")
 
 	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
-	router := setupTestRouter(handler)
+	router := setupTestRouterWithAuth(handler, "test-secret-key-32-chars")
 
 	token := generateTestToken(user.ID, user.Username, "session-123", "test-secret-key-32-chars")
 

@@ -20,6 +20,10 @@ func NewLinterService() *LinterService {
 }
 
 func (l *LinterService) Lint(content string) ([]models.LintResult, error) {
+	return l.LintWithDir(content, "/tmp")
+}
+
+func (l *LinterService) LintWithDir(content string, workingDir string) ([]models.LintResult, error) {
 	var results []models.LintResult
 
 	var parsed map[string]interface{}
@@ -53,7 +57,7 @@ func (l *LinterService) Lint(content string) ([]models.LintResult, error) {
 				Filename: "docker-compose.yml",
 			},
 		},
-		WorkingDir: "/tmp",
+		WorkingDir: workingDir,
 	}
 
 	composeConfig, err := loader.LoadWithContext(context.Background(), configDetails, func(o *loader.Options) {
@@ -79,7 +83,7 @@ func (l *LinterService) Lint(content string) ([]models.LintResult, error) {
 			results = append(results, models.LintResult{
 				Level:   "error",
 				Line:    line,
-				Message: fmt.Sprintf("Service '%s' has neither 'image' nor 'build' specified", serviceName),
+				Message: fmt.Sprintf("Service '%s' has neither 'image' nor 'build' specified. Docker Compose needs at least one to create the container.", serviceName),
 				Rule:    "missing-image",
 			})
 		}
@@ -89,7 +93,7 @@ func (l *LinterService) Lint(content string) ([]models.LintResult, error) {
 				results = append(results, models.LintResult{
 					Level:   "warning",
 					Line:    line,
-					Message: fmt.Sprintf("Service '%s' uses :latest tag (image: %s)", serviceName, service.Image),
+					Message: fmt.Sprintf("Service '%s' uses :latest tag (image: %s). The 'latest' tag is mutable and can point to different images over time, leading to unpredictable deployments. Consider pinning to a specific version tag.", serviceName, service.Image),
 					Rule:    "latest-tag",
 				})
 			}
@@ -99,7 +103,7 @@ func (l *LinterService) Lint(content string) ([]models.LintResult, error) {
 			results = append(results, models.LintResult{
 				Level:   "warning",
 				Line:    line,
-				Message: fmt.Sprintf("Service '%s' has no restart policy specified", serviceName),
+				Message: fmt.Sprintf("Service '%s' has no restart policy. Without one, the container won't automatically restart on failure or host reboot. Consider adding `restart: unless-stopped` or `restart: always`.", serviceName),
 				Rule:    "no-restart-policy",
 			})
 		}
@@ -108,7 +112,7 @@ func (l *LinterService) Lint(content string) ([]models.LintResult, error) {
 			results = append(results, models.LintResult{
 				Level:   "warning",
 				Line:    line,
-				Message: fmt.Sprintf("Service '%s' uses privileged mode", serviceName),
+				Message: fmt.Sprintf("Service '%s' runs in privileged mode, which grants full host access and bypasses container isolation. This is a security risk. Use specific capabilities (cap_add) instead if possible.", serviceName),
 				Rule:    "privileged-mode",
 			})
 		}
@@ -117,7 +121,7 @@ func (l *LinterService) Lint(content string) ([]models.LintResult, error) {
 			results = append(results, models.LintResult{
 				Level:   "info",
 				Line:    line,
-				Message: fmt.Sprintf("Service '%s' uses host network mode", serviceName),
+				Message: fmt.Sprintf("Service '%s' uses host network mode, which shares the host's network stack and exposes all ports without mapping. Ensure this is intentional.", serviceName),
 				Rule:    "host-network",
 			})
 		}
@@ -126,7 +130,7 @@ func (l *LinterService) Lint(content string) ([]models.LintResult, error) {
 			results = append(results, models.LintResult{
 				Level:   "info",
 				Line:    line,
-				Message: fmt.Sprintf("Service '%s' has no resource limits specified", serviceName),
+				Message: fmt.Sprintf("Service '%s' has no resource limits. Without limits, a single service can consume all available CPU/memory, affecting other containers on the host.", serviceName),
 				Rule:    "no-resource-limits",
 			})
 		}

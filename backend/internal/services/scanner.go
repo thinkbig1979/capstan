@@ -139,7 +139,13 @@ func (s *ScannerService) ScanDirectory(path string) error {
 			envFile := determineEnvFile(path, name)
 
 			stackID := fmt.Sprintf("%s:%s", dirName, name)
-			projectName := fmt.Sprintf("%s-%s", dirName, strings.ReplaceAll(name, ":", "-"))
+
+			var projectName string
+			if name == "default" {
+				projectName = dirName
+			} else {
+				projectName = fmt.Sprintf("%s-%s", dirName, strings.ReplaceAll(name, ":", "-"))
+			}
 
 			stack := models.Stack{
 				ID:          stackID,

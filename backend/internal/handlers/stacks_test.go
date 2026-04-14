@@ -24,11 +24,12 @@ func TestStacksHandler_Create_Success(t *testing.T) {
 
 	cfg := &config.Config{StacksDir: tempDir}
 	linter := services.NewLinterService()
-	handler := NewStacksHandler(nil, nil, linter, db, cfg)
+	scanner := services.NewScannerService(cfg, db)
+	handler := NewStacksHandler(nil, scanner, linter, db, cfg)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.POST("/stacks", handler.Create)
+	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
 
 	user := models.User{
 		ID:        "test-user-id",
@@ -39,6 +40,9 @@ func TestStacksHandler_Create_Success(t *testing.T) {
 	}
 	err = db.CreateUser(user)
 	require.NoError(t, err)
+
+	stackDir := filepath.Join(tempDir, "my-stack")
+	createTestDirectory(t, db, stackDir)
 
 	reqBody := map[string]interface{}{
 		"name":           "my-stack",
@@ -107,6 +111,8 @@ func TestStacksHandler_List_Success(t *testing.T) {
 	cfg := &config.Config{StacksDir: "/tmp/test"}
 	handler := NewStacksHandler(nil, nil, nil, db, cfg)
 
+	createTestDirectory(t, db, "/tmp/test/stack1")
+
 	stack := models.Stack{
 		ID:          "stack1:default",
 		Directory:   "/tmp/test/stack1",
@@ -142,6 +148,8 @@ func TestStacksHandler_Get_Success(t *testing.T) {
 
 	cfg := &config.Config{StacksDir: "/tmp/test"}
 	handler := NewStacksHandler(nil, nil, nil, db, cfg)
+
+	createTestDirectory(t, db, "/tmp/test/stack1")
 
 	stack := models.Stack{
 		ID:          "stack1:default",
