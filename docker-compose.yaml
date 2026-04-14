@@ -1,50 +1,26 @@
 services:
-  backend:
+  app:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: docker-manager-backend
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: docker-manager
     restart: unless-stopped
     ports:
       - "5001:5001"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # IMPORTANT: For testing, use test stacks directory
-      # For production, use to same path in both STACKS_DIR and HOST_STACKS_DIR
-      - ./testing/docker-test-stacks:/opt/stacks
+      - /home/edwin/development:/home/edwin/development
       - app_data:/app/data
-      - ./backend/.env:/app/.env:ro
     environment:
-      # Path inside container where stacks are stored
-      - STACKS_DIR=/opt/stacks
-      # Path on host system (must match STACKS_DIR for Docker Compose to work)
-      - HOST_STACKS_DIR=/opt/stacks
+      - STACKS_DIR=/home/edwin/development
+      - HOST_STACKS_DIR=/home/edwin/development
       - DATA_DIR=/app/data
       - TRUSTED_NETWORKS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,172.18.0.0/16,127.0.0.1,::1
     env_file:
       - ./backend/.env
-    networks:
-      - docker-manager-network
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: docker-manager-frontend
-    restart: unless-stopped
-    ports:
-      - "3001:80"
-    depends_on:
-      - backend
-    networks:
-      - docker-manager-network
 
 volumes:
   stacks_data:
     driver: local
   app_data:
     driver: local
-
-networks:
-  docker-manager-network:
-    driver: bridge

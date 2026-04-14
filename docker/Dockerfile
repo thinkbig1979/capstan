@@ -1,10 +1,13 @@
 # Frontend build stage
-FROM node:20-alpine AS frontend-build
+FROM node:22-alpine AS frontend-build
 
 WORKDIR /app/frontend
 
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+RUN npm install -g pnpm
+
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+
+RUN pnpm install --frozen-lockfile
 
 COPY frontend/ ./
 
@@ -24,7 +27,7 @@ COPY backend/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -a -o server ./cmd/server
 
 # Runtime stage
-FROM alpine:3.19
+FROM alpine:latest
 
 WORKDIR /app
 
@@ -34,18 +37,19 @@ RUN apk add --no-cache \
     docker-cli-compose \
     git \
     openssh-client \
-    tzdata
+    tzdata \
+    wget
 
 COPY --from=backend-build /app/server /app/
 COPY --from=frontend-build /app/frontend/dist /app/frontend/
 
 RUN chmod +x /app/server
 
-RUN addgroup -g 1000 -S appuser && \
-    adduser -u 1000 -S -G appuser appuser && \
-    chown -R appuser:appuser /app
+RUN mkdir -p /opt/stacks /app/data
 
-USER appuser
+ENV STACKS_DIR=/opt/stacks
+ENV DATA_DIR=/app/data
+ENV PORT=5001
 
 EXPOSE 5001
 
