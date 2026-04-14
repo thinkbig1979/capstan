@@ -1,5 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
-import { AppShell } from '@/components/layout/AppShell'
+import { useState, useEffect } from 'react'
 import { StackDetail } from '@/components/stack/StackDetail'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -21,13 +20,13 @@ export function StackPage() {
   const { confirm, ConfirmComponent } = useConfirm()
   const [isDeleting, setIsDeleting] = useState(false)
   const { setSelectedStack } = useStackStore()
-  const initialTabRef = useRef<string | null>(null)
 
   const tabFromPath = location.pathname.split('/').slice(3).join('/') || 'overview'
-  if (initialTabRef.current === null) {
-    initialTabRef.current = tabFromPath
-  }
-  const [activeTab, setActiveTab] = useState(initialTabRef.current)
+  const [activeTab, setActiveTab] = useState(tabFromPath)
+
+  useEffect(() => {
+    setActiveTab(tabFromPath)
+  }, [tabFromPath])
 
   useEffect(() => {
     setSelectedStack(id ?? null)
@@ -61,17 +60,15 @@ export function StackPage() {
 
   if (isLoading) {
     return (
-      <AppShell>
-        <div className="space-y-6">
-          <div>
-            <Skeleton className="h-8 w-64" />
-            <Skeleton className="mt-2 h-4 w-96" />
-          </div>
-          <div className="space-y-4">
-            <Skeleton className="h-64 w-full" />
-          </div>
+      <div className="space-y-6">
+        <div>
+          <Skeleton className="h-8 w-64" />
+          <Skeleton className="mt-2 h-4 w-96" />
         </div>
-      </AppShell>
+        <div className="space-y-4">
+          <Skeleton className="h-64 w-full" />
+        </div>
+      </div>
     )
   }
 
@@ -79,65 +76,63 @@ export function StackPage() {
     const appError = error ? classifyError(error) : null
     
     return (
-      <AppShell>
-        <div className="space-y-6">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Stack Not Found</h1>
-            <p className="text-muted-foreground">
-              {appError?.message || 'The requested stack could not be found.'}
-            </p>
-          </div>
-          
-          {appError && (
-            <Card className="border-destructive">
-              <CardContent className="pt-6">
-                <div className="flex items-start gap-4">
-                  <AlertCircle className="h-5 w-5 text-destructive mt-0.5" />
-                  <div className="flex-1 space-y-2">
-                    <h3 className="font-semibold">Failed to load stack</h3>
-                    <p className="text-sm text-muted-foreground">{appError.message}</p>
-                    <div className="flex gap-2">
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Stack Not Found</h1>
+          <p className="text-muted-foreground">
+            {appError?.message || 'The requested stack could not be found.'}
+          </p>
+        </div>
+        
+        {appError && (
+          <Card className="border-destructive">
+            <CardContent className="pt-6">
+              <div className="flex items-start gap-4">
+                <AlertCircle className="h-5 w-5 text-destructive mt-0.5" />
+                <div className="flex-1 space-y-2">
+                  <h3 className="font-semibold">Failed to load stack</h3>
+                  <p className="text-sm text-muted-foreground">{appError.message}</p>
+                  <div className="flex gap-2">
+                    <Button 
+                      onClick={() => refetch()} 
+                      disabled={!appError.retryable}
+                      variant="outline"
+                      size="sm"
+                    >
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      Retry
+                    </Button>
+                    <Button 
+                      onClick={() => navigate('/')}
+                      variant="outline"
+                      size="sm"
+                    >
+                      <Home className="mr-2 h-4 w-4" />
+                      Dashboard
+                    </Button>
+                    {appError.type === 'auth' && (
                       <Button 
-                        onClick={() => refetch()} 
-                        disabled={!appError.retryable}
+                        onClick={() => (window.location.href = '/login')}
                         variant="outline"
                         size="sm"
                       >
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        Retry
+                        Login
                       </Button>
-                      <Button 
-                        onClick={() => navigate('/')}
-                        variant="outline"
-                        size="sm"
-                      >
-                        <Home className="mr-2 h-4 w-4" />
-                        Dashboard
-                      </Button>
-                      {appError.type === 'auth' && (
-                        <Button 
-                          onClick={() => (window.location.href = '/login')}
-                          variant="outline"
-                          size="sm"
-                        >
-                          Login
-                        </Button>
-                      )}
-                    </div>
+                    )}
                   </div>
                 </div>
-              </CardContent>
-            </Card>
-          )}
-          
-          {!appError && (
-            <Button onClick={() => navigate('/')} variant="outline">
-              <Home className="mr-2 h-4 w-4" />
-              Back to Dashboard
-            </Button>
-          )}
-        </div>
-      </AppShell>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        
+        {!appError && (
+          <Button onClick={() => navigate('/')} variant="outline">
+            <Home className="mr-2 h-4 w-4" />
+            Back to Dashboard
+          </Button>
+        )}
+      </div>
     )
   }
 
@@ -159,7 +154,7 @@ export function StackPage() {
   }
 
   return (
-    <AppShell>
+    <>
       <div className="space-y-6">
         <div className="flex items-start justify-between">
           <div>
@@ -179,6 +174,7 @@ export function StackPage() {
         </div>
 
         <StackDetail
+          key={stack.id}
           stack={stack}
           activeTab={activeTab}
           onTabChange={handleTabChange}
@@ -186,6 +182,6 @@ export function StackPage() {
         />
       </div>
       <ConfirmComponent />
-    </AppShell>
+    </>
   )
 }

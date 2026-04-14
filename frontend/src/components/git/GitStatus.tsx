@@ -7,11 +7,11 @@ import { useState } from 'react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 interface GitStatusProps {
-  directoryPath: string
+  stackId: string
 }
 
-export function GitStatus({ directoryPath }: GitStatusProps) {
-  const { data: gitStatus, isLoading, error } = useGitStatus(directoryPath)
+export function GitStatus({ stackId }: GitStatusProps) {
+  const { data: gitStatus, isLoading, error } = useGitStatus(stackId)
   const pullMutation = useGitPull()
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [confirmDialogProps, setConfirmDialogProps] = useState<{
@@ -56,7 +56,7 @@ export function GitStatus({ directoryPath }: GitStatusProps) {
 
   const executePull = (redeploy: boolean) => {
     pullMutation.mutate(
-      { path: directoryPath, redeploy },
+      { stackId, redeploy },
       {
         onSuccess: (data) => {
           if (redeploy && data.redeployedStacks) {

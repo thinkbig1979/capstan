@@ -13,7 +13,7 @@ import {
 type DiffView = 'unified' | 'split'
 
 interface DiffViewerProps {
-  directoryPath: string
+  stackId: string
   commitHash: string
 }
 
@@ -37,7 +37,7 @@ interface DiffLine {
   newLine?: number
 }
 
-export function DiffViewer({ directoryPath, commitHash }: DiffViewerProps) {
+export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set())
   const [viewMode, setViewMode] = useState<DiffView>(() => {
     if (typeof window !== 'undefined') {
@@ -47,7 +47,7 @@ export function DiffViewer({ directoryPath, commitHash }: DiffViewerProps) {
     return 'unified'
   })
 
-  const { data: diffData, isLoading, error } = useGitDiff(directoryPath, commitHash)
+  const { data: diffData, isLoading, error } = useGitDiff(stackId, commitHash)
 
   useEffect(() => {
     localStorage.setItem('diff-view-preference', viewMode)

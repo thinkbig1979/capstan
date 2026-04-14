@@ -24,13 +24,13 @@ describe('GitStatus', () => {
 
   it('shows loading state', () => {
     mockUseGitStatus.mockReturnValue({ isLoading: true, error: null, data: null })
-    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    renderWithProviders(<GitStatus stackId="myapp:default" />)
     expect(screen.getByText('Loading git status...')).toBeInTheDocument()
   })
 
   it('shows error state when fetch fails', () => {
     mockUseGitStatus.mockReturnValue({ isLoading: false, error: new Error('fail'), data: null })
-    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    renderWithProviders(<GitStatus stackId="myapp:default" />)
     expect(screen.getByText('Failed to load git status')).toBeInTheDocument()
   })
 
@@ -40,7 +40,7 @@ describe('GitStatus', () => {
       error: null,
       data: { branch: 'main', commit: 'abc123', dirty: false, ahead: 0, behind: 0 },
     })
-    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    renderWithProviders(<GitStatus stackId="myapp:default" />)
     expect(screen.getByText('main')).toBeInTheDocument()
   })
 
@@ -50,7 +50,7 @@ describe('GitStatus', () => {
       error: null,
       data: { branch: 'feature', commit: 'def456', dirty: false, ahead: 3, behind: 0 },
     })
-    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    renderWithProviders(<GitStatus stackId="myapp:default" />)
     expect(screen.getByText('↑ 3')).toBeInTheDocument()
   })
 
@@ -60,7 +60,7 @@ describe('GitStatus', () => {
       error: null,
       data: { branch: 'main', commit: 'abc123', dirty: false, ahead: 0, behind: 2 },
     })
-    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    renderWithProviders(<GitStatus stackId="myapp:default" />)
     expect(screen.getByText('↓ 2')).toBeInTheDocument()
   })
 
@@ -70,7 +70,7 @@ describe('GitStatus', () => {
       error: null,
       data: { branch: 'main', commit: 'abc123', dirty: true, ahead: 0, behind: 0 },
     })
-    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    renderWithProviders(<GitStatus stackId="myapp:default" />)
     expect(screen.getByText('dirty')).toBeInTheDocument()
   })
 
@@ -80,7 +80,7 @@ describe('GitStatus', () => {
       error: null,
       data: { branch: 'main', commit: 'abc123', dirty: false, ahead: 0, behind: 0 },
     })
-    renderWithProviders(<GitStatus directoryPath="/opt/stacks/myapp" />)
+    renderWithProviders(<GitStatus stackId="myapp:default" />)
     expect(screen.getByText('Pull')).toBeInTheDocument()
     expect(screen.getByText('Pull & Redeploy')).toBeInTheDocument()
   })

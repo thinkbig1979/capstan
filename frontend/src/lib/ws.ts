@@ -93,9 +93,14 @@ export class WSClient {
       this.reconnectTimeout = null
     }
     this.reconnectAttempts = this.maxReconnects
-    this.ws?.close()
-    this.ws = null
-    this.state = 'CLOSED'
+    if (this.ws) {
+      const ws = this.ws
+      this.ws = null
+      this.state = 'CLOSED'
+      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
+        ws.close()
+      }
+    }
   }
 
   getState(): WSState {

@@ -24,6 +24,7 @@ export function useWebSocket(
   const { isAuthenticated, authDisabled } = useAuthStore()
   const wsClientRef = useRef<WSClient | null>(null)
   const onMessageRef = useRef(onMessage)
+  const optionsRef = useRef(options)
   const [lastMessage, setLastMessage] = useState<string | ArrayBuffer | null>(null)
   const [status, setStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'reconnecting'>('disconnected')
   const [wsState, setWsState] = useState<WSState>('CLOSED')
@@ -33,45 +34,50 @@ export function useWebSocket(
     onMessageRef.current = onMessage
   }, [onMessage])
 
+  useEffect(() => {
+    optionsRef.current = options
+  }, [options])
+
   const wrappedOnMessage = useCallback((data: string | ArrayBuffer) => {
     setLastMessage(data)
     onMessageRef.current(data)
   }, [])
 
   useEffect(() => {
-    if ((!isAuthenticated && !authDisabled) || options.skip) {
+    if ((!isAuthenticated && !authDisabled) || optionsRef.current.skip) {
       return
     }
 
     const client = new WSClient()
     wsClientRef.current = client
+    const opts = optionsRef.current
 
     const enhancedOptions: WSClientOptions = {
-      ...options,
+      ...opts,
       onOpen: () => {
         setStatus('connected')
         setWsState('OPEN')
-        options.onOpen?.()
+        opts.onOpen?.()
       },
       onClose: () => {
         setStatus('disconnected')
         setWsState('CLOSED')
-        options.onClose?.()
+        opts.onClose?.()
       },
       onError: (error) => {
         setStatus('disconnected')
-        options.onError?.(error)
+        opts.onError?.(error)
       },
       onReconnecting: (attempt) => {
         setStatus('reconnecting')
         setWsState('RECONNECTING')
         setReconnectAttempts(attempt)
-        options.onReconnecting?.(attempt)
+        opts.onReconnecting?.(attempt)
       },
       onReconnectFailed: () => {
         setStatus('disconnected')
         setWsState('CLOSED')
-        options.onReconnectFailed?.()
+        opts.onReconnectFailed?.()
       },
     }
 
@@ -88,23 +94,24 @@ export function useWebSocket(
       setWsState('CLOSED')
       setReconnectAttempts(0)
     }
-  }, [path, isAuthenticated, authDisabled, options.skip, options, wrappedOnMessage])
+  }, [path, isAuthenticated, authDisabled, wrappedOnMessage])
 
   const send = useCallback((data: string | ArrayBuffer) => {
     wsClientRef.current?.send(data)
   }, [])
 
   const reconnect = useCallback(() => {
-    if ((!isAuthenticated && !authDisabled) || options.skip) {
+    if ((!isAuthenticated && !authDisabled) || optionsRef.current.skip) {
       return
     }
+    const opts = optionsRef.current
     wsClientRef.current?.close()
     setStatus('connecting')
     setWsState('CONNECTING')
     setTimeout(() => {
-      wsClientRef.current?.connect(path, wrappedOnMessage, options)
+      wsClientRef.current?.connect(path, wrappedOnMessage, opts)
     }, 100)
-  }, [path, isAuthenticated, authDisabled, options, wrappedOnMessage])
+  }, [path, isAuthenticated, authDisabled, wrappedOnMessage])
 
   const disconnect = useCallback(() => {
     wsClientRef.current?.close()
@@ -135,6 +142,16 @@ export function useWebSocketJSON<T>(
   options: UseWebSocketJSONOptions<T> = {}
 ): UseWebSocketJSONReturn<T> {
   const [lastMessage, setLastMessage] = useState<T | null>(null)
+  const onMessageRef = useRef(onMessage)
+  const parseRef = useRef(options.parse)
+
+  useEffect(() => {
+    onMessageRef.current = onMessage
+  }, [onMessage])
+
+  useEffect(() => {
+    parseRef.current = options.parse
+  }, [options.parse])
 
   const wrappedOnMessage = useCallback((data: string | ArrayBuffer) => {
     if (typeof data !== 'string') {
@@ -143,13 +160,13 @@ export function useWebSocketJSON<T>(
     }
 
     try {
-      const parsed = options.parse ? options.parse(data) : JSON.parse(data) as T
+      const parsed = parseRef.current ? parseRef.current(data) : JSON.parse(data) as T
       setLastMessage(parsed)
-      onMessage(parsed)
+      onMessageRef.current(parsed)
     } catch (error) {
       console.warn('Failed to parse WebSocket message as JSON:', error)
     }
-  }, [onMessage, options])
+  }, [])
 
   const ws = useWebSocket(path, wrappedOnMessage, { ...options, binary: false })
 

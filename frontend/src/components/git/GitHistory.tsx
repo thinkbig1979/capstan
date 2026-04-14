@@ -7,19 +7,19 @@ import { DiffViewer } from './DiffViewer'
 import { Search, X } from 'lucide-react'
 
 interface GitHistoryProps {
-  directoryPath: string
+  stackId: string
 }
 
 type SearchScope = 'all' | 'files' | 'messages' | 'authors'
 
-export function GitHistory({ directoryPath }: GitHistoryProps) {
+export function GitHistory({ stackId }: GitHistoryProps) {
   const [offset, setOffset] = useState(0)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchScope, setSearchScope] = useState<SearchScope>('all')
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null)
   const limit = 50
 
-  const { data: logData, isLoading, error } = useGitLog(directoryPath, limit, offset)
+  const { data: logData, isLoading, error } = useGitLog(stackId, limit, offset)
 
   const filteredCommits = useMemo(() => {
     if (!logData?.commits) return []
@@ -150,7 +150,7 @@ export function GitHistory({ directoryPath }: GitHistoryProps) {
 
             {selectedCommit === commit.hash && (
               <div className="ml-4">
-                <DiffViewer directoryPath={directoryPath} commitHash={commit.hash} />
+                <DiffViewer stackId={stackId} commitHash={commit.hash} />
               </div>
             )}
           </div>

@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback } from 'react'
-import { AreaChart, Area, ResponsiveContainer, XAxis, YAxis } from 'recharts'
+import { AreaChart, Area, XAxis, YAxis } from 'recharts'
 import { Cpu, HardDrive, Network, Activity } from 'lucide-react'
 import { useMonitoring, type AggregateMetrics } from '@/hooks/useMonitoring'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -126,20 +126,18 @@ function ContainerCard({
                 <Cpu className="h-3 w-3" />
                 <span>CPU History (1 min)</span>
               </div>
-              <div className="h-16">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData}>
-                    <XAxis dataKey="index" hide />
-                    <YAxis domain={[0, 100]} hide />
-                    <Area
-                      type="monotone"
-                      dataKey="cpu"
-                      stroke={cpuColor}
-                      fill={cpuColor}
-                      fillOpacity={0.3}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+              <div className="h-16 w-full" style={{ minWidth: 0 }}>
+                <AreaChart width={300} height={64} data={chartData}>
+                  <XAxis dataKey="index" hide />
+                  <YAxis domain={[0, 100]} hide />
+                  <Area
+                    type="monotone"
+                    dataKey="cpu"
+                    stroke={cpuColor}
+                    fill={cpuColor}
+                    fillOpacity={0.3}
+                  />
+                </AreaChart>
               </div>
             </div>
 
