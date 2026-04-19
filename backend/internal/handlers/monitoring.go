@@ -108,7 +108,7 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		go pingLoop(ctx, conn.Conn, DefaultPingInterval)
+		go safePingLoop(ctx, conn, DefaultPingInterval)
 
 		containerIDs, err := h.monitor.GetContainersForStack(ctx, stack.ProjectName)
 		if err != nil {
@@ -138,7 +138,7 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 					Containers: batch,
 				}
 
-				if err := writeJSON(conn.Conn, frame); err != nil {
+				if err := safeWriteJSON(conn, frame); err != nil {
 					slog.Debug("Failed to write metrics frame", "error", err)
 					return
 				}
@@ -175,7 +175,7 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		go pingLoop(ctx, conn.Conn, DefaultPingInterval)
+		go safePingLoop(ctx, conn, DefaultPingInterval)
 
 		eventChan := make(chan models.StackEvent, 50)
 
@@ -199,7 +199,7 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 					return
 				}
 
-				if err := writeJSON(conn.Conn, event); err != nil {
+				if err := safeWriteJSON(conn, event); err != nil {
 					slog.Debug("Failed to write event", "error", err)
 					return
 				}
@@ -224,6 +224,8 @@ func StartEventBroadcaster(ctx context.Context, monitor *services.MonitorService
 				if !ok {
 					return
 				}
+
+				slog.Debug("Broadcasting event", "type", event.Type, "stackId", event.StackID, "event", event.Event, "subscribers", len(eventSubscribers.channels))
 
 				eventSubscribers.RLock()
 				for ch := range eventSubscribers.channels {

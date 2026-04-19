@@ -162,7 +162,27 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 		close(logChan)
 	}()
 
-	go pingLoop(ctx, conn, DefaultPingInterval)
+	var writeMu sync.Mutex
+
+	go func() {
+		ticker := time.NewTicker(DefaultPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				writeMu.Lock()
+				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				err := conn.WriteMessage(websocket.PingMessage, nil)
+				writeMu.Unlock()
+				if err != nil {
+					slog.Debug("Failed to send ping", "error", err)
+					return
+				}
+			}
+		}
+	}()
 
 	go func() {
 		for {
@@ -209,7 +229,10 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 			filterMutex.Unlock()
 
 			if shouldSend {
-				if err := writeJSON(conn, logLine); err != nil {
+				writeMu.Lock()
+				err := writeJSON(conn, logLine)
+				writeMu.Unlock()
+				if err != nil {
 					slog.Debug("Failed to send log line", "error", err)
 					goto cleanup
 				}

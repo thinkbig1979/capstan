@@ -33,10 +33,17 @@ func NewSettingsHandler(db *database.DB, stacksDir string, jwtSecret string, aut
 
 func (h *SettingsHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.PUT("/auth/password", h.ChangePassword)
+	group.GET("/settings/config", h.GetConfig)
 	group.GET("/settings/global-env", h.GetGlobalEnv)
 	group.PUT("/settings/global-env", h.UpdateGlobalEnv)
 	group.GET("/settings/log-retention", h.GetLogRetention)
 	group.PUT("/settings/log-retention", h.UpdateLogRetention)
+}
+
+func (h *SettingsHandler) GetConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"stacksDir": h.stacksDir,
+	})
 }
 
 func (h *SettingsHandler) ChangePassword(c *gin.Context) {

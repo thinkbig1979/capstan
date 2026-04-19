@@ -13,6 +13,8 @@ import {
 } from '@/components/ui/tooltip'
 import { toast } from 'sonner'
 import { useCreateStack } from '@/hooks/useCreateStack'
+import { useQuery } from '@tanstack/react-query'
+import { authApi } from '@/lib/api'
 import { useNavigate } from 'react-router-dom'
 import { FileCheck, AlertCircle, AlertTriangle, Info, Plus } from 'lucide-react'
 import type { LintResult } from '@/types'
@@ -42,6 +44,11 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
   const navigate = useNavigate()
   const createMutation = useCreateStack()
   const { theme } = useUIStore()
+  const { data: config } = useQuery({
+    queryKey: ['config'],
+    queryFn: authApi.getConfig,
+    staleTime: Infinity,
+  })
 
   const [name, setName] = useState('')
   const [composeContent, setComposeContent] = useState(DEFAULT_COMPOSE)
@@ -273,7 +280,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
             {nameError && <p className="text-sm text-red-500">{nameError}</p>}
             {name && !nameError && (
               <p className="text-xs text-muted-foreground">
-                Directory will be: /docker-stacks/{name}
+                Directory will be: {config?.stacksDir ?? '...'}/{name}
               </p>
             )}
           </div>
@@ -305,7 +312,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
               </div>
               <div className="divide-y max-h-40 overflow-y-auto">
                 {lintResults.map((result, index) => (
-                  <div key={index} className="p-3 flex items-start gap-3 hover:bg-muted/50">
+                  <div key={`${result.level}-${result.line || index}-${result.message}`} className="p-3 flex items-start gap-3 hover:bg-muted/50">
                     {getLintIcon(result.level)}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
@@ -395,8 +402,8 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
                 Please fix the following errors:
               </div>
               <ul className="space-y-1">
-                 {validationErrors.map((error, index) => (
-                   <li key={index}>
+                 {validationErrors.map((error) => (
+                   <li key={error.field}>
                      <button
                        type="button"
                        className="text-sm text-red-700 dark:text-red-300 hover:underline flex items-center gap-1"

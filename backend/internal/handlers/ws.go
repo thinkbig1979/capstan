@@ -36,10 +36,11 @@ var upgrader = websocket.Upgrader{
 }
 
 type Connection struct {
-	ID        string
-	UserID    string
-	Conn      *websocket.Conn
-	CreatedAt time.Time
+	ID         string
+	UserID     string
+	Conn       *websocket.Conn
+	CreatedAt  time.Time
+	WriteMutex sync.Mutex
 }
 
 type ConnectionManager struct {
@@ -225,6 +226,33 @@ func pingLoop(ctx context.Context, conn *websocket.Conn, interval time.Duration)
 		case <-ticker.C:
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				slog.Debug("Failed to send ping", "error", err)
+				return
+			}
+		}
+	}
+}
+
+func safeWriteJSON(c *Connection, v interface{}) error {
+	c.WriteMutex.Lock()
+	defer c.WriteMutex.Unlock()
+	return writeJSON(c.Conn, v)
+}
+
+func safePingLoop(ctx context.Context, c *Connection, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.WriteMutex.Lock()
+			c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			err := c.Conn.WriteMessage(websocket.PingMessage, nil)
+			c.WriteMutex.Unlock()
+			if err != nil {
 				slog.Debug("Failed to send ping", "error", err)
 				return
 			}

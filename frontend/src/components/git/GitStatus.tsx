@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Download } from 'lucide-react'
+import { Download, GitBranch, ArrowUp, ArrowDown, FileWarning } from 'lucide-react'
 import { useGitStatus, useGitPull } from '@/hooks/useGit'
 import { toast } from 'sonner'
 import { useState } from 'react'
@@ -21,26 +21,39 @@ export function GitStatus({ stackId }: GitStatusProps) {
   } | null>(null)
 
   if (isLoading) {
-    return <div className="text-sm text-muted-foreground">Loading git status...</div>
+    return (
+      <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <GitBranch className="h-4 w-4 text-muted-foreground" />
+          <h3 className="text-sm font-medium">Git Status</h3>
+        </div>
+        <div className="text-sm text-muted-foreground">Loading git status...</div>
+      </div>
+    )
   }
 
   if (error || !gitStatus) {
     return (
-      <div className="text-sm text-muted-foreground">
-        {error ? 'Failed to load git status' : 'Not a git repository'}
+      <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <GitBranch className="h-4 w-4 text-muted-foreground" />
+          <h3 className="text-sm font-medium">Git Status</h3>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          This directory is not a git repository.
+        </p>
       </div>
     )
   }
 
   const handlePull = (redeploy = false) => {
-    const isDirty = gitStatus.dirty
-    const dirtyWarning = isDirty
-      ? '\n\n⚠️ Warning: Your working directory has uncommitted changes. Pulling may cause conflicts or overwrite your changes.'
+    const dirtyWarning = gitStatus.dirty
+      ? `\n\nWarning: Your working directory has ${gitStatus.dirtyCount} uncommitted change${gitStatus.dirtyCount !== 1 ? 's' : ''}. Pulling may cause conflicts or overwrite your changes.`
       : ''
-    
+
     if (redeploy) {
       setConfirmDialogProps({
-        title: 'Confirm Pull & Redeploy',
+        title: 'Confirm Git Pull & Redeploy',
         description: `This will pull the latest changes from the remote repository and redeploy all affected stacks.${dirtyWarning}\n\nThis operation will restart containers, which may cause brief downtime.`,
         onConfirm: () => executePull(true),
       })
@@ -70,7 +83,7 @@ export function GitStatus({ stackId }: GitStatusProps) {
         onError: (error) => {
           const errorData = (error as any).response?.data
           if (errorData?.dirty) {
-            toast.error('Cannot pull: working directory is dirty')
+            toast.error('Cannot pull: working directory has uncommitted changes')
           } else if (errorData?.conflict) {
             toast.error('Pull failed: merge conflict detected')
           } else {
@@ -83,50 +96,65 @@ export function GitStatus({ stackId }: GitStatusProps) {
 
   return (
     <>
-      <div className="flex items-center justify-between rounded-lg border bg-card p-4">
-        <div className="flex items-center gap-3">
-          <Badge variant="outline" className="font-mono text-sm">
-            {gitStatus.branch}
-          </Badge>
-
+      <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {gitStatus.ahead > 0 && (
-              <Badge variant="secondary" className="text-green-600">
-                ↑ {gitStatus.ahead}
-              </Badge>
-            )}
-            {gitStatus.behind > 0 && (
-              <Badge variant="secondary" className="text-yellow-600">
-                ↓ {gitStatus.behind}
-              </Badge>
-            )}
-            {gitStatus.dirty && (
-              <Badge variant="destructive" className="text-xs">
-                dirty
-              </Badge>
-            )}
+            <GitBranch className="h-4 w-4 text-muted-foreground" />
+            <h3 className="text-sm font-medium">Git Status</h3>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handlePull(false)}
+              disabled={pullMutation.isPending}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Git Pull
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handlePull(true)}
+              disabled={pullMutation.isPending}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Git Pull & Redeploy
+            </Button>
           </div>
         </div>
 
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handlePull(false)}
-            disabled={pullMutation.isPending}
-          >
-            <Download className="mr-2 h-4 w-4" />
-            Pull
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handlePull(true)}
-            disabled={pullMutation.isPending}
-          >
-            <Download className="mr-2 h-4 w-4" />
-            Pull & Redeploy
-          </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="outline" className="font-mono text-xs gap-1.5">
+            <GitBranch className="h-3 w-3" />
+            {gitStatus.branch}
+          </Badge>
+
+          {gitStatus.ahead > 0 && (
+            <Badge variant="secondary" className="text-xs gap-1 text-green-600">
+              <ArrowUp className="h-3 w-3" />
+              {gitStatus.ahead} ahead
+            </Badge>
+          )}
+          {gitStatus.behind > 0 && (
+            <Badge variant="secondary" className="text-xs gap-1 text-yellow-600">
+              <ArrowDown className="h-3 w-3" />
+              {gitStatus.behind} behind
+            </Badge>
+          )}
+
+          {gitStatus.dirty && (
+            <Badge variant="destructive" className="text-xs gap-1">
+              <FileWarning className="h-3 w-3" />
+              {gitStatus.dirtyCount} uncommitted change{gitStatus.dirtyCount !== 1 ? 's' : ''}
+            </Badge>
+          )}
+
+          {gitStatus.commitShort && (
+            <span className="text-xs text-muted-foreground font-mono" title={gitStatus.commitMessage}>
+              {gitStatus.commitShort}
+            </span>
+          )}
         </div>
       </div>
 

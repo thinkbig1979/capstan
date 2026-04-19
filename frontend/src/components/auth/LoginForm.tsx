@@ -38,7 +38,6 @@ export function LoginForm({ onSubmit, isLoading = false, error, buttonText = 'Lo
           type="text"
           placeholder="Enter your username"
           {...register('username')}
-          autoFocus
         />
         {errors.username && <p className="text-sm text-destructive">{errors.username.message}</p>}
       </div>

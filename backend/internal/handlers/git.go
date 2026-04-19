@@ -110,6 +110,7 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 		"commitAuthor":  status.Commit.Author,
 		"commitDate":    status.Commit.Date,
 		"dirty":         status.Dirty,
+		"dirtyCount":    status.DirtyCount,
 		"ahead":         status.Ahead,
 		"behind":        status.Behind,
 		"remote":        status.RemoteURL,

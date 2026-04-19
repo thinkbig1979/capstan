@@ -143,6 +143,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       } else {
         toast.success('No lint issues found')
       }
+      queryClient.invalidateQueries({ queryKey: ['stack', stackId, 'compose'] })
     },
     onError: () => {
       toast.error('Failed to lint compose file')
@@ -196,7 +197,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       }
 
       const state = EditorState.create({
-        doc: content,
+        doc: data || content,
         extensions,
       })
 
@@ -216,15 +217,6 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       viewRef.current = null
     }
   }, [stackId, isDark, handleSave])
-
-  // Update content from editor
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (viewRef.current) {
-      const currentContent = viewRef.current.state.doc.toString()
-      setContent(currentContent)
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Update lint diagnostics when results change
   useEffect(() => {
@@ -295,7 +287,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
           </div>
           <div className="divide-y">
             {lintResults.map((result, index) => (
-              <div key={index} className="p-3 flex items-start gap-3 hover:bg-muted/50">
+              <div key={`${result.level}-${result.line || index}-${result.message}`} className="p-3 flex items-start gap-3 hover:bg-muted/50">
                 {getLintIcon(result.level)}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
@@ -336,7 +328,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
               {lintResults
                 .filter((r) => r.level === 'error')
                 .map((result, index) => (
-                  <div key={index} className="flex items-start gap-2 text-sm">
+                  <div key={`err-${result.line || index}-${result.message}`} className="flex items-start gap-2 text-sm">
                     <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div className="font-medium">{result.message}</div>

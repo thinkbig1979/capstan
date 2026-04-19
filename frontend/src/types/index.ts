@@ -50,6 +50,35 @@ export interface ContainerMetrics {
   netTx: number
   blockRead: number
   blockWrite: number
+  memSwap: number
+  pids: number
+}
+
+export interface DashboardContainerInfo {
+  id: string
+  name: string
+  image: string
+  state: string
+  status: string
+  health: string
+  ports: PortBinding[]
+  stackId: string
+  projectName: string
+  restartCount: number
+  created: string
+  startedAt: string
+  diskSize: number
+  imageSize: number
+}
+
+export interface DashboardStats {
+  totalStacks: number
+  runningStacks: number
+  stoppedStacks: number
+  totalContainers: number
+  runningContainers: number
+  imageDiskUsage: number
+  containers: DashboardContainerInfo[]
 }
 
 export interface Stack {
@@ -77,6 +106,7 @@ export interface GitStatus {
   commitAuthor: string
   commitDate: string
   dirty: boolean
+  dirtyCount: number
   ahead: number
   behind: number
   remote: string
@@ -126,10 +156,64 @@ export interface ScanResult {
   unchanged: number
 }
 
+export interface DockerImage {
+  id: string
+  repoTags: string[]
+  size: number
+  created: number
+  containers: number
+}
+
+export interface DockerVolume {
+  name: string
+  driver: string
+  mountpoint: string
+  size: number
+  created: string
+  stack: string
+}
+
+export interface DockerNetwork {
+  id: string
+  name: string
+  driver: string
+  scope: string
+  internal: boolean
+  containers: number
+  labels: string[]
+  created: string
+  stack: string
+}
+
+export interface BuildCacheEntry {
+  ID: string
+  Type: string
+  Description: string
+  InUse: boolean
+  Shared: boolean
+  Size: number
+  CreatedAt: string
+  LastUsedAt: string | null
+  UsageCount: number
+  Parents?: string[]
+}
+
 export interface HealthResponse {
   status: string
   docker: string
   database: string
   version: string
   uptime_seconds: number
+}
+
+export interface ContainerUpdateInfo {
+  containerId: string
+  containerName: string
+  image: string
+  imageRef: string
+  state: string
+  stackId: string
+  projectName: string
+  serviceName: string
+  isCompose: boolean
 }

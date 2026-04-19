@@ -28,25 +28,25 @@ export interface ScanCompleteEvent {
 export type StackEvent = StackStatusEvent | ContainerEvent | ScanCompleteEvent
 
 export function useStackEvents() {
-  const invalidateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingRef = useRef<Set<string>>(new Set())
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     return () => {
-      if (invalidateTimeoutRef.current) {
-        clearTimeout(invalidateTimeoutRef.current)
-      }
+      if (timerRef.current) clearTimeout(timerRef.current)
     }
   }, [])
 
-  const scheduleInvalidation = () => {
-    if (invalidateTimeoutRef.current) {
-      clearTimeout(invalidateTimeoutRef.current)
-    }
-    invalidateTimeoutRef.current = setTimeout(() => {
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
-      queryClient.invalidateQueries({ queryKey: ['directories'] })
-      invalidateTimeoutRef.current = null
-    }, 500)
+  const scheduleInvalidations = (keys: string[][]) => {
+    keys.forEach((k) => pendingRef.current.add(JSON.stringify(k)))
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => {
+      pendingRef.current.forEach((key) => {
+        queryClient.invalidateQueries({ queryKey: JSON.parse(key) })
+      })
+      pendingRef.current.clear()
+      timerRef.current = null
+    }, 750)
   }
 
   const handleStackStatusEvent = (event: StackStatusEvent) => {
@@ -56,15 +56,22 @@ export function useStackEvents() {
         stack.id === event.stackId ? { ...stack, status: event.status } : stack
       )
     })
-    queryClient.invalidateQueries({ queryKey: ['stacks', event.stackId] })
+    scheduleInvalidations([
+      ['stack', event.stackId],
+      ['dashboard-stats'],
+    ])
   }
 
   const handleContainerEvent = (event: ContainerEvent) => {
-    queryClient.invalidateQueries({ queryKey: ['stacks', event.stackId] })
+    const keys: string[][] = [['dashboard-stats']]
+    if (event.stackId) {
+      keys.push(['stack', event.stackId], ['stacks'])
+    }
+    scheduleInvalidations(keys)
   }
 
   const handleScanCompleteEvent = () => {
-    scheduleInvalidation()
+    scheduleInvalidations([['stacks'], ['directories']])
   }
 
   useWebSocketJSON<StackEvent>(

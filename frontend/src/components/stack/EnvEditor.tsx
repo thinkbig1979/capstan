@@ -54,7 +54,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       const prev = history[historyIndex - 1]
       setEntries(prev.entries)
       setRawContent(prev.raw)
-      setHistoryIndex(historyIndex - 1)
+      setHistoryIndex((prev) => prev - 1)
       setHasUnsavedChanges(true)
     }
   }, [history, historyIndex])
@@ -64,7 +64,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       const next = history[historyIndex + 1]
       setEntries(next.entries)
       setRawContent(next.raw)
-      setHistoryIndex(historyIndex + 1)
+      setHistoryIndex((prev) => prev + 1)
       setHasUnsavedChanges(true)
     }
   }, [history, historyIndex])
@@ -260,7 +260,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
               </TableHeader>
               <TableBody>
                 {entries.map((entry, index) => (
-                  <TableRow key={index}>
+                  <TableRow key={entry.key || `entry-${index}`}>
                     <TableCell>
                       <Input
                         value={entry.key}
@@ -332,7 +332,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
 
           <div className="md:hidden space-y-3">
             {entries.map((entry, index) => (
-              <div key={index} className="rounded-lg border p-4 space-y-3">
+              <div key={entry.key || `entry-${index}`} className="rounded-lg border p-4 space-y-3">
                 <div>
                   <Input
                     value={entry.key}

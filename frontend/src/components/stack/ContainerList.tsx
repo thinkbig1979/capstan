@@ -1,32 +1,13 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Terminal, FileText, Play, Square, AlertCircle, RefreshCw } from 'lucide-react'
+import { Play, Square, AlertCircle, RefreshCw } from 'lucide-react'
 import type { Container } from '@/types'
-import { useCallback } from 'react'
 
 interface ContainerListProps {
   containers: Container[]
-  onContainerAction: (containerId: string, tab: 'logs' | 'terminal') => void
-  onContainerNameAction?: (containerName: string, tab: 'logs' | 'terminal') => void
 }
 
-export function ContainerList({ containers, onContainerAction, onContainerNameAction }: ContainerListProps) {
-  const handleTerminal = useCallback(
-    (containerId: string, containerName: string) => {
-      onContainerAction(containerId, 'terminal')
-      onContainerNameAction?.(containerName, 'terminal')
-    },
-    [onContainerAction, onContainerNameAction],
-  )
-
-  const handleLogs = useCallback(
-    (containerId: string, containerName: string) => {
-      onContainerAction(containerId, 'logs')
-      onContainerNameAction?.(containerName, 'logs')
-    },
-    [onContainerAction, onContainerNameAction],
-  )
+export function ContainerList({ containers }: ContainerListProps) {
 
   if (!containers || containers.length === 0) {
     return (
@@ -60,7 +41,6 @@ export function ContainerList({ containers, onContainerAction, onContainerNameAc
               <TableHead>Status</TableHead>
               <TableHead>Ports</TableHead>
               <TableHead>Health</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -80,36 +60,14 @@ export function ContainerList({ containers, onContainerAction, onContainerNameAc
                 <TableCell className="text-sm">{container.status}</TableCell>
                 <TableCell className="text-sm">
                   {container.ports.length > 0
-                    ? container.ports.map((p, i) => (
-                        <div key={i}>
+                    ? container.ports.map((p) => (
+                        <div key={`${p.host}-${p.container}`}>
                           {formatPort(p)}
                         </div>
                       ))
                     : '-'}
                 </TableCell>
                 <TableCell>{getHealthBadge(container.health)}</TableCell>
-                <TableCell className="text-right">
-                  <div className="flex justify-end gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleTerminal(container.id, container.name)}
-                      title="Open Terminal"
-                      aria-label={`Open terminal for ${container.name}`}
-                    >
-                      <Terminal className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleLogs(container.id, container.name)}
-                      title="View Logs"
-                      aria-label={`View logs for ${container.name}`}
-                    >
-                      <FileText className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -146,35 +104,14 @@ export function ContainerList({ containers, onContainerAction, onContainerNameAc
                 <div className="flex items-start gap-2">
                   <span className="text-sm text-muted-foreground">Ports:</span>
                   <div className="flex flex-col gap-1 text-sm">
-                    {container.ports.map((p, i) => (
-                      <span key={i}>
+                    {container.ports.map((p) => (
+                      <span key={`${p.host}-${p.container}`}>
                         {formatPort(p)}
                       </span>
                     ))}
                   </div>
                 </div>
               )}
-            </div>
-
-            <div className="flex gap-2 pt-2 border-t">
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => handleTerminal(container.id, container.name)}
-                className="min-h-[44px] min-w-[44px] flex-1"
-                aria-label="Open terminal"
-              >
-                <Terminal className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => handleLogs(container.id, container.name)}
-                className="min-h-[44px] min-w-[44px] flex-1"
-                aria-label="View logs"
-              >
-                <FileText className="h-4 w-4" />
-              </Button>
             </div>
           </div>
         ))}

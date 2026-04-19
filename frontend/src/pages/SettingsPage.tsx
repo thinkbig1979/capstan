@@ -260,7 +260,7 @@ function GlobalEnvContent({
         {globalEnv.vars.map((envVar: { key: string; value: string }, index: number) => {
           const displayValue = showValues[index] ? envVar.value : maskValue(envVar.value)
           return (
-            <div key={index} className="flex items-center gap-2">
+            <div key={envVar.key || `var-${index}`} className="flex items-center gap-2">
               <div className="flex-1 font-mono text-sm bg-muted p-2 rounded">
                 <span className="font-semibold">{envVar.key}</span>=
                 <span className="opacity-70">{displayValue}</span>

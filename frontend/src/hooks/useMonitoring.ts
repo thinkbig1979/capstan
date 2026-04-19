@@ -10,6 +10,8 @@ export interface ContainerMetric {
   netTx: number
   blockRead: number
   blockWrite: number
+  memSwap: number
+  pids: number
 }
 
 export interface ContainerMetricHistory {
@@ -38,6 +40,8 @@ export interface MetricsMessage {
     netTx: number
     blockRead: number
     blockWrite: number
+    memSwap: number
+    pids: number
   }>
 }
 
@@ -62,6 +66,8 @@ export function useMonitoring(stackId: string) {
           netTx: container.netTx,
           blockRead: container.blockRead,
           blockWrite: container.blockWrite,
+          memSwap: container.memSwap,
+          pids: container.pids,
         }
 
         if (!next[container.containerId]) {

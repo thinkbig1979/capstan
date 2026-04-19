@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useEffect } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ContainerList } from './ContainerList'
 import { ComposeEditor } from './ComposeEditor'
@@ -6,11 +6,12 @@ import { EnvEditor } from './EnvEditor'
 import { TerminalComponent } from './Terminal'
 import { LogViewer } from './LogViewer'
 import { MetricsPanel } from './MetricsPanel'
+import { OperationProgress } from './OperationProgress'
 import { GitStatus as GitStatusComponent } from '../git/GitStatus'
 import { Button } from '@/components/ui/button'
-import { Play, Square, RefreshCw } from 'lucide-react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { stacksApi } from '@/lib/api'
+import { Download, Play, Square, RefreshCw } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import { useStreamingOperation } from '@/hooks/useStreamingOperation'
 import { toast } from 'sonner'
 import type { Stack } from '@/types'
 
@@ -18,32 +19,32 @@ interface StackDetailProps {
   stack: Stack
   activeTab: string
   onTabChange: (tab: string) => void
-  onContainerAction: (containerId: string, tab: 'logs' | 'terminal') => void
 }
 
 function OverviewTabContent({
   stack,
-  onContainerAction,
-  onContainerNameAction,
   onStart,
   onStop,
   onRestart,
+  onPull,
   isStarting,
   isStopping,
   isRestarting,
+  isPulling,
 }: {
   stack: Stack
-  onContainerAction: (containerId: string, tab: 'logs' | 'terminal') => void
-  onContainerNameAction?: (containerName: string, _tab: 'logs' | 'terminal') => void
   onStart: () => void
   onStop: () => void
   onRestart: () => void
+  onPull: () => void
   isStarting: boolean
   isStopping: boolean
   isRestarting: boolean
+  isPulling: boolean
 }) {
   const canStart = stack.status === 'stopped' || stack.status === 'partial'
   const canStop = stack.status === 'running'
+  const anyRunning = isStarting || isStopping || isRestarting || isPulling
 
   return (
     <div className="space-y-6">
@@ -51,17 +52,15 @@ function OverviewTabContent({
         <h3 className="mb-3 text-lg font-semibold">Containers</h3>
         <ContainerList
           containers={stack.containers || []}
-          onContainerAction={onContainerAction}
-          onContainerNameAction={onContainerNameAction}
         />
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Button
           variant="outline"
           size="sm"
           onClick={onStart}
-          disabled={!canStart || isStarting || isRestarting}
+          disabled={!canStart || anyRunning}
         >
           <Play className="mr-2 h-4 w-4" />
           {isStarting ? 'Starting...' : 'Start'}
@@ -70,7 +69,7 @@ function OverviewTabContent({
           variant="outline"
           size="sm"
           onClick={onStop}
-          disabled={!canStop || isStopping || isRestarting}
+          disabled={!canStop || anyRunning}
         >
           <Square className="mr-2 h-4 w-4" />
           {isStopping ? 'Stopping...' : 'Stop'}
@@ -79,73 +78,45 @@ function OverviewTabContent({
           variant="outline"
           size="sm"
           onClick={onRestart}
-          disabled={!canStop || isRestarting}
+          disabled={!canStop || anyRunning}
         >
           <RefreshCw className={`mr-2 h-4 w-4 ${isRestarting ? 'animate-spin' : ''}`} />
           {isRestarting ? 'Restarting...' : 'Restart'}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onPull}
+          disabled={anyRunning}
+        >
+          <Download className={`mr-2 h-4 w-4 ${isPulling ? 'animate-spin' : ''}`} />
+          {isPulling ? 'Pulling...' : 'Pull Images'}
         </Button>
       </div>
     </div>
   )
 }
 
-export function StackDetail({ stack, activeTab, onTabChange, onContainerAction }: StackDetailProps) {
-  const [selectedContainer, setSelectedContainer] = useState<string | undefined>()
+export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps) {
   const queryClient = useQueryClient()
+  const operation = useStreamingOperation()
 
-  const startMutation = useMutation({
-    mutationFn: () => stacksApi.start(stack.id),
-    onSuccess: () => {
-      toast.success('Stack started successfully')
+  const isStarting = operation.status === 'running' && operation.action === 'start'
+  const isStopping = operation.status === 'running' && operation.action === 'stop'
+  const isRestarting = operation.status === 'running' && operation.action === 'restart'
+  const isPulling = operation.status === 'running' && operation.action === 'pull'
+
+  useEffect(() => {
+    if (operation.status === 'success') {
       queryClient.invalidateQueries({ queryKey: ['stack', stack.id] })
       queryClient.invalidateQueries({ queryKey: ['stacks'] })
-    },
-    onError: () => {
-      toast.error('Failed to start stack')
-    },
-  })
-
-  const stopMutation = useMutation({
-    mutationFn: () => stacksApi.stop(stack.id),
-    onSuccess: () => {
-      toast.success('Stack stopped successfully')
-      queryClient.invalidateQueries({ queryKey: ['stack', stack.id] })
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
-    },
-    onError: () => {
-      toast.error('Failed to stop stack')
-    },
-  })
-
-  const restartMutation = useMutation({
-    mutationFn: () => stacksApi.restart(stack.id),
-    onSuccess: () => {
-      toast.success('Stack restarted successfully')
-      queryClient.invalidateQueries({ queryKey: ['stack', stack.id] })
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
-    },
-    onError: () => {
-      toast.error('Failed to restart stack')
-    },
-  })
-
-  const handleContainerAction = useCallback(
-    (containerId: string, tab: 'logs' | 'terminal') => {
-      onContainerAction(containerId, tab)
-    },
-    [onContainerAction],
-  )
-
-  const handleContainerNameAction = useCallback(
-    (containerName: string, _tab: 'logs' | 'terminal') => {
-      setSelectedContainer(containerName)
-    },
-    [],
-  )
+      toast.success(`${operation.action.charAt(0).toUpperCase() + operation.action.slice(1)} completed`)
+    }
+  }, [operation.status, operation.action, stack.id, queryClient])
 
   return (
-    <div className="h-full flex flex-col">
-      {stack.isGitRepo && <GitStatusComponent stackId={stack.id} />}
+    <div className="h-full flex flex-col gap-4">
+      <GitStatusComponent stackId={stack.id} />
       <Tabs value={activeTab} onValueChange={onTabChange} className="flex-1">
         <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6">
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -159,14 +130,14 @@ export function StackDetail({ stack, activeTab, onTabChange, onContainerAction }
         <TabsContent value="overview" className="mt-4">
           <OverviewTabContent
             stack={stack}
-            onContainerAction={handleContainerAction}
-            onContainerNameAction={handleContainerNameAction}
-            onStart={() => startMutation.mutate()}
-            onStop={() => stopMutation.mutate()}
-            onRestart={() => restartMutation.mutate()}
-            isStarting={startMutation.isPending}
-            isStopping={stopMutation.isPending}
-            isRestarting={restartMutation.isPending}
+            onStart={() => operation.execute(stack.id, 'start')}
+            onStop={() => operation.execute(stack.id, 'stop')}
+            onRestart={() => operation.execute(stack.id, 'restart')}
+            onPull={() => operation.execute(stack.id, 'pull')}
+            isStarting={isStarting}
+            isStopping={isStopping}
+            isRestarting={isRestarting}
+            isPulling={isPulling}
           />
         </TabsContent>
 
@@ -179,17 +150,25 @@ export function StackDetail({ stack, activeTab, onTabChange, onContainerAction }
         </TabsContent>
 
         <TabsContent value="logs" className="mt-4">
-          <LogViewer stackId={stack.id} initialContainer={selectedContainer} />
+          <LogViewer stackId={stack.id} initialContainer={undefined} hasRunningContainers={stack.status !== 'stopped' && (stack.containers?.length ?? 0) > 0} />
         </TabsContent>
 
         <TabsContent value="terminal" className="mt-4">
-          <TerminalComponent stack={stack} initialContainer={selectedContainer} />
+          <TerminalComponent stack={stack} initialContainer={undefined} />
         </TabsContent>
 
         <TabsContent value="metrics" className="mt-4">
           <MetricsPanel stackId={stack.id} />
         </TabsContent>
       </Tabs>
+
+      <OperationProgress
+        status={operation.status}
+        lines={operation.lines}
+        action={operation.action}
+        error={operation.error}
+        onDismiss={operation.reset}
+      />
     </div>
   )
 }

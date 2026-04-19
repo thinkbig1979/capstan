@@ -79,6 +79,12 @@ func (s *GitService) getStatusGoGit(dirPath string) (result *models.GitStatusRes
 	}
 
 	dirty := !status.IsClean()
+	dirtyCount := 0
+	for _, s := range status {
+		if s.Staging != git.Unmodified || s.Worktree != git.Unmodified {
+			dirtyCount++
+		}
+	}
 
 	ahead, behind, trackingBranch, remoteURL, err := s.getDivergence(repo, head)
 	if err != nil {
@@ -93,6 +99,7 @@ func (s *GitService) getStatusGoGit(dirPath string) (result *models.GitStatusRes
 		Branch:         branchName,
 		Commit:         gitCommit,
 		Dirty:          dirty,
+		DirtyCount:     dirtyCount,
 		Ahead:          ahead,
 		Behind:         behind,
 		RemoteURL:      remoteURL,
@@ -122,8 +129,13 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	}
 
 	dirty := false
+	dirtyCount := 0
 	if output, err := s.gitCommand(dirPath, "status", "--porcelain"); err == nil {
-		dirty = strings.TrimSpace(output) != ""
+		trimmed := strings.TrimSpace(output)
+		dirty = trimmed != ""
+		if dirty {
+			dirtyCount = len(strings.Split(trimmed, "\n"))
+		}
 	}
 
 	ahead := 0
@@ -148,10 +160,11 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 			Message: subject,
 			Date:    dateStr,
 		},
-		Dirty:     dirty,
-		Ahead:     ahead,
-		Behind:    behind,
-		RemoteURL: remoteURL,
+		Dirty:      dirty,
+		DirtyCount: dirtyCount,
+		Ahead:      ahead,
+		Behind:     behind,
+		RemoteURL:  remoteURL,
 	}, nil
 }
 

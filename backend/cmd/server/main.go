@@ -207,6 +207,13 @@ func main() {
 	connectionManager := handlers.NewConnectionManager(10)
 	monitorHandler := handlers.NewMonitoringHandler(monitorService, dockerService, db, connectionManager)
 	monitorHandler.RegisterRoutes(protected, cfg.JWTSecret, cfg.AuthDisabled)
+
+	dashboardHandler := handlers.NewDashboardHandler(monitorService, dockerService, db, connectionManager)
+	dashboardHandler.RegisterRoutes(protected, cfg.JWTSecret, cfg.AuthDisabled)
+
+	resourcesHandler := handlers.NewResourcesHandler(dockerService, db)
+	resourcesHandler.RegisterRoutes(protected)
+
 	if monitorService != nil {
 		go handlers.StartEventBroadcaster(ctx, monitorService)
 	}
@@ -224,11 +231,14 @@ func main() {
 	}
 
 	stacksGroup.Use(timeoutMiddleware(120 * time.Second))
-	terminalGroup := protected.Group("/terminal")
-	terminalGroup.Use(timeoutMiddleware(300 * time.Second))
+	wsGroup := protected.Group("")
+	wsGroup.Use(timeoutMiddleware(300 * time.Second))
 
 	terminalHandler := handlers.NewTerminalHandler(terminalService, db)
-	terminalHandler.RegisterRoutes(terminalGroup)
+	terminalHandler.RegisterRoutes(wsGroup, cfg.JWTSecret, cfg.AuthDisabled)
+
+	operationsHandler := handlers.NewOperationsHandler(dockerService, db)
+	operationsHandler.RegisterRoutes(wsGroup, cfg.JWTSecret, cfg.AuthDisabled)
 
 	r.NoRoute(func(c *gin.Context) {
 		if !strings.HasPrefix(c.Request.URL.Path, "/api/") {

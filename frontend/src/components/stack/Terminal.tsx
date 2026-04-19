@@ -3,14 +3,119 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { SearchAddon } from '@xterm/addon-search'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { useWebSocketBinary } from '@/hooks/useWebSocket'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
-import { RotateCcw, Terminal, Clock, Copy, Clipboard } from 'lucide-react'
+import { RotateCcw, Terminal, Clock, Copy, Clipboard, Unplug, Plus, Minus, Search, ChevronUp, ChevronDown, X } from 'lucide-react'
 import type { Stack } from '@/types'
 
+function TerminalSearchBar({ searchAddon, onClose }: { searchAddon: SearchAddon | null; onClose: () => void }) {
+  const [query, setQuery] = useState('')
+  const [matchCount, setMatchCount] = useState<number | null>(null)
+  const [currentMatch, setCurrentMatch] = useState<number | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  const doSearch = useCallback(() => {
+    if (!searchAddon || !query) return
+    searchAddon.findNext(query, {
+      regex: false,
+      wholeWord: false,
+      caseSensitive: false,
+      incremental: true,
+      decorations: {
+        matchBackground: '#613214',
+        matchBorder: '#e07a36',
+        matchOverviewRuler: '#e07a36',
+        activeMatchBackground: '#515c6a',
+        activeMatchBorder: '#a8b4c4',
+        activeMatchColorOverviewRuler: '#a8b4c4',
+      },
+    })
+  }, [searchAddon, query])
+
+  const findNext = useCallback(() => {
+    if (!searchAddon || !query) return
+    searchAddon.findNext(query)
+  }, [searchAddon, query])
+
+  const findPrev = useCallback(() => {
+    if (!searchAddon || !query) return
+    searchAddon.findPrevious(query)
+  }, [searchAddon, query])
+
+  useEffect(() => {
+    if (!searchAddon) return
+    const disposable = searchAddon.onDidChangeResults((e) => {
+      setMatchCount(e?.resultCount ?? null)
+      setCurrentMatch(e?.resultIndex !== undefined && e.resultIndex >= 0 ? e.resultIndex + 1 : null)
+    })
+    return () => disposable.dispose()
+  }, [searchAddon])
+
+  const clearSearch = useCallback(() => {
+    searchAddon?.clearDecorations()
+    searchAddon?.clearActiveDecoration()
+  }, [searchAddon])
+
+  useEffect(() => {
+    if (!query) {
+      clearSearch()
+      return
+    }
+    const timer = setTimeout(() => doSearch(), 150)
+    return () => clearTimeout(timer)
+  }, [query, doSearch, searchAddon, clearSearch])
+
+  return (
+    <div className="flex items-center gap-2 rounded-lg border bg-background px-3 py-1.5">
+      <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <input
+        ref={inputRef}
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            if (e.shiftKey) { findPrev() } else { findNext() }
+          }
+          if (e.key === 'Escape') {
+            onClose()
+          }
+        }}
+        placeholder="Find in terminal..."
+        className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+      />
+      {matchCount !== null && (
+        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+          {currentMatch ?? 0}/{matchCount}
+        </span>
+      )}
+      <Button variant="ghost" size="sm" onClick={findPrev} disabled={!query} className="h-6 w-6 p-0" title="Previous match (Shift+Enter)">
+        <ChevronUp className="h-3.5 w-3.5" />
+      </Button>
+      <Button variant="ghost" size="sm" onClick={findNext} disabled={!query} className="h-6 w-6 p-0" title="Next match (Enter)">
+        <ChevronDown className="h-3.5 w-3.5" />
+      </Button>
+      <Button variant="ghost" size="sm" onClick={onClose} className="h-6 w-6 p-0" title="Close (Esc)">
+        <X className="h-3.5 w-3.5" />
+      </Button>
+    </div>
+  )
+}
+
 const SESSION_WARNING_MINUTES = 25
+
+const FONT_SIZE_KEY = 'terminal-font-size'
+const DEFAULT_FONT_SIZE = 14
+const MIN_FONT_SIZE = 10
+const MAX_FONT_SIZE = 24
 
 interface TerminalProps {
   stack: Stack
@@ -24,14 +129,22 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
   const [sessionDuration, setSessionDuration] = useState(0)
   const [disconnectCountdown, setDisconnectCountdown] = useState<number | null>(null)
   const [hasSelection, setHasSelection] = useState(false)
+  const [fontSize, setFontSize] = useState(() => {
+    const stored = localStorage.getItem(FONT_SIZE_KEY)
+    const parsed = stored ? parseInt(stored, 10) : DEFAULT_FONT_SIZE
+    return Number.isNaN(parsed) ? DEFAULT_FONT_SIZE : Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, parsed))
+  })
   const [showHints, setShowHints] = useState(() => {
     const stored = localStorage.getItem('terminal-hints-shown')
     return stored !== 'true'
   })
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchAddonInstance, setSearchAddonInstance] = useState<SearchAddon | null>(null)
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const webLinksAddonRef = useRef<WebLinksAddon | null>(null)
+  const searchAddonRef = useRef<SearchAddon | null>(null)
   const textEncoderRef = useRef(new TextEncoder())
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -59,7 +172,6 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
         setDisconnectCountdown(null)
         toast.success('Terminal connected')
         resetInactivityTimer()
-        startSessionTimer()
       },
       onClose: () => {
         setIsConnected(false)
@@ -69,13 +181,11 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
           terminal.writeln('\r\n\x1b[31mDisconnected. Press Reconnect to continue.\x1b[0m\r\n')
         }
         clearInactivityTimers()
-        stopSessionTimer()
       },
       onError: () => {
         setIsConnected(false)
         setIsConnecting(false)
         toast.error('Terminal connection error')
-        stopSessionTimer()
       },
     },
   )
@@ -91,19 +201,19 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
     }
   }, [])
 
-  const stopSessionTimer = useCallback(() => {
-    if (sessionTimerRef.current) {
-      clearInterval(sessionTimerRef.current)
-      sessionTimerRef.current = null
+  useEffect(() => {
+    if (isConnected) {
+      sessionTimerRef.current = setInterval(() => {
+        setSessionDuration((prev) => prev + 1)
+      }, 1000)
+      return () => {
+        if (sessionTimerRef.current) {
+          clearInterval(sessionTimerRef.current)
+          sessionTimerRef.current = null
+        }
+      }
     }
-  }, [])
-
-  const startSessionTimer = useCallback(() => {
-    stopSessionTimer()
-    sessionTimerRef.current = setInterval(() => {
-      setSessionDuration((prev) => prev + 1)
-    }, 1000)
-  }, [stopSessionTimer])
+  }, [isConnected])
 
   const resetInactivityTimer = useCallback(() => {
     clearInactivityTimers()
@@ -164,21 +274,51 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
   }, [isConnected, send, resetInactivityTimer])
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
       const terminal = xtermRef.current
       if (terminal && terminal.hasSelection()) {
         e.preventDefault()
+        e.stopPropagation()
         handleCopy()
       }
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
       e.preventDefault()
+      e.stopPropagation()
       handlePaste()
+    }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+      e.preventDefault()
+      e.stopPropagation()
+      setShowSearch(true)
     }
   }, [handleCopy, handlePaste])
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
+  }, [])
+
+  const handleFontSizeChange = useCallback((delta: number) => {
+    setFontSize((prev) => {
+      const next = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, prev + delta))
+      const terminal = xtermRef.current
+      if (terminal) {
+        terminal.options.fontSize = next
+        fitAddonRef.current?.fit()
+      }
+      localStorage.setItem(FONT_SIZE_KEY, String(next))
+      return next
+    })
+  }, [])
+
+  const toggleSearch = useCallback(() => {
+    setShowSearch((prev) => {
+      if (prev) {
+        searchAddonRef.current?.clearDecorations()
+        searchAddonRef.current?.clearActiveDecoration()
+      }
+      return !prev
+    })
   }, [])
 
   const dismissHints = useCallback(() => {
@@ -211,13 +351,36 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
 
   const handleContainerChange = useCallback((value: string) => {
     if (value !== selectedContainer) {
-      disconnect()
+      if (isConnected) {
+        const terminal = xtermRef.current
+        if (terminal) {
+          terminal.writeln('\r\n\x1b[33mSwitching terminal to a different container...\x1b[0m\r\n')
+        }
+        disconnect()
+      }
       setSessionDuration(0)
       setDisconnectCountdown(null)
+      setIsConnected(false)
       setSelectedContainer(value)
       reconnectKeyRef.current++
     }
-  }, [selectedContainer, disconnect])
+  }, [selectedContainer, isConnected, disconnect])
+
+  const handleDisconnect = useCallback(() => {
+    if (isConnected) {
+      disconnect()
+      setIsConnected(false)
+      setIsConnecting(false)
+      setSessionDuration(0)
+      setDisconnectCountdown(null)
+      const terminal = xtermRef.current
+      if (terminal) {
+        terminal.writeln('\r\n\x1b[33mTerminal disconnected.\x1b[0m\r\n')
+      }
+      clearInactivityTimers()
+      toast.info('Terminal disconnected')
+    }
+  }, [isConnected, disconnect, clearInactivityTimers])
 
   const handleReconnect = useCallback(() => {
     reconnect()
@@ -227,12 +390,20 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
     if (!terminalRef.current) return
 
     const terminal = new XTerm({
-      fontSize: 14,
+      fontSize,
       fontFamily: 'Menlo, Monaco, Consolas, monospace',
+      cursorBlink: true,
+      cursorStyle: 'bar',
+      scrollback: 10000,
+      lineHeight: 1.15,
+      allowProposedApi: true,
       theme: {
         background: '#1a1a1a',
         foreground: '#d4d4d4',
         cursor: '#ffffff',
+        cursorAccent: '#1a1a1a',
+        selectionBackground: '#264f78',
+        selectionForeground: '#ffffff',
         black: '#000000',
         red: '#cd3131',
         green: '#0dbc79',
@@ -254,15 +425,32 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
 
     const fitAddon = new FitAddon()
     const webLinksAddon = new WebLinksAddon()
+    const searchAddon = new SearchAddon()
+    const unicode11Addon = new Unicode11Addon()
 
     terminal.loadAddon(fitAddon)
     terminal.loadAddon(webLinksAddon)
+    terminal.loadAddon(searchAddon)
+    terminal.loadAddon(unicode11Addon)
+
+    terminal.unicode.activeVersion = '6'
+
+    terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
+        if (e.key.toLowerCase() === 'c' || e.key.toLowerCase() === 'v' || e.key.toLowerCase() === 'f') {
+          return false
+        }
+      }
+      return true
+    })
+
     terminal.open(terminalRef.current)
 
     xtermRef.current = terminal
     fitAddonRef.current = fitAddon
     webLinksAddonRef.current = webLinksAddon
-
+    searchAddonRef.current = searchAddon
+    setSearchAddonInstance(searchAddon)
     const handleData = terminal.onData(handleTerminalData)
     const handleSelectionChange = terminal.onSelectionChange(() => {
       setHasSelection(terminal.hasSelection())
@@ -294,9 +482,9 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
       resizeObserver.disconnect()
       terminal.dispose()
       clearInactivityTimers()
-      stopSessionTimer()
     }
-  }, [handleTerminalData, isConnected, send, clearInactivityTimers, stopSessionTimer, reconnectKeyRef])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handleTerminalData, isConnected, send, clearInactivityTimers, reconnectKeyRef])
 
   useEffect(() => {
     const handleWindowResize = () => {
@@ -357,11 +545,26 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
                 <span className="mr-1.5 h-2 w-2 rounded-full bg-green-500" />
                 Connected
               </span>
-              <Button variant="ghost" size="sm" onClick={handleCopy} disabled={!hasSelection} title="Copy (Ctrl+C)">
+              <Button variant="ghost" size="sm" onClick={handleCopy} disabled={!hasSelection} title="Copy (Ctrl+Shift+C)">
                 <Copy className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="sm" onClick={handlePaste} title="Paste (Ctrl+V)">
+              <Button variant="ghost" size="sm" onClick={handlePaste} title="Paste (Ctrl+Shift+V)">
                 <Clipboard className="h-4 w-4" />
+              </Button>
+              <div className="flex items-center gap-0.5 border-l pl-2 ml-1">
+                <Button variant="ghost" size="sm" onClick={() => handleFontSizeChange(-1)} title="Decrease font size" disabled={fontSize <= MIN_FONT_SIZE}>
+                  <Minus className="h-3.5 w-3.5" />
+                </Button>
+                <span className="w-8 text-center text-xs text-muted-foreground tabular-nums" title="Font size">{fontSize}</span>
+                <Button variant="ghost" size="sm" onClick={() => handleFontSizeChange(1)} title="Increase font size" disabled={fontSize >= MAX_FONT_SIZE}>
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <Button variant="ghost" size="sm" onClick={toggleSearch} title="Find (Ctrl+Shift+F)" className={showSearch ? 'bg-accent' : ''}>
+                <Search className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleDisconnect} title="Disconnect terminal" className="text-muted-foreground hover:text-foreground">
+                <Unplug className="h-4 w-4" />
               </Button>
             </>
           )}
@@ -372,13 +575,25 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
             </span>
           )}
           {!isConnected && !isConnecting && selectedContainer && (
-            <Button variant="outline" size="sm" onClick={handleReconnect}>
-              <RotateCcw className="mr-2 h-4 w-4" />
-              Reconnect
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={handleReconnect}>
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Reconnect
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setSelectedContainer('')} className="text-muted-foreground">
+                Close
+              </Button>
+            </div>
           )}
         </div>
       </div>
+      {showSearch && isConnected && (
+        <TerminalSearchBar searchAddon={searchAddonInstance} onClose={() => {
+          setShowSearch(false)
+          searchAddonRef.current?.clearDecorations()
+          searchAddonRef.current?.clearActiveDecoration()
+        }} />
+      )}
       <div
         ref={terminalRef}
         className="flex-1 overflow-hidden rounded-lg border bg-[#1a1a1a]"
@@ -390,8 +605,9 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
         <div className="rounded-lg border bg-muted/50 p-4 text-sm">
           <div className="mb-2 font-medium">Keyboard Shortcuts</div>
           <div className="space-y-1 text-muted-foreground">
-            <div><kbd className="rounded border bg-background px-1.5 py-0.5">Ctrl</kbd> + <kbd className="rounded border bg-background px-1.5 py-0.5">C</kbd> - Copy selection</div>
-            <div><kbd className="rounded border bg-background px-1.5 py-0.5">Ctrl</kbd> + <kbd className="rounded border bg-background px-1.5 py-0.5">V</kbd> - Paste from clipboard</div>
+            <div><kbd className="rounded border bg-background px-1.5 py-0.5">Ctrl</kbd> + <kbd className="rounded border bg-background px-1.5 py-0.5">Shift</kbd> + <kbd className="rounded border bg-background px-1.5 py-0.5">C</kbd> - Copy selection</div>
+            <div><kbd className="rounded border bg-background px-1.5 py-0.5">Ctrl</kbd> + <kbd className="rounded border bg-background px-1.5 py-0.5">Shift</kbd> + <kbd className="rounded border bg-background px-1.5 py-0.5">V</kbd> - Paste from clipboard</div>
+            <div><kbd className="rounded border bg-background px-1.5 py-0.5">Ctrl</kbd> + <kbd className="rounded border bg-background px-1.5 py-0.5">Shift</kbd> + <kbd className="rounded border bg-background px-1.5 py-0.5">F</kbd> - Find in terminal</div>
           </div>
           <Button variant="link" size="sm" onClick={dismissHints} className="mt-2 p-0">
             Don't show again

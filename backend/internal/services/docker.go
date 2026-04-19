@@ -1,18 +1,24 @@
 package services
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 
 	"github.com/docker-manager/backend/internal/config"
@@ -113,6 +119,81 @@ func (s *DockerService) Pull(stack models.Stack) (*models.CommandResult, error) 
 		Stdout:   string(output),
 		Stderr:   "",
 	}, nil
+}
+
+type StreamLine struct {
+	Type    string `json:"type"`
+	Line    string `json:"line,omitempty"`
+	Success bool   `json:"success,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, subcommand string, extraArgs []string) <-chan StreamLine {
+	out := make(chan StreamLine, 100)
+
+	go func() {
+		defer close(out)
+
+		args := s.buildComposeArgs(stack, subcommand, extraArgs)
+		cmd := exec.CommandContext(ctx, "docker", args...)
+		cmd.Dir = stack.Directory
+
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			out <- StreamLine{Type: "error", Error: fmt.Sprintf("Failed to create pipe: %v", err)}
+			return
+		}
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			out <- StreamLine{Type: "error", Error: fmt.Sprintf("Failed to create stderr pipe: %v", err)}
+			return
+		}
+
+		if err := cmd.Start(); err != nil {
+			out <- StreamLine{Type: "error", Error: fmt.Sprintf("Failed to start command: %v", err)}
+			return
+		}
+
+		done := make(chan struct{})
+		go func() {
+			scanner := bufio.NewScanner(stdout)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if strings.TrimSpace(line) != "" {
+					out <- StreamLine{Type: "data", Line: line}
+				}
+			}
+			if err := scanner.Err(); err != nil {
+				out <- StreamLine{Type: "error", Error: err.Error()}
+			}
+			done <- struct{}{}
+		}()
+		go func() {
+			scanner := bufio.NewScanner(stderr)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if strings.TrimSpace(line) != "" {
+					out <- StreamLine{Type: "data", Line: line}
+				}
+			}
+			if err := scanner.Err(); err != nil {
+				out <- StreamLine{Type: "error", Error: err.Error()}
+			}
+			done <- struct{}{}
+		}()
+
+		<-done
+		<-done
+
+		err = cmd.Wait()
+		if err != nil {
+			out <- StreamLine{Type: "done", Success: false, Error: fmt.Sprintf("Command failed: %v", err)}
+		} else {
+			out <- StreamLine{Type: "done", Success: true}
+		}
+	}()
+
+	return out
 }
 
 func (s *DockerService) Delete(stack models.Stack) (*models.CommandResult, error) {
@@ -278,6 +359,8 @@ func (s *DockerService) GetContainerStats(ctx context.Context, containerID strin
 			memPercent, memUsage, memLimit := calculateMemPercent(&statsJSON)
 			netRx, netTx := calculateNetwork(&statsJSON)
 			blockRead, blockWrite := calculateBlockIO(&statsJSON)
+			memSwap := calculateMemSwap(&statsJSON)
+			pids := getPids(&statsJSON)
 
 			containerName := containerID[:12]
 			if len(statsJSON.Name) > 0 {
@@ -295,6 +378,8 @@ func (s *DockerService) GetContainerStats(ctx context.Context, containerID strin
 				NetTx:       netTx,
 				BlockRead:   blockRead,
 				BlockWrite:  blockWrite,
+				MemSwap:     memSwap,
+				Pids:        pids,
 			}
 
 			select {
@@ -400,6 +485,21 @@ func calculateMemPercent(stats *types.StatsJSON) (float64, float64, float64) {
 	return memPercent, memUsage, memLimit
 }
 
+func calculateMemSwap(stats *types.StatsJSON) float64 {
+	if stats.MemoryStats.Stats == nil {
+		return 0
+	}
+	swapUsage, ok := stats.MemoryStats.Stats["swap"]
+	if !ok {
+		return 0
+	}
+	return float64(swapUsage)
+}
+
+func getPids(stats *types.StatsJSON) uint64 {
+	return stats.PidsStats.Current
+}
+
 func calculateNetwork(stats *types.StatsJSON) (float64, float64) {
 	var netRx, netTx uint64
 
@@ -445,6 +545,543 @@ func parsePorts(portsStr string) []models.PortBinding {
 	}
 
 	return ports
+}
+
+func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db DashboardDB) ([]models.DashboardContainerInfo, error) {
+	containers, err := s.client.ContainerList(ctx, container.ListOptions{All: true, Size: true})
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]models.DashboardContainerInfo, 0, len(containers))
+
+	for _, c := range containers {
+		projectName := c.Labels["com.docker.compose.project"]
+
+		ports := make([]models.PortBinding, 0)
+		for _, p := range c.Ports {
+			if p.PublicPort > 0 {
+				ports = append(ports, models.PortBinding{
+					Host:      fmt.Sprintf("%s:%d", p.IP, p.PublicPort),
+					Container: fmt.Sprintf("%d/%s", p.PrivatePort, p.Type),
+					Protocol:  p.Type,
+				})
+			}
+		}
+
+		var stackID string
+		if db != nil && projectName != "" {
+			stack, err := db.GetStackByProjectName(projectName)
+			if err == nil && stack != nil {
+				stackID = stack.ID
+			}
+		}
+
+		name := ""
+		if len(c.Names) > 0 {
+			name = strings.TrimPrefix(c.Names[0], "/")
+		}
+
+		restartCount := 0
+
+		health := ""
+
+		info := models.DashboardContainerInfo{
+			ID:           c.ID,
+			Name:         name,
+			Image:        c.Image,
+			State:        c.State,
+			Status:       c.Status,
+			Health:       health,
+			Ports:        ports,
+			StackID:      stackID,
+			ProjectName:  projectName,
+			RestartCount: restartCount,
+			Created:      time.Unix(c.Created, 0),
+			DiskSize:     c.SizeRw,
+			ImageSize:    c.SizeRootFs,
+		}
+
+		if c.State == "running" {
+			inspect, err := s.client.ContainerInspect(ctx, c.ID)
+			if err == nil {
+				if inspect.State != nil && inspect.State.StartedAt != "" {
+					if t, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt); err == nil {
+						info.StartedAt = t
+					}
+				}
+				if inspect.State != nil {
+					info.RestartCount = inspect.RestartCount
+					if inspect.State.Health != nil {
+						health = inspect.State.Health.Status
+					}
+				}
+				if inspect.SizeRw != nil {
+					info.DiskSize = *inspect.SizeRw
+				}
+				if inspect.SizeRootFs != nil {
+					info.ImageSize = *inspect.SizeRootFs
+				}
+			}
+		}
+
+		result = append(result, info)
+	}
+
+	return result, nil
+}
+
+func (s *DockerService) GetImageDiskUsage(ctx context.Context) (int64, error) {
+	images, err := s.client.ImageList(ctx, types.ImageListOptions{})
+	if err != nil {
+		return 0, err
+	}
+
+	var total int64
+	for _, img := range images {
+		total += img.Size
+	}
+
+	return total, nil
+}
+
+func (s *DockerService) GetRunningContainerIDs(ctx context.Context) ([]string, error) {
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("status", "running")
+
+	containers, err := s.client.ContainerList(ctx, container.ListOptions{
+		Filters: filterArgs,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]string, 0, len(containers))
+	for _, c := range containers {
+		ids = append(ids, c.ID)
+	}
+
+	return ids, nil
+}
+
+type DashboardDB interface {
+	GetStackByProjectName(projectName string) (*models.Stack, error)
+}
+
+func (s *DockerService) ListImages(ctx context.Context) ([]models.DockerImage, error) {
+	images, err := s.client.ImageList(ctx, types.ImageListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("listing images: %w", err)
+	}
+
+	result := make([]models.DockerImage, 0, len(images))
+	for _, img := range images {
+		repoTags := img.RepoTags
+		if repoTags == nil {
+			repoTags = []string{"<none>"}
+		}
+
+		result = append(result, models.DockerImage{
+			ID:         img.ID,
+			RepoTags:   repoTags,
+			Size:       img.Size,
+			Created:    img.Created,
+			Containers: int(img.Containers),
+		})
+	}
+
+	return result, nil
+}
+
+func (s *DockerService) ListVolumes(ctx context.Context) ([]models.DockerVolume, error) {
+	volumes, err := s.client.VolumeList(ctx, volume.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("listing volumes: %w", err)
+	}
+
+	result := make([]models.DockerVolume, 0, len(volumes.Volumes))
+	for _, vol := range volumes.Volumes {
+		if vol == nil {
+			continue
+		}
+
+		var stack string
+		if vol.Labels != nil {
+			stack = vol.Labels["com.docker.compose.project"]
+		}
+
+		var usageData int64
+		if vol.UsageData != nil {
+			usageData = vol.UsageData.Size
+		}
+
+		result = append(result, models.DockerVolume{
+			Name:       vol.Name,
+			Driver:     vol.Driver,
+			Mountpoint: vol.Mountpoint,
+			Size:       usageData,
+			Created:    vol.CreatedAt,
+			Stack:      stack,
+		})
+	}
+
+	return result, nil
+}
+
+func (s *DockerService) ListNetworks(ctx context.Context) ([]models.DockerNetwork, error) {
+	networks, err := s.client.NetworkList(ctx, types.NetworkListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("listing networks: %w", err)
+	}
+
+	result := make([]models.DockerNetwork, 0, len(networks))
+	for _, net := range networks {
+		var stack string
+		var labelStrs []string
+		if net.Labels != nil {
+			stack = net.Labels["com.docker.compose.project"]
+			for k, v := range net.Labels {
+				labelStrs = append(labelStrs, k+"="+v)
+			}
+		}
+
+		containerCount := 0
+		if net.Containers != nil {
+			containerCount = len(net.Containers)
+		}
+
+		result = append(result, models.DockerNetwork{
+			ID:         net.ID,
+			Name:       net.Name,
+			Driver:     net.Driver,
+			Scope:      net.Scope,
+			Internal:   net.Internal,
+			Containers: containerCount,
+			Labels:     labelStrs,
+			Created:    net.Created.Format(time.RFC3339),
+			Stack:      stack,
+		})
+	}
+
+	return result, nil
+}
+
+func (s *DockerService) DeleteContainer(ctx context.Context, containerID string, force bool) error {
+	return s.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force})
+}
+
+func (s *DockerService) PruneContainers(ctx context.Context) (types.ContainersPruneReport, error) {
+	return s.client.ContainersPrune(ctx, filters.NewArgs())
+}
+
+func (s *DockerService) DeleteImage(ctx context.Context, imageID string, force bool) ([]image.DeleteResponse, error) {
+	return s.client.ImageRemove(ctx, imageID, image.RemoveOptions{Force: force})
+}
+
+func (s *DockerService) PruneImages(ctx context.Context) (types.ImagesPruneReport, error) {
+	return s.client.ImagesPrune(ctx, filters.NewArgs())
+}
+
+func (s *DockerService) DeleteVolume(ctx context.Context, volumeName string, force bool) error {
+	return s.client.VolumeRemove(ctx, volumeName, force)
+}
+
+func (s *DockerService) PruneVolumes(ctx context.Context) (types.VolumesPruneReport, error) {
+	return s.client.VolumesPrune(ctx, filters.NewArgs())
+}
+
+func (s *DockerService) DeleteNetwork(ctx context.Context, networkID string) error {
+	return s.client.NetworkRemove(ctx, networkID)
+}
+
+func (s *DockerService) PruneNetworks(ctx context.Context) (types.NetworksPruneReport, error) {
+	return s.client.NetworksPrune(ctx, filters.NewArgs())
+}
+
+func (s *DockerService) StartContainer(ctx context.Context, containerID string) error {
+	return s.client.ContainerStart(ctx, containerID, container.StartOptions{})
+}
+
+func (s *DockerService) StopContainer(ctx context.Context, containerID string) error {
+	return s.client.ContainerStop(ctx, containerID, container.StopOptions{})
+}
+
+func (s *DockerService) RestartContainer(ctx context.Context, containerID string) error {
+	return s.client.ContainerRestart(ctx, containerID, container.StopOptions{})
+}
+
+func (s *DockerService) ListBuildCache(ctx context.Context) ([]*types.BuildCache, error) {
+	du, err := s.client.DiskUsage(ctx, types.DiskUsageOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return du.BuildCache, nil
+}
+
+func (s *DockerService) PruneBuildCache(ctx context.Context) (*types.BuildCachePruneReport, error) {
+	return s.client.BuildCachePrune(ctx, types.BuildCachePruneOptions{All: true})
+}
+
+func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]models.ContainerUpdateInfo, error) {
+	containers, err := s.client.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("listing containers: %w", err)
+	}
+
+	type imgInfo struct {
+		ref          string
+		localDigest  string
+		remoteDigest string
+		checked      bool
+	}
+
+	imageMap := make(map[string]*imgInfo)
+
+	type cInfo struct {
+		id          string
+		name        string
+		imageID     string
+		imageRef    string
+		localDigest string
+		state       string
+		stackID     string
+		project     string
+		service     string
+		isCompose   bool
+	}
+	var allContainers []cInfo
+
+	for _, c := range containers {
+		name := ""
+		if len(c.Names) > 0 {
+			name = strings.TrimPrefix(c.Names[0], "/")
+		}
+
+		imgInspect, _, err := s.client.ImageInspectWithRaw(ctx, c.ImageID)
+		if err != nil {
+			continue
+		}
+
+		var imageRef string
+		for _, tag := range imgInspect.RepoTags {
+			if tag != "<none>" && !strings.Contains(tag, "@sha256:") {
+				imageRef = tag
+				break
+			}
+		}
+		if imageRef == "" {
+			continue
+		}
+
+		var localDigest string
+		for _, rd := range imgInspect.RepoDigests {
+			if idx := strings.LastIndex(rd, "@"); idx >= 0 {
+				localDigest = rd[idx+1:]
+				break
+			}
+		}
+		if localDigest == "" {
+			continue
+		}
+
+		if _, exists := imageMap[imageRef]; !exists {
+			imageMap[imageRef] = &imgInfo{
+				ref:         imageRef,
+				localDigest: localDigest,
+			}
+		}
+
+		var stackID string
+		projectName := c.Labels["com.docker.compose.project"]
+		serviceName := c.Labels["com.docker.compose.service"]
+		if db != nil && projectName != "" {
+			stack, err := db.GetStackByProjectName(projectName)
+			if err == nil && stack != nil {
+				stackID = stack.ID
+			}
+		}
+
+		allContainers = append(allContainers, cInfo{
+			id:          c.ID,
+			name:        name,
+			imageID:     c.ImageID,
+			imageRef:    imageRef,
+			localDigest: localDigest,
+			state:       c.State,
+			stackID:     stackID,
+			project:     projectName,
+			service:     serviceName,
+			isCompose:   projectName != "",
+		})
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 5)
+
+	for ref, info := range imageMap {
+		wg.Add(1)
+		go func(ref string, info *imgInfo) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			manifestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+
+			output, err := exec.CommandContext(manifestCtx, "docker", "manifest", "inspect", "--verbose", ref).Output()
+			if err != nil {
+				slog.Debug("Failed to inspect manifest", "image", ref, "error", err)
+				return
+			}
+
+			var manifest struct {
+				Descriptor struct {
+					Digest string `json:"digest"`
+				} `json:"Descriptor"`
+			}
+			if err := json.Unmarshal(output, &manifest); err != nil {
+				slog.Debug("Failed to parse manifest", "image", ref, "error", err)
+				return
+			}
+
+			if manifest.Descriptor.Digest == "" {
+				return
+			}
+
+			mu.Lock()
+			info.remoteDigest = manifest.Descriptor.Digest
+			info.checked = true
+			mu.Unlock()
+		}(ref, info)
+	}
+	wg.Wait()
+
+	var result []models.ContainerUpdateInfo
+	for _, c := range allContainers {
+		info, ok := imageMap[c.imageRef]
+		if !ok || !info.checked {
+			continue
+		}
+		if info.remoteDigest != c.localDigest {
+			result = append(result, models.ContainerUpdateInfo{
+				ContainerID:   c.id,
+				ContainerName: c.name,
+				Image:         c.imageRef,
+				ImageRef:      c.imageRef,
+				State:         c.state,
+				StackID:       c.stackID,
+				ProjectName:   c.project,
+				ServiceName:   c.service,
+				IsCompose:     c.isCompose,
+			})
+		}
+	}
+
+	return result, nil
+}
+
+func (s *DockerService) UpdateContainer(ctx context.Context, containerID string, db DashboardDB) error {
+	inspect, err := s.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("inspecting container: %w", err)
+	}
+
+	wasRunning := inspect.State != nil && inspect.State.Running
+	projectName := ""
+	serviceName := ""
+	if inspect.Config != nil && inspect.Config.Labels != nil {
+		projectName = inspect.Config.Labels["com.docker.compose.project"]
+		serviceName = inspect.Config.Labels["com.docker.compose.service"]
+	}
+
+	if projectName != "" && serviceName != "" && db != nil {
+		stack, err := db.GetStackByProjectName(projectName)
+		if err == nil && stack != nil {
+			return s.updateComposeContainer(ctx, *stack, serviceName, wasRunning)
+		}
+	}
+
+	return s.updateStandaloneContainer(ctx, inspect, wasRunning)
+}
+
+func (s *DockerService) updateComposeContainer(ctx context.Context, stack models.Stack, serviceName string, wasRunning bool) error {
+	pullArgs := s.buildComposeArgs(stack, "pull", []string{serviceName})
+	pullCmd := exec.CommandContext(ctx, "docker", pullArgs...)
+	pullCmd.Dir = stack.Directory
+	if output, err := pullCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("compose pull failed: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+
+	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", serviceName})
+	upCmd := exec.CommandContext(ctx, "docker", upArgs...)
+	upCmd.Dir = stack.Directory
+	if output, err := upCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("compose up failed: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+
+	if !wasRunning {
+		time.Sleep(3 * time.Second)
+		filterArgs := filters.NewArgs()
+		filterArgs.Add("label", "com.docker.compose.project="+stack.ProjectName)
+		filterArgs.Add("label", "com.docker.compose.service="+serviceName)
+		filterArgs.Add("status", "running")
+
+		containers, err := s.client.ContainerList(ctx, container.ListOptions{Filters: filterArgs})
+		if err != nil {
+			return fmt.Errorf("finding new container to stop: %w", err)
+		}
+		for _, c := range containers {
+			if err := s.client.ContainerStop(ctx, c.ID, container.StopOptions{}); err != nil {
+				slog.Error("Failed to stop recreated container", "id", c.ID, "error", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect types.ContainerJSON, wasRunning bool) error {
+	imageRef := inspect.Config.Image
+
+	reader, err := s.client.ImagePull(ctx, imageRef, image.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("pulling image: %w", err)
+	}
+	io.Copy(io.Discard, reader)
+	reader.Close()
+
+	if wasRunning {
+		if err := s.client.ContainerStop(ctx, inspect.ID, container.StopOptions{}); err != nil {
+			return fmt.Errorf("stopping container: %w", err)
+		}
+	}
+
+	if err := s.client.ContainerRemove(ctx, inspect.ID, container.RemoveOptions{}); err != nil {
+		return fmt.Errorf("removing container: %w", err)
+	}
+
+	name := strings.TrimPrefix(inspect.Name, "/")
+
+	var netConfig *network.NetworkingConfig
+	if inspect.NetworkSettings != nil {
+		netConfig = &network.NetworkingConfig{
+			EndpointsConfig: inspect.NetworkSettings.Networks,
+		}
+	}
+
+	newContainer, err := s.client.ContainerCreate(ctx, inspect.Config, inspect.HostConfig, netConfig, nil, name)
+	if err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+
+	if wasRunning {
+		if err := s.client.ContainerStart(ctx, newContainer.ID, container.StartOptions{}); err != nil {
+			return fmt.Errorf("starting container: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func formatBytes(bytes float64) string {

@@ -31,51 +31,50 @@ func NewTerminalHandler(terminal *services.TerminalService, db *database.DB) *Te
 	}
 }
 
-func (h *TerminalHandler) RegisterRoutes(group *gin.RouterGroup) {
-	group.GET("/ws/terminal/:id/:container", h.WSTerminal)
+func (h *TerminalHandler) RegisterRoutes(group *gin.RouterGroup, jwtSecret string, authDisabled bool) {
+	group.GET("/ws/terminal/:id/:container", h.handleTerminalWS(jwtSecret, authDisabled))
 }
 
-func (h *TerminalHandler) WSTerminal(c *gin.Context) {
-	stackID := c.Param("id")
-	containerName := c.Param("container")
+func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		stackID := c.Param("id")
+		containerName := c.Param("container")
 
-	jwtSecret := c.MustGet("jwt_secret").(string)
-	authDisabled := c.MustGet("auth_disabled").(bool)
+		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
+		if err != nil {
+			models.HandleError(c, err)
+			return
+		}
+		defer conn.Conn.Close()
 
-	conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
-	if err != nil {
-		models.HandleError(c, err)
-		return
-	}
-	defer conn.Conn.Close()
+		stack, err := h.db.GetStack(stackID)
+		if err != nil || stack == nil {
+			slog.Error("Failed to get stack", "stack_id", stackID, "error", err)
+			writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Stack not found")
+			return
+		}
 
-	stack, err := h.db.GetStack(stackID)
-	if err != nil || stack == nil {
-		slog.Error("Failed to get stack", "stack_id", stackID, "error", err)
-		writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Stack not found")
-		return
-	}
+		session, err := h.terminal.CreateSession(stack.ProjectName, containerName)
+		if err != nil {
+			slog.Error("Failed to create terminal session", "stack_id", stackID, "container", containerName, "error", err)
+			writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Failed to create terminal session")
+			return
+		}
+		defer h.terminal.CloseSession(session.ID)
 
-	session, err := h.terminal.CreateSession(stackID, containerName, stack.ComposeFile, stack.Directory)
-	if err != nil {
-		slog.Error("Failed to create terminal session", "stack_id", stackID, "container", containerName, "error", err)
-		writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Failed to create terminal session")
-		return
-	}
-	defer h.terminal.CloseSession(session.ID)
+		done := make(chan struct{})
+		readDone := make(chan struct{})
+		writeDone := make(chan struct{})
 
-	done := make(chan struct{})
-	readDone := make(chan struct{})
-	writeDone := make(chan struct{})
+		go h.readFromWebSocket(conn, session, readDone, done)
+		go h.writeToWebSocket(conn, session, writeDone, done)
+		go h.waitForProcessExit(session, conn, done)
 
-	go h.readFromWebSocket(conn, session, readDone, done)
-	go h.writeToWebSocket(conn, session, writeDone, done)
-	go h.waitForProcessExit(session, conn, done)
-
-	select {
-	case <-readDone:
-	case <-writeDone:
-	case <-done:
+		select {
+		case <-readDone:
+		case <-writeDone:
+		case <-done:
+		}
 	}
 }
 

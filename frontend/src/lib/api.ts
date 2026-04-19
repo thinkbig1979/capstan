@@ -9,6 +9,12 @@ import type {
   CommandResult,
   ApiError,
   LintResult,
+  DashboardStats,
+  DockerImage,
+  DockerVolume,
+  DockerNetwork,
+  BuildCacheEntry,
+  ContainerUpdateInfo,
 } from '@/types'
 
 const API_BASE_URL = '/api/v1'
@@ -107,6 +113,11 @@ export const authApi = {
     return response.data
   },
 
+  getConfig: async () => {
+    const response = await apiClient.get<{ stacksDir: string }>('/settings/config')
+    return response.data
+  },
+
   updateGlobalEnv: async (vars: Array<{ key: string; value: string }>) => {
     const response = await apiClient.put<void>('/settings/global-env', { vars })
     return response.data
@@ -184,6 +195,98 @@ export const stacksApi = {
 
   delete: async (id: string) => {
     const response = await apiClient.delete<void>(`/stacks/${encodeURIComponent(id)}?confirm=true`)
+    return response.data
+  },
+}
+
+export const dashboardApi = {
+  stats: async () => {
+    const response = await apiClient.get<DashboardStats>('/dashboard/stats')
+    return response.data
+  },
+}
+
+export const resourcesApi = {
+  images: async () => {
+    const response = await apiClient.get<{ images: DockerImage[] }>('/resources/images')
+    return response.data.images
+  },
+  deleteImage: async (id: string, force = false) => {
+    const response = await apiClient.delete<{ deleted: unknown[] }>(`/resources/images/${encodeURIComponent(id)}?force=${force}`)
+    return response.data
+  },
+  pruneImages: async () => {
+    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>('/resources/images/prune')
+    return response.data
+  },
+
+  containers: async () => {
+    const response = await apiClient.get<{ containers: unknown[] }>('/resources/containers')
+    return response.data.containers
+  },
+  deleteContainer: async (id: string, force = false) => {
+    const response = await apiClient.delete<{ deleted: string }>(`/resources/containers/${encodeURIComponent(id)}?force=${force}`)
+    return response.data
+  },
+  startContainer: async (id: string) => {
+    const response = await apiClient.post<{ message: string }>(`/resources/containers/${encodeURIComponent(id)}/start`)
+    return response.data
+  },
+  stopContainer: async (id: string) => {
+    const response = await apiClient.post<{ message: string }>(`/resources/containers/${encodeURIComponent(id)}/stop`)
+    return response.data
+  },
+  restartContainer: async (id: string) => {
+    const response = await apiClient.post<{ message: string }>(`/resources/containers/${encodeURIComponent(id)}/restart`)
+    return response.data
+  },
+  pruneContainers: async () => {
+    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>('/resources/containers/prune')
+    return response.data
+  },
+
+  checkUpdates: async () => {
+    const response = await apiClient.get<{ updates: ContainerUpdateInfo[] }>('/resources/updates')
+    return response.data.updates
+  },
+
+  updateContainer: async (id: string) => {
+    const response = await apiClient.post<{ message: string }>(`/resources/containers/${encodeURIComponent(id)}/update`)
+    return response.data
+  },
+
+  volumes: async () => {
+    const response = await apiClient.get<{ volumes: DockerVolume[] }>('/resources/volumes')
+    return response.data.volumes
+  },
+  deleteVolume: async (name: string, force = false) => {
+    const response = await apiClient.delete<{ deleted: string }>(`/resources/volumes/${encodeURIComponent(name)}?force=${force}`)
+    return response.data
+  },
+  pruneVolumes: async () => {
+    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>('/resources/volumes/prune')
+    return response.data
+  },
+
+  networks: async () => {
+    const response = await apiClient.get<{ networks: DockerNetwork[] }>('/resources/networks')
+    return response.data.networks
+  },
+  deleteNetwork: async (id: string) => {
+    const response = await apiClient.delete<{ deleted: string }>(`/resources/networks/${encodeURIComponent(id)}`)
+    return response.data
+  },
+  pruneNetworks: async () => {
+    const response = await apiClient.post<{ deleted: string[] }>('/resources/networks/prune')
+    return response.data
+  },
+
+  listBuildCache: async () => {
+    const response = await apiClient.get<{ entries: BuildCacheEntry[] }>('/resources/build-cache')
+    return response.data.entries
+  },
+  pruneBuildCache: async () => {
+    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>('/resources/build-cache/prune')
     return response.data
   },
 }

@@ -6,8 +6,10 @@ type Theme = 'light' | 'dark' | 'system'
 interface UIState {
   theme: Theme
   sidebarOpen: boolean
+  sidebarWidth: number
   setTheme: (theme: Theme) => void
   toggleSidebar: () => void
+  setSidebarWidth: (width: number) => void
 }
 
 function getSystemTheme(): 'light' | 'dark' {
@@ -31,6 +33,7 @@ export const useUIStore = create<UIState>()(
     (set) => ({
       theme: 'system',
       sidebarOpen: true,
+      sidebarWidth: 256,
 
       setTheme: (theme) => {
         set({ theme })
@@ -39,6 +42,10 @@ export const useUIStore = create<UIState>()(
 
       toggleSidebar: () => {
         set((state) => ({ sidebarOpen: !state.sidebarOpen }))
+      },
+
+      setSidebarWidth: (width: number) => {
+        set({ sidebarWidth: Math.min(Math.max(width, 200), 480) })
       },
     }),
     {

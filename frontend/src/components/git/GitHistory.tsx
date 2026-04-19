@@ -131,7 +131,17 @@ export function GitHistory({ stackId }: GitHistoryProps) {
               className={`rounded-lg border bg-card p-4 cursor-pointer transition-colors hover:bg-muted/50 ${
                 selectedCommit === commit.hash ? 'border-primary' : ''
               }`}
+              role="button"
+              tabIndex={0}
+              aria-expanded={selectedCommit === commit.hash}
+              aria-label={`Commit ${commit.short}: ${commit.message}`}
               onClick={() => setSelectedCommit(selectedCommit === commit.hash ? null : commit.hash)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setSelectedCommit(selectedCommit === commit.hash ? null : commit.hash)
+                }
+              }}
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">

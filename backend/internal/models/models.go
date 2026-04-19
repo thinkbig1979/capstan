@@ -69,6 +69,8 @@ type ContainerMetrics struct {
 	NetTx       float64 `json:"netTx"`
 	BlockRead   float64 `json:"blockRead"`
 	BlockWrite  float64 `json:"blockWrite"`
+	MemSwap     float64 `json:"memSwap"`
+	Pids        uint64  `json:"pids"`
 }
 
 type GitCommit struct {
@@ -113,6 +115,7 @@ type GitStatusResult struct {
 	Branch         string     `json:"branch"`
 	Commit         *GitCommit `json:"commit"`
 	Dirty          bool       `json:"dirty"`
+	DirtyCount     int        `json:"dirtyCount"`
 	Ahead          int        `json:"ahead"`
 	Behind         int        `json:"behind"`
 	RemoteURL      string     `json:"remoteUrl"`
@@ -135,6 +138,74 @@ type DiffResult struct {
 	Commit *GitCommit `json:"commit"`
 	Diff   string     `json:"diff"`
 	Files  []string   `json:"files"`
+}
+
+type DashboardContainerInfo struct {
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	Image        string        `json:"image"`
+	State        string        `json:"state"`
+	Status       string        `json:"status"`
+	Health       string        `json:"health"`
+	Ports        []PortBinding `json:"ports"`
+	StackID      string        `json:"stackId"`
+	ProjectName  string        `json:"projectName"`
+	RestartCount int           `json:"restartCount"`
+	Created      time.Time     `json:"created"`
+	StartedAt    time.Time     `json:"startedAt"`
+	DiskSize     int64         `json:"diskSize"`
+	ImageSize    int64         `json:"imageSize"`
+}
+
+type DashboardStats struct {
+	TotalStacks       int                      `json:"totalStacks"`
+	RunningStacks     int                      `json:"runningStacks"`
+	StoppedStacks     int                      `json:"stoppedStacks"`
+	TotalContainers   int                      `json:"totalContainers"`
+	RunningContainers int                      `json:"runningContainers"`
+	ImageDiskUsage    int64                    `json:"imageDiskUsage"`
+	Containers        []DashboardContainerInfo `json:"containers"`
+}
+
+type DockerImage struct {
+	ID         string   `json:"id"`
+	RepoTags   []string `json:"repoTags"`
+	Size       int64    `json:"size"`
+	Created    int64    `json:"created"`
+	Containers int      `json:"containers"`
+}
+
+type DockerVolume struct {
+	Name       string `json:"name"`
+	Driver     string `json:"driver"`
+	Mountpoint string `json:"mountpoint"`
+	Size       int64  `json:"size"`
+	Created    string `json:"created"`
+	Stack      string `json:"stack"`
+}
+
+type DockerNetwork struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Driver     string   `json:"driver"`
+	Scope      string   `json:"scope"`
+	Internal   bool     `json:"internal"`
+	Containers int      `json:"containers"`
+	Labels     []string `json:"labels"`
+	Created    string   `json:"created"`
+	Stack      string   `json:"stack"`
+}
+
+type ContainerUpdateInfo struct {
+	ContainerID   string `json:"containerId"`
+	ContainerName string `json:"containerName"`
+	Image         string `json:"image"`
+	ImageRef      string `json:"imageRef"`
+	State         string `json:"state"`
+	StackID       string `json:"stackId"`
+	ProjectName   string `json:"projectName"`
+	ServiceName   string `json:"serviceName"`
+	IsCompose     bool   `json:"isCompose"`
 }
 
 type StackEvent struct {

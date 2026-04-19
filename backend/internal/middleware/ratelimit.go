@@ -193,10 +193,10 @@ var apiRateLimiter *RateLimiter
 
 func InitRateLimiters() {
 	authRateLimiter = NewRateLimiter(1*time.Minute, 5)
-	apiRateLimiter = NewRateLimiter(1*time.Minute, 60)
+	apiRateLimiter = NewRateLimiter(1*time.Minute, 300)
 	slog.Info("Rate limiters initialized",
 		"auth", "5/min",
-		"api", "60/min",
+		"api", "300/min",
 	)
 }
 

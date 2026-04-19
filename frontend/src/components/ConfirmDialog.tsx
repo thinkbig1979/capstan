@@ -11,28 +11,6 @@ interface ConfirmDialogProps {
   isDangerous?: boolean
 }
 
-function sanitizeText(text: string, maxLength: number): string {
-  if (!text) return ''
-  
-  let sanitized = text.replace(/<[^>]*>/g, '')
-  
-  sanitized = sanitized.replace(/&/g, '&amp;')
-  sanitized = sanitized.replace(/</g, '&lt;')
-  sanitized = sanitized.replace(/>/g, '&gt;')
-  sanitized = sanitized.replace(/"/g, '&quot;')
-  sanitized = sanitized.replace(/'/g, '&#x27;')
-  
-  if (sanitized.length > maxLength) {
-    sanitized = sanitized.substring(0, maxLength) + '...'
-  }
-  
-  return sanitized
-}
-
-function validateNoHTML(text: string): boolean {
-  return !/<[^>]*>/.test(text)
-}
-
 export const ConfirmDialog = React.memo(function ConfirmDialog({
   open,
   onOpenChange,
@@ -47,23 +25,14 @@ export const ConfirmDialog = React.memo(function ConfirmDialog({
     onOpenChange(false)
   }, [onConfirm, onOpenChange])
 
-  React.useEffect(() => {
-    if (!validateNoHTML(title) || !validateNoHTML(description)) {
-      console.warn('ConfirmDialog: HTML detected in props, which may indicate an XSS attempt')
-    }
-  }, [title, description])
-
   if (!open) return null
-
-  const sanitizedTitle = sanitizeText(title, 100)
-  const sanitizedDescription = sanitizeText(description, 500)
 
   return (
       <div className="fixed inset-0 z-50 flex items-center justify-center">
         <div className="fixed inset-0 bg-black/80" onClick={() => onOpenChange(false)} aria-hidden="true" />
       <div className="relative z-50 w-full max-w-md rounded-lg border bg-background p-6 shadow-lg">
-        <h3 className="text-lg font-semibold mb-2">{sanitizedTitle}</h3>
-        <p className="text-sm text-muted-foreground mb-6">{sanitizedDescription}</p>
+        <h3 className="text-lg font-semibold mb-2">{title}</h3>
+        <p className="text-sm text-muted-foreground mb-6">{description}</p>
         <div className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 gap-2">
           <Button
             variant="outline"
@@ -86,17 +55,41 @@ export const ConfirmDialog = React.memo(function ConfirmDialog({
   )
 })
 
-export function useConfirm() {
-  const [state, setState] = React.useState<{
-    open: boolean
-    title: string
-    description: string
-    confirmText?: string
-    isDangerous?: boolean
-    onConfirm: () => void
-  } | null>(null)
+interface ConfirmState {
+  title: string
+  description: string
+  confirmText?: string
+  isDangerous?: boolean
+  onConfirm: () => void
+}
 
-  const confirm = (
+function ConfirmDialogRenderer({ state, onClose }: {
+  state: ConfirmState | null
+  onClose: () => void
+}) {
+  const handleOpenChange = React.useCallback((open: boolean) => {
+    if (!open) onClose()
+  }, [onClose])
+
+  if (!state) return null
+  return (
+    <ConfirmDialog
+      open={true}
+      onOpenChange={handleOpenChange}
+      title={state.title}
+      description={state.description}
+      confirmText={state.confirmText}
+      onConfirm={state.onConfirm}
+      isDangerous={state.isDangerous}
+    />
+  )
+}
+
+export function useConfirm() {
+  const [state, setState] = React.useState<ConfirmState | null>(null)
+  const resolveRef = React.useRef<((value: boolean) => void) | null>(null)
+
+  const confirm = React.useCallback((
     title: string,
     description: string,
     options?: {
@@ -105,39 +98,34 @@ export function useConfirm() {
     },
   ) => {
     return new Promise<boolean>((resolve) => {
+      resolveRef.current = resolve
       setState({
-        open: true,
         title,
         description,
         confirmText: options?.confirmText,
         isDangerous: options?.isDangerous,
-        onConfirm: React.useCallback(() => resolve(true), []),
+        onConfirm: () => {
+          resolve(true)
+          resolveRef.current = null
+        },
       })
     })
-  }
+  }, [])
 
-  const close = () => {
+  const close = React.useCallback(() => {
+    if (resolveRef.current) {
+      resolveRef.current(false)
+      resolveRef.current = null
+    }
     setState(null)
-  }
+  }, [])
 
-  const ConfirmComponent = React.memo(() => {
-    if (!state) return null
-    return (
-      <ConfirmDialog
-        open={state.open}
-        onOpenChange={(open) => {
-          if (!open) {
-            close()
-          }
-        }}
-        title={state.title}
-        description={state.description}
-        confirmText={state.confirmText}
-        onConfirm={state.onConfirm}
-        isDangerous={state.isDangerous}
-      />
-    )
-  })
+  const ConfirmComponent = React.useMemo(
+    () => function StableConfirmComponent() {
+      return <ConfirmDialogRenderer state={state} onClose={close} />
+    },
+    [state, close],
+  )
 
   return { confirm, ConfirmComponent }
 }

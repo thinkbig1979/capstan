@@ -81,7 +81,7 @@ describe('GitStatus', () => {
       data: { branch: 'main', commit: 'abc123', dirty: false, ahead: 0, behind: 0 },
     })
     renderWithProviders(<GitStatus stackId="myapp:default" />)
-    expect(screen.getByText('Pull')).toBeInTheDocument()
-    expect(screen.getByText('Pull & Redeploy')).toBeInTheDocument()
+    expect(screen.getByText('Git Pull')).toBeInTheDocument()
+    expect(screen.getByText('Git Pull & Redeploy')).toBeInTheDocument()
   })
 })

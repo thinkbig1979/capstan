@@ -86,6 +86,8 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 					memPercent, memUsage, memLimit := calculateMemPercent(&statsJSON)
 					netRx, netTx := calculateNetwork(&statsJSON)
 					blockRead, blockWrite := calculateBlockIO(&statsJSON)
+					memSwap := calculateMemSwap(&statsJSON)
+					pids := getPids(&statsJSON)
 
 					containerName := containerID[:12]
 					if len(statsJSON.Name) > 0 {
@@ -103,6 +105,8 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 						NetTx:       netTx,
 						BlockRead:   blockRead,
 						BlockWrite:  blockWrite,
+						MemSwap:     memSwap,
+						Pids:        pids,
 					}
 
 					select {
@@ -183,10 +187,32 @@ func (s *MonitorService) ListenEvents(ctx context.Context) (<-chan models.StackE
 				containerID := event.Actor.ID
 				action := string(event.Action)
 
+				slog.Debug("Docker container event", "action", action, "container", containerID[:12])
+
+				switch action {
+				case "start", "stop", "die", "kill", "destroy", "restart", "pause", "unpause", "create", "rename":
+				default:
+					continue
+				}
+
 				containerLabels := event.Actor.Attributes
 				projectName := containerLabels["com.docker.compose.project"]
 
 				if projectName == "" {
+					stackEvent := models.StackEvent{
+						Type:        "container_event",
+						StackID:     "",
+						ContainerID: containerID,
+						Event:       action,
+						Timestamp:   time.Unix(event.Time, 0),
+					}
+					if action == "start" || action == "stop" || action == "die" || action == "destroy" {
+						select {
+						case eventChan <- stackEvent:
+						case <-ctx.Done():
+							return
+						}
+					}
 					continue
 				}
 

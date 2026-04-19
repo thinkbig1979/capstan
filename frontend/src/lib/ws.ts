@@ -57,11 +57,16 @@ export class WSClient {
 
     this.ws.onclose = () => {
       this.state = 'CLOSED'
+      this.ws = null
       options.onClose?.()
-      this.scheduleReconnect()
+      if (this.currentPath && this.currentOnMessage) {
+        this.scheduleReconnect()
+      }
     }
 
     this.ws.onerror = (error) => {
+      this.ws = null
+      this.state = 'CLOSED'
       options.onError?.(error)
     }
   }
@@ -84,7 +89,9 @@ export class WSClient {
   }
 
   send(data: string | ArrayBuffer) {
-    this.ws?.send(data)
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(data)
+    }
   }
 
   close() {
@@ -93,6 +100,9 @@ export class WSClient {
       this.reconnectTimeout = null
     }
     this.reconnectAttempts = this.maxReconnects
+    this.currentPath = null
+    this.currentOnMessage = null
+    this.currentOptions = null
     if (this.ws) {
       const ws = this.ws
       this.ws = null

@@ -1,6 +1,6 @@
 import { useMemo, useState, useCallback } from 'react'
 import { AreaChart, Area, XAxis, YAxis } from 'recharts'
-import { Cpu, HardDrive, Network, Activity } from 'lucide-react'
+import { Cpu, HardDrive, Network, Activity, Database } from 'lucide-react'
 import { useMonitoring, type AggregateMetrics } from '@/hooks/useMonitoring'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -156,7 +156,7 @@ function ContainerCard({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <div className="space-y-1">
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Network className="h-3 w-3" />
@@ -188,6 +188,19 @@ function ContainerCard({
                     <span className="text-muted-foreground">write:</span>{' '}
                     {formatRate(latestMetric.blockWrite)}
                   </div>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Database className="h-3 w-3" />
+                  <span>Swap</span>
+                </div>
+                <div className="text-xs">
+                  {formatBytes(latestMetric.memSwap)}
+                </div>
+                <div className="text-xs">
+                  <span className="text-muted-foreground">PIDs:</span> {latestMetric.pids}
                 </div>
               </div>
             </div>

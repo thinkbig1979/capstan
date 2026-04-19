@@ -1,0 +1,5539 @@
+{
+  "version": 3,
+  "created": "2026-04-18T10:45:35+00:00",
+  "last_scan": "2026-04-18T10:45:40+00:00",
+  "scan_count": 1,
+  "overall_score": 18.6,
+  "objective_score": 74.4,
+  "strict_score": 18.6,
+  "verified_strict_score": 74.4,
+  "stats": {
+    "total": 74,
+    "auto_resolved": 0,
+    "deferred": 0,
+    "false_positive": 0,
+    "fixed": 0,
+    "open": 74,
+    "triaged_out": 0,
+    "wontfix": 0,
+    "by_tier": {
+      "2": {
+        "auto_resolved": 0,
+        "deferred": 0,
+        "false_positive": 0,
+        "fixed": 0,
+        "open": 2,
+        "triaged_out": 0,
+        "wontfix": 0
+      },
+      "3": {
+        "auto_resolved": 0,
+        "deferred": 0,
+        "false_positive": 0,
+        "fixed": 0,
+        "open": 52,
+        "triaged_out": 0,
+        "wontfix": 0
+      },
+      "4": {
+        "auto_resolved": 0,
+        "deferred": 0,
+        "false_positive": 0,
+        "fixed": 0,
+        "open": 20,
+        "triaged_out": 0,
+        "wontfix": 0
+      }
+    }
+  },
+  "work_items": {
+    "structural::backend/internal/services/docker.go": {
+      "id": "structural::backend/internal/services/docker.go",
+      "detector": "structural",
+      "file": "backend/internal/services/docker.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Large file: large (836 LOC) / complexity score 48",
+      "detail": {
+        "loc": 836,
+        "complexity_score": 48,
+        "complexity_signals": [
+          "67 if/else branches",
+          "21 for loops"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:35+00:00",
+      "last_seen": "2026-04-18T10:45:35+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "structural::backend/internal/services/git.go": {
+      "id": "structural::backend/internal/services/git.go",
+      "detector": "structural",
+      "file": "backend/internal/services/git.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Large file: large (617 LOC) / complexity score 46",
+      "detail": {
+        "loc": 617,
+        "complexity_score": 46,
+        "complexity_signals": [
+          "71 if/else branches"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:35+00:00",
+      "last_seen": "2026-04-18T10:45:35+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "structural::backend/internal/handlers/stacks.go": {
+      "id": "structural::backend/internal/handlers/stacks.go",
+      "detector": "structural",
+      "file": "backend/internal/handlers/stacks.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Large file: large (543 LOC) / complexity score 16",
+      "detail": {
+        "loc": 543,
+        "complexity_score": 16,
+        "complexity_signals": [
+          "41 if/else branches"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:35+00:00",
+      "last_seen": "2026-04-18T10:45:35+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "flat_dirs::backend/internal/handlers": {
+      "id": "flat_dirs::backend/internal/handlers",
+      "detector": "flat_dirs",
+      "file": "backend/internal/handlers",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Directory overload: 24 files, 0 child dirs (combined 24) \u2014 consider grouping by domain",
+      "detail": {
+        "file_count": 24,
+        "child_dir_count": 0,
+        "combined_score": 24,
+        "kind": "overload",
+        "parent_sibling_count": 0,
+        "wrapper_item_count": 0,
+        "sparse_child_count": 0,
+        "sparse_child_ratio": 0.0,
+        "sparse_child_file_threshold": 0
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:35+00:00",
+      "last_seen": "2026-04-18T10:45:35+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "unused::backend/internal/handlers/auth_test.go::unused_import::12": {
+      "id": "unused::backend/internal/handlers/auth_test.go::unused_import::12",
+      "detector": "unused",
+      "file": "backend/internal/handlers/auth_test.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Unused import: v5",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "test",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "unused::backend/internal/handlers/ws.go::unused_import::13": {
+      "id": "unused::backend/internal/handlers/ws.go::unused_import::13",
+      "detector": "unused",
+      "file": "backend/internal/handlers/ws.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Unused import: v5",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "unused::backend/internal/middleware/auth.go::unused_import::12": {
+      "id": "unused::backend/internal/middleware/auth.go::unused_import::12",
+      "detector": "unused",
+      "file": "backend/internal/middleware/auth.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Unused import: v5",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "unused::backend/internal/services/docker.go::unused_import::8": {
+      "id": "unused::backend/internal/services/docker.go::unused_import::8",
+      "detector": "unused",
+      "file": "backend/internal/services/docker.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Unused import: io",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "unused::backend/internal/services/docker.go::unused_import::13": {
+      "id": "unused::backend/internal/services/docker.go::unused_import::13",
+      "detector": "unused",
+      "file": "backend/internal/services/docker.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Unused import: sync",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "unused::backend/internal/services/linter.go::unused_import::13": {
+      "id": "unused::backend/internal/services/linter.go::unused_import::13",
+      "detector": "unused",
+      "file": "backend/internal/services/linter.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Unused import: v3",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "signature::backend/internal/handlers/auth.go::signature_variance::RegisterRoutes": {
+      "id": "signature::backend/internal/handlers/auth.go::signature_variance::RegisterRoutes",
+      "detector": "signature",
+      "file": "backend/internal/handlers/auth.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "'RegisterRoutes' has 4 different signatures across 13 files",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "signature::backend/internal/handlers/git.go::signature_variance::Pull": {
+      "id": "signature::backend/internal/handlers/git.go::signature_variance::Pull",
+      "detector": "signature",
+      "file": "backend/internal/handlers/git.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "'Pull' has 3 different signatures across 4 files",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "signature::backend/internal/handlers/stacks.go::signature_variance::Start": {
+      "id": "signature::backend/internal/handlers/stacks.go::signature_variance::Start",
+      "detector": "signature",
+      "file": "backend/internal/handlers/stacks.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "'Start' has 3 different signatures across 3 files",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "signature::backend/internal/handlers/stacks.go::signature_variance::Stop": {
+      "id": "signature::backend/internal/handlers/stacks.go::signature_variance::Stop",
+      "detector": "signature",
+      "file": "backend/internal/handlers/stacks.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "'Stop' has 3 different signatures across 3 files",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "signature::backend/internal/handlers/compose.go::signature_variance::Get": {
+      "id": "signature::backend/internal/handlers/compose.go::signature_variance::Get",
+      "detector": "signature",
+      "file": "backend/internal/handlers/compose.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "'Get' has 2 different signatures across 5 files",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "signature::backend/internal/handlers/compose.go::signature_variance::Lint": {
+      "id": "signature::backend/internal/handlers/compose.go::signature_variance::Lint",
+      "detector": "signature",
+      "file": "backend/internal/handlers/compose.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "'Lint' has 2 different signatures across 3 files",
+      "detail": {},
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/middleware/validation.go::untested_module": {
+      "id": "test_coverage::backend/internal/middleware/validation.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/middleware/validation.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (199 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 199,
+        "importer_count": 0,
+        "loc_weight": 14.106735979665885
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/config/config.go::untested_module": {
+      "id": "test_coverage::backend/internal/config/config.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/config/config.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (171 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 171,
+        "importer_count": 0,
+        "loc_weight": 13.076696830622021
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/database/migrations.go::untested_module": {
+      "id": "test_coverage::backend/internal/database/migrations.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/database/migrations.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (142 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 142,
+        "importer_count": 0,
+        "loc_weight": 11.916375287812984
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/handlers/dashboard.go::untested_module": {
+      "id": "test_coverage::backend/internal/handlers/dashboard.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/handlers/dashboard.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (162 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 162,
+        "importer_count": 0,
+        "loc_weight": 12.727922061357855
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/middleware/cors.go::untested_module": {
+      "id": "test_coverage::backend/internal/middleware/cors.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/middleware/cors.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (45 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 45,
+        "importer_count": 0,
+        "loc_weight": 6.708203932499369
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/handlers/monitoring.go::untested_module": {
+      "id": "test_coverage::backend/internal/handlers/monitoring.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/handlers/monitoring.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (242 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 242,
+        "importer_count": 0,
+        "loc_weight": 15.556349186104045
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/models/errors.go::untested_module": {
+      "id": "test_coverage::backend/internal/models/errors.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/models/errors.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (64 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 64,
+        "importer_count": 0,
+        "loc_weight": 8.0
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/handlers/resources.go::untested_module": {
+      "id": "test_coverage::backend/internal/handlers/resources.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/handlers/resources.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (237 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 237,
+        "importer_count": 0,
+        "loc_weight": 15.394804318340652
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/middleware/ratelimit.go::untested_module": {
+      "id": "test_coverage::backend/internal/middleware/ratelimit.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/middleware/ratelimit.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (242 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 242,
+        "importer_count": 0,
+        "loc_weight": 15.556349186104045
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/database/database.go::untested_module": {
+      "id": "test_coverage::backend/internal/database/database.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/database/database.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (369 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 369,
+        "importer_count": 0,
+        "loc_weight": 19.209372712298546
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/middleware/auth.go::untested_module": {
+      "id": "test_coverage::backend/internal/middleware/auth.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/middleware/auth.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (160 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 160,
+        "importer_count": 0,
+        "loc_weight": 12.649110640673518
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/middleware/logging.go::untested_module": {
+      "id": "test_coverage::backend/internal/middleware/logging.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/middleware/logging.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (47 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 47,
+        "importer_count": 0,
+        "loc_weight": 6.855654600401044
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/services/git.go::untested_critical": {
+      "id": "test_coverage::backend/internal/services/git.go::untested_critical",
+      "detector": "test_coverage",
+      "file": "backend/internal/services/git.go",
+      "tier": 2,
+      "confidence": "high",
+      "summary": "Untested critical module (617 LOC, 0 importers) \u2014 high blast radius",
+      "detail": {
+        "kind": "untested_critical",
+        "loc": 617,
+        "importer_count": 0,
+        "loc_weight": 24.839484696748443,
+        "complexity_score": 46
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/services/terminal.go::untested_module": {
+      "id": "test_coverage::backend/internal/services/terminal.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/services/terminal.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (165 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 165,
+        "importer_count": 0,
+        "loc_weight": 12.84523257866513
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/services/watcher.go::untested_module": {
+      "id": "test_coverage::backend/internal/services/watcher.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/services/watcher.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (196 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 196,
+        "importer_count": 0,
+        "loc_weight": 14.0
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/services/actionlog.go::untested_module": {
+      "id": "test_coverage::backend/internal/services/actionlog.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/services/actionlog.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (70 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 70,
+        "importer_count": 0,
+        "loc_weight": 8.366600265340756
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/handlers/terminal.go::untested_module": {
+      "id": "test_coverage::backend/internal/handlers/terminal.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/handlers/terminal.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (155 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 155,
+        "importer_count": 0,
+        "loc_weight": 12.449899597988733
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/cmd/server/main.go::untested_module": {
+      "id": "test_coverage::backend/cmd/server/main.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/cmd/server/main.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (275 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 275,
+        "importer_count": 0,
+        "loc_weight": 16.583123951777
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/handlers/git.go::untested_module": {
+      "id": "test_coverage::backend/internal/handlers/git.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/handlers/git.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (307 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 307,
+        "importer_count": 0,
+        "loc_weight": 17.52141546793523
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/middleware/recovery.go::untested_module": {
+      "id": "test_coverage::backend/internal/middleware/recovery.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/middleware/recovery.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (34 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 34,
+        "importer_count": 0,
+        "loc_weight": 5.830951894845301
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/services/monitor.go::untested_module": {
+      "id": "test_coverage::backend/internal/services/monitor.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/services/monitor.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (292 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 292,
+        "importer_count": 0,
+        "loc_weight": 17.08800749063506
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "test_coverage::backend/internal/handlers/operations.go::untested_module": {
+      "id": "test_coverage::backend/internal/handlers/operations.go::untested_module",
+      "detector": "test_coverage",
+      "file": "backend/internal/handlers/operations.go",
+      "tier": 3,
+      "confidence": "high",
+      "summary": "Untested module (128 LOC, 0 importers)",
+      "detail": {
+        "kind": "untested_module",
+        "loc": 128,
+        "importer_count": 0,
+        "loc_weight": 11.313708498984761
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::abstraction_fitness": {
+      "id": "subjective_review::.::abstraction_fitness",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Abstraction fit \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "abstraction_fitness"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::ai_generated_debt": {
+      "id": "subjective_review::.::ai_generated_debt",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "AI generated debt \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "ai_generated_debt"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::api_surface_coherence": {
+      "id": "subjective_review::.::api_surface_coherence",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "API coherence \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "api_surface_coherence"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::authorization_consistency": {
+      "id": "subjective_review::.::authorization_consistency",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Auth consistency \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "authorization_consistency"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::contract_coherence": {
+      "id": "subjective_review::.::contract_coherence",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Contracts \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "contract_coherence"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::convention_outlier": {
+      "id": "subjective_review::.::convention_outlier",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Convention drift \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "convention_outlier"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::cross_module_architecture": {
+      "id": "subjective_review::.::cross_module_architecture",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Cross-module arch \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "cross_module_architecture"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::dependency_health": {
+      "id": "subjective_review::.::dependency_health",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Dep health \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "dependency_health"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::design_coherence": {
+      "id": "subjective_review::.::design_coherence",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Design coherence \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "design_coherence"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::error_consistency": {
+      "id": "subjective_review::.::error_consistency",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Error consistency \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "error_consistency"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::high_level_elegance": {
+      "id": "subjective_review::.::high_level_elegance",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "High elegance \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "high_level_elegance"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::incomplete_migration": {
+      "id": "subjective_review::.::incomplete_migration",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Stale migration \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "incomplete_migration"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::initialization_coupling": {
+      "id": "subjective_review::.::initialization_coupling",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Init coupling \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "initialization_coupling"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::logic_clarity": {
+      "id": "subjective_review::.::logic_clarity",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Logic clarity \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "logic_clarity"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::low_level_elegance": {
+      "id": "subjective_review::.::low_level_elegance",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Low elegance \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "low_level_elegance"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::mid_level_elegance": {
+      "id": "subjective_review::.::mid_level_elegance",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Mid elegance \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "mid_level_elegance"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::naming_quality": {
+      "id": "subjective_review::.::naming_quality",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Naming quality \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "naming_quality"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::package_organization": {
+      "id": "subjective_review::.::package_organization",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Structure nav \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "package_organization"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::test_strategy": {
+      "id": "subjective_review::.::test_strategy",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Test strategy \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "test_strategy"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "subjective_review::.::type_safety": {
+      "id": "subjective_review::.::type_safety",
+      "detector": "subjective_review",
+      "file": ".",
+      "tier": 4,
+      "confidence": "low",
+      "summary": "Type safety \u2014 no assessment on record, run `desloppify review --prepare`",
+      "detail": {
+        "reason": "unassessed",
+        "dimension": "type_safety"
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:37+00:00",
+      "last_seen": "2026-04-18T10:45:37+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "assessment_request",
+      "issue_kind": "assessment_request",
+      "origin": "synthetic_task",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/handlers/env.go::3e689b9fd782e7ec": {
+      "id": "boilerplate_duplication::backend/internal/handlers/env.go::3e689b9fd782e7ec",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/handlers/env.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 3 files (window 14 lines): backend/internal/handlers/env.go:121, backend/internal/handlers/logs.go:53, backend/internal/handlers/stacks.go:331",
+      "detail": {
+        "distinct_files": 3,
+        "window_size": 14,
+        "locations": [
+          {
+            "file": "backend/internal/handlers/env.go",
+            "line": 121
+          },
+          {
+            "file": "backend/internal/handlers/logs.go",
+            "line": 53
+          },
+          {
+            "file": "backend/internal/handlers/stacks.go",
+            "line": 331
+          }
+        ],
+        "sample": [
+          "(c *gin.Context) {",
+          "\tid := c.Param(\"id\")",
+          "",
+          "\tstack, err := h.db.GetStack(id)"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/handlers/compose.go::aa483c564909caa5": {
+      "id": "boilerplate_duplication::backend/internal/handlers/compose.go::aa483c564909caa5",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/handlers/compose.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 3 files (window 14 lines): backend/internal/handlers/compose.go:60, backend/internal/handlers/env.go:61, backend/internal/handlers/stacks.go:331",
+      "detail": {
+        "distinct_files": 3,
+        "window_size": 14,
+        "locations": [
+          {
+            "file": "backend/internal/handlers/compose.go",
+            "line": 60
+          },
+          {
+            "file": "backend/internal/handlers/env.go",
+            "line": 61
+          },
+          {
+            "file": "backend/internal/handlers/stacks.go",
+            "line": 331
+          }
+        ],
+        "sample": [
+          ") Get(c *gin.Context) {",
+          "\tid := c.Param(\"id\")",
+          "",
+          "\tstack, err := h.db.GetStack(id)"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/handlers/ws.go::1d5c22e08e114fa8": {
+      "id": "boilerplate_duplication::backend/internal/handlers/ws.go::1d5c22e08e114fa8",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/handlers/ws.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 20 lines): backend/internal/handlers/ws.go:187, backend/internal/middleware/auth.go:141",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 20,
+        "locations": [
+          {
+            "file": "backend/internal/handlers/ws.go",
+            "line": 187
+          },
+          {
+            "file": "backend/internal/middleware/auth.go",
+            "line": 141
+          }
+        ],
+        "sample": [
+          "}",
+          "",
+          "func validateJWT(token, secret string) (jwt.MapClaims, error) {",
+          "\tparsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/handlers/logs.go::3b032798995fc063": {
+      "id": "boilerplate_duplication::backend/internal/handlers/logs.go::3b032798995fc063",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/handlers/logs.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 7 lines): backend/internal/handlers/logs.go:258, backend/internal/services/docker.go:440",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 7,
+        "locations": [
+          {
+            "file": "backend/internal/handlers/logs.go",
+            "line": 258
+          },
+          {
+            "file": "backend/internal/services/docker.go",
+            "line": 440
+          }
+        ],
+        "sample": [
+          "if _, err := exec.Command(\"test\", \"-f\", globalEnvPath).CombinedOutput(); err == nil {",
+          "\t\t\targs = append(args, \"--env-file\", globalEnvPath)",
+          "\t\t}",
+          "\t\tif stack.EnvFile != \"\" {"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/services/docker.go::5722ff73fa345c41": {
+      "id": "boilerplate_duplication::backend/internal/services/docker.go::5722ff73fa345c41",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/services/docker.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 41 lines): backend/internal/services/docker.go:346, backend/internal/services/monitor.go:73",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 41,
+        "locations": [
+          {
+            "file": "backend/internal/services/docker.go",
+            "line": 346
+          },
+          {
+            "file": "backend/internal/services/monitor.go",
+            "line": 73
+          }
+        ],
+        "sample": [
+          "return",
+          "\t\t}",
+          "\t\tdefer stats.Body.Close()",
+          ""
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/handlers/compose.go::8b9ff88e1f209129": {
+      "id": "boilerplate_duplication::backend/internal/handlers/compose.go::8b9ff88e1f209129",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/handlers/compose.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 14 lines): backend/internal/handlers/compose.go:120, backend/internal/handlers/env.go:121",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 14,
+        "locations": [
+          {
+            "file": "backend/internal/handlers/compose.go",
+            "line": 120
+          },
+          {
+            "file": "backend/internal/handlers/env.go",
+            "line": 121
+          }
+        ],
+        "sample": [
+          ") Put(c *gin.Context) {",
+          "\tid := c.Param(\"id\")",
+          "",
+          "\tstack, err := h.db.GetStack(id)"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/handlers/compose.go::9bee11b573db8f11": {
+      "id": "boilerplate_duplication::backend/internal/handlers/compose.go::9bee11b573db8f11",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/handlers/compose.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 30 lines): backend/internal/handlers/compose.go:247, backend/internal/handlers/env.go:320",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 30,
+        "locations": [
+          {
+            "file": "backend/internal/handlers/compose.go",
+            "line": 247
+          },
+          {
+            "file": "backend/internal/handlers/env.go",
+            "line": 320
+          }
+        ],
+        "sample": [
+          ") validatePath(path string) error {",
+          "\tcleanPath := filepath.Clean(path)",
+          "",
+          "\tabsPath, err := filepath.Abs(cleanPath)"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/services/docker.go::9da8099a6f1d2ce3": {
+      "id": "boilerplate_duplication::backend/internal/services/docker.go::9da8099a6f1d2ce3",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/services/docker.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 13 lines): backend/internal/services/docker.go:297, backend/internal/services/monitor.go:274",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 13,
+        "locations": [
+          {
+            "file": "backend/internal/services/docker.go",
+            "line": 297
+          },
+          {
+            "file": "backend/internal/services/monitor.go",
+            "line": 274
+          }
+        ],
+        "sample": [
+          "filterArgs := filters.NewArgs()",
+          "\tfilterArgs.Add(\"label\", \"com.docker.compose.project=\"+projectName)",
+          "",
+          "\tcontainers, err := s.client.ContainerList(ctx, container.ListOptions{"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/handlers/dashboard.go::a8b5454bc7330e8a": {
+      "id": "boilerplate_duplication::backend/internal/handlers/dashboard.go::a8b5454bc7330e8a",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/handlers/dashboard.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 20 lines): backend/internal/handlers/dashboard.go:137, backend/internal/handlers/monitoring.go:123",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 20,
+        "locations": [
+          {
+            "file": "backend/internal/handlers/dashboard.go",
+            "line": 137
+          },
+          {
+            "file": "backend/internal/handlers/monitoring.go",
+            "line": 123
+          }
+        ],
+        "sample": [
+          ", \"Failed to stream metrics\")",
+          "\t\t\treturn",
+          "\t\t}",
+          ""
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/services/docker.go::a8f709ce6dd42acc": {
+      "id": "boilerplate_duplication::backend/internal/services/docker.go::a8f709ce6dd42acc",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/services/docker.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 13 lines): backend/internal/services/docker.go:653, backend/internal/services/monitor.go:279",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 13,
+        "locations": [
+          {
+            "file": "backend/internal/services/docker.go",
+            "line": 653
+          },
+          {
+            "file": "backend/internal/services/monitor.go",
+            "line": 279
+          }
+        ],
+        "sample": [
+          "Filters: filterArgs,",
+          "\t})",
+          "\tif err != nil {",
+          "\t\treturn nil, err"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/handlers/dashboard.go::bff9053db5181d02": {
+      "id": "boilerplate_duplication::backend/internal/handlers/dashboard.go::bff9053db5181d02",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/handlers/dashboard.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 13 lines): backend/internal/handlers/dashboard.go:96, backend/internal/handlers/monitoring.go:101",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 13,
+        "locations": [
+          {
+            "file": "backend/internal/handlers/dashboard.go",
+            "line": 96
+          },
+          {
+            "file": "backend/internal/handlers/monitoring.go",
+            "line": 101
+          }
+        ],
+        "sample": [
+          ", \"Connection limit exceeded\")",
+          "\t\t\tconn.Conn.Close()",
+          "\t\t\treturn",
+          "\t\t}"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/handlers/compose.go::d2cf4e77472289da": {
+      "id": "boilerplate_duplication::backend/internal/handlers/compose.go::d2cf4e77472289da",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/handlers/compose.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 25 lines): backend/internal/handlers/compose.go:143, backend/internal/handlers/stacks.go:131",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 25,
+        "locations": [
+          {
+            "file": "backend/internal/handlers/compose.go",
+            "line": 143
+          },
+          {
+            "file": "backend/internal/handlers/stacks.go",
+            "line": 131
+          }
+        ],
+        "sample": [
+          ")",
+          "\tif err != nil {",
+          "\t\tc.JSON(http.StatusInternalServerError, models.NewAppError(",
+          "\t\t\thttp.StatusInternalServerError,"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/handlers/logs.go::e88f3b6a530fb7d6": {
+      "id": "boilerplate_duplication::backend/internal/handlers/logs.go::e88f3b6a530fb7d6",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/handlers/logs.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 7 lines): backend/internal/handlers/logs.go:125, backend/internal/handlers/ws.go:293",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 7,
+        "locations": [
+          {
+            "file": "backend/internal/handlers/logs.go",
+            "line": 125
+          },
+          {
+            "file": "backend/internal/handlers/ws.go",
+            "line": 293
+          }
+        ],
+        "sample": [
+          "conn.SetReadDeadline(time.Now().Add(60 * time.Second))",
+          "\tconn.SetPongHandler(func(string) error {",
+          "\t\tconn.SetReadDeadline(time.Now().Add(60 * time.Second))",
+          "\t\treturn nil"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "boilerplate_duplication::backend/internal/handlers/dashboard.go::ef9efff294e0d1df": {
+      "id": "boilerplate_duplication::backend/internal/handlers/dashboard.go::ef9efff294e0d1df",
+      "detector": "boilerplate_duplication",
+      "file": "backend/internal/handlers/dashboard.go",
+      "tier": 3,
+      "confidence": "medium",
+      "summary": "Boilerplate block repeated across 2 files (window 10 lines): backend/internal/handlers/dashboard.go:87, backend/internal/handlers/monitoring.go:159",
+      "detail": {
+        "distinct_files": 2,
+        "window_size": 10,
+        "locations": [
+          {
+            "file": "backend/internal/handlers/dashboard.go",
+            "line": 87
+          },
+          {
+            "file": "backend/internal/handlers/monitoring.go",
+            "line": 159
+          }
+        ],
+        "sample": [
+          "(jwtSecret string, authDisabled bool) gin.HandlerFunc {",
+          "\treturn func(c *gin.Context) {",
+          "\t\tconn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)",
+          "\t\tif err != nil {"
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "dupes::backend/internal/handlers/ws.go::validateJWT::backend/internal/middleware/auth.go::validateJWT": {
+      "id": "dupes::backend/internal/handlers/ws.go::validateJWT::backend/internal/middleware/auth.go::validateJWT",
+      "detector": "dupes",
+      "file": "backend/internal/handlers/ws.go",
+      "tier": 2,
+      "confidence": "high",
+      "summary": "Exact dupe: validateJWT (backend/internal/handlers/ws.go:189) <-> validateJWT (backend/internal/middleware/auth.go:143) [100%]",
+      "detail": {
+        "fn_a": {
+          "file": "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go",
+          "name": "validateJWT",
+          "line": 189,
+          "loc": 18
+        },
+        "fn_b": {
+          "file": "/home/edwin/development/docker-manager/backend/internal/middleware/auth.go",
+          "name": "validateJWT",
+          "line": 143,
+          "loc": 18
+        },
+        "similarity": 1.0,
+        "kind": "exact",
+        "cluster_size": 2,
+        "cluster": [
+          {
+            "file": "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go",
+            "name": "validateJWT",
+            "line": 189,
+            "loc": 18
+          },
+          {
+            "file": "/home/edwin/development/docker-manager/backend/internal/middleware/auth.go",
+            "name": "validateJWT",
+            "line": 143,
+            "loc": 18
+          }
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    },
+    "dupes::backend/internal/handlers/compose.go::validatePath::backend/internal/handlers/env.go::validatePath": {
+      "id": "dupes::backend/internal/handlers/compose.go::validatePath::backend/internal/handlers/env.go::validatePath",
+      "detector": "dupes",
+      "file": "backend/internal/handlers/compose.go",
+      "tier": 3,
+      "confidence": "low",
+      "summary": "Near dupe: validatePath (backend/internal/handlers/compose.go:247) <-> validatePath (backend/internal/handlers/env.go:320) [96%]",
+      "detail": {
+        "fn_a": {
+          "file": "/home/edwin/development/docker-manager/backend/internal/handlers/compose.go",
+          "name": "validatePath",
+          "line": 247,
+          "loc": 28
+        },
+        "fn_b": {
+          "file": "/home/edwin/development/docker-manager/backend/internal/handlers/env.go",
+          "name": "validatePath",
+          "line": 320,
+          "loc": 28
+        },
+        "similarity": 0.957,
+        "kind": "near-duplicate",
+        "cluster_size": 2,
+        "cluster": [
+          {
+            "file": "/home/edwin/development/docker-manager/backend/internal/handlers/compose.go",
+            "name": "validatePath",
+            "line": 247,
+            "loc": 28
+          },
+          {
+            "file": "/home/edwin/development/docker-manager/backend/internal/handlers/env.go",
+            "name": "validatePath",
+            "line": 320,
+            "loc": 28
+          }
+        ]
+      },
+      "status": "open",
+      "note": null,
+      "first_seen": "2026-04-18T10:45:40+00:00",
+      "last_seen": "2026-04-18T10:45:40+00:00",
+      "resolved_at": null,
+      "reopen_count": 0,
+      "work_item_kind": "mechanical_defect",
+      "issue_kind": "mechanical_defect",
+      "origin": "scan",
+      "lang": "go",
+      "zone": "production",
+      "suppressed": false,
+      "suppressed_at": null,
+      "suppression_pattern": null
+    }
+  },
+  "scan_coverage": {
+    "go": {
+      "status": "reduced",
+      "confidence": 0.0,
+      "detectors": {
+        "golangci_lint": {
+          "detector": "golangci_lint",
+          "status": "reduced",
+          "confidence": 0.0,
+          "summary": "golangci-lint tooling unavailable (parser_error)",
+          "impact": "Detector results may be under-reported for this scan.",
+          "remediation": "Install/fix the tool command and rerun scan.",
+          "tool": "golangci-lint",
+          "reason": "parser_error"
+        },
+        "vet_error": {
+          "detector": "vet_error",
+          "status": "reduced",
+          "confidence": 0.0,
+          "summary": "go vet tooling unavailable (tool_failed_unparsed_output)",
+          "impact": "Detector results may be under-reported for this scan.",
+          "remediation": "Install/fix the tool command and rerun scan.",
+          "tool": "go vet",
+          "reason": "tool_failed_unparsed_output"
+        },
+        "security": {
+          "detector": "security",
+          "status": "full",
+          "confidence": 1.0,
+          "summary": "Security coverage complete for enabled detectors.",
+          "impact": "",
+          "remediation": "",
+          "tool": "",
+          "reason": ""
+        }
+      },
+      "warnings": [
+        {
+          "detector": "golangci_lint",
+          "status": "reduced",
+          "confidence": 0.0,
+          "summary": "golangci-lint tooling unavailable (parser_error)",
+          "impact": "Detector results may be under-reported for this scan.",
+          "remediation": "Install/fix the tool command and rerun scan.",
+          "tool": "golangci-lint",
+          "reason": "parser_error"
+        },
+        {
+          "detector": "vet_error",
+          "status": "reduced",
+          "confidence": 0.0,
+          "summary": "go vet tooling unavailable (tool_failed_unparsed_output)",
+          "impact": "Detector results may be under-reported for this scan.",
+          "remediation": "Install/fix the tool command and rerun scan.",
+          "tool": "go vet",
+          "reason": "tool_failed_unparsed_output"
+        }
+      ],
+      "updated_at": "2026-04-18T10:45:40+00:00"
+    }
+  },
+  "score_confidence": {
+    "status": "reduced",
+    "confidence": 0.0,
+    "detectors": [
+      {
+        "detector": "golangci_lint",
+        "status": "reduced",
+        "confidence": 0.0,
+        "summary": "golangci-lint tooling unavailable (parser_error)",
+        "impact": "Detector results may be under-reported for this scan.",
+        "remediation": "Install/fix the tool command and rerun scan.",
+        "tool": "golangci-lint",
+        "reason": "parser_error"
+      },
+      {
+        "detector": "vet_error",
+        "status": "reduced",
+        "confidence": 0.0,
+        "summary": "go vet tooling unavailable (tool_failed_unparsed_output)",
+        "impact": "Detector results may be under-reported for this scan.",
+        "remediation": "Install/fix the tool command and rerun scan.",
+        "tool": "go vet",
+        "reason": "tool_failed_unparsed_output"
+      }
+    ],
+    "dimensions": []
+  },
+  "scan_metadata": {
+    "source": "scan"
+  },
+  "subjective_integrity": {
+    "status": "pass",
+    "target_score": 85.0,
+    "matched_count": 0,
+    "matched_dimensions": [],
+    "reset_dimensions": []
+  },
+  "subjective_assessments": {},
+  "scan_history": [
+    {
+      "timestamp": "2026-04-18T10:45:40+00:00",
+      "lang": "go",
+      "strict_score": 18.6,
+      "verified_strict_score": 74.4,
+      "objective_score": 74.4,
+      "overall_score": 18.6,
+      "open": 74,
+      "diff_new": 74,
+      "diff_resolved": 0,
+      "ignored": 0,
+      "raw_issues": 74,
+      "suppressed_pct": 0.0,
+      "ignore_patterns": 0,
+      "subjective_integrity": {
+        "status": "pass",
+        "matched_count": 0,
+        "reset_count": 0,
+        "target_score": 85.0
+      },
+      "score_confidence": {
+        "status": "reduced",
+        "confidence": 0.0,
+        "detector_count": 2,
+        "dimension_count": 0
+      },
+      "dimension_scores": {
+        "Code quality": {
+          "score": 93.0,
+          "strict": 93.0
+        },
+        "Security": {
+          "score": 100.0,
+          "strict": 100.0
+        },
+        "File health": {
+          "score": 93.8,
+          "strict": 93.8
+        },
+        "Duplication": {
+          "score": 96.4,
+          "strict": 96.4
+        },
+        "Test health": {
+          "score": 40.6,
+          "strict": 40.6
+        },
+        "Abstraction fit": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "AI generated debt": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "API coherence": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Auth consistency": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Contracts": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Convention drift": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Cross-module arch": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Dep health": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Design coherence": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Error consistency": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "High elegance": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Stale migration": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Init coupling": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Logic clarity": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Low elegance": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Mid elegance": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Naming quality": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Structure nav": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Test strategy": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Type safety": {
+          "score": 0.0,
+          "strict": 0.0
+        }
+      }
+    }
+  ],
+  "review_cache": {
+    "detectors": {
+      "boilerplate": {
+        "version": 1,
+        "fingerprint": "6c9b94f1582e5adbd44f540bd334da1f85950e7d",
+        "entries": [
+          {
+            "id": "fe541e89dee44e58",
+            "distinct_files": 6,
+            "window_size": 11,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/auth_test.go",
+                "line": 24
+              },
+              {
+                "file": "backend/internal/handlers/compose_test.go",
+                "line": 54
+              },
+              {
+                "file": "backend/internal/handlers/directories_test.go",
+                "line": 39
+              },
+              {
+                "file": "backend/internal/handlers/env_integration_test.go",
+                "line": 52
+              },
+              {
+                "file": "backend/internal/handlers/settings_test.go",
+                "line": 36
+              },
+              {
+                "file": "backend/internal/handlers/stacks_test.go",
+                "line": 131
+              }
+            ],
+            "sample": [
+              ", nil)",
+              "\tw := httptest.NewRecorder()",
+              "\trouter.ServeHTTP(w, req)",
+              ""
+            ]
+          },
+          {
+            "id": "6f3affe0d051eeb9",
+            "distinct_files": 4,
+            "window_size": 42,
+            "locations": [
+              {
+                "file": "testing/tests/core/compose-editor.test.sh",
+                "line": 29
+              },
+              {
+                "file": "testing/tests/core/env-editor.test.sh",
+                "line": 29
+              },
+              {
+                "file": "testing/tests/core/git-integration.test.sh",
+                "line": 29
+              },
+              {
+                "file": "testing/tests/smoke/stack-ops.test.sh",
+                "line": 29
+              }
+            ],
+            "sample": [
+              "$1\"",
+              "  local test_name=\"$2\"",
+              "  ",
+              "  echo \"\""
+            ]
+          },
+          {
+            "id": "bda648dde1d392a6",
+            "distinct_files": 4,
+            "window_size": 10,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/BuildCacheTab.tsx",
+                "line": 3
+              },
+              {
+                "file": "frontend/src/components/dashboard/ImagesTab.tsx",
+                "line": 3
+              },
+              {
+                "file": "frontend/src/components/dashboard/NetworksTab.tsx",
+                "line": 3
+              },
+              {
+                "file": "frontend/src/components/dashboard/VolumesTab.tsx",
+                "line": 3
+              }
+            ],
+            "sample": [
+              "} from '@/hooks/useResources'",
+              "import { resourcesApi } from '@/lib/api'",
+              "import { Badge } from '@/components/ui/badge'",
+              "import { Card, CardContent } from '@/components/ui/card'"
+            ]
+          },
+          {
+            "id": "c6f240e507d41441",
+            "distinct_files": 4,
+            "window_size": 11,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/compose_test.go",
+                "line": 82
+              },
+              {
+                "file": "backend/internal/handlers/directories_test.go",
+                "line": 140
+              },
+              {
+                "file": "backend/internal/handlers/env_integration_test.go",
+                "line": 94
+              },
+              {
+                "file": "backend/internal/handlers/stacks_test.go",
+                "line": 193
+              }
+            ],
+            "sample": [
+              ", nil)",
+              "\tw := httptest.NewRecorder()",
+              "\trouter.ServeHTTP(w, req)",
+              ""
+            ]
+          },
+          {
+            "id": "d85c7609bb3274ed",
+            "distinct_files": 4,
+            "window_size": 6,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/BuildCacheTab.tsx",
+                "line": 136
+              },
+              {
+                "file": "frontend/src/components/dashboard/ContainersOverviewTab.tsx",
+                "line": 433
+              },
+              {
+                "file": "frontend/src/components/dashboard/NetworksTab.tsx",
+                "line": 122
+              },
+              {
+                "file": "frontend/src/components/dashboard/VolumesTab.tsx",
+                "line": 128
+              }
+            ],
+            "sample": [
+              " },",
+              "        ]}",
+              "        sortValue={sortBy}",
+              "        onSortChange={(key) => setSortBy(key as SortKey)}"
+            ]
+          },
+          {
+            "id": "dc23859c27683afb",
+            "distinct_files": 4,
+            "window_size": 9,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/ContainersOverviewTab.tsx",
+                "line": 22
+              },
+              {
+                "file": "frontend/src/components/dashboard/DashboardMetricsTab.tsx",
+                "line": 7
+              },
+              {
+                "file": "frontend/src/components/dashboard/ImagesTab.tsx",
+                "line": 18
+              },
+              {
+                "file": "frontend/src/components/stack/MetricsPanel.tsx",
+                "line": 15
+              }
+            ],
+            "sample": [
+              "function formatBytes(bytes: number): string {",
+              "  if (bytes === 0) return '0 B'",
+              "  const k = 1024",
+              "  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']"
+            ]
+          },
+          {
+            "id": "209eb6e901ce9164",
+            "distinct_files": 3,
+            "window_size": 11,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/auth_test.go",
+                "line": 254
+              },
+              {
+                "file": "backend/internal/handlers/env_integration_test.go",
+                "line": 144
+              },
+              {
+                "file": "backend/internal/handlers/stacks_test.go",
+                "line": 131
+              }
+            ],
+            "sample": [
+              ")",
+              "\tw := httptest.NewRecorder()",
+              "\trouter.ServeHTTP(w, req)",
+              ""
+            ]
+          },
+          {
+            "id": "2d757f27483b4bb9",
+            "distinct_files": 3,
+            "window_size": 13,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/ImagesTab.tsx",
+                "line": 113
+              },
+              {
+                "file": "frontend/src/components/dashboard/NetworksTab.tsx",
+                "line": 88
+              },
+              {
+                "file": "frontend/src/components/dashboard/VolumesTab.tsx",
+                "line": 95
+              }
+            ],
+            "sample": [
+              ", sortBy])",
+              "",
+              "  if (isLoading) {",
+              "    return ("
+            ]
+          },
+          {
+            "id": "3e689b9fd782e7ec",
+            "distinct_files": 3,
+            "window_size": 14,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/env.go",
+                "line": 121
+              },
+              {
+                "file": "backend/internal/handlers/logs.go",
+                "line": 53
+              },
+              {
+                "file": "backend/internal/handlers/stacks.go",
+                "line": 331
+              }
+            ],
+            "sample": [
+              "(c *gin.Context) {",
+              "\tid := c.Param(\"id\")",
+              "",
+              "\tstack, err := h.db.GetStack(id)"
+            ]
+          },
+          {
+            "id": "8faeebbe32b3b033",
+            "distinct_files": 3,
+            "window_size": 34,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/ImagesTab.tsx",
+                "line": 132
+              },
+              {
+                "file": "frontend/src/components/dashboard/NetworksTab.tsx",
+                "line": 107
+              },
+              {
+                "file": "frontend/src/components/dashboard/VolumesTab.tsx",
+                "line": 114
+              }
+            ],
+            "sample": [
+              "found on this host",
+              "          </p>",
+              "        </CardContent>",
+              "      </Card>"
+            ]
+          },
+          {
+            "id": "aa483c564909caa5",
+            "distinct_files": 3,
+            "window_size": 14,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/compose.go",
+                "line": 60
+              },
+              {
+                "file": "backend/internal/handlers/env.go",
+                "line": 61
+              },
+              {
+                "file": "backend/internal/handlers/stacks.go",
+                "line": 331
+              }
+            ],
+            "sample": [
+              ") Get(c *gin.Context) {",
+              "\tid := c.Param(\"id\")",
+              "",
+              "\tstack, err := h.db.GetStack(id)"
+            ]
+          },
+          {
+            "id": "1c1bfb7d05be4cf7",
+            "distinct_files": 2,
+            "window_size": 7,
+            "locations": [
+              {
+                "file": "frontend/src/components/stack/__tests__/ComposeEditor.test.tsx",
+                "line": 34
+              },
+              {
+                "file": "frontend/src/components/stack/__tests__/EnvEditor.test.tsx",
+                "line": 7
+              }
+            ],
+            "sample": [
+              "= vi.fn()",
+              "",
+              "vi.mock('@/lib/api', () => ({",
+              "  apiClient: {"
+            ]
+          },
+          {
+            "id": "1d5c22e08e114fa8",
+            "distinct_files": 2,
+            "window_size": 20,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/ws.go",
+                "line": 187
+              },
+              {
+                "file": "backend/internal/middleware/auth.go",
+                "line": 141
+              }
+            ],
+            "sample": [
+              "}",
+              "",
+              "func validateJWT(token, secret string) (jwt.MapClaims, error) {",
+              "\tparsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {"
+            ]
+          },
+          {
+            "id": "2cef515183aee549",
+            "distinct_files": 2,
+            "window_size": 17,
+            "locations": [
+              {
+                "file": "frontend/src/hooks/useDashboardMetrics.ts",
+                "line": 121
+              },
+              {
+                "file": "frontend/src/hooks/useMonitoring.ts",
+                "line": 109
+              }
+            ],
+            "sample": [
+              ": 0,",
+              "      }",
+              "    }",
+              ""
+            ]
+          },
+          {
+            "id": "358afb850fc552ee",
+            "distinct_files": 2,
+            "window_size": 15,
+            "locations": [
+              {
+                "file": "frontend/src/pages/LoginPage.tsx",
+                "line": 25
+              },
+              {
+                "file": "frontend/src/pages/SetupPage.tsx",
+                "line": 25
+              }
+            ],
+            "sample": [
+              "setError(errorMessage)",
+              "      toast.error(errorMessage)",
+              "    } finally {",
+              "      setIsLoading(false)"
+            ]
+          },
+          {
+            "id": "398bdd2d11c5faa9",
+            "distinct_files": 2,
+            "window_size": 14,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/compose_test.go",
+                "line": 132
+              },
+              {
+                "file": "backend/internal/handlers/env_integration_test.go",
+                "line": 143
+              }
+            ],
+            "sample": [
+              ", bytes.NewReader(reqBytes))",
+              "\treq.Header.Set(\"Content-Type\", \"application/json\")",
+              "\tw := httptest.NewRecorder()",
+              "\trouter.ServeHTTP(w, req)"
+            ]
+          },
+          {
+            "id": "3b032798995fc063",
+            "distinct_files": 2,
+            "window_size": 7,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/logs.go",
+                "line": 258
+              },
+              {
+                "file": "backend/internal/services/docker.go",
+                "line": 440
+              }
+            ],
+            "sample": [
+              "if _, err := exec.Command(\"test\", \"-f\", globalEnvPath).CombinedOutput(); err == nil {",
+              "\t\t\targs = append(args, \"--env-file\", globalEnvPath)",
+              "\t\t}",
+              "\t\tif stack.EnvFile != \"\" {"
+            ]
+          },
+          {
+            "id": "435d46d27d4c1e7c",
+            "distinct_files": 2,
+            "window_size": 11,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/ContainersOverviewTab.tsx",
+                "line": 414
+              },
+              {
+                "file": "frontend/src/components/dashboard/VolumesTab.tsx",
+                "line": 97
+              }
+            ],
+            "sample": [
+              ") {",
+              "    return (",
+              "      <div className=\"space-y-4\">",
+              "        {Array.from({ length: 5 }).map((_, i) => ("
+            ]
+          },
+          {
+            "id": "500f6e66fceb77c8",
+            "distinct_files": 2,
+            "window_size": 8,
+            "locations": [
+              {
+                "file": "backend/frontend/index.html",
+                "line": 1
+              },
+              {
+                "file": "frontend/index.html",
+                "line": 1
+              }
+            ],
+            "sample": [
+              "<!doctype html>",
+              "<html lang=\"en\">",
+              "  <head>",
+              "    <meta charset=\"UTF-8\" />"
+            ]
+          },
+          {
+            "id": "56ca238c90d25e30",
+            "distinct_files": 2,
+            "window_size": 9,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/compose_test.go",
+                "line": 21
+              },
+              {
+                "file": "backend/internal/handlers/env_integration_test.go",
+                "line": 20
+              }
+            ],
+            "sample": [
+              "(t *testing.T) {",
+              "\ttempDir := t.TempDir()",
+              "\tdb, err := database.NewWithMigrations(\":memory:\")",
+              "\trequire.NoError(t, err)"
+            ]
+          },
+          {
+            "id": "5722ff73fa345c41",
+            "distinct_files": 2,
+            "window_size": 41,
+            "locations": [
+              {
+                "file": "backend/internal/services/docker.go",
+                "line": 346
+              },
+              {
+                "file": "backend/internal/services/monitor.go",
+                "line": 73
+              }
+            ],
+            "sample": [
+              "return",
+              "\t\t}",
+              "\t\tdefer stats.Body.Close()",
+              ""
+            ]
+          },
+          {
+            "id": "5734658dab84f8d6",
+            "distinct_files": 2,
+            "window_size": 34,
+            "locations": [
+              {
+                "file": "frontend/src/hooks/useDashboardMetrics.ts",
+                "line": 66
+              },
+              {
+                "file": "frontend/src/hooks/useMonitoring.ts",
+                "line": 60
+              }
+            ],
+            "sample": [
+              "= {",
+              "          cpuPercent: container.cpuPercent,",
+              "          memUsage: container.memUsage,",
+              "          memLimit: container.memLimit,"
+            ]
+          },
+          {
+            "id": "5f17f92b66cbe060",
+            "distinct_files": 2,
+            "window_size": 31,
+            "locations": [
+              {
+                "file": ".agent-os/instructions/core/orchestrate.md",
+                "line": 377
+              },
+              {
+                "file": ".agent-os/instructions/core/run.md",
+                "line": 252
+              }
+            ],
+            "sample": [
+              "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+              "STATUS REPORT FORMAT (to Orchestrator)",
+              "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+              ""
+            ]
+          },
+          {
+            "id": "633deda990466c90",
+            "distinct_files": 2,
+            "window_size": 52,
+            "locations": [
+              {
+                "file": "testing/tests/smoke/dashboard.test.sh",
+                "line": 18
+              },
+              {
+                "file": "testing/tests/smoke/stack-ops.test.sh",
+                "line": 19
+              }
+            ],
+            "sample": [
+              "\"",
+              "",
+              "# Test counter",
+              "declare -g TEST_COUNT=0"
+            ]
+          },
+          {
+            "id": "6595e53fb987ddf6",
+            "distinct_files": 2,
+            "window_size": 26,
+            "locations": [
+              {
+                "file": "frontend/src/components/stack/ComposeEditor.tsx",
+                "line": 288
+              },
+              {
+                "file": "frontend/src/components/stack/CreateStackDialog.tsx",
+                "line": 313
+              }
+            ],
+            "sample": [
+              "\">",
+              "            {lintResults.map((result, index) => (",
+              "              <div key={`${result.level}-${result.line || index}-${result.message}`} className=\"p-3 flex items-start gap-3 hover:bg-muted/50\">",
+              "                {getLintIcon(result.level)}"
+            ]
+          },
+          {
+            "id": "70b4cc18c437ba69",
+            "distinct_files": 2,
+            "window_size": 32,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/BuildCacheTab.tsx",
+                "line": 122
+              },
+              {
+                "file": "frontend/src/components/dashboard/VolumesTab.tsx",
+                "line": 115
+              }
+            ],
+            "sample": [
+              "</p>",
+              "        </CardContent>",
+              "      </Card>",
+              "    )"
+            ]
+          },
+          {
+            "id": "7bed0a11b2005b7b",
+            "distinct_files": 2,
+            "window_size": 9,
+            "locations": [
+              {
+                "file": "frontend/src/components/stack/__tests__/ComposeEditor.test.tsx",
+                "line": 40
+              },
+              {
+                "file": "frontend/src/components/stack/__tests__/EnvEditor.test.tsx",
+                "line": 12
+              }
+            ],
+            "sample": [
+              "(...args),",
+              "  },",
+              "}))",
+              ""
+            ]
+          },
+          {
+            "id": "7d768f34d05cfe57",
+            "distinct_files": 2,
+            "window_size": 12,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/auth_test.go",
+                "line": 88
+              },
+              {
+                "file": "backend/internal/handlers/env_integration_test.go",
+                "line": 143
+              }
+            ],
+            "sample": [
+              "))",
+              "\treq.Header.Set(\"Content-Type\", \"application/json\")",
+              "\tw := httptest.NewRecorder()",
+              "\trouter.ServeHTTP(w, req)"
+            ]
+          },
+          {
+            "id": "7fd0b291bd611514",
+            "distinct_files": 2,
+            "window_size": 9,
+            "locations": [
+              {
+                "file": "frontend/src/pages/LoginPage.tsx",
+                "line": 1
+              },
+              {
+                "file": "frontend/src/pages/SetupPage.tsx",
+                "line": 1
+              }
+            ],
+            "sample": [
+              "import { useState } from 'react'",
+              "import { useNavigate } from 'react-router-dom'",
+              "import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'",
+              "import { LoginForm, type LoginFormData } from '@/components/auth/LoginForm'"
+            ]
+          },
+          {
+            "id": "883d3c24b8403d6b",
+            "distinct_files": 2,
+            "window_size": 9,
+            "locations": [
+              {
+                "file": "frontend/src/components/stack/ComposeEditor.tsx",
+                "line": 138
+              },
+              {
+                "file": "frontend/src/components/stack/CreateStackDialog.tsx",
+                "line": 112
+              }
+            ],
+            "sample": [
+              "setLintResults(data.lintResults || [])",
+              "      if (data.lintResults?.some((r: LintResult) => r.level === 'error')) {",
+              "        toast.error('Lint errors detected')",
+              "      } else if (data.lintResults?.some((r: LintResult) => r.level === 'warning')) {"
+            ]
+          },
+          {
+            "id": "8b9ff88e1f209129",
+            "distinct_files": 2,
+            "window_size": 14,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/compose.go",
+                "line": 120
+              },
+              {
+                "file": "backend/internal/handlers/env.go",
+                "line": 121
+              }
+            ],
+            "sample": [
+              ") Put(c *gin.Context) {",
+              "\tid := c.Param(\"id\")",
+              "",
+              "\tstack, err := h.db.GetStack(id)"
+            ]
+          },
+          {
+            "id": "97bf3d146909d04c",
+            "distinct_files": 2,
+            "window_size": 15,
+            "locations": [
+              {
+                "file": "testing/tests/core/env-editor.test.sh",
+                "line": 412
+              },
+              {
+                "file": "testing/tests/smoke/stack-ops.test.sh",
+                "line": 411
+              }
+            ],
+            "sample": [
+              "Looking for search input...\"",
+              "  local snapshot",
+              "  snapshot=$(browser_snapshot -i)",
+              "  "
+            ]
+          },
+          {
+            "id": "99b4be2f4ffc4b30",
+            "distinct_files": 2,
+            "window_size": 17,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/compose_test.go",
+                "line": 31
+              },
+              {
+                "file": "backend/internal/handlers/env_integration_test.go",
+                "line": 30
+              }
+            ],
+            "sample": [
+              "), 0644)",
+              "\trequire.NoError(t, err)",
+              "",
+              "\tcreateTestDirectory(t, db, stackDir)"
+            ]
+          },
+          {
+            "id": "99c6f957648f4f9b",
+            "distinct_files": 2,
+            "window_size": 9,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/auth.go",
+                "line": 314
+              },
+              {
+                "file": "backend/internal/handlers/auth_test.go",
+                "line": 289
+              }
+            ],
+            "sample": [
+              ".MapClaims{",
+              "\t\t\"sub\":      userID,",
+              "\t\t\"username\": username,",
+              "\t\t\"jti\":      sessionID,"
+            ]
+          },
+          {
+            "id": "9bdea275cd67f81f",
+            "distinct_files": 2,
+            "window_size": 29,
+            "locations": [
+              {
+                "file": "testing/tests/core/compose-editor.test.sh",
+                "line": 266
+              },
+              {
+                "file": "testing/tests/core/env-editor.test.sh",
+                "line": 321
+              }
+            ],
+            "sample": [
+              "$TEST_STACK\"",
+              "  ",
+              "  # Look for save button",
+              "  log_info \"Looking for save button...\""
+            ]
+          },
+          {
+            "id": "9bee11b573db8f11",
+            "distinct_files": 2,
+            "window_size": 30,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/compose.go",
+                "line": 247
+              },
+              {
+                "file": "backend/internal/handlers/env.go",
+                "line": 320
+              }
+            ],
+            "sample": [
+              ") validatePath(path string) error {",
+              "\tcleanPath := filepath.Clean(path)",
+              "",
+              "\tabsPath, err := filepath.Abs(cleanPath)"
+            ]
+          },
+          {
+            "id": "9da8099a6f1d2ce3",
+            "distinct_files": 2,
+            "window_size": 13,
+            "locations": [
+              {
+                "file": "backend/internal/services/docker.go",
+                "line": 297
+              },
+              {
+                "file": "backend/internal/services/monitor.go",
+                "line": 274
+              }
+            ],
+            "sample": [
+              "filterArgs := filters.NewArgs()",
+              "\tfilterArgs.Add(\"label\", \"com.docker.compose.project=\"+projectName)",
+              "",
+              "\tcontainers, err := s.client.ContainerList(ctx, container.ListOptions{"
+            ]
+          },
+          {
+            "id": "9dbf6af3f9ceea08",
+            "distinct_files": 2,
+            "window_size": 7,
+            "locations": [
+              {
+                "file": "frontend/src/components/stack/ComposeEditor.tsx",
+                "line": 82
+              },
+              {
+                "file": "frontend/src/components/stack/CreateStackDialog.tsx",
+                "line": 112
+              }
+            ],
+            "sample": [
+              ")",
+              "      if (data.lintResults?.some((r: LintResult) => r.level === 'error')) {",
+              "        toast.error('Lint errors detected')",
+              "      } else if (data.lintResults?.some((r: LintResult) => r.level === 'warning')) {"
+            ]
+          },
+          {
+            "id": "a07d44fb6a5f5139",
+            "distinct_files": 2,
+            "window_size": 11,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/BuildCacheTab.tsx",
+                "line": 104
+              },
+              {
+                "file": "frontend/src/components/dashboard/VolumesTab.tsx",
+                "line": 97
+              }
+            ],
+            "sample": [
+              "if (isLoading) {",
+              "    return (",
+              "      <div className=\"space-y-4\">",
+              "        {Array.from({ length: 5 }).map((_, i) => ("
+            ]
+          },
+          {
+            "id": "a3341abd5bb21875",
+            "distinct_files": 2,
+            "window_size": 21,
+            "locations": [
+              {
+                "file": "frontend/src/hooks/useDashboardMetrics.ts",
+                "line": 36
+              },
+              {
+                "file": "frontend/src/hooks/useMonitoring.ts",
+                "line": 30
+              }
+            ],
+            "sample": [
+              "{",
+              "  timestamp: string",
+              "  containers: Array<{",
+              "    containerId: string"
+            ]
+          },
+          {
+            "id": "a8b5454bc7330e8a",
+            "distinct_files": 2,
+            "window_size": 20,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/dashboard.go",
+                "line": 137
+              },
+              {
+                "file": "backend/internal/handlers/monitoring.go",
+                "line": 123
+              }
+            ],
+            "sample": [
+              ", \"Failed to stream metrics\")",
+              "\t\t\treturn",
+              "\t\t}",
+              ""
+            ]
+          },
+          {
+            "id": "a8f709ce6dd42acc",
+            "distinct_files": 2,
+            "window_size": 13,
+            "locations": [
+              {
+                "file": "backend/internal/services/docker.go",
+                "line": 653
+              },
+              {
+                "file": "backend/internal/services/monitor.go",
+                "line": 279
+              }
+            ],
+            "sample": [
+              "Filters: filterArgs,",
+              "\t})",
+              "\tif err != nil {",
+              "\t\treturn nil, err"
+            ]
+          },
+          {
+            "id": "ab2eb3bfda09d1f7",
+            "distinct_files": 2,
+            "window_size": 12,
+            "locations": [
+              {
+                "file": "frontend/src/components/stack/ComposeEditor.tsx",
+                "line": 233
+              },
+              {
+                "file": "frontend/src/components/stack/CreateStackDialog.tsx",
+                "line": 93
+              }
+            ],
+            "sample": [
+              "(level: string) => {",
+              "    switch (level) {",
+              "      case 'error':",
+              "        return <AlertCircle className=\"h-4 w-4 text-red-500\" />"
+            ]
+          },
+          {
+            "id": "abc465f6c030086a",
+            "distinct_files": 2,
+            "window_size": 6,
+            "locations": [
+              {
+                "file": "frontend/src/pages/DashboardPage.tsx",
+                "line": 283
+              },
+              {
+                "file": "frontend/src/pages/StackPage.tsx",
+                "line": 81
+              }
+            ],
+            "sample": [
+              "<Card className=\"border-destructive\">",
+              "          <CardContent className=\"pt-6\">",
+              "            <div className=\"flex items-start gap-4\">",
+              "              <AlertCircle className=\"h-5 w-5 text-destructive mt-0.5\" />"
+            ]
+          },
+          {
+            "id": "b426c407c819bcf0",
+            "distinct_files": 2,
+            "window_size": 7,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/VolumesTab.tsx",
+                "line": 20
+              },
+              {
+                "file": "frontend/src/components/stack/MetricsPanel.tsx",
+                "line": 17
+              }
+            ],
+            "sample": [
+              "const k = 1024",
+              "  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']",
+              "  const i = Math.floor(Math.log(bytes) / Math.log(k))",
+              "  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`"
+            ]
+          },
+          {
+            "id": "b9ef668ed1975255",
+            "distinct_files": 2,
+            "window_size": 17,
+            "locations": [
+              {
+                "file": "frontend/src/hooks/useDashboardMetrics.ts",
+                "line": 100
+              },
+              {
+                "file": "frontend/src/hooks/useMonitoring.ts",
+                "line": 94
+              }
+            ],
+            "sample": [
+              ",",
+              "    handleMessage,",
+              "    {",
+              "      onOpen: () => setIsConnected(true),"
+            ]
+          },
+          {
+            "id": "bff9053db5181d02",
+            "distinct_files": 2,
+            "window_size": 13,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/dashboard.go",
+                "line": 96
+              },
+              {
+                "file": "backend/internal/handlers/monitoring.go",
+                "line": 101
+              }
+            ],
+            "sample": [
+              ", \"Connection limit exceeded\")",
+              "\t\t\tconn.Conn.Close()",
+              "\t\t\treturn",
+              "\t\t}"
+            ]
+          },
+          {
+            "id": "c4bd4a006edb567a",
+            "distinct_files": 2,
+            "window_size": 11,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/BuildCacheTab.tsx",
+                "line": 16
+              },
+              {
+                "file": "frontend/src/components/dashboard/ImagesTab.tsx",
+                "line": 16
+              }
+            ],
+            "sample": [
+              "} from '@/types'",
+              "",
+              "function formatBytes(bytes: number): string {",
+              "  if (bytes === 0) return '0 B'"
+            ]
+          },
+          {
+            "id": "c7c6d0114bafb603",
+            "distinct_files": 2,
+            "window_size": 7,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/ImagesTab.tsx",
+                "line": 145
+              },
+              {
+                "file": "frontend/src/components/dashboard/NetworksTab.tsx",
+                "line": 121
+              }
+            ],
+            "sample": [
+              " },",
+              "          { key: 'containers', label: 'Containers' },",
+              "        ]}",
+              "        sortValue={sortBy}"
+            ]
+          },
+          {
+            "id": "c980ed45d97d3eee",
+            "distinct_files": 2,
+            "window_size": 46,
+            "locations": [
+              {
+                "file": "testing/tests/smoke/auth.test.sh",
+                "line": 19
+              },
+              {
+                "file": "testing/tests/smoke/dashboard.test.sh",
+                "line": 17
+              }
+            ],
+            "sample": [
+              "\"",
+              "TEST_BASE_URL=\"http://localhost:3001\"",
+              "",
+              "# Test counter"
+            ]
+          },
+          {
+            "id": "cc9af46ecde9e4f3",
+            "distinct_files": 2,
+            "window_size": 7,
+            "locations": [
+              {
+                "file": "frontend/src/components/dashboard/NetworksTab.tsx",
+                "line": 73
+              },
+              {
+                "file": "frontend/src/components/dashboard/VolumesTab.tsx",
+                "line": 82
+              }
+            ],
+            "sample": [
+              "]",
+              "    switch (sortBy) {",
+              "      case 'name':",
+              "        return sorted.sort((a, b) => a.name.localeCompare(b.name))"
+            ]
+          },
+          {
+            "id": "d2cf4e77472289da",
+            "distinct_files": 2,
+            "window_size": 25,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/compose.go",
+                "line": 143
+              },
+              {
+                "file": "backend/internal/handlers/stacks.go",
+                "line": 131
+              }
+            ],
+            "sample": [
+              ")",
+              "\tif err != nil {",
+              "\t\tc.JSON(http.StatusInternalServerError, models.NewAppError(",
+              "\t\t\thttp.StatusInternalServerError,"
+            ]
+          },
+          {
+            "id": "de2b68fa21555e2a",
+            "distinct_files": 2,
+            "window_size": 12,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/directories_test.go",
+                "line": 100
+              },
+              {
+                "file": "backend/internal/handlers/stacks_test.go",
+                "line": 118
+              }
+            ],
+            "sample": [
+              ",",
+              "\t\tComposeFile: \"compose.yaml\",",
+              "\t\tEnvFile:     \".env\",",
+              "\t\tProjectName: \"stack1-default\","
+            ]
+          },
+          {
+            "id": "e88f3b6a530fb7d6",
+            "distinct_files": 2,
+            "window_size": 7,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/logs.go",
+                "line": 125
+              },
+              {
+                "file": "backend/internal/handlers/ws.go",
+                "line": 293
+              }
+            ],
+            "sample": [
+              "conn.SetReadDeadline(time.Now().Add(60 * time.Second))",
+              "\tconn.SetPongHandler(func(string) error {",
+              "\t\tconn.SetReadDeadline(time.Now().Add(60 * time.Second))",
+              "\t\treturn nil"
+            ]
+          },
+          {
+            "id": "ef9efff294e0d1df",
+            "distinct_files": 2,
+            "window_size": 10,
+            "locations": [
+              {
+                "file": "backend/internal/handlers/dashboard.go",
+                "line": 87
+              },
+              {
+                "file": "backend/internal/handlers/monitoring.go",
+                "line": 159
+              }
+            ],
+            "sample": [
+              "(jwtSecret string, authDisabled bool) gin.HandlerFunc {",
+              "\treturn func(c *gin.Context) {",
+              "\t\tconn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)",
+              "\t\tif err != nil {"
+            ]
+          },
+          {
+            "id": "f57080c434133f45",
+            "distinct_files": 2,
+            "window_size": 5,
+            "locations": [
+              {
+                "file": "frontend/src/components/layout/Sidebar.tsx",
+                "line": 25
+              },
+              {
+                "file": "frontend/src/pages/DashboardPage.tsx",
+                "line": 190
+              }
+            ],
+            "sample": [
+              ") {",
+              "      if (!groups.has(stack.directory)) groups.set(stack.directory, [])",
+              "      groups.get(stack.directory)!.push(stack)",
+              "    }"
+            ]
+          }
+        ]
+      },
+      "security": {
+        "version": 1,
+        "fingerprint": "7320b2c0274ec4cac1d88ab4911b453967c4079c",
+        "entries": [],
+        "files_scanned": 0,
+        "coverage": null
+      },
+      "dupes": {
+        "version": 1,
+        "threshold": 0.9,
+        "functions": {
+          "/home/edwin/development/docker-manager/backend/cmd/server/main.go:SecurityHeaders:24:33": {
+            "body_hash": "f2d1f90b9d64",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/cmd/server/main.go:isLocalhost:35:38": {
+            "body_hash": "985205026041",
+            "loc": 4
+          },
+          "/home/edwin/development/docker-manager/backend/cmd/server/main.go:main:40:275": {
+            "body_hash": "629e51993f9f",
+            "loc": 236
+          },
+          "/home/edwin/development/docker-manager/backend/internal/config/config.go:Load:25:100": {
+            "body_hash": "3128afa9c440",
+            "loc": 76
+          },
+          "/home/edwin/development/docker-manager/backend/internal/config/config.go:validate:102:124": {
+            "body_hash": "dddea04f21ae",
+            "loc": 23
+          },
+          "/home/edwin/development/docker-manager/backend/internal/config/config.go:validateVolumePathIdentity:126:146": {
+            "body_hash": "eab24c57c2c6",
+            "loc": 21
+          },
+          "/home/edwin/development/docker-manager/backend/internal/config/config.go:Error:153:155": {
+            "body_hash": "3a64ad6ecf31",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/config/config.go:NormalizeOrigins:157:171": {
+            "body_hash": "94bd2766d2d3",
+            "loc": 15
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:New:17:54": {
+            "body_hash": "6f1433c26b4e",
+            "loc": 38
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:NewWithMigrations:56:66": {
+            "body_hash": "e2a9c7278c27",
+            "loc": 11
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:Close:68:70": {
+            "body_hash": "bb63aea16a17",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:UserCount:72:76": {
+            "body_hash": "4af8ccfe8445",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:CreateUser:78:83": {
+            "body_hash": "39c667996fa3",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:GetUserByUsername:85:94": {
+            "body_hash": "8a95738ff8dc",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:GetUserByID:96:105": {
+            "body_hash": "be0314c63417",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:UpdateUserPassword:107:111": {
+            "body_hash": "bc8b6c42dc6e",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:CreateSession:113:118": {
+            "body_hash": "ed5698fad208",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:GetSession:120:129": {
+            "body_hash": "e37fab6b1c2c",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:DeleteSession:131:135": {
+            "body_hash": "aaac70ef9926",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:DeleteExpiredSessions:137:141": {
+            "body_hash": "fb10c9dca1af",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:UpsertDirectory:143:149": {
+            "body_hash": "3fbb23483519",
+            "loc": 7
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:ListDirectories:151:170": {
+            "body_hash": "49c005e149b4",
+            "loc": 20
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:GetDirectory:172:181": {
+            "body_hash": "ee7732b07a84",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:DeleteDirectory:183:187": {
+            "body_hash": "64880cbbbf5e",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:ClearDirectories:189:193": {
+            "body_hash": "f83366166a0d",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:UpsertStack:195:204": {
+            "body_hash": "cc2236b6e74a",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:ListStacks:206:228": {
+            "body_hash": "835f8d14bafc",
+            "loc": 23
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:GetStack:230:242": {
+            "body_hash": "a2e3e292c03d",
+            "loc": 13
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:ListStacksByDirectory:244:266": {
+            "body_hash": "4500a2c6c2ba",
+            "loc": 23
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:DeleteStack:268:272": {
+            "body_hash": "ddcf7ca78999",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:ClearStacks:274:278": {
+            "body_hash": "7397d852c6bc",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:UpdateStackStatus:280:284": {
+            "body_hash": "349ee2f4be3e",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:GetStackByProjectName:286:298": {
+            "body_hash": "a57a5d9ad1fc",
+            "loc": 13
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:LogAction:300:305": {
+            "body_hash": "ebb562548e67",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:GetActionsByStack:307:326": {
+            "body_hash": "66b0b617d379",
+            "loc": 20
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:GetRecentActions:328:347": {
+            "body_hash": "21b65b82fcff",
+            "loc": 20
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:GetSetting:349:357": {
+            "body_hash": "a75b2d632cd8",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:SetSetting:359:363": {
+            "body_hash": "c7788bf19216",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/database.go:DeleteOldActionLogs:365:369": {
+            "body_hash": "89cb7d2a34e3",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/database/migrations.go:RunMigrations:93:142": {
+            "body_hash": "381646b360c4",
+            "loc": 50
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/auth.go:NewAuthHandler:23:29": {
+            "body_hash": "a9638c63a60e",
+            "loc": 7
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/auth.go:RegisterRoutes:31:37": {
+            "body_hash": "88c21bab16f3",
+            "loc": 7
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/auth.go:Status:39:51": {
+            "body_hash": "36a9b93fa1d2",
+            "loc": 13
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/auth.go:Setup:53:154": {
+            "body_hash": "2400b53f2d94",
+            "loc": 102
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/auth.go:Login:156:238": {
+            "body_hash": "55b57f2b9423",
+            "loc": 83
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/auth.go:Logout:240:263": {
+            "body_hash": "ade4b39aac03",
+            "loc": 24
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/auth.go:Me:265:290": {
+            "body_hash": "b0e53d807759",
+            "loc": 26
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/auth.go:validateUsername:292:303": {
+            "body_hash": "51ba943e5070",
+            "loc": 12
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/auth.go:validatePassword:305:311": {
+            "body_hash": "857693385340",
+            "loc": 7
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/auth.go:generateJWT:313:324": {
+            "body_hash": "841e360a492a",
+            "loc": 12
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/auth.go:parseJWT:326:343": {
+            "body_hash": "be16cb20614a",
+            "loc": 18
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/compose.go:NewComposeHandler:45:52": {
+            "body_hash": "f2fdea9ce8b3",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/compose.go:RegisterRoutes:54:58": {
+            "body_hash": "52d0763c3303",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/compose.go:Get:60:118": {
+            "body_hash": "58ddfb18a093",
+            "loc": 59
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/compose.go:Put:120:201": {
+            "body_hash": "28fcae791642",
+            "loc": 82
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/compose.go:Lint:203:245": {
+            "body_hash": "66764da2f5fd",
+            "loc": 43
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/compose.go:validatePath:247:274": {
+            "body_hash": "cbb662835427",
+            "loc": 28
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/compose.go:logAction:276:278": {
+            "body_hash": "0ab68f2d200f",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/dashboard.go:NewDashboardHandler:21:28": {
+            "body_hash": "079feebcd615",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/dashboard.go:RegisterRoutes:30:33": {
+            "body_hash": "48b917f0f9cd",
+            "loc": 4
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/dashboard.go:getDashboardStats:35:85": {
+            "body_hash": "26b4711d527a",
+            "loc": 51
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/dashboard.go:handleDashboardMetricsWebSocket:87:162": {
+            "body_hash": "52bd982b9391",
+            "loc": 76
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/directories.go:NewDirectoriesHandler:19:24": {
+            "body_hash": "3c16f69324e0",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/directories.go:RegisterRoutes:26:30": {
+            "body_hash": "06317e279740",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/directories.go:List:32:60": {
+            "body_hash": "369a4701f05d",
+            "loc": 29
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/directories.go:Scan:62:85": {
+            "body_hash": "a12a059b8343",
+            "loc": 24
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/directories.go:Get:87:119": {
+            "body_hash": "e8dc9fe27911",
+            "loc": 33
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/env.go:NewEnvHandler:48:54": {
+            "body_hash": "ff3a745d2bd4",
+            "loc": 7
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/env.go:RegisterRoutes:56:59": {
+            "body_hash": "d84d756c5c12",
+            "loc": 4
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/env.go:Get:61:119": {
+            "body_hash": "10e3e12ea101",
+            "loc": 59
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/env.go:Put:121:195": {
+            "body_hash": "3b482ca9af4a",
+            "loc": 75
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/env.go:parseEnvFile:197:258": {
+            "body_hash": "e53c57806d19",
+            "loc": 62
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/env.go:unquoteValue:260:273": {
+            "body_hash": "5da9103d5530",
+            "loc": 14
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/env.go:serializeEnvFile:275:297": {
+            "body_hash": "42d862aa90c9",
+            "loc": 23
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/env.go:isSensitiveKey:299:318": {
+            "body_hash": "c26352b203be",
+            "loc": 20
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/env.go:validatePath:320:347": {
+            "body_hash": "455d6e16d932",
+            "loc": 28
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/env.go:logAction:349:351": {
+            "body_hash": "9a2c727e6058",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:NewGitHandler:27:35": {
+            "body_hash": "feadb1beaf36",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:RegisterRoutes:37:42": {
+            "body_hash": "3faaef3c118e",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:resolvePathFromStack:44:90": {
+            "body_hash": "bbc24251464b",
+            "loc": 47
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:GetStatus:92:118": {
+            "body_hash": "5d27882f171a",
+            "loc": 27
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:Pull:120:151": {
+            "body_hash": "9ecf7d848b28",
+            "loc": 32
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:redeployAffectedStacks:153:182": {
+            "body_hash": "8472394f673a",
+            "loc": 30
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:stackFilesChanged:184:191": {
+            "body_hash": "8e9300967c49",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:formatPullDetail:193:206": {
+            "body_hash": "84e4ad0631af",
+            "loc": 14
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:GetLog:208:249": {
+            "body_hash": "bd1fc4f63e36",
+            "loc": 42
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:GetDiff:251:279": {
+            "body_hash": "0437fa217f5a",
+            "loc": 29
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:logGitAction:281:283": {
+            "body_hash": "ad0b370490b5",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:parseQueryParamInt:285:297": {
+            "body_hash": "1262ba5f0e0a",
+            "loc": 13
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/git.go:isValidHash:299:307": {
+            "body_hash": "db278ca49aa7",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/logs.go:NewLogsHandler:39:46": {
+            "body_hash": "385e88838dab",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/logs.go:RegisterRoutes:48:51": {
+            "body_hash": "8bb2172ba8f4",
+            "loc": 4
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/logs.go:GetLogs:53:93": {
+            "body_hash": "fe6e45a25bb0",
+            "loc": 41
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/logs.go:StreamLogs:95:251": {
+            "body_hash": "3eee20f6875e",
+            "loc": 157
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/logs.go:buildComposeArgs:253:272": {
+            "body_hash": "4994ad9b3339",
+            "loc": 20
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/logs.go:parseLogLines:274:292": {
+            "body_hash": "100f8dbeb7c2",
+            "loc": 19
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/logs.go:parseLogLine:294:345": {
+            "body_hash": "9fe46f49fe21",
+            "loc": 52
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/logs.go:writeJSONError:347:349": {
+            "body_hash": "55637acea5d2",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/monitoring.go:NewMonitoringHandler:24:31": {
+            "body_hash": "897b4b4e22fd",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/monitoring.go:RegisterRoutes:38:42": {
+            "body_hash": "200b3963bed8",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/monitoring.go:getStackContainers:44:78": {
+            "body_hash": "63f1f2a34938",
+            "loc": 35
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/monitoring.go:handleMetricsWebSocket:80:148": {
+            "body_hash": "aa031179b607",
+            "loc": 69
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/monitoring.go:init:155:157": {
+            "body_hash": "cba22521d938",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/monitoring.go:handleEventsWebSocket:159:209": {
+            "body_hash": "8e6ec095ca6e",
+            "loc": 51
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/monitoring.go:StartEventBroadcaster:211:242": {
+            "body_hash": "b8bf3e1a6fa6",
+            "loc": 32
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/operations.go:NewOperationsHandler:18:23": {
+            "body_hash": "75e1a060c47e",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/operations.go:RegisterRoutes:25:27": {
+            "body_hash": "609c6dd78dfa",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/operations.go:handleOperation:29:128": {
+            "body_hash": "398de11db63d",
+            "loc": 100
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:NewResourcesHandler:15:17": {
+            "body_hash": "a46c76a8a59b",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:RegisterRoutes:19:41": {
+            "body_hash": "13141a2a03af",
+            "loc": 23
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:listImages:43:51": {
+            "body_hash": "2c59b41766dd",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:deleteImage:53:64": {
+            "body_hash": "b4b30cd8a7fe",
+            "loc": 12
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:pruneImages:66:81": {
+            "body_hash": "04527ed05312",
+            "loc": 16
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:listContainers:83:91": {
+            "body_hash": "5492c7fb2da3",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:startContainer:93:101": {
+            "body_hash": "8b5a49ce1bcb",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:stopContainer:103:111": {
+            "body_hash": "72feb4e58d2b",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:restartContainer:113:121": {
+            "body_hash": "f2f786f97382",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:deleteContainer:123:133": {
+            "body_hash": "ed468dde0100",
+            "loc": 11
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:pruneContainers:135:146": {
+            "body_hash": "e73f8ae8410a",
+            "loc": 12
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:listVolumes:148:156": {
+            "body_hash": "bdfe61a783c0",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:deleteVolume:158:168": {
+            "body_hash": "8c799b35305d",
+            "loc": 11
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:pruneVolumes:170:181": {
+            "body_hash": "eafd2ead6541",
+            "loc": 12
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:listNetworks:183:191": {
+            "body_hash": "c8f73967242e",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:deleteNetwork:193:202": {
+            "body_hash": "94f40fa4cebf",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:pruneNetworks:204:214": {
+            "body_hash": "d57ed4c6afba",
+            "loc": 11
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:listBuildCache:216:224": {
+            "body_hash": "b6e2407a85bf",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/resources.go:pruneBuildCache:226:237": {
+            "body_hash": "25ef983f8211",
+            "loc": 12
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/settings.go:NewSettingsHandler:25:32": {
+            "body_hash": "8103e80263c0",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/settings.go:RegisterRoutes:34:41": {
+            "body_hash": "d0a0592a57dd",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/settings.go:GetConfig:43:47": {
+            "body_hash": "7bc53817b3e1",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/settings.go:ChangePassword:49:159": {
+            "body_hash": "0a4b841d1964",
+            "loc": 111
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/settings.go:GetGlobalEnv:161:179": {
+            "body_hash": "2c6b7024c5ba",
+            "loc": 19
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/settings.go:UpdateGlobalEnv:181:237": {
+            "body_hash": "8c44d85c8799",
+            "loc": 57
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/settings.go:parseEnvFile:239:266": {
+            "body_hash": "3c8b231f3963",
+            "loc": 28
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/settings.go:GetLogRetention:268:290": {
+            "body_hash": "146a6e87ba44",
+            "loc": 23
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/settings.go:UpdateLogRetention:292:318": {
+            "body_hash": "e5e6c6ed6aa3",
+            "loc": 27
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:NewStacksHandler:27:36": {
+            "body_hash": "4ca0c8623132",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:RegisterRoutes:38:47": {
+            "body_hash": "6cc5218ed0b7",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:Create:60:268": {
+            "body_hash": "b3ca86575694",
+            "loc": 209
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:Lint:270:303": {
+            "body_hash": "5c6a2823063e",
+            "loc": 34
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:List:305:329": {
+            "body_hash": "766cf7e991b3",
+            "loc": 25
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:Get:331:353": {
+            "body_hash": "d5e6728b57bc",
+            "loc": 23
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:Start:355:387": {
+            "body_hash": "b07cb03e7a3a",
+            "loc": 33
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:Stop:389:421": {
+            "body_hash": "8def48892cbc",
+            "loc": 33
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:Restart:423:453": {
+            "body_hash": "52c08d244f53",
+            "loc": 31
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:Pull:455:496": {
+            "body_hash": "bfbefe5054fb",
+            "loc": 42
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:Delete:498:539": {
+            "body_hash": "cee1c1b25d0f",
+            "loc": 42
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/stacks.go:logAction:541:543": {
+            "body_hash": "0c8cfd8960df",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/terminal.go:NewTerminalHandler:27:32": {
+            "body_hash": "230d4c6b302a",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/terminal.go:RegisterRoutes:34:36": {
+            "body_hash": "d513d32ef0a2",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/terminal.go:handleTerminalWS:38:79": {
+            "body_hash": "5eb1f538f466",
+            "loc": 42
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/terminal.go:readFromWebSocket:81:116": {
+            "body_hash": "c59121f3ed1f",
+            "loc": 36
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/terminal.go:writeToWebSocket:118:144": {
+            "body_hash": "433a61d5e776",
+            "loc": 27
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/terminal.go:waitForProcessExit:146:155": {
+            "body_hash": "f0fbd0085886",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:NewConnectionManager:53:62": {
+            "body_hash": "db8013325b0a",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:Add:64:80": {
+            "body_hash": "8deaefb4295b",
+            "loc": 17
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:Remove:82:93": {
+            "body_hash": "7958499d8392",
+            "loc": 12
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:Get:95:100": {
+            "body_hash": "943b23391eca",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:Count:102:106": {
+            "body_hash": "70903baa5564",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:CountByUser:108:112": {
+            "body_hash": "803cfe9f1e4d",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:CloseAll:114:126": {
+            "body_hash": "c62c33b5daa8",
+            "loc": 13
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:authenticateWS:128:187": {
+            "body_hash": "00627d9f5388",
+            "loc": 60
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:validateJWT:189:206": {
+            "body_hash": "faea557168bb",
+            "loc": 18
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:writeJSON:208:211": {
+            "body_hash": "ca05a969a63b",
+            "loc": 4
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:readJSON:213:216": {
+            "body_hash": "bfc7ca660360",
+            "loc": 4
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:pingLoop:218:234": {
+            "body_hash": "71294287b117",
+            "loc": 17
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:safeWriteJSON:236:240": {
+            "body_hash": "f90d05211ae3",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:safePingLoop:242:261": {
+            "body_hash": "211c7efd9a6b",
+            "loc": 20
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:writeCloseMessage:263:272": {
+            "body_hash": "15157804e856",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/handlers/ws.go:upgradeConnection:274:300": {
+            "body_hash": "d74a17290518",
+            "loc": 27
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/auth.go:isTrustedIP:15:52": {
+            "body_hash": "47171fc44c72",
+            "loc": 38
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/auth.go:AuthMiddleware:54:141": {
+            "body_hash": "9c36cf90f016",
+            "loc": 88
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/auth.go:validateJWT:143:160": {
+            "body_hash": "faea557168bb",
+            "loc": 18
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/cors.go:CORSMiddleware:9:45": {
+            "body_hash": "1e26fabad794",
+            "loc": 37
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/logging.go:LoggingMiddleware:11:47": {
+            "body_hash": "acb05347ee1b",
+            "loc": 37
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/ratelimit.go:NewRateLimiter:34:46": {
+            "body_hash": "e75f2c951140",
+            "loc": 13
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/ratelimit.go:validateRateLimitKey:48:81": {
+            "body_hash": "15c4cb0445b7",
+            "loc": 34
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/ratelimit.go:evictLRU:83:93": {
+            "body_hash": "9e7ecbe3517f",
+            "loc": 11
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/ratelimit.go:cleanup:95:117": {
+            "body_hash": "62abe2519511",
+            "loc": 23
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/ratelimit.go:check:119:162": {
+            "body_hash": "96ad656a7c60",
+            "loc": 44
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/ratelimit.go:Middleware:164:189": {
+            "body_hash": "d600e2b1a3a8",
+            "loc": 26
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/ratelimit.go:InitRateLimiters:194:201": {
+            "body_hash": "6470616cb0c4",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/ratelimit.go:RateLimitByIP:203:229": {
+            "body_hash": "9acd80bd6303",
+            "loc": 27
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/ratelimit.go:RateLimitByUser:231:242": {
+            "body_hash": "220ece938b39",
+            "loc": 12
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/recovery.go:RecoveryMiddleware:12:34": {
+            "body_hash": "3ca2d2f64e85",
+            "loc": 23
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/validation.go:ValidateStackID:52:54": {
+            "body_hash": "7478fcea1223",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/validation.go:ValidateUsername:56:61": {
+            "body_hash": "53a8b07ec3dc",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/validation.go:ValidatePassword:63:104": {
+            "body_hash": "77b00705663c",
+            "loc": 42
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/validation.go:ValidateNoPathTraversal:106:108": {
+            "body_hash": "895213e4e47c",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/validation.go:validateFilePath:110:142": {
+            "body_hash": "89e525584b70",
+            "loc": 33
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/validation.go:ValidateInput:144:188": {
+            "body_hash": "4891e6e0e739",
+            "loc": 45
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/validation.go:SanitizeFilePath:190:195": {
+            "body_hash": "aef27bb835a9",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/middleware/validation.go:ValidatePathParam:197:199": {
+            "body_hash": "0996368bbf0b",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/models/errors.go:Error:36:38": {
+            "body_hash": "56c0c3453c46",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/models/errors.go:NewAppError:40:46": {
+            "body_hash": "a3e8ce8e75b6",
+            "loc": 7
+          },
+          "/home/edwin/development/docker-manager/backend/internal/models/errors.go:NewAppErrorWithDetails:48:55": {
+            "body_hash": "46201269252a",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/models/errors.go:HandleError:57:64": {
+            "body_hash": "fd57ea861297",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/actionlog.go:NewActionLogger:33:35": {
+            "body_hash": "84a7526eafd4",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/actionlog.go:Log:37:62": {
+            "body_hash": "1534571dff1e",
+            "loc": 26
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/actionlog.go:LogFromContext:64:70": {
+            "body_hash": "d01e541bdaa1",
+            "loc": 7
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:NewDockerService:33:51": {
+            "body_hash": "e155a4ba9390",
+            "loc": 19
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:Start:53:69": {
+            "body_hash": "cca56440cf58",
+            "loc": 17
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:Stop:71:87": {
+            "body_hash": "ec688ed842c8",
+            "loc": 17
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:Restart:89:104": {
+            "body_hash": "7c3985ca9ee5",
+            "loc": 16
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:Pull:106:122": {
+            "body_hash": "d7ba91b453b2",
+            "loc": 17
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:RunStreaming:131:197": {
+            "body_hash": "433ed41e7453",
+            "loc": 67
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:Delete:199:215": {
+            "body_hash": "06f39edc235e",
+            "loc": 17
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:Status:217:278": {
+            "body_hash": "259b19545999",
+            "loc": 62
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:Logs:280:292": {
+            "body_hash": "d5311def23f4",
+            "loc": 13
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:GetContainerList:294:336": {
+            "body_hash": "1051bbba3a4d",
+            "loc": 43
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:GetContainerStats:338:394": {
+            "body_hash": "d9e031bb615e",
+            "loc": 57
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:ListenEvents:396:434": {
+            "body_hash": "6494f73cebe6",
+            "loc": 39
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:buildComposeArgs:436:454": {
+            "body_hash": "97a4f2598a7c",
+            "loc": 19
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:ValidateName:456:462": {
+            "body_hash": "196fe9e24df2",
+            "loc": 7
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:calculateCPUPercent:464:474": {
+            "body_hash": "2d102177c82e",
+            "loc": 11
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:calculateMemPercent:476:486": {
+            "body_hash": "8096a840e13e",
+            "loc": 11
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:calculateMemSwap:488:497": {
+            "body_hash": "6c02b594ebf6",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:getPids:499:501": {
+            "body_hash": "bcd68aa3f7b7",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:calculateNetwork:503:512": {
+            "body_hash": "0ed93edf3136",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:calculateBlockIO:514:526": {
+            "body_hash": "61b6c53a2fbe",
+            "loc": 13
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:parsePorts:528:548": {
+            "body_hash": "43a2e2cdf094",
+            "loc": 21
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:GetAllContainersWithDetails:550:632": {
+            "body_hash": "1678853d78d9",
+            "loc": 83
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:GetImageDiskUsage:634:646": {
+            "body_hash": "981a8efbddc1",
+            "loc": 13
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:GetRunningContainerIDs:648:665": {
+            "body_hash": "5549a6bfed36",
+            "loc": 18
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:ListImages:671:694": {
+            "body_hash": "17161fa06741",
+            "loc": 24
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:ListVolumes:696:729": {
+            "body_hash": "3f94ee471e90",
+            "loc": 34
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:ListNetworks:731:767": {
+            "body_hash": "bfade94cd769",
+            "loc": 37
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:DeleteContainer:769:771": {
+            "body_hash": "7214a5ce43cb",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:PruneContainers:773:775": {
+            "body_hash": "2271dd25d75f",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:DeleteImage:777:779": {
+            "body_hash": "fea42cd33d5d",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:PruneImages:781:783": {
+            "body_hash": "3473de8f9438",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:DeleteVolume:785:787": {
+            "body_hash": "41ca58789f25",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:PruneVolumes:789:791": {
+            "body_hash": "35fcb85500e7",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:DeleteNetwork:793:795": {
+            "body_hash": "081d0c380528",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:PruneNetworks:797:799": {
+            "body_hash": "3d76346ec7b9",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:StartContainer:801:803": {
+            "body_hash": "a8661392982b",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:StopContainer:805:807": {
+            "body_hash": "7f34c196aee2",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:RestartContainer:809:811": {
+            "body_hash": "e1837c0a4210",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:ListBuildCache:813:819": {
+            "body_hash": "4a969ba52d4d",
+            "loc": 7
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:PruneBuildCache:821:823": {
+            "body_hash": "b00d7f358994",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/docker.go:formatBytes:825:836": {
+            "body_hash": "8e43ed7cda92",
+            "loc": 12
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:NewGitService:28:32": {
+            "body_hash": "75ed625194d1",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:GetStatus:34:41": {
+            "body_hash": "2509bca01d51",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:getStatusGoGit:43:108": {
+            "body_hash": "d0d9f2ff1b56",
+            "loc": 66
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:getStatusCLI:110:169": {
+            "body_hash": "4b3e0e6bb170",
+            "loc": 60
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:gitCommand:171:179": {
+            "body_hash": "812ba31db9a6",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:Pull:181:183": {
+            "body_hash": "21a427314bb0",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:pullCLI:185:228": {
+            "body_hash": "7207a573ff15",
+            "loc": 44
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:GetLog:230:239": {
+            "body_hash": "71b792219816",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:getLogCLI:241:284": {
+            "body_hash": "2309bde1e40a",
+            "loc": 44
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:GetDiff:286:288": {
+            "body_hash": "76a8d1623a26",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:getDiffCLI:290:325": {
+            "body_hash": "0dcf6a21e750",
+            "loc": 36
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:GetLogForFile:327:367": {
+            "body_hash": "c5adf4fbd646",
+            "loc": 41
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:openRepo:369:381": {
+            "body_hash": "903155c9663c",
+            "loc": 13
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:getDivergence:383:428": {
+            "body_hash": "602c36854980",
+            "loc": 46
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:findMergeBase:430:441": {
+            "body_hash": "79b122ead0f2",
+            "loc": 12
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:collectAncestors:443:464": {
+            "body_hash": "ee836775e239",
+            "loc": 22
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:countCommits:466:479": {
+            "body_hash": "38b5b06183fb",
+            "loc": 14
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:getChangedFiles:481:511": {
+            "body_hash": "36f832c9730e",
+            "loc": 31
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:fileAffectedByCommit:513:541": {
+            "body_hash": "dd4d6641b432",
+            "loc": 29
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:getAuthMethod:543:590": {
+            "body_hash": "bddafa3177a9",
+            "loc": 48
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:getPublicAuth:592:597": {
+            "body_hash": "b77f82f24f94",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:mapCommit:599:608": {
+            "body_hash": "784758c38367",
+            "loc": 10
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/git.go:getParent:610:617": {
+            "body_hash": "8290d956d6f5",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/linter.go:NewLinterService:18:20": {
+            "body_hash": "637313b9b1ec",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/linter.go:Lint:22:24": {
+            "body_hash": "5104ee46d18a",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/linter.go:LintWithDir:26:146": {
+            "body_hash": "7e910a72ee1e",
+            "loc": 121
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/linter.go:isLatestTag:148:155": {
+            "body_hash": "5a924bf385b9",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/linter.go:findServiceLine:157:169": {
+            "body_hash": "d3451e23dc4f",
+            "loc": 13
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/linter.go:sortResults:171:188": {
+            "body_hash": "785b4d5301e6",
+            "loc": 18
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/linter.go:extractLineNumber:190:217": {
+            "body_hash": "afb589f4cfc7",
+            "loc": 28
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/monitor.go:NewMonitorService:28:32": {
+            "body_hash": "bde8973d2e32",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/monitor.go:NewMonitorServiceWithDB:34:39": {
+            "body_hash": "a6bc4d9f7594",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/monitor.go:StreamStats:41:163": {
+            "body_hash": "a99a2e7b7a3d",
+            "loc": 123
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/monitor.go:ListenEvents:165:271": {
+            "body_hash": "da5426286c8f",
+            "loc": 107
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/monitor.go:GetContainersForStack:273:292": {
+            "body_hash": "7edd295082c6",
+            "loc": 20
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/scanner.go:NewScannerService:20:25": {
+            "body_hash": "a851b91c9262",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/scanner.go:ScanAll:27:65": {
+            "body_hash": "3cd5296ccc66",
+            "loc": 39
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/scanner.go:ScanDirectory:67:170": {
+            "body_hash": "c8ea9b9e7b7a",
+            "loc": 104
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/scanner.go:extractStackName:172:190": {
+            "body_hash": "2781671767a2",
+            "loc": 19
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/scanner.go:determineEnvFile:192:212": {
+            "body_hash": "79bb6af341fb",
+            "loc": 21
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/terminal.go:NewTerminalService:34:39": {
+            "body_hash": "3d5bed657bf8",
+            "loc": 6
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/terminal.go:CreateSession:41:74": {
+            "body_hash": "d9263e498da5",
+            "loc": 34
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/terminal.go:GetSession:76:80": {
+            "body_hash": "d91f226dce83",
+            "loc": 5
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/terminal.go:ResizeSession:82:95": {
+            "body_hash": "9b982748ec74",
+            "loc": 14
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/terminal.go:CloseSession:97:113": {
+            "body_hash": "0fff188271e3",
+            "loc": 17
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/terminal.go:UpdateActivity:115:122": {
+            "body_hash": "01c3bb344e9b",
+            "loc": 8
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/terminal.go:StartReaper:124:138": {
+            "body_hash": "5f284c75e5f6",
+            "loc": 15
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/terminal.go:reapExpiredSessions:140:157": {
+            "body_hash": "d0ba32cb8eef",
+            "loc": 18
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/terminal.go:Error:163:165": {
+            "body_hash": "6dc477e9a5a3",
+            "loc": 3
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/watcher.go:NewWatcherService:28:38": {
+            "body_hash": "a7b192be37f1",
+            "loc": 11
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/watcher.go:Start:40:58": {
+            "body_hash": "86dafa078f06",
+            "loc": 19
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/watcher.go:addWatchPaths:60:86": {
+            "body_hash": "cc760f3f9583",
+            "loc": 27
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/watcher.go:watchLoop:88:107": {
+            "body_hash": "f3ead2bb034c",
+            "loc": 20
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/watcher.go:handleEvent:109:128": {
+            "body_hash": "131a496c4367",
+            "loc": 20
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/watcher.go:shouldProcessEvent:130:150": {
+            "body_hash": "80ab9e48338e",
+            "loc": 21
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/watcher.go:scheduleRescan:152:167": {
+            "body_hash": "7066fba4f3a3",
+            "loc": 16
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/watcher.go:performRescan:169:177": {
+            "body_hash": "9b0eb07f6541",
+            "loc": 9
+          },
+          "/home/edwin/development/docker-manager/backend/internal/services/watcher.go:Stop:179:196": {
+            "body_hash": "0be6c56e6aac",
+            "loc": 18
+          }
+        },
+        "near_pairs": [
+          {
+            "a": "/home/edwin/development/docker-manager/backend/internal/handlers/compose.go:validatePath:247:274",
+            "b": "/home/edwin/development/docker-manager/backend/internal/handlers/env.go:validatePath:320:347",
+            "similarity": 0.956522
+          }
+        ]
+      }
+    }
+  },
+  "lang_capabilities": {
+    "go": {
+      "fixers": [],
+      "typecheck_cmd": "go vet ./..."
+    }
+  },
+  "zone_distribution": {
+    "production": 34,
+    "test": 13
+  },
+  "tool_hash": "43b46a9e22da",
+  "scan_path": ".",
+  "scan_completeness": {
+    "go": "full"
+  },
+  "potentials": {
+    "go": {
+      "structural": 34,
+      "flat_dirs": 10,
+      "unused_imports": 6,
+      "signature": 6,
+      "test_coverage": 493,
+      "security": 34,
+      "subjective_review": 20,
+      "boilerplate_duplication": 10,
+      "dupes": 299,
+      "stale_wontfix": 0
+    }
+  },
+  "codebase_metrics": {
+    "go": {
+      "total_files": 47,
+      "total_loc": 11533,
+      "total_directories": 7
+    }
+  },
+  "dimension_scores": {
+    "Code quality": {
+      "score": 93.0,
+      "strict": 93.0,
+      "verified_strict_score": 93.0,
+      "checks": 10,
+      "failing": 1,
+      "tier": 3,
+      "detectors": {
+        "flat_dirs": {
+          "potential": 10,
+          "pass_rate": 0.93,
+          "failing": 1,
+          "weighted_failures": 0.7
+        }
+      }
+    },
+    "Security": {
+      "score": 100.0,
+      "strict": 100.0,
+      "verified_strict_score": 100.0,
+      "checks": 34,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "security": {
+          "potential": 34,
+          "pass_rate": 1.0,
+          "failing": 0,
+          "weighted_failures": 0.0
+        }
+      }
+    },
+    "File health": {
+      "score": 93.8,
+      "strict": 93.8,
+      "verified_strict_score": 93.8,
+      "checks": 34,
+      "failing": 3,
+      "tier": 3,
+      "detectors": {
+        "structural": {
+          "potential": 34,
+          "pass_rate": 0.9382352941176471,
+          "failing": 3,
+          "weighted_failures": 2.0999999999999996
+        }
+      }
+    },
+    "Duplication": {
+      "score": 96.4,
+      "strict": 96.4,
+      "verified_strict_score": 96.4,
+      "checks": 309,
+      "failing": 16,
+      "tier": 3,
+      "detectors": {
+        "dupes": {
+          "potential": 299,
+          "pass_rate": 0.9956521739130434,
+          "failing": 2,
+          "weighted_failures": 1.3
+        },
+        "boilerplate_duplication": {
+          "potential": 10,
+          "pass_rate": 0.020000000000000108,
+          "failing": 14,
+          "weighted_failures": 9.799999999999999
+        }
+      }
+    },
+    "Test health": {
+      "score": 40.6,
+      "strict": 40.6,
+      "verified_strict_score": 40.6,
+      "checks": 493,
+      "failing": 22,
+      "tier": 4,
+      "detectors": {
+        "test_coverage": {
+          "potential": 493,
+          "pass_rate": 0.4064989874669364,
+          "failing": 22,
+          "weighted_failures": 292.59599917880035
+        }
+      }
+    },
+    "Abstraction fit": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "abstraction_fitness",
+          "configured_weight": 8.0,
+          "components": []
+        }
+      }
+    },
+    "AI generated debt": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "ai_generated_debt",
+          "configured_weight": 1.0,
+          "components": []
+        }
+      }
+    },
+    "API coherence": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "api_surface_coherence",
+          "configured_weight": 1.0,
+          "components": []
+        }
+      }
+    },
+    "Auth consistency": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "authorization_consistency",
+          "configured_weight": 1.0,
+          "components": []
+        }
+      }
+    },
+    "Contracts": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "contract_coherence",
+          "configured_weight": 12.0,
+          "components": []
+        }
+      }
+    },
+    "Convention drift": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "convention_outlier",
+          "configured_weight": 1.0,
+          "components": []
+        }
+      }
+    },
+    "Cross-module arch": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "cross_module_architecture",
+          "configured_weight": 1.0,
+          "components": []
+        }
+      }
+    },
+    "Dep health": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "dependency_health",
+          "configured_weight": 1.0,
+          "components": []
+        }
+      }
+    },
+    "Design coherence": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "design_coherence",
+          "configured_weight": 10.0,
+          "components": []
+        }
+      }
+    },
+    "Error consistency": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "error_consistency",
+          "configured_weight": 3.0,
+          "components": []
+        }
+      }
+    },
+    "High elegance": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "high_level_elegance",
+          "configured_weight": 22.0,
+          "components": []
+        }
+      }
+    },
+    "Stale migration": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "incomplete_migration",
+          "configured_weight": 1.0,
+          "components": []
+        }
+      }
+    },
+    "Init coupling": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "initialization_coupling",
+          "configured_weight": 1.0,
+          "components": []
+        }
+      }
+    },
+    "Logic clarity": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "logic_clarity",
+          "configured_weight": 6.0,
+          "components": []
+        }
+      }
+    },
+    "Low elegance": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "low_level_elegance",
+          "configured_weight": 12.0,
+          "components": []
+        }
+      }
+    },
+    "Mid elegance": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "mid_level_elegance",
+          "configured_weight": 22.0,
+          "components": []
+        }
+      }
+    },
+    "Naming quality": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "naming_quality",
+          "configured_weight": 2.0,
+          "components": []
+        }
+      }
+    },
+    "Structure nav": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "package_organization",
+          "configured_weight": 5.0,
+          "components": []
+        }
+      }
+    },
+    "Test strategy": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "test_strategy",
+          "configured_weight": 1.0,
+          "components": []
+        }
+      }
+    },
+    "Type safety": {
+      "score": 0.0,
+      "strict": 0.0,
+      "verified_strict_score": 0.0,
+      "checks": 10,
+      "failing": 0,
+      "tier": 4,
+      "detectors": {
+        "subjective_assessment": {
+          "potential": 10,
+          "pass_rate": 0.0,
+          "failing": 0,
+          "weighted_failures": 10.0,
+          "assessment_score": 0.0,
+          "placeholder": true,
+          "dimension_key": "type_safety",
+          "configured_weight": 12.0,
+          "components": []
+        }
+      }
+    }
+  }
+}

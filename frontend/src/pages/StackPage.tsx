@@ -21,19 +21,13 @@ export function StackPage() {
   const [isDeleting, setIsDeleting] = useState(false)
   const { setSelectedStack } = useStackStore()
 
-  const tabFromPath = location.pathname.split('/').slice(3).join('/') || 'overview'
-  const [activeTab, setActiveTab] = useState(tabFromPath)
-
-  useEffect(() => {
-    setActiveTab(tabFromPath)
-  }, [tabFromPath])
+  const activeTab = location.pathname.split('/').slice(3).join('/') || 'overview'
 
   useEffect(() => {
     setSelectedStack(id ?? null)
   }, [id, setSelectedStack])
 
   const handleTabChange = (newTab: string) => {
-    setActiveTab(newTab)
     navigate(`/stacks/${id}/${newTab}`, { replace: true })
   }
 
@@ -41,7 +35,6 @@ export function StackPage() {
     queryKey: ['stack', id],
     queryFn: () => stacksApi.get(id || ''),
     enabled: !!id,
-    staleTime: 30000,
     retry: 1,
   })
 
@@ -136,10 +129,6 @@ export function StackPage() {
     )
   }
 
-  const handleContainerAction = (containerId: string, actionTab: 'logs' | 'terminal') => {
-    navigate(`/stacks/${id}/${actionTab}`, { state: { containerId } })
-  }
-
   const handleDelete = async () => {
     if (!stack) return
     const confirmed = await confirm(
@@ -178,7 +167,6 @@ export function StackPage() {
           stack={stack}
           activeTab={activeTab}
           onTabChange={handleTabChange}
-          onContainerAction={handleContainerAction}
         />
       </div>
       <ConfirmComponent />

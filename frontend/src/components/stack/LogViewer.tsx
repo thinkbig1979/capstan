@@ -34,6 +34,7 @@ interface TimeRangeConfig {
 interface LogViewerProps {
   stackId: string
   initialContainer?: string
+  hasRunningContainers?: boolean
 }
 
 const MAX_LOG_BUFFER = 10000
@@ -124,7 +125,7 @@ function highlightSearchTerm(text: string, searchTerm: string): React.ReactNode 
   )
 }
 
-export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
+export function LogViewer({ stackId, initialContainer, hasRunningContainers = true }: LogViewerProps) {
   const [logs, setLogs] = useState<LogMessage[]>([])
   const [autoScroll, setAutoScroll] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
@@ -193,6 +194,7 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
     `/ws/logs/${stackId}`,
     handleLogMessage,
     {
+      skip: !hasRunningContainers,
       onReconnecting: (attempt) => {
         console.log(`Reconnecting... attempt ${attempt}`)
       },
@@ -232,7 +234,7 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
     const container = logContainerRef.current
     if (!container) return
 
-    container.addEventListener('scroll', handleScroll)
+    container.addEventListener('scroll', handleScroll, { passive: true })
     return () => {
       container.removeEventListener('scroll', handleScroll)
     }
@@ -391,7 +393,7 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
         </div>
       )}
 
-      {isDisconnected && (
+      {isDisconnected && hasRunningContainers && (
         <div className="flex items-center justify-between rounded-lg border border-yellow-500/50 bg-yellow-500/10 px-4 py-2 text-yellow-600 dark:text-yellow-400">
           <div className="flex items-center gap-2">
             <AlertCircle className="h-4 w-4" />
@@ -414,7 +416,8 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
       >
         {filteredLogs.length === 0 ? (
           <div className="flex h-full items-center justify-center text-muted-foreground">
-            {logs.length === 0 ? 'Waiting for logs...' : 
+            {!hasRunningContainers ? 'No containers are running. Start the stack to view logs.' :
+             logs.length === 0 ? 'Waiting for logs...' : 
              timeRange !== 'all' ? 'No logs in selected time range' :
              'No logs match current filters'}
           </div>
@@ -427,6 +430,7 @@ export function LogViewer({ stackId, initialContainer }: LogViewerProps) {
               <div
                 key={`${log.container}-${log.timestamp}-${index}`}
                 className="flex gap-2 whitespace-pre-wrap break-words py-0.5"
+                role="log"
               >
                 {showTimestamps && (
                   <span className="text-muted-foreground select-none">
