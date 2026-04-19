@@ -9,9 +9,10 @@ import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
-import { HardDrive, Trash2, Scissors } from 'lucide-react'
+import { HardDrive, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/components/ConfirmDialog'
 import type { DockerVolume } from '@/types'
 
@@ -45,17 +46,6 @@ export function VolumesTab() {
     },
   })
 
-  const pruneMutation = useMutation({
-    mutationFn: () => resourcesApi.pruneVolumes(),
-    onSuccess: (data) => {
-      const count = data.deleted?.length || 0
-      const space = data.spaceReclaimed ? formatBytes(data.spaceReclaimed) : '0 B'
-      toast.success(`Pruned ${count} volume${count !== 1 ? 's' : ''}, ${space} reclaimed`)
-      queryClient.invalidateQueries({ queryKey: ['resources', 'volumes'] })
-    },
-    onError: () => toast.error('Failed to prune volumes'),
-  })
-
   const handleDelete = async (vol: DockerVolume) => {
     const confirmed = await confirm(
       `Remove Volume "${vol.name}"?`,
@@ -66,15 +56,6 @@ export function VolumesTab() {
       setDeletingName(vol.name)
       deleteMutation.mutate({ name: vol.name, force: false })
     }
-  }
-
-  const handlePrune = async () => {
-    const confirmed = await confirm(
-      'Prune Unused Volumes?',
-      'All volumes not referenced by any container will be permanently removed. This cannot be undone.',
-      { confirmText: 'Prune', isDangerous: true },
-    )
-    if (confirmed) pruneMutation.mutate()
   }
 
   const sortedVolumes = useMemo(() => {
@@ -130,10 +111,13 @@ export function VolumesTab() {
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
         actions={
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handlePrune} disabled={pruneMutation.isPending} title="Remove all unused volumes">
-            <Scissors className="mr-1 h-3 w-3" />
-            Prune
-          </Button>
+          <PruneButton
+            resourceType="volume"
+            pruneFn={() => resourcesApi.pruneVolumes()}
+            confirmMessage="Prune Unused Volumes?"
+            confirmDescription="All volumes not referenced by any container will be permanently removed."
+            invalidateKeys={[['resources', 'volumes'], ['dashboard-stats']]}
+          />
         }
         countDisplay={`${volumes.length} volumes`}
       />

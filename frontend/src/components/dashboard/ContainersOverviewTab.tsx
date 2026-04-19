@@ -10,13 +10,14 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import {
-  Play, Square, RefreshCw, Download, Trash2, Scissors,
+  Play, Square, RefreshCw, Download, Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { DashboardStats, DashboardContainerInfo } from '@/types'
 import type { DashboardContainerMetric } from '@/hooks/useDashboardMetrics'
 import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/components/ConfirmDialog'
 
 function formatBytes(bytes: number): string {
@@ -376,27 +377,6 @@ export function ContainersOverviewTab({ stats, latestMetrics }: ContainersOvervi
     if (confirmed) deleteContainerMutation.mutate({ id: containerId, isRunning })
   }
 
-  const pruneMutation = useMutation({
-    mutationFn: () => resourcesApi.pruneContainers(),
-    onSuccess: (data) => {
-      const count = data.deleted?.length || 0
-      const space = data.spaceReclaimed ? formatBytes(data.spaceReclaimed) : '0 B'
-      toast.success(`Pruned ${count} container${count !== 1 ? 's' : ''}, ${space} reclaimed`)
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
-    },
-    onError: () => toast.error('Failed to prune containers'),
-  })
-
-  const handlePrune = async () => {
-    const confirmed = await confirm(
-      'Prune Stopped Containers?',
-      'All stopped containers will be permanently removed. This cannot be undone.',
-      { confirmText: 'Prune', isDangerous: true },
-    )
-    if (confirmed) pruneMutation.mutate()
-  }
-
   const { stackContainers, otherContainers } = useMemo(() => {
     if (!stats?.containers) return { stackContainers: [], otherContainers: [] }
     const stackContainers: DashboardContainerInfo[] = []
@@ -435,10 +415,13 @@ export function ContainersOverviewTab({ stats, latestMetrics }: ContainersOvervi
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
         actions={
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handlePrune} disabled={pruneMutation.isPending} title="Remove all stopped containers">
-            <Scissors className="mr-1 h-3 w-3" />
-            Prune
-          </Button>
+          <PruneButton
+            resourceType="stopped container"
+            pruneFn={() => resourcesApi.pruneContainers()}
+            confirmMessage="Prune Stopped Containers?"
+            confirmDescription="All stopped containers will be permanently removed."
+            invalidateKeys={[['dashboard-stats'], ['stacks']]}
+          />
         }
         countDisplay={`${totalCount} container${totalCount !== 1 ? 's' : ''}`}
       />

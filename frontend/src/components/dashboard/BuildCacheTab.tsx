@@ -1,18 +1,15 @@
 import { useState, useMemo } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useBuildCache } from '@/hooks/useResources'
 import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
-import { Database, Scissors } from 'lucide-react'
-import { toast } from 'sonner'
+import { Database } from 'lucide-react'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
-import { useConfirm } from '@/components/ConfirmDialog'
+import { PruneButton } from '@/components/dashboard/PruneButton'
 import type { BuildCacheEntry } from '@/types'
 
 function formatBytes(bytes: number): string {
@@ -49,32 +46,8 @@ function timeAgo(dateStr: string | null): string {
 type SortKey = 'id' | 'type' | 'size' | 'lastUsed' | 'usageCount'
 
 export function BuildCacheTab() {
-  const queryClient = useQueryClient()
-  const { confirm, ConfirmComponent } = useConfirm()
   const { data: entries, isLoading } = useBuildCache()
   const [sortBy, setSortBy] = useState<SortKey>('size')
-
-  const pruneMutation = useMutation({
-    mutationFn: () => resourcesApi.pruneBuildCache(),
-    onSuccess: (data) => {
-      const count = data.deleted?.length || 0
-      const space = data.spaceReclaimed ? formatBytes(data.spaceReclaimed) : '0 B'
-      toast.success(`Pruned ${count} cache entr${count !== 1 ? 'ies' : 'y'}, ${space} reclaimed`)
-      queryClient.invalidateQueries({ queryKey: ['resources', 'build-cache'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-    },
-    onError: () => toast.error('Failed to prune build cache'),
-  })
-
-  const handlePrune = async () => {
-    const totalSize = entries?.reduce((sum, e) => sum + e.Size, 0) || 0
-    const confirmed = await confirm(
-      'Prune Build Cache?',
-      `This will remove all unused build cache entries (${formatBytes(totalSize)}). This cannot be undone.`,
-      { confirmText: 'Prune', isDangerous: true },
-    )
-    if (confirmed) pruneMutation.mutate()
-  }
 
   const sortedEntries = useMemo(() => {
     if (!entries) return []
@@ -100,6 +73,8 @@ export function BuildCacheTab() {
   }, [entries, sortBy])
 
   const totalSize = entries?.reduce((sum, e) => sum + e.Size, 0) || 0
+
+  const pruneDescription = `This will remove all unused build cache entries${totalSize > 0 ? ` (${formatBytes(totalSize)})` : ''}. This cannot be undone.`
 
   if (isLoading) {
     return (
@@ -138,10 +113,14 @@ export function BuildCacheTab() {
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
         actions={
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handlePrune} disabled={pruneMutation.isPending} title="Remove all unused build cache">
-            <Scissors className="mr-1 h-3 w-3" />
-            Prune All
-          </Button>
+          <PruneButton
+            label="Prune All"
+            resourceType="cache entry"
+            pruneFn={() => resourcesApi.pruneBuildCache()}
+            confirmMessage="Prune Build Cache?"
+            confirmDescription={pruneDescription}
+            invalidateKeys={[['resources', 'build-cache'], ['dashboard-stats']]}
+          />
         }
         countDisplay={`${entries.length} entries · ${formatBytes(totalSize)}`}
       />
@@ -196,7 +175,6 @@ export function BuildCacheTab() {
           </TableBody>
         </Table>
       </div>
-      <ConfirmComponent />
     </div>
   )
 }

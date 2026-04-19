@@ -9,9 +9,10 @@ import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
-import { Network, Trash2, Scissors } from 'lucide-react'
+import { Network, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/components/ConfirmDialog'
 import type { DockerNetwork } from '@/types'
 
@@ -37,16 +38,6 @@ export function NetworksTab() {
     },
   })
 
-  const pruneMutation = useMutation({
-    mutationFn: () => resourcesApi.pruneNetworks(),
-    onSuccess: (data) => {
-      const count = data.deleted?.length || 0
-      toast.success(`Pruned ${count} network${count !== 1 ? 's' : ''}`)
-      queryClient.invalidateQueries({ queryKey: ['resources', 'networks'] })
-    },
-    onError: () => toast.error('Failed to prune networks'),
-  })
-
   const handleDelete = async (net: DockerNetwork) => {
     const confirmed = await confirm(
       `Remove Network "${net.name}"?`,
@@ -57,15 +48,6 @@ export function NetworksTab() {
       setDeletingId(net.id)
       deleteMutation.mutate(net.id)
     }
-  }
-
-  const handlePrune = async () => {
-    const confirmed = await confirm(
-      'Prune Unused Networks?',
-      'All networks not referenced by any container will be permanently removed. This cannot be undone.',
-      { confirmText: 'Prune', isDangerous: true },
-    )
-    if (confirmed) pruneMutation.mutate()
   }
 
   const sortedNetworks = useMemo(() => {
@@ -124,10 +106,13 @@ export function NetworksTab() {
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
         actions={
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handlePrune} disabled={pruneMutation.isPending} title="Remove all unused networks">
-            <Scissors className="mr-1 h-3 w-3" />
-            Prune
-          </Button>
+          <PruneButton
+            resourceType="network"
+            pruneFn={() => resourcesApi.pruneNetworks()}
+            confirmMessage="Prune Unused Networks?"
+            confirmDescription="All networks not referenced by any container will be permanently removed."
+            invalidateKeys={[['resources', 'networks']]}
+          />
         }
         countDisplay={`${networks.length} networks`}
       />

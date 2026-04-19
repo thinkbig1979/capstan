@@ -54,6 +54,16 @@ export default {
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
       },
+      keyframes: {
+        'prune-progress': {
+          '0%': { width: '0%', marginLeft: '0%' },
+          '50%': { width: '60%', marginLeft: '20%' },
+          '100%': { width: '0%', marginLeft: '100%' },
+        },
+      },
+      animation: {
+        'prune-progress': 'prune-progress 1.5s ease-in-out infinite',
+      },
     },
   },
   plugins: [],

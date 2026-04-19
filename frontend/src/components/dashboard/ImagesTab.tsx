@@ -9,9 +9,10 @@ import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
-import { ImageIcon, Trash2, Scissors } from 'lucide-react'
+import { ImageIcon, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/components/ConfirmDialog'
 import type { DockerImage } from '@/types'
 
@@ -58,18 +59,6 @@ export function ImagesTab() {
     },
   })
 
-  const pruneMutation = useMutation({
-    mutationFn: () => resourcesApi.pruneImages(),
-    onSuccess: (data) => {
-      const count = data.deleted?.length || 0
-      const space = data.spaceReclaimed ? formatBytes(data.spaceReclaimed) : '0 B'
-      toast.success(`Pruned ${count} image${count !== 1 ? 's' : ''}, ${space} reclaimed`)
-      queryClient.invalidateQueries({ queryKey: ['resources', 'images'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-    },
-    onError: () => toast.error('Failed to prune images'),
-  })
-
   const handleDelete = async (image: DockerImage) => {
     const tag = image.repoTags[0] || image.id.substring(0, 19)
     const hasContainers = image.containers > 0
@@ -84,15 +73,6 @@ export function ImagesTab() {
       setDeletingId(image.id)
       deleteMutation.mutate({ id: image.id, force: hasContainers })
     }
-  }
-
-  const handlePrune = async () => {
-    const confirmed = await confirm(
-      'Prune Unused Images?',
-      'All images not referenced by any container will be permanently removed. This cannot be undone.',
-      { confirmText: 'Prune', isDangerous: true },
-    )
-    if (confirmed) pruneMutation.mutate()
   }
 
   const sortedImages = useMemo(() => {
@@ -148,10 +128,13 @@ export function ImagesTab() {
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
         actions={
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handlePrune} disabled={pruneMutation.isPending} title="Remove all unused images">
-            <Scissors className="mr-1 h-3 w-3" />
-            Prune
-          </Button>
+          <PruneButton
+            resourceType="image"
+            pruneFn={() => resourcesApi.pruneImages()}
+            confirmMessage="Prune Unused Images?"
+            confirmDescription="All images not referenced by any container will be permanently removed."
+            invalidateKeys={[['resources', 'images'], ['dashboard-stats']]}
+          />
         }
         countDisplay={`${images.length} images, ${formatBytes(images.reduce((sum, img) => sum + img.size, 0))} total`}
       />
