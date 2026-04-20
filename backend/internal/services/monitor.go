@@ -54,7 +54,6 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 		for i := range containerChans {
 			containerChans[i] = make(chan models.ContainerMetrics, 10)
 		}
-		errors := make(chan error, len(containerIDs))
 
 		for i, containerID := range containerIDs {
 			wg.Add(1)
@@ -69,7 +68,6 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 				stats, err := s.client.ContainerStats(ctx, containerID, true)
 				if err != nil {
 					slog.Error("Failed to stream stats", "container", containerID, "error", err)
-					errors <- err
 					return
 				}
 				defer stats.Body.Close()
@@ -89,7 +87,10 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 					memSwap := calculateMemSwap(&statsJSON)
 					pids := getPids(&statsJSON)
 
-					containerName := containerID[:12]
+					containerName := containerID
+					if len(containerID) > 12 {
+						containerName = containerID[:12]
+					}
 					if len(statsJSON.Name) > 0 {
 						containerName = strings.TrimPrefix(statsJSON.Name, "/")
 					}
@@ -134,14 +135,19 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 			}(ch)
 		}
 
+		go func() {
+			wg.Wait()
+			metricsMu.Lock()
+			for id := range lastMetrics {
+				delete(lastMetrics, id)
+			}
+			metricsMu.Unlock()
+		}()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case err := <-errors:
-				if err != nil {
-					return
-				}
 			case <-ticker.C:
 				metricsMu.Lock()
 				batch := make([]models.ContainerMetrics, 0, len(lastMetrics))

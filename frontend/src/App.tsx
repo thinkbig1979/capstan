@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense, lazy } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
@@ -10,9 +10,16 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { LoginPage } from '@/pages/LoginPage'
 import { SetupPage } from '@/pages/SetupPage'
-import { DashboardPage } from '@/pages/DashboardPage'
-import { StackPage } from '@/pages/StackPage'
-import { SettingsPage } from '@/pages/SettingsPage'
+
+const DashboardPage = lazy(() =>
+  import('@/pages/DashboardPage').then((m) => ({ default: m.DashboardPage }))
+)
+const StackPage = lazy(() =>
+  import('@/pages/StackPage').then((m) => ({ default: m.StackPage }))
+)
+const SettingsPage = lazy(() =>
+  import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage }))
+)
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { canAccess, checkAuth, checkStatus } = useAuth()
@@ -73,13 +80,15 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <ErrorBoundary>
           <AppShell>
-            <Routes>
-              <Route path="/" element={<DashboardPage />} />
-              <Route path="/stacks/:id" element={<StackPage />} />
-              <Route path="/stacks/:id/:tab" element={<StackPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+            <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><LoadingSpinner size="large" /></div>}>
+              <Routes>
+                <Route path="/" element={<DashboardPage />} />
+                <Route path="/stacks/:id" element={<StackPage />} />
+                <Route path="/stacks/:id/:tab" element={<StackPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
           </AppShell>
         </ErrorBoundary>
         <Toaster />
@@ -113,7 +122,9 @@ function App() {
             element={
               <AppShell>
                 <AuthGuard>
-                  <DashboardPage />
+                  <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><LoadingSpinner size="large" /></div>}>
+                    <DashboardPage />
+                  </Suspense>
                 </AuthGuard>
               </AppShell>
             }
@@ -123,7 +134,9 @@ function App() {
             element={
               <AppShell>
                 <AuthGuard>
-                  <StackPage />
+                  <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><LoadingSpinner size="large" /></div>}>
+                    <StackPage />
+                  </Suspense>
                 </AuthGuard>
               </AppShell>
             }
@@ -133,7 +146,9 @@ function App() {
             element={
               <AppShell>
                 <AuthGuard>
-                  <StackPage />
+                  <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><LoadingSpinner size="large" /></div>}>
+                    <StackPage />
+                  </Suspense>
                 </AuthGuard>
               </AppShell>
             }
@@ -143,7 +158,9 @@ function App() {
             element={
               <AppShell>
                 <AuthGuard>
-                  <SettingsPage />
+                  <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><LoadingSpinner size="large" /></div>}>
+                    <SettingsPage />
+                  </Suspense>
                 </AuthGuard>
               </AppShell>
             }

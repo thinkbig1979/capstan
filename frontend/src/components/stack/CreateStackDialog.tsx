@@ -14,7 +14,7 @@ import {
 import { toast } from 'sonner'
 import { useCreateStack } from '@/hooks/useCreateStack'
 import { useQuery } from '@tanstack/react-query'
-import { authApi } from '@/lib/api'
+import { authApi, apiClient } from '@/lib/api'
 import { useNavigate } from 'react-router-dom'
 import { FileCheck, AlertCircle, AlertTriangle, Info, Plus } from 'lucide-react'
 import type { LintResult } from '@/types'
@@ -61,6 +61,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
   const editorRef = useRef<HTMLDivElement>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const composeRef = useRef<HTMLDivElement>(null)
+  const isUpdatingFromEditor = useRef(false)
 
   const isDarkTheme = useMemo(
     () =>
@@ -103,12 +104,8 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
 
   const handleLint = useCallback(async () => {
     try {
-      const response = await fetch('/api/v1/stacks/lint', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ compose: composeContent }),
-      })
-      const data = await response.json()
+      const response = await apiClient.post<{ lintResults: LintResult[] }>('/stacks/lint', { compose: composeContent })
+      const data = response.data
       setLintResults(data.lintResults || [])
 
       if (data.lintResults?.some((r: LintResult) => r.level === 'error')) {
@@ -151,15 +148,15 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
           setShowEnv(false)
           setLintResults([])
         },
-        onError: (error) => {
-          const errorData = (error as { response?: { data?: { lintResults?: LintResult[]; error?: string } } }).response?.data
-          if (errorData?.lintResults) {
-            setLintResults(errorData.lintResults)
+        onError: (error: unknown) => {
+          const err = error as { error?: string; lintResults?: LintResult[] }
+          if (err.lintResults && err.lintResults.length > 0) {
+            setLintResults(err.lintResults)
             toast.error('Lint errors detected')
-          } else if (errorData?.error?.includes('already exists')) {
+          } else if (err.error?.includes('already exists')) {
             toast.error('Stack name already exists')
           } else {
-            toast.error('Failed to create stack')
+            toast.error(err.error || 'Failed to create stack')
           }
         },
       },
@@ -169,7 +166,11 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
   const handleSave = useCallback(() => {
     if (!editorViewRef.current) return
     const currentContent = editorViewRef.current.state.doc.toString()
+    isUpdatingFromEditor.current = true
     setComposeContent(currentContent)
+    requestAnimationFrame(() => {
+      isUpdatingFromEditor.current = false
+    })
   }, [])
 
   // Initialize CodeMirror editor
@@ -228,10 +229,10 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     }
   }, [open, isDarkTheme, handleSave])
 
-  // Update editor content when composeContent changes
+  // Update editor content when composeContent changes externally
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (editorViewRef.current) {
+    if (editorViewRef.current && !isUpdatingFromEditor.current) {
       const transaction = editorViewRef.current.state.update({
         changes: { from: 0, to: editorViewRef.current.state.doc.length, insert: composeContent },
       })

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -106,6 +107,11 @@ func main() {
 		slog.Warn("Docker service unavailable", "error", err)
 	}
 
+	var schedulerService *services.SchedulerService
+	if dockerService != nil {
+		schedulerService = services.NewSchedulerService(dockerService, db, slog.Default(), handlers.BroadcastEvent)
+	}
+
 	scannerService := services.NewScannerService(cfg, db)
 
 	hasGlobalEnv, _ := scannerService.ScanAll()
@@ -165,7 +171,7 @@ func main() {
 	authGroup.Use(middleware.RateLimitByIP())
 	authHandler.RegisterRoutes(authGroup)
 
-	settingsHandler := handlers.NewSettingsHandler(db, cfg.StacksDir, cfg.JWTSecret, cfg.AuthDisabled)
+	settingsHandler := handlers.NewSettingsHandler(db, cfg.StacksDir, cfg.JWTSecret, cfg.AuthDisabled, schedulerService, cfg)
 
 	protected := api.Group("")
 	protected.Use(middleware.AuthMiddleware(db, cfg.JWTSecret, cfg.AuthDisabled, cfg.TrustedNetworks))
@@ -189,11 +195,11 @@ func main() {
 	composeHandler := handlers.NewComposeHandler(services.NewLinterService(), db, cfg)
 	composeHandler.RegisterRoutes(stacksGroup)
 
-	gitHandler := handlers.NewGitHandler(services.NewGitService(cfg), dockerService, db, cfg)
+	gitHandler := handlers.NewGitHandler(services.NewGitService(cfg, db), dockerService, db, cfg)
 	gitGroup := protected.Group("/git")
 	gitHandler.RegisterRoutes(gitGroup)
 
-	logsHandler := handlers.NewLogsHandler(dockerService, db, cfg.JWTSecret, cfg.AuthDisabled)
+	logsHandler := handlers.NewLogsHandler(dockerService, db, cfg.JWTSecret, cfg.AuthDisabled, cfg.DataDir)
 	logsHandler.RegisterRoutes(protected)
 
 	terminalService := services.NewTerminalService(cfg)
@@ -211,8 +217,18 @@ func main() {
 	dashboardHandler := handlers.NewDashboardHandler(monitorService, dockerService, db, connectionManager)
 	dashboardHandler.RegisterRoutes(protected, cfg.JWTSecret, cfg.AuthDisabled)
 
-	resourcesHandler := handlers.NewResourcesHandler(dockerService, db)
+	resourcesHandler := handlers.NewResourcesHandler(dockerService, db, schedulerService)
 	resourcesHandler.RegisterRoutes(protected)
+
+	if schedulerService != nil {
+		intervalStr, _ := db.GetSetting("update_scan_interval")
+		if intervalStr != "" {
+			if minutes, err := strconv.Atoi(intervalStr); err == nil && minutes > 0 {
+				schedulerService.Start(time.Duration(minutes) * time.Minute)
+				slog.Info("Update scheduler started", "interval_minutes", minutes)
+			}
+		}
+	}
 
 	if monitorService != nil {
 		go handlers.StartEventBroadcaster(ctx, monitorService)
@@ -263,6 +279,10 @@ func main() {
 	<-quit
 
 	slog.Info("Shutting down server...")
+
+	if schedulerService != nil {
+		schedulerService.Stop()
+	}
 
 	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

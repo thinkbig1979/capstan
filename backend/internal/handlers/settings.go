@@ -5,12 +5,15 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/docker-manager/backend/internal/config"
 	"github.com/docker-manager/backend/internal/database"
 	"github.com/docker-manager/backend/internal/middleware"
 	"github.com/docker-manager/backend/internal/models"
+	"github.com/docker-manager/backend/internal/services"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -20,14 +23,18 @@ type SettingsHandler struct {
 	stacksDir    string
 	jwtSecret    string
 	authDisabled bool
+	scheduler    *services.SchedulerService
+	cfg          *config.Config
 }
 
-func NewSettingsHandler(db *database.DB, stacksDir string, jwtSecret string, authDisabled bool) *SettingsHandler {
+func NewSettingsHandler(db *database.DB, stacksDir string, jwtSecret string, authDisabled bool, scheduler *services.SchedulerService, cfg *config.Config) *SettingsHandler {
 	return &SettingsHandler{
 		db:           db,
 		stacksDir:    stacksDir,
 		jwtSecret:    jwtSecret,
 		authDisabled: authDisabled,
+		scheduler:    scheduler,
+		cfg:          cfg,
 	}
 }
 
@@ -38,6 +45,10 @@ func (h *SettingsHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.PUT("/settings/global-env", h.UpdateGlobalEnv)
 	group.GET("/settings/log-retention", h.GetLogRetention)
 	group.PUT("/settings/log-retention", h.UpdateLogRetention)
+	group.GET("/settings/updates", h.GetUpdateSettings)
+	group.PUT("/settings/updates", h.UpdateUpdateSettings)
+	group.GET("/settings/git", h.GetGitSettings)
+	group.PUT("/settings/git", h.UpdateGitSettings)
 }
 
 func (h *SettingsHandler) GetConfig(c *gin.Context) {
@@ -159,7 +170,7 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 }
 
 func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
-	globalEnvPath := h.stacksDir + "/global.env"
+	globalEnvPath := h.cfg.DataDir + "/global.env"
 
 	envVars, err := parseEnvFile(globalEnvPath)
 	if err != nil {
@@ -214,7 +225,7 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 		}
 	}
 
-	globalEnvPath := h.stacksDir + "/global.env"
+	globalEnvPath := h.cfg.DataDir + "/global.env"
 	content := ""
 	for _, v := range req.Vars {
 		if v.Key != "" && v.Value != "" {
@@ -315,4 +326,198 @@ func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {
 
 	slog.Info("Log retention updated", "retention_days", req.RetentionDays)
 	c.Status(http.StatusNoContent)
+}
+
+func (h *SettingsHandler) GetUpdateSettings(c *gin.Context) {
+	scanIntervalStr, _ := h.db.GetSetting("update_scan_interval")
+	lastScanAt, _ := h.db.GetSetting("update_scan_last_run")
+	lastScanError, _ := h.db.GetSetting("update_scan_last_error")
+	autoUpdateEnabledStr, _ := h.db.GetSetting("auto_update_enabled")
+
+	scanInterval := 0
+	if scanIntervalStr != "" {
+		if v, err := strconv.Atoi(scanIntervalStr); err == nil {
+			scanInterval = v
+		}
+	}
+
+	enabledContainers, last7Days, last30Days, err := h.db.GetUpdateStats()
+	if err != nil {
+		slog.Error("Failed to get update stats", "error", err)
+	}
+
+	var lastScanAtPtr *string
+	if lastScanAt != "" {
+		lastScanAtPtr = &lastScanAt
+	}
+	var lastScanErrorPtr *string
+	if lastScanError != "" {
+		lastScanErrorPtr = &lastScanError
+	}
+
+	response := models.UpdateSettingsResponse{
+		ScanIntervalMinutes: scanInterval,
+		GlobalAutoUpdate:    autoUpdateEnabledStr == "true",
+	}
+	if lastScanAtPtr != nil {
+		response.LastScanAt = *lastScanAtPtr
+	}
+	if lastScanErrorPtr != nil {
+		response.LastScanError = *lastScanErrorPtr
+	}
+	response.AutoUpdateStats.EnabledContainers = enabledContainers
+	response.AutoUpdateStats.UpdatesLast7Days = last7Days
+	response.AutoUpdateStats.UpdatesLast30Days = last30Days
+
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
+	var req struct {
+		ScanIntervalMinutes int  `json:"scanIntervalMinutes"`
+		GlobalAutoUpdate    bool `json:"globalAutoUpdate"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			"VALIDATION_ERROR",
+			"Invalid request body",
+		))
+		return
+	}
+
+	if req.ScanIntervalMinutes != 0 && req.ScanIntervalMinutes < 15 {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			"VALIDATION_ERROR",
+			"Scan interval must be 0 (disabled) or at least 15 minutes",
+		))
+		return
+	}
+
+	oldIntervalStr, _ := h.db.GetSetting("update_scan_interval")
+	oldInterval := 0
+	if oldIntervalStr != "" {
+		if v, err := strconv.Atoi(oldIntervalStr); err == nil {
+			oldInterval = v
+		}
+	}
+
+	if err := h.db.SetSetting("update_scan_interval", fmt.Sprintf("%d", req.ScanIntervalMinutes)); err != nil {
+		slog.Error("Failed to update scan interval", "error", err)
+		c.JSON(http.StatusInternalServerError, models.NewAppError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to update scan interval",
+		))
+		return
+	}
+
+	autoUpdateVal := "false"
+	if req.GlobalAutoUpdate {
+		autoUpdateVal = "true"
+	}
+	if err := h.db.SetSetting("auto_update_enabled", autoUpdateVal); err != nil {
+		slog.Error("Failed to update auto-update setting", "error", err)
+		c.JSON(http.StatusInternalServerError, models.NewAppError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to update auto-update setting",
+		))
+		return
+	}
+
+	if h.scheduler != nil && req.ScanIntervalMinutes != oldInterval {
+		if req.ScanIntervalMinutes > 0 {
+			h.scheduler.Restart(time.Duration(req.ScanIntervalMinutes) * time.Minute)
+		} else {
+			h.scheduler.Stop()
+		}
+	}
+
+	slog.Info("Update settings changed",
+		"scan_interval", req.ScanIntervalMinutes,
+		"auto_update", req.GlobalAutoUpdate)
+
+	h.GetUpdateSettings(c)
+}
+
+func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
+	sshKey, _ := h.db.GetSetting("git_ssh_key")
+	if sshKey == "" {
+		sshKey = h.cfg.GitSSHKey
+	}
+	httpsUser, _ := h.db.GetSetting("git_https_user")
+	if httpsUser == "" {
+		httpsUser = h.cfg.GitHTTPSUser
+	}
+	hasToken := false
+	httpsToken, _ := h.db.GetSetting("git_https_token")
+	if httpsToken == "" && h.cfg.GitHTTPSToken != "" {
+		hasToken = true
+	} else if httpsToken != "" {
+		hasToken = true
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"sshKey":       sshKey,
+		"httpsUser":    httpsUser,
+		"hasHttpsToken": hasToken,
+	})
+}
+
+func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
+	var req struct {
+		SSHKey      string `json:"sshKey"`
+		HTTPSUser   string `json:"httpsUser"`
+		HTTPSToken  string `json:"httpsToken"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			"VALIDATION_ERROR",
+			"Invalid request body",
+		))
+		return
+	}
+
+	if req.SSHKey != "" {
+		if err := h.db.SetSetting("git_ssh_key", req.SSHKey); err != nil {
+			slog.Error("Failed to update git SSH key setting", "error", err)
+			c.JSON(http.StatusInternalServerError, models.NewAppError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to update git SSH key",
+			))
+			return
+		}
+	}
+
+	if req.HTTPSUser != "" {
+		if err := h.db.SetSetting("git_https_user", req.HTTPSUser); err != nil {
+			slog.Error("Failed to update git HTTPS user setting", "error", err)
+			c.JSON(http.StatusInternalServerError, models.NewAppError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to update git HTTPS user",
+			))
+			return
+		}
+	}
+
+	if req.HTTPSToken != "" {
+		if err := h.db.SetSetting("git_https_token", req.HTTPSToken); err != nil {
+			slog.Error("Failed to update git HTTPS token setting", "error", err)
+			c.JSON(http.StatusInternalServerError, models.NewAppError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to update git HTTPS token",
+			))
+			return
+		}
+	}
+
+	slog.Info("Git settings updated")
+	h.GetGitSettings(c)
 }

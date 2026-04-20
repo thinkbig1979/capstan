@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useRef, useState, useEffect } from 'react'
 import { WSClient } from '@/lib/ws'
 
 export type OperationStatus = 'idle' | 'running' | 'success' | 'error'
@@ -31,6 +31,15 @@ export function useStreamingOperation(): StreamingOperation {
   const [error, setError] = useState<string | null>(null)
   const clientRef = useRef<WSClient | null>(null)
   const completedRef = useRef(false)
+
+  useEffect(() => {
+    return () => {
+      if (clientRef.current) {
+        clientRef.current.close()
+        clientRef.current = null
+      }
+    }
+  }, [])
 
   const cancel = useCallback(() => {
     clientRef.current?.close()
@@ -98,13 +107,8 @@ export function useStreamingOperation(): StreamingOperation {
       {
         onClose: () => {
           if (!completedRef.current) {
-            setStatus(prev => {
-              if (prev === 'running') {
-                setLines(prev => [...prev, 'Connection closed.'])
-                return 'error'
-              }
-              return prev
-            })
+            setStatus('error')
+            setLines(prev => [...prev, 'Connection closed.'])
           }
           clientRef.current = null
         },

@@ -4,9 +4,11 @@ import type { User } from '@/types'
 const isTokenExpired = (token: string): boolean => {
   try {
     const payload = token.split('.')[1]
+    if (!payload) return true
     const decoded = JSON.parse(atob(payload))
-    const exp = decoded.exp * 1000
-    return Date.now() >= exp
+    const exp = Number(decoded.exp)
+    if (!Number.isFinite(exp)) return true
+    return Date.now() >= exp * 1000
   } catch {
     return true
   }
@@ -23,6 +25,8 @@ const getStoredToken = (): string | null => {
   return null
 }
 
+const cachedInitialToken = getStoredToken()
+
 interface AuthState {
   token: string | null
   user: User | null
@@ -37,9 +41,9 @@ interface AuthState {
 }
 
 export const useAuthStore = create<AuthState>()((set) => ({
-  token: getStoredToken(),
+  token: cachedInitialToken,
   user: null,
-  isAuthenticated: !!getStoredToken(),
+  isAuthenticated: !!cachedInitialToken,
   authDisabled: false,
   needsSetup: false,
 

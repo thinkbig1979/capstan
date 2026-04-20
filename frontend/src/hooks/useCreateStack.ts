@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '@/lib/api'
-import { classifyError } from '@/lib/error-handler'
 import { toast } from 'sonner'
 import type { LintResult } from '@/types'
 
@@ -41,15 +40,15 @@ export function useCreateStack() {
         toast.success('Stack created successfully')
       }
     },
-    onError: (error: { response?: { data?: { lintResults?: LintResult[]; error?: string } } }) => {
-      const appError = classifyError(error)
-      
-      if (error.response?.data?.lintResults) {
+    onError: (error: unknown) => {
+      const err = error as { error?: string; code?: string; lintResults?: LintResult[] }
+
+      if (err.lintResults && err.lintResults.length > 0) {
         toast.error('Lint errors detected')
-      } else if (error.response?.data?.error?.includes('already exists')) {
-        toast.error('Stack name already exists')
+      } else if (err.error?.includes('already exists')) {
+        toast.error('A stack with this name already exists')
       } else {
-        toast.error(appError.message)
+        toast.error(err.error || 'Failed to create stack')
       }
     },
   })

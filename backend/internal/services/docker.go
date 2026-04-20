@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -320,9 +321,14 @@ func (s *DockerService) GetContainerList(projectName string) ([]models.Container
 			}
 		}
 
+		name := ""
+		if len(c.Names) > 0 {
+			name = strings.TrimPrefix(c.Names[0], "/")
+		}
+
 		container := models.Container{
 			ID:     c.ID,
-			Name:   strings.TrimPrefix(c.Names[0], "/"),
+			Name:   name,
 			Image:  c.Image,
 			State:  c.State,
 			Status: c.Status,
@@ -362,7 +368,10 @@ func (s *DockerService) GetContainerStats(ctx context.Context, containerID strin
 			memSwap := calculateMemSwap(&statsJSON)
 			pids := getPids(&statsJSON)
 
-			containerName := containerID[:12]
+			containerName := containerID
+			if len(containerID) > 12 {
+				containerName = containerID[:12]
+			}
 			if len(statsJSON.Name) > 0 {
 				containerName = strings.TrimPrefix(statsJSON.Name, "/")
 			}
@@ -436,8 +445,8 @@ func (s *DockerService) ListenEvents(ctx context.Context) (<-chan models.DockerE
 func (s *DockerService) buildComposeArgs(stack models.Stack, subcommand string, extraArgs []string) []string {
 	args := []string{"compose"}
 
-	globalEnvPath := s.config.StacksDir + "/global.env"
-	if _, err := exec.Command("test", "-f", globalEnvPath).CombinedOutput(); err == nil {
+	globalEnvPath := s.config.DataDir + "/global.env"
+	if _, err := os.Stat(globalEnvPath); err == nil {
 		args = append(args, "--env-file", globalEnvPath)
 	}
 
@@ -475,7 +484,11 @@ func calculateCPUPercent(stats *types.StatsJSON) float64 {
 
 func calculateMemPercent(stats *types.StatsJSON) (float64, float64, float64) {
 	memPercent := 0.0
-	memUsage := float64(stats.MemoryStats.Usage - stats.MemoryStats.Stats["cache"])
+	var cache uint64
+	if stats.MemoryStats.Stats != nil {
+		cache = stats.MemoryStats.Stats["cache"]
+	}
+	memUsage := float64(stats.MemoryStats.Usage - cache)
 	memLimit := float64(stats.MemoryStats.Limit)
 
 	if memLimit > 0 {
@@ -613,7 +626,7 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 				if inspect.State != nil {
 					info.RestartCount = inspect.RestartCount
 					if inspect.State.Health != nil {
-						health = inspect.State.Health.Status
+						info.Health = inspect.State.Health.Status
 					}
 				}
 				if inspect.SizeRw != nil {
@@ -806,6 +819,10 @@ func (s *DockerService) StopContainer(ctx context.Context, containerID string) e
 	return s.client.ContainerStop(ctx, containerID, container.StopOptions{})
 }
 
+func (s *DockerService) InspectContainer(ctx context.Context, containerID string) (types.ContainerJSON, error) {
+	return s.client.ContainerInspect(ctx, containerID)
+}
+
 func (s *DockerService) RestartContainer(ctx context.Context, containerID string) error {
 	return s.client.ContainerRestart(ctx, containerID, container.StopOptions{})
 }
@@ -981,11 +998,14 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 	return result, nil
 }
 
-func (s *DockerService) UpdateContainer(ctx context.Context, containerID string, db DashboardDB) error {
+func (s *DockerService) UpdateContainer(ctx context.Context, containerID string, db DashboardDB) (models.UpdateResult, error) {
 	inspect, err := s.client.ContainerInspect(ctx, containerID)
 	if err != nil {
-		return fmt.Errorf("inspecting container: %w", err)
+		return models.UpdateResult{}, fmt.Errorf("inspecting container: %w", err)
 	}
+
+	oldDigest := inspect.Image
+	start := time.Now()
 
 	wasRunning := inspect.State != nil && inspect.State.Running
 	projectName := ""
@@ -995,14 +1015,38 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 		serviceName = inspect.Config.Labels["com.docker.compose.service"]
 	}
 
+	var updateErr error
 	if projectName != "" && serviceName != "" && db != nil {
 		stack, err := db.GetStackByProjectName(projectName)
 		if err == nil && stack != nil {
-			return s.updateComposeContainer(ctx, *stack, serviceName, wasRunning)
+			updateErr = s.updateComposeContainer(ctx, *stack, serviceName, wasRunning)
+		} else {
+			updateErr = s.updateStandaloneContainer(ctx, inspect, wasRunning)
 		}
+	} else {
+		updateErr = s.updateStandaloneContainer(ctx, inspect, wasRunning)
 	}
 
-	return s.updateStandaloneContainer(ctx, inspect, wasRunning)
+	durationMs := time.Since(start).Milliseconds()
+
+	if updateErr != nil {
+		return models.UpdateResult{
+			OldDigest:  oldDigest,
+			DurationMs: durationMs,
+		}, updateErr
+	}
+
+	newDigest := oldDigest
+	newInspect, inspectErr := s.client.ContainerInspect(ctx, containerID)
+	if inspectErr == nil {
+		newDigest = newInspect.Image
+	}
+
+	return models.UpdateResult{
+		OldDigest:  oldDigest,
+		NewDigest:  newDigest,
+		DurationMs: durationMs,
+	}, nil
 }
 
 func (s *DockerService) updateComposeContainer(ctx context.Context, stack models.Stack, serviceName string, wasRunning bool) error {

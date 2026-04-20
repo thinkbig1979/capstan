@@ -11,14 +11,7 @@ import { Database } from 'lucide-react'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import type { BuildCacheEntry } from '@/types'
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
-}
+import { formatBytes } from '@/lib/format'
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '-'

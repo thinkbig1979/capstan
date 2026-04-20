@@ -3,14 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Scissors, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
-}
+import { formatBytes } from '@/lib/format'
 
 interface PruneResult {
   deleted: string[]
@@ -87,7 +80,7 @@ export function PruneButton({
           title={confirmDescription}
         >
           {phase === 'pruning' ? (
-            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            <Scissors className="mr-1 h-3 w-3 animate-spin" />
           ) : (
             <Scissors className="mr-1 h-3 w-3" />
           )}

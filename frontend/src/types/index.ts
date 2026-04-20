@@ -9,6 +9,10 @@ export interface AuthResponse {
   user: User
 }
 
+export type ContainerState = 'created' | 'running' | 'paused' | 'restarting' | 'removing' | 'exited' | 'dead'
+
+export type StackTab = 'overview' | 'compose' | 'env' | 'git' | 'logs' | 'terminal'
+
 export interface Directory {
   path: string
   name: string
@@ -16,6 +20,10 @@ export interface Directory {
   isGitRepo: boolean
   gitBranch?: string
   gitRemote?: string
+  gitAuthType?: string
+  gitSshKeyPath?: string
+  gitHttpsUser?: string
+  hasHttpsToken?: boolean
   scannedAt: string
   gitAhead?: number
   gitBehind?: number
@@ -27,7 +35,7 @@ export interface Container {
   id: string
   name: string
   image: string
-  state: string
+  state: ContainerState
   status: string
   ports: PortBinding[]
   health?: string
@@ -58,7 +66,7 @@ export interface DashboardContainerInfo {
   id: string
   name: string
   image: string
-  state: string
+  state: ContainerState
   status: string
   health: string
   ports: PortBinding[]
@@ -139,7 +147,7 @@ export interface EnvEntry {
 export interface CommandResult {
   status: string
   output: string
-  duration_ms: number
+  duration: number
 }
 
 export interface ApiError {
@@ -151,9 +159,7 @@ export interface ApiError {
 export interface ScanResult {
   directories: Directory[]
   scannedAt: string
-  added: number
-  removed: number
-  unchanged: number
+  hasGlobalEnv: boolean
 }
 
 export interface DockerImage {
@@ -216,4 +222,73 @@ export interface ContainerUpdateInfo {
   projectName: string
   serviceName: string
   isCompose: boolean
+}
+
+export interface CachedUpdate {
+  id: string
+  containerId: string
+  containerName: string
+  image: string
+  imageRef: string
+  state: string
+  stackId?: string
+  projectName?: string
+  serviceName?: string
+  isCompose: boolean
+  localDigest: string
+  remoteDigest: string
+  scannedAt: string
+}
+
+export interface UpdateHistoryEntry {
+  id: string
+  containerId: string
+  containerName: string
+  stackId?: string
+  stackName?: string
+  image: string
+  oldDigest?: string
+  newDigest?: string
+  oldImageRef?: string
+  newImageRef?: string
+  status: 'pending' | 'success' | 'failed' | 'paused'
+  trigger: 'manual' | 'auto'
+  startedAt: string
+  completedAt?: string
+  durationMs?: number
+  errorMessage?: string
+}
+
+export interface AutoUpdatePolicy {
+  id: string
+  targetType: 'container' | 'stack'
+  targetId: string
+  enabled: boolean
+  consecutiveFailures: number
+  paused: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface UpdateSettings {
+  scanIntervalMinutes: number
+  lastScanAt: string | null
+  lastScanError: string | null
+  globalAutoUpdate: boolean
+  autoUpdateStats: {
+    enabledContainers: number
+    updatesLast7Days: number
+    updatesLast30Days: number
+  }
+}
+
+export interface UpdateHistoryFilters {
+  page?: number
+  limit?: number
+  status?: string
+  trigger?: string
+  containerId?: string
+  stackId?: string
+  from?: string
+  to?: string
 }

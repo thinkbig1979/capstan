@@ -9,11 +9,15 @@ import { MetricsPanel } from './MetricsPanel'
 import { OperationProgress } from './OperationProgress'
 import { GitStatus as GitStatusComponent } from '../git/GitStatus'
 import { Button } from '@/components/ui/button'
-import { Download, Play, Square, RefreshCw } from 'lucide-react'
+import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
+import { Download, Play, Square, RefreshCw, Info } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useStreamingOperation } from '@/hooks/useStreamingOperation'
+import { useAutoUpdatePolicies } from '@/hooks/useResources'
 import { toast } from 'sonner'
-import type { Stack } from '@/types'
+import type { Stack, AutoUpdatePolicy } from '@/types'
 
 interface StackDetailProps {
   stack: Stack
@@ -42,6 +46,15 @@ function OverviewTabContent({
   isRestarting: boolean
   isPulling: boolean
 }) {
+  const { data: policiesData } = useAutoUpdatePolicies()
+
+  const stackPolicy: AutoUpdatePolicy | undefined = policiesData?.policies?.find(
+    (p) => p.targetType === 'stack' && p.targetId === stack.id,
+  )
+  const hasContainerPolicies = policiesData?.policies?.some(
+    (p) => p.targetType === 'container' && stack.containers?.some((c) => c.id === p.targetId),
+  )
+
   const canStart = stack.status === 'stopped' || stack.status === 'partial'
   const canStop = stack.status === 'running'
   const anyRunning = isStarting || isStopping || isRestarting || isPulling
@@ -55,7 +68,7 @@ function OverviewTabContent({
         />
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="outline"
           size="sm"
@@ -92,6 +105,29 @@ function OverviewTabContent({
           <Download className={`mr-2 h-4 w-4 ${isPulling ? 'animate-spin' : ''}`} />
           {isPulling ? 'Pulling...' : 'Pull Images'}
         </Button>
+
+        <Separator orientation="vertical" className="h-6 mx-1" />
+
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">Auto-Update</span>
+          <AutoUpdateToggle
+            targetType="stack"
+            targetId={stack.id}
+            enabled={stackPolicy?.enabled ?? false}
+            paused={stackPolicy?.paused ?? false}
+            consecutiveFailures={stackPolicy?.consecutiveFailures ?? 0}
+          />
+          {hasContainerPolicies && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Individual container settings override this stack-level toggle</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -116,7 +152,7 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
 
   return (
     <div className="h-full flex flex-col gap-4">
-      <GitStatusComponent stackId={stack.id} />
+      <GitStatusComponent stack={stack} />
       <Tabs value={activeTab} onValueChange={onTabChange} className="flex-1">
         <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6">
           <TabsTrigger value="overview">Overview</TabsTrigger>

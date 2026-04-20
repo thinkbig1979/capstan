@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/docker-manager/backend/internal/config"
+	"github.com/docker-manager/backend/internal/database"
 	"github.com/docker-manager/backend/internal/models"
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5"
@@ -23,11 +24,13 @@ import (
 
 type GitService struct {
 	config *config.Config
+	db     *database.DB
 }
 
-func NewGitService(cfg *config.Config) *GitService {
+func NewGitService(cfg *config.Config, db *database.DB) *GitService {
 	return &GitService{
 		config: cfg,
+		db:     db,
 	}
 }
 
@@ -169,7 +172,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 }
 
 func (s *GitService) gitCommand(dirPath string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-c", "safe.directory=*"}, args...)...)
+	cmd := exec.Command("git", append([]string{"-c", "safe.directory=" + dirPath}, args...)...)
 	cmd.Dir = dirPath
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -428,13 +431,27 @@ func (s *GitService) getDivergence(repo *git.Repository, head *plumbing.Referenc
 }
 
 func (s *GitService) findMergeBase(repo *git.Repository, commit1, commit2 *object.Commit) (*object.Commit, error) {
-	commits1 := s.collectAncestors(repo, commit1)
-	commits2 := s.collectAncestors(repo, commit2)
+	ancestors1 := s.collectAncestors(repo, commit1)
 
-	for hash := range commits1 {
-		if commits2[hash] {
-			return repo.CommitObject(hash)
+	queue := []*object.Commit{commit2}
+	visited := map[plumbing.Hash]bool{commit2.Hash: true}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if ancestors1[current.Hash] {
+			return current, nil
 		}
+
+		parents := current.Parents()
+		parents.ForEach(func(parent *object.Commit) error {
+			if !visited[parent.Hash] {
+				visited[parent.Hash] = true
+				queue = append(queue, parent)
+			}
+			return nil
+		})
 	}
 
 	return nil, fmt.Errorf("no merge base found")
@@ -478,68 +495,6 @@ func (s *GitService) countCommits(repo *git.Repository, base, target plumbing.Ha
 	return count
 }
 
-func (s *GitService) getChangedFiles(repo *git.Repository, oldCommitHash, newCommitHash string) ([]string, error) {
-	oldHash := plumbing.NewHash(oldCommitHash)
-	newHash := plumbing.NewHash(newCommitHash)
-
-	newCommit, err := repo.CommitObject(newHash)
-	if err != nil {
-		return nil, err
-	}
-
-	oldCommit, err := repo.CommitObject(oldHash)
-	if err != nil {
-		return nil, err
-	}
-
-	patch, err := newCommit.Patch(oldCommit)
-	if err != nil {
-		return nil, err
-	}
-
-	files := []string{}
-	for _, filePatch := range patch.FilePatches() {
-		from, to := filePatch.Files()
-		if from != nil {
-			files = append(files, from.Path())
-		} else if to != nil {
-			files = append(files, to.Path())
-		}
-	}
-
-	return files, nil
-}
-
-func (s *GitService) fileAffectedByCommit(commit *object.Commit, filePath string) (bool, error) {
-	parent := s.getParent(commit)
-	if parent == nil {
-		return true, nil
-	}
-
-	patch, err := commit.Patch(parent)
-	if err != nil {
-		return false, err
-	}
-
-	normalizedPath := filepath.ToSlash(filePath)
-	if !strings.HasPrefix(normalizedPath, "/") {
-		normalizedPath = "/" + normalizedPath
-	}
-
-	for _, filePatch := range patch.FilePatches() {
-		from, to := filePatch.Files()
-
-		if from != nil && filepath.ToSlash(from.Path()) == normalizedPath {
-			return true, nil
-		}
-		if to != nil && filepath.ToSlash(to.Path()) == normalizedPath {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
 func (s *GitService) getAuthMethod(dirPath string) (transport.AuthMethod, error) {
 	repo, err := s.openRepo(dirPath)
 	if err != nil {
@@ -551,49 +506,101 @@ func (s *GitService) getAuthMethod(dirPath string) (transport.AuthMethod, error)
 		return nil, fmt.Errorf("failed to get config: %w", err)
 	}
 
+	remoteURL := ""
 	for name, remote := range cfg.Remotes {
 		if name == "origin" && len(remote.URLs) > 0 {
-			remoteURL := remote.URLs[0]
+			remoteURL = remote.URLs[0]
+			break
+		}
+	}
 
-			if strings.HasPrefix(remoteURL, "git@") || strings.HasPrefix(remoteURL, "ssh://") {
-				if s.config.GitSSHKey != "" {
-					publicKeys, err := ssh.NewPublicKeysFromFile("git", s.config.GitSSHKey, "")
-					if err != nil {
-						slog.Warn("Failed to load SSH key", "error", err)
-						return nil, nil
-					}
-					return publicKeys, nil
+	if remoteURL == "" {
+		return nil, nil
+	}
+
+	isSSH := strings.HasPrefix(remoteURL, "git@") || strings.HasPrefix(remoteURL, "ssh://")
+	isHTTPS := strings.HasPrefix(remoteURL, "https://") || strings.HasPrefix(remoteURL, "http://")
+
+	var dirAuthType, dirSSHKeyPath, dirHTTPSUser, dirHTTPSToken string
+	if s.db != nil {
+		if dir, err := s.db.GetDirectory(dirPath); err == nil && dir != nil {
+			dirAuthType = dir.GitAuthType
+			dirSSHKeyPath = dir.GitSSHKeyPath
+			dirHTTPSUser = dir.GitHTTPSUser
+			dirHTTPSToken = dir.GitHTTPSToken
+		}
+	}
+
+	if dirAuthType == "ssh" && dirSSHKeyPath != "" && isSSH {
+		publicKeys, err := ssh.NewPublicKeysFromFile("git", dirSSHKeyPath, "")
+		if err != nil {
+			slog.Warn("Failed to load per-directory SSH key", "path", dirPath, "key", dirSSHKeyPath, "error", err)
+			return nil, nil
+		}
+		return publicKeys, nil
+	}
+
+	if dirAuthType == "https" && isHTTPS {
+		user := dirHTTPSUser
+		if user == "" {
+			user = "git"
+		}
+		if dirHTTPSToken != "" {
+			return &http.BasicAuth{
+				Username: user,
+				Password: dirHTTPSToken,
+			}, nil
+		}
+	}
+
+	if dirAuthType == "inherit" || dirAuthType == "" {
+		globalSSHKey := s.config.GitSSHKey
+		globalHTTPSUser := s.config.GitHTTPSUser
+		globalHTTPSToken := s.config.GitHTTPSToken
+
+		if s.db != nil {
+			if dbKey, _ := s.db.GetSetting("git_ssh_key"); dbKey != "" {
+				globalSSHKey = dbKey
+			}
+			if dbUser, _ := s.db.GetSetting("git_https_user"); dbUser != "" {
+				globalHTTPSUser = dbUser
+			}
+			if dbToken, _ := s.db.GetSetting("git_https_token"); dbToken != "" {
+				globalHTTPSToken = dbToken
+			}
+		}
+
+		if isSSH {
+			if globalSSHKey != "" {
+				publicKeys, err := ssh.NewPublicKeysFromFile("git", globalSSHKey, "")
+				if err != nil {
+					slog.Warn("Failed to load global SSH key", "error", err)
+					return nil, nil
 				}
-
-				sshAuth, err := ssh.NewSSHAgentAuth("git")
-				if err == nil {
-					return sshAuth, nil
-				}
-
-				return nil, nil
+				return publicKeys, nil
 			}
 
-			if strings.HasPrefix(remoteURL, "https://") || strings.HasPrefix(remoteURL, "http://") {
-				if s.config.GitHTTPSToken != "" {
-					return &http.BasicAuth{
-						Username: s.config.GitHTTPSUser,
-						Password: s.config.GitHTTPSToken,
-					}, nil
-				}
-
-				return nil, nil
+			sshAuth, err := ssh.NewSSHAgentAuth("git")
+			if err == nil {
+				return sshAuth, nil
 			}
+
+			return nil, nil
+		}
+
+		if isHTTPS {
+			if globalHTTPSToken != "" {
+				return &http.BasicAuth{
+					Username: globalHTTPSUser,
+					Password: globalHTTPSToken,
+				}, nil
+			}
+
+			return nil, nil
 		}
 	}
 
 	return nil, nil
-}
-
-func (s *GitService) getPublicAuth() transport.AuthMethod {
-	return &http.BasicAuth{
-		Username: "anything",
-		Password: "",
-	}
 }
 
 func (s *GitService) mapCommit(commit *object.Commit) *models.GitCommit {

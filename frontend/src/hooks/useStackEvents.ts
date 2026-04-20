@@ -25,14 +25,50 @@ export interface ScanCompleteEvent {
   timestamp: string
 }
 
-export type StackEvent = StackStatusEvent | ContainerEvent | ScanCompleteEvent
+export interface ResourceChangedEvent {
+  type: 'resource_changed'
+  event?: string
+  containerId?: string
+  timestamp: string
+}
+
+export interface UpdateScanCompleteEvent {
+  type: 'update_scan_complete'
+  timestamp: string
+}
+
+export interface UpdatePolicyChangedEvent {
+  type: 'update_policy_changed'
+  timestamp: string
+}
+
+export interface UpdateCompletedEvent {
+  type: 'update_completed'
+  containerId?: string
+  timestamp: string
+}
+
+export type StackEvent =
+  | StackStatusEvent
+  | ContainerEvent
+  | ScanCompleteEvent
+  | ResourceChangedEvent
+  | UpdateScanCompleteEvent
+  | UpdatePolicyChangedEvent
+  | UpdateCompletedEvent
 
 export function useStackEvents() {
   const pendingRef = useRef<Set<string>>(new Set())
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
+    const currentPending = pendingRef.current
     return () => {
+      if (currentPending.size > 0) {
+        currentPending.forEach((key) => {
+          queryClient.invalidateQueries({ queryKey: JSON.parse(key) })
+        })
+      }
       if (timerRef.current) clearTimeout(timerRef.current)
     }
   }, [])
@@ -74,6 +110,44 @@ export function useStackEvents() {
     scheduleInvalidations([['stacks'], ['directories']])
   }
 
+  const handleResourceChangedEvent = (event: ResourceChangedEvent) => {
+    const keys: string[][] = [
+      ['resources', 'images'],
+      ['resources', 'volumes'],
+      ['resources', 'networks'],
+      ['resources', 'build-cache'],
+      ['dashboard-stats'],
+    ]
+    if (event.containerId) {
+      keys.push(['stacks'])
+    }
+    scheduleInvalidations(keys)
+  }
+
+  const handleUpdateScanCompleteEvent = () => {
+    scheduleInvalidations([
+      ['resources', 'updates'],
+      ['settings', 'updates'],
+    ])
+  }
+
+  const handleUpdatePolicyChangedEvent = () => {
+    scheduleInvalidations([
+      ['auto-update-policies'],
+      ['settings', 'updates'],
+      ['resources', 'updates'],
+    ])
+  }
+
+  const handleUpdateCompletedEvent = () => {
+    scheduleInvalidations([
+      ['update-history'],
+      ['resources', 'updates'],
+      ['dashboard-stats'],
+      ['stacks'],
+    ])
+  }
+
   useWebSocketJSON<StackEvent>(
     '/ws/events',
     (data) => {
@@ -86,6 +160,18 @@ export function useStackEvents() {
           break
         case 'scan_complete':
           handleScanCompleteEvent()
+          break
+        case 'resource_changed':
+          handleResourceChangedEvent(data)
+          break
+        case 'update_scan_complete':
+          handleUpdateScanCompleteEvent()
+          break
+        case 'update_policy_changed':
+          handleUpdatePolicyChangedEvent()
+          break
+        case 'update_completed':
+          handleUpdateCompletedEvent()
           break
       }
     }

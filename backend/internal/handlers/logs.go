@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -34,14 +35,16 @@ type LogsHandler struct {
 	db           *database.DB
 	jwtSecret    string
 	authDisabled bool
+	dataDir      string
 }
 
-func NewLogsHandler(docker *services.DockerService, db *database.DB, jwtSecret string, authDisabled bool) *LogsHandler {
+func NewLogsHandler(docker *services.DockerService, db *database.DB, jwtSecret string, authDisabled bool, dataDir string) *LogsHandler {
 	return &LogsHandler{
 		docker:       docker,
 		db:           db,
 		jwtSecret:    jwtSecret,
 		authDisabled: authDisabled,
+		dataDir:      dataDir,
 	}
 }
 
@@ -254,8 +257,8 @@ func (h *LogsHandler) buildComposeArgs(stack models.Stack, subcommand string, ex
 	args := []string{"compose"}
 
 	if h.docker != nil {
-		globalEnvPath := "/opt/stacks/global.env"
-		if _, err := exec.Command("test", "-f", globalEnvPath).CombinedOutput(); err == nil {
+		globalEnvPath := h.dataDir + "/global.env"
+		if _, err := os.Stat(globalEnvPath); err == nil {
 			args = append(args, "--env-file", globalEnvPath)
 		}
 		if stack.EnvFile != "" {

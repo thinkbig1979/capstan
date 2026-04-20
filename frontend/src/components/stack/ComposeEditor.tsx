@@ -33,6 +33,7 @@ interface ComposeEditorProps {
 export function ComposeEditor({ stackId }: ComposeEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const handleSaveRef = useRef<(forceSave?: boolean) => void>(() => {})
   const { theme } = useUIStore()
   const [content, setContent] = useState('')
   const [lastSaved, setLastSaved] = useState('')
@@ -128,6 +129,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     },
     [saveMutation, stackId],
   )
+  handleSaveRef.current = handleSave
 
   const lintMutation = useMutation({
     mutationFn: async (content: string) => {
@@ -179,7 +181,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
           {
             key: 'Mod-s',
             run: () => {
-              handleSave()
+              handleSaveRef.current()
               return true
             },
           },
@@ -216,7 +218,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       view.destroy()
       viewRef.current = null
     }
-  }, [stackId, isDark, handleSave])
+  }, [stackId, isDark])
 
   // Update lint diagnostics when results change
   useEffect(() => {

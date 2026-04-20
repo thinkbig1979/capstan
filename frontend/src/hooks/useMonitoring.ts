@@ -70,19 +70,17 @@ export function useMonitoring(stackId: string) {
           pids: container.pids,
         }
 
-        if (!next[container.containerId]) {
-          next[container.containerId] = {
-            containerId: container.containerId,
-            name: container.name,
-            metrics: [],
-          }
-        }
+        const existing = next[container.containerId]
+        const currentMetrics = existing ? [...existing.metrics] : []
+        currentMetrics.push(metric)
+        const trimmed = currentMetrics.length > HISTORY_SIZE
+          ? currentMetrics.slice(-HISTORY_SIZE)
+          : currentMetrics
 
-        const history = next[container.containerId].metrics
-        history.push(metric)
-
-        if (history.length > HISTORY_SIZE) {
-          history.shift()
+        next[container.containerId] = {
+          containerId: container.containerId,
+          name: existing?.name ?? container.name,
+          metrics: trimmed,
         }
       })
 

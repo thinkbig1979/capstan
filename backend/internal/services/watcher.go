@@ -117,7 +117,9 @@ func (w *WatcherService) handleEvent(event fsnotify.Event) {
 		info, err := os.Stat(event.Name)
 		if err == nil && info.IsDir() {
 			slog.Info("New subdirectory detected, adding to watcher", "path", event.Name)
-			w.watcher.Add(event.Name)
+			if err := w.watcher.Add(event.Name); err != nil {
+				slog.Warn("Failed to watch new subdirectory", "path", event.Name, "error", err)
+			}
 			return
 		}
 	}

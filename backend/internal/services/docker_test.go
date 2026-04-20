@@ -41,12 +41,13 @@ func TestDockerService_buildComposeArgs(t *testing.T) {
 
 func TestDockerService_buildComposeArgs_WithGlobalEnv(t *testing.T) {
 	tempDir := t.TempDir()
+	dataDir := t.TempDir()
 
-	globalEnvPath := filepath.Join(tempDir, "global.env")
+	globalEnvPath := filepath.Join(dataDir, "global.env")
 	err := os.WriteFile(globalEnvPath, []byte("TEST=value\n"), 0644)
 	require.NoError(t, err)
 
-	cfg := &config.Config{StacksDir: tempDir}
+	cfg := &config.Config{StacksDir: tempDir, DataDir: dataDir}
 	service := &DockerService{config: cfg}
 
 	stack := models.Stack{

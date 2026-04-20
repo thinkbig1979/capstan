@@ -40,6 +40,10 @@ vendor/
 backend/.env
 frontend/.env
 
+# SSH keys (keep the README)
+keys/*
+!keys/README.md
+
 # Backend embedded frontend (built during Docker build)
 backend/frontend/assets/
 :memory:

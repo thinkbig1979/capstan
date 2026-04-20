@@ -5,19 +5,12 @@ import { useMonitoring, type AggregateMetrics } from '@/hooks/useMonitoring'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { formatBytes } from '@/lib/format'
 
 type TimeRange = '1m' | '5m' | '15m' | '1h'
 
 interface MetricsPanelProps {
   stackId: string
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
 }
 
 function formatRate(bytesPerSecond: number): string {

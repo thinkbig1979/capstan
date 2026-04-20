@@ -85,7 +85,6 @@ export function DashboardPage() {
   } = useQuery({
     queryKey: ['dashboard-stats'],
     queryFn: dashboardApi.stats,
-    refetchInterval: 30000,
     retry: 1,
   })
 

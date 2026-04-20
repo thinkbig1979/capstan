@@ -30,7 +30,7 @@ func TestSettingsHandler_GetLogRetention_Default(t *testing.T) {
 
 	require.NoError(t, err)
 
-	handler := NewSettingsHandler(db, "", "test-secret", false)
+	handler := NewSettingsHandler(db, "", "test-secret", false, nil, nil)
 	router := setupSettingsRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/settings/log-retention", nil)
@@ -57,7 +57,7 @@ func TestSettingsHandler_GetLogRetention_Custom(t *testing.T) {
 	err = db.SetSetting("max_log_retention_days", "60")
 	require.NoError(t, err)
 
-	handler := NewSettingsHandler(db, "", "test-secret", false)
+	handler := NewSettingsHandler(db, "", "test-secret", false, nil, nil)
 	router := setupSettingsRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/settings/log-retention", nil)
@@ -81,7 +81,7 @@ func TestSettingsHandler_UpdateLogRetention(t *testing.T) {
 
 	require.NoError(t, err)
 
-	handler := NewSettingsHandler(db, "", "test-secret", false)
+	handler := NewSettingsHandler(db, "", "test-secret", false, nil, nil)
 	router := setupSettingsRouter(handler)
 
 	reqBody := `{"retentionDays": 45}`
@@ -105,7 +105,7 @@ func TestSettingsHandler_UpdateLogRetention_Minimum(t *testing.T) {
 
 	require.NoError(t, err)
 
-	handler := NewSettingsHandler(db, "", "test-secret", false)
+	handler := NewSettingsHandler(db, "", "test-secret", false, nil, nil)
 	router := setupSettingsRouter(handler)
 
 	reqBody := `{"retentionDays": 7}`
@@ -129,7 +129,7 @@ func TestSettingsHandler_UpdateLogRetention_BelowMinimum(t *testing.T) {
 
 	require.NoError(t, err)
 
-	handler := NewSettingsHandler(db, "", "test-secret", false)
+	handler := NewSettingsHandler(db, "", "test-secret", false, nil, nil)
 	router := setupSettingsRouter(handler)
 
 	reqBody := `{"retentionDays": 5}`
@@ -154,7 +154,7 @@ func TestSettingsHandler_UpdateLogRetention_InvalidInput(t *testing.T) {
 
 	require.NoError(t, err)
 
-	handler := NewSettingsHandler(db, "", "test-secret", false)
+	handler := NewSettingsHandler(db, "", "test-secret", false, nil, nil)
 	router := setupSettingsRouter(handler)
 
 	reqBody := `{"retentionDays": "invalid"}`

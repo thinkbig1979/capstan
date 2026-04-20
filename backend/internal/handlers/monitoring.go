@@ -156,6 +156,18 @@ func init() {
 	eventSubscribers.channels = make(map[chan models.StackEvent]bool)
 }
 
+func BroadcastEvent(event models.StackEvent) {
+	eventSubscribers.RLock()
+	defer eventSubscribers.RUnlock()
+	for ch := range eventSubscribers.channels {
+		select {
+		case ch <- event:
+		default:
+			slog.Debug("Event subscriber channel full, dropping event", "type", event.Type)
+		}
+	}
+}
+
 func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)

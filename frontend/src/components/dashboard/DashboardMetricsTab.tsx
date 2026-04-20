@@ -3,14 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { DashboardStats } from '@/types'
 import type { DashboardAggregateMetrics } from '@/hooks/useDashboardMetrics'
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
-}
+import { formatBytes } from '@/lib/format'
 
 function getColorForThreshold(percent: number): string {
   if (percent >= 80) return 'text-red-500'

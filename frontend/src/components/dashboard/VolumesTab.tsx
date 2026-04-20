@@ -15,14 +15,7 @@ import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/components/ConfirmDialog'
 import type { DockerVolume } from '@/types'
-
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return '-'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
-}
+import { formatBytes } from '@/lib/format'
 
 type SortKey = 'name' | 'driver' | 'size' | 'stack'
 

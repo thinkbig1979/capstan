@@ -9,6 +9,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./stacks:/opt/stacks
       - ./data:/app/data
+      - ./keys:/app/keys:ro
     env_file:
       - .env
     networks:

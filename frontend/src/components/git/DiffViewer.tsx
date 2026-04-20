@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useGitDiff } from '@/hooks/useGit'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -37,6 +37,70 @@ interface DiffLine {
   newLine?: number
 }
 
+function parseDiff(diff: string): DiffFile[] {
+  const lines = diff.split('\n')
+  const files: DiffFile[] = []
+  let currentFile: DiffFile | null = null
+  let currentHunk: DiffHunk | null = null
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+
+    if (line.startsWith('diff --git')) {
+      if (currentFile) {
+        files.push(currentFile)
+      }
+      currentFile = {
+        path: line.split(' b/')[1] || '',
+        addedLines: 0,
+        removedLines: 0,
+        hunks: [],
+      }
+      currentHunk = null
+    } else if (line.startsWith('---')) {
+      if (currentFile) {
+        currentFile.oldPath = line.substring(4)
+      }
+    } else if (line.startsWith('+++')) {
+      if (currentFile) {
+        currentFile.path = line.substring(4)
+      }
+    } else if (line.startsWith('@@')) {
+      if (currentFile) {
+        currentHunk = {
+          header: line,
+          lines: [],
+        }
+        currentFile.hunks.push(currentHunk)
+      }
+    } else if (currentHunk) {
+      let type: DiffLine['type'] = 'context'
+      if (line.startsWith('+')) type = 'added'
+      else if (line.startsWith('-')) type = 'removed'
+      else if (line.startsWith('@@')) type = 'header'
+
+      const diffLine: DiffLine = {
+        type,
+        content: line.substring(1),
+      }
+
+      currentHunk.lines.push(diffLine)
+
+      if (type === 'added' && currentFile) {
+        currentFile.addedLines++
+      } else if (type === 'removed' && currentFile) {
+        currentFile.removedLines++
+      }
+    }
+  }
+
+  if (currentFile) {
+    files.push(currentFile)
+  }
+
+  return files
+}
+
 export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set())
   const [viewMode, setViewMode] = useState<DiffView>(() => {
@@ -53,69 +117,10 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
     localStorage.setItem('diff-view-preference', viewMode)
   }, [viewMode])
 
-  const parseDiff = (diff: string): DiffFile[] => {
-    const lines = diff.split('\n')
-    const files: DiffFile[] = []
-    let currentFile: DiffFile | null = null
-    let currentHunk: DiffHunk | null = null
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-
-      if (line.startsWith('diff --git')) {
-        if (currentFile) {
-          files.push(currentFile)
-        }
-        currentFile = {
-          path: line.split(' b/')[1] || '',
-          addedLines: 0,
-          removedLines: 0,
-          hunks: [],
-        }
-        currentHunk = null
-      } else if (line.startsWith('---')) {
-        if (currentFile) {
-          currentFile.oldPath = line.substring(4)
-        }
-      } else if (line.startsWith('+++')) {
-        if (currentFile) {
-          currentFile.path = line.substring(4)
-        }
-      } else if (line.startsWith('@@')) {
-        if (currentFile) {
-          currentHunk = {
-            header: line,
-            lines: [],
-          }
-          currentFile.hunks.push(currentHunk)
-        }
-      } else if (currentHunk) {
-        let type: DiffLine['type'] = 'context'
-        if (line.startsWith('+')) type = 'added'
-        else if (line.startsWith('-')) type = 'removed'
-        else if (line.startsWith('@@')) type = 'header'
-
-        const diffLine: DiffLine = {
-          type,
-          content: line.substring(1),
-        }
-
-        currentHunk.lines.push(diffLine)
-
-        if (type === 'added' && currentFile) {
-          currentFile.addedLines++
-        } else if (type === 'removed' && currentFile) {
-          currentFile.removedLines++
-        }
-      }
-    }
-
-    if (currentFile) {
-      files.push(currentFile)
-    }
-
-    return files
-  }
+  const files = useMemo(() => {
+    if (!diffData?.diff) return []
+    return parseDiff(diffData.diff)
+  }, [diffData?.diff])
 
   const toggleFile = (path: string) => {
     setCollapsedFiles((prev) => {
@@ -136,8 +141,6 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
   if (error || !diffData) {
     return <div className="flex items-center justify-center py-4 text-muted-foreground">Failed to load diff</div>
   }
-
-  const files = parseDiff(diffData.diff)
 
   if (files.length === 0) {
     return <div className="flex items-center justify-center py-4 text-muted-foreground">No diff available</div>

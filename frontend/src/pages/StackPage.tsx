@@ -105,7 +105,7 @@ export function StackPage() {
                     </Button>
                     {appError.type === 'auth' && (
                       <Button 
-                        onClick={() => (window.location.href = '/login')}
+                        onClick={() => navigate('/login')}
                         variant="outline"
                         size="sm"
                       >

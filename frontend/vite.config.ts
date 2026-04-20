@@ -2,7 +2,6 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -16,6 +15,19 @@ export default defineConfig({
         target: 'http://localhost:5001',
         changeOrigin: true,
         ws: true,
+      },
+    },
+  },
+  build: {
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          codemirror: ['codemirror', '@codemirror/view', '@codemirror/state', '@codemirror/lang-yaml'],
+          xterm: ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-search'],
+          charts: ['recharts'],
+          vendor: ['react', 'react-dom', 'react-router-dom'],
+        },
       },
     },
   },

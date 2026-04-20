@@ -152,32 +152,3 @@ export function classifyError(error: unknown): AppError {
     action: 'Contact Support',
   }
 }
-
-export function getErrorIcon(type: ErrorType): string {
-  const icons = {
-    network: '🌐',
-    auth: '🔐',
-    validation: '⚠️',
-    server: '🔧',
-    timeout: '⏱️',
-    unknown: '❓',
-  }
-  return icons[type]
-}
-
-export function canRetry(error: AppError): boolean {
-  return error.retryable
-}
-
-export function copyErrorToClipboard(error: AppError): void {
-  const errorText = `
-Error: ${error.message}
-Type: ${error.type}
-Status: ${error.status || 'N/A'}
-Timestamp: ${new Date().toISOString()}
-URL: ${window.location.href}
-User Agent: ${navigator.userAgent}
-  `.trim()
-  
-  navigator.clipboard.writeText(errorText).catch(() => {})
-}

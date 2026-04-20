@@ -172,8 +172,9 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
 
   const toggleVisibility = (index: number) => {
     const newEntries = [...entries]
-    newEntries[index].sensitive = !newEntries[index].sensitive
+    newEntries[index] = { ...newEntries[index], sensitive: !newEntries[index].sensitive }
     setEntries(newEntries)
+    pushToHistory(newEntries, rawContent)
   }
 
   const isSensitiveKey = (key: string) => {

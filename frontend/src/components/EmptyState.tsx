@@ -1,33 +1,10 @@
 import type { ReactNode } from 'react'
-import { useEffect } from 'react'
 
 interface EmptyStateProps {
   icon?: ReactNode
   title: string
   description?: string
   action?: ReactNode
-}
-
-function sanitizeText(text: string, maxLength: number): string {
-  if (!text) return ''
-  
-  let sanitized = text.replace(/<[^>]*>/g, '')
-  
-  sanitized = sanitized.replace(/&/g, '&amp;')
-  sanitized = sanitized.replace(/</g, '&lt;')
-  sanitized = sanitized.replace(/>/g, '&gt;')
-  sanitized = sanitized.replace(/"/g, '&quot;')
-  sanitized = sanitized.replace(/'/g, '&#x27;')
-  
-  if (sanitized.length > maxLength) {
-    sanitized = sanitized.substring(0, maxLength) + '...'
-  }
-  
-  return sanitized
-}
-
-function validateNoHTML(text: string): boolean {
-  return !/<[^>]*>/.test(text)
 }
 
 const DefaultIcon = () => (
@@ -50,20 +27,11 @@ const DefaultIcon = () => (
 )
 
 export function EmptyState({ icon, title, description, action }: EmptyStateProps) {
-  useEffect(() => {
-    if (!validateNoHTML(title) || (description && !validateNoHTML(description))) {
-      console.warn('EmptyState: HTML detected in props, which may indicate an XSS attempt')
-    }
-  }, [title, description])
-
-  const sanitizedTitle = sanitizeText(title, 100)
-  const sanitizedDescription = description ? sanitizeText(description, 500) : undefined
-
   return (
     <div className="flex flex-col items-center justify-center min-h-[400px] text-center p-8">
       {icon || <DefaultIcon />}
-      <h3 className="text-lg font-semibold mt-4 mb-2">{sanitizedTitle}</h3>
-      {sanitizedDescription && <p className="text-sm text-muted-foreground mb-4 max-w-md">{sanitizedDescription}</p>}
+      <h3 className="text-lg font-semibold mt-4 mb-2">{title}</h3>
+      {description && <p className="text-sm text-muted-foreground mb-4 max-w-md">{description}</p>}
       {action && <div>{action}</div>}
     </div>
   )

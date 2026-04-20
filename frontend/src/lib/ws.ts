@@ -16,7 +16,6 @@ export class WSClient {
   private reconnectAttempts = 0
   private maxReconnects = 5
   private reconnectDelay = 2000
-  private state: WSState = 'CLOSED'
   private currentPath: string | null = null
   private currentOnMessage: ((data: string | ArrayBuffer) => void) | null = null
   private currentOptions: WSClientOptions | null = null
@@ -34,7 +33,6 @@ export class WSClient {
     this.currentPath = path
     this.currentOnMessage = onMessage
     this.currentOptions = options
-    this.state = 'CONNECTING'
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = token
@@ -45,7 +43,6 @@ export class WSClient {
     this.ws.binaryType = options.binary ? 'arraybuffer' : 'blob'
 
     this.ws.onopen = () => {
-      this.state = 'OPEN'
       this.reconnectAttempts = 0
       options.onOpen?.()
     }
@@ -56,7 +53,6 @@ export class WSClient {
     }
 
     this.ws.onclose = () => {
-      this.state = 'CLOSED'
       this.ws = null
       options.onClose?.()
       if (this.currentPath && this.currentOnMessage) {
@@ -66,14 +62,12 @@ export class WSClient {
 
     this.ws.onerror = (error) => {
       this.ws = null
-      this.state = 'CLOSED'
       options.onError?.(error)
     }
   }
 
   private scheduleReconnect() {
     if (this.reconnectAttempts < this.maxReconnects && this.currentPath && this.currentOnMessage) {
-      this.state = 'RECONNECTING'
       this.reconnectAttempts++
       const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1)
       this.currentOptions?.onReconnecting?.(this.reconnectAttempts)
@@ -106,26 +100,10 @@ export class WSClient {
     if (this.ws) {
       const ws = this.ws
       this.ws = null
-      this.state = 'CLOSED'
       if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
         ws.close()
       }
     }
   }
 
-  getState(): WSState {
-    return this.state
-  }
-
-  getReconnectAttempts(): number {
-    return this.reconnectAttempts
-  }
-
-  getMaxReconnects(): number {
-    return this.maxReconnects
-  }
-
-  resetReconnectCounter() {
-    this.reconnectAttempts = 0
-  }
 }

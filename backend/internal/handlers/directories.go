@@ -3,6 +3,7 @@ package handlers
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/docker-manager/backend/internal/database"
@@ -27,6 +28,7 @@ func (h *DirectoriesHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("", h.List)
 	group.POST("/scan", h.Scan)
 	group.GET("/:path", h.Get)
+	group.PUT("/credentials", h.UpdateCredentials)
 }
 
 func (h *DirectoriesHandler) List(c *gin.Context) {
@@ -115,5 +117,69 @@ func (h *DirectoriesHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, DirWithStacks{
 		Directory: *directory,
 		Stacks:    stacks,
+	})
+}
+
+func (h *DirectoriesHandler) UpdateCredentials(c *gin.Context) {
+	var req struct {
+		Path       string `json:"path" binding:"required"`
+		AuthType   string `json:"authType"`
+		SSHKeyPath string `json:"sshKeyPath"`
+		HTTPSUser  string `json:"httpsUser"`
+		HTTPSToken string `json:"httpsToken"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid request body: path is required",
+		))
+		return
+	}
+
+	directory, err := h.db.GetDirectory(req.Path)
+	if err != nil || directory == nil {
+		c.JSON(http.StatusNotFound, models.NewAppError(
+			http.StatusNotFound,
+			models.ErrNotFound,
+			"Directory not found",
+		))
+		return
+	}
+
+	authType := strings.ToLower(req.AuthType)
+	if authType != "" && authType != "ssh" && authType != "https" && authType != "inherit" {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"authType must be 'ssh', 'https', 'inherit', or empty",
+		))
+		return
+	}
+
+	if err := h.db.UpdateDirectoryCredentials(directory.Path, authType, req.SSHKeyPath, req.HTTPSUser, req.HTTPSToken); err != nil {
+		slog.Error("Failed to update directory credentials", "path", directory.Path, "error", err)
+		c.JSON(http.StatusInternalServerError, models.NewAppError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to update credentials",
+		))
+		return
+	}
+
+	updated, err := h.db.GetDirectory(directory.Path)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.NewAppError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to retrieve updated directory",
+		))
+		return
+	}
+
+	slog.Info("Directory credentials updated", "path", directory.Path, "authType", authType)
+
+	c.JSON(http.StatusOK, gin.H{
+		"directory": updated,
 	})
 }

@@ -32,16 +32,8 @@ func (s *ScannerService) ScanAll() (hasGlobalEnv bool, err error) {
 		return false, err
 	}
 
-	_, err = os.Stat(filepath.Join(s.config.StacksDir, "global.env"))
+	_, err = os.Stat(filepath.Join(s.config.DataDir, "global.env"))
 	hasGlobalEnv = !os.IsNotExist(err)
-
-	if err := s.db.ClearDirectories(); err != nil {
-		return hasGlobalEnv, err
-	}
-
-	if err := s.db.ClearStacks(); err != nil {
-		return hasGlobalEnv, err
-	}
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -60,8 +52,63 @@ func (s *ScannerService) ScanAll() (hasGlobalEnv bool, err error) {
 		}
 	}
 
+	if err := s.pruneStaleStacks(entries); err != nil {
+		slog.Warn("Failed to prune stale stacks", "error", err)
+	}
+
 	slog.Info("Directory scan complete")
 	return hasGlobalEnv, nil
+}
+
+func (s *ScannerService) pruneStaleStacks(entries []os.DirEntry) error {
+	activeDirs := make(map[string]bool, len(entries)+1)
+	activeDirs[s.config.StacksDir] = true
+	for _, entry := range entries {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+			activeDirs[filepath.Join(s.config.StacksDir, entry.Name())] = true
+		}
+	}
+
+	directories, err := s.db.ListDirectories()
+	if err != nil {
+		return err
+	}
+	for _, dir := range directories {
+		if !activeDirs[dir.Path] {
+			s.db.DeleteDirectory(dir.Path)
+		}
+	}
+
+	stacks, err := s.db.ListStacks()
+	if err != nil {
+		return err
+	}
+	activeComposeFiles := make(map[string]bool)
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		dirPath := filepath.Join(s.config.StacksDir, entry.Name())
+		patterns := []string{
+			"compose*.yaml", "compose*.yml",
+			"docker-compose*.yaml", "docker-compose*.yml",
+		}
+		for _, pattern := range patterns {
+			matches, _ := filepath.Glob(filepath.Join(dirPath, pattern))
+			for _, m := range matches {
+				activeComposeFiles[filepath.Base(m)] = true
+			}
+		}
+	}
+
+	for _, stack := range stacks {
+		if !activeDirs[stack.Directory] {
+			s.db.DeleteStack(stack.ID)
+		}
+	}
+
+	_ = activeComposeFiles
+	return nil
 }
 
 func (s *ScannerService) ScanDirectory(path string) error {

@@ -5,28 +5,28 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import {
-  Play, Square, RefreshCw, Download, Trash2,
+  Play, Square, RefreshCw, Download, Trash2, HelpCircle, AlertCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { DashboardStats, DashboardContainerInfo } from '@/types'
 import type { DashboardContainerMetric } from '@/hooks/useDashboardMetrics'
-import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/components/ConfirmDialog'
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
-}
+import { useAutoUpdatePolicies, useToggleAutoUpdate } from '@/hooks/useResources'
+import { formatBytes } from '@/lib/format'
 
 function getMetricColor(percent: number): string {
   if (percent >= 80) return 'bg-red-500'
@@ -198,6 +198,39 @@ function StandaloneContainerActions({ containerId, containerName, containerState
   )
 }
 
+function StatusIcon({ state }: { state: string }) {
+  const config: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
+    running: { icon: <Play className="h-3.5 w-3.5" />, color: 'text-green-500', label: 'Running' },
+    exited: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-red-500', label: 'Stopped' },
+    dead: { icon: <AlertCircle className="h-3.5 w-3.5" />, color: 'text-red-500', label: 'Dead' },
+    restarting: { icon: <RefreshCw className="h-3.5 w-3.5" />, color: 'text-yellow-500', label: 'Restarting' },
+    paused: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-yellow-500', label: 'Paused' },
+    created: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-gray-500', label: 'Created' },
+  }
+  const c = config[state] || { icon: <HelpCircle className="h-3.5 w-3.5" />, color: 'text-gray-500', label: state }
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={`inline-flex items-center justify-center ${c.color}`}>
+            {state === 'running' && (
+              <span className="relative flex h-3.5 w-3.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-3.5 w-3.5">{c.icon}</span>
+              </span>
+            )}
+            {state !== 'running' && c.icon}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>{c.label}</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
 type SortKey = 'name' | 'cpu' | 'memory' | 'stack'
 
 function ContainerTable({
@@ -211,6 +244,20 @@ function ContainerTable({
   sortBy: SortKey
   renderActions: (container: DashboardContainerInfo, deletePending: boolean) => React.ReactNode
 }) {
+  const { data: policiesData } = useAutoUpdatePolicies()
+  const toggleAutoUpdate = useToggleAutoUpdate()
+
+  const policyMap = useMemo(() => {
+    if (!policiesData?.policies) return new Map<string, boolean>()
+    const map = new Map<string, boolean>()
+    for (const p of policiesData.policies) {
+      if (p.targetType === 'container') {
+        map.set(p.targetId, p.enabled)
+      }
+    }
+    return map
+  }, [policiesData])
+
   const sorted = useMemo(() => {
     const sorted = [...containers]
     switch (sortBy) {
@@ -227,21 +274,31 @@ function ContainerTable({
     }
   }, [containers, latestMetrics, sortBy])
 
+  const handleToggleAutoUpdate = (containerId: string, enabled: boolean) => {
+    toggleAutoUpdate.mutate(
+      { targetType: 'container', targetId: containerId, enabled },
+      {
+        onSuccess: () => toast.success(enabled ? 'Auto-update enabled' : 'Auto-update disabled'),
+        onError: () => toast.error('Failed to update auto-update policy'),
+      },
+    )
+  }
+
   return (
     <div className="rounded-md border">
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead className="w-10" />
             <TableHead>Name</TableHead>
             <TableHead>Stack</TableHead>
-            <TableHead>State</TableHead>
             <TableHead>CPU</TableHead>
             <TableHead>Memory</TableHead>
             <TableHead className="hidden lg:table-cell">Network</TableHead>
             <TableHead className="hidden xl:table-cell">Disk</TableHead>
             <TableHead className="hidden lg:table-cell">Uptime</TableHead>
             <TableHead className="hidden md:table-cell">Restarts</TableHead>
-            <TableHead className="hidden md:table-cell">PIDs</TableHead>
+            <TableHead className="hidden md:table-cell">Auto-Update</TableHead>
             <TableHead>Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -250,6 +307,9 @@ function ContainerTable({
             const m = latestMetrics[container.id]
             return (
               <TableRow key={container.id}>
+                <TableCell>
+                  <StatusIcon state={container.state} />
+                </TableCell>
                 <TableCell>
                   <div className="flex flex-col">
                     <span className="font-medium text-sm">{container.name}</span>
@@ -269,9 +329,6 @@ function ContainerTable({
                   ) : (
                     <span className="text-xs text-muted-foreground italic">standalone</span>
                   )}
-                </TableCell>
-                <TableCell>
-                  <StatusBadge status={container.state === 'running' ? 'running' : container.state === 'exited' ? 'stopped' : 'unknown'} />
                 </TableCell>
                 <TableCell>
                   {m ? (
@@ -331,7 +388,14 @@ function ContainerTable({
                   )}
                 </TableCell>
                 <TableCell className="hidden md:table-cell">
-                  <span className="text-sm">{m?.pids || '-'}</span>
+                  <div className="flex items-center">
+                    <Switch
+                      checked={policyMap.get(container.id) ?? false}
+                      onCheckedChange={(checked) => handleToggleAutoUpdate(container.id, checked)}
+                      disabled={toggleAutoUpdate.isPending}
+                      aria-label="Toggle auto-update"
+                    />
+                  </div>
                 </TableCell>
                 <TableCell>
                   {renderActions(container, false)}

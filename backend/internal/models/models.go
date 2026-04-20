@@ -18,12 +18,17 @@ type Session struct {
 }
 
 type Directory struct {
-	Path      string    `json:"path"`
-	Name      string    `json:"name"`
-	IsGitRepo bool      `json:"isGitRepo"`
-	GitRemote string    `json:"gitRemote"`
-	GitBranch string    `json:"gitBranch"`
-	ScannedAt time.Time `json:"scannedAt"`
+	Path          string    `json:"path"`
+	Name          string    `json:"name"`
+	IsGitRepo     bool      `json:"isGitRepo"`
+	GitRemote     string    `json:"gitRemote"`
+	GitBranch     string    `json:"gitBranch"`
+	GitAuthType   string    `json:"gitAuthType"`
+	GitSSHKeyPath string    `json:"gitSshKeyPath,omitempty"`
+	GitHTTPSUser  string    `json:"gitHttpsUser,omitempty"`
+	GitHTTPSToken string    `json:"-"`
+	HasHTTPSToken bool      `json:"hasHttpsToken"`
+	ScannedAt     time.Time `json:"scannedAt"`
 }
 
 type Stack struct {
@@ -215,4 +220,80 @@ type StackEvent struct {
 	Event       string    `json:"event,omitempty"`
 	Status      string    `json:"status,omitempty"`
 	Timestamp   time.Time `json:"timestamp"`
+}
+
+type CachedUpdate struct {
+	ID            string `json:"id"`
+	ContainerID   string `json:"containerId"`
+	ContainerName string `json:"containerName"`
+	Image         string `json:"image"`
+	ImageRef      string `json:"imageRef"`
+	State         string `json:"state"`
+	StackID       string `json:"stackId,omitempty"`
+	ProjectName   string `json:"projectName,omitempty"`
+	ServiceName   string `json:"serviceName,omitempty"`
+	IsCompose     bool   `json:"isCompose"`
+	LocalDigest   string `json:"localDigest"`
+	RemoteDigest  string `json:"remoteDigest"`
+	ScannedAt     string `json:"scannedAt"`
+}
+
+type AutoUpdatePolicy struct {
+	ID                  string `json:"id"`
+	TargetType          string `json:"targetType"`
+	TargetID            string `json:"targetId"`
+	Enabled             bool   `json:"enabled"`
+	ConsecutiveFailures int    `json:"consecutiveFailures"`
+	Paused              bool   `json:"paused"`
+	CreatedAt           string `json:"createdAt"`
+	UpdatedAt           string `json:"updatedAt"`
+}
+
+type UpdateHistoryEntry struct {
+	ID            string  `json:"id"`
+	ContainerID   string  `json:"containerId"`
+	ContainerName string  `json:"containerName"`
+	StackID       *string `json:"stackId,omitempty"`
+	StackName     *string `json:"stackName,omitempty"`
+	Image         string  `json:"image"`
+	OldDigest     *string `json:"oldDigest,omitempty"`
+	NewDigest     *string `json:"newDigest,omitempty"`
+	OldImageRef   *string `json:"oldImageRef,omitempty"`
+	NewImageRef   *string `json:"newImageRef,omitempty"`
+	Status        string  `json:"status"`
+	Trigger       string  `json:"trigger"`
+	StartedAt     string  `json:"startedAt"`
+	CompletedAt   *string `json:"completedAt,omitempty"`
+	DurationMs    *int64  `json:"durationMs,omitempty"`
+	ErrorMessage  *string `json:"errorMessage,omitempty"`
+}
+
+type UpdateHistoryFilters struct {
+	Page        int
+	Limit       int
+	Status      string
+	Trigger     string
+	ContainerID string
+	StackID     string
+	From        *time.Time
+	To          *time.Time
+}
+
+type UpdateResult struct {
+	HistoryID  string `json:"historyId"`
+	OldDigest  string `json:"oldDigest"`
+	NewDigest  string `json:"newDigest"`
+	DurationMs int64  `json:"durationMs"`
+}
+
+type UpdateSettingsResponse struct {
+	ScanIntervalMinutes int    `json:"scanIntervalMinutes"`
+	LastScanAt          string `json:"lastScanAt,omitempty"`
+	LastScanError       string `json:"lastScanError,omitempty"`
+	GlobalAutoUpdate    bool   `json:"globalAutoUpdate"`
+	AutoUpdateStats     struct {
+		EnabledContainers int `json:"enabledContainers"`
+		UpdatesLast7Days  int `json:"updatesLast7Days"`
+		UpdatesLast30Days int `json:"updatesLast30Days"`
+	} `json:"autoUpdateStats"`
 }

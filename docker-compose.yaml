@@ -10,6 +10,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /home/edwin/development:/home/edwin/development
+      - ./keys:/app/keys:ro
       - app_data:/app/data
     environment:
       - STACKS_DIR=/home/edwin/development

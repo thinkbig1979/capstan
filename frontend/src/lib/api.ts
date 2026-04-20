@@ -15,14 +15,14 @@ import type {
   DockerNetwork,
   BuildCacheEntry,
   ContainerUpdateInfo,
+  CachedUpdate,
+  UpdateHistoryEntry,
+  AutoUpdatePolicy,
+  UpdateSettings,
+  UpdateHistoryFilters,
 } from '@/types'
 
 const API_BASE_URL = '/api/v1'
-
-const getCSRFToken = () => {
-  const meta = document.querySelector('meta[name="csrf-token"]')
-  return meta?.getAttribute('content')
-}
 
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -40,10 +40,6 @@ apiClient.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
-  const csrfToken = getCSRFToken()
-  if (csrfToken) {
-    config.headers['X-CSRF-Token'] = csrfToken
-  }
   return config
 })
 
@@ -51,23 +47,16 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ApiError>) => {
     if (error.response?.status === 401 && logout) {
-      logout()
-      window.location.href = '/login'
+      const url = error.config?.url
+      const isAuthEndpoint = url?.includes('/auth/status') || url?.includes('/auth/login')
+      if (!isAuthEndpoint) {
+        logout()
+      }
     }
     const safeError = error.response?.data || { error: 'Unknown error', code: 'UNKNOWN' }
     return Promise.reject(safeError)
   },
 )
-
-export const safeErrorMessage = (error: any): string => {
-  if (error?.response?.status === 401) return 'Authentication failed'
-  if (error?.response?.status === 403) return 'Access denied'
-  if (error?.response?.status === 404) return 'Resource not found'
-  if (error?.response?.status === 429) return 'Too many requests'
-  if (error?.response?.status === 500) return 'Server error occurred'
-  if (error?.response?.status === 503) return 'Service unavailable'
-  return 'An error occurred'
-}
 
 export function setAuthCallbacks(getTokenFn: () => string | null, logoutFn: () => void) {
   getToken = getTokenFn
@@ -138,6 +127,19 @@ export const directoriesApi = {
   get: async (path: string) => {
     const response = await apiClient.get<Directory>(`/directories/${encodeURIComponent(path)}`)
     return response.data
+  },
+
+  updateCredentials: async (path: string, data: {
+    authType: string
+    sshKeyPath?: string
+    httpsUser?: string
+    httpsToken?: string
+  }) => {
+    const response = await apiClient.put<{ directory: Directory }>(
+      '/directories/credentials',
+      { path, ...data },
+    )
+    return response.data.directory
   },
 }
 
@@ -245,13 +247,74 @@ export const resourcesApi = {
     return response.data
   },
 
-  checkUpdates: async () => {
-    const response = await apiClient.get<{ updates: ContainerUpdateInfo[] }>('/resources/updates')
-    return response.data.updates
+  checkUpdates: async (refresh = false) => {
+    const params = refresh ? { refresh: 'true' } : undefined
+    const response = await apiClient.get<{
+      updates: (ContainerUpdateInfo | CachedUpdate)[]
+      fromCache?: boolean
+      scannedAt?: string
+    }>('/resources/updates', { params })
+    return response.data
   },
 
   updateContainer: async (id: string) => {
-    const response = await apiClient.post<{ message: string }>(`/resources/containers/${encodeURIComponent(id)}/update`)
+    const response = await apiClient.post<{ message: string; historyId?: string; oldDigest?: string; newDigest?: string; durationMs?: number }>(`/resources/containers/${encodeURIComponent(id)}/update`)
+    return response.data
+  },
+
+  getUpdateHistory: async (filters: UpdateHistoryFilters) => {
+    const response = await apiClient.get<{
+      entries: UpdateHistoryEntry[]
+      total: number
+      page: number
+      limit: number
+      totalPages: number
+    }>('/resources/updates/history', { params: filters })
+    return response.data
+  },
+
+  clearUpdateHistory: async (params?: { olderThan?: string; status?: string }) => {
+    const response = await apiClient.delete<{ deleted: number }>('/resources/updates/history', { params })
+    return response.data
+  },
+
+  getAutoUpdatePolicies: async () => {
+    const response = await apiClient.get<{
+      globalEnabled: boolean
+      policies: AutoUpdatePolicy[]
+    }>('/resources/auto-update/policies')
+    return response.data
+  },
+
+  setAutoUpdatePolicy: async (targetType: string, targetId: string, data: { enabled: boolean }) => {
+    const response = await apiClient.put<AutoUpdatePolicy>(
+      `/resources/auto-update/policies/${targetType}/${encodeURIComponent(targetId)}`,
+      data,
+    )
+    return response.data
+  },
+
+  deleteAutoUpdatePolicy: async (targetType: string, targetId: string) => {
+    await apiClient.delete(`/resources/auto-update/policies/${targetType}/${encodeURIComponent(targetId)}`)
+  },
+
+  getUpdateSettings: async () => {
+    const response = await apiClient.get<UpdateSettings>('/settings/updates')
+    return response.data
+  },
+
+  updateUpdateSettings: async (data: { scanIntervalMinutes: number; globalAutoUpdate: boolean }) => {
+    const response = await apiClient.put<UpdateSettings>('/settings/updates', data)
+    return response.data
+  },
+
+  getGitSettings: async () => {
+    const response = await apiClient.get<{ sshKey: string; httpsUser: string; hasHttpsToken: boolean }>('/settings/git')
+    return response.data
+  },
+
+  updateGitSettings: async (data: { sshKey?: string; httpsUser?: string; httpsToken?: string }) => {
+    const response = await apiClient.put<{ sshKey: string; httpsUser: string; hasHttpsToken: boolean }>('/settings/git', data)
     return response.data
   },
 
@@ -292,4 +355,3 @@ export const resourcesApi = {
 }
 
 export { apiClient }
-export default apiClient

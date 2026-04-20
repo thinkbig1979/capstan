@@ -1,8 +1,8 @@
 {
   "version": 3,
   "created": "2026-04-18T10:42:20+00:00",
-  "last_scan": "2026-04-18T10:42:21+00:00",
-  "scan_count": 1,
+  "last_scan": "2026-04-20T13:28:05+00:00",
+  "scan_count": 3,
   "overall_score": 25.0,
   "objective_score": 100.0,
   "strict_score": 25.0,
@@ -43,7 +43,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -69,7 +69,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -95,7 +95,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -121,7 +121,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -147,7 +147,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -173,7 +173,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -199,7 +199,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -225,7 +225,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -251,7 +251,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -277,7 +277,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -303,7 +303,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -329,7 +329,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -355,7 +355,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -381,7 +381,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -407,7 +407,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -433,7 +433,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -459,7 +459,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -485,7 +485,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -511,7 +511,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -537,7 +537,7 @@
       "status": "open",
       "note": null,
       "first_seen": "2026-04-18T10:42:21+00:00",
-      "last_seen": "2026-04-18T10:42:21+00:00",
+      "last_seen": "2026-04-20T13:28:05+00:00",
       "resolved_at": null,
       "reopen_count": 0,
       "work_item_kind": "assessment_request",
@@ -567,7 +567,7 @@
         }
       },
       "warnings": [],
-      "updated_at": "2026-04-18T10:42:21+00:00"
+      "updated_at": "2026-04-20T13:28:05+00:00"
     }
   },
   "score_confidence": {
@@ -597,6 +597,232 @@
       "overall_score": 25.0,
       "open": 20,
       "diff_new": 20,
+      "diff_resolved": 0,
+      "ignored": 0,
+      "raw_issues": 20,
+      "suppressed_pct": 0.0,
+      "ignore_patterns": 0,
+      "subjective_integrity": {
+        "status": "pass",
+        "matched_count": 0,
+        "reset_count": 0,
+        "target_score": 85.0
+      },
+      "score_confidence": {
+        "status": "full",
+        "confidence": 1.0,
+        "detector_count": 0,
+        "dimension_count": 0
+      },
+      "dimension_scores": {
+        "Code quality": {
+          "score": 100.0,
+          "strict": 100.0
+        },
+        "Abstraction fit": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "AI generated debt": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "API coherence": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Auth consistency": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Contracts": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Convention drift": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Cross-module arch": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Dep health": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Design coherence": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Error consistency": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "High elegance": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Stale migration": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Init coupling": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Logic clarity": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Low elegance": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Mid elegance": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Naming quality": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Structure nav": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Test strategy": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Type safety": {
+          "score": 0.0,
+          "strict": 0.0
+        }
+      }
+    },
+    {
+      "timestamp": "2026-04-20T13:27:26+00:00",
+      "lang": "typescript",
+      "strict_score": 25.0,
+      "verified_strict_score": 100.0,
+      "objective_score": 100.0,
+      "overall_score": 25.0,
+      "open": 20,
+      "diff_new": 0,
+      "diff_resolved": 0,
+      "ignored": 0,
+      "raw_issues": 20,
+      "suppressed_pct": 0.0,
+      "ignore_patterns": 0,
+      "subjective_integrity": {
+        "status": "pass",
+        "matched_count": 0,
+        "reset_count": 0,
+        "target_score": 85.0
+      },
+      "score_confidence": {
+        "status": "full",
+        "confidence": 1.0,
+        "detector_count": 0,
+        "dimension_count": 0
+      },
+      "dimension_scores": {
+        "Code quality": {
+          "score": 100.0,
+          "strict": 100.0
+        },
+        "Abstraction fit": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "AI generated debt": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "API coherence": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Auth consistency": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Contracts": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Convention drift": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Cross-module arch": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Dep health": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Design coherence": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Error consistency": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "High elegance": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Stale migration": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Init coupling": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Logic clarity": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Low elegance": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Mid elegance": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Naming quality": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Structure nav": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Test strategy": {
+          "score": 0.0,
+          "strict": 0.0
+        },
+        "Type safety": {
+          "score": 0.0,
+          "strict": 0.0
+        }
+      }
+    },
+    {
+      "timestamp": "2026-04-20T13:28:05+00:00",
+      "lang": "typescript",
+      "strict_score": 25.0,
+      "verified_strict_score": 100.0,
+      "objective_score": 100.0,
+      "overall_score": 25.0,
+      "open": 20,
+      "diff_new": 0,
       "diff_resolved": 0,
       "ignored": 0,
       "raw_issues": 20,
@@ -1208,5 +1434,9 @@
         }
       }
     }
+  },
+  "reminder_history": {
+    "report_scores": 2,
+    "feedback_nudge": 1
   }
 }

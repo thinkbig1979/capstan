@@ -1,16 +1,17 @@
-import { useState, useCallback, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
+import { Switch } from '@/components/ui/switch'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { useAuth } from '@/hooks/useAuth'
 import { useUIStore } from '@/stores/uiStore'
+import { useUpdateSettings, useUpdateUpdateSettings, useGitSettings, useUpdateGitSettings } from '@/hooks/useResources'
 import { toast } from 'sonner'
 import { classifyError } from '@/lib/error-handler'
-import { Eye, EyeOff, AlertCircle, RefreshCw, Sun, Moon, Monitor, ChevronDown, ChevronUp, Shield, Palette, Cpu } from 'lucide-react'
+import { AlertCircle, Sun, Moon, Monitor, ChevronDown, ChevronUp, Shield, Palette, Clock, KeyRound } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -20,7 +21,7 @@ import {
 } from '@/components/ui/select'
 
 interface SettingsSection {
-  id: 'account-security' | 'appearance' | 'system'
+  id: 'account-security' | 'appearance' | 'git' | 'update-schedule'
   title: string
   description: string
   icon: React.ReactNode
@@ -43,10 +44,17 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     defaultExpanded: false,
   },
   {
-    id: 'system',
-    title: 'System',
-    description: 'Configure system-wide environment variables',
-    icon: <Cpu className="h-5 w-5" />,
+    id: 'git',
+    title: 'Git',
+    description: 'Configure global git credentials for repository access',
+    icon: <KeyRound className="h-5 w-5" />,
+    defaultExpanded: false,
+  },
+  {
+    id: 'update-schedule',
+    title: 'Update Schedule',
+    description: 'Configure automatic image update scanning and auto-update policies',
+    icon: <Clock className="h-5 w-5" />,
     defaultExpanded: false,
   },
 ]
@@ -99,217 +107,263 @@ function CollapsibleSection({ section, expanded, onToggle, children }: Collapsib
   )
 }
 
-function maskValue(value: string): string {
-  if (value.length <= 4) {
-    return '*'.repeat(value.length)
-  }
-  const visibleChars = 2
-  return value.slice(0, visibleChars) + '*'.repeat(value.length - visibleChars)
-}
+function UpdateScheduleContent() {
+  const { data: settings, isLoading } = useUpdateSettings()
+  const updateSettingsMutation = useUpdateUpdateSettings()
 
-function GlobalEnvContent({
-  globalEnv,
-  isLoadingEnv,
-  error: envError,
-  refetch
-}: {
-  globalEnv?: { vars: { key: string; value: string }[] };
-  isLoadingEnv: boolean;
-  error?: unknown;
-  refetch: () => void;
-}) {
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [authTimeout, setAuthTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
-  const [showValues, setShowValues] = useState<Record<number, boolean>>({})
-  const [authPassword, setAuthPassword] = useState('')
-  const [showAuthDialog, setShowAuthDialog] = useState(false)
+  const [initialized, setInitialized] = useState(false)
+  const [scanPreset, setScanPreset] = useState<string>('0')
+  const [customMinutes, setCustomMinutes] = useState<number>(60)
+  const [globalAutoUpdate, setGlobalAutoUpdate] = useState(false)
+
+  const presets = ['0', '60', '360', '720', '1440']
 
   useEffect(() => {
-    return () => {
-      if (authTimeout) {
-        clearTimeout(authTimeout)
+    if (settings && !initialized) {
+      if (presets.includes(String(settings.scanIntervalMinutes))) {
+        setScanPreset(String(settings.scanIntervalMinutes))
+      } else {
+        setScanPreset('custom')
+        setCustomMinutes(settings.scanIntervalMinutes)
       }
+      setGlobalAutoUpdate(settings.globalAutoUpdate)
+      setInitialized(true)
     }
-  }, [authTimeout])
+  }, [settings, initialized])
 
-  const resetAuth = useCallback(() => {
-    setIsAuthenticated(false)
-    setShowValues({})
-    if (authTimeout) {
-      clearTimeout(authTimeout)
-      setAuthTimeout(null)
-    }
-  }, [authTimeout])
+  const scanInterval = settings?.scanIntervalMinutes ?? 0
+  const effectivePreset = initialized ? scanPreset : (presets.includes(String(scanInterval)) ? String(scanInterval) : 'custom')
+  const effectiveCustom = initialized ? customMinutes : scanInterval
+  const effectiveAutoUpdate = initialized ? globalAutoUpdate : (settings?.globalAutoUpdate ?? false)
 
-  const startAuthTimeout = useCallback(() => {
-    if (authTimeout) {
-      clearTimeout(authTimeout)
-    }
-    const timeout = setTimeout(() => {
-      setIsAuthenticated(false)
-      setShowValues({})
-      toast.info('Authentication session expired')
-    }, 5 * 60 * 1000) // 5 minutes
-    setAuthTimeout(timeout)
-  }, [authTimeout])
-
-  const handleAuthSuccess = useCallback(() => {
-    setIsAuthenticated(true)
-    setShowValues(
-      Object.fromEntries(globalEnv!.vars.map((_, i) => [i, true])),
-    )
-    setShowAuthDialog(false)
-    setAuthPassword('')
-    toast.success('Password verified')
-    startAuthTimeout()
-  }, [globalEnv, startAuthTimeout])
-
-  if (isLoadingEnv) {
+  if (isLoading) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <LoadingSpinner size="small" />
-        Loading environment variables...
+        Loading update settings...
       </div>
     )
   }
 
-  if (envError) {
-    const appError = classifyError(envError)
-    return (
-      <div className="flex items-start gap-2 text-sm text-destructive">
-        <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-        <div className="flex-1 space-y-2">
-          <p>{appError.message}</p>
-          {appError.retryable && (
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={refetch}
-              className="h-7"
-            >
-              <RefreshCw className="mr-1 h-3 w-3" />
-              Retry
-            </Button>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  if (!globalEnv?.vars?.length) {
-    return (
-      <div className="text-sm text-muted-foreground">
-        No global environment variables configured. Create a file at <code className="bg-muted px-1 rounded">/opt/stacks/global.env</code> to add variables.
-      </div>
-    )
-  }
-
-  const handleToggle = (index: number) => {
-    if (isAuthenticated) {
-      setShowValues(prev => ({ ...prev, [index]: !prev[index] }))
-      startAuthTimeout()
-    } else {
-      setShowAuthDialog(true)
-    }
-  }
-
-  const handleAuthConfirm = async () => {
-    if (!authPassword) {
-      toast.error('Password required')
+  const save = (updates: { scanIntervalMinutes?: number; globalAutoUpdate?: boolean }) => {
+    const minutes = updates.scanIntervalMinutes ?? (effectivePreset === 'custom' ? effectiveCustom : parseInt(effectivePreset, 10))
+    const autoUpdate = updates.globalAutoUpdate ?? effectiveAutoUpdate
+    if (minutes > 0 && minutes < 15) {
+      toast.error('Custom interval must be at least 15 minutes')
       return
     }
+    updateSettingsMutation.mutate(
+      { scanIntervalMinutes: minutes, globalAutoUpdate: autoUpdate },
+      {
+        onSuccess: () => toast.success('Settings saved'),
+        onError: () => toast.error('Failed to save settings'),
+      },
+    )
+  }
 
-    try {
-      const { authApi } = await import('@/lib/api')
-      await authApi.login(globalEnv!.vars[0].key, authPassword)
-      handleAuthSuccess()
-    } catch {
-      toast.error('Invalid password')
+  const handlePresetChange = (value: string) => {
+    setScanPreset(value)
+    if (value !== 'custom') {
+      save({ scanIntervalMinutes: parseInt(value, 10) })
     }
+  }
+
+  const handleCustomBlur = () => {
+    if (scanPreset === 'custom') {
+      save({ scanIntervalMinutes: effectiveCustom })
+    }
+  }
+
+  const handleAutoUpdateChange = (checked: boolean) => {
+    setGlobalAutoUpdate(checked)
+    save({ globalAutoUpdate: checked })
+  }
+
+  const stats = settings?.autoUpdateStats
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <h3 className="text-lg font-medium">Scan for Image Updates</h3>
+        <div className="space-y-2">
+          <Label htmlFor="scan-interval">Scan Interval</Label>
+          <Select value={effectivePreset} onValueChange={handlePresetChange}>
+            <SelectTrigger id="scan-interval" className="w-full max-w-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="0">Disabled</SelectItem>
+              <SelectItem value="60">Every hour</SelectItem>
+              <SelectItem value="360">Every 6 hours</SelectItem>
+              <SelectItem value="720">Every 12 hours</SelectItem>
+              <SelectItem value="1440">Every 24 hours</SelectItem>
+              <SelectItem value="custom">Custom</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {effectivePreset === 'custom' && (
+          <div className="space-y-2">
+            <Label htmlFor="custom-minutes">Custom interval (minutes)</Label>
+            <Input
+              id="custom-minutes"
+              type="number"
+              min={15}
+              max={10080}
+              value={effectiveCustom}
+              onChange={(e) => setCustomMinutes(parseInt(e.target.value, 10) || 0)}
+              onBlur={handleCustomBlur}
+              className="max-w-xs"
+            />
+            <p className="text-xs text-muted-foreground">Minimum 15 minutes</p>
+          </div>
+        )}
+
+        {settings?.lastScanAt && (
+          <p className="text-sm text-muted-foreground">
+            Last scanned: {new Date(settings.lastScanAt).toLocaleString()}
+          </p>
+        )}
+        {!settings?.lastScanAt && (
+          <p className="text-sm text-muted-foreground">Last scanned: Never</p>
+        )}
+        {settings?.lastScanError && (
+          <p className="text-sm text-destructive">
+            Last scan error: {settings.lastScanError}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-4 pt-4 border-t">
+        <h3 className="text-lg font-medium">Auto-Update</h3>
+        <div className="flex items-center gap-3">
+          <Switch
+            id="global-auto-update"
+            checked={effectiveAutoUpdate}
+            onCheckedChange={handleAutoUpdateChange}
+          />
+          <Label htmlFor="global-auto-update">Enable auto-update globally</Label>
+        </div>
+        {effectiveAutoUpdate && (
+          <div className="flex items-start gap-2 rounded-lg border border-yellow-200 bg-yellow-50 p-3 dark:border-yellow-900 dark:bg-yellow-950">
+            <AlertCircle className="h-4 w-4 mt-0.5 text-yellow-600 dark:text-yellow-400 flex-shrink-0" />
+            <p className="text-sm text-yellow-800 dark:text-yellow-200">
+              When enabled, containers with auto-update turned on will be updated automatically when new images are detected. This may cause brief service interruption during the update.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {stats && (
+        <div className="space-y-2 pt-4 border-t">
+          <h3 className="text-sm font-medium text-muted-foreground">Statistics</h3>
+          <p className="text-sm">
+            {stats.enabledContainers} container{stats.enabledContainers !== 1 ? 's' : ''} with auto-update enabled
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {stats.updatesLast7Days} update{stats.updatesLast7Days !== 1 ? 's' : ''} in the last 7 days,{' '}
+            {stats.updatesLast30Days} in the last 30 days
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function GitSettingsContent() {
+  const { data: gitSettings, isLoading } = useGitSettings()
+  const updateGitSettings = useUpdateGitSettings()
+
+  const [sshKey, setSshKey] = useState<string | undefined>(undefined)
+  const [httpsUser, setHttpsUser] = useState<string | undefined>(undefined)
+  const [httpsToken, setHttpsToken] = useState('')
+
+  const effectiveSshKey = sshKey !== undefined ? sshKey : (gitSettings?.sshKey || '')
+  const effectiveHttpsUser = httpsUser !== undefined ? httpsUser : (gitSettings?.httpsUser || '')
+
+  if (isLoading) {
+    return <div className="py-4"><LoadingSpinner /></div>
+  }
+
+  const handleSave = () => {
+    const data: { sshKey?: string; httpsUser?: string; httpsToken?: string } = {}
+    if (effectiveSshKey) data.sshKey = effectiveSshKey
+    if (effectiveHttpsUser) data.httpsUser = effectiveHttpsUser
+    if (httpsToken) data.httpsToken = httpsToken
+    updateGitSettings.mutate(data, {
+      onSuccess: () => {
+        toast.success('Git settings saved')
+        setHttpsToken('')
+      },
+      onError: () => toast.error('Failed to save git settings'),
+    })
   }
 
   return (
-    <>
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          {isAuthenticated ? (
-            <>
-              <EyeOff className="h-4 w-4" />
-              <span>Unlocked - all values visible</span>
-            </>
-          ) : (
-            <>
-              <Eye className="h-4 w-4" />
-              <span>Locked - enter password to view</span>
-            </>
-          )}
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <h3 className="text-lg font-medium">SSH</h3>
+        <div className="space-y-2">
+          <Label htmlFor="git-ssh-key">SSH Private Key Path</Label>
+          <Input
+            id="git-ssh-key"
+            type="text"
+            placeholder="/path/to/id_rsa (inside container)"
+            value={effectiveSshKey}
+            onChange={(e) => setSshKey(e.target.value)}
+            className="max-w-md"
+          />
+          <p className="text-xs text-muted-foreground">
+            Path to the default SSH private key used for git operations. Must be accessible inside the container.
+          </p>
         </div>
-        {isAuthenticated && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={resetAuth}
-            className="h-8"
-          >
-            Hide all
-          </Button>
-        )}
-      </div>
-      
-      <div className="space-y-2">
-        {globalEnv.vars.map((envVar: { key: string; value: string }, index: number) => {
-          const displayValue = showValues[index] ? envVar.value : maskValue(envVar.value)
-          return (
-            <div key={envVar.key || `var-${index}`} className="flex items-center gap-2">
-              <div className="flex-1 font-mono text-sm bg-muted p-2 rounded">
-                <span className="font-semibold">{envVar.key}</span>=
-                <span className="opacity-70">{displayValue}</span>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => handleToggle(index)}
-                className="h-8 w-8 p-0"
-                aria-label={showValues[index] ? 'Hide value' : 'Show value'}
-              >
-                {showValues[index] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </Button>
-            </div>
-          )
-        })}
       </div>
 
-      {showAuthDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/80" onClick={() => setShowAuthDialog(false)} aria-hidden="true" />
-          <div className="relative z-50 w-full max-w-md rounded-lg border bg-background p-6 shadow-lg">
-            <h3 className="text-lg font-semibold mb-4">Verify Password</h3>
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="auth-password">Password</Label>
-                <Input
-                  id="auth-password"
-                  type="password"
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAuthConfirm()}
-                  className="mt-1.5"
-                />
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setShowAuthDialog(false)} className="flex-1">
-                  Cancel
-                </Button>
-                <Button onClick={handleAuthConfirm} className="flex-1">
-                  Verify
-                </Button>
-              </div>
-            </div>
-          </div>
+      <div className="space-y-4 pt-4 border-t">
+        <h3 className="text-lg font-medium">HTTPS</h3>
+        <div className="space-y-2">
+          <Label htmlFor="git-https-user">Username</Label>
+          <Input
+            id="git-https-user"
+            type="text"
+            placeholder="git"
+            value={effectiveHttpsUser}
+            onChange={(e) => setHttpsUser(e.target.value)}
+            className="max-w-md"
+          />
         </div>
-      )}
-    </>
+        <div className="space-y-2">
+          <Label htmlFor="git-https-token">
+            Personal Access Token
+            {gitSettings?.hasHttpsToken && (
+              <span className="ml-2 text-xs text-muted-foreground font-normal">(currently set)</span>
+            )}
+          </Label>
+          <Input
+            id="git-https-token"
+            type="password"
+            placeholder={gitSettings?.hasHttpsToken ? 'Leave blank to keep current token' : 'ghp_xxxx or glpat-xxxx'}
+            value={httpsToken}
+            onChange={(e) => setHttpsToken(e.target.value)}
+            className="max-w-md"
+          />
+          <p className="text-xs text-muted-foreground">
+            Used as the default token for HTTPS git remotes. Individual stack credentials override these.
+          </p>
+        </div>
+      </div>
+
+      <Button onClick={handleSave} disabled={updateGitSettings.isPending}>
+        {updateGitSettings.isPending ? (
+          <>
+            <span className="mr-2"><LoadingSpinner size="small" /></span>
+            Saving...
+          </>
+        ) : (
+          'Save Git Settings'
+        )}
+      </Button>
+    </div>
   )
 }
 
@@ -360,21 +414,6 @@ export function SettingsPage() {
     const section = SETTINGS_SECTIONS.find((s) => s.id === sectionId)
     return section?.defaultExpanded ?? false
   }
-
-  const { 
-    data: globalEnv, 
-    isLoading: isLoadingEnv,
-    error: envError,
-    refetch: refetchGlobalEnv 
-  } = useQuery({
-    queryKey: ['settings', 'global-env'],
-    queryFn: async () => {
-      const { authApi } = await import('@/lib/api')
-      return authApi.getGlobalEnv()
-    },
-    staleTime: 30_000,
-    retry: 1,
-  })
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -606,15 +645,18 @@ export function SettingsPage() {
 
         <CollapsibleSection
           section={SETTINGS_SECTIONS[2]}
-          expanded={isSectionExpanded('system')}
-          onToggle={() => toggleSection('system')}
+          expanded={isSectionExpanded('git')}
+          onToggle={() => toggleSection('git')}
         >
-          <GlobalEnvContent
-            globalEnv={globalEnv}
-            isLoadingEnv={isLoadingEnv}
-            error={envError}
-            refetch={refetchGlobalEnv}
-          />
+          <GitSettingsContent />
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          section={SETTINGS_SECTIONS[3]}
+          expanded={isSectionExpanded('update-schedule')}
+          onToggle={() => toggleSection('update-schedule')}
+        >
+          <UpdateScheduleContent />
         </CollapsibleSection>
     </div>
   )

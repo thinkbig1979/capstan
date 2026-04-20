@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useWebSocketJSON } from '@/hooks/useWebSocket'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -110,10 +110,15 @@ function getLogLevelColor(message: string): string {
   return ''
 }
 
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function highlightSearchTerm(text: string, searchTerm: string): React.ReactNode {
   if (!searchTerm) return text
 
-  const parts = text.split(new RegExp(`(${searchTerm})`, 'gi'))
+  const escaped = escapeRegExp(searchTerm)
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'))
   return parts.map((part, i) =>
     part.toLowerCase() === searchTerm.toLowerCase() ? (
       <mark key={i} className="bg-yellow-300 text-yellow-900 rounded px-0.5">
@@ -152,18 +157,18 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
     return config?.getStartTime() || null
   }, [timeRange, customStartTime])
 
-  const filteredLogs = logs.filter((log) => {
-    const matchesSearch =
-      !searchTerm || log.message.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesContainer =
-      selectedContainers.length === 0 || selectedContainers.includes(log.container)
-    
+  const filteredLogs = useMemo(() => {
     const startTime = filterStartTime()
-    const matchesTimeRange =
-      !startTime || new Date(log.timestamp) >= startTime
-    
-    return matchesSearch && matchesContainer && matchesTimeRange
-  })
+    return logs.filter((log) => {
+      const matchesSearch =
+        !searchTerm || log.message.toLowerCase().includes(searchTerm.toLowerCase())
+      const matchesContainer =
+        selectedContainers.length === 0 || selectedContainers.includes(log.container)
+      const matchesTimeRange =
+        !startTime || new Date(log.timestamp) >= startTime
+      return matchesSearch && matchesContainer && matchesTimeRange
+    })
+  }, [logs, searchTerm, selectedContainers, filterStartTime])
 
   const handleLogMessage = useCallback((data: LogMessage) => {
     batchRef.current.push(data)

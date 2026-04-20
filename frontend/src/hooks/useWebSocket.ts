@@ -21,7 +21,8 @@ export function useWebSocket(
   onMessage: (data: string | ArrayBuffer) => void,
   options: UseWebSocketOptions = {}
 ): UseWebSocketReturn {
-  const { isAuthenticated, authDisabled } = useAuthStore()
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+  const authDisabled = useAuthStore((s) => s.authDisabled)
   const wsClientRef = useRef<WSClient | null>(null)
   const onMessageRef = useRef(onMessage)
   const optionsRef = useRef(options)
@@ -94,7 +95,7 @@ export function useWebSocket(
       setWsState('CLOSED')
       setReconnectAttempts(0)
     }
-  }, [path, isAuthenticated, authDisabled, wrappedOnMessage])
+  }, [path, isAuthenticated, authDisabled, wrappedOnMessage, options?.skip])
 
   const send = useCallback((data: string | ArrayBuffer) => {
     wsClientRef.current?.send(data)

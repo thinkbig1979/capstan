@@ -42,9 +42,10 @@ func TestScannerService_ScanAll_EmptyDirectory(t *testing.T) {
 
 func TestScannerService_ScanAll_WithGlobalEnv(t *testing.T) {
 	tempDir := t.TempDir()
-	cfg := &config.Config{StacksDir: tempDir}
+	dataDir := t.TempDir()
+	cfg := &config.Config{StacksDir: tempDir, DataDir: dataDir}
 
-	globalEnvPath := filepath.Join(tempDir, "global.env")
+	globalEnvPath := filepath.Join(dataDir, "global.env")
 	err := os.WriteFile(globalEnvPath, []byte("TEST=value\n"), 0644)
 	require.NoError(t, err)
 
