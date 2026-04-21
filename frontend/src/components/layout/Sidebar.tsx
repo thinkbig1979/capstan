@@ -1,160 +1,209 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
-import { Link, useLocation } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { useUIStore } from '@/stores/uiStore'
-import { stacksApi } from '@/lib/api'
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { Link, useLocation } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { useUIStore } from "@/stores/uiStore";
+import { stacksApi } from "@/lib/api";
 import {
-  Search, X, Play, Square, AlertTriangle, HelpCircle, Minus,
-  ChevronDown, ChevronRight, ArrowUpDown, Boxes,
-} from 'lucide-react'
-import type { Stack, StackStatus } from '@/types'
+  Search,
+  X,
+  Play,
+  Square,
+  AlertTriangle,
+  HelpCircle,
+  Minus,
+  ChevronDown,
+  ChevronRight,
+  ArrowUpDown,
+  Boxes,
+} from "lucide-react";
+import type { Stack, StackStatus } from "@/types";
 
-const statusIcon: Record<StackStatus, { icon: React.ComponentType<{ className?: string }>; className: string }> = {
-  running: { icon: Play, className: 'text-green-500' },
-  partial: { icon: Minus, className: 'text-yellow-500' },
-  stopped: { icon: Square, className: 'text-muted-foreground' },
-  error: { icon: AlertTriangle, className: 'text-red-500' },
-  unknown: { icon: HelpCircle, className: 'text-gray-400' },
-}
+const statusIcon: Record<
+  StackStatus,
+  { icon: React.ComponentType<{ className?: string }>; className: string }
+> = {
+  running: { icon: Play, className: "text-green-500" },
+  partial: { icon: Minus, className: "text-yellow-500" },
+  stopped: { icon: Square, className: "text-muted-foreground" },
+  error: { icon: AlertTriangle, className: "text-red-500" },
+  unknown: { icon: HelpCircle, className: "text-gray-400" },
+};
 
 function groupStacksByDirectory(stacks: Stack[]) {
-  const groups = new Map<string, Stack[]>()
+  const groups = new Map<string, Stack[]>();
   for (const stack of stacks) {
-    if (!groups.has(stack.directory)) groups.set(stack.directory, [])
-    groups.get(stack.directory)!.push(stack)
+    if (!groups.has(stack.directory)) groups.set(stack.directory, []);
+    groups.get(stack.directory)!.push(stack);
   }
-  const result: { dirName: string; dirPath: string; stacks: Stack[] }[] = []
+  const result: { dirName: string; dirPath: string; stacks: Stack[] }[] = [];
   for (const [dirPath, dirStacks] of groups) {
-    const parts = dirPath.split('/')
-    result.push({ dirName: parts[parts.length - 1] || dirPath, dirPath, stacks: dirStacks })
+    const parts = dirPath.split("/");
+    result.push({
+      dirName: parts[parts.length - 1] || dirPath,
+      dirPath,
+      stacks: dirStacks,
+    });
   }
-  return result.sort((a, b) => a.dirName.localeCompare(b.dirName))
+  return result.sort((a, b) => a.dirName.localeCompare(b.dirName));
 }
 
 function loadCollapsed(): Set<string> {
   try {
-    const raw = localStorage.getItem('sidebar-collapsed')
-    if (raw) return new Set(JSON.parse(raw))
-  } catch { /* ignore */ }
-  return new Set()
+    const raw = localStorage.getItem("sidebar-collapsed");
+    if (raw) return new Set(JSON.parse(raw));
+  } catch {
+    /* ignore */
+  }
+  return new Set();
 }
 
 function saveCollapsed(set: Set<string>) {
-  localStorage.setItem('sidebar-collapsed', JSON.stringify([...set]))
+  localStorage.setItem("sidebar-collapsed", JSON.stringify([...set]));
 }
 
 export function Sidebar() {
-  const sidebarOpen = useUIStore((s) => s.sidebarOpen)
-  const toggleSidebar = useUIStore((s) => s.toggleSidebar)
-  const sidebarWidth = useUIStore((s) => s.sidebarWidth)
-  const setSidebarWidth = useUIStore((s) => s.setSidebarWidth)
-  const location = useLocation()
-  const isDragging = useRef(false)
-  const dragWidthRef = useRef(0)
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
+  const sidebarWidth = useUIStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useUIStore((s) => s.setSidebarWidth);
+  const location = useLocation();
+  const isDragging = useRef(false);
+  const dragWidthRef = useRef(0);
 
-  const [searchQuery, setSearchQuery] = useState(() => localStorage.getItem('sidebar-search') || '')
-  const [statusFilter, setStatusFilter] = useState<StackStatus | 'all'>(() => {
-    const saved = localStorage.getItem('sidebar-filter')
-    return (saved as StackStatus | 'all') || 'all'
-  })
-  const [sortBy, setSortBy] = useState<'name' | 'status'>(() => {
-    return (localStorage.getItem('sidebar-sort') as 'name' | 'status') || 'name'
-  })
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed)
+  const [searchQuery, setSearchQuery] = useState(
+    () => localStorage.getItem("sidebar-search") || "",
+  );
+  const [statusFilter, setStatusFilter] = useState<StackStatus | "all">(() => {
+    const saved = localStorage.getItem("sidebar-filter");
+    return (saved as StackStatus | "all") || "all";
+  });
+  const [sortBy, setSortBy] = useState<"name" | "status">(() => {
+    return (
+      (localStorage.getItem("sidebar-sort") as "name" | "status") || "name"
+    );
+  });
+  const [collapsedGroups, setCollapsedGroups] =
+    useState<Set<string>>(loadCollapsed);
 
-  useEffect(() => { localStorage.setItem('sidebar-search', searchQuery) }, [searchQuery])
-  useEffect(() => { localStorage.setItem('sidebar-filter', statusFilter) }, [statusFilter])
-  useEffect(() => { localStorage.setItem('sidebar-sort', sortBy) }, [sortBy])
-  useEffect(() => { saveCollapsed(collapsedGroups) }, [collapsedGroups])
+  useEffect(() => {
+    localStorage.setItem("sidebar-search", searchQuery);
+  }, [searchQuery]);
+  useEffect(() => {
+    localStorage.setItem("sidebar-filter", statusFilter);
+  }, [statusFilter]);
+  useEffect(() => {
+    localStorage.setItem("sidebar-sort", sortBy);
+  }, [sortBy]);
+  useEffect(() => {
+    saveCollapsed(collapsedGroups);
+  }, [collapsedGroups]);
 
   const { data: stacks = [], isLoading } = useQuery({
-    queryKey: ['stacks'],
+    queryKey: ["stacks"],
     queryFn: () => stacksApi.list(),
     staleTime: 30_000,
-  })
+  });
 
   const filteredStacks = useMemo(() => {
-    let result = [...stacks]
+    let result = [...stacks];
     if (searchQuery) {
-      const q = searchQuery.toLowerCase()
-      result = result.filter((s) => s.projectName.toLowerCase().includes(q))
+      const q = searchQuery.toLowerCase();
+      result = result.filter((s) => s.projectName.toLowerCase().includes(q));
     }
-    if (statusFilter !== 'all') {
-      result = result.filter((s) => s.status === statusFilter)
+    if (statusFilter !== "all") {
+      result = result.filter((s) => s.status === statusFilter);
     }
     result.sort((a, b) => {
-      if (sortBy === 'status') return a.status.localeCompare(b.status) || a.projectName.localeCompare(b.projectName)
-      return a.projectName.localeCompare(b.projectName)
-    })
-    return result
-  }, [stacks, searchQuery, statusFilter, sortBy])
+      if (sortBy === "status")
+        return (
+          a.status.localeCompare(b.status) ||
+          a.projectName.localeCompare(b.projectName)
+        );
+      return a.projectName.localeCompare(b.projectName);
+    });
+    return result;
+  }, [stacks, searchQuery, statusFilter, sortBy]);
 
-  const grouped = useMemo(() => groupStacksByDirectory(filteredStacks), [filteredStacks])
+  const grouped = useMemo(
+    () => groupStacksByDirectory(filteredStacks),
+    [filteredStacks],
+  );
   const useGroups = useMemo(() => {
-    const allGrouped = groupStacksByDirectory(stacks)
-    return allGrouped.some((g) => g.stacks.length > 1)
-  }, [stacks])
+    const allGrouped = groupStacksByDirectory(stacks);
+    return allGrouped.some((g) => g.stacks.length > 1);
+  }, [stacks]);
 
   const toggleGroup = useCallback((dirPath: string) => {
     setCollapsedGroups((prev) => {
-      const next = new Set(prev)
-      if (next.has(dirPath)) next.delete(dirPath)
-      else next.add(dirPath)
-      return next
-    })
-  }, [])
+      const next = new Set(prev);
+      if (next.has(dirPath)) next.delete(dirPath);
+      else next.add(dirPath);
+      return next;
+    });
+  }, []);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    isDragging.current = true
-    dragWidthRef.current = sidebarWidth
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    const startX = e.clientX
-    const onMove = (ev: MouseEvent) => {
-      if (!isDragging.current) return
-      setSidebarWidth(sidebarWidth + ev.clientX - startX)
-    }
-    const onUp = () => {
-      isDragging.current = false
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-  }, [sidebarWidth, setSidebarWidth])
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      isDragging.current = true;
+      dragWidthRef.current = sidebarWidth;
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      const startX = e.clientX;
+      const onMove = (ev: MouseEvent) => {
+        if (!isDragging.current) return;
+        setSidebarWidth(sidebarWidth + ev.clientX - startX);
+      };
+      const onUp = () => {
+        isDragging.current = false;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    },
+    [sidebarWidth, setSidebarWidth],
+  );
 
   const renderStack = (stack: Stack) => {
-    const isActive = location.pathname.startsWith(`/stacks/${stack.id}`)
-    const cfg = statusIcon[stack.status] || statusIcon.unknown
-    const Icon = cfg.icon
+    const isActive = location.pathname.startsWith(`/stacks/${stack.id}`);
+    const cfg = statusIcon[stack.status] || statusIcon.unknown;
+    const Icon = cfg.icon;
     return (
       <Link
         key={stack.id}
         to={`/stacks/${stack.id}`}
         className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors ${
-          isActive ? 'bg-accent text-accent-foreground font-medium' : 'hover:bg-accent/50 text-foreground'
+          isActive
+            ? "bg-accent text-accent-foreground font-medium"
+            : "hover:bg-accent/50 text-foreground"
         }`}
         aria-label={`${stack.projectName} - ${stack.status}`}
       >
         <Icon className={`h-3.5 w-3.5 flex-shrink-0 ${cfg.className}`} />
         <span className="flex-1 truncate">{stack.projectName}</span>
         {stack.containerCount != null && stack.containerCount > 0 && (
-          <Badge variant="secondary" className="h-4 min-w-[1.25rem] px-1 text-[10px] leading-none">
+          <Badge
+            variant="secondary"
+            className="h-4 min-w-[1.25rem] px-1 text-[10px] leading-none"
+          >
             {stack.containerCount}
           </Badge>
         )}
         {stack.isGitRepo && stack.gitDirty && (
-          <span className="h-1.5 w-1.5 rounded-full bg-orange-400 flex-shrink-0" title="Uncommitted changes" />
+          <span
+            className="h-1.5 w-1.5 rounded-full bg-orange-400 flex-shrink-0"
+            title="Uncommitted changes"
+          />
         )}
       </Link>
-    )
-  }
+    );
+  };
 
   if (!sidebarOpen) {
     return (
@@ -167,15 +216,25 @@ export function Sidebar() {
           aria-label="Open sidebar"
           title="Open sidebar"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <polyline points="9 18 15 12 9 6" />
           </svg>
         </Button>
       </aside>
-    )
+    );
   }
 
-  const hasFilters = searchQuery || statusFilter !== 'all'
+  const hasFilters = searchQuery || statusFilter !== "all";
 
   return (
     <aside
@@ -187,9 +246,17 @@ export function Sidebar() {
           <h2 className="text-sm font-semibold flex items-center gap-1.5">
             <Boxes className="h-4 w-4" />
             Stacks
-            <span className="text-muted-foreground font-normal">({stacks.length})</span>
+            <span className="text-muted-foreground font-normal">
+              ({stacks.length})
+            </span>
           </h2>
-          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={toggleSidebar} aria-label="Close sidebar">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            onClick={toggleSidebar}
+            aria-label="Close sidebar"
+          >
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -205,7 +272,7 @@ export function Sidebar() {
           />
           {searchQuery && (
             <button
-              onClick={() => setSearchQuery('')}
+              onClick={() => setSearchQuery("")}
               className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
             >
               <X className="h-3 w-3" />
@@ -214,30 +281,45 @@ export function Sidebar() {
         </div>
 
         <div className="flex items-center gap-1 flex-wrap">
-          {(['all', 'running', 'stopped', 'error'] as const).map((key) => (
+          {(["all", "running", "stopped", "error"] as const).map((key) => (
             <button
               key={key}
               onClick={() => setStatusFilter(key)}
               className={`inline-flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-medium transition-colors ${
                 statusFilter === key
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80"
               }`}
             >
-              {key === 'all' && 'All'}
-              {key === 'running' && <><span className="h-1.5 w-1.5 rounded-full bg-current" />Run</>}
-              {key === 'stopped' && <><span className="h-1.5 w-1.5 rounded-sm bg-current" />Stop</>}
-              {key === 'error' && <><span className="h-1.5 w-1.5 rounded-full bg-current" />Err</>}
+              {key === "all" && "All"}
+              {key === "running" && (
+                <>
+                  <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                  Running
+                </>
+              )}
+              {key === "stopped" && (
+                <>
+                  <span className="h-1.5 w-1.5 rounded-sm bg-current" />
+                  Stopped
+                </>
+              )}
+              {key === "error" && (
+                <>
+                  <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                  Error
+                </>
+              )}
             </button>
           ))}
           <div className="flex-1" />
           <button
-            onClick={() => setSortBy(sortBy === 'name' ? 'status' : 'name')}
+            onClick={() => setSortBy(sortBy === "name" ? "status" : "name")}
             className="inline-flex items-center gap-0.5 h-5 px-1.5 rounded text-[10px] text-muted-foreground hover:bg-muted transition-colors"
-            title={`Sort by ${sortBy === 'name' ? 'name' : 'status'}. Click to toggle.`}
+            title={`Sort by ${sortBy === "name" ? "name" : "status"}. Click to toggle.`}
           >
             <ArrowUpDown className="h-2.5 w-2.5" />
-            {sortBy === 'name' ? 'A-Z' : 'St'}
+            {sortBy === "name" ? "A-Z" : "St"}
           </button>
         </div>
       </div>
@@ -246,7 +328,10 @@ export function Sidebar() {
         <div className="px-3 py-1 border-b text-[10px] text-muted-foreground">
           {filteredStacks.length} of {stacks.length} stacks
           <button
-            onClick={() => { setSearchQuery(''); setStatusFilter('all') }}
+            onClick={() => {
+              setSearchQuery("");
+              setStatusFilter("all");
+            }}
             className="ml-1.5 text-primary hover:underline"
           >
             Clear
@@ -257,14 +342,16 @@ export function Sidebar() {
       <ScrollArea className="flex-1">
         <div className="p-2 space-y-0.5">
           {isLoading ? (
-            <div className="px-2 py-4 text-sm text-muted-foreground">Loading...</div>
+            <div className="px-2 py-4 text-sm text-muted-foreground">
+              Loading...
+            </div>
           ) : filteredStacks.length === 0 ? (
             <div className="px-2 py-4 text-sm text-muted-foreground">
-              {hasFilters ? 'No stacks match filters' : 'No stacks found'}
+              {hasFilters ? "No stacks match filters" : "No stacks found"}
             </div>
           ) : useGroups ? (
             grouped.map((group) => {
-              const isCollapsed = collapsedGroups.has(group.dirPath)
+              const isCollapsed = collapsedGroups.has(group.dirPath);
               return (
                 <div key={group.dirPath}>
                   <button
@@ -277,12 +364,16 @@ export function Sidebar() {
                     ) : (
                       <ChevronDown className="h-3 w-3 flex-shrink-0" />
                     )}
-                    <span className="truncate flex-1 text-left">{group.dirName}</span>
-                    <span className="text-[9px] font-normal tabular-nums">{group.stacks.length}</span>
+                    <span className="truncate flex-1 text-left">
+                      {group.dirName}
+                    </span>
+                    <span className="text-[9px] font-normal tabular-nums">
+                      {group.stacks.length}
+                    </span>
                   </button>
                   {!isCollapsed && group.stacks.map(renderStack)}
                 </div>
-              )
+              );
             })
           ) : (
             filteredStacks.map(renderStack)
@@ -300,5 +391,5 @@ export function Sidebar() {
         title="Drag to resize"
       />
     </aside>
-  )
+  );
 }

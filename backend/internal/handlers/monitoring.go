@@ -43,11 +43,7 @@ func (h *MonitoringHandler) RegisterRoutes(r *gin.RouterGroup, jwtSecret string,
 
 func (h *MonitoringHandler) getStackContainers(jwtSecret string, authDisabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID, err := authenticateWS(c, h.db, jwtSecret, authDisabled)
-		if err != nil {
-			c.Error(err)
-			return
-		}
+		userID := c.GetString("userID")
 
 		stackID := c.Param("id")
 		stack, err := h.db.GetStack(stackID)

@@ -104,24 +104,40 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 		return
 	}
 
-	userID, err := authenticateWS(c, h.db, h.jwtSecret, h.authDisabled)
-	if err != nil {
-		if appErr, ok := err.(*models.AppError); ok {
-			c.JSON(appErr.Status, appErr)
-		} else {
-			c.JSON(http.StatusUnauthorized, models.NewAppError(
-				http.StatusUnauthorized,
-				models.ErrUnauthorized,
-				"Authentication failed",
-			))
-		}
-		return
-	}
-
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		slog.Error("Failed to upgrade WebSocket connection", "error", err)
 		return
+	}
+
+	var userID string
+
+	if h.authDisabled {
+		userID = "anonymous"
+	} else {
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var authMsg struct {
+			Type  string `json:"type"`
+			Token string `json:"token"`
+		}
+		if err := conn.ReadJSON(&authMsg); err != nil {
+			writeCloseMessage(conn, CloseCodeAuthFailure, "Auth timeout")
+			conn.Close()
+			return
+		}
+
+		if authMsg.Type != "auth" || authMsg.Token == "" {
+			writeCloseMessage(conn, CloseCodeAuthFailure, "Invalid auth message")
+			conn.Close()
+			return
+		}
+
+		userID, err = authenticateToken(authMsg.Token, h.db, h.jwtSecret)
+		if err != nil {
+			writeCloseMessage(conn, CloseCodeAuthFailure, "Auth failed")
+			conn.Close()
+			return
+		}
 	}
 	defer conn.Close()
 

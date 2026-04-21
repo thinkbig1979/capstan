@@ -125,20 +125,7 @@ func (cm *ConnectionManager) CloseAll() {
 	cm.userCounts = make(map[string]int)
 }
 
-func authenticateWS(c *gin.Context, db *database.DB, jwtSecret string, authDisabled bool) (string, error) {
-	if authDisabled {
-		return "anonymous", nil
-	}
-
-	token := c.Query("token")
-	if token == "" {
-		return "", &models.AppError{
-			Code:    models.ErrUnauthorized,
-			Message: "Missing token parameter",
-			Status:  http.StatusUnauthorized,
-		}
-	}
-
+func authenticateToken(token string, db *database.DB, jwtSecret string) (string, error) {
 	claims, err := validateJWT(token, jwtSecret)
 	if err != nil {
 		if err.Error() == "token is expired by" {
@@ -272,14 +259,39 @@ func writeCloseMessage(conn *websocket.Conn, closeCode int, reason string) {
 }
 
 func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDisabled bool) (*Connection, error) {
-	userID, err := authenticateWS(c, db, jwtSecret, authDisabled)
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-	if err != nil {
-		return nil, err
+	var userID string
+
+	if authDisabled {
+		userID = "anonymous"
+	} else {
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var authMsg struct {
+			Type  string `json:"type"`
+			Token string `json:"token"`
+		}
+		if err := conn.ReadJSON(&authMsg); err != nil {
+			writeCloseMessage(conn, CloseCodeAuthFailure, "Auth timeout")
+			conn.Close()
+			return nil, &models.AppError{Code: models.ErrUnauthorized, Message: "No auth message received", Status: 401}
+		}
+
+		if authMsg.Type != "auth" || authMsg.Token == "" {
+			writeCloseMessage(conn, CloseCodeAuthFailure, "Invalid auth message")
+			conn.Close()
+			return nil, &models.AppError{Code: models.ErrUnauthorized, Message: "Invalid auth message", Status: 401}
+		}
+
+		userID, err = authenticateToken(authMsg.Token, db, jwtSecret)
+		if err != nil {
+			writeCloseMessage(conn, CloseCodeAuthFailure, "Auth failed")
+			conn.Close()
+			return nil, err
+		}
 	}
 
 	connectionID := uuid.New().String()

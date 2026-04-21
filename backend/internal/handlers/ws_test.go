@@ -1,14 +1,12 @@
 package handlers
 
 import (
-	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/docker-manager/backend/internal/database"
 	"github.com/docker-manager/backend/internal/models"
-	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -124,7 +122,7 @@ func TestValidateJWT(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestAuthenticateWS_MissingToken(t *testing.T) {
+func TestAuthenticateToken_EmptyToken(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "test-db-*")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
@@ -133,14 +131,11 @@ func TestAuthenticateWS_MissingToken(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("GET", "/ws", nil)
-
-	_, err = authenticateWS(c, db, "test-secret", false)
+	_, err = authenticateToken("", db, "test-secret")
 	assert.Error(t, err)
 }
 
-func TestAuthenticateWS_ValidToken(t *testing.T) {
+func TestAuthenticateToken_ValidToken(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "test-db-*")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
@@ -148,8 +143,6 @@ func TestAuthenticateWS_ValidToken(t *testing.T) {
 	db, err := database.NewWithMigrations(tempDir)
 	require.NoError(t, err)
 	defer db.Close()
-
-	require.NoError(t, err)
 
 	userID := uuid.New().String()
 	user := models.User{
@@ -184,15 +177,12 @@ func TestAuthenticateWS_ValidToken(t *testing.T) {
 	token, err := generateJWTForTest(claims, "test-secret-key-32-chars-long!!")
 	require.NoError(t, err)
 
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("GET", "/ws?token="+token, nil)
-
-	resultUserID, err := authenticateWS(c, db, "test-secret-key-32-chars-long!!", false)
+	resultUserID, err := authenticateToken(token, db, "test-secret-key-32-chars-long!!")
 	assert.NoError(t, err)
 	assert.Equal(t, userID, resultUserID)
 }
 
-func TestAuthenticateWS_AuthDisabled(t *testing.T) {
+func TestAuthenticateToken_InvalidToken(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "test-db-*")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
@@ -201,12 +191,8 @@ func TestAuthenticateWS_AuthDisabled(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("GET", "/ws", nil)
-
-	userID, err := authenticateWS(c, db, "", true)
-	assert.NoError(t, err)
-	assert.Equal(t, "anonymous", userID)
+	_, err = authenticateToken("not-a-valid-token", db, "test-secret-key-32-chars-long!!")
+	assert.Error(t, err)
 }
 
 func generateJWTForTest(claims map[string]interface{}, secret string) (string, error) {

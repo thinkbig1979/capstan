@@ -35,15 +35,16 @@ export class WSClient {
     this.currentOptions = options
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = token
-      ? `${protocol}//${window.location.host}/api/v1${path}?token=${token}`
-      : `${protocol}//${window.location.host}/api/v1${path}`
+    const url = `${protocol}//${window.location.host}/api/v1${path}`
 
     this.ws = new WebSocket(url)
     this.ws.binaryType = options.binary ? 'arraybuffer' : 'blob'
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0
+      if (token) {
+        this.ws!.send(JSON.stringify({ type: 'auth', token }))
+      }
       options.onOpen?.()
     }
 

@@ -138,7 +138,7 @@ describe('useWebSocket auth-disabled behavior', () => {
   })
 
   describe('WSClient URL construction', () => {
-    it('omits token parameter when authDisabled=true and no token exists', () => {
+    it('omits token from URL when authDisabled=true and no token exists', () => {
       useAuthStore.setState({ authDisabled: true, token: null, isAuthenticated: false })
 
       const client = new WSClient()
@@ -149,32 +149,41 @@ describe('useWebSocket auth-disabled behavior', () => {
       expect(MockWebSocket.instance!.url).toMatch(/\/api\/v1\/containers$/)
     })
 
-    it('includes token parameter when token exists', () => {
+    it('sends auth message as first message when token exists', () => {
       useAuthStore.setState({
         authDisabled: false,
         token: 'my.jwt.token',
         isAuthenticated: true,
       })
 
+      const sendSpy = vi.fn()
       const client = new WSClient()
       client.connect('/containers', vi.fn())
 
       expect(MockWebSocket.instance).not.toBeNull()
-      expect(MockWebSocket.instance!.url).toContain('?token=my.jwt.token')
+      expect(MockWebSocket.instance!.url).not.toContain('?token=')
+
+      MockWebSocket.instance!.send = sendSpy
+      MockWebSocket.instance!.onopen!()
+
+      expect(sendSpy).toHaveBeenCalledWith(JSON.stringify({ type: 'auth', token: 'my.jwt.token' }))
     })
 
-    it('includes token parameter when both token and authDisabled are set', () => {
+    it('does not send auth message when authDisabled=true without token', () => {
       useAuthStore.setState({
         authDisabled: true,
-        token: 'my.jwt.token',
-        isAuthenticated: true,
+        token: null,
+        isAuthenticated: false,
       })
 
+      const sendSpy = vi.fn()
       const client = new WSClient()
       client.connect('/containers', vi.fn())
 
-      expect(MockWebSocket.instance).not.toBeNull()
-      expect(MockWebSocket.instance!.url).toContain('?token=my.jwt.token')
+      MockWebSocket.instance!.send = sendSpy
+      MockWebSocket.instance!.onopen!()
+
+      expect(sendSpy).not.toHaveBeenCalled()
     })
 
     it('does not connect when authDisabled=false and no token', () => {
@@ -299,6 +308,7 @@ describe('useWebSocket auth-disabled behavior', () => {
       })
 
       act(() => {
+        MockWebSocket.instance!.readyState = MockWebSocket.OPEN
         MockWebSocket.instance!.onopen!()
       })
 
