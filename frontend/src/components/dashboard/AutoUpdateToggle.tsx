@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Switch } from '@/components/ui/switch'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { AlertTriangle } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { AlertTriangle, Lock } from 'lucide-react'
 import { useToggleAutoUpdate } from '@/hooks/useResources'
 
 interface AutoUpdateToggleProps {
@@ -10,6 +10,7 @@ interface AutoUpdateToggleProps {
   enabled: boolean
   paused: boolean
   consecutiveFailures: number
+  globalDisabled?: boolean
 }
 
 export function AutoUpdateToggle({
@@ -18,6 +19,7 @@ export function AutoUpdateToggle({
   enabled,
   paused,
   consecutiveFailures,
+  globalDisabled = false,
 }: AutoUpdateToggleProps) {
   const [optimisticEnabled, setOptimisticEnabled] = useState(enabled)
   const toggleMutation = useToggleAutoUpdate()
@@ -40,6 +42,29 @@ export function AutoUpdateToggle({
 
   const isChecked = optimisticEnabled && !paused
 
+  if (globalDisabled) {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center gap-1.5 cursor-help">
+              <Switch
+                checked={false}
+                disabled
+                aria-label={`Auto-update ${targetType} ${targetId}`}
+              />
+              <Lock className="h-3 w-3 text-muted-foreground" />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Auto-update is not enabled.</p>
+            <p>Enable it in Settings to configure per-container updates.</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    )
+  }
+
   return (
     <div className="flex items-center gap-1.5">
       <Switch
@@ -49,15 +74,17 @@ export function AutoUpdateToggle({
         aria-label={`Auto-update ${targetType} ${targetId}`}
       />
       {paused && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <AlertTriangle className="h-3.5 w-3.5 text-orange-500 cursor-help" />
-          </TooltipTrigger>
-          <TooltipContent>
-            <p>Auto-update paused after 3 consecutive failures.</p>
-            <p>Toggle to re-enable.</p>
-          </TooltipContent>
-        </Tooltip>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <AlertTriangle className="h-3.5 w-3.5 text-orange-500 cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Auto-update paused after 3 consecutive failures.</p>
+              <p>Toggle to re-enable.</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
       {!paused && consecutiveFailures > 0 && (
         <span className="text-xs font-medium text-yellow-600 dark:text-yellow-400">

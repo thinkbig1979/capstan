@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { directoriesApi, stacksApi, dashboardApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { StackCardSkeleton } from '@/components/LoadingSkeleton'
@@ -25,7 +25,7 @@ import { toast } from 'sonner'
 import { useConfirm } from '@/components/ConfirmDialog'
 import { StatusBadge } from '@/components/dashboard/StatusBadge'
 
-type SortOption = 'name' | 'status' | 'created'
+type SortOption = 'name' | 'status'
 type StatusFilter = 'all' | 'running' | 'stopped'
 
 export function DashboardPage() {
@@ -147,25 +147,23 @@ export function DashboardPage() {
 
   const isLoading = isLoadingDirectories || isLoadingStacks
 
-  const sortItems = <T extends { name?: string; status?: string; createdAt?: string }>(
-    items: T[] | undefined,
-  ): T[] => {
+  const sortStacks = (items: typeof stacks) => {
     if (!items) return []
     const sorted = [...items]
     switch (sortBy) {
       case 'name':
-        return sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+        return sorted.sort((a, b) => a.projectName.localeCompare(b.projectName))
       case 'status':
-        return sorted.sort((a, b) => (a.status || '').localeCompare(b.status || ''))
-      case 'created':
-        return sorted.sort((a, b) => {
-          const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0
-          const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0
-          return bTime - aTime
-        })
+        return sorted.sort((a, b) => a.status.localeCompare(b.status))
       default:
         return sorted
     }
+  }
+
+  const sortDirectories = (items: typeof directories) => {
+    if (!items) return []
+    const sorted = [...items]
+    return sorted.sort((a, b) => a.name.localeCompare(b.name))
   }
 
   const filterStacks = (stacksList: typeof stacks) => {
@@ -174,15 +172,15 @@ export function DashboardPage() {
       case 'running':
         return stacksList.filter((s) => s.status === 'running')
       case 'stopped':
-        return stacksList.filter((s) => s.status === 'stopped')
+        return stacksList.filter((s) => s.status !== 'running')
       case 'all':
       default:
         return stacksList
     }
   }
 
-  const sortedDirectories = sortItems(directories)
-  const sortedStacks = sortItems(stacks)
+  const sortedDirectories = sortDirectories(directories)
+  const sortedStacks = sortStacks(stacks)
   const filteredStacks = filterStacks(sortedStacks)
 
   const groupedStacks = useMemo(() => {
@@ -199,7 +197,7 @@ export function DashboardPage() {
     }
     return result.sort((a, b) => a.dirName.localeCompare(b.dirName))
   }, [filteredStacks])
-  const hasMultiStackGroups = groupedStacks.some((g) => g.stacks.length > 1)
+  const hasMultiStackGroups = sortBy === 'name' && groupedStacks.some((g) => g.stacks.length > 1)
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
@@ -332,47 +330,96 @@ export function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Stacks</CardTitle>
-            <Folder className="h-4 w-4 text-muted-foreground" />
+      <div className="grid grid-cols-1 gap-4 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:shadow-xs md:grid-cols-2 lg:grid-cols-4">
+        <Card className="@container/card">
+          <CardHeader>
+            <CardDescription>Total Stacks</CardDescription>
+            <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
+              {stacks?.length || 0}
+            </CardTitle>
+            <CardAction>
+              <Badge variant="outline">
+                <Folder className="size-3" />
+                {directories?.length || 0} dirs
+              </Badge>
+            </CardAction>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stacks?.length || 0}</div>
-          </CardContent>
+          <CardFooter className="flex-col items-start gap-1.5 text-sm">
+            <div className="line-clamp-1 flex gap-2 font-medium">
+              {runningCount} running stacks
+            </div>
+            <div className="text-muted-foreground">
+              Across {directories?.length || 0} directories
+            </div>
+          </CardFooter>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Running</CardTitle>
-            <div className="h-2 w-2 rounded-full bg-green-500" />
+        <Card className="@container/card">
+          <CardHeader>
+            <CardDescription>Running</CardDescription>
+            <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
+              {runningCount}
+            </CardTitle>
+            <CardAction>
+              <Badge variant="outline" className="text-green-600 border-green-200 dark:text-green-400 dark:border-green-800">
+                Active
+              </Badge>
+            </CardAction>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{runningCount}</div>
-          </CardContent>
+          <CardFooter className="flex-col items-start gap-1.5 text-sm">
+            <div className="line-clamp-1 flex gap-2 font-medium">
+              {stacks?.length ? Math.round((runningCount / stacks.length) * 100) : 0}% uptime
+            </div>
+            <div className="text-muted-foreground">
+              Stack availability
+            </div>
+          </CardFooter>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Stopped</CardTitle>
-            <div className="h-2 w-2 rounded-full bg-red-500" />
+        <Card className="@container/card">
+          <CardHeader>
+            <CardDescription>Stopped</CardDescription>
+            <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
+              {stoppedCount}
+            </CardTitle>
+            <CardAction>
+              <Badge variant="outline" className="text-red-600 border-red-200 dark:text-red-400 dark:border-red-800">
+                Inactive
+              </Badge>
+            </CardAction>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stoppedCount}</div>
-          </CardContent>
+          <CardFooter className="flex-col items-start gap-1.5 text-sm">
+            <div className="line-clamp-1 flex gap-2 font-medium">
+              {stoppedCount > 0 ? 'Needs attention' : 'All stacks running'}
+            </div>
+            <div className="text-muted-foreground">
+              Stopped or errored stacks
+            </div>
+          </CardFooter>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Containers</CardTitle>
-            <div className="h-2 w-2 rounded-full bg-blue-500" />
+        <Card className="@container/card">
+          <CardHeader>
+            <CardDescription>Containers</CardDescription>
+            <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
+              {containerCount}
+            </CardTitle>
+            <CardAction>
+              <Badge variant="outline">
+                {runningCount} stacks
+              </Badge>
+            </CardAction>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{containerCount}</div>
-          </CardContent>
+          <CardFooter className="flex-col items-start gap-1.5 text-sm">
+            <div className="line-clamp-1 flex gap-2 font-medium">
+              Total container instances
+            </div>
+            <div className="text-muted-foreground">
+              Managed by Docker Compose
+            </div>
+          </CardFooter>
         </Card>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full sm:w-auto grid-cols-9">
+        <TabsList variant="line" className="w-full">
           <TabsTrigger value="overview">Metrics</TabsTrigger>
           <TabsTrigger value="stacks">Stacks</TabsTrigger>
           <TabsTrigger value="directories">Dirs</TabsTrigger>
@@ -393,11 +440,11 @@ export function DashboardPage() {
         </TabsContent>
 
         <TabsContent value="stacks" className="mt-4">
+          <div className="space-y-4">
           <SortFilterBar
             sortOptions={[
               { key: 'name', label: 'Name' },
               { key: 'status', label: 'Status' },
-              { key: 'created', label: 'Created' },
             ]}
             sortValue={sortBy}
             onSortChange={(key) => setSortBy(key as SortOption)}
@@ -575,16 +622,17 @@ export function DashboardPage() {
               </CardContent>
             </Card>
           )}
+          </div>
         </TabsContent>
 
         <TabsContent value="directories" className="mt-4">
+          <div className="space-y-4">
           <SortFilterBar
             sortOptions={[
               { key: 'name', label: 'Name' },
-              { key: 'created', label: 'Created' },
             ]}
-            sortValue={sortBy === 'status' ? 'name' : sortBy}
-            onSortChange={(key) => setSortBy(key as SortOption)}
+            sortValue="name"
+            onSortChange={() => {}}
             countDisplay={`${sortedDirectories.length} directories`}
           />
           {sortedDirectories.length > 0 ? (
@@ -655,6 +703,7 @@ export function DashboardPage() {
               </CardContent>
             </Card>
           )}
+          </div>
         </TabsContent>
 
         <TabsContent value="containers" className="mt-4">

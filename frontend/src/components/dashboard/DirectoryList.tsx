@@ -40,7 +40,7 @@ export function DirectoryList() {
                 <h3 className="font-semibold truncate" title={dir.name}>{dir.name}</h3>
                 <p className="text-sm text-muted-foreground truncate" title={dir.path}>{dir.path}</p>
               </div>
-              <span className="text-xs bg-muted px-2 py-0.5 rounded ml-2 flex-shrink-0">
+              <span className="text-xs bg-muted px-2 py-0.5 rounded ml-2 shrink-0">
                 {dir.stackCount} stacks
               </span>
             </div>

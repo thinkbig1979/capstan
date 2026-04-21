@@ -279,7 +279,7 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 }
 
 func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
-	args := s.buildComposeArgs(stack, "logs", []string{"--tail", fmt.Sprintf("%d", tail)})
+	args := s.buildComposeArgs(stack, "logs", []string{"--tail", fmt.Sprintf("%d", tail), "--timestamps"})
 
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory

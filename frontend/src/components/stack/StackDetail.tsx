@@ -116,6 +116,7 @@ function OverviewTabContent({
             enabled={stackPolicy?.enabled ?? false}
             paused={stackPolicy?.paused ?? false}
             consecutiveFailures={stackPolicy?.consecutiveFailures ?? 0}
+            globalDisabled={!policiesData?.globalEnabled}
           />
           {hasContainerPolicies && (
             <Tooltip>
@@ -154,7 +155,7 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
     <div className="h-full flex flex-col gap-4">
       <GitStatusComponent stack={stack} />
       <Tabs value={activeTab} onValueChange={onTabChange} className="flex-1">
-        <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6">
+        <TabsList variant="line" className="w-full">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="compose">Compose</TabsTrigger>
           <TabsTrigger value="environment">Environment</TabsTrigger>

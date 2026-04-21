@@ -45,7 +45,7 @@ export function NoDirectories({ onScan }: { onScan: () => void }) {
       action={
         <button
           onClick={onScan}
-          className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 min-h-[44px]"
+          className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-2 min-h-[44px]"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"

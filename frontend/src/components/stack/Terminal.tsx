@@ -90,7 +90,7 @@ function TerminalSearchBar({ searchAddon, onClose }: { searchAddon: SearchAddon 
           }
         }}
         placeholder="Find in terminal..."
-        className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+        className="flex-1 bg-transparent text-sm outline-hidden placeholder:text-muted-foreground"
       />
       {matchCount !== null && (
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
@@ -594,12 +594,14 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
           searchAddonRef.current?.clearActiveDecoration()
         }} />
       )}
-      <div
-        ref={terminalRef}
-        className="flex-1 overflow-hidden rounded-lg border bg-[#1a1a1a]"
-        style={{ minHeight: '400px' }}
-        onContextMenu={handleContextMenu}
-      />
+      <div className="rounded-lg border bg-[#1a1a1a] p-2">
+        <div
+          ref={terminalRef}
+          className="overflow-hidden"
+          style={{ minHeight: '400px' }}
+          onContextMenu={handleContextMenu}
+        />
+      </div>
 
       {showHints && isConnected && (
         <div className="rounded-lg border bg-muted/50 p-4 text-sm">

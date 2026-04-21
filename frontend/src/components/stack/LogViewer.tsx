@@ -434,15 +434,15 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
             return (
               <div
                 key={`${log.container}-${log.timestamp}-${index}`}
-                className="flex gap-2 whitespace-pre-wrap break-words py-0.5"
+                className="flex gap-2 whitespace-pre-wrap wrap-break-word py-0.5"
                 role="log"
               >
-                {showTimestamps && (
-                  <span className="text-muted-foreground select-none">
+                {showTimestamps && log.timestamp && (
+                  <span className="text-muted-foreground">
                     [{log.timestamp}] 
                   </span>
                 )}
-                <span className={cn('select-none', containerColor)}>
+                <span className={cn('text-muted-foreground', containerColor)}>
                   [{log.container}]
                 </span>
                 <span className={cn('flex-1', logLevelColor)}>

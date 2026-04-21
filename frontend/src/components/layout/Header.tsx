@@ -116,7 +116,7 @@ export function Header() {
   const breadcrumbs = getBreadcrumbs()
 
   return (
-    <header className="h-16 border-b flex items-center px-4 bg-background">
+    <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center gap-2 border-b bg-background/90 backdrop-blur-sm px-4">
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="icon" className="md:hidden" onClick={toggleSidebar} aria-label="Toggle sidebar">
           <svg

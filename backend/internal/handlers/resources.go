@@ -162,9 +162,13 @@ func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prune containers: " + err.Error()})
 		return
 	}
+	deleted := report.ContainersDeleted
+	if deleted == nil {
+		deleted = []string{}
+	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_prune", Timestamp: time.Now()})
 	c.JSON(http.StatusOK, gin.H{
-		"deleted":        report.ContainersDeleted,
+		"deleted":        deleted,
 		"spaceReclaimed": report.SpaceReclaimed,
 	})
 }
@@ -199,9 +203,13 @@ func (h *ResourcesHandler) pruneVolumes(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prune volumes: " + err.Error()})
 		return
 	}
+	deleted := report.VolumesDeleted
+	if deleted == nil {
+		deleted = []string{}
+	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "volume_prune", Timestamp: time.Now()})
 	c.JSON(http.StatusOK, gin.H{
-		"deleted":        report.VolumesDeleted,
+		"deleted":        deleted,
 		"spaceReclaimed": report.SpaceReclaimed,
 	})
 }
@@ -235,9 +243,13 @@ func (h *ResourcesHandler) pruneNetworks(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prune networks: " + err.Error()})
 		return
 	}
+	deleted := report.NetworksDeleted
+	if deleted == nil {
+		deleted = []string{}
+	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "network_prune", Timestamp: time.Now()})
 	c.JSON(http.StatusOK, gin.H{
-		"deleted": report.NetworksDeleted,
+		"deleted": deleted,
 	})
 }
 
@@ -258,9 +270,13 @@ func (h *ResourcesHandler) pruneBuildCache(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prune build cache: " + err.Error()})
 		return
 	}
+	deleted := report.CachesDeleted
+	if deleted == nil {
+		deleted = []string{}
+	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "build_cache_prune", Timestamp: time.Now()})
 	c.JSON(http.StatusOK, gin.H{
-		"deleted":        report.CachesDeleted,
+		"deleted":        deleted,
 		"spaceReclaimed": report.SpaceReclaimed,
 	})
 }

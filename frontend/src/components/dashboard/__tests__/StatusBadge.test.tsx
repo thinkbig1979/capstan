@@ -4,11 +4,12 @@ import { renderWithProviders } from '../../../test/utils'
 import { StatusBadge, type Status } from '../StatusBadge'
 
 function getBadgeByText(text: string) {
-  return screen.getByText(text).closest('[class]') as HTMLElement
+  return screen.getByText(text).closest('[data-slot="badge"]') as HTMLElement
 }
 
 function getDot() {
-  return screen.getByText('Running').parentElement?.querySelector('span') as HTMLElement | null
+  const badge = document.querySelector('[data-slot="badge"]')
+  return badge?.querySelector('span:not([data-slot])') as HTMLElement | null
 }
 
 describe('StatusBadge', () => {
@@ -43,15 +44,15 @@ describe('StatusBadge', () => {
     it('dot appears before the Running text', () => {
       renderWithProviders(<StatusBadge status="running" pulse={false} />)
       const badge = getBadgeByText('Running')
-      const firstChild = badge.children[0]
-      expect(firstChild?.tagName).toBe('SPAN')
-      expect(firstChild?.className).toContain('bg-green-500')
+      const dot = badge.querySelector('span:not([data-slot])')
+      expect(dot).toBeInTheDocument()
+      expect(dot?.className).toContain('bg-green-500')
     })
 
     it('does not render a dot for non-running statuses', () => {
       renderWithProviders(<StatusBadge status="stopped" pulse={false} />)
-      const badge = screen.getByText('Stopped').parentElement
-      expect(badge?.querySelector('span')).not.toBeInTheDocument()
+      const badge = screen.getByText('Stopped').closest('[data-slot="badge"]')
+      expect(badge?.querySelector('span:not([data-slot])')).not.toBeInTheDocument()
     })
   })
 
@@ -124,8 +125,8 @@ describe('StatusBadge', () => {
 
     it('does not render a dot for an unrecognized status', () => {
       renderWithProviders(<StatusBadge status={'bogus' as Status} pulse={true} />)
-      const badge = screen.getByText('Unknown').parentElement
-      expect(badge?.querySelector('span')).not.toBeInTheDocument()
+      const badge = screen.getByText('Unknown').closest('[data-slot="badge"]')
+      expect(badge?.querySelector('span:not([data-slot])')).not.toBeInTheDocument()
     })
   })
 

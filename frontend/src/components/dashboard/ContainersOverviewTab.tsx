@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import {
   Tooltip,
   TooltipContent,
@@ -25,7 +24,8 @@ import type { DashboardContainerMetric } from '@/hooks/useDashboardMetrics'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/components/ConfirmDialog'
-import { useAutoUpdatePolicies, useToggleAutoUpdate } from '@/hooks/useResources'
+import { useAutoUpdatePolicies } from '@/hooks/useResources'
+import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { formatBytes } from '@/lib/format'
 
 function getMetricColor(percent: number): string {
@@ -245,7 +245,6 @@ function ContainerTable({
   renderActions: (container: DashboardContainerInfo, deletePending: boolean) => React.ReactNode
 }) {
   const { data: policiesData } = useAutoUpdatePolicies()
-  const toggleAutoUpdate = useToggleAutoUpdate()
 
   const policyMap = useMemo(() => {
     if (!policiesData?.policies) return new Map<string, boolean>()
@@ -273,16 +272,6 @@ function ContainerTable({
         return sorted
     }
   }, [containers, latestMetrics, sortBy])
-
-  const handleToggleAutoUpdate = (containerId: string, enabled: boolean) => {
-    toggleAutoUpdate.mutate(
-      { targetType: 'container', targetId: containerId, enabled },
-      {
-        onSuccess: () => toast.success(enabled ? 'Auto-update enabled' : 'Auto-update disabled'),
-        onError: () => toast.error('Failed to update auto-update policy'),
-      },
-    )
-  }
 
   return (
     <div className="rounded-md border">
@@ -389,11 +378,13 @@ function ContainerTable({
                 </TableCell>
                 <TableCell className="hidden md:table-cell">
                   <div className="flex items-center">
-                    <Switch
-                      checked={policyMap.get(container.id) ?? false}
-                      onCheckedChange={(checked) => handleToggleAutoUpdate(container.id, checked)}
-                      disabled={toggleAutoUpdate.isPending}
-                      aria-label="Toggle auto-update"
+                    <AutoUpdateToggle
+                      targetType="container"
+                      targetId={container.id}
+                      enabled={policyMap.get(container.id) ?? false}
+                      paused={false}
+                      consecutiveFailures={0}
+                      globalDisabled={!policiesData?.globalEnabled}
                     />
                   </div>
                 </TableCell>

@@ -95,13 +95,13 @@ export function GitHistorySkeleton() {
     <div className="rounded-lg border bg-card">
       {Array.from({ length: 5 }).map((_, i) => (
         <div key={i} className="flex items-start gap-4 p-4 border-b last:border-0">
-          <div className="h-8 w-8 bg-muted animate-pulse rounded-full flex-shrink-0" />
+          <div className="h-8 w-8 bg-muted animate-pulse rounded-full shrink-0" />
           <div className="flex-1 min-w-0">
             <div className="h-5 w-64 bg-muted animate-pulse rounded mb-2" />
             <div className="h-4 w-96 bg-muted animate-pulse rounded mb-1" />
             <div className="h-4 w-32 bg-muted animate-pulse rounded" />
           </div>
-          <div className="flex gap-2 flex-shrink-0">
+          <div className="flex gap-2 shrink-0">
             <div className="h-8 w-16 bg-muted animate-pulse rounded" />
             <div className="h-8 w-16 bg-muted animate-pulse rounded" />
           </div>

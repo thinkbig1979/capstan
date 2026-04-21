@@ -235,6 +235,7 @@ func main() {
 	}
 
 	r.Static("/assets", "./frontend/assets")
+	r.Static("/fonts", "./frontend/fonts")
 	r.StaticFile("/vite.svg", "./frontend/vite.svg")
 
 	timeoutMiddleware := func(timeout time.Duration) gin.HandlerFunc {

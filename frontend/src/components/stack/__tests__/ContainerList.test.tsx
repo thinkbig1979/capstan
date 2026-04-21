@@ -193,7 +193,7 @@ describe('ContainerList', () => {
     expect(noneBadges.length).toBeGreaterThan(0)
   })
 
-  it('renders custom health status as outline badge', () => {
+  it('renders custom health status as outline-solid badge', () => {
     const containers = [
       makeContainer({ id: 'c1', name: 'web', health: 'starting' }),
     ]

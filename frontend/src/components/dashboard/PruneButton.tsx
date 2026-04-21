@@ -6,8 +6,8 @@ import { toast } from 'sonner'
 import { formatBytes } from '@/lib/format'
 
 interface PruneResult {
-  deleted: string[]
-  spaceReclaimed?: number
+  deleted?: string[] | null
+  spaceReclaimed?: number | null
 }
 
 interface PruneButtonProps {
@@ -66,110 +66,73 @@ export function PruneButton({
     },
   })
 
-  const isPruning = phase === 'confirming' || phase === 'pruning'
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
+  if (phase === 'confirming') {
+    return (
+      <div className="flex items-center gap-2 animate-in fade-in duration-150">
+        <span className="text-xs text-muted-foreground">{confirmMessage}</span>
         <Button
-          variant="outline"
           size="sm"
+          variant="destructive"
           className="h-7 text-xs"
-          onClick={() => setPhase('confirming')}
-          disabled={isPruning}
-          title={confirmDescription}
+          onClick={() => {
+            setPhase('pruning')
+            mutation.mutate()
+          }}
         >
-          {phase === 'pruning' ? (
-            <Scissors className="mr-1 h-3 w-3 animate-spin" />
-          ) : (
-            <Scissors className="mr-1 h-3 w-3" />
-          )}
-          {phase === 'pruning' ? 'Pruning...' : label}
+          Confirm
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={() => setPhase('idle')}
+        >
+          Cancel
         </Button>
       </div>
+    )
+  }
 
-      {phase === 'confirming' && (
-        <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-3 animate-in fade-in slide-in-from-top-1 duration-200">
-          <p className="text-sm font-medium">{confirmMessage}</p>
-          <p className="text-xs text-muted-foreground mt-1">{confirmDescription}</p>
-          <div className="flex items-center gap-2 mt-3">
-            <Button
-              size="sm"
-              variant="destructive"
-              className="h-7 text-xs"
-              onClick={() => {
-                setPhase('pruning')
-                mutation.mutate()
-              }}
-            >
-              Confirm Prune
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 text-xs"
-              onClick={() => setPhase('idle')}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      )}
+  if (phase === 'pruning') {
+    return (
+      <div className="flex items-center gap-2">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">Pruning...</span>
+      </div>
+    )
+  }
 
-      {phase === 'pruning' && (
-        <div className="rounded-lg border bg-muted/30 p-3 overflow-hidden">
-          <div className="flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">Pruning {resourceType}s...</span>
-          </div>
-          <div className="mt-2 h-1.5 w-full rounded-full bg-muted overflow-hidden">
-            <div className="h-full rounded-full bg-primary animate-prune-progress" />
-          </div>
-        </div>
-      )}
+  if (phase === 'done' && result) {
+    return (
+      <div className="flex items-center gap-2 animate-in fade-in duration-150">
+        <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+        <span className="text-xs text-green-700 dark:text-green-400">
+          Pruned {result.deleted?.length ?? 0} {resourceType}{(result.deleted?.length ?? 0) !== 1 ? 's' : ''}
+          {result.spaceReclaimed ? ` (${formatBytes(result.spaceReclaimed)})` : ''}
+        </span>
+      </div>
+    )
+  }
 
-      {phase === 'done' && result && (
-        <div className="rounded-lg border border-green-500/30 bg-green-500/5 p-3 animate-in fade-in slide-in-from-top-1 duration-200">
-          <div className="flex items-start gap-2">
-            <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-green-700 dark:text-green-400">
-                Pruned {result.deleted.length} {resourceType}{result.deleted.length !== 1 ? 's' : ''}
-                {result.spaceReclaimed ? ` (${formatBytes(result.spaceReclaimed)} reclaimed)` : ''}
-              </p>
-              {result.deleted.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {result.deleted.slice(0, 8).map((id) => (
-                    <span
-                      key={id}
-                      className="inline-block text-xs font-mono bg-muted px-1.5 py-0.5 rounded truncate max-w-[160px]"
-                      title={id}
-                    >
-                      {id.length > 24 ? `${id.substring(0, 12)}...${id.substring(id.length - 12)}` : id}
-                    </span>
-                  ))}
-                  {result.deleted.length > 8 && (
-                    <span className="text-xs text-muted-foreground">
-                      +{result.deleted.length - 8} more
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+  if (phase === 'error') {
+    return (
+      <div className="flex items-center gap-2 animate-in fade-in duration-150">
+        <XCircle className="h-3.5 w-3.5 text-red-600" />
+        <span className="text-xs text-red-700 dark:text-red-400">Prune failed</span>
+      </div>
+    )
+  }
 
-      {phase === 'error' && (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 animate-in fade-in slide-in-from-top-1 duration-200">
-          <div className="flex items-center gap-2">
-            <XCircle className="h-4 w-4 text-red-600" />
-            <span className="text-sm text-red-700 dark:text-red-400">
-              Failed to prune {resourceType}s. Please try again.
-            </span>
-          </div>
-        </div>
-      )}
-    </div>
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-7 text-xs"
+      onClick={() => setPhase('confirming')}
+      title={confirmDescription}
+    >
+      <Scissors className="mr-1 h-3 w-3" />
+      {label}
+    </Button>
   )
 }

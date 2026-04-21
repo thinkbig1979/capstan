@@ -52,8 +52,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
   },
   {
     id: 'update-schedule',
-    title: 'Update Schedule',
-    description: 'Configure automatic image update scanning and auto-update policies',
+    title: 'Updates',
+    description: 'Configure image update scanning and auto-update settings',
     icon: <Clock className="h-5 w-5" />,
     defaultExpanded: false,
   },
@@ -242,13 +242,26 @@ function UpdateScheduleContent() {
             checked={effectiveAutoUpdate}
             onCheckedChange={handleAutoUpdateChange}
           />
-          <Label htmlFor="global-auto-update">Enable auto-update globally</Label>
+          <div>
+            <Label htmlFor="global-auto-update">Enable Auto-Update</Label>
+            <p className="text-xs text-muted-foreground">
+              Master switch for automatic container updates. When on, you can opt in individual containers or stacks.
+            </p>
+          </div>
         </div>
         {effectiveAutoUpdate && (
           <div className="flex items-start gap-2 rounded-lg border border-yellow-200 bg-yellow-50 p-3 dark:border-yellow-900 dark:bg-yellow-950">
-            <AlertCircle className="h-4 w-4 mt-0.5 text-yellow-600 dark:text-yellow-400 flex-shrink-0" />
+            <AlertCircle className="h-4 w-4 mt-0.5 text-yellow-600 dark:text-yellow-400 shrink-0" />
             <p className="text-sm text-yellow-800 dark:text-yellow-200">
-              When enabled, containers with auto-update turned on will be updated automatically when new images are detected. This may cause brief service interruption during the update.
+              Only containers and stacks with auto-update turned on will be updated. Updates happen when new images are detected during scans and may cause brief service interruption.
+            </p>
+          </div>
+        )}
+        {!effectiveAutoUpdate && (
+          <div className="flex items-start gap-2 rounded-lg border bg-muted/50 p-3">
+            <AlertCircle className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+            <p className="text-sm text-muted-foreground">
+              Auto-update is off. Per-container and per-stack auto-update toggles are locked until this is enabled.
             </p>
           </div>
         )}

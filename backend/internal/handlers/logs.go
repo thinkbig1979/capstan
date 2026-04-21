@@ -153,7 +153,7 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 	filterContainers := make(map[string]bool)
 	filterMutex := sync.Mutex{}
 
-	args := h.buildComposeArgs(*stack, "logs", []string{"-f", "--tail=100"})
+	args := h.buildComposeArgs(*stack, "logs", []string{"-f", "--tail=100", "--timestamps"})
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = stack.Directory
@@ -341,7 +341,9 @@ func parseLogLine(line string) *LogLine {
 		"2006-01-02T15:04:05.000Z",
 		time.RFC3339,
 		"2006-01-02T15:04:05Z",
+		"2006-01-02 15:04:05.000Z",
 		"2006-01-02 15:04:05",
+		"2006/01/02 15:04:05",
 		time.RFC3339Nano,
 	}
 
@@ -351,6 +353,16 @@ func parseLogLine(line string) *LogLine {
 			if _, err := time.Parse(format, potentialTime); err == nil {
 				timestamp = potentialTime
 				message = strings.TrimSpace(rest[len(format):])
+				break
+			}
+		}
+	}
+
+	for _, format := range timeFormats {
+		if len(message) >= len(format) {
+			potentialTime := message[:len(format)]
+			if _, err := time.Parse(format, potentialTime); err == nil {
+				message = strings.TrimSpace(message[len(format):])
 				break
 			}
 		}

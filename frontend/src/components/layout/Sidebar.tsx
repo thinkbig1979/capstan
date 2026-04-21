@@ -180,24 +180,24 @@ export function Sidebar() {
         to={`/stacks/${stack.id}`}
         className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors ${
           isActive
-            ? "bg-accent text-accent-foreground font-medium"
-            : "hover:bg-accent/50 text-foreground"
+            ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+            : "hover:bg-sidebar-accent/50 text-sidebar-foreground"
         }`}
         aria-label={`${stack.projectName} - ${stack.status}`}
       >
-        <Icon className={`h-3.5 w-3.5 flex-shrink-0 ${cfg.className}`} />
+        <Icon className={`h-3.5 w-3.5 shrink-0 ${cfg.className}`} />
         <span className="flex-1 truncate">{stack.projectName}</span>
         {stack.containerCount != null && stack.containerCount > 0 && (
           <Badge
             variant="secondary"
-            className="h-4 min-w-[1.25rem] px-1 text-[10px] leading-none"
+            className="h-4 min-w-5 px-1 text-[10px] leading-none"
           >
             {stack.containerCount}
           </Badge>
         )}
         {stack.isGitRepo && stack.gitDirty && (
           <span
-            className="h-1.5 w-1.5 rounded-full bg-orange-400 flex-shrink-0"
+            className="h-1.5 w-1.5 rounded-full bg-orange-400 shrink-0"
             title="Uncommitted changes"
           />
         )}
@@ -207,7 +207,7 @@ export function Sidebar() {
 
   if (!sidebarOpen) {
     return (
-      <aside className="hidden md:flex flex-col border-r bg-card">
+      <aside className="hidden md:flex flex-col border-r border-sidebar-border bg-sidebar">
         <Button
           variant="ghost"
           size="icon"
@@ -238,7 +238,7 @@ export function Sidebar() {
 
   return (
     <aside
-      className="hidden lg:flex flex-col border-r bg-card transition-[none] relative"
+      className="hidden lg:flex flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[none] relative"
       style={{ width: sidebarWidth }}
     >
       <div className="p-3 border-b space-y-2">
@@ -268,12 +268,12 @@ export function Sidebar() {
             placeholder="Search stacks..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full h-7 pl-7 pr-2 text-xs rounded-md border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+            className="w-full h-7 pl-7 pr-2 text-xs rounded-md border bg-background focus:outline-hidden focus:ring-1 focus:ring-ring"
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery("")}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-sidebar-foreground"
             >
               <X className="h-3 w-3" />
             </button>
@@ -356,13 +356,13 @@ export function Sidebar() {
                 <div key={group.dirPath}>
                   <button
                     onClick={() => toggleGroup(group.dirPath)}
-                    className="flex items-center gap-1.5 w-full px-2 pt-2 pb-0.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors"
+                    className="flex items-center gap-1.5 w-full px-2 pt-2 pb-0.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider hover:text-sidebar-foreground transition-colors"
                     title={group.dirPath}
                   >
                     {isCollapsed ? (
-                      <ChevronRight className="h-3 w-3 flex-shrink-0" />
+                      <ChevronRight className="h-3 w-3 shrink-0" />
                     ) : (
-                      <ChevronDown className="h-3 w-3 flex-shrink-0" />
+                      <ChevronDown className="h-3 w-3 shrink-0" />
                     )}
                     <span className="truncate flex-1 text-left">
                       {group.dirName}
@@ -382,7 +382,7 @@ export function Sidebar() {
       </ScrollArea>
 
       <div
-        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/20 active:bg-primary/30 transition-colors z-10"
+        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-sidebar-ring/20 active:bg-sidebar-ring/30 transition-colors z-10"
         onMouseDown={handleMouseDown}
         role="separator"
         aria-orientation="vertical"
