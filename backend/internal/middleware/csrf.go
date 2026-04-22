@@ -1,0 +1,109 @@
+package middleware
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+)
+
+const (
+	csrfCookieName = "docker_manager_csrf"
+	csrfHeaderName = "X-CSRF-Token"
+	csrfTokenLen   = 32
+)
+
+func GenerateCSRFToken() string {
+	b := make([]byte, csrfTokenLen)
+	if _, err := rand.Read(b); err != nil {
+		slog.Error("Failed to generate CSRF token", "error", err)
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
+func CSRFMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Method == "GET" || c.Request.Method == "HEAD" || c.Request.Method == "OPTIONS" {
+			existing, err := c.Cookie(csrfCookieName)
+			if err != nil || existing == "" {
+				token := GenerateCSRFToken()
+				if token != "" {
+					setCSRFCookie(c, token)
+				}
+			}
+			c.Next()
+			return
+		}
+
+		if isWebSocketUpgrade(c) {
+			c.Next()
+			return
+		}
+
+		if isPublicPath(c.Request.URL.Path) {
+			c.Next()
+			return
+		}
+
+		csrfCookie, err := c.Cookie(csrfCookieName)
+		if err != nil || csrfCookie == "" {
+			token := GenerateCSRFToken()
+			if token != "" {
+				setCSRFCookie(c, token)
+			}
+			c.Next()
+			return
+		}
+
+		csrfHeader := c.GetHeader(csrfHeaderName)
+		if csrfHeader == "" {
+			slog.Warn("CSRF token missing in header", "path", c.Request.URL.Path, "method", c.Request.Method)
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":    "CSRF_TOKEN_MISSING",
+				"message": "CSRF token required",
+			})
+			c.Abort()
+			return
+		}
+
+		if !strings.EqualFold(csrfCookie, csrfHeader) {
+			slog.Warn("CSRF token mismatch", "path", c.Request.URL.Path, "method", c.Request.Method)
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":    "CSRF_TOKEN_INVALID",
+				"message": "CSRF token mismatch",
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+func setCSRFCookie(c *gin.Context, token string) {
+	secure := !strings.Contains(c.Request.Host, "localhost") && !strings.Contains(c.Request.Host, "127.0.0.1")
+	c.SetCookie(csrfCookieName, token, 86400, "/", "", secure, false)
+	c.Header(csrfHeaderName, token)
+}
+
+func isWebSocketUpgrade(c *gin.Context) bool {
+	return strings.EqualFold(c.GetHeader("Upgrade"), "websocket")
+}
+
+func isPublicPath(path string) bool {
+	publicPrefixes := []string{
+		"/api/v1/auth/login",
+		"/api/v1/auth/setup",
+		"/api/v1/auth/status",
+	}
+	for _, p := range publicPrefixes {
+		if path == p {
+			return true
+		}
+	}
+	return false
+}

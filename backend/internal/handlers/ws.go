@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,12 +28,33 @@ const (
 	DefaultConnectionLimit = 10
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  DefaultReadBufferSize,
-	WriteBufferSize: DefaultWriteBufferSize,
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+var upgrader websocket.Upgrader
+
+func InitUpgrader(corsOrigins string) {
+	upgrader = websocket.Upgrader{
+		ReadBufferSize:  DefaultReadBufferSize,
+		WriteBufferSize: DefaultWriteBufferSize,
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+
+			if corsOrigins == "" {
+				host := r.Host
+				return origin == "http://"+host || origin == "https://"+host
+			}
+
+			for _, allowed := range strings.Split(corsOrigins, ",") {
+				allowed = strings.TrimSpace(allowed)
+				if allowed == origin {
+					return true
+				}
+			}
+
+			return false
+		},
+	}
 }
 
 type Connection struct {
@@ -269,28 +291,39 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 	if authDisabled {
 		userID = "anonymous"
 	} else {
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		var authMsg struct {
-			Type  string `json:"type"`
-			Token string `json:"token"`
-		}
-		if err := conn.ReadJSON(&authMsg); err != nil {
-			writeCloseMessage(conn, CloseCodeAuthFailure, "Auth timeout")
-			conn.Close()
-			return nil, &models.AppError{Code: models.ErrUnauthorized, Message: "No auth message received", Status: 401}
-		}
+		cookieToken, cookieErr := c.Cookie("docker_manager_token")
 
-		if authMsg.Type != "auth" || authMsg.Token == "" {
-			writeCloseMessage(conn, CloseCodeAuthFailure, "Invalid auth message")
-			conn.Close()
-			return nil, &models.AppError{Code: models.ErrUnauthorized, Message: "Invalid auth message", Status: 401}
-		}
+		if cookieErr == nil && cookieToken != "" {
+			userID, err = authenticateToken(cookieToken, db, jwtSecret)
+			if err != nil {
+				writeCloseMessage(conn, CloseCodeAuthFailure, "Auth failed")
+				conn.Close()
+				return nil, err
+			}
+		} else {
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			var authMsg struct {
+				Type  string `json:"type"`
+				Token string `json:"token"`
+			}
+			if err := conn.ReadJSON(&authMsg); err != nil {
+				writeCloseMessage(conn, CloseCodeAuthFailure, "Auth timeout")
+				conn.Close()
+				return nil, &models.AppError{Code: models.ErrUnauthorized, Message: "No auth message received", Status: 401}
+			}
 
-		userID, err = authenticateToken(authMsg.Token, db, jwtSecret)
-		if err != nil {
-			writeCloseMessage(conn, CloseCodeAuthFailure, "Auth failed")
-			conn.Close()
-			return nil, err
+			if authMsg.Type != "auth" || authMsg.Token == "" {
+				writeCloseMessage(conn, CloseCodeAuthFailure, "Invalid auth message")
+				conn.Close()
+				return nil, &models.AppError{Code: models.ErrUnauthorized, Message: "Invalid auth message", Status: 401}
+			}
+
+			userID, err = authenticateToken(authMsg.Token, db, jwtSecret)
+			if err != nil {
+				writeCloseMessage(conn, CloseCodeAuthFailure, "Auth failed")
+				conn.Close()
+				return nil, err
+			}
 		}
 	}
 

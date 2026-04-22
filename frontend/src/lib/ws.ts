@@ -26,7 +26,7 @@ export class WSClient {
     const authDisabled = useAuthStore.getState().authDisabled
 
     if (!token && !authDisabled) {
-      console.error('Cannot connect: no JWT token available')
+      console.error('Cannot connect: not authenticated')
       return
     }
 
@@ -42,7 +42,7 @@ export class WSClient {
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0
-      if (token) {
+      if (token && token !== 'cookie') {
         this.ws!.send(JSON.stringify({ type: 'auth', token }))
       }
       options.onOpen?.()

@@ -61,7 +61,7 @@ func (h *ResourcesHandler) listImages(c *gin.Context) {
 	images, err := h.docker.ListImages(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to list images", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list images"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list images"))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"images": images})
@@ -74,7 +74,7 @@ func (h *ResourcesHandler) deleteImage(c *gin.Context) {
 	resp, err := h.docker.DeleteImage(c.Request.Context(), id, force)
 	if err != nil {
 		slog.Error("Failed to delete image", "id", id, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete image: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to delete image"))
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Timestamp: time.Now()})
@@ -85,7 +85,7 @@ func (h *ResourcesHandler) pruneImages(c *gin.Context) {
 	report, err := h.docker.PruneImages(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to prune images", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prune images: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to prune images"))
 		return
 	}
 	deleted := make([]string, 0, len(report.ImagesDeleted))
@@ -103,7 +103,7 @@ func (h *ResourcesHandler) listContainers(c *gin.Context) {
 	containers, err := h.docker.GetAllContainersWithDetails(c.Request.Context(), nil)
 	if err != nil {
 		slog.Error("Failed to list containers", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list containers"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list containers"))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"containers": containers})
@@ -113,7 +113,7 @@ func (h *ResourcesHandler) startContainer(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.docker.StartContainer(c.Request.Context(), id); err != nil {
 		slog.Error("Failed to start container", "id", id, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start container: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to start container"))
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_start", ContainerID: id, Timestamp: time.Now()})
@@ -124,7 +124,7 @@ func (h *ResourcesHandler) stopContainer(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.docker.StopContainer(c.Request.Context(), id); err != nil {
 		slog.Error("Failed to stop container", "id", id, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to stop container: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to stop container"))
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_stop", ContainerID: id, Timestamp: time.Now()})
@@ -135,7 +135,7 @@ func (h *ResourcesHandler) restartContainer(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.docker.RestartContainer(c.Request.Context(), id); err != nil {
 		slog.Error("Failed to restart container", "id", id, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to restart container: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to restart container"))
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_restart", ContainerID: id, Timestamp: time.Now()})
@@ -148,7 +148,7 @@ func (h *ResourcesHandler) deleteContainer(c *gin.Context) {
 
 	if err := h.docker.DeleteContainer(c.Request.Context(), id, force); err != nil {
 		slog.Error("Failed to delete container", "id", id, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete container: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to delete container"))
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_delete", ContainerID: id, Timestamp: time.Now()})
@@ -159,7 +159,7 @@ func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
 	report, err := h.docker.PruneContainers(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to prune containers", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prune containers: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to prune containers"))
 		return
 	}
 	deleted := report.ContainersDeleted
@@ -177,7 +177,7 @@ func (h *ResourcesHandler) listVolumes(c *gin.Context) {
 	volumes, err := h.docker.ListVolumes(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to list volumes", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list volumes"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list volumes"))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"volumes": volumes})
@@ -189,7 +189,7 @@ func (h *ResourcesHandler) deleteVolume(c *gin.Context) {
 
 	if err := h.docker.DeleteVolume(c.Request.Context(), name, force); err != nil {
 		slog.Error("Failed to delete volume", "name", name, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete volume: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to delete volume"))
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "volume_delete", Timestamp: time.Now()})
@@ -200,7 +200,7 @@ func (h *ResourcesHandler) pruneVolumes(c *gin.Context) {
 	report, err := h.docker.PruneVolumes(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to prune volumes", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prune volumes: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to prune volumes"))
 		return
 	}
 	deleted := report.VolumesDeleted
@@ -218,7 +218,7 @@ func (h *ResourcesHandler) listNetworks(c *gin.Context) {
 	networks, err := h.docker.ListNetworks(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to list networks", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list networks"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list networks"))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"networks": networks})
@@ -229,7 +229,7 @@ func (h *ResourcesHandler) deleteNetwork(c *gin.Context) {
 
 	if err := h.docker.DeleteNetwork(c.Request.Context(), id); err != nil {
 		slog.Error("Failed to delete network", "id", id, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete network: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to delete network"))
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "network_delete", Timestamp: time.Now()})
@@ -240,7 +240,7 @@ func (h *ResourcesHandler) pruneNetworks(c *gin.Context) {
 	report, err := h.docker.PruneNetworks(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to prune networks", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prune networks: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to prune networks"))
 		return
 	}
 	deleted := report.NetworksDeleted
@@ -257,7 +257,7 @@ func (h *ResourcesHandler) listBuildCache(c *gin.Context) {
 	entries, err := h.docker.ListBuildCache(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to list build cache", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list build cache"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list build cache"))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"entries": entries})
@@ -267,7 +267,7 @@ func (h *ResourcesHandler) pruneBuildCache(c *gin.Context) {
 	report, err := h.docker.PruneBuildCache(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to prune build cache", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prune build cache: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to prune build cache"))
 		return
 	}
 	deleted := report.CachesDeleted
@@ -289,11 +289,11 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 			cachedUpdates, err := h.scheduler.RunScan(c.Request.Context())
 			if err != nil {
 				if err.Error() == "scan already in progress" {
-					c.JSON(http.StatusConflict, gin.H{"error": "Scan already in progress", "code": "SCAN_IN_PROGRESS"})
+					models.HandleError(c, models.NewAppError(http.StatusConflict, "SCAN_IN_PROGRESS", "Scan already in progress"))
 					return
 				}
 				slog.Error("Failed to scan for updates", "error", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check for updates: " + err.Error()})
+				models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to check for updates"))
 				return
 			}
 
@@ -328,7 +328,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 		updates, err := h.docker.CheckForUpdates(c.Request.Context(), h.db)
 		if err != nil {
 			slog.Error("Failed to check for updates", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check for updates: " + err.Error()})
+			models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to check for updates"))
 			return
 		}
 		if updates == nil {
@@ -341,7 +341,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 	cachedUpdates, err := h.db.GetCachedUpdates()
 	if err != nil {
 		slog.Error("Failed to get cached updates", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get cached updates"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get cached updates"))
 		return
 	}
 
@@ -382,7 +382,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	inspect, err := h.docker.InspectContainer(c.Request.Context(), id)
 	if err != nil {
 		slog.Error("Failed to inspect container before update", "id", id, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to inspect container"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container"))
 		return
 	}
 
@@ -445,7 +445,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 		}
 		h.db.UpdateUpdateHistory(historyID, updates)
 
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update container: " + err.Error()})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to update container"))
 		return
 	}
 
@@ -501,7 +501,7 @@ func (h *ResourcesHandler) getUpdateHistory(c *gin.Context) {
 	entries, total, err := h.db.GetUpdateHistory(filters)
 	if err != nil {
 		slog.Error("Failed to get update history", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get update history"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get update history"))
 		return
 	}
 
@@ -526,20 +526,20 @@ func (h *ResourcesHandler) getUpdateHistory(c *gin.Context) {
 func (h *ResourcesHandler) clearUpdateHistory(c *gin.Context) {
 	olderThan := c.Query("olderThan")
 	if olderThan == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "olderThan parameter is required", "code": "VALIDATION_ERROR"})
+		models.HandleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "olderThan parameter is required"))
 		return
 	}
 
 	t, err := time.Parse(time.RFC3339, olderThan)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid olderThan date format", "code": "VALIDATION_ERROR"})
+		models.HandleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid olderThan date format"))
 		return
 	}
 
 	deleted, err := h.db.DeleteUpdateHistoryOlderThan(t)
 	if err != nil {
 		slog.Error("Failed to clear update history", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clear update history"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to clear update history"))
 		return
 	}
 
@@ -550,7 +550,7 @@ func (h *ResourcesHandler) listAutoUpdatePolicies(c *gin.Context) {
 	policies, err := h.db.GetAutoUpdatePolicies()
 	if err != nil {
 		slog.Error("Failed to get auto-update policies", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get auto-update policies"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get auto-update policies"))
 		return
 	}
 
@@ -571,7 +571,7 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 	targetId := c.Param("targetId")
 
 	if targetType != "container" && targetType != "stack" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "targetType must be 'container' or 'stack'", "code": "VALIDATION_ERROR"})
+		models.HandleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "targetType must be 'container' or 'stack'"))
 		return
 	}
 
@@ -579,7 +579,7 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "code": "VALIDATION_ERROR"})
+		models.HandleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid request body"))
 		return
 	}
 
@@ -614,7 +614,7 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 
 	if err := h.db.UpsertAutoUpdatePolicy(policy); err != nil {
 		slog.Error("Failed to upsert auto-update policy", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save auto-update policy"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to save auto-update policy"))
 		return
 	}
 
@@ -627,13 +627,13 @@ func (h *ResourcesHandler) deleteAutoUpdatePolicy(c *gin.Context) {
 	targetId := c.Param("targetId")
 
 	if targetType != "container" && targetType != "stack" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "targetType must be 'container' or 'stack'", "code": "VALIDATION_ERROR"})
+		models.HandleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "targetType must be 'container' or 'stack'"))
 		return
 	}
 
 	if err := h.db.DeleteAutoUpdatePolicy(targetType, targetId); err != nil {
 		slog.Error("Failed to delete auto-update policy", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete auto-update policy"})
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to delete auto-update policy"))
 		return
 	}
 

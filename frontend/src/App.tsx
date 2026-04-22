@@ -28,9 +28,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const init = async () => {
       await checkStatus()
-      if (sessionStorage.getItem('token')) {
-        await checkAuth()
-      }
+      await checkAuth()
     }
     init()
   }, [checkAuth, checkStatus])
@@ -48,9 +46,8 @@ function App() {
 
   useEffect(() => {
     setAuthCallbacks(
-      () => sessionStorage.getItem('token'),
+      () => null,
       () => {
-        sessionStorage.removeItem('token')
         window.location.href = '/login'
       },
     )

@@ -46,7 +46,7 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
-	db, err := database.NewWithMigrations(cfg.DataDir)
+	db, err := database.NewWithMigrationsAndEncryptor(cfg.DataDir, services.NewTokenEncryptorOrDefault(cfg.JWTSecret))
 	if err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
@@ -126,12 +126,14 @@ func main() {
 	defer watcherService.Stop()
 
 	middleware.InitRateLimiters()
+	handlers.InitUpgrader(cfg.CORSOrigins)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.LoggingMiddleware())
+	r.Use(middleware.BodySizeLimit())
 	r.Use(middleware.CORSMiddleware(cfg.CORSOrigins))
 	r.Use(middleware.ValidateInput())
 	r.Use(gin.CustomRecovery(nil))
@@ -176,6 +178,7 @@ func main() {
 	protected := api.Group("")
 	protected.Use(middleware.AuthMiddleware(db, cfg.JWTSecret, cfg.AuthDisabled, cfg.TrustedNetworks))
 	protected.Use(middleware.RateLimitByUser())
+	protected.Use(middleware.CSRFMiddleware())
 	settingsHandler.RegisterRoutes(protected)
 
 	directoriesHandler := handlers.NewDirectoriesHandler(scannerService, db)
@@ -281,15 +284,23 @@ func main() {
 
 	slog.Info("Shutting down server...")
 
+	cancel()
+
 	if schedulerService != nil {
 		schedulerService.Stop()
 	}
 
-	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	watcherService.Stop()
 
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown:", err)
+	if connectionManager != nil {
+		connectionManager.CloseAll()
+	}
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("Server forced to shutdown", "error", err)
 	}
 
 	slog.Info("Server exited")

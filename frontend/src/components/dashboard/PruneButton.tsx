@@ -127,7 +127,7 @@ export function PruneButton({
     <Button
       variant="outline"
       size="sm"
-      className="h-7 text-xs"
+      className="h-7 text-xs border-orange-500/60 text-orange-600 hover:bg-orange-50 hover:text-orange-700 dark:border-orange-500/40 dark:text-orange-400 dark:hover:bg-orange-950 dark:hover:text-orange-300"
       onClick={() => setPhase('confirming')}
       title={confirmDescription}
     >

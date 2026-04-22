@@ -96,6 +96,12 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 			token = c.Query("token")
 		}
 
+		if token == "" {
+			if cookie, err := c.Cookie("docker_manager_token"); err == nil && cookie != "" {
+				token = cookie
+			}
+		}
+
 		if token != "" && !strings.HasPrefix(token, "Bearer ") {
 			token = "Bearer " + token
 		}

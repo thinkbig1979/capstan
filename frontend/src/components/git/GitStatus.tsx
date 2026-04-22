@@ -262,7 +262,7 @@ function GitSettingsSection({
       </button>
 
       {open && (
-        <div className="mt-3 space-y-3 pl-5">
+        <form onSubmit={(e) => { e.preventDefault(); saveMutation.mutate() }} className="mt-3 space-y-3 pl-5">
           <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-3 items-center max-w-md">
             <Label className="text-sm text-right">Method</Label>
             <div>
@@ -323,15 +323,15 @@ function GitSettingsSection({
 
           <div className="flex justify-end">
             <Button
+              type="submit"
               size="sm"
               className="h-7 text-xs"
               disabled={saveMutation.isPending}
-              onClick={() => saveMutation.mutate()}
             >
               {saveMutation.isPending ? 'Saving...' : 'Save Credentials'}
             </Button>
           </div>
-        </div>
+        </form>
       )}
     </div>
   )

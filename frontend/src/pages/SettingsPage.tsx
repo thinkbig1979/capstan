@@ -313,7 +313,7 @@ function GitSettingsContent() {
   }
 
   return (
-    <div className="space-y-6">
+    <form onSubmit={(e) => { e.preventDefault(); handleSave() }} className="space-y-6">
       <div className="space-y-4">
         <h3 className="text-lg font-medium">SSH</h3>
         <div className="space-y-2">
@@ -366,7 +366,7 @@ function GitSettingsContent() {
         </div>
       </div>
 
-      <Button onClick={handleSave} disabled={updateGitSettings.isPending}>
+      <Button type="submit" disabled={updateGitSettings.isPending}>
         {updateGitSettings.isPending ? (
           <>
             <span className="mr-2"><LoadingSpinner size="small" /></span>
@@ -376,7 +376,7 @@ function GitSettingsContent() {
           'Save Git Settings'
         )}
       </Button>
-    </div>
+    </form>
   )
 }
 

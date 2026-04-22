@@ -48,22 +48,14 @@ func (h *MonitoringHandler) getStackContainers(jwtSecret string, authDisabled bo
 		stackID := c.Param("id")
 		stack, err := h.db.GetStack(stackID)
 		if err != nil {
-			c.Error(&models.AppError{
-				Code:    models.ErrNotFound,
-				Message: "Stack not found",
-				Status:  http.StatusNotFound,
-			})
+			models.HandleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
 			return
 		}
 
 		containers, err := h.docker.GetContainerList(stack.ProjectName)
 		if err != nil {
 			slog.Error("Failed to get container list", "userId", userID, "stackId", stackID, "error", err)
-			c.Error(&models.AppError{
-				Code:    "INTERNAL_ERROR",
-				Message: "Failed to retrieve container list",
-				Status:  http.StatusInternalServerError,
-			})
+			models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve container list"))
 			return
 		}
 
@@ -79,17 +71,13 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 
 		stack, err := h.db.GetStack(stackID)
 		if err != nil {
-			c.Error(&models.AppError{
-				Code:    models.ErrNotFound,
-				Message: "Stack not found",
-				Status:  http.StatusNotFound,
-			})
+			models.HandleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
 			return
 		}
 
 		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
 		if err != nil {
-			c.Error(err)
+			models.HandleError(c, err)
 			return
 		}
 
@@ -168,7 +156,7 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 	return func(c *gin.Context) {
 		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
 		if err != nil {
-			c.Error(err)
+			models.HandleError(c, err)
 			return
 		}
 

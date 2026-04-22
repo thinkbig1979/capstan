@@ -24,12 +24,18 @@ import type {
 
 const API_BASE_URL = '/api/v1'
 
+function getCSRFToken(): string | null {
+  const match = document.cookie.match(/(?:^|;\s*)docker_manager_csrf=([^;]*)/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true,
 })
 
 let getToken: (() => string | null) | null = null
@@ -37,9 +43,15 @@ let logout: (() => void) | null = null
 
 apiClient.interceptors.request.use((config) => {
   const token = getToken?.()
-  if (token) {
+  if (token && token !== 'cookie') {
     config.headers.Authorization = `Bearer ${token}`
   }
+
+  const csrfToken = getCSRFToken()
+  if (csrfToken) {
+    config.headers['X-CSRF-Token'] = csrfToken
+  }
+
   return config
 })
 

@@ -12,11 +12,21 @@ import (
 	"github.com/docker-manager/backend/internal/models"
 )
 
+type TokenEncryptor interface {
+	Encrypt(plaintext string) (string, error)
+	Decrypt(encoded string) (string, error)
+}
+
 type DB struct {
-	db *sql.DB
+	db        *sql.DB
+	encryptor TokenEncryptor
 }
 
 func New(dataDir string) (*DB, error) {
+	return NewWithEncryptor(dataDir, nil)
+}
+
+func NewWithEncryptor(dataDir string, encryptor TokenEncryptor) (*DB, error) {
 	var dbPath string
 	if dataDir == ":memory:" {
 		dbPath = ":memory:"
@@ -52,11 +62,15 @@ func New(dataDir string) (*DB, error) {
 		return nil, err
 	}
 
-	return &DB{db: db}, nil
+	return &DB{db: db, encryptor: encryptor}, nil
 }
 
 func NewWithMigrations(dataDir string) (*DB, error) {
-	db, err := New(dataDir)
+	return NewWithMigrationsAndEncryptor(dataDir, nil)
+}
+
+func NewWithMigrationsAndEncryptor(dataDir string, encryptor TokenEncryptor) (*DB, error) {
+	db, err := NewWithEncryptor(dataDir, encryptor)
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +83,17 @@ func NewWithMigrations(dataDir string) (*DB, error) {
 
 func (d *DB) Close() error {
 	return d.db.Close()
+}
+
+func (d *DB) decryptToken(token string) string {
+	if d.encryptor != nil && token != "" {
+		decrypted, err := d.encryptor.Decrypt(token)
+		if err != nil {
+			return token
+		}
+		return decrypted
+	}
+	return token
 }
 
 func (d *DB) UserCount() (int, error) {
@@ -143,11 +168,19 @@ func (d *DB) DeleteExpiredSessions() error {
 }
 
 func (d *DB) UpsertDirectory(dir models.Directory) error {
+	token := dir.GitHTTPSToken
+	if d.encryptor != nil && token != "" {
+		encrypted, err := d.encryptor.Encrypt(token)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt token: %w", err)
+		}
+		token = encrypted
+	}
 	query := `INSERT OR REPLACE INTO directories
 	          (path, name, is_git_repo, git_remote, git_branch, git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at)
 	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := d.db.Exec(query, dir.Path, dir.Name, dir.IsGitRepo, dir.GitRemote, dir.GitBranch,
-		dir.GitAuthType, dir.GitSSHKeyPath, dir.GitHTTPSUser, dir.GitHTTPSToken, dir.ScannedAt)
+		dir.GitAuthType, dir.GitSSHKeyPath, dir.GitHTTPSUser, token, dir.ScannedAt)
 	return err
 }
 
@@ -168,6 +201,7 @@ func (d *DB) ListDirectories() ([]models.Directory, error) {
 		if err != nil {
 			return nil, err
 		}
+		dir.GitHTTPSToken = d.decryptToken(dir.GitHTTPSToken)
 		dir.HasHTTPSToken = dir.GitHTTPSToken != ""
 		directories = append(directories, dir)
 	}
@@ -183,6 +217,7 @@ func (d *DB) GetDirectory(path string) (*models.Directory, error) {
 	if err != nil {
 		return nil, err
 	}
+	dir.GitHTTPSToken = d.decryptToken(dir.GitHTTPSToken)
 	dir.HasHTTPSToken = dir.GitHTTPSToken != ""
 	return &dir, nil
 }
@@ -194,6 +229,13 @@ func (d *DB) DeleteDirectory(path string) error {
 }
 
 func (d *DB) UpdateDirectoryCredentials(path, authType, sshKeyPath, httpsUser, httpsToken string) error {
+	if d.encryptor != nil && httpsToken != "" {
+		encrypted, err := d.encryptor.Encrypt(httpsToken)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt token: %w", err)
+		}
+		httpsToken = encrypted
+	}
 	query := `UPDATE directories SET git_auth_type = ?, git_ssh_key_path = ?, git_https_user = ?, git_https_token = ? WHERE path = ?`
 	_, err := d.db.Exec(query, authType, sshKeyPath, httpsUser, httpsToken, path)
 	return err
@@ -366,10 +408,24 @@ func (d *DB) GetSetting(key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if d.encryptor != nil && key == "git_https_token" && value != "" {
+		decrypted, err := d.encryptor.Decrypt(value)
+		if err != nil {
+			return "", err
+		}
+		return decrypted, nil
+	}
 	return value, nil
 }
 
 func (d *DB) SetSetting(key, value string) error {
+	if d.encryptor != nil && key == "git_https_token" && value != "" {
+		encrypted, err := d.encryptor.Encrypt(value)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt setting: %w", err)
+		}
+		value = encrypted
+	}
 	query := `INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`
 	_, err := d.db.Exec(query, key, value)
 	return err

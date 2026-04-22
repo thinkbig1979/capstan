@@ -1,32 +1,6 @@
 import { create } from 'zustand'
 import type { User } from '@/types'
 
-const isTokenExpired = (token: string): boolean => {
-  try {
-    const payload = token.split('.')[1]
-    if (!payload) return true
-    const decoded = JSON.parse(atob(payload))
-    const exp = Number(decoded.exp)
-    if (!Number.isFinite(exp)) return true
-    return Date.now() >= exp * 1000
-  } catch {
-    return true
-  }
-}
-
-const getStoredToken = (): string | null => {
-  const token = sessionStorage.getItem('token')
-  if (token && !isTokenExpired(token)) {
-    return token
-  }
-  if (token) {
-    sessionStorage.removeItem('token')
-  }
-  return null
-}
-
-const cachedInitialToken = getStoredToken()
-
 interface AuthState {
   token: string | null
   user: User | null
@@ -41,9 +15,9 @@ interface AuthState {
 }
 
 export const useAuthStore = create<AuthState>()((set) => ({
-  token: cachedInitialToken,
+  token: null,
   user: null,
-  isAuthenticated: !!cachedInitialToken,
+  isAuthenticated: false,
   authDisabled: false,
   needsSetup: false,
 
@@ -55,7 +29,6 @@ export const useAuthStore = create<AuthState>()((set) => ({
       user: response.user,
       isAuthenticated: true,
     })
-    sessionStorage.setItem('token', response.token)
   },
 
   setup: async (username: string, password: string) => {
@@ -67,7 +40,6 @@ export const useAuthStore = create<AuthState>()((set) => ({
       isAuthenticated: true,
       needsSetup: false,
     })
-    sessionStorage.setItem('token', response.token)
   },
 
   logout: async () => {
@@ -85,27 +57,14 @@ export const useAuthStore = create<AuthState>()((set) => ({
       user: null,
       isAuthenticated: false,
     })
-    sessionStorage.removeItem('token')
   },
 
   checkAuth: async () => {
-    const token = sessionStorage.getItem('token')
-    if (!token) {
-      set({ token: null, user: null, isAuthenticated: false })
-      return
-    }
-
-    if (isTokenExpired(token)) {
-      sessionStorage.removeItem('token')
-      set({ token: null, user: null, isAuthenticated: false })
-      return
-    }
-
     try {
       const { authApi } = await import('@/lib/api')
       const user = await authApi.me()
       set({
-        token,
+        token: 'cookie',
         user,
         isAuthenticated: true,
       })
@@ -114,7 +73,6 @@ export const useAuthStore = create<AuthState>()((set) => ({
       if (isDev) {
         console.error('Auth check failed:', error)
       }
-      sessionStorage.removeItem('token')
       set({ token: null, user: null, isAuthenticated: false })
     }
   },

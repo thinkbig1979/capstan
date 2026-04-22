@@ -4,9 +4,11 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/docker-manager/backend/internal/database"
+	"github.com/docker-manager/backend/internal/middleware"
 	"github.com/docker-manager/backend/internal/models"
 	"github.com/gin-gonic/gin"
 	jwtv5 "github.com/golang-jwt/jwt/v5"
@@ -144,6 +146,9 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 		return
 	}
 
+	csrfToken := middleware.GenerateCSRFToken()
+	setAuthCookies(c, token, csrfToken)
+
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
@@ -228,6 +233,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	csrfToken := middleware.GenerateCSRFToken()
+	setAuthCookies(c, token, csrfToken)
+
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
@@ -259,6 +267,9 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 
 	slog.Info("User logged out", "userID", userID)
+
+	clearAuthCookies(c)
+
 	c.Status(http.StatusNoContent)
 }
 
@@ -340,4 +351,16 @@ func parseJWT(token, secret string) (jwtv5.MapClaims, error) {
 	}
 
 	return nil, jwtv5.ErrInvalidKey
+}
+
+func setAuthCookies(c *gin.Context, token string, csrfToken string) {
+	secure := !strings.Contains(c.Request.Host, "localhost") && !strings.Contains(c.Request.Host, "127.0.0.1")
+	c.SetCookie("docker_manager_token", token, 86400, "/", "", secure, true)
+	c.SetCookie("docker_manager_csrf", csrfToken, 86400, "/", "", secure, false)
+	c.Header("X-CSRF-Token", csrfToken)
+}
+
+func clearAuthCookies(c *gin.Context) {
+	c.SetCookie("docker_manager_token", "", -1, "/", "", false, true)
+	c.SetCookie("docker_manager_csrf", "", -1, "/", "", false, false)
 }

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -139,6 +140,17 @@ func validateFilePath(input string) bool {
 	}
 
 	return false
+}
+
+const maxRequestBodySize = 10 << 20
+
+func BodySizeLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Body != nil {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
+		}
+		c.Next()
+	}
 }
 
 func ValidateInput() gin.HandlerFunc {
