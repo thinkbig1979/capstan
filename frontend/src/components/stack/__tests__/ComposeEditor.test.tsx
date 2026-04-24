@@ -2,27 +2,32 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import { renderWithProviders } from '../../../test/utils'
 
-vi.mock('codemirror', () => ({
-  basicSetup: [],
-  EditorView: class {
+vi.mock('codemirror', () => {
+  class MockEditorView {
     static theme = () => []
+    static updateListener = { of: () => [] }
     dispatch() {}
     destroy() {}
     state = { doc: { toString: () => '', length: 0 } }
-  },
-}))
+  }
+  return { basicSetup: [], EditorView: MockEditorView }
+})
 vi.mock('@codemirror/state', () => ({
   EditorState: { create: () => ({ doc: { toString: () => '', length: 0 } }) },
 }))
-vi.mock('@codemirror/view', () => ({
-  EditorView: class {
+vi.mock('@codemirror/view', () => {
+  class MockEditorView {
     static theme = () => []
+    static updateListener = { of: () => [] }
     dispatch() {}
     destroy() {}
     state = { doc: { toString: () => '', length: 0 } }
-  },
-  keymap: { of: () => [] },
-}))
+  }
+  return {
+    EditorView: MockEditorView,
+    keymap: { of: () => [] },
+  }
+})
 vi.mock('@codemirror/lang-yaml', () => ({ yaml: () => [] }))
 vi.mock('@codemirror/lint', () => ({ linter: () => [], lintGutter: () => [] }))
 vi.mock('@codemirror/theme-one-dark', () => ({ oneDark: {} }))
