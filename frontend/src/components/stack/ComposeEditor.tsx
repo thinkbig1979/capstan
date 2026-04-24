@@ -9,6 +9,8 @@ import { search } from '@codemirror/search'
 import { autocompletion } from '@codemirror/autocomplete'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import {
   Dialog,
@@ -18,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Save, FileCheck, AlertCircle, AlertTriangle, Info } from 'lucide-react'
+import { Save, FileCheck, AlertCircle, AlertTriangle, Info, Variable } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '@/lib/api'
 import { classifyError } from '@/lib/error-handler'
@@ -192,6 +194,18 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
           '&': { fontSize: '14px' },
           '.cm-scroller': { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' },
         }),
+        EditorView.updateListener.of((update) => {
+          if (update.selectionSet || update.docChanged) {
+            const sel = update.state.selection.main
+            if (sel.from !== sel.to) {
+              selectedTextRef.current = update.state.sliceDoc(sel.from, sel.to)
+              setSelectedText(selectedTextRef.current)
+            } else {
+              selectedTextRef.current = ''
+              setSelectedText('')
+            }
+          }
+        }),
       ]
 
       if (isDark) {
@@ -243,16 +257,106 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-8">
-        <div className="flex items-center gap-2">
-          <LoadingSpinner size="default" />
-          <span className="text-muted-foreground">Loading compose file...</span>
-        </div>
-      </div>
-    )
+  const [selectedText, setSelectedText] = useState('')
+  const [extractVarName, setExtractVarName] = useState('')
+  const [showExtractDialog, setShowExtractDialog] = useState(false)
+  const [isExtracting, setIsExtracting] = useState(false)
+
+  const selectedTextRef = useRef('')
+
+  const inferVarName = (yamlContent: string, cursorPos: number): string => {
+    const lines = yamlContent.split('\n')
+    let charIdx = 0
+    let currentLineIdx = 0
+
+    for (let i = 0; i < lines.length; i++) {
+      const lineEnd = charIdx + lines[i].length
+      if (charIdx <= cursorPos && cursorPos <= lineEnd) {
+        currentLineIdx = i
+        break
+      }
+      charIdx = lineEnd + 1
+    }
+
+    const currentLine = lines[currentLineIdx]
+    const colonMatch = currentLine.match(/^\s*([a-zA-Z0-9_-]+)\s*:/)
+    if (colonMatch) {
+      const key = colonMatch[1].replace(/-/g, '_').toUpperCase()
+      return key
+    }
+
+    const listMatch = currentLine.match(/^\s*-\s*([A-Za-z0-9_]+)\s*=/)
+    if (listMatch) {
+      return listMatch[1].replace(/-/g, '_').toUpperCase()
+    }
+
+    for (let i = currentLineIdx - 1; i >= Math.max(0, currentLineIdx - 5); i--) {
+      const line = lines[i]
+      const keyMatch = line.match(/^\s*([a-zA-Z0-9_-]+)\s*:/)
+      if (keyMatch && !keyMatch[1].match(/^(services|environment|ports|volumes|networks|depends_on|deploy|build|image|restart|container_name|hostname|labels|command|entrypoint|env_file|extra_hosts|healthcheck|logging|cap_add|cap_drop|devices|dns|tmpfs|ulimits|security_opt|shm_size|stdin_open|tty|user|working_dir|domainname|mac_address|privileged|read_only|pid|cgroup_parent|network_mode|stop_signal|stop_grace_period|isolation|configs|secrets|links|external_links|sysctls|named|anonymous)$/i)) {
+        return keyMatch[1].replace(/-/g, '_').toUpperCase()
+      }
+    }
+
+    return 'ENV_VAR'
   }
+
+  const handleExtractToEnv = useCallback(() => {
+    if (!viewRef.current || !selectedText) return
+    const view = viewRef.current
+    const sel = view.state.selection.main
+    const inferred = inferVarName(view.state.doc.toString(), sel.from)
+    setExtractVarName(inferred)
+    setShowExtractDialog(true)
+  }, [selectedText])
+
+  const confirmExtract = useCallback(async () => {
+    if (!viewRef.current || !selectedText || !extractVarName.trim()) return
+
+    const view = viewRef.current
+    const sel = view.state.selection.main
+    const varName = extractVarName.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_')
+
+    setIsExtracting(true)
+    try {
+      const newCompose = view.state.doc.toString()
+      const before = newCompose.slice(0, sel.from)
+      const after = newCompose.slice(sel.to)
+      const updatedCompose = before + `\${${varName}}` + after
+
+      await apiClient.put(`/stacks/${stackId}/compose`, { content: updatedCompose })
+
+      let currentEnv = ''
+      try {
+        const envResponse = await apiClient.get(`/stacks/${stackId}/env`)
+        if (envResponse.data?.raw) {
+          currentEnv = envResponse.data.raw
+        }
+      } catch {
+        // no .env file yet, that's fine
+      }
+
+      const newEnvLine = `${varName}=${selectedText}`
+      const updatedEnv = currentEnv ? `${currentEnv}\n${newEnvLine}` : newEnvLine
+
+      await apiClient.put(`/stacks/${stackId}/env`, { raw: updatedEnv })
+
+      view.dispatch({
+        changes: { from: sel.from, to: sel.to, insert: `\${${varName}}` },
+      })
+
+      setContent(updatedCompose)
+      setLastSaved(updatedCompose)
+      queryClient.invalidateQueries({ queryKey: ['stack', stackId] })
+      toast.success(`Extracted ${varName} to .env`)
+      setShowExtractDialog(false)
+      setSelectedText('')
+    } catch {
+      toast.error('Failed to extract variable to .env')
+    } finally {
+      setIsExtracting(false)
+    }
+  }, [selectedText, extractVarName, stackId, queryClient])
 
   return (
     <div className="space-y-4">
@@ -260,14 +364,24 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
         <div className="flex items-center gap-2">
           <Button
             onClick={() => handleSave()}
-            disabled={saveMutation.isPending || !hasUnsavedChanges || isLintingBeforeSave}
+            disabled={isLoading || saveMutation.isPending || !hasUnsavedChanges || isLintingBeforeSave}
           >
             <Save className="mr-2 h-4 w-4" />
             {isLintingBeforeSave ? 'Validating...' : saveMutation.isPending ? 'Saving...' : 'Save'}
           </Button>
-          <Button variant="outline" onClick={handleLint} disabled={lintMutation.isPending}>
+          <Button variant="outline" onClick={handleLint} disabled={isLoading || lintMutation.isPending}>
             <FileCheck className="mr-2 h-4 w-4" />
             {lintMutation.isPending ? 'Linting...' : 'Lint'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExtractToEnv}
+            disabled={!selectedText || isLoading || saveMutation.isPending}
+            title={selectedText ? 'Extract selected value to .env file' : 'Select a value in the editor to extract'}
+          >
+            <Variable className="mr-2 h-4 w-4" />
+            Extract to .env
           </Button>
           {hasUnsavedChanges && (
             <Badge variant="secondary" className="text-xs">
@@ -280,7 +394,17 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
         </div>
       </div>
 
-      <div ref={editorRef} className="rounded-md border overflow-hidden" style={{ minHeight: '400px' }} />
+      <div className="relative">
+        {isLoading && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 rounded-md border">
+            <div className="flex items-center gap-2">
+              <LoadingSpinner size="default" />
+              <span className="text-muted-foreground">Loading compose file...</span>
+            </div>
+          </div>
+        )}
+        <div ref={editorRef} className="rounded-md border overflow-hidden" style={{ minHeight: '400px' }} />
+      </div>
 
       {lintResults.length > 0 && (
         <div className="rounded-md border bg-card">
@@ -311,6 +435,49 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
           </div>
         </div>
       )}
+
+      <Dialog open={showExtractDialog} onOpenChange={setShowExtractDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Variable className="h-5 w-5" />
+              Extract to .env
+            </DialogTitle>
+            <DialogDescription>
+              Replace the selected value with a variable reference and add it to the .env file.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <div className="text-sm text-muted-foreground">Selected value:</div>
+              <code className="block rounded-md bg-muted p-2 text-sm font-mono break-all">
+                {selectedText.length > 100 ? `${selectedText.slice(0, 100)}...` : selectedText}
+              </code>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="extract-var-name">Variable name</Label>
+              <Input
+                id="extract-var-name"
+                value={extractVarName}
+                onChange={(e) => setExtractVarName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'))}
+                placeholder="VARIABLE_NAME"
+                className="font-mono"
+              />
+            </div>
+            <div className="text-sm text-muted-foreground">
+              Will become: <code className="font-mono">${'{'}{extractVarName || 'VARIABLE_NAME'}{'}'}</code> in compose, <code className="font-mono">{extractVarName || 'VARIABLE_NAME'}={selectedText}</code> in .env
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowExtractDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmExtract} disabled={!extractVarName.trim() || isExtracting}>
+              {isExtracting ? 'Extracting...' : 'Extract'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showSaveConfirm} onOpenChange={setShowSaveConfirm}>
         <DialogContent>

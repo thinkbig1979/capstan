@@ -14,9 +14,10 @@ import {
 import { toast } from 'sonner'
 import { useCreateStack } from '@/hooks/useCreateStack'
 import { useQuery } from '@tanstack/react-query'
-import { authApi, apiClient } from '@/lib/api'
+import { authApi, stacksApi } from '@/lib/api'
+import { convertDockerRun, isDockerRunCommand } from '@/lib/docker-run-parser'
 import { useNavigate } from 'react-router-dom'
-import { FileCheck, AlertCircle, AlertTriangle, Info, Plus } from 'lucide-react'
+import { FileCheck, AlertCircle, AlertTriangle, Info, Plus, Terminal } from 'lucide-react'
 import type { LintResult } from '@/types'
 import { EditorView, basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
@@ -53,10 +54,14 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
   const [name, setName] = useState('')
   const [composeContent, setComposeContent] = useState(DEFAULT_COMPOSE)
   const [envContent, setEnvContent] = useState('')
-  const [deploy, setDeploy] = useState(true)
+  const [deploy, setDeploy] = useState(false)
   const [showEnv, setShowEnv] = useState(false)
   const [lintResults, setLintResults] = useState<LintResult[]>([])
   const [nameError, setNameError] = useState('')
+  const [composeTab, setComposeTab] = useState<'editor' | 'docker-run'>('editor')
+  const [dockerRunInput, setDockerRunInput] = useState('')
+  const [conversionError, setConversionError] = useState('')
+  const [pendingCompose, setPendingCompose] = useState<string | null>(null)
   const editorViewRef = useRef<EditorView | null>(null)
   const editorRef = useRef<HTMLDivElement>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
@@ -104,8 +109,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
 
   const handleLint = useCallback(async () => {
     try {
-      const response = await apiClient.post<{ lintResults: LintResult[] }>('/stacks/lint', { compose: composeContent })
-      const data = response.data
+      const data = await stacksApi.lint(composeContent)
       setLintResults(data.lintResults || [])
 
       if (data.lintResults?.some((r: LintResult) => r.level === 'error')) {
@@ -119,6 +123,18 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
       toast.error('Failed to lint compose file')
     }
   }, [composeContent])
+
+  const resetForm = useCallback(() => {
+    setName('')
+    setComposeContent(DEFAULT_COMPOSE)
+    setEnvContent('')
+    setShowEnv(false)
+    setLintResults([])
+    setDockerRunInput('')
+    setConversionError('')
+    setPendingCompose(null)
+    setComposeTab('editor')
+  }, [])
 
   const handleCreate = useCallback(() => {
     const error = validateName(name)
@@ -142,11 +158,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
           )
           onOpenChange(false)
           navigate(`/stacks/${data.stack.id}`)
-          setName('')
-          setComposeContent(DEFAULT_COMPOSE)
-          setEnvContent('')
-          setShowEnv(false)
-          setLintResults([])
+          resetForm()
         },
         onError: (error: unknown) => {
           const err = error as { error?: string; lintResults?: LintResult[] }
@@ -161,7 +173,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
         },
       },
     )
-  }, [name, composeContent, envContent, showEnv, deploy, createMutation, onOpenChange, navigate, validateName])
+  }, [name, composeContent, envContent, showEnv, deploy, createMutation, onOpenChange, navigate, validateName, resetForm])
 
   const handleSave = useCallback(() => {
     if (!editorViewRef.current) return
@@ -173,13 +185,43 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     })
   }, [])
 
-  // Initialize CodeMirror editor
+  const handleConvertDockerRun = useCallback(() => {
+    const trimmed = dockerRunInput.trim()
+    if (!trimmed) {
+      toast.error('Please paste a docker run command')
+      return
+    }
+
+    if (!isDockerRunCommand(trimmed)) {
+      toast.error('Input does not appear to be a docker run command')
+      return
+    }
+
+    try {
+      const compose = convertDockerRun(trimmed)
+      if (!compose) {
+        toast.error('Could not parse the docker run command')
+        return
+      }
+
+      setPendingCompose(compose)
+      setConversionError('')
+      toast.success('Docker run command converted to Compose')
+      setComposeTab('editor')
+    } catch {
+      setConversionError('Failed to parse the docker run command. Check the syntax and try again.')
+      toast.error('Failed to parse the docker run command')
+    }
+  }, [dockerRunInput])
+
   useEffect(() => {
-    if (!editorRef.current || !open) return
+    if (!editorRef.current || !open || composeTab !== 'editor') return
 
     if (editorViewRef.current) {
       editorViewRef.current.destroy()
     }
+
+    const doc = pendingCompose ?? composeContent
 
     const extensions = [
       basicSetup,
@@ -205,7 +247,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     }
 
     const state = EditorState.create({
-      doc: composeContent,
+      doc,
       extensions: [
         ...extensions,
         EditorView.updateListener.of((update) => {
@@ -223,16 +265,20 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
 
     editorViewRef.current = view
 
+    if (pendingCompose) {
+      setComposeContent(pendingCompose)
+      setPendingCompose(null)
+    }
+
     return () => {
       view.destroy()
       editorViewRef.current = null
     }
-  }, [open, isDarkTheme, handleSave])
+  }, [open, isDarkTheme, composeTab, handleSave])
 
-  // Update editor content when composeContent changes externally
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (editorViewRef.current && !isUpdatingFromEditor.current) {
+    if (editorViewRef.current && !isUpdatingFromEditor.current && composeTab === 'editor') {
       const transaction = editorViewRef.current.state.update({
         changes: { from: 0, to: editorViewRef.current.state.doc.length, insert: composeContent },
       })
@@ -256,13 +302,15 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     return errors
   }, [nameError, hasLintErrors, lintResults])
 
-
   const validationErrors = getValidationErrors()
   const isCreateDisabled = createMutation.isPending || validationErrors.length > 0
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[600px] sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+    <Dialog open={open} onOpenChange={(isOpen) => {
+      if (!isOpen) resetForm()
+      onOpenChange(isOpen)
+    }}>
+      <DialogContent className="w-[900px] sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create New Stack</DialogTitle>
         </DialogHeader>
@@ -294,15 +342,75 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
                 Lint
               </Button>
             </div>
-            <div
-              ref={editorRef}
-              className={`rounded-md border overflow-hidden ${hasLintErrors ? 'border-red-500' : ''}`}
-              style={{ minHeight: '300px' }}
-            />
-            {hasLintErrors && (
-              <p className="text-sm text-red-500">
-                {lintResults.filter((r) => r.level === 'error').length} error(s) found - fix before creating
-              </p>
+
+            <div className="inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground w-full">
+              <button
+                onClick={() => setComposeTab('editor')}
+                className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-all flex-1 ${
+                  composeTab === 'editor'
+                    ? 'bg-background text-foreground shadow'
+                    : 'hover:bg-background/50'
+                }`}
+              >
+                Compose Editor
+              </button>
+              <button
+                onClick={() => setComposeTab('docker-run')}
+                className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-all flex-1 ${
+                  composeTab === 'docker-run'
+                    ? 'bg-background text-foreground shadow'
+                    : 'hover:bg-background/50'
+                }`}
+              >
+                <Terminal className="mr-2 h-3 w-3" />
+                Convert docker run
+              </button>
+            </div>
+
+            {composeTab === 'editor' && (
+              <div className="space-y-2">
+                <div
+                  ref={editorRef}
+                  className={`rounded-md border overflow-hidden ${hasLintErrors ? 'border-red-500' : ''}`}
+                  style={{ minHeight: '300px' }}
+                />
+                {hasLintErrors && (
+                  <p className="text-sm text-red-500">
+                    {lintResults.filter((r) => r.level === 'error').length} error(s) found - fix before creating
+                  </p>
+                )}
+              </div>
+            )}
+
+            {composeTab === 'docker-run' && (
+              <div className="space-y-3">
+                <Textarea
+                  value={dockerRunInput}
+                  onChange={(e) => {
+                    setDockerRunInput(e.target.value)
+                    setConversionError('')
+                  }}
+                  placeholder={`docker run -d \\\n  --name webapp \\\n  -p 8080:80 \\\n  -e NODE_ENV=production \\\n  nginx:alpine`}
+                  className="font-mono min-h-[200px] text-sm"
+                />
+                {conversionError && (
+                  <p className="text-sm text-red-500">{conversionError}</p>
+                )}
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-muted-foreground">
+                    Paste a <code className="bg-muted px-1 rounded">docker run</code> command to convert it to Compose format
+                  </p>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleConvertDockerRun}
+                    disabled={!dockerRunInput.trim()}
+                  >
+                    <Terminal className="mr-2 h-4 w-4" />
+                    Convert
+                  </Button>
+                </div>
+              </div>
             )}
           </div>
 
@@ -343,12 +451,12 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
               className="w-full justify-start"
             >
               <Plus className="mr-2 h-4 w-4" />
-              {showEnv ? 'Hide' : 'Add'} Environment Variables
+              {showEnv ? 'Hide' : 'Add'} .env File
             </Button>
 
             {showEnv && (
               <div className="space-y-2 pl-4 border-l-2">
-                <Label htmlFor="env">Environment Variables</Label>
+                <Label htmlFor="env">.env File</Label>
                 <Textarea
                   id="env"
                   value={envContent}
@@ -357,7 +465,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
                   className="font-mono min-h-[150px]"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Add environment variables in KEY=value format (one per line)
+                  Creates a .env file alongside compose.yaml. Variables are available via {'${VAR}'} in the compose file. You can also extract hardcoded values from the Compose tab after creation.
                 </p>
               </div>
             )}
@@ -379,7 +487,10 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
 
         <DialogFooter className="mt-6 flex-col items-stretch gap-2">
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
+            <Button variant="outline" onClick={() => {
+              resetForm()
+              onOpenChange(false)
+            }}>
               Cancel
             </Button>
             <TooltipProvider>
@@ -412,8 +523,8 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
                        <AlertCircle className="h-3 w-3" />
                        {error.message}
                      </button>
-                  </li>
-                ))}
+                   </li>
+                 ))}
               </ul>
             </div>
           )}
