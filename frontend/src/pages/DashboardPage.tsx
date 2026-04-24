@@ -627,82 +627,187 @@ export function DashboardPage() {
 
         <TabsContent value="directories" className="mt-4">
           <div className="space-y-4">
-          <SortFilterBar
-            sortOptions={[
-              { key: 'name', label: 'Name' },
-            ]}
-            sortValue="name"
-            onSortChange={() => {}}
-            countDisplay={`${sortedDirectories.length} directories`}
-          />
-          {sortedDirectories.length > 0 ? (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Path</TableHead>
-                    <TableHead>Stacks</TableHead>
-                    <TableHead>Git Branch</TableHead>
-                    <TableHead>Behind</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sortedDirectories.map((dir) => (
-                    <TableRow key={dir.path}>
-                      <TableCell className="font-medium">
-                        <div className="flex items-center gap-2">
-                          <Folder className="h-4 w-4 text-muted-foreground" />
-                          {dir.name}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{dir.path}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant="secondary"
-                          className="cursor-pointer hover:bg-secondary/80"
-                          onClick={() => {
-                            const firstStack = stacks?.find(s => s.directory === dir.path)
-                            if (firstStack) {
-                              navigate(`/stacks/${firstStack.id}`)
-                            }
-                          }}
-                        >
-                          {dir.stackCount}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {dir.isGitRepo ? (
-                          <Badge variant="outline" className="flex items-center gap-1 w-fit">
-                            <GitBranch className="h-3 w-3" />
-                            {dir.gitBranch || 'main'}
-                          </Badge>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {dir.isGitRepo && ((dir.gitBehind ?? 0) > 0) ? (
-                          <Badge variant="secondary" className="flex items-center gap-1 text-yellow-600">
-                            <GitPullRequest className="h-3 w-3" />
-                            {dir.gitBehind}
-                          </Badge>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">-</span>
-                        )}
-                      </TableCell>
-                    </TableRow>
+          {(() => {
+            const rootDirs = new Map<string, { name: string; dirs: typeof sortedDirectories }>();
+            for (const dir of sortedDirectories) {
+              const root = (dir as { rootDir?: string }).rootDir || stacks?.find(s => s.directory === dir.path)?.directory?.split('/').slice(0, -1).join('/') || '';
+              if (!rootDirs.has(root)) {
+                const rootName = root.split('/').filter(Boolean).pop() || root || 'Default';
+                rootDirs.set(root, { name: rootName, dirs: [] });
+              }
+              rootDirs.get(root)!.dirs.push(dir);
+            }
+            const rootEntries = Array.from(rootDirs.entries());
+            const hasMultipleRoots = rootEntries.length > 1;
+
+            if (!hasMultipleRoots) {
+              return (
+                <>
+                  <SortFilterBar
+                    sortOptions={[{ key: 'name', label: 'Name' }]}
+                    sortValue="name"
+                    onSortChange={() => {}}
+                    countDisplay={`${sortedDirectories.length} directories`}
+                  />
+                  {sortedDirectories.length > 0 ? (
+                    <div className="rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Name</TableHead>
+                            <TableHead>Path</TableHead>
+                            <TableHead>Stacks</TableHead>
+                            <TableHead>Git Branch</TableHead>
+                            <TableHead>Behind</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {sortedDirectories.map((dir) => (
+                            <TableRow key={dir.path}>
+                              <TableCell className="font-medium">
+                                <div className="flex items-center gap-2">
+                                  <Folder className="h-4 w-4 text-muted-foreground" />
+                                  {dir.name}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">{dir.path}</TableCell>
+                              <TableCell>
+                                <Badge
+                                  variant="secondary"
+                                  className="cursor-pointer hover:bg-secondary/80"
+                                  onClick={() => {
+                                    const firstStack = stacks?.find(s => s.directory === dir.path)
+                                    if (firstStack) navigate(`/stacks/${firstStack.id}`)
+                                  }}
+                                >
+                                  {dir.stackCount}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                {dir.isGitRepo ? (
+                                  <Badge variant="outline" className="flex items-center gap-1 w-fit">
+                                    <GitBranch className="h-3 w-3" />
+                                    {dir.gitBranch || 'main'}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-sm text-muted-foreground">-</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {dir.isGitRepo && ((dir.gitBehind ?? 0) > 0) ? (
+                                  <Badge variant="secondary" className="flex items-center gap-1 text-yellow-600">
+                                    <GitPullRequest className="h-3 w-3" />
+                                    {dir.gitBehind}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-sm text-muted-foreground">-</span>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ) : (
+                    <Card>
+                      <CardContent className="pt-6">
+                        <p className="text-center text-muted-foreground">No directories found</p>
+                      </CardContent>
+                    </Card>
+                  )}
+                </>
+              );
+            }
+
+            return (
+              <Tabs defaultValue={rootEntries[0]?.[0]}>
+                <TabsList variant="line" className="w-full">
+                  {rootEntries.map(([rootPath, { name }]) => (
+                    <TabsTrigger key={rootPath} value={rootPath}>
+                      <Folder className="h-3.5 w-3.5 mr-1.5" />
+                      {name}
+                    </TabsTrigger>
                   ))}
-                </TableBody>
-              </Table>
-            </div>
-          ) : (
-            <Card>
-              <CardContent className="pt-6">
-                <p className="text-center text-muted-foreground">No directories found</p>
-              </CardContent>
-            </Card>
-          )}
+                </TabsList>
+                {rootEntries.map(([rootPath, { dirs: rootDirs }]) => (
+                  <TabsContent key={rootPath} value={rootPath} className="mt-4">
+                    <SortFilterBar
+                      sortOptions={[{ key: 'name', label: 'Name' }]}
+                      sortValue="name"
+                      onSortChange={() => {}}
+                      countDisplay={`${rootDirs.length} directories`}
+                    />
+                    {rootDirs.length > 0 ? (
+                      <div className="rounded-md border">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Name</TableHead>
+                              <TableHead>Path</TableHead>
+                              <TableHead>Stacks</TableHead>
+                              <TableHead>Git Branch</TableHead>
+                              <TableHead>Behind</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {rootDirs.map((dir) => (
+                              <TableRow key={dir.path}>
+                                <TableCell className="font-medium">
+                                  <div className="flex items-center gap-2">
+                                    <Folder className="h-4 w-4 text-muted-foreground" />
+                                    {dir.name}
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-sm text-muted-foreground">{dir.path}</TableCell>
+                                <TableCell>
+                                  <Badge
+                                    variant="secondary"
+                                    className="cursor-pointer hover:bg-secondary/80"
+                                    onClick={() => {
+                                      const firstStack = stacks?.find(s => s.directory === dir.path)
+                                      if (firstStack) navigate(`/stacks/${firstStack.id}`)
+                                    }}
+                                  >
+                                    {dir.stackCount}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>
+                                  {dir.isGitRepo ? (
+                                    <Badge variant="outline" className="flex items-center gap-1 w-fit">
+                                      <GitBranch className="h-3 w-3" />
+                                      {dir.gitBranch || 'main'}
+                                    </Badge>
+                                  ) : (
+                                    <span className="text-sm text-muted-foreground">-</span>
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  {dir.isGitRepo && ((dir.gitBehind ?? 0) > 0) ? (
+                                    <Badge variant="secondary" className="flex items-center gap-1 text-yellow-600">
+                                      <GitPullRequest className="h-3 w-3" />
+                                      {dir.gitBehind}
+                                    </Badge>
+                                  ) : (
+                                    <span className="text-sm text-muted-foreground">-</span>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    ) : (
+                      <Card>
+                        <CardContent className="pt-6">
+                          <p className="text-center text-muted-foreground">No directories in this location</p>
+                        </CardContent>
+                      </Card>
+                    )}
+                  </TabsContent>
+                ))}
+              </Tabs>
+            );
+          })()}
           </div>
         </TabsContent>
 

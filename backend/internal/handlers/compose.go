@@ -252,25 +252,27 @@ func (h *ComposeHandler) validatePath(path string) error {
 		return err
 	}
 
-	absStacksDir, err := filepath.Abs(h.config.StacksDir)
-	if err != nil {
-		return err
-	}
+	for _, stacksDir := range h.config.GetAllStacksDirs() {
+		absStacksDir, err := filepath.Abs(stacksDir)
+		if err != nil {
+			continue
+		}
 
-	rel, err := filepath.Rel(absStacksDir, absPath)
-	if err != nil {
-		return err
-	}
+		rel, err := filepath.Rel(absStacksDir, absPath)
+		if err != nil {
+			continue
+		}
 
-	if strings.HasPrefix(rel, "..") || strings.HasPrefix(rel, "/") {
-		return &models.AppError{
-			Code:    models.ErrPathTraversal,
-			Message: "Path is outside stacks directory",
-			Status:  http.StatusBadRequest,
+		if !strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, "/") {
+			return nil
 		}
 	}
 
-	return nil
+	return &models.AppError{
+		Code:    models.ErrPathTraversal,
+		Message: "Path is outside configured stacks directories",
+		Status:  http.StatusBadRequest,
+	}
 }
 
 func (h *ComposeHandler) logAction(userID, stackID, action, detail string) {

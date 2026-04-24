@@ -3,6 +3,7 @@ import type {
   User,
   AuthResponse,
   Directory,
+  ConfiguredDir,
   ScanResult,
   Stack,
   StackStatus,
@@ -115,7 +116,7 @@ export const authApi = {
   },
 
   getConfig: async () => {
-    const response = await apiClient.get<{ stacksDir: string }>('/settings/config')
+    const response = await apiClient.get<{ stacksDir: string; stacksDirectories: string[] }>('/settings/config')
     return response.data
   },
 
@@ -164,6 +165,7 @@ export const stacksApi = {
 
   create: async (input: {
     name: string
+    directory?: string
     composeContent: string
     envContent?: string
     deploy: boolean
@@ -216,6 +218,18 @@ export const stacksApi = {
 export const dashboardApi = {
   stats: async () => {
     const response = await apiClient.get<DashboardStats>('/dashboard/stats')
+    return response.data
+  },
+}
+
+export const directoryConfigApi = {
+  list: async () => {
+    const response = await apiClient.get<{ directories: ConfiguredDir[]; defaultDir: string }>('/settings/directories')
+    return response.data
+  },
+
+  update: async (data: { defaultDir: string }) => {
+    const response = await apiClient.put<{ directories: ConfiguredDir[]; defaultDir: string }>('/settings/directories', data)
     return response.data
   },
 }

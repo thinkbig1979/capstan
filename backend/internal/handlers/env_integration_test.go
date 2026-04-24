@@ -33,7 +33,7 @@ func TestEnvHandler_Get_Success(t *testing.T) {
 	createTestDirectory(t, db, stackDir)
 
 	stack := models.Stack{
-		ID:          "stack1:default",
+		ID:          filepath.Base(tempDir) + "~stack1:default",
 		Directory:   stackDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -49,7 +49,7 @@ func TestEnvHandler_Get_Success(t *testing.T) {
 	router := gin.New()
 	router.GET("/stacks/:id/env", handler.Get)
 
-	req := httptest.NewRequest(http.MethodGet, "/stacks/stack1:default/env", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stacks/" + filepath.Base(tempDir) + "~stack1:default/env", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -75,7 +75,7 @@ func TestEnvHandler_Get_NoEnvFile(t *testing.T) {
 	createTestDirectory(t, db, stackDir)
 
 	stack := models.Stack{
-		ID:          "stack1:default",
+		ID:          filepath.Base(tempDir) + "~stack1:default",
 		Directory:   stackDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     "",
@@ -91,7 +91,7 @@ func TestEnvHandler_Get_NoEnvFile(t *testing.T) {
 	router := gin.New()
 	router.GET("/stacks/:id/env", handler.Get)
 
-	req := httptest.NewRequest(http.MethodGet, "/stacks/stack1:default/env", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stacks/" + filepath.Base(tempDir) + "~stack1:default/env", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -120,7 +120,7 @@ func TestEnvHandler_Put_Success(t *testing.T) {
 	createTestDirectory(t, db, stackDir)
 
 	stack := models.Stack{
-		ID:          "stack1:default",
+		ID:          filepath.Base(tempDir) + "~stack1:default",
 		Directory:   stackDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -140,7 +140,7 @@ func TestEnvHandler_Put_Success(t *testing.T) {
 	router := gin.New()
 	router.PUT("/stacks/:id/env", authContextMiddleware("test-user-id"), handler.Put)
 
-	req := httptest.NewRequest(http.MethodPut, "/stacks/stack1:default/env", bytes.NewReader(reqBytes))
+	req := httptest.NewRequest(http.MethodPut, "/stacks/" + filepath.Base(tempDir) + "~stack1:default/env", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -175,7 +175,7 @@ func TestEnvHandler_Put_WithEntries(t *testing.T) {
 	createTestDirectory(t, db, stackDir)
 
 	stack := models.Stack{
-		ID:          "stack1:default",
+		ID:          filepath.Base(tempDir) + "~stack1:default",
 		Directory:   stackDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -198,7 +198,7 @@ func TestEnvHandler_Put_WithEntries(t *testing.T) {
 	router := gin.New()
 	router.PUT("/stacks/:id/env", authContextMiddleware("test-user-id"), handler.Put)
 
-	req := httptest.NewRequest(http.MethodPut, "/stacks/stack1:default/env", bytes.NewReader(reqBytes))
+	req := httptest.NewRequest(http.MethodPut, "/stacks/" + filepath.Base(tempDir) + "~stack1:default/env", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

@@ -105,7 +105,7 @@ export const handlers = [
     return HttpResponse.json({
       stacks: [
         {
-          id: 'stack1:default',
+          id: 'stacks~stack1:default',
           directory: '/opt/stacks/stack1',
           composeFile: 'compose.yaml',
           envFile: '.env',

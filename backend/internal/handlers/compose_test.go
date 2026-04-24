@@ -34,7 +34,7 @@ func TestComposeHandler_Get_Success(t *testing.T) {
 	createTestDirectory(t, db, stackDir)
 
 	stack := models.Stack{
-		ID:          "stack1:default",
+		ID:          filepath.Base(tempDir) + "~stack1:default",
 		Directory:   stackDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -51,7 +51,7 @@ func TestComposeHandler_Get_Success(t *testing.T) {
 	router := gin.New()
 	router.GET("/stacks/:id/compose", handler.Get)
 
-	req := httptest.NewRequest(http.MethodGet, "/stacks/stack1:default/compose", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stacks/" + filepath.Base(tempDir) + "~stack1:default/compose", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -79,7 +79,7 @@ func TestComposeHandler_Get_NotFound(t *testing.T) {
 	router := gin.New()
 	router.GET("/stacks/:id/compose", handler.Get)
 
-	req := httptest.NewRequest(http.MethodGet, "/stacks/nonexistent:default/compose", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stacks/test~nonexistent:default/compose", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -108,7 +108,7 @@ func TestComposeHandler_Put_Success(t *testing.T) {
 	createTestDirectory(t, db, stackDir)
 
 	stack := models.Stack{
-		ID:          "stack1:default",
+		ID:          filepath.Base(tempDir) + "~stack1:default",
 		Directory:   stackDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -129,7 +129,7 @@ func TestComposeHandler_Put_Success(t *testing.T) {
 	router := gin.New()
 	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), handler.Put)
 
-	req := httptest.NewRequest(http.MethodPut, "/stacks/stack1:default/compose", bytes.NewReader(reqBytes))
+	req := httptest.NewRequest(http.MethodPut, "/stacks/" + filepath.Base(tempDir) + "~stack1:default/compose", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -163,7 +163,7 @@ func TestComposeHandler_Put_ValidationError(t *testing.T) {
 	createTestDirectory(t, db, stackDir)
 
 	stack := models.Stack{
-		ID:          "stack1:default",
+		ID:          filepath.Base(tempDir) + "~stack1:default",
 		Directory:   stackDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -184,7 +184,7 @@ func TestComposeHandler_Put_ValidationError(t *testing.T) {
 	router := gin.New()
 	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), handler.Put)
 
-	req := httptest.NewRequest(http.MethodPut, "/stacks/stack1:default/compose", bytes.NewReader(reqBytes))
+	req := httptest.NewRequest(http.MethodPut, "/stacks/" + filepath.Base(tempDir) + "~stack1:default/compose", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

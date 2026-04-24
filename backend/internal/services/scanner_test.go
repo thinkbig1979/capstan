@@ -86,7 +86,7 @@ func TestScannerService_ScanAll_SingleStack(t *testing.T) {
 	stacks, err := db.ListStacks()
 	assert.NoError(t, err)
 	assert.Len(t, stacks, 1)
-	assert.Equal(t, "my-stack:default", stacks[0].ID)
+	assert.Equal(t, filepath.Base(tempDir)+"~my-stack:default", stacks[0].ID)
 }
 
 func TestScannerService_ScanAll_MultipleStacks(t *testing.T) {
@@ -179,8 +179,9 @@ func TestScannerService_ScanAll_MultipleComposeFiles(t *testing.T) {
 	for _, s := range stacks {
 		stackNames[s.ID] = true
 	}
-	assert.True(t, stackNames["multi-stack:default"])
-	assert.True(t, stackNames["multi-stack:testing"])
+	rootPrefix := filepath.Base(tempDir)
+	assert.True(t, stackNames[rootPrefix+"~multi-stack:default"])
+	assert.True(t, stackNames[rootPrefix+"~multi-stack:testing"])
 }
 
 func TestScannerService_ScanAll_WithGitRepo(t *testing.T) {

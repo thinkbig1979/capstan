@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useUIStore } from "@/stores/uiStore";
-import { stacksApi } from "@/lib/api";
+import { stacksApi, authApi } from "@/lib/api";
 import {
   Search,
   X,
@@ -18,6 +18,7 @@ import {
   ChevronRight,
   ArrowUpDown,
   Boxes,
+  FolderOpen,
 } from "lucide-react";
 import type { Stack, StackStatus } from "@/types";
 
@@ -32,22 +33,75 @@ const statusIcon: Record<
   unknown: { icon: HelpCircle, className: "text-gray-400" },
 };
 
-function groupStacksByDirectory(stacks: Stack[]) {
+function groupStacksByDirectory(stacks: Stack[], configuredDirs: string[]) {
   const groups = new Map<string, Stack[]>();
   for (const stack of stacks) {
     if (!groups.has(stack.directory)) groups.set(stack.directory, []);
     groups.get(stack.directory)!.push(stack);
   }
-  const result: { dirName: string; dirPath: string; stacks: Stack[] }[] = [];
+  const result: { dirName: string; dirPath: string; rootDir: string; stacks: Stack[] }[] = [];
   for (const [dirPath, dirStacks] of groups) {
     const parts = dirPath.split("/");
+    let rootDir = "";
+    for (const cd of configuredDirs) {
+      if (dirPath.startsWith(cd) || dirPath === cd) {
+        rootDir = cd;
+        break;
+      }
+    }
     result.push({
       dirName: parts[parts.length - 1] || dirPath,
       dirPath,
+      rootDir,
       stacks: dirStacks,
     });
   }
   return result.sort((a, b) => a.dirName.localeCompare(b.dirName));
+}
+
+function groupStacksByRootDir(
+  stacks: Stack[],
+  configuredDirs: { path: string; name: string }[],
+) {
+  const rootGroups = new Map<string, { rootName: string; rootPath: string; dirs: { dirName: string; dirPath: string; stacks: Stack[] }[] }>();
+
+  for (const dir of configuredDirs) {
+    rootGroups.set(dir.path, { rootName: dir.name, rootPath: dir.path, dirs: [] });
+  }
+
+  const grouped = groupStacksByDirectory(
+    stacks,
+    configuredDirs.map((d) => d.path),
+  );
+
+  for (const group of grouped) {
+    let rootPath = group.rootDir;
+    if (!rootPath) {
+      for (const dir of configuredDirs) {
+        if (group.dirPath.startsWith(dir.path)) {
+          rootPath = dir.path;
+          break;
+        }
+      }
+    }
+    if (!rootPath && configuredDirs.length > 0) {
+      rootPath = configuredDirs[0].path;
+    }
+    const rootGroup = rootGroups.get(rootPath);
+    if (rootGroup) {
+      rootGroup.dirs.push(group);
+    }
+  }
+
+  const result: { rootName: string; rootPath: string; dirs: { dirName: string; dirPath: string; stacks: Stack[] }[] }[] = [];
+  for (const dir of configuredDirs) {
+    const group = rootGroups.get(dir.path);
+    if (group && group.dirs.length > 0) {
+      result.push(group);
+    }
+  }
+
+  return result;
 }
 
 function loadCollapsed(): Set<string> {
@@ -107,6 +161,20 @@ export function Sidebar() {
     staleTime: 30_000,
   });
 
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: authApi.getConfig,
+    staleTime: Infinity,
+  });
+
+  const configuredDirs = useMemo(() => {
+    if (!config?.stacksDirectories) return [];
+    return config.stacksDirectories.map((p: string) => ({
+      path: p,
+      name: p.split("/").filter(Boolean).pop() || p,
+    }));
+  }, [config]);
+
   const filteredStacks = useMemo(() => {
     let result = [...stacks];
     if (searchQuery) {
@@ -128,13 +196,18 @@ export function Sidebar() {
   }, [stacks, searchQuery, statusFilter, sortBy]);
 
   const grouped = useMemo(
-    () => groupStacksByDirectory(filteredStacks),
-    [filteredStacks],
+    () => groupStacksByDirectory(filteredStacks, configuredDirs.map((d) => d.path)),
+    [filteredStacks, configuredDirs],
   );
   const useGroups = useMemo(() => {
-    const allGrouped = groupStacksByDirectory(stacks);
-    return allGrouped.some((g) => g.stacks.length > 1);
-  }, [stacks]);
+    const allGrouped = groupStacksByDirectory(stacks, configuredDirs.map((d) => d.path));
+    return allGrouped.some((g) => g.stacks.length > 1) || configuredDirs.length > 1;
+  }, [stacks, configuredDirs]);
+
+  const rootGrouped = useMemo(
+    () => groupStacksByRootDir(filteredStacks, configuredDirs),
+    [filteredStacks, configuredDirs],
+  );
 
   const toggleGroup = useCallback((dirPath: string) => {
     setCollapsedGroups((prev) => {
@@ -350,31 +423,87 @@ export function Sidebar() {
               {hasFilters ? "No stacks match filters" : "No stacks found"}
             </div>
           ) : useGroups ? (
-            grouped.map((group) => {
-              const isCollapsed = collapsedGroups.has(group.dirPath);
-              return (
-                <div key={group.dirPath}>
-                  <button
-                    onClick={() => toggleGroup(group.dirPath)}
-                    className="flex items-center gap-1.5 w-full px-2 pt-2 pb-0.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider hover:text-sidebar-foreground transition-colors"
-                    title={group.dirPath}
-                  >
-                    {isCollapsed ? (
-                      <ChevronRight className="h-3 w-3 shrink-0" />
-                    ) : (
-                      <ChevronDown className="h-3 w-3 shrink-0" />
-                    )}
-                    <span className="truncate flex-1 text-left">
-                      {group.dirName}
-                    </span>
-                    <span className="text-[9px] font-normal tabular-nums">
-                      {group.stacks.length}
-                    </span>
-                  </button>
-                  {!isCollapsed && group.stacks.map(renderStack)}
-                </div>
-              );
-            })
+            configuredDirs.length > 1 ? (
+              rootGrouped.map((rootGroup) => {
+                const isRootCollapsed = collapsedGroups.has(rootGroup.rootPath);
+                return (
+                  <div key={rootGroup.rootPath}>
+                    <button
+                      onClick={() => toggleGroup(rootGroup.rootPath)}
+                      className="flex items-center gap-1.5 w-full px-2 pt-2 pb-0.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-sidebar-foreground transition-colors"
+                      title={rootGroup.rootPath}
+                    >
+                      {isRootCollapsed ? (
+                        <ChevronRight className="h-3 w-3 shrink-0" />
+                      ) : (
+                        <ChevronDown className="h-3 w-3 shrink-0" />
+                      )}
+                      <FolderOpen className="h-3 w-3 shrink-0" />
+                      <span className="truncate flex-1 text-left">
+                        {rootGroup.rootName}
+                      </span>
+                      <span className="text-[9px] font-normal tabular-nums">
+                        {rootGroup.dirs.reduce((sum, d) => sum + d.stacks.length, 0)}
+                      </span>
+                    </button>
+                    {!isRootCollapsed && rootGroup.dirs.map((group) => {
+                      const isDirCollapsed = collapsedGroups.has(group.dirPath);
+                      const hasMultipleStacks = rootGroup.dirs.some((d) => d.stacks.length > 1);
+                      return (
+                        <div key={group.dirPath}>
+                          {hasMultipleStacks && (
+                            <button
+                              onClick={() => toggleGroup(group.dirPath)}
+                              className="flex items-center gap-1.5 w-full px-4 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-sidebar-foreground transition-colors"
+                              title={group.dirPath}
+                            >
+                              {isDirCollapsed ? (
+                                <ChevronRight className="h-2.5 w-2.5 shrink-0" />
+                              ) : (
+                                <ChevronDown className="h-2.5 w-2.5 shrink-0" />
+                              )}
+                              <span className="truncate flex-1 text-left">
+                                {group.dirName}
+                              </span>
+                              <span className="text-[9px] font-normal tabular-nums">
+                                {group.stacks.length}
+                              </span>
+                            </button>
+                          )}
+                          {!isDirCollapsed && group.stacks.map(renderStack)}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })
+            ) : (
+              grouped.map((group) => {
+                const isCollapsed = collapsedGroups.has(group.dirPath);
+                return (
+                  <div key={group.dirPath}>
+                    <button
+                      onClick={() => toggleGroup(group.dirPath)}
+                      className="flex items-center gap-1.5 w-full px-2 pt-2 pb-0.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider hover:text-sidebar-foreground transition-colors"
+                      title={group.dirPath}
+                    >
+                      {isCollapsed ? (
+                        <ChevronRight className="h-3 w-3 shrink-0" />
+                      ) : (
+                        <ChevronDown className="h-3 w-3 shrink-0" />
+                      )}
+                      <span className="truncate flex-1 text-left">
+                        {group.dirName}
+                      </span>
+                      <span className="text-[9px] font-normal tabular-nums">
+                        {group.stacks.length}
+                      </span>
+                    </button>
+                    {!isCollapsed && group.stacks.map(renderStack)}
+                  </div>
+                );
+              })
+            )
           ) : (
             filteredStacks.map(renderStack)
           )}

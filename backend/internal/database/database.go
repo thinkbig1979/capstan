@@ -81,6 +81,104 @@ func NewWithMigrationsAndEncryptor(dataDir string, encryptor TokenEncryptor) (*D
 	return db, nil
 }
 
+func (d *DB) MigrateStackIDsToRootPrefixed(stacksDir string) error {
+	version, err := d.GetSetting("stack_id_version")
+	if err != nil {
+		return fmt.Errorf("checking stack_id_version: %w", err)
+	}
+	if version == "2" {
+		return nil
+	}
+
+	rootPrefix := ""
+	if stacksDir != "" {
+		idx := strings.LastIndex(stacksDir, "/")
+		if idx >= 0 {
+			rootPrefix = stacksDir[idx+1:]
+		} else {
+			rootPrefix = stacksDir
+		}
+	}
+	if rootPrefix == "" {
+		rootPrefix = "stacks"
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("UPDATE directories SET root_dir = ? WHERE root_dir = ''", stacksDir); err != nil {
+		return fmt.Errorf("update directory root_dir: %w", err)
+	}
+
+	rows, err := tx.Query(`SELECT id, directory FROM stacks`)
+	if err != nil {
+		return fmt.Errorf("query stacks: %w", err)
+	}
+	defer rows.Close()
+
+	type idMapping struct {
+		oldID string
+		newID string
+		dir   string
+	}
+	var mappings []idMapping
+
+	for rows.Next() {
+		var id, dir string
+		if err := rows.Scan(&id, &dir); err != nil {
+			return fmt.Errorf("scan stack: %w", err)
+		}
+
+		if strings.Contains(id, "~") {
+			continue
+		}
+
+		newID := rootPrefix + "~" + id
+		mappings = append(mappings, idMapping{oldID: id, newID: newID, dir: dir})
+	}
+	rows.Close()
+
+	for _, m := range mappings {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO stacks
+			(id, directory, compose_file, env_file, project_name, status,
+			 is_git_repo, git_branch, git_commit, git_dirty, git_ahead, git_behind)
+			SELECT ?, directory, compose_file, env_file, project_name, status,
+			 is_git_repo, git_branch, git_commit, git_dirty, git_ahead, git_behind
+			FROM stacks WHERE id = ?`, m.newID, m.oldID); err != nil {
+			return fmt.Errorf("insert new stack %s: %w", m.newID, err)
+		}
+		if _, err := tx.Exec(`DELETE FROM stacks WHERE id = ?`, m.oldID); err != nil {
+			return fmt.Errorf("delete old stack %s: %w", m.oldID, err)
+		}
+		if _, err := tx.Exec(`UPDATE action_log SET stack_id = ? WHERE stack_id = ?`, m.newID, m.oldID); err != nil {
+			return fmt.Errorf("update action_log %s: %w", m.oldID, err)
+		}
+		if _, err := tx.Exec(`UPDATE cached_updates SET stack_id = ? WHERE stack_id = ?`, m.newID, m.oldID); err != nil {
+			return fmt.Errorf("update cached_updates %s: %w", m.oldID, err)
+		}
+		if _, err := tx.Exec(`UPDATE update_history SET stack_id = ? WHERE stack_id = ?`, m.newID, m.oldID); err != nil {
+			return fmt.Errorf("update update_history %s: %w", m.oldID, err)
+		}
+	}
+
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES ('stack_id_version', '2')`); err != nil {
+		return fmt.Errorf("update stack_id_version: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	if len(mappings) > 0 {
+		fmt.Printf("Migrated %d stack IDs to root-prefixed format (prefix=%s)\n", len(mappings), rootPrefix)
+	}
+
+	return nil
+}
+
 func (d *DB) Close() error {
 	return d.db.Close()
 }
@@ -177,15 +275,15 @@ func (d *DB) UpsertDirectory(dir models.Directory) error {
 		token = encrypted
 	}
 	query := `INSERT OR REPLACE INTO directories
-	          (path, name, is_git_repo, git_remote, git_branch, git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := d.db.Exec(query, dir.Path, dir.Name, dir.IsGitRepo, dir.GitRemote, dir.GitBranch,
+	          (path, name, root_dir, is_git_repo, git_remote, git_branch, git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err := d.db.Exec(query, dir.Path, dir.Name, dir.RootDir, dir.IsGitRepo, dir.GitRemote, dir.GitBranch,
 		dir.GitAuthType, dir.GitSSHKeyPath, dir.GitHTTPSUser, token, dir.ScannedAt)
 	return err
 }
 
 func (d *DB) ListDirectories() ([]models.Directory, error) {
-	query := `SELECT path, name, is_git_repo, git_remote, git_branch, git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at
+	query := `SELECT path, name, root_dir, is_git_repo, git_remote, git_branch, git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at
 	          FROM directories ORDER BY name`
 	rows, err := d.db.Query(query)
 	if err != nil {
@@ -196,7 +294,7 @@ func (d *DB) ListDirectories() ([]models.Directory, error) {
 	directories := make([]models.Directory, 0)
 	for rows.Next() {
 		var dir models.Directory
-		err := rows.Scan(&dir.Path, &dir.Name, &dir.IsGitRepo, &dir.GitRemote, &dir.GitBranch,
+		err := rows.Scan(&dir.Path, &dir.Name, &dir.RootDir, &dir.IsGitRepo, &dir.GitRemote, &dir.GitBranch,
 			&dir.GitAuthType, &dir.GitSSHKeyPath, &dir.GitHTTPSUser, &dir.GitHTTPSToken, &dir.ScannedAt)
 		if err != nil {
 			return nil, err
@@ -210,9 +308,9 @@ func (d *DB) ListDirectories() ([]models.Directory, error) {
 
 func (d *DB) GetDirectory(path string) (*models.Directory, error) {
 	var dir models.Directory
-	query := `SELECT path, name, is_git_repo, git_remote, git_branch, git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at
+	query := `SELECT path, name, root_dir, is_git_repo, git_remote, git_branch, git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at
 	          FROM directories WHERE path = ?`
-	err := d.db.QueryRow(query, path).Scan(&dir.Path, &dir.Name, &dir.IsGitRepo, &dir.GitRemote, &dir.GitBranch,
+	err := d.db.QueryRow(query, path).Scan(&dir.Path, &dir.Name, &dir.RootDir, &dir.IsGitRepo, &dir.GitRemote, &dir.GitBranch,
 		&dir.GitAuthType, &dir.GitSSHKeyPath, &dir.GitHTTPSUser, &dir.GitHTTPSToken, &dir.ScannedAt)
 	if err != nil {
 		return nil, err

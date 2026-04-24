@@ -38,7 +38,8 @@ func NewWatcherService(scanner *ScannerService, cfg *config.Config) *WatcherServ
 }
 
 func (w *WatcherService) Start() error {
-	slog.Info("Starting file watcher service", "stacksDir", w.config.StacksDir)
+	allDirs := w.config.GetAllStacksDirs()
+	slog.Info("Starting file watcher service", "stacksDirs", allDirs)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -58,27 +59,32 @@ func (w *WatcherService) Start() error {
 }
 
 func (w *WatcherService) addWatchPaths() error {
-	if err := w.watcher.Add(w.config.StacksDir); err != nil {
-		slog.Warn("Failed to watch stacks directory", "path", w.config.StacksDir, "error", err)
-	}
+	allDirs := w.config.GetAllStacksDirs()
 
-	entries, err := os.ReadDir(w.config.StacksDir)
-	if err != nil {
-		return err
-	}
+	for _, stacksDir := range allDirs {
+		if err := w.watcher.Add(stacksDir); err != nil {
+			slog.Warn("Failed to watch stacks directory", "path", stacksDir, "error", err)
+		}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
+		entries, err := os.ReadDir(stacksDir)
+		if err != nil {
+			slog.Warn("Failed to read stacks directory", "path", stacksDir, "error", err)
 			continue
 		}
 
-		if strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
 
-		dirPath := filepath.Join(w.config.StacksDir, entry.Name())
-		if err := w.watcher.Add(dirPath); err != nil {
-			slog.Warn("Failed to watch subdirectory", "path", dirPath, "error", err)
+			if strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+
+			dirPath := filepath.Join(stacksDir, entry.Name())
+			if err := w.watcher.Add(dirPath); err != nil {
+				slog.Warn("Failed to watch subdirectory", "path", dirPath, "error", err)
+			}
 		}
 	}
 
@@ -124,7 +130,15 @@ func (w *WatcherService) handleEvent(event fsnotify.Event) {
 		}
 	}
 
-	if dirPath != w.config.StacksDir && !strings.HasPrefix(filepath.Base(dirPath), ".") {
+	isRootDir := false
+	for _, stacksDir := range w.config.GetAllStacksDirs() {
+		if dirPath == stacksDir {
+			isRootDir = true
+			break
+		}
+	}
+
+	if !isRootDir && !strings.HasPrefix(filepath.Base(dirPath), ".") {
 		w.scheduleRescan(dirPath)
 	}
 }

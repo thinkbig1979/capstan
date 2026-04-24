@@ -48,6 +48,7 @@ func (h *StacksHandler) RegisterRoutes(group *gin.RouterGroup) {
 
 type CreateStackRequest struct {
 	Name           string `json:"name" binding:"required"`
+	Directory      string `json:"directory"`
 	ComposeContent string `json:"composeContent" binding:"required"`
 	EnvContent     string `json:"envContent"`
 	Deploy         bool   `json:"deploy"`
@@ -87,7 +88,20 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	stackDir := filepath.Join(h.config.StacksDir, req.Name)
+	targetDir := h.config.StacksDir
+	if req.Directory != "" {
+		if !h.isValidStacksDir(req.Directory) {
+			c.JSON(http.StatusBadRequest, models.NewAppError(
+				http.StatusBadRequest,
+				models.ErrValidation,
+				"Invalid target directory",
+			))
+			return
+		}
+		targetDir = req.Directory
+	}
+
+	stackDir := filepath.Join(targetDir, req.Name)
 
 	if _, err := os.Stat(stackDir); err == nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
@@ -98,12 +112,12 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	absStacksDir, err := filepath.Abs(h.config.StacksDir)
+	absTargetDir, err := filepath.Abs(targetDir)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.NewAppError(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
-			"Failed to resolve stacks directory",
+			"Failed to resolve target directory",
 		))
 		return
 	}
@@ -118,7 +132,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	rel, err := filepath.Rel(absStacksDir, absStackDir)
+	rel, err := filepath.Rel(absTargetDir, absStackDir)
 	if err != nil || filepath.HasPrefix(rel, "..") {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
@@ -193,7 +207,8 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		envFile = ".env"
 	}
 
-	stackID := fmt.Sprintf("%s:default", req.Name)
+	rootPrefix := filepath.Base(targetDir)
+	stackID := fmt.Sprintf("%s~%s:default", rootPrefix, req.Name)
 	projectName := fmt.Sprintf("%s-default", req.Name)
 
 	stack := models.Stack{
@@ -215,7 +230,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	if err := h.scanner.ScanDirectory(stackDir); err != nil {
+	if err := h.scanner.ScanDirectoryWithRoot(stackDir, targetDir); err != nil {
 		c.JSON(http.StatusInternalServerError, models.NewAppError(
 			http.StatusInternalServerError,
 			"SCANNER_ERROR",
@@ -540,4 +555,21 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 
 func (h *StacksHandler) logAction(userID, stackID, action, detail string) {
 	h.actionLog.Log(userID, &stackID, action, detail)
+}
+
+func (h *StacksHandler) isValidStacksDir(dir string) bool {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	for _, stacksDir := range h.config.GetAllStacksDirs() {
+		absStacksDir, err := filepath.Abs(stacksDir)
+		if err != nil {
+			continue
+		}
+		if absDir == absStacksDir {
+			return true
+		}
+	}
+	return false
 }

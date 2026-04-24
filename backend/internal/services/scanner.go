@@ -25,34 +25,41 @@ func NewScannerService(cfg *config.Config, db *database.DB) *ScannerService {
 }
 
 func (s *ScannerService) ScanAll() (hasGlobalEnv bool, err error) {
-	slog.Info("Starting directory scan", "stacksDir", s.config.StacksDir)
-
-	entries, err := os.ReadDir(s.config.StacksDir)
-	if err != nil {
-		return false, err
-	}
+	allDirs := s.config.GetAllStacksDirs()
+	slog.Info("Starting directory scan", "stacksDirs", allDirs)
 
 	_, err = os.Stat(filepath.Join(s.config.DataDir, "global.env"))
 	hasGlobalEnv = !os.IsNotExist(err)
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	var allEntries []os.DirEntry
+	for _, stacksDir := range allDirs {
+		entries, err := os.ReadDir(stacksDir)
+		if err != nil {
+			slog.Warn("Failed to read stacks directory", "path", stacksDir, "error", err)
 			continue
 		}
 
-		if strings.HasPrefix(entry.Name(), ".") {
-			continue
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+
+			if strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+
+			dirPath := filepath.Join(stacksDir, entry.Name())
+
+			if err := s.ScanDirectoryWithRoot(dirPath, stacksDir); err != nil {
+				slog.Warn("Failed to scan directory", "path", dirPath, "error", err)
+				continue
+			}
 		}
 
-		dirPath := filepath.Join(s.config.StacksDir, entry.Name())
-
-		if err := s.ScanDirectory(dirPath); err != nil {
-			slog.Warn("Failed to scan directory", "path", dirPath, "error", err)
-			continue
-		}
+		allEntries = append(allEntries, entries...)
 	}
 
-	if err := s.pruneStaleStacks(entries); err != nil {
+	if err := s.pruneStaleStacks(); err != nil {
 		slog.Warn("Failed to prune stale stacks", "error", err)
 	}
 
@@ -60,12 +67,20 @@ func (s *ScannerService) ScanAll() (hasGlobalEnv bool, err error) {
 	return hasGlobalEnv, nil
 }
 
-func (s *ScannerService) pruneStaleStacks(entries []os.DirEntry) error {
-	activeDirs := make(map[string]bool, len(entries)+1)
-	activeDirs[s.config.StacksDir] = true
-	for _, entry := range entries {
-		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
-			activeDirs[filepath.Join(s.config.StacksDir, entry.Name())] = true
+func (s *ScannerService) pruneStaleStacks() error {
+	allDirs := s.config.GetAllStacksDirs()
+
+	activeDirs := make(map[string]bool)
+	for _, stacksDir := range allDirs {
+		activeDirs[stacksDir] = true
+		entries, err := os.ReadDir(stacksDir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+				activeDirs[filepath.Join(stacksDir, entry.Name())] = true
+			}
 		}
 	}
 
@@ -83,23 +98,6 @@ func (s *ScannerService) pruneStaleStacks(entries []os.DirEntry) error {
 	if err != nil {
 		return err
 	}
-	activeComposeFiles := make(map[string]bool)
-	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		dirPath := filepath.Join(s.config.StacksDir, entry.Name())
-		patterns := []string{
-			"compose*.yaml", "compose*.yml",
-			"docker-compose*.yaml", "docker-compose*.yml",
-		}
-		for _, pattern := range patterns {
-			matches, _ := filepath.Glob(filepath.Join(dirPath, pattern))
-			for _, m := range matches {
-				activeComposeFiles[filepath.Base(m)] = true
-			}
-		}
-	}
 
 	for _, stack := range stacks {
 		if !activeDirs[stack.Directory] {
@@ -107,11 +105,14 @@ func (s *ScannerService) pruneStaleStacks(entries []os.DirEntry) error {
 		}
 	}
 
-	_ = activeComposeFiles
 	return nil
 }
 
 func (s *ScannerService) ScanDirectory(path string) error {
+	return s.ScanDirectoryWithRoot(path, "")
+}
+
+func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) error {
 	_, err := os.ReadDir(path)
 	if err != nil {
 		return err
@@ -136,9 +137,20 @@ func (s *ScannerService) ScanDirectory(path string) error {
 		}
 	}
 
+	effectiveRoot := rootDir
+	if effectiveRoot == "" {
+		for _, stacksDir := range s.config.GetAllStacksDirs() {
+			if strings.HasPrefix(path, stacksDir) {
+				effectiveRoot = stacksDir
+				break
+			}
+		}
+	}
+
 	directory := models.Directory{
 		Path:      path,
 		Name:      dirName,
+		RootDir:   effectiveRoot,
 		IsGitRepo: isGitRepo,
 		GitRemote: gitRemote,
 		GitBranch: gitBranch,
@@ -185,7 +197,8 @@ func (s *ScannerService) ScanDirectory(path string) error {
 
 			envFile := determineEnvFile(path, name)
 
-			stackID := fmt.Sprintf("%s:%s", dirName, name)
+			rootPrefix := filepath.Base(effectiveRoot)
+		stackID := fmt.Sprintf("%s~%s:%s", rootPrefix, dirName, name)
 
 			var projectName string
 			if name == "default" {
@@ -209,7 +222,7 @@ func (s *ScannerService) ScanDirectory(path string) error {
 				return err
 			}
 
-			slog.Info("Discovered stack", "id", stackID, "project", projectName)
+			slog.Info("Discovered stack", "id", stackID, "project", projectName, "root", effectiveRoot)
 		}
 	}
 

@@ -17,9 +17,16 @@ type Session struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+type ConfiguredDir struct {
+	Path      string `json:"path"`
+	Name      string `json:"name"`
+	IsDefault bool   `json:"isDefault"`
+}
+
 type Directory struct {
 	Path          string    `json:"path"`
 	Name          string    `json:"name"`
+	RootDir       string    `json:"rootDir,omitempty"`
 	IsGitRepo     bool      `json:"isGitRepo"`
 	GitRemote     string    `json:"gitRemote"`
 	GitBranch     string    `json:"gitBranch"`

@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
@@ -11,7 +13,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { useUpdateSettings, useUpdateUpdateSettings, useGitSettings, useUpdateGitSettings } from '@/hooks/useResources'
 import { toast } from 'sonner'
 import { classifyError } from '@/lib/error-handler'
-import { AlertCircle, Sun, Moon, Monitor, ChevronDown, ChevronUp, Shield, Palette, Clock, KeyRound } from 'lucide-react'
+import { AlertCircle, Sun, Moon, Monitor, ChevronDown, ChevronUp, Shield, Palette, Clock, KeyRound, FolderCog } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -21,7 +23,7 @@ import {
 } from '@/components/ui/select'
 
 interface SettingsSection {
-  id: 'account-security' | 'appearance' | 'git' | 'update-schedule'
+  id: 'account-security' | 'appearance' | 'directories' | 'git' | 'update-schedule'
   title: string
   description: string
   icon: React.ReactNode
@@ -41,6 +43,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     title: 'Appearance',
     description: 'Customize the look and feel of the application',
     icon: <Palette className="h-5 w-5" />,
+    defaultExpanded: false,
+  },
+  {
+    id: 'directories',
+    title: 'Directories',
+    description: 'Configure monitored stack directories and default location for new stacks',
+    icon: <FolderCog className="h-5 w-5" />,
     defaultExpanded: false,
   },
   {
@@ -380,6 +389,101 @@ function GitSettingsContent() {
   )
 }
 
+function DirectoriesSettingsContent() {
+  const { data: config, isLoading } = useQuery({
+    queryKey: ['config'],
+    queryFn: async () => {
+      const { authApi } = await import('@/lib/api')
+      return authApi.getConfig()
+    },
+  })
+  const queryClient = useQueryClient()
+  const [defaultDir, setDefaultDir] = useState('')
+  const [initialized, setInitialized] = useState(false)
+
+  useEffect(() => {
+    if (config && !initialized) {
+      setDefaultDir(config.stacksDir || '')
+      setInitialized(true)
+    }
+  }, [config, initialized])
+
+  if (isLoading) {
+    return <div className="py-4"><LoadingSpinner /></div>
+  }
+
+  const allDirs = config?.stacksDirectories || []
+  const effectiveDefault = initialized ? defaultDir : (config?.stacksDir || '')
+
+  const handleSaveDefault = () => {
+    import('@/lib/api').then(({ directoryConfigApi }) => {
+      directoryConfigApi.update({ defaultDir: effectiveDefault }).then(() => {
+        toast.success('Default directory updated')
+        queryClient.invalidateQueries({ queryKey: ['config'] })
+      }).catch(() => {
+        toast.error('Failed to update default directory')
+      })
+    })
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <h3 className="text-lg font-medium">Monitored Directories</h3>
+        {allDirs.length > 0 ? (
+          <div className="space-y-2">
+            {allDirs.map((dir: string, index: number) => (
+              <div key={dir} className="flex items-center gap-3 p-3 rounded-md border bg-muted/30">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium truncate">{dir.split('/').filter(Boolean).pop() || dir}</span>
+                    {index === 0 && (
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Default</Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate">{dir}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No directories configured</p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Additional directories can be added via the EXTRA_STACKS_DIRS environment variable (comma-separated paths).
+        </p>
+      </div>
+
+      {allDirs.length > 1 && (
+        <div className="space-y-4 pt-4 border-t">
+          <h3 className="text-lg font-medium">Default Stack Directory</h3>
+          <div className="space-y-2">
+            <Label htmlFor="default-dir">Default Directory for New Stacks</Label>
+            <Select value={effectiveDefault} onValueChange={setDefaultDir}>
+              <SelectTrigger id="default-dir" className="w-full max-w-md">
+                <SelectValue placeholder="Select default directory" />
+              </SelectTrigger>
+              <SelectContent>
+                {allDirs.map((dir: string) => (
+                  <SelectItem key={dir} value={dir}>
+                    {dir.split('/').filter(Boolean).pop() || dir} ({dir})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              New stacks will be created in this directory by default unless changed in the creation dialog.
+            </p>
+          </div>
+          <Button onClick={handleSaveDefault} disabled={effectiveDefault === config?.stacksDir}>
+            Save Default Directory
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SettingsPage() {
   const { user, logout, authDisabled } = useAuth()
   const { theme, setTheme } = useUIStore()
@@ -658,6 +762,14 @@ export function SettingsPage() {
 
         <CollapsibleSection
           section={SETTINGS_SECTIONS[2]}
+          expanded={isSectionExpanded('directories')}
+          onToggle={() => toggleSection('directories')}
+        >
+          <DirectoriesSettingsContent />
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          section={SETTINGS_SECTIONS[3]}
           expanded={isSectionExpanded('git')}
           onToggle={() => toggleSection('git')}
         >
@@ -665,7 +777,7 @@ export function SettingsPage() {
         </CollapsibleSection>
 
         <CollapsibleSection
-          section={SETTINGS_SECTIONS[3]}
+          section={SETTINGS_SECTIONS[4]}
           expanded={isSectionExpanded('update-schedule')}
           onToggle={() => toggleSection('update-schedule')}
         >

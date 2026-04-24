@@ -6,6 +6,13 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -52,6 +59,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
   })
 
   const [name, setName] = useState('')
+  const [selectedDir, setSelectedDir] = useState<string>('')
   const [composeContent, setComposeContent] = useState(DEFAULT_COMPOSE)
   const [envContent, setEnvContent] = useState('')
   const [deploy, setDeploy] = useState(false)
@@ -126,6 +134,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
 
   const resetForm = useCallback(() => {
     setName('')
+    setSelectedDir('')
     setComposeContent(DEFAULT_COMPOSE)
     setEnvContent('')
     setShowEnv(false)
@@ -150,7 +159,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     }
 
     createMutation.mutate(
-      { name, composeContent, envContent: showEnv ? envContent : undefined, deploy },
+      { name, directory: selectedDir || undefined, composeContent, envContent: showEnv ? envContent : undefined, deploy },
       {
         onSuccess: (data) => {
           toast.success(
@@ -173,7 +182,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
         },
       },
     )
-  }, [name, composeContent, envContent, showEnv, deploy, createMutation, onOpenChange, navigate, validateName, resetForm])
+  }, [name, selectedDir, composeContent, envContent, showEnv, deploy, createMutation, onOpenChange, navigate, validateName, resetForm])
 
   const handleSave = useCallback(() => {
     if (!editorViewRef.current) return
@@ -214,6 +223,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     }
   }, [dockerRunInput])
 
+  // Initialize CodeMirror editor (recreates when tab switches to editor)
   useEffect(() => {
     if (!editorRef.current || !open || composeTab !== 'editor') return
 
@@ -276,6 +286,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     }
   }, [open, isDarkTheme, composeTab, handleSave])
 
+  // Update editor content when composeContent changes externally (while editor is alive)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (editorViewRef.current && !isUpdatingFromEditor.current && composeTab === 'editor') {
@@ -329,10 +340,36 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
             {nameError && <p className="text-sm text-red-500">{nameError}</p>}
             {name && !nameError && (
               <p className="text-xs text-muted-foreground">
-                Directory will be: {config?.stacksDir ?? '...'}/{name}
+                Directory will be {selectedDir && selectedDir !== (config?.stacksDir ?? '') ? selectedDir : (config?.stacksDir ?? '...')}/{name}
               </p>
             )}
           </div>
+
+          {(config?.stacksDirectories?.length ?? 0) > 1 && (
+            <div className="space-y-2">
+              <Label htmlFor="directory">Target Directory</Label>
+              <Select value={selectedDir || config?.stacksDir || ''} onValueChange={setSelectedDir}>
+                <SelectTrigger id="directory">
+                  <SelectValue placeholder="Select directory" />
+                </SelectTrigger>
+                <SelectContent>
+                  {config?.stacksDirectories?.map((dir: string) => (
+                    <SelectItem key={dir} value={dir}>
+                      <span className="flex items-center gap-2">
+                        {dir === config?.stacksDir && (
+                          <Badge variant="secondary" className="text-[10px] px-1 py-0">Default</Badge>
+                        )}
+                        {dir}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Choose which monitored directory to create the stack in.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-2" ref={composeRef}>
             <div className="flex items-center justify-between">

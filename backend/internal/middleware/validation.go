@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	stackIDRegex  = regexp.MustCompile(`^[a-zA-Z0-9._:-]+$`)
+	stackIDRegex  = regexp.MustCompile(`^[a-zA-Z0-9._:~-]+$`)
 	usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 	pathTraversal = regexp.MustCompile(`\.\.`)
 

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -49,11 +50,15 @@ func (h *SettingsHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.PUT("/settings/updates", h.UpdateUpdateSettings)
 	group.GET("/settings/git", h.GetGitSettings)
 	group.PUT("/settings/git", h.UpdateGitSettings)
+	group.GET("/settings/directories", h.GetConfiguredDirectories)
+	group.PUT("/settings/directories", h.UpdateConfiguredDirectories)
 }
 
 func (h *SettingsHandler) GetConfig(c *gin.Context) {
+	allDirs := h.cfg.GetAllStacksDirs()
 	c.JSON(http.StatusOK, gin.H{
-		"stacksDir": h.stacksDir,
+		"stacksDir":         h.stacksDir,
+		"stacksDirectories": allDirs,
 	})
 }
 
@@ -520,4 +525,73 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 
 	slog.Info("Git settings updated")
 	h.GetGitSettings(c)
+}
+
+func (h *SettingsHandler) GetConfiguredDirectories(c *gin.Context) {
+	allDirs := h.cfg.GetAllStacksDirs()
+
+	type ConfiguredDir struct {
+		Path      string `json:"path"`
+		Name      string `json:"name"`
+		IsDefault bool   `json:"isDefault"`
+	}
+
+	result := make([]ConfiguredDir, 0, len(allDirs))
+	for i, dir := range allDirs {
+		name := filepath.Base(dir)
+		if dir == "/" {
+			name = "root"
+		}
+		result = append(result, ConfiguredDir{
+			Path:      dir,
+			Name:      name,
+			IsDefault: i == 0,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"directories": result,
+		"defaultDir":  allDirs[0],
+	})
+}
+
+func (h *SettingsHandler) UpdateConfiguredDirectories(c *gin.Context) {
+	var req struct {
+		DefaultDir string `json:"defaultDir"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			"VALIDATION_ERROR",
+			"Invalid request body",
+		))
+		return
+	}
+
+	if req.DefaultDir != "" {
+		if err := os.MkdirAll(req.DefaultDir, 0755); err != nil {
+			c.JSON(http.StatusInternalServerError, models.NewAppError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to create directory",
+			))
+			return
+		}
+
+		if err := h.db.SetSetting("default_stacks_dir", req.DefaultDir); err != nil {
+			slog.Error("Failed to update default stacks dir", "error", err)
+			c.JSON(http.StatusInternalServerError, models.NewAppError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to update default stacks directory",
+			))
+			return
+		}
+
+		h.stacksDir = req.DefaultDir
+		h.cfg.StacksDir = req.DefaultDir
+		slog.Info("Default stacks directory updated", "path", req.DefaultDir)
+	}
+
+	h.GetConfiguredDirectories(c)
 }

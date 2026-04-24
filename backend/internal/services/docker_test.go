@@ -19,7 +19,7 @@ func TestDockerService_buildComposeArgs(t *testing.T) {
 	service := &DockerService{config: cfg}
 
 	stack := models.Stack{
-		ID:          "test-stack:default",
+		ID:          filepath.Base(tempDir) + "~test-stack:default",
 		Directory:   tempDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -51,7 +51,7 @@ func TestDockerService_buildComposeArgs_WithGlobalEnv(t *testing.T) {
 	service := &DockerService{config: cfg}
 
 	stack := models.Stack{
-		ID:          "test-stack:default",
+		ID:          filepath.Base(tempDir) + "~test-stack:default",
 		Directory:   tempDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -77,7 +77,7 @@ func TestDockerService_buildComposeArgs_WithoutEnvFile(t *testing.T) {
 	service := &DockerService{config: cfg}
 
 	stack := models.Stack{
-		ID:          "test-stack:default",
+		ID:          filepath.Base(tempDir) + "~test-stack:default",
 		Directory:   tempDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     "",
@@ -292,7 +292,7 @@ func TestDockerService_Start_FailsWithoutDocker(t *testing.T) {
 	service := &DockerService{config: cfg}
 
 	stack := models.Stack{
-		ID:          "test-stack:default",
+		ID:          filepath.Base(tempDir) + "~test-stack:default",
 		Directory:   tempDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -310,7 +310,7 @@ func TestDockerService_Stop_FailsWithoutDocker(t *testing.T) {
 	service := &DockerService{config: cfg}
 
 	stack := models.Stack{
-		ID:          "test-stack:default",
+		ID:          filepath.Base(tempDir) + "~test-stack:default",
 		Directory:   tempDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -328,7 +328,7 @@ func TestDockerService_Restart_FailsWithoutDocker(t *testing.T) {
 	service := &DockerService{config: cfg}
 
 	stack := models.Stack{
-		ID:          "test-stack:default",
+		ID:          filepath.Base(tempDir) + "~test-stack:default",
 		Directory:   tempDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -346,7 +346,7 @@ func TestDockerService_Pull_FailsWithoutDocker(t *testing.T) {
 	service := &DockerService{config: cfg}
 
 	stack := models.Stack{
-		ID:          "test-stack:default",
+		ID:          filepath.Base(tempDir) + "~test-stack:default",
 		Directory:   tempDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -364,7 +364,7 @@ func TestDockerService_Delete_FailsWithoutDocker(t *testing.T) {
 	service := &DockerService{config: cfg}
 
 	stack := models.Stack{
-		ID:          "test-stack:default",
+		ID:          filepath.Base(tempDir) + "~test-stack:default",
 		Directory:   tempDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -382,7 +382,7 @@ func TestDockerService_Status_InvalidProject(t *testing.T) {
 	service := &DockerService{config: cfg}
 
 	stack := models.Stack{
-		ID:          "test-stack:default",
+		ID:          filepath.Base(tempDir) + "~test-stack:default",
 		Directory:   tempDir,
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",

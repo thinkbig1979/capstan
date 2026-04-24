@@ -164,6 +164,21 @@ ALTER TABLE directories ADD COLUMN git_https_user TEXT NOT NULL DEFAULT '';
 ALTER TABLE directories ADD COLUMN git_https_token TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		Version: 5,
+		Name:    "stacks_directories_setting",
+		SQL: `
+INSERT OR IGNORE INTO settings (key, value) VALUES ('default_stacks_dir', '');
+ALTER TABLE directories ADD COLUMN root_dir TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		Version: 6,
+		Name:    "stack_id_root_prefix_marker",
+		SQL: `
+INSERT OR IGNORE INTO settings (key, value) VALUES ('stack_id_version', '1');
+`,
+	},
 }
 
 func RunMigrations(db *DB) error {

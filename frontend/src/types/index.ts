@@ -13,9 +13,16 @@ export type ContainerState = 'created' | 'running' | 'paused' | 'restarting' | '
 
 export type StackTab = 'overview' | 'compose' | 'env' | 'git' | 'logs' | 'terminal'
 
+export interface ConfiguredDir {
+  path: string
+  name: string
+  isDefault: boolean
+}
+
 export interface Directory {
   path: string
   name: string
+  rootDir?: string
   stackCount: number
   isGitRepo: boolean
   gitBranch?: string

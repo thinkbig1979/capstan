@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -69,7 +70,16 @@ func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error
 	if filepath.IsAbs(decodedPath) {
 		absPath = decodedPath
 	} else {
-		absPath = filepath.Join(h.config.StacksDir, decodedPath)
+		for _, stacksDir := range h.config.GetAllStacksDirs() {
+			candidate := filepath.Join(stacksDir, decodedPath)
+			if _, err := os.Stat(candidate); err == nil {
+				absPath = candidate
+				break
+			}
+		}
+		if absPath == "" {
+			absPath = filepath.Join(h.config.StacksDir, decodedPath)
+		}
 	}
 
 	normalizedAbs, err := filepath.Abs(absPath)
@@ -77,12 +87,19 @@ func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error
 		return "", "", models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid path")
 	}
 
-	normalizedStacks, err := filepath.Abs(h.config.StacksDir)
-	if err != nil {
-		return "", "", models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve stacks directory")
+	valid := false
+	for _, stacksDir := range h.config.GetAllStacksDirs() {
+		normalizedStacks, err := filepath.Abs(stacksDir)
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(normalizedAbs, normalizedStacks) {
+			valid = true
+			break
+		}
 	}
 
-	if !strings.HasPrefix(normalizedAbs, normalizedStacks) {
+	if !valid {
 		return "", "", models.NewAppError(http.StatusForbidden, models.ErrPathTraversal, "Path traversal not allowed")
 	}
 

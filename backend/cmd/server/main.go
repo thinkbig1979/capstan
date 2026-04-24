@@ -52,6 +52,10 @@ func main() {
 	}
 	defer db.Close()
 
+	if err := db.MigrateStackIDsToRootPrefixed(cfg.StacksDir); err != nil {
+		slog.Warn("Failed to migrate stack IDs", "error", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

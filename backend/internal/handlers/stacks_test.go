@@ -64,7 +64,7 @@ func TestStacksHandler_Create_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	stack := response["stack"].(map[string]interface{})
-	assert.Equal(t, "my-stack:default", stack["id"])
+	assert.Equal(t, filepath.Base(tempDir)+"~my-stack:default", stack["id"])
 
 	assert.FileExists(t, filepath.Join(tempDir, "my-stack", "compose.yaml"))
 	assert.FileExists(t, filepath.Join(tempDir, "my-stack", ".env"))
@@ -114,7 +114,7 @@ func TestStacksHandler_List_Success(t *testing.T) {
 	createTestDirectory(t, db, "/tmp/test/stack1")
 
 	stack := models.Stack{
-		ID:          "stack1:default",
+		ID:          "test~stack1:default",
 		Directory:   "/tmp/test/stack1",
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -152,7 +152,7 @@ func TestStacksHandler_Get_Success(t *testing.T) {
 	createTestDirectory(t, db, "/tmp/test/stack1")
 
 	stack := models.Stack{
-		ID:          "stack1:default",
+		ID:          "test~stack1:default",
 		Directory:   "/tmp/test/stack1",
 		ComposeFile: "compose.yaml",
 		EnvFile:     ".env",
@@ -166,7 +166,7 @@ func TestStacksHandler_Get_Success(t *testing.T) {
 	router := gin.New()
 	router.GET("/stacks/:id", handler.Get)
 
-	req := httptest.NewRequest(http.MethodGet, "/stacks/stack1:default", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stacks/test~stack1:default", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -176,7 +176,7 @@ func TestStacksHandler_Get_Success(t *testing.T) {
 	err = json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 
-	assert.Equal(t, "stack1:default", response["id"])
+	assert.Equal(t, "test~stack1:default", response["id"])
 }
 
 func TestStacksHandler_Get_NotFound(t *testing.T) {
@@ -190,7 +190,7 @@ func TestStacksHandler_Get_NotFound(t *testing.T) {
 	router := gin.New()
 	router.GET("/stacks/:id", handler.Get)
 
-	req := httptest.NewRequest(http.MethodGet, "/stacks/nonexistent:default", nil)
+	req := httptest.NewRequest(http.MethodGet, "/stacks/test~nonexistent:default", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 

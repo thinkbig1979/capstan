@@ -7,6 +7,12 @@ import (
 	"strings"
 )
 
+type StacksDirEntry struct {
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	IsDefault   bool   `json:"isDefault"`
+}
+
 type Config struct {
 	StacksDir       string
 	HostStacksDir   string
@@ -20,6 +26,7 @@ type Config struct {
 	AuthDisabled    bool
 	CORSOrigins     string
 	TrustedNetworks string
+	ExtraStacksDirs []string
 }
 
 func Load() (*Config, error) {
@@ -67,6 +74,15 @@ func Load() (*Config, error) {
 	}
 
 	cfg.CORSOrigins = os.Getenv("CORS_ORIGINS")
+
+	if extraDirs := os.Getenv("EXTRA_STACKS_DIRS"); extraDirs != "" {
+		for _, d := range strings.Split(extraDirs, ",") {
+			d = strings.TrimSpace(d)
+			if d != "" {
+				cfg.ExtraStacksDirs = append(cfg.ExtraStacksDirs, d)
+			}
+		}
+	}
 
 	if err := validate(cfg); err != nil {
 		return nil, err
@@ -168,4 +184,10 @@ func NormalizeOrigins(origins string) []string {
 		}
 	}
 	return result
+}
+
+func (c *Config) GetAllStacksDirs() []string {
+	dirs := []string{c.StacksDir}
+	dirs = append(dirs, c.ExtraStacksDirs...)
+	return dirs
 }

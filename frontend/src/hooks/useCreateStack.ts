@@ -5,6 +5,7 @@ import type { LintResult } from '@/types'
 
 interface CreateStackInput {
   name: string
+  directory?: string
   composeContent: string
   envContent?: string
   deploy: boolean
