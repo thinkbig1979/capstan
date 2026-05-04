@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { resourcesApi } from '@/lib/api'
+import { resourcesApi, settingsApi, autoUpdateApi } from '@/lib/api'
 import type { UpdateHistoryFilters } from '@/types'
 
 export function useImages() {
@@ -29,7 +29,7 @@ export function useNetworks() {
 export function useBuildCache() {
   return useQuery({
     queryKey: ['resources', 'build-cache'],
-    queryFn: resourcesApi.listBuildCache,
+    queryFn: resourcesApi.buildCache,
     retry: 1,
   })
 }
@@ -78,7 +78,7 @@ export function useUpdateHistory(filters: UpdateHistoryFilters) {
 export function useAutoUpdatePolicies() {
   return useQuery({
     queryKey: ['auto-update-policies'],
-    queryFn: () => resourcesApi.getAutoUpdatePolicies(),
+    queryFn: () => autoUpdateApi.getPolicies(),
     retry: 1,
   })
 }
@@ -87,7 +87,7 @@ export function useToggleAutoUpdate() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ targetType, targetId, enabled }: { targetType: string; targetId: string; enabled: boolean }) =>
-      resourcesApi.setAutoUpdatePolicy(targetType, targetId, { enabled }),
+      autoUpdateApi.setPolicy(targetType, targetId, { enabled }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['auto-update-policies'] })
       queryClient.invalidateQueries({ queryKey: ['resources', 'updates'] })
@@ -99,7 +99,7 @@ export function useToggleAutoUpdate() {
 export function useUpdateSettings() {
   return useQuery({
     queryKey: ['settings', 'updates'],
-    queryFn: () => resourcesApi.getUpdateSettings(),
+    queryFn: () => settingsApi.getUpdates(),
     retry: 1,
   })
 }
@@ -108,7 +108,7 @@ export function useUpdateUpdateSettings() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (data: { scanIntervalMinutes: number; globalAutoUpdate: boolean }) =>
-      resourcesApi.updateUpdateSettings(data),
+      settingsApi.updateUpdates(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings', 'updates'] })
     },
@@ -118,7 +118,7 @@ export function useUpdateUpdateSettings() {
 export function useGitSettings() {
   return useQuery({
     queryKey: ['settings', 'git'],
-    queryFn: () => resourcesApi.getGitSettings(),
+    queryFn: () => settingsApi.getGit(),
     retry: 1,
   })
 }
@@ -127,7 +127,7 @@ export function useUpdateGitSettings() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (data: { sshKey?: string; httpsUser?: string; httpsToken?: string }) =>
-      resourcesApi.updateGitSettings(data),
+      settingsApi.updateGit(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings', 'git'] })
     },

@@ -93,11 +93,24 @@ func (s *DockerService) Restart(stack models.Stack) (*models.CommandResult, erro
 		return nil, err
 	}
 
-	for i := 0; i < 60; i++ {
-		time.Sleep(500 * time.Millisecond)
-		status, _, err := s.Status(stack)
-		if err != nil || status == "stopped" {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	backoff := 100 * time.Millisecond
+	for {
+		select {
+		case <-ctx.Done():
 			break
+		default:
+		}
+		status, _, sErr := s.Status(stack)
+		if sErr != nil || status == "stopped" {
+			break
+		}
+		time.Sleep(backoff)
+		backoff = backoff * 2
+		if backoff > 2*time.Second {
+			backoff = 2 * time.Second
 		}
 	}
 
@@ -1128,15 +1141,3 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect t
 	return nil
 }
 
-func formatBytes(bytes float64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%.0f B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", bytes/float64(div), "KMGTPE"[exp])
-}

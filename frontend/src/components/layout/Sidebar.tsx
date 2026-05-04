@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useUIStore } from "@/stores/uiStore";
-import { stacksApi, authApi } from "@/lib/api";
+import { stacksApi, settingsApi } from "@/lib/api";
 import {
   Search,
   X,
@@ -20,6 +20,12 @@ import {
   Boxes,
   FolderOpen,
 } from "lucide-react";
+import {
+  buildDirectoryTree,
+  countTreeNodeStacks,
+  hasTreeNesting,
+  type TreeNode,
+} from "@/lib/stack-tree";
 import type { Stack, StackStatus } from "@/types";
 
 const statusIcon: Record<
@@ -33,76 +39,7 @@ const statusIcon: Record<
   unknown: { icon: HelpCircle, className: "text-gray-400" },
 };
 
-function groupStacksByDirectory(stacks: Stack[], configuredDirs: string[]) {
-  const groups = new Map<string, Stack[]>();
-  for (const stack of stacks) {
-    if (!groups.has(stack.directory)) groups.set(stack.directory, []);
-    groups.get(stack.directory)!.push(stack);
-  }
-  const result: { dirName: string; dirPath: string; rootDir: string; stacks: Stack[] }[] = [];
-  for (const [dirPath, dirStacks] of groups) {
-    const parts = dirPath.split("/");
-    let rootDir = "";
-    for (const cd of configuredDirs) {
-      if (dirPath.startsWith(cd) || dirPath === cd) {
-        rootDir = cd;
-        break;
-      }
-    }
-    result.push({
-      dirName: parts[parts.length - 1] || dirPath,
-      dirPath,
-      rootDir,
-      stacks: dirStacks,
-    });
-  }
-  return result.sort((a, b) => a.dirName.localeCompare(b.dirName));
-}
 
-function groupStacksByRootDir(
-  stacks: Stack[],
-  configuredDirs: { path: string; name: string }[],
-) {
-  const rootGroups = new Map<string, { rootName: string; rootPath: string; dirs: { dirName: string; dirPath: string; stacks: Stack[] }[] }>();
-
-  for (const dir of configuredDirs) {
-    rootGroups.set(dir.path, { rootName: dir.name, rootPath: dir.path, dirs: [] });
-  }
-
-  const grouped = groupStacksByDirectory(
-    stacks,
-    configuredDirs.map((d) => d.path),
-  );
-
-  for (const group of grouped) {
-    let rootPath = group.rootDir;
-    if (!rootPath) {
-      for (const dir of configuredDirs) {
-        if (group.dirPath.startsWith(dir.path)) {
-          rootPath = dir.path;
-          break;
-        }
-      }
-    }
-    if (!rootPath && configuredDirs.length > 0) {
-      rootPath = configuredDirs[0].path;
-    }
-    const rootGroup = rootGroups.get(rootPath);
-    if (rootGroup) {
-      rootGroup.dirs.push(group);
-    }
-  }
-
-  const result: { rootName: string; rootPath: string; dirs: { dirName: string; dirPath: string; stacks: Stack[] }[] }[] = [];
-  for (const dir of configuredDirs) {
-    const group = rootGroups.get(dir.path);
-    if (group && group.dirs.length > 0) {
-      result.push(group);
-    }
-  }
-
-  return result;
-}
 
 function loadCollapsed(): Set<string> {
   try {
@@ -163,7 +100,7 @@ export function Sidebar() {
 
   const { data: config } = useQuery({
     queryKey: ["config"],
-    queryFn: authApi.getConfig,
+    queryFn: settingsApi.getConfig,
     staleTime: Infinity,
   });
 
@@ -195,19 +132,31 @@ export function Sidebar() {
     return result;
   }, [stacks, searchQuery, statusFilter, sortBy]);
 
-  const grouped = useMemo(
-    () => groupStacksByDirectory(filteredStacks, configuredDirs.map((d) => d.path)),
-    [filteredStacks, configuredDirs],
-  );
-  const useGroups = useMemo(() => {
-    const allGrouped = groupStacksByDirectory(stacks, configuredDirs.map((d) => d.path));
-    return allGrouped.some((g) => g.stacks.length > 1) || configuredDirs.length > 1;
-  }, [stacks, configuredDirs]);
+  const tree = useMemo(() => {
+    if (configuredDirs.length === 0) return []
+    return buildDirectoryTree(filteredStacks, configuredDirs.map((d) => d.path))
+  }, [filteredStacks, configuredDirs])
 
-  const rootGrouped = useMemo(
-    () => groupStacksByRootDir(filteredStacks, configuredDirs),
-    [filteredStacks, configuredDirs],
-  );
+  const treeByRoot = useMemo(() => {
+    return configuredDirs
+      .map((cd) => {
+        const rootStacks = filteredStacks.filter(
+          (s) => s.directory === cd.path || s.directory.startsWith(cd.path + '/'),
+        )
+        return {
+          rootPath: cd.path,
+          rootName: cd.name,
+          nodes: buildDirectoryTree(rootStacks, [cd.path]),
+        }
+      })
+      .filter((g) => g.nodes.length > 0)
+  }, [filteredStacks, configuredDirs])
+
+  const useGroups = useMemo(() => {
+    if (stacks.length === 0) return false
+    const allTree = buildDirectoryTree(stacks, configuredDirs.map((d) => d.path))
+    return configuredDirs.length > 1 || allTree.length > 1 || hasTreeNesting(allTree)
+  }, [stacks, configuredDirs])
 
   const toggleGroup = useCallback((dirPath: string) => {
     setCollapsedGroups((prev) => {
@@ -242,6 +191,45 @@ export function Sidebar() {
     },
     [sidebarWidth, setSidebarWidth],
   );
+
+  const renderTreeNode = (node: TreeNode, depth: number, isFirst = false) => {
+    const isCollapsed = collapsedGroups.has(node.fullPath);
+    const totalStacks = countTreeNodeStacks(node);
+    const isTopLevel = depth === 0;
+    const indentPx = (2 + depth * 2) * 4;
+
+    return (
+      <div key={node.fullPath} className={isTopLevel && !isFirst ? 'border-t border-sidebar-border mt-1' : ''}>
+        <button
+          onClick={() => toggleGroup(node.fullPath)}
+          className={`flex items-center gap-1.5 w-full transition-colors rounded ${
+            isTopLevel
+              ? 'py-1 text-[11px] font-semibold text-sidebar-accent-foreground bg-sidebar-accent/50 hover:bg-sidebar-accent/80'
+              : 'py-0.5 text-[10px] font-medium text-muted-foreground hover:text-sidebar-foreground'
+          }`}
+          style={{ paddingLeft: `${indentPx}px`, paddingRight: '8px' }}
+          title={node.fullPath}
+        >
+          {isCollapsed ? (
+            <ChevronRight className={isTopLevel ? 'h-3 w-3 shrink-0' : 'h-2.5 w-2.5 shrink-0'} />
+          ) : (
+            <ChevronDown className={isTopLevel ? 'h-3 w-3 shrink-0' : 'h-2.5 w-2.5 shrink-0'} />
+          )}
+          {isTopLevel && <FolderOpen className="h-3.5 w-3.5 shrink-0" />}
+          <span className="truncate flex-1 text-left">{node.name}</span>
+          <span className={`font-normal tabular-nums ${isTopLevel ? 'text-[10px]' : 'text-[9px]'}`}>
+            {totalStacks}
+          </span>
+        </button>
+        {!isCollapsed && (
+          <>
+            {node.stacks.map(renderStack)}
+            {node.children.map((child, i) => renderTreeNode(child, depth + 1, i === 0))}
+          </>
+        )}
+      </div>
+    );
+  };
 
   const renderStack = (stack: Stack) => {
     const isActive = location.pathname.startsWith(`/stacks/${stack.id}`);
@@ -424,8 +412,12 @@ export function Sidebar() {
             </div>
           ) : useGroups ? (
             configuredDirs.length > 1 ? (
-              rootGrouped.map((rootGroup) => {
+              treeByRoot.map((rootGroup) => {
                 const isRootCollapsed = collapsedGroups.has(rootGroup.rootPath);
+                const totalStacks = rootGroup.nodes.reduce(
+                  (sum, n) => sum + countTreeNodeStacks(n),
+                  0,
+                );
                 return (
                   <div key={rootGroup.rootPath}>
                     <button
@@ -443,66 +435,16 @@ export function Sidebar() {
                         {rootGroup.rootName}
                       </span>
                       <span className="text-[9px] font-normal tabular-nums">
-                        {rootGroup.dirs.reduce((sum, d) => sum + d.stacks.length, 0)}
+                        {totalStacks}
                       </span>
                     </button>
-                    {!isRootCollapsed && rootGroup.dirs.map((group) => {
-                      const isDirCollapsed = collapsedGroups.has(group.dirPath);
-                      const hasMultipleStacks = rootGroup.dirs.some((d) => d.stacks.length > 1);
-                      return (
-                        <div key={group.dirPath}>
-                          {hasMultipleStacks && (
-                            <button
-                              onClick={() => toggleGroup(group.dirPath)}
-                              className="flex items-center gap-1.5 w-full px-4 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-sidebar-foreground transition-colors"
-                              title={group.dirPath}
-                            >
-                              {isDirCollapsed ? (
-                                <ChevronRight className="h-2.5 w-2.5 shrink-0" />
-                              ) : (
-                                <ChevronDown className="h-2.5 w-2.5 shrink-0" />
-                              )}
-                              <span className="truncate flex-1 text-left">
-                                {group.dirName}
-                              </span>
-                              <span className="text-[9px] font-normal tabular-nums">
-                                {group.stacks.length}
-                              </span>
-                            </button>
-                          )}
-                          {!isDirCollapsed && group.stacks.map(renderStack)}
-                        </div>
-                      );
-                    })}
+                    {!isRootCollapsed &&
+                      rootGroup.nodes.map((node, i) => renderTreeNode(node, 0, i === 0))}
                   </div>
                 );
               })
             ) : (
-              grouped.map((group) => {
-                const isCollapsed = collapsedGroups.has(group.dirPath);
-                return (
-                  <div key={group.dirPath}>
-                    <button
-                      onClick={() => toggleGroup(group.dirPath)}
-                      className="flex items-center gap-1.5 w-full px-2 pt-2 pb-0.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider hover:text-sidebar-foreground transition-colors"
-                      title={group.dirPath}
-                    >
-                      {isCollapsed ? (
-                        <ChevronRight className="h-3 w-3 shrink-0" />
-                      ) : (
-                        <ChevronDown className="h-3 w-3 shrink-0" />
-                      )}
-                      <span className="truncate flex-1 text-left">
-                        {group.dirName}
-                      </span>
-                      <span className="text-[9px] font-normal tabular-nums">
-                        {group.stacks.length}
-                      </span>
-                    </button>
-                    {!isCollapsed && group.stacks.map(renderStack)}
-                  </div>
-                );
-              })
+              tree.map((node, i) => renderTreeNode(node, 0, i === 0))
             )
           ) : (
             filteredStacks.map(renderStack)

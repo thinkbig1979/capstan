@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useWebSocketJSON } from '@/hooks/useWebSocket'
+import { formatDateTimeLocal } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -86,15 +87,6 @@ const TIME_RANGE_OPTIONS: TimeRangeConfig[] = [
     getStartTime: () => null,
   },
 ]
-
-function formatDateTimeLocal(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  return `${year}-${month}-${day}T${hours}:${minutes}`
-}
 
 function getLogLevelColor(message: string): string {
   const upperMsg = message.toUpperCase()

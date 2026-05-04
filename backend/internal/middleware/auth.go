@@ -12,6 +12,22 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+var PublicPaths = []string{
+	"/api/v1/auth/login",
+	"/api/v1/auth/setup",
+	"/api/v1/auth/status",
+	"/health",
+}
+
+func IsPublicPath(path string) bool {
+	for _, p := range PublicPaths {
+		if path == p {
+			return true
+		}
+	}
+	return false
+}
+
 func isTrustedIP(clientIP string, trustedNetworks string) bool {
 	if clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" {
 		return true
@@ -72,18 +88,10 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 		}
 
 		path := c.Request.URL.Path
-		publicPaths := []string{
-			"/api/v1/auth/login",
-			"/api/v1/auth/setup",
-			"/api/v1/auth/status",
-			"/health",
-		}
 
-		for _, pp := range publicPaths {
-			if path == pp {
-				c.Next()
-				return
-			}
+		if IsPublicPath(path) {
+			c.Next()
+			return
 		}
 
 		if strings.HasPrefix(path, "/api/v1/ws/") {
@@ -114,7 +122,7 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 
 		token = strings.TrimPrefix(token, "Bearer ")
 
-		claims, err := validateJWT(token, jwtSecret)
+		claims, err := ValidateJWT(token, jwtSecret)
 		if err != nil {
 			if strings.Contains(err.Error(), "expired") {
 				c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Session expired"))
@@ -151,7 +159,7 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 	}
 }
 
-func validateJWT(token, secret string) (jwt.MapClaims, error) {
+func ValidateJWT(token, secret string) (jwt.MapClaims, error) {
 	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, jwt.ErrSignatureInvalid

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,19 +21,13 @@ import {
 import { toast } from 'sonner'
 import { useCreateStack } from '@/hooks/useCreateStack'
 import { useQuery } from '@tanstack/react-query'
-import { authApi, stacksApi } from '@/lib/api'
+import { settingsApi, stacksApi } from '@/lib/api'
 import { convertDockerRun, isDockerRunCommand } from '@/lib/docker-run-parser'
 import { useNavigate } from 'react-router-dom'
-import { FileCheck, AlertCircle, AlertTriangle, Info, Plus, Terminal } from 'lucide-react'
+import { FileCheck, AlertCircle, Plus, Terminal } from 'lucide-react'
 import type { LintResult } from '@/types'
-import { EditorView, basicSetup } from 'codemirror'
-import { EditorState } from '@codemirror/state'
-import { yaml } from '@codemirror/lang-yaml'
-import { keymap } from '@codemirror/view'
-import { search } from '@codemirror/search'
-import { autocompletion } from '@codemirror/autocomplete'
-import { oneDark } from '@codemirror/theme-one-dark'
-import { useUIStore } from '@/stores/uiStore'
+import { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
+import { LintResultsPanel } from '@/components/stack/LintResultsPanel'
 
 interface CreateStackDialogProps {
   open: boolean
@@ -51,10 +45,9 @@ const DEFAULT_COMPOSE = `services:
 export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps) {
   const navigate = useNavigate()
   const createMutation = useCreateStack()
-  const { theme } = useUIStore()
   const { data: config } = useQuery({
     queryKey: ['config'],
-    queryFn: authApi.getConfig,
+    queryFn: settingsApi.getConfig,
     staleTime: Infinity,
   })
 
@@ -70,18 +63,10 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
   const [dockerRunInput, setDockerRunInput] = useState('')
   const [conversionError, setConversionError] = useState('')
   const [pendingCompose, setPendingCompose] = useState<string | null>(null)
-  const editorViewRef = useRef<EditorView | null>(null)
   const editorRef = useRef<HTMLDivElement>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const composeRef = useRef<HTMLDivElement>(null)
   const isUpdatingFromEditor = useRef(false)
-
-  const isDarkTheme = useMemo(
-    () =>
-      theme === 'dark' ||
-      (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches),
-    [theme],
-  )
 
   const validateName = useCallback((value: string) => {
     if (!value.trim()) {
@@ -103,17 +88,6 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     },
     [validateName],
   )
-
-  const getLintIcon = useCallback((level: string) => {
-    switch (level) {
-      case 'error':
-        return <AlertCircle className="h-4 w-4 text-red-500" />
-      case 'warning':
-        return <AlertTriangle className="h-4 w-4 text-yellow-500" />
-      default:
-        return <Info className="h-4 w-4 text-blue-500" />
-    }
-  }, [])
 
   const handleLint = useCallback(async () => {
     try {
@@ -184,16 +158,6 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     )
   }, [name, selectedDir, composeContent, envContent, showEnv, deploy, createMutation, onOpenChange, navigate, validateName, resetForm])
 
-  const handleSave = useCallback(() => {
-    if (!editorViewRef.current) return
-    const currentContent = editorViewRef.current.state.doc.toString()
-    isUpdatingFromEditor.current = true
-    setComposeContent(currentContent)
-    requestAnimationFrame(() => {
-      isUpdatingFromEditor.current = false
-    })
-  }, [])
-
   const handleConvertDockerRun = useCallback(() => {
     const trimmed = dockerRunInput.trim()
     if (!trimmed) {
@@ -223,79 +187,26 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     }
   }, [dockerRunInput])
 
-  // Initialize CodeMirror editor (recreates when tab switches to editor)
+  useCodeMirrorEditor(editorRef, {
+    doc: pendingCompose ?? composeContent,
+    onChange: (newContent) => {
+      if (!isUpdatingFromEditor.current) {
+        isUpdatingFromEditor.current = true
+        setComposeContent(newContent)
+        requestAnimationFrame(() => {
+          isUpdatingFromEditor.current = false
+        })
+      }
+    },
+    deps: [open, composeTab],
+  })
+
   useEffect(() => {
-    if (!editorRef.current || !open || composeTab !== 'editor') return
-
-    if (editorViewRef.current) {
-      editorViewRef.current.destroy()
-    }
-
-    const doc = pendingCompose ?? composeContent
-
-    const extensions = [
-      basicSetup,
-      yaml(),
-      keymap.of([
-        {
-          key: 'Mod-s',
-          run: () => {
-            return true
-          },
-        },
-      ]),
-      search({ top: true }),
-      autocompletion(),
-      EditorView.theme({
-        '&': { fontSize: '14px' },
-        '.cm-scroller': { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' },
-      }),
-    ]
-
-    if (isDarkTheme) {
-      extensions.push(oneDark)
-    }
-
-    const state = EditorState.create({
-      doc,
-      extensions: [
-        ...extensions,
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            handleSave()
-          }
-        }),
-      ],
-    })
-
-    const view = new EditorView({
-      state,
-      parent: editorRef.current,
-    })
-
-    editorViewRef.current = view
-
     if (pendingCompose) {
       setComposeContent(pendingCompose)
       setPendingCompose(null)
     }
-
-    return () => {
-      view.destroy()
-      editorViewRef.current = null
-    }
-  }, [open, isDarkTheme, composeTab, handleSave])
-
-  // Update editor content when composeContent changes externally (while editor is alive)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (editorViewRef.current && !isUpdatingFromEditor.current && composeTab === 'editor') {
-      const transaction = editorViewRef.current.state.update({
-        changes: { from: 0, to: editorViewRef.current.state.doc.length, insert: composeContent },
-      })
-      editorViewRef.current.dispatch(transaction)
-    }
-  }, [composeContent]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pendingCompose])
 
   const hasLintErrors = lintResults.some((r) => r.level === 'error')
 
@@ -451,35 +362,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
             )}
           </div>
 
-          {lintResults.length > 0 && (
-            <div className="rounded-md border bg-card">
-              <div className="p-3 border-b">
-                <h4 className="font-semibold text-sm">Lint Results</h4>
-              </div>
-              <div className="divide-y max-h-40 overflow-y-auto">
-                {lintResults.map((result, index) => (
-                  <div key={`${result.level}-${result.line || index}-${result.message}`} className="p-3 flex items-start gap-3 hover:bg-muted/50">
-                    {getLintIcon(result.level)}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        {result.line && (
-                          <Badge variant="outline" className="text-xs">
-                            Line {result.line}
-                          </Badge>
-                        )}
-                        <span className="text-sm font-medium">{result.message}</span>
-                      </div>
-                      {result.rule && (
-                        <div className="text-xs text-muted-foreground mt-1">
-                          {result.rule}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <LintResultsPanel results={lintResults} maxHeight="10rem" />
 
           <div className="space-y-2">
             <Button

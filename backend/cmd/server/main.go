@@ -118,6 +118,8 @@ func main() {
 
 	scannerService := services.NewScannerService(cfg, db)
 
+	opLock := services.NewOperationLock()
+
 	hasGlobalEnv, _ := scannerService.ScanAll()
 	if hasGlobalEnv {
 		slog.Info("Global .env file detected")
@@ -140,7 +142,6 @@ func main() {
 	r.Use(middleware.BodySizeLimit())
 	r.Use(middleware.CORSMiddleware(cfg.CORSOrigins))
 	r.Use(middleware.ValidateInput())
-	r.Use(gin.CustomRecovery(nil))
 	r.Use(SecurityHeaders())
 
 	r.GET("/health", func(c *gin.Context) {
@@ -183,13 +184,14 @@ func main() {
 	protected.Use(middleware.AuthMiddleware(db, cfg.JWTSecret, cfg.AuthDisabled, cfg.TrustedNetworks))
 	protected.Use(middleware.RateLimitByUser())
 	protected.Use(middleware.CSRFMiddleware())
+	authHandler.RegisterProtectedRoutes(protected)
 	settingsHandler.RegisterRoutes(protected)
 
 	directoriesHandler := handlers.NewDirectoriesHandler(scannerService, db)
 	directoriesGroup := protected.Group("/directories")
 	directoriesHandler.RegisterRoutes(directoriesGroup)
 
-	stacksHandler := handlers.NewStacksHandler(dockerService, scannerService, services.NewLinterService(), db, cfg)
+	stacksHandler := handlers.NewStacksHandler(dockerService, scannerService, services.NewLinterService(), db, cfg, opLock)
 	stacksGroup := protected.Group("/stacks")
 	stacksHandler.RegisterRoutes(stacksGroup)
 
@@ -206,7 +208,8 @@ func main() {
 	gitGroup := protected.Group("/git")
 	gitHandler.RegisterRoutes(gitGroup)
 
-	logsHandler := handlers.NewLogsHandler(dockerService, db, cfg.JWTSecret, cfg.AuthDisabled, cfg.DataDir)
+	connectionManager := handlers.NewConnectionManager(10)
+	logsHandler := handlers.NewLogsHandler(dockerService, db, cfg.JWTSecret, cfg.AuthDisabled, cfg.DataDir, connectionManager)
 	logsHandler.RegisterRoutes(protected)
 
 	terminalService := services.NewTerminalService(cfg)
@@ -217,8 +220,8 @@ func main() {
 		slog.Warn("Docker client unavailable for monitoring", "error", err)
 	}
 	monitorService := services.NewMonitorServiceWithDB(dockerClient, db)
-	connectionManager := handlers.NewConnectionManager(10)
-	monitorHandler := handlers.NewMonitoringHandler(monitorService, dockerService, db, connectionManager)
+	eventBus := handlers.DefaultEventBus()
+	monitorHandler := handlers.NewMonitoringHandler(monitorService, dockerService, db, connectionManager, eventBus)
 	monitorHandler.RegisterRoutes(protected, cfg.JWTSecret, cfg.AuthDisabled)
 
 	dashboardHandler := handlers.NewDashboardHandler(monitorService, dockerService, db, connectionManager)
@@ -238,7 +241,7 @@ func main() {
 	}
 
 	if monitorService != nil {
-		go handlers.StartEventBroadcaster(ctx, monitorService)
+		go handlers.StartEventBroadcaster(ctx, monitorService, eventBus)
 	}
 
 	r.Static("/assets", "./frontend/assets")
@@ -261,7 +264,7 @@ func main() {
 	terminalHandler := handlers.NewTerminalHandler(terminalService, db)
 	terminalHandler.RegisterRoutes(wsGroup, cfg.JWTSecret, cfg.AuthDisabled)
 
-	operationsHandler := handlers.NewOperationsHandler(dockerService, db)
+	operationsHandler := handlers.NewOperationsHandler(dockerService, db, opLock)
 	operationsHandler.RegisterRoutes(wsGroup, cfg.JWTSecret, cfg.AuthDisabled)
 
 	r.NoRoute(func(c *gin.Context) {

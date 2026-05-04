@@ -265,26 +265,6 @@ func TestParsePorts(t *testing.T) {
 	}
 }
 
-func TestFormatBytes(t *testing.T) {
-	tests := []struct {
-		bytes    float64
-		expected string
-	}{
-		{100, "100 B"},
-		{1024, "1.0 KB"},
-		{1536, "1.5 KB"},
-		{1048576, "1.0 MB"},
-		{1073741824, "1.0 GB"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.expected, func(t *testing.T) {
-			result := formatBytes(tt.bytes)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestDockerService_Start_FailsWithoutDocker(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{StacksDir: tempDir}

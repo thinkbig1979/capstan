@@ -52,6 +52,9 @@ func (h *SettingsHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.PUT("/settings/git", h.UpdateGitSettings)
 	group.GET("/settings/directories", h.GetConfiguredDirectories)
 	group.PUT("/settings/directories", h.UpdateConfiguredDirectories)
+	group.GET("/settings/scan-depth", h.GetScanDepth)
+	group.PUT("/settings/scan-depth", h.UpdateScanDepth)
+	group.GET("/settings/audit-log", h.GetAuditLog)
 }
 
 func (h *SettingsHandler) GetConfig(c *gin.Context) {
@@ -569,7 +572,26 @@ func (h *SettingsHandler) UpdateConfiguredDirectories(c *gin.Context) {
 	}
 
 	if req.DefaultDir != "" {
-		if err := os.MkdirAll(req.DefaultDir, 0755); err != nil {
+		absDir, err := filepath.Abs(req.DefaultDir)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.NewAppError(
+				http.StatusBadRequest,
+				"VALIDATION_ERROR",
+				"Invalid directory path",
+			))
+			return
+		}
+
+		if !h.isPathWithinAllowedDirs(absDir) {
+			c.JSON(http.StatusBadRequest, models.NewAppError(
+				http.StatusBadRequest,
+				"VALIDATION_ERROR",
+				"Directory must be within a configured stacks directory",
+			))
+			return
+		}
+
+		if err := os.MkdirAll(absDir, 0755); err != nil {
 			c.JSON(http.StatusInternalServerError, models.NewAppError(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
@@ -578,7 +600,7 @@ func (h *SettingsHandler) UpdateConfiguredDirectories(c *gin.Context) {
 			return
 		}
 
-		if err := h.db.SetSetting("default_stacks_dir", req.DefaultDir); err != nil {
+		if err := h.db.SetSetting("default_stacks_dir", absDir); err != nil {
 			slog.Error("Failed to update default stacks dir", "error", err)
 			c.JSON(http.StatusInternalServerError, models.NewAppError(
 				http.StatusInternalServerError,
@@ -588,10 +610,107 @@ func (h *SettingsHandler) UpdateConfiguredDirectories(c *gin.Context) {
 			return
 		}
 
-		h.stacksDir = req.DefaultDir
-		h.cfg.StacksDir = req.DefaultDir
-		slog.Info("Default stacks directory updated", "path", req.DefaultDir)
+		h.stacksDir = absDir
+		h.cfg.StacksDir = absDir
+		slog.Info("Default stacks directory updated", "path", absDir)
 	}
 
 	h.GetConfiguredDirectories(c)
+}
+
+func (h *SettingsHandler) isPathWithinAllowedDirs(path string) bool {
+	for _, dir := range h.cfg.GetAllStacksDirs() {
+		absDir, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		if path == absDir || filepath.HasPrefix(path, absDir+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
+	pageStr := c.DefaultQuery("page", "1")
+	pageSizeStr := c.DefaultQuery("pageSize", "50")
+
+	page, err := strconv.Atoi(pageStr)
+	if err != nil || page < 1 {
+		page = 1
+	}
+	pageSize, err := strconv.Atoi(pageSizeStr)
+	if err != nil || pageSize < 1 || pageSize > 100 {
+		pageSize = 50
+	}
+
+	offset := (page - 1) * pageSize
+
+	actions, total, err := h.db.ListActionLogsPaginated(pageSize, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.NewAppError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to retrieve audit log",
+		))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"entries": actions,
+		"total":   total,
+		"page":    page,
+		"pageSize": pageSize,
+	})
+}
+
+func (h *SettingsHandler) GetScanDepth(c *gin.Context) {
+	depthStr, err := h.db.GetSetting("scan_depth")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.NewAppError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to get scan depth setting",
+		))
+		return
+	}
+
+	depth := 1
+	if depthStr != "" {
+		if v, parseErr := strconv.Atoi(depthStr); parseErr == nil && v >= 1 {
+			depth = v
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"scanDepth": depth,
+	})
+}
+
+func (h *SettingsHandler) UpdateScanDepth(c *gin.Context) {
+	var req struct {
+		ScanDepth int `json:"scanDepth" binding:"required,min=1,max=10"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			"VALIDATION_ERROR",
+			"Scan depth must be between 1 and 10",
+		))
+		return
+	}
+
+	if err := h.db.SetSetting("scan_depth", fmt.Sprintf("%d", req.ScanDepth)); err != nil {
+		slog.Error("Failed to update scan depth setting", "error", err)
+		c.JSON(http.StatusInternalServerError, models.NewAppError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to update scan depth setting",
+		))
+		return
+	}
+
+	slog.Info("Scan depth updated", "scan_depth", req.ScanDepth)
+	h.GetScanDepth(c)
 }

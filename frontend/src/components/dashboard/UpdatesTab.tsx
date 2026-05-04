@@ -15,6 +15,7 @@ import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { UpdateLogTab } from '@/components/dashboard/UpdateLogTab'
 import type { ContainerUpdateInfo, CachedUpdate, AutoUpdatePolicy } from '@/types'
+import { formatRelativeTime } from '@/lib/format'
 
 type SortKey = 'name' | 'image' | 'state' | 'stack'
 
@@ -22,24 +23,6 @@ type UpdateItem = ContainerUpdateInfo | CachedUpdate
 
 function isCachedUpdate(item: UpdateItem): item is CachedUpdate {
   return 'localDigest' in item && 'remoteDigest' in item
-}
-
-function formatRelativeTime(dateStr?: string): string {
-  if (!dateStr) return 'Never'
-  try {
-    const date = new Date(dateStr)
-    const now = new Date()
-    const diffMs = now.getTime() - date.getTime()
-    const diffMin = Math.floor(diffMs / 60000)
-    if (diffMin < 1) return 'just now'
-    if (diffMin < 60) return `${diffMin}m ago`
-    const diffHr = Math.floor(diffMin / 60)
-    if (diffHr < 24) return `${diffHr}h ago`
-    const diffDay = Math.floor(diffHr / 24)
-    return `${diffDay}d ago`
-  } catch {
-    return dateStr
-  }
 }
 
 export function UpdatesTab() {

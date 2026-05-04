@@ -21,13 +21,13 @@ export class WSClient {
   private currentOptions: WSClientOptions | null = null
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
 
-  connect(path: string, onMessage: (data: string | ArrayBuffer) => void, options: WSClientOptions = {}) {
+  connect(path: string, onMessage: (data: string | ArrayBuffer) => void, options: WSClientOptions = {}): boolean {
     const token = useAuthStore.getState().token
     const authDisabled = useAuthStore.getState().authDisabled
 
     if (!token && !authDisabled) {
       console.error('Cannot connect: not authenticated')
-      return
+      return false
     }
 
     this.currentPath = path
@@ -65,6 +65,8 @@ export class WSClient {
       this.ws = null
       options.onError?.(error)
     }
+
+    return true
   }
 
   private scheduleReconnect() {

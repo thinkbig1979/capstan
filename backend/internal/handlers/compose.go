@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/docker-manager/backend/internal/config"
@@ -72,7 +71,7 @@ func (h *ComposeHandler) Get(c *gin.Context) {
 
 	composePath := filepath.Join(stack.Directory, stack.ComposeFile)
 
-	if err := h.validatePath(composePath); err != nil {
+	if err := validateStackPath(composePath, h.config); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
 			models.ErrPathTraversal,
@@ -173,7 +172,7 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 
 	composePath := filepath.Join(stack.Directory, stack.ComposeFile)
 
-	if err := h.validatePath(composePath); err != nil {
+	if err := validateStackPath(composePath, h.config); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
 			models.ErrPathTraversal,
@@ -242,37 +241,6 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 		Valid:       !hasErrors,
 		LintResults: lintResults,
 	})
-}
-
-func (h *ComposeHandler) validatePath(path string) error {
-	cleanPath := filepath.Clean(path)
-
-	absPath, err := filepath.Abs(cleanPath)
-	if err != nil {
-		return err
-	}
-
-	for _, stacksDir := range h.config.GetAllStacksDirs() {
-		absStacksDir, err := filepath.Abs(stacksDir)
-		if err != nil {
-			continue
-		}
-
-		rel, err := filepath.Rel(absStacksDir, absPath)
-		if err != nil {
-			continue
-		}
-
-		if !strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, "/") {
-			return nil
-		}
-	}
-
-	return &models.AppError{
-		Code:    models.ErrPathTraversal,
-		Message: "Path is outside configured stacks directories",
-		Status:  http.StatusBadRequest,
-	}
 }
 
 func (h *ComposeHandler) logAction(userID, stackID, action, detail string) {

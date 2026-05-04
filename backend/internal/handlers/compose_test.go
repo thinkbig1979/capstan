@@ -228,10 +228,6 @@ func TestComposeHandler_Lint_Valid(t *testing.T) {
 
 func TestComposeHandler_validatePath(t *testing.T) {
 	cfg := &config.Config{StacksDir: "/opt/stacks"}
-	linter := services.NewLinterService()
-	db, err := database.NewWithMigrations(":memory:")
-	require.NoError(t, err)
-	handler := NewComposeHandler(linter, db, cfg)
 
 	tests := []struct {
 		name        string
@@ -272,7 +268,7 @@ func TestComposeHandler_validatePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := handler.validatePath(tt.path)
+			err := validateStackPath(tt.path, cfg)
 			if tt.expectError {
 				assert.Error(t, err)
 				var appErr *models.AppError
@@ -287,9 +283,6 @@ func TestComposeHandler_validatePath(t *testing.T) {
 
 func TestEnvHandler_validatePath(t *testing.T) {
 	cfg := &config.Config{StacksDir: "/opt/stacks"}
-	db, err := database.NewWithMigrations(":memory:")
-	require.NoError(t, err)
-	handler := NewEnvHandler(db, cfg)
 
 	tests := []struct {
 		name        string
@@ -325,7 +318,7 @@ func TestEnvHandler_validatePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := handler.validatePath(tt.path)
+			err := validateStackPath(tt.path, cfg)
 			if tt.expectError {
 				assert.Error(t, err)
 				var appErr *models.AppError

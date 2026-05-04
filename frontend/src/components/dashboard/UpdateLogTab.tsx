@@ -16,29 +16,7 @@ import {
 } from '@/components/ui/select'
 import { RefreshCw, ChevronLeft, ChevronRight, History } from 'lucide-react'
 import type { UpdateHistoryEntry } from '@/types'
-
-function formatRelativeTime(dateStr: string): string {
-  try {
-    const date = new Date(dateStr)
-    const now = new Date()
-    const diffMs = now.getTime() - date.getTime()
-    const diffMin = Math.floor(diffMs / 60000)
-    if (diffMin < 1) return 'just now'
-    if (diffMin < 60) return `${diffMin}m ago`
-    const diffHr = Math.floor(diffMin / 60)
-    if (diffHr < 24) return `${diffHr}h ago`
-    const diffDay = Math.floor(diffHr / 24)
-    if (diffDay < 30) return `${diffDay}d ago`
-    return date.toLocaleDateString()
-  } catch {
-    return dateStr
-  }
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
-}
+import { formatRelativeTime, formatDurationShort } from '@/lib/format'
 
 function truncateDigest(digest?: string): string {
   if (!digest) return '-'
@@ -255,7 +233,7 @@ export function UpdateLogTab() {
                   <TriggerBadgeComponent trigger={entry.trigger} />
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
-                  {entry.durationMs != null ? formatDuration(entry.durationMs) : '-'}
+                  {entry.durationMs != null ? formatDurationShort(entry.durationMs) : '-'}
                 </TableCell>
               </TableRow>
             ))}

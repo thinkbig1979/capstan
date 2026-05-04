@@ -26,6 +26,7 @@ export function useWebSocket(
   const wsClientRef = useRef<WSClient | null>(null)
   const onMessageRef = useRef(onMessage)
   const optionsRef = useRef(options)
+  const skipRef = useRef(options.skip)
   const [lastMessage, setLastMessage] = useState<string | ArrayBuffer | null>(null)
   const [status, setStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'reconnecting'>('disconnected')
   const [wsState, setWsState] = useState<WSState>('CLOSED')
@@ -39,13 +40,17 @@ export function useWebSocket(
     optionsRef.current = options
   }, [options])
 
+  useEffect(() => {
+    skipRef.current = options.skip
+  }, [options.skip])
+
   const wrappedOnMessage = useCallback((data: string | ArrayBuffer) => {
     setLastMessage(data)
     onMessageRef.current(data)
   }, [])
 
   useEffect(() => {
-    if ((!isAuthenticated && !authDisabled) || optionsRef.current.skip) {
+    if ((!isAuthenticated && !authDisabled) || skipRef.current) {
       return
     }
 
@@ -95,7 +100,7 @@ export function useWebSocket(
       setWsState('CLOSED')
       setReconnectAttempts(0)
     }
-  }, [path, isAuthenticated, authDisabled, wrappedOnMessage, options?.skip])
+  }, [path, isAuthenticated, authDisabled, wrappedOnMessage])
 
   const send = useCallback((data: string | ArrayBuffer) => {
     wsClientRef.current?.send(data)

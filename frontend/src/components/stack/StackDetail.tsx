@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
+import { TabErrorBoundary } from '@/components/TabErrorBoundary'
 import { Download, Play, Square, RefreshCw, Info } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useStreamingOperation } from '@/hooks/useStreamingOperation'
@@ -165,37 +166,49 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
         </TabsList>
 
         <TabsContent value="overview" className="mt-4">
-          <OverviewTabContent
-            stack={stack}
-            onStart={() => operation.execute(stack.id, 'start')}
-            onStop={() => operation.execute(stack.id, 'stop')}
-            onRestart={() => operation.execute(stack.id, 'restart')}
-            onPull={() => operation.execute(stack.id, 'pull')}
-            isStarting={isStarting}
-            isStopping={isStopping}
-            isRestarting={isRestarting}
-            isPulling={isPulling}
-          />
+          <TabErrorBoundary>
+            <OverviewTabContent
+              stack={stack}
+              onStart={() => operation.execute(stack.id, 'start')}
+              onStop={() => operation.execute(stack.id, 'stop')}
+              onRestart={() => operation.execute(stack.id, 'restart')}
+              onPull={() => operation.execute(stack.id, 'pull')}
+              isStarting={isStarting}
+              isStopping={isStopping}
+              isRestarting={isRestarting}
+              isPulling={isPulling}
+            />
+          </TabErrorBoundary>
         </TabsContent>
 
         <TabsContent value="compose" className="mt-4">
-          <ComposeEditor stackId={stack.id} />
+          <TabErrorBoundary>
+            <ComposeEditor stackId={stack.id} />
+          </TabErrorBoundary>
         </TabsContent>
 
         <TabsContent value="environment" className="mt-4">
-          <EnvEditor stackId={stack.id} />
+          <TabErrorBoundary>
+            <EnvEditor stackId={stack.id} />
+          </TabErrorBoundary>
         </TabsContent>
 
         <TabsContent value="logs" className="mt-4">
-          <LogViewer stackId={stack.id} initialContainer={undefined} hasRunningContainers={stack.status !== 'stopped' && (stack.containers?.length ?? 0) > 0} />
+          <TabErrorBoundary>
+            <LogViewer stackId={stack.id} initialContainer={undefined} hasRunningContainers={stack.status !== 'stopped' && (stack.containers?.length ?? 0) > 0} />
+          </TabErrorBoundary>
         </TabsContent>
 
         <TabsContent value="terminal" className="mt-4">
-          <TerminalComponent stack={stack} initialContainer={undefined} />
+          <TabErrorBoundary>
+            <TerminalComponent stack={stack} initialContainer={undefined} />
+          </TabErrorBoundary>
         </TabsContent>
 
         <TabsContent value="metrics" className="mt-4">
-          <MetricsPanel stackId={stack.id} />
+          <TabErrorBoundary>
+            <MetricsPanel stackId={stack.id} />
+          </TabErrorBoundary>
         </TabsContent>
       </Tabs>
 

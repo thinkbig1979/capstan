@@ -25,7 +25,7 @@ func TestStacksHandler_Create_Success(t *testing.T) {
 	cfg := &config.Config{StacksDir: tempDir}
 	linter := services.NewLinterService()
 	scanner := services.NewScannerService(cfg, db)
-	handler := NewStacksHandler(nil, scanner, linter, db, cfg)
+	handler := NewStacksHandler(nil, scanner, linter, db, cfg, services.NewOperationLock())
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -77,7 +77,7 @@ func TestStacksHandler_Create_ValidationError(t *testing.T) {
 
 	cfg := &config.Config{StacksDir: tempDir}
 	linter := services.NewLinterService()
-	handler := NewStacksHandler(nil, nil, linter, db, cfg)
+	handler := NewStacksHandler(nil, nil, linter, db, cfg, services.NewOperationLock())
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -109,7 +109,7 @@ func TestStacksHandler_List_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: "/tmp/test"}
-	handler := NewStacksHandler(nil, nil, nil, db, cfg)
+	handler := NewStacksHandler(nil, nil, nil, db, cfg, services.NewOperationLock())
 
 	createTestDirectory(t, db, "/tmp/test/stack1")
 
@@ -147,7 +147,7 @@ func TestStacksHandler_Get_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: "/tmp/test"}
-	handler := NewStacksHandler(nil, nil, nil, db, cfg)
+	handler := NewStacksHandler(nil, nil, nil, db, cfg, services.NewOperationLock())
 
 	createTestDirectory(t, db, "/tmp/test/stack1")
 
@@ -184,7 +184,7 @@ func TestStacksHandler_Get_NotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{StacksDir: "/tmp/test"}
-	handler := NewStacksHandler(nil, nil, nil, db, cfg)
+	handler := NewStacksHandler(nil, nil, nil, db, cfg, services.NewOperationLock())
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

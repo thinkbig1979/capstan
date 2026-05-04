@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/docker-manager/backend/internal/config"
@@ -31,57 +32,71 @@ func (s *ScannerService) ScanAll() (hasGlobalEnv bool, err error) {
 	_, err = os.Stat(filepath.Join(s.config.DataDir, "global.env"))
 	hasGlobalEnv = !os.IsNotExist(err)
 
-	var allEntries []os.DirEntry
+	scanDepth := 1
+	if s.db != nil {
+		if depthStr, dbErr := s.db.GetSetting("scan_depth"); dbErr == nil && depthStr != "" {
+			if v, parseErr := strconv.Atoi(depthStr); parseErr == nil && v >= 1 {
+				scanDepth = v
+			}
+		}
+	}
+
 	for _, stacksDir := range allDirs {
-		entries, err := os.ReadDir(stacksDir)
-		if err != nil {
-			slog.Warn("Failed to read stacks directory", "path", stacksDir, "error", err)
-			continue
-		}
-
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-
-			if strings.HasPrefix(entry.Name(), ".") {
-				continue
-			}
-
-			dirPath := filepath.Join(stacksDir, entry.Name())
-
-			if err := s.ScanDirectoryWithRoot(dirPath, stacksDir); err != nil {
-				slog.Warn("Failed to scan directory", "path", dirPath, "error", err)
-				continue
-			}
-		}
-
-		allEntries = append(allEntries, entries...)
+		s.scanDirectoryRecursive(stacksDir, stacksDir, scanDepth, 1)
 	}
 
 	if err := s.pruneStaleStacks(); err != nil {
 		slog.Warn("Failed to prune stale stacks", "error", err)
 	}
 
-	slog.Info("Directory scan complete")
+	slog.Info("Directory scan complete", "scanDepth", scanDepth)
 	return hasGlobalEnv, nil
+}
+
+func (s *ScannerService) scanDirectoryRecursive(path string, rootDir string, maxDepth int, currentDepth int) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		slog.Warn("Failed to read directory", "path", path, "error", err)
+		return
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		dirPath := filepath.Join(path, entry.Name())
+
+		if err := s.ScanDirectoryWithRoot(dirPath, rootDir); err != nil {
+			slog.Warn("Failed to scan directory", "path", dirPath, "error", err)
+			continue
+		}
+
+		if currentDepth < maxDepth {
+			s.scanDirectoryRecursive(dirPath, rootDir, maxDepth, currentDepth+1)
+		}
+	}
 }
 
 func (s *ScannerService) pruneStaleStacks() error {
 	allDirs := s.config.GetAllStacksDirs()
 
-	activeDirs := make(map[string]bool)
-	for _, stacksDir := range allDirs {
-		activeDirs[stacksDir] = true
-		entries, err := os.ReadDir(stacksDir)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
-				activeDirs[filepath.Join(stacksDir, entry.Name())] = true
+	scanDepth := 1
+	if s.db != nil {
+		if depthStr, err := s.db.GetSetting("scan_depth"); err == nil && depthStr != "" {
+			if v, parseErr := strconv.Atoi(depthStr); parseErr == nil && v >= 1 {
+				scanDepth = v
 			}
 		}
+	}
+
+	activeDirs := make(map[string]bool)
+	for _, stacksDir := range allDirs {
+		collectActiveDirs(stacksDir, scanDepth, 1, activeDirs)
 	}
 
 	directories, err := s.db.ListDirectories()
@@ -106,6 +121,24 @@ func (s *ScannerService) pruneStaleStacks() error {
 	}
 
 	return nil
+}
+
+func collectActiveDirs(path string, maxDepth int, currentDepth int, active map[string]bool) {
+	active[path] = true
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		dirPath := filepath.Join(path, entry.Name())
+		active[dirPath] = true
+		if currentDepth < maxDepth {
+			collectActiveDirs(dirPath, maxDepth, currentDepth+1, active)
+		}
+	}
 }
 
 func (s *ScannerService) ScanDirectory(path string) error {
@@ -145,6 +178,17 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 				break
 			}
 		}
+	}
+
+	relPath := ""
+	if effectiveRoot != "" {
+		rel, err := filepath.Rel(effectiveRoot, path)
+		if err == nil {
+			relPath = rel
+		}
+	}
+	if relPath == "" {
+		relPath = dirName
 	}
 
 	directory := models.Directory{
@@ -198,7 +242,8 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 			envFile := determineEnvFile(path, name)
 
 			rootPrefix := filepath.Base(effectiveRoot)
-		stackID := fmt.Sprintf("%s~%s:%s", rootPrefix, dirName, name)
+			stackPathID := strings.ReplaceAll(relPath, string(filepath.Separator), "-")
+			stackID := fmt.Sprintf("%s~%s:%s", rootPrefix, stackPathID, name)
 
 			var projectName string
 			if name == "default" {

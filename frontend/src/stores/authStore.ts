@@ -9,7 +9,7 @@ interface AuthState {
   needsSetup: boolean
   login: (username: string, password: string) => Promise<void>
   setup: (username: string, password: string) => Promise<void>
-  logout: () => void
+  logout: () => Promise<void>
   checkAuth: () => Promise<void>
   checkStatus: () => Promise<void>
 }

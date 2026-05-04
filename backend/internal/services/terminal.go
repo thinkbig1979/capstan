@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"regexp"
 	"sync"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/kr/pty"
 )
+
+var validContainerNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
 const SessionTimeout = 30 * time.Minute
 const ReaperInterval = 60 * time.Second
@@ -39,6 +42,10 @@ func NewTerminalService(cfg *config.Config) *TerminalService {
 }
 
 func (s *TerminalService) CreateSession(stackID, containerName string) (*TerminalSession, error) {
+	if !validContainerNameRegex.MatchString(containerName) {
+		return nil, &invalidContainerNameError{containerName}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -54,7 +61,7 @@ func (s *TerminalService) CreateSession(stackID, containerName string) (*Termina
 	var ptyFile *os.File
 
 	for _, shell := range shells {
-		cmd := exec.Command("docker", "exec", "-it", containerName, shell)
+		cmd := exec.Command("docker", "exec", "-it", "--", containerName, shell)
 
 		ptyFile, err = pty.Start(cmd)
 		if err == nil {
@@ -162,4 +169,12 @@ type sessionNotFoundError struct {
 
 func (e *sessionNotFoundError) Error() string {
 	return "session not found: " + e.sessionID
+}
+
+type invalidContainerNameError struct {
+	name string
+}
+
+func (e *invalidContainerNameError) Error() string {
+	return "invalid container name: " + e.name
 }

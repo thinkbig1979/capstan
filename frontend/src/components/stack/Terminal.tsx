@@ -6,109 +6,11 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { useWebSocketBinary } from '@/hooks/useWebSocket'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
-import { RotateCcw, Terminal, Clock, Copy, Clipboard, Unplug, Plus, Minus, Search, ChevronUp, ChevronDown, X } from 'lucide-react'
+import { TerminalToolbar } from '@/components/stack/TerminalToolbar'
+import { TerminalSearchBar } from '@/components/stack/TerminalSearchBar'
 import type { Stack } from '@/types'
-
-function TerminalSearchBar({ searchAddon, onClose }: { searchAddon: SearchAddon | null; onClose: () => void }) {
-  const [query, setQuery] = useState('')
-  const [matchCount, setMatchCount] = useState<number | null>(null)
-  const [currentMatch, setCurrentMatch] = useState<number | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
-
-  const doSearch = useCallback(() => {
-    if (!searchAddon || !query) return
-    searchAddon.findNext(query, {
-      regex: false,
-      wholeWord: false,
-      caseSensitive: false,
-      incremental: true,
-      decorations: {
-        matchBackground: '#613214',
-        matchBorder: '#e07a36',
-        matchOverviewRuler: '#e07a36',
-        activeMatchBackground: '#515c6a',
-        activeMatchBorder: '#a8b4c4',
-        activeMatchColorOverviewRuler: '#a8b4c4',
-      },
-    })
-  }, [searchAddon, query])
-
-  const findNext = useCallback(() => {
-    if (!searchAddon || !query) return
-    searchAddon.findNext(query)
-  }, [searchAddon, query])
-
-  const findPrev = useCallback(() => {
-    if (!searchAddon || !query) return
-    searchAddon.findPrevious(query)
-  }, [searchAddon, query])
-
-  useEffect(() => {
-    if (!searchAddon) return
-    const disposable = searchAddon.onDidChangeResults((e) => {
-      setMatchCount(e?.resultCount ?? null)
-      setCurrentMatch(e?.resultIndex !== undefined && e.resultIndex >= 0 ? e.resultIndex + 1 : null)
-    })
-    return () => disposable.dispose()
-  }, [searchAddon])
-
-  const clearSearch = useCallback(() => {
-    searchAddon?.clearDecorations()
-    searchAddon?.clearActiveDecoration()
-  }, [searchAddon])
-
-  useEffect(() => {
-    if (!query) {
-      clearSearch()
-      return
-    }
-    const timer = setTimeout(() => doSearch(), 150)
-    return () => clearTimeout(timer)
-  }, [query, doSearch, searchAddon, clearSearch])
-
-  return (
-    <div className="flex items-center gap-2 rounded-lg border bg-background px-3 py-1.5">
-      <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <input
-        ref={inputRef}
-        type="text"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            if (e.shiftKey) { findPrev() } else { findNext() }
-          }
-          if (e.key === 'Escape') {
-            onClose()
-          }
-        }}
-        placeholder="Find in terminal..."
-        className="flex-1 bg-transparent text-sm outline-hidden placeholder:text-muted-foreground"
-      />
-      {matchCount !== null && (
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-          {currentMatch ?? 0}/{matchCount}
-        </span>
-      )}
-      <Button variant="ghost" size="sm" onClick={findPrev} disabled={!query} className="h-6 w-6 p-0" title="Previous match (Shift+Enter)">
-        <ChevronUp className="h-3.5 w-3.5" />
-      </Button>
-      <Button variant="ghost" size="sm" onClick={findNext} disabled={!query} className="h-6 w-6 p-0" title="Next match (Enter)">
-        <ChevronDown className="h-3.5 w-3.5" />
-      </Button>
-      <Button variant="ghost" size="sm" onClick={onClose} className="h-6 w-6 p-0" title="Close (Esc)">
-        <X className="h-3.5 w-3.5" />
-      </Button>
-    </div>
-  )
-}
 
 const SESSION_WARNING_MINUTES = 25
 
@@ -143,7 +45,6 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
-  const webLinksAddonRef = useRef<WebLinksAddon | null>(null)
   const searchAddonRef = useRef<SearchAddon | null>(null)
   const textEncoderRef = useRef(new TextEncoder())
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -448,7 +349,6 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
 
     xtermRef.current = terminal
     fitAddonRef.current = fitAddon
-    webLinksAddonRef.current = webLinksAddon
     searchAddonRef.current = searchAddon
     setSearchAddonInstance(searchAddon)
     const handleData = terminal.onData(handleTerminalData)
@@ -501,92 +401,28 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
 
   return (
     <div className="flex h-full flex-col space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <Terminal className="h-5 w-5 text-muted-foreground" />
-          <Select value={selectedContainer} onValueChange={handleContainerChange}>
-            <SelectTrigger className="w-[300px]">
-              <SelectValue placeholder="Select container">
-                {selectedContainer
-                  ? runningContainers.find(c => c.id === selectedContainer)?.name || 'Unknown'
-                  : 'Select container'}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {runningContainers.length === 0 ? (
-                <div className="px-2 py-2 text-sm text-muted-foreground">
-                  No running containers
-                </div>
-              ) : (
-                runningContainers.map(container => (
-                  <SelectItem key={container.id} value={container.id}>
-                    {container.name}
-                  </SelectItem>
-                ))
-              )}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex items-center space-x-2">
-          {isConnected && (
-            <>
-              {disconnectCountdown !== null ? (
-                <span className="flex items-center text-sm text-red-500 font-medium">
-                  <Clock className="mr-1.5 h-4 w-4" />
-                  Disconnecting in {disconnectCountdown} seconds
-                </span>
-              ) : (
-                <span className="flex items-center text-sm text-muted-foreground">
-                  <Clock className="mr-1.5 h-4 w-4" />
-                  Active for {formatDuration(sessionDuration)}
-                </span>
-              )}
-              <span className="flex items-center text-sm text-muted-foreground">
-                <span className="mr-1.5 h-2 w-2 rounded-full bg-green-500" />
-                Connected
-              </span>
-              <Button variant="ghost" size="sm" onClick={handleCopy} disabled={!hasSelection} title="Copy (Ctrl+Shift+C)">
-                <Copy className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="sm" onClick={handlePaste} title="Paste (Ctrl+Shift+V)">
-                <Clipboard className="h-4 w-4" />
-              </Button>
-              <div className="flex items-center gap-0.5 border-l pl-2 ml-1">
-                <Button variant="ghost" size="sm" onClick={() => handleFontSizeChange(-1)} title="Decrease font size" disabled={fontSize <= MIN_FONT_SIZE}>
-                  <Minus className="h-3.5 w-3.5" />
-                </Button>
-                <span className="w-8 text-center text-xs text-muted-foreground tabular-nums" title="Font size">{fontSize}</span>
-                <Button variant="ghost" size="sm" onClick={() => handleFontSizeChange(1)} title="Increase font size" disabled={fontSize >= MAX_FONT_SIZE}>
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-              <Button variant="ghost" size="sm" onClick={toggleSearch} title="Find (Ctrl+Shift+F)" className={showSearch ? 'bg-accent' : ''}>
-                <Search className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="sm" onClick={handleDisconnect} title="Disconnect terminal" className="text-muted-foreground hover:text-foreground">
-                <Unplug className="h-4 w-4" />
-              </Button>
-            </>
-          )}
-          {isConnecting && (
-            <span className="flex items-center text-sm text-muted-foreground">
-              <span className="mr-1.5 h-2 w-2 animate-pulse rounded-full bg-yellow-500" />
-              Connecting...
-            </span>
-          )}
-          {!isConnected && !isConnecting && selectedContainer && (
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={handleReconnect}>
-                <RotateCcw className="mr-2 h-4 w-4" />
-                Reconnect
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setSelectedContainer('')} className="text-muted-foreground">
-                Close
-              </Button>
-            </div>
-          )}
-        </div>
-      </div>
+      <TerminalToolbar
+        selectedContainer={selectedContainer}
+        runningContainers={runningContainers}
+        onContainerChange={handleContainerChange}
+        isConnected={isConnected}
+        isConnecting={isConnecting}
+        sessionDuration={sessionDuration}
+        disconnectCountdown={disconnectCountdown}
+        fontSize={fontSize}
+        minFontSize={MIN_FONT_SIZE}
+        maxFontSize={MAX_FONT_SIZE}
+        hasSelection={hasSelection}
+        showSearch={showSearch}
+        formatDuration={formatDuration}
+        onFontSizeChange={handleFontSizeChange}
+        onCopy={handleCopy}
+        onPaste={handlePaste}
+        onToggleSearch={toggleSearch}
+        onDisconnect={handleDisconnect}
+        onReconnect={handleReconnect}
+        onClose={() => setSelectedContainer('')}
+      />
       {showSearch && isConnected && (
         <TerminalSearchBar searchAddon={searchAddonInstance} onClose={() => {
           setShowSearch(false)

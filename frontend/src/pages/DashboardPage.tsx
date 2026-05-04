@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useSearchParams } from 'react-router-dom'
-import { directoriesApi, stacksApi, dashboardApi } from '@/lib/api'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
+import { directoriesApi, stacksApi, dashboardApi, settingsApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { StackCardSkeleton } from '@/components/LoadingSkeleton'
-import { AlertCircle, RefreshCw, Plus, Folder, GitBranch, GitPullRequest, Play, Square, Trash2 } from 'lucide-react'
+import { AlertCircle, RefreshCw, Plus, Folder } from 'lucide-react'
 import { CreateStackDialog } from '@/components/stack/CreateStackDialog'
 import { useStackStatusAnimation } from '@/hooks/useStackStatusAnimation'
 import { useDashboardMetrics } from '@/hooks/useDashboardMetrics'
@@ -19,17 +18,18 @@ import { VolumesTab } from '@/components/dashboard/VolumesTab'
 import { NetworksTab } from '@/components/dashboard/NetworksTab'
 import { BuildCacheTab } from '@/components/dashboard/BuildCacheTab'
 import { UpdatesTab } from '@/components/dashboard/UpdatesTab'
-import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { DashboardHeader } from '@/components/dashboard/DashboardHeader'
+import { StacksTab } from '@/components/dashboard/StacksTab'
+import { DirectoriesTab } from '@/components/dashboard/DirectoriesTab'
 import { classifyError } from '@/lib/error-handler'
+import { useStackActions } from '@/hooks/useStackActions'
 import { toast } from 'sonner'
 import { useConfirm } from '@/components/ConfirmDialog'
-import { StatusBadge } from '@/components/dashboard/StatusBadge'
 
 type SortOption = 'name' | 'status'
 type StatusFilter = 'all' | 'running' | 'stopped'
 
 export function DashboardPage() {
-  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = searchParams.get('tab') || 'overview'
   const setActiveTab = useCallback((tab: string) => {
@@ -88,56 +88,23 @@ export function DashboardPage() {
     retry: 1,
   })
 
-  const startMutation = useMutation({
-    mutationFn: (id: string) => stacksApi.start(id),
-    onSuccess: () => {
-      toast.success('Stack started successfully')
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
-      queryClient.invalidateQueries({ queryKey: ['stack'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-    },
-    onError: () => {
-      toast.error('Failed to start stack')
-    },
+  const { data: config } = useQuery({
+    queryKey: ['config'],
+    queryFn: settingsApi.getConfig,
+    staleTime: Infinity,
   })
 
-  const stopMutation = useMutation({
-    mutationFn: (id: string) => stacksApi.stop(id),
-    onSuccess: () => {
-      toast.success('Stack stopped successfully')
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
-      queryClient.invalidateQueries({ queryKey: ['stack'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-    },
-    onError: () => {
-      toast.error('Failed to stop stack')
-    },
-  })
+  const configuredDirs = useMemo(
+    () => config?.stacksDirectories || [],
+    [config],
+  )
 
-  const restartMutation = useMutation({
-    mutationFn: (id: string) => stacksApi.restart(id),
-    onSuccess: () => {
-      toast.success('Stack restarted successfully')
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
-      queryClient.invalidateQueries({ queryKey: ['stack'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+  const { start: startMutation, stop: stopMutation, restart: restartMutation, delete: deleteMutation } = useStackActions({
+    onSuccess: (action) => {
+      if (action === 'delete') setDeletingStackId(null)
     },
-    onError: () => {
-      toast.error('Failed to restart stack')
-    },
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => stacksApi.delete(id),
-    onSuccess: () => {
-      toast.success('Stack deleted successfully')
-      setDeletingStackId(null)
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-    },
-    onError: () => {
-      toast.error('Failed to delete stack')
-      setDeletingStackId(null)
+    onError: (action) => {
+      if (action === 'delete') setDeletingStackId(null)
     },
   })
 
@@ -182,22 +149,6 @@ export function DashboardPage() {
   const sortedDirectories = sortDirectories(directories)
   const sortedStacks = sortStacks(stacks)
   const filteredStacks = filterStacks(sortedStacks)
-
-  const groupedStacks = useMemo(() => {
-    const groups = new Map<string, typeof filteredStacks>()
-    for (const stack of filteredStacks) {
-      if (!groups.has(stack.directory)) groups.set(stack.directory, [])
-      groups.get(stack.directory)!.push(stack)
-    }
-    const result: { dirName: string; dirPath: string; stacks: typeof filteredStacks }[] = []
-    for (const [dirPath, dirStacks] of groups) {
-      const parts = dirPath.split('/')
-      const dirName = parts[parts.length - 1] || dirPath
-      result.push({ dirName, dirPath, stacks: dirStacks })
-    }
-    return result.sort((a, b) => a.dirName.localeCompare(b.dirName))
-  }, [filteredStacks])
-  const hasMultiStackGroups = sortBy === 'name' && groupedStacks.some((g) => g.stacks.length > 1)
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
@@ -290,15 +241,6 @@ export function DashboardPage() {
                     <RefreshCw className="mr-2 h-4 w-4" />
                     Retry
                   </Button>
-                  {appError.type === 'auth' && (
-                    <Button
-                      variant="outline"
-                      onClick={() => navigate('/login')}
-                      size="sm"
-                    >
-                      Login
-                    </Button>
-                  )}
                   <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isRefreshing}>
                     <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
                     Refresh
@@ -314,21 +256,11 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground">Welcome to Docker Manager</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isRefreshing} aria-label="Refresh dashboard">
-            <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-          </Button>
-          <Button onClick={() => setCreateDialogOpen(true)} aria-label="Create new stack">
-            <Plus className="mr-2 h-4 w-4" />
-            New Stack
-          </Button>
-        </div>
-      </div>
+      <DashboardHeader
+        onRefresh={handleRefresh}
+        onCreateStack={() => setCreateDialogOpen(true)}
+        isRefreshing={isRefreshing}
+      />
 
       <div className="grid grid-cols-1 gap-4 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:shadow-xs md:grid-cols-2 lg:grid-cols-4">
         <Card className="@container/card">
@@ -440,375 +372,35 @@ export function DashboardPage() {
         </TabsContent>
 
         <TabsContent value="stacks" className="mt-4">
-          <div className="space-y-4">
-          <SortFilterBar
-            sortOptions={[
-              { key: 'name', label: 'Name' },
-              { key: 'status', label: 'Status' },
-            ]}
-            sortValue={sortBy}
-            onSortChange={(key) => setSortBy(key as SortOption)}
-            filterOptions={[
-              { key: 'all', label: 'All' },
-              { key: 'running', label: 'Running' },
-              { key: 'stopped', label: 'Stopped' },
-            ]}
-            filterValue={statusFilter}
-            onFilterChange={(key) => setStatusFilter(key as StatusFilter)}
-            countDisplay={
-              <>
-                <span className="font-medium">{filteredStacks.length}</span> of <span className="font-medium">{stacks?.length || 0}</span>
-              </>
-            }
+          <StacksTab
+            stacks={stacks || []}
+            filteredStacks={filteredStacks}
+            configuredDirs={configuredDirs}
+            sortBy={sortBy}
+            statusFilter={statusFilter}
+            onSortChange={setSortBy}
+            onFilterChange={setStatusFilter}
+            onNavigateToDirectories={() => setActiveTab('directories')}
+            onCreateStack={() => setCreateDialogOpen(true)}
+            onStart={handleStart}
+            onStop={handleStop}
+            onRestart={handleRestart}
+            onDelete={handleDelete}
+            deletingStackId={deletingStackId}
+            startPending={startMutation.isPending}
+            stopPending={stopMutation.isPending}
+            restartPending={restartMutation.isPending}
+            deletePending={deleteMutation.isPending}
+            isAnimating={isAnimating}
           />
-          {filteredStacks.length > 0 ? (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Directory</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Containers</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {hasMultiStackGroups ? (
-                    groupedStacks.flatMap((group) => [
-                      <TableRow key={`group-${group.dirPath}`} className="bg-muted/50 hover:bg-muted/50">
-                        <TableCell colSpan={5} className="py-1.5 px-4">
-                          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                            {group.dirName}
-                          </span>
-                          {group.stacks[0]?.isGitRepo && (
-                            <GitBranch className="inline h-3 w-3 ml-1.5 text-muted-foreground align-middle" />
-                          )}
-                          <span className="text-xs text-muted-foreground ml-2">
-                            {group.stacks.length} stack{group.stacks.length !== 1 ? 's' : ''}
-                          </span>
-                        </TableCell>
-                      </TableRow>,
-                      ...group.stacks.map((stack) => (
-                        <TableRow
-                          key={stack.id}
-                          className="cursor-pointer"
-                          onClick={() => navigate(`/stacks/${stack.id}`)}
-                        >
-                           <TableCell className="font-medium pl-6">{stack.projectName}</TableCell>
-                           <TableCell className="text-sm text-muted-foreground">
-                             <span className="inline-flex items-center gap-1.5">
-                               {stack.composeFile}
-                             </span>
-                           </TableCell>
-                           <TableCell>
-                             <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'unknown'} pulse={isAnimating(stack.id)} />
-                           </TableCell>
-                           <TableCell>
-                             {stack.containerCount !== undefined ? (
-                               <Badge variant="outline">{stack.containerCount}</Badge>
-                             ) : (
-                               <span className="text-sm text-muted-foreground">-</span>
-                             )}
-                           </TableCell>
-                           <TableCell>
-                             <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()} role="group" aria-label="Stack actions">
-                              {stack.status !== 'running' && (
-                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => handleStart(stack.id, e)} disabled={startMutation.isPending} title="Start">
-                                  <Play className="h-3.5 w-3.5" />
-                                </Button>
-                              )}
-                              {stack.status === 'running' && (
-                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => handleStop(stack.id, e)} disabled={stopMutation.isPending} title="Stop">
-                                  <Square className="h-3.5 w-3.5" />
-                                </Button>
-                              )}
-                              {stack.status === 'running' && (
-                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => handleRestart(stack.id, e)} disabled={restartMutation.isPending} title="Restart">
-                                  <RefreshCw className={`h-3.5 w-3.5 ${restartMutation.isPending ? 'animate-spin' : ''}`} />
-                                </Button>
-                              )}
-                              <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={(e) => handleDelete(stack.id, stack.projectName, e)} disabled={deletingStackId === stack.id || deleteMutation.isPending} title="Delete">
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )),
-                    ])
-                  ) : (
-                    filteredStacks.map((stack) => (
-                      <TableRow
-                        key={stack.id}
-                        className="cursor-pointer"
-                        onClick={() => navigate(`/stacks/${stack.id}`)}
-                      >
-                        <TableCell className="font-medium">{stack.projectName}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                           <span
-                            className="inline-flex items-center gap-1.5 cursor-pointer hover:text-foreground hover:underline"
-                            role="button"
-                            tabIndex={0}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setActiveTab('directories')
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                setActiveTab('directories')
-                              }
-                            }}
-                          >
-                            {stack.directory}
-                            {stack.isGitRepo && (
-                              <GitBranch className="h-3 w-3 text-muted-foreground" />
-                            )}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'unknown'} pulse={isAnimating(stack.id)} />
-                        </TableCell>
-                        <TableCell>
-                          {stack.containerCount !== undefined ? (
-                            <Badge variant="outline">{stack.containerCount}</Badge>
-                          ) : (
-                            <span className="text-sm text-muted-foreground">-</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()} role="group" aria-label="Stack actions">
-                             {stack.status !== 'running' && (
-                               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => handleStart(stack.id, e)} disabled={startMutation.isPending} title="Start">
-                                 <Play className="h-3.5 w-3.5" />
-                               </Button>
-                             )}
-                             {stack.status === 'running' && (
-                               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => handleStop(stack.id, e)} disabled={stopMutation.isPending} title="Stop">
-                                 <Square className="h-3.5 w-3.5" />
-                               </Button>
-                             )}
-                             {stack.status === 'running' && (
-                               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => handleRestart(stack.id, e)} disabled={restartMutation.isPending} title="Restart">
-                                 <RefreshCw className={`h-3.5 w-3.5 ${restartMutation.isPending ? 'animate-spin' : ''}`} />
-                               </Button>
-                             )}
-                             <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={(e) => handleDelete(stack.id, stack.projectName, e)} disabled={deletingStackId === stack.id || deleteMutation.isPending} title="Delete">
-                               <Trash2 className="h-3.5 w-3.5" />
-                             </Button>
-                            </div>
-                         </TableCell>
-                       </TableRow>
-                     ))
-                   )}
-                 </TableBody>
-               </Table>
-            </div>
-          ) : (
-            <Card>
-              <CardContent className="pt-6">
-                <div className="text-center space-y-4">
-                  <p className="text-muted-foreground">
-                    {statusFilter === 'all' ? 'No stacks configured yet' : `No ${statusFilter} stacks found`}
-                  </p>
-                  {statusFilter === 'all' && (
-                    <Button onClick={() => setCreateDialogOpen(true)}>
-                      <Plus className="mr-2 h-4 w-4" />
-                      Create Your First Stack
-                    </Button>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-          </div>
         </TabsContent>
 
         <TabsContent value="directories" className="mt-4">
-          <div className="space-y-4">
-          {(() => {
-            const rootDirs = new Map<string, { name: string; dirs: typeof sortedDirectories }>();
-            for (const dir of sortedDirectories) {
-              const root = (dir as { rootDir?: string }).rootDir || stacks?.find(s => s.directory === dir.path)?.directory?.split('/').slice(0, -1).join('/') || '';
-              if (!rootDirs.has(root)) {
-                const rootName = root.split('/').filter(Boolean).pop() || root || 'Default';
-                rootDirs.set(root, { name: rootName, dirs: [] });
-              }
-              rootDirs.get(root)!.dirs.push(dir);
-            }
-            const rootEntries = Array.from(rootDirs.entries());
-            const hasMultipleRoots = rootEntries.length > 1;
-
-            if (!hasMultipleRoots) {
-              return (
-                <>
-                  <SortFilterBar
-                    sortOptions={[{ key: 'name', label: 'Name' }]}
-                    sortValue="name"
-                    onSortChange={() => {}}
-                    countDisplay={`${sortedDirectories.length} directories`}
-                  />
-                  {sortedDirectories.length > 0 ? (
-                    <div className="rounded-md border">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Name</TableHead>
-                            <TableHead>Path</TableHead>
-                            <TableHead>Stacks</TableHead>
-                            <TableHead>Git Branch</TableHead>
-                            <TableHead>Behind</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {sortedDirectories.map((dir) => (
-                            <TableRow key={dir.path}>
-                              <TableCell className="font-medium">
-                                <div className="flex items-center gap-2">
-                                  <Folder className="h-4 w-4 text-muted-foreground" />
-                                  {dir.name}
-                                </div>
-                              </TableCell>
-                              <TableCell className="text-sm text-muted-foreground">{dir.path}</TableCell>
-                              <TableCell>
-                                <Badge
-                                  variant="secondary"
-                                  className="cursor-pointer hover:bg-secondary/80"
-                                  onClick={() => {
-                                    const firstStack = stacks?.find(s => s.directory === dir.path)
-                                    if (firstStack) navigate(`/stacks/${firstStack.id}`)
-                                  }}
-                                >
-                                  {dir.stackCount}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>
-                                {dir.isGitRepo ? (
-                                  <Badge variant="outline" className="flex items-center gap-1 w-fit">
-                                    <GitBranch className="h-3 w-3" />
-                                    {dir.gitBranch || 'main'}
-                                  </Badge>
-                                ) : (
-                                  <span className="text-sm text-muted-foreground">-</span>
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                {dir.isGitRepo && ((dir.gitBehind ?? 0) > 0) ? (
-                                  <Badge variant="secondary" className="flex items-center gap-1 text-yellow-600">
-                                    <GitPullRequest className="h-3 w-3" />
-                                    {dir.gitBehind}
-                                  </Badge>
-                                ) : (
-                                  <span className="text-sm text-muted-foreground">-</span>
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  ) : (
-                    <Card>
-                      <CardContent className="pt-6">
-                        <p className="text-center text-muted-foreground">No directories found</p>
-                      </CardContent>
-                    </Card>
-                  )}
-                </>
-              );
-            }
-
-            return (
-              <Tabs defaultValue={rootEntries[0]?.[0]}>
-                <TabsList variant="line" className="w-full">
-                  {rootEntries.map(([rootPath, { name }]) => (
-                    <TabsTrigger key={rootPath} value={rootPath}>
-                      <Folder className="h-3.5 w-3.5 mr-1.5" />
-                      {name}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-                {rootEntries.map(([rootPath, { dirs: rootDirs }]) => (
-                  <TabsContent key={rootPath} value={rootPath} className="mt-4">
-                    <SortFilterBar
-                      sortOptions={[{ key: 'name', label: 'Name' }]}
-                      sortValue="name"
-                      onSortChange={() => {}}
-                      countDisplay={`${rootDirs.length} directories`}
-                    />
-                    {rootDirs.length > 0 ? (
-                      <div className="rounded-md border">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Name</TableHead>
-                              <TableHead>Path</TableHead>
-                              <TableHead>Stacks</TableHead>
-                              <TableHead>Git Branch</TableHead>
-                              <TableHead>Behind</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {rootDirs.map((dir) => (
-                              <TableRow key={dir.path}>
-                                <TableCell className="font-medium">
-                                  <div className="flex items-center gap-2">
-                                    <Folder className="h-4 w-4 text-muted-foreground" />
-                                    {dir.name}
-                                  </div>
-                                </TableCell>
-                                <TableCell className="text-sm text-muted-foreground">{dir.path}</TableCell>
-                                <TableCell>
-                                  <Badge
-                                    variant="secondary"
-                                    className="cursor-pointer hover:bg-secondary/80"
-                                    onClick={() => {
-                                      const firstStack = stacks?.find(s => s.directory === dir.path)
-                                      if (firstStack) navigate(`/stacks/${firstStack.id}`)
-                                    }}
-                                  >
-                                    {dir.stackCount}
-                                  </Badge>
-                                </TableCell>
-                                <TableCell>
-                                  {dir.isGitRepo ? (
-                                    <Badge variant="outline" className="flex items-center gap-1 w-fit">
-                                      <GitBranch className="h-3 w-3" />
-                                      {dir.gitBranch || 'main'}
-                                    </Badge>
-                                  ) : (
-                                    <span className="text-sm text-muted-foreground">-</span>
-                                  )}
-                                </TableCell>
-                                <TableCell>
-                                  {dir.isGitRepo && ((dir.gitBehind ?? 0) > 0) ? (
-                                    <Badge variant="secondary" className="flex items-center gap-1 text-yellow-600">
-                                      <GitPullRequest className="h-3 w-3" />
-                                      {dir.gitBehind}
-                                    </Badge>
-                                  ) : (
-                                    <span className="text-sm text-muted-foreground">-</span>
-                                  )}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    ) : (
-                      <Card>
-                        <CardContent className="pt-6">
-                          <p className="text-center text-muted-foreground">No directories in this location</p>
-                        </CardContent>
-                      </Card>
-                    )}
-                  </TabsContent>
-                ))}
-              </Tabs>
-            );
-          })()}
-          </div>
+          <DirectoriesTab
+            directories={sortedDirectories}
+            stacks={stacks || []}
+            configuredDirs={configuredDirs}
+          />
         </TabsContent>
 
         <TabsContent value="containers" className="mt-4">

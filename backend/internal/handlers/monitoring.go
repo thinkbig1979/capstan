@@ -15,18 +15,20 @@ import (
 )
 
 type MonitoringHandler struct {
-	monitor *services.MonitorService
-	docker  *services.DockerService
-	db      *database.DB
-	cm      *ConnectionManager
+	monitor   *services.MonitorService
+	docker    *services.DockerService
+	db        *database.DB
+	cm        *ConnectionManager
+	eventBus  *EventBus
 }
 
-func NewMonitoringHandler(monitor *services.MonitorService, docker *services.DockerService, db *database.DB, cm *ConnectionManager) *MonitoringHandler {
+func NewMonitoringHandler(monitor *services.MonitorService, docker *services.DockerService, db *database.DB, cm *ConnectionManager, eventBus *EventBus) *MonitoringHandler {
 	return &MonitoringHandler{
-		monitor: monitor,
-		docker:  docker,
-		db:      db,
-		cm:      cm,
+		monitor:  monitor,
+		docker:   docker,
+		db:       db,
+		cm:       cm,
+		eventBus: eventBus,
 	}
 }
 
@@ -131,25 +133,56 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 	}
 }
 
-var eventSubscribers struct {
-	sync.RWMutex
-	channels map[chan models.StackEvent]bool
+type EventBus struct {
+	mu        sync.RWMutex
+	channels  map[chan models.StackEvent]bool
 }
 
-func init() {
-	eventSubscribers.channels = make(map[chan models.StackEvent]bool)
+func NewEventBus() *EventBus {
+	return &EventBus{
+		channels: make(map[chan models.StackEvent]bool),
+	}
 }
 
-func BroadcastEvent(event models.StackEvent) {
-	eventSubscribers.RLock()
-	defer eventSubscribers.RUnlock()
-	for ch := range eventSubscribers.channels {
+func (eb *EventBus) Subscribe(ch chan models.StackEvent) {
+	eb.mu.Lock()
+	eb.channels[ch] = true
+	eb.mu.Unlock()
+}
+
+func (eb *EventBus) Unsubscribe(ch chan models.StackEvent) {
+	eb.mu.Lock()
+	delete(eb.channels, ch)
+	eb.mu.Unlock()
+	close(ch)
+}
+
+func (eb *EventBus) Broadcast(event models.StackEvent) {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
+	for ch := range eb.channels {
 		select {
 		case ch <- event:
 		default:
 			slog.Debug("Event subscriber channel full, dropping event", "type", event.Type)
 		}
 	}
+}
+
+func (eb *EventBus) SubscriberCount() int {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
+	return len(eb.channels)
+}
+
+var defaultEventBus = NewEventBus()
+
+func BroadcastEvent(event models.StackEvent) {
+	defaultEventBus.Broadcast(event)
+}
+
+func DefaultEventBus() *EventBus {
+	return defaultEventBus
 }
 
 func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled bool) gin.HandlerFunc {
@@ -175,15 +208,10 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 
 		eventChan := make(chan models.StackEvent, 50)
 
-		eventSubscribers.Lock()
-		eventSubscribers.channels[eventChan] = true
-		eventSubscribers.Unlock()
+		h.eventBus.Subscribe(eventChan)
 
 		defer func() {
-			eventSubscribers.Lock()
-			delete(eventSubscribers.channels, eventChan)
-			eventSubscribers.Unlock()
-			close(eventChan)
+			h.eventBus.Unsubscribe(eventChan)
 		}()
 
 		for {
@@ -204,7 +232,7 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 	}
 }
 
-func StartEventBroadcaster(ctx context.Context, monitor *services.MonitorService) {
+func StartEventBroadcaster(ctx context.Context, monitor *services.MonitorService, eventBus *EventBus) {
 	eventChan, err := monitor.ListenEvents(ctx)
 	if err != nil {
 		slog.Error("Failed to start event listener", "error", err)
@@ -221,17 +249,9 @@ func StartEventBroadcaster(ctx context.Context, monitor *services.MonitorService
 					return
 				}
 
-				slog.Debug("Broadcasting event", "type", event.Type, "stackId", event.StackID, "event", event.Event, "subscribers", len(eventSubscribers.channels))
+				slog.Debug("Broadcasting event", "type", event.Type, "stackId", event.StackID, "event", event.Event, "subscribers", eventBus.SubscriberCount())
 
-				eventSubscribers.RLock()
-				for ch := range eventSubscribers.channels {
-					select {
-					case ch <- event:
-					default:
-						slog.Debug("Event subscriber channel full, dropping event", "stackId", event.StackID)
-					}
-				}
-				eventSubscribers.RUnlock()
+				eventBus.Broadcast(event)
 			}
 		}
 	}()

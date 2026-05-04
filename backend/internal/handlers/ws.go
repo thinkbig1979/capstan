@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/docker-manager/backend/internal/database"
+	"github.com/docker-manager/backend/internal/middleware"
 	"github.com/docker-manager/backend/internal/models"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -148,7 +148,7 @@ func (cm *ConnectionManager) CloseAll() {
 }
 
 func authenticateToken(token string, db *database.DB, jwtSecret string) (string, error) {
-	claims, err := validateJWT(token, jwtSecret)
+	claims, err := middleware.ValidateJWT(token, jwtSecret)
 	if err != nil {
 		if err.Error() == "token is expired by" {
 			return "", &models.AppError{
@@ -193,25 +193,6 @@ func authenticateToken(token string, db *database.DB, jwtSecret string) (string,
 	}
 
 	return userID, nil
-}
-
-func validateJWT(token, secret string) (jwt.MapClaims, error) {
-	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, jwt.ErrSignatureInvalid
-		}
-		return []byte(secret), nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	if claims, ok := parsedToken.Claims.(jwt.MapClaims); ok && parsedToken.Valid {
-		return claims, nil
-	}
-
-	return nil, jwt.ErrInvalidKey
 }
 
 func writeJSON(conn *websocket.Conn, v interface{}) error {

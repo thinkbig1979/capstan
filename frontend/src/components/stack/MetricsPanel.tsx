@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback } from 'react'
 import { AreaChart, Area, XAxis, YAxis } from 'recharts'
 import { Cpu, HardDrive, Network, Activity, Database } from 'lucide-react'
-import { useMonitoring, type AggregateMetrics } from '@/hooks/useMonitoring'
+import { useMetricsBase, type ContainerMetricHistory } from '@/hooks/useMetricsBase'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -29,7 +29,7 @@ function getChartColor(percent: number): string {
   return '#22c55e'
 }
 
-function AggregateRow({ aggregates, timeRangeLabel }: { aggregates: AggregateMetrics; timeRangeLabel: string }) {
+function AggregateRow({ aggregates, timeRangeLabel }: { aggregates: { totalCpuPercent: number; totalMemUsage: number; totalMemLimit: number; totalMemPercent: number }; timeRangeLabel: string }) {
   const cpuColor = getColorForThreshold(aggregates.totalCpuPercent)
   const memColor = getColorForThreshold(aggregates.totalMemPercent)
 
@@ -76,7 +76,7 @@ function ContainerCard({
   container,
   timeRange,
 }: {
-  container: ReturnType<typeof useMonitoring>['containers'][number]
+  container: ContainerMetricHistory
   timeRange: TimeRange
 }) {
   const rangeSeconds = {
@@ -210,7 +210,7 @@ function ContainerCard({
 
 export function MetricsPanel({ stackId }: MetricsPanelProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>('1m')
-  const { containers, aggregates, isConnected, ws } = useMonitoring(stackId)
+  const { containers, baseAggregates: aggregates, isConnected, ws } = useMetricsBase(`/ws/metrics/${stackId}`)
 
   const handleTimeRangeChange = useCallback((value: string) => {
     setTimeRange(value as TimeRange)

@@ -16,6 +16,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+var bearerPrefixRegex = regexp.MustCompile(`^Bearer\s+`)
+
 type AuthHandler struct {
 	db           *database.DB
 	jwtSecret    string
@@ -34,8 +36,11 @@ func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/status", h.Status)
 	group.POST("/setup", h.Setup)
 	group.POST("/login", h.Login)
-	group.POST("/logout", h.Logout)
-	group.GET("/me", h.Me)
+}
+
+func (h *AuthHandler) RegisterProtectedRoutes(group *gin.RouterGroup) {
+	group.POST("/auth/logout", h.Logout)
+	group.GET("/auth/me", h.Me)
 }
 
 func (h *AuthHandler) Status(c *gin.Context) {
@@ -257,7 +262,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 
 	token := c.GetHeader("Authorization")
-	token = regexp.MustCompile(`^Bearer\s+`).ReplaceAllString(token, "")
+	token = bearerPrefixRegex.ReplaceAllString(token, "")
 
 	claims, err := parseJWT(token, h.jwtSecret)
 	if err == nil {

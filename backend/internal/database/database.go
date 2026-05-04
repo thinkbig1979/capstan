@@ -535,6 +535,33 @@ func (d *DB) DeleteOldActionLogs(retentionDays int) error {
 	return err
 }
 
+func (d *DB) ListActionLogsPaginated(limit, offset int) ([]models.ActionLog, int, error) {
+	var total int
+	err := d.db.QueryRow(`SELECT COUNT(*) FROM action_log`).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	query := `SELECT id, user_id, stack_id, action, detail, created_at
+	          FROM action_log ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	rows, err := d.db.Query(query, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	actions := make([]models.ActionLog, 0)
+	for rows.Next() {
+		var action models.ActionLog
+		err := rows.Scan(&action.ID, &action.UserID, &action.StackID, &action.Action, &action.Detail, &action.CreatedAt)
+		if err != nil {
+			return nil, 0, err
+		}
+		actions = append(actions, action)
+	}
+	return actions, total, nil
+}
+
 func (d *DB) GetCachedUpdates() ([]models.CachedUpdate, error) {
 	query := `SELECT id, container_id, container_name, image, image_ref, state,
 	          COALESCE(stack_id, ''), COALESCE(project_name, ''), COALESCE(service_name, ''),

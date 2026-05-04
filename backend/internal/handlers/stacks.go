@@ -16,15 +16,16 @@ import (
 )
 
 type StacksHandler struct {
-	docker    *services.DockerService
-	scanner   *services.ScannerService
-	linter    *services.LinterService
-	db        *database.DB
-	config    *config.Config
-	actionLog *services.ActionLogger
+	docker      *services.DockerService
+	scanner     *services.ScannerService
+	linter      *services.LinterService
+	db          *database.DB
+	config      *config.Config
+	actionLog   *services.ActionLogger
+	opLock      *services.OperationLock
 }
 
-func NewStacksHandler(docker *services.DockerService, scanner *services.ScannerService, linter *services.LinterService, db *database.DB, cfg *config.Config) *StacksHandler {
+func NewStacksHandler(docker *services.DockerService, scanner *services.ScannerService, linter *services.LinterService, db *database.DB, cfg *config.Config, opLock *services.OperationLock) *StacksHandler {
 	return &StacksHandler{
 		docker:    docker,
 		scanner:   scanner,
@@ -32,6 +33,7 @@ func NewStacksHandler(docker *services.DockerService, scanner *services.ScannerS
 		db:        db,
 		config:    cfg,
 		actionLog: services.NewActionLogger(db),
+		opLock:    opLock,
 	}
 }
 
@@ -380,6 +382,16 @@ func (h *StacksHandler) Start(c *gin.Context) {
 		return
 	}
 
+	if _, err := h.opLock.Acquire(id); err != nil {
+		c.JSON(http.StatusConflict, models.NewAppError(
+			http.StatusConflict,
+			"OPERATION_IN_PROGRESS",
+			err.Error(),
+		))
+		return
+	}
+	defer h.opLock.Release(id)
+
 	startTime := time.Now()
 	result, err := h.docker.Start(*stack)
 	duration := time.Since(startTime)
@@ -392,10 +404,14 @@ func (h *StacksHandler) Start(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	h.logAction(userID.(string), id, "start", result.Stdout)
 
-	h.db.UpdateStackStatus(id, "running")
+	actualStatus := "running"
+	if status, _, sErr := h.docker.Status(*stack); sErr == nil {
+		actualStatus = status
+	}
+	h.db.UpdateStackStatus(id, actualStatus)
 
 	c.JSON(http.StatusOK, gin.H{
-		"status":   "started",
+		"status":   actualStatus,
 		"output":   result.Stdout,
 		"duration": duration.Milliseconds(),
 	})
@@ -414,6 +430,16 @@ func (h *StacksHandler) Stop(c *gin.Context) {
 		return
 	}
 
+	if _, err := h.opLock.Acquire(id); err != nil {
+		c.JSON(http.StatusConflict, models.NewAppError(
+			http.StatusConflict,
+			"OPERATION_IN_PROGRESS",
+			err.Error(),
+		))
+		return
+	}
+	defer h.opLock.Release(id)
+
 	startTime := time.Now()
 	result, err := h.docker.Stop(*stack)
 	duration := time.Since(startTime)
@@ -426,10 +452,14 @@ func (h *StacksHandler) Stop(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	h.logAction(userID.(string), id, "stop", result.Stdout)
 
-	h.db.UpdateStackStatus(id, "stopped")
+	actualStatus := "stopped"
+	if status, _, sErr := h.docker.Status(*stack); sErr == nil {
+		actualStatus = status
+	}
+	h.db.UpdateStackStatus(id, actualStatus)
 
 	c.JSON(http.StatusOK, gin.H{
-		"status":   "stopped",
+		"status":   actualStatus,
 		"output":   result.Stdout,
 		"duration": duration.Milliseconds(),
 	})
@@ -448,6 +478,16 @@ func (h *StacksHandler) Restart(c *gin.Context) {
 		return
 	}
 
+	if _, err := h.opLock.Acquire(id); err != nil {
+		c.JSON(http.StatusConflict, models.NewAppError(
+			http.StatusConflict,
+			"OPERATION_IN_PROGRESS",
+			err.Error(),
+		))
+		return
+	}
+	defer h.opLock.Release(id)
+
 	startTime := time.Now()
 	result, err := h.docker.Restart(*stack)
 	duration := time.Since(startTime)
@@ -460,8 +500,14 @@ func (h *StacksHandler) Restart(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	h.logAction(userID.(string), id, "restart", result.Stdout)
 
+	actualStatus := "running"
+	if status, _, sErr := h.docker.Status(*stack); sErr == nil {
+		actualStatus = status
+	}
+	h.db.UpdateStackStatus(id, actualStatus)
+
 	c.JSON(http.StatusOK, gin.H{
-		"status":   "restarted",
+		"status":   actualStatus,
 		"output":   result.Stdout,
 		"duration": duration.Milliseconds(),
 	})
@@ -479,6 +525,16 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 		))
 		return
 	}
+
+	if _, err := h.opLock.Acquire(id); err != nil {
+		c.JSON(http.StatusConflict, models.NewAppError(
+			http.StatusConflict,
+			"OPERATION_IN_PROGRESS",
+			err.Error(),
+		))
+		return
+	}
+	defer h.opLock.Release(id)
 
 	startTime := time.Now()
 	result, err := h.docker.Pull(*stack)
@@ -531,6 +587,16 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		))
 		return
 	}
+
+	if _, err := h.opLock.Acquire(id); err != nil {
+		c.JSON(http.StatusConflict, models.NewAppError(
+			http.StatusConflict,
+			"OPERATION_IN_PROGRESS",
+			err.Error(),
+		))
+		return
+	}
+	defer h.opLock.Release(id)
 
 	startTime := time.Now()
 	result, err := h.docker.Delete(*stack)

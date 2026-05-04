@@ -1,7 +1,7 @@
 import React, { type ErrorInfo, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { AlertCircle, RefreshCw, Copy, Bug } from 'lucide-react'
+import { AlertCircle, RefreshCw, Copy } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface ErrorBoundaryProps {
@@ -91,10 +91,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   handleReportIssue = () => {
-    const errorDetails = this.getErrorDetails()
-    const subject = encodeURIComponent('Bug Report - Docker Manager')
-    const body = encodeURIComponent(errorDetails)
-    window.open(`mailto:support@example.com?subject=${subject}&body=${body}`, '_blank')
+    window.location.reload()
   }
 
   getErrorDetails = (): string => {
@@ -132,7 +129,7 @@ Timestamp: ${new Date().toISOString()}
               <p className="text-center text-muted-foreground">{userMessage}</p>
 
               <div className="flex flex-wrap gap-2 justify-center">
-                {errorAction !== 'Contact Support' && errorAction !== 'Log In' && (
+                {errorAction !== 'Log In' && (
                   <Button onClick={this.handleRetry} className="min-h-[44px]">
                     <RefreshCw className="mr-2 h-4 w-4" />
                     {errorAction}
@@ -143,8 +140,8 @@ Timestamp: ${new Date().toISOString()}
                   onClick={this.handleReportIssue}
                   className="min-h-[44px]"
                 >
-                  <Bug className="mr-2 h-4 w-4" />
-                  Contact Support
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Refresh Page
                 </Button>
               </div>
 

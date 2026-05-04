@@ -210,7 +210,15 @@ func (h *GitHandler) stackFilesChanged(stack models.Stack, changedFiles []string
 func (h *GitHandler) formatPullDetail(result *models.PullResult, redeployedStacks []string) string {
 	detail := ""
 	if result.PreviousCommit != result.CurrentCommit {
-		detail = "Pulled " + result.PreviousCommit[:7] + " -> " + result.CurrentCommit[:7]
+		prevShort := result.PreviousCommit
+		if len(prevShort) > 7 {
+			prevShort = prevShort[:7]
+		}
+		currShort := result.CurrentCommit
+		if len(currShort) > 7 {
+			currShort = currShort[:7]
+		}
+		detail = "Pulled " + prevShort + " -> " + currShort
 	} else {
 		detail = "Already up to date"
 	}

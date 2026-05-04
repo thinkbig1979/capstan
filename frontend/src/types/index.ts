@@ -17,6 +17,15 @@ export interface ConfiguredDir {
   path: string
   name: string
   isDefault: boolean
+  stackCount?: number
+  isGitRepo?: boolean
+  gitBranch?: string
+  gitBehind?: number
+  gitAuthType?: string
+  gitSshKeyPath?: string
+  gitHttpsUser?: string
+  hasHttpsToken?: boolean
+  scannedAt?: string
 }
 
 export interface Directory {

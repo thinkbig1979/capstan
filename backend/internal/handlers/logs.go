@@ -36,15 +36,17 @@ type LogsHandler struct {
 	jwtSecret    string
 	authDisabled bool
 	dataDir      string
+	cm           *ConnectionManager
 }
 
-func NewLogsHandler(docker *services.DockerService, db *database.DB, jwtSecret string, authDisabled bool, dataDir string) *LogsHandler {
+func NewLogsHandler(docker *services.DockerService, db *database.DB, jwtSecret string, authDisabled bool, dataDir string, cm *ConnectionManager) *LogsHandler {
 	return &LogsHandler{
 		docker:       docker,
 		db:           db,
 		jwtSecret:    jwtSecret,
 		authDisabled: authDisabled,
 		dataDir:      dataDir,
+		cm:           cm,
 	}
 }
 
@@ -104,48 +106,20 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 		return
 	}
 
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	wsConn, err := upgradeConnection(c, h.db, h.jwtSecret, h.authDisabled)
 	if err != nil {
-		slog.Error("Failed to upgrade WebSocket connection", "error", err)
 		return
 	}
 
-	var userID string
-
-	if h.authDisabled {
-		userID = "anonymous"
-	} else {
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		var authMsg struct {
-			Type  string `json:"type"`
-			Token string `json:"token"`
-		}
-		if err := conn.ReadJSON(&authMsg); err != nil {
-			writeCloseMessage(conn, CloseCodeAuthFailure, "Auth timeout")
-			conn.Close()
-			return
-		}
-
-		if authMsg.Type != "auth" || authMsg.Token == "" {
-			writeCloseMessage(conn, CloseCodeAuthFailure, "Invalid auth message")
-			conn.Close()
-			return
-		}
-
-		userID, err = authenticateToken(authMsg.Token, h.db, h.jwtSecret)
-		if err != nil {
-			writeCloseMessage(conn, CloseCodeAuthFailure, "Auth failed")
-			conn.Close()
-			return
-		}
+	if err := h.cm.Add(wsConn.ID, wsConn); err != nil {
+		writeCloseMessage(wsConn.Conn, websocket.CloseNormalClosure, "Connection limit exceeded")
+		wsConn.Conn.Close()
+		return
 	}
-	defer conn.Close()
+	defer h.cm.Remove(wsConn.ID)
 
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
-	})
+	conn := wsConn.Conn
+	defer conn.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -266,7 +240,7 @@ cleanup:
 		cmd.Wait()
 	}
 
-	slog.Debug("Log streaming connection closed", "stackID", id, "userID", userID)
+	slog.Debug("Log streaming connection closed", "stackID", id, "userID", wsConn.UserID)
 }
 
 func (h *LogsHandler) buildComposeArgs(stack models.Stack, subcommand string, extraArgs []string) []string {

@@ -5,6 +5,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { useGitLog } from '@/hooks/useGit'
 import { DiffViewer } from './DiffViewer'
 import { Search, X } from 'lucide-react'
+import { formatRelativeTime } from '@/lib/format'
 
 interface GitHistoryProps {
   stackId: string
@@ -43,18 +44,6 @@ export function GitHistory({ stackId }: GitHistoryProps) {
 
   const handleLoadMore = () => {
     setOffset((prev) => prev + limit)
-  }
-
-  const formatRelativeTime = (dateString: string) => {
-    const date = new Date(dateString)
-    const now = new Date()
-    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000)
-
-    if (seconds < 60) return 'just now'
-    if (seconds < 3600) return `${Math.floor(seconds / 60)} minutes ago`
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`
-    if (seconds < 604800) return `${Math.floor(seconds / 86400)} days ago`
-    return date.toLocaleDateString()
   }
 
   const truncateMessage = (message: string, maxLength = 60) => {

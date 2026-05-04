@@ -95,15 +95,5 @@ func isWebSocketUpgrade(c *gin.Context) bool {
 }
 
 func isPublicPath(path string) bool {
-	publicPrefixes := []string{
-		"/api/v1/auth/login",
-		"/api/v1/auth/setup",
-		"/api/v1/auth/status",
-	}
-	for _, p := range publicPrefixes {
-		if path == p {
-			return true
-		}
-	}
-	return false
+	return IsPublicPath(path)
 }

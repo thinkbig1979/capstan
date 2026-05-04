@@ -15,19 +15,7 @@ import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/components/ConfirmDialog'
 import type { DockerImage } from '@/types'
-import { formatBytes } from '@/lib/format'
-
-function formatDate(epoch: number): string {
-  if (!epoch) return '-'
-  const date = new Date(epoch * 1000)
-  return date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
+import { formatBytes, formatDate } from '@/lib/format'
 
 type SortKey = 'name' | 'size' | 'created' | 'containers'
 

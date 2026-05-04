@@ -1,3 +1,6 @@
+# Desloppify local state
+.desloppify/
+
 # Drift: ignore caches and temporary data
 .drift/lake/
 .drift/cache/
@@ -39,6 +42,7 @@ vendor/
 # Local environment overrides
 backend/.env
 frontend/.env
+backend/server
 
 # SSH keys (keep the README)
 keys/*

@@ -13,12 +13,14 @@ import (
 type OperationsHandler struct {
 	docker *services.DockerService
 	db     *database.DB
+	opLock *services.OperationLock
 }
 
-func NewOperationsHandler(docker *services.DockerService, db *database.DB) *OperationsHandler {
+func NewOperationsHandler(docker *services.DockerService, db *database.DB, opLock *services.OperationLock) *OperationsHandler {
 	return &OperationsHandler{
 		docker: docker,
 		db:     db,
+		opLock: opLock,
 	}
 }
 
@@ -36,6 +38,12 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			c.JSON(http.StatusNotFound, gin.H{"error": "Stack not found"})
 			return
 		}
+
+		if _, err := h.opLock.Acquire(stackID); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		defer h.opLock.Release(stackID)
 
 		var subcommand string
 		var extraArgs []string

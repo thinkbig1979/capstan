@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -15,10 +16,8 @@ type TokenEncryptor struct {
 }
 
 func NewTokenEncryptor(secret string) (*TokenEncryptor, error) {
-	if len(secret) < 32 {
-		secret = secret + "00000000000000000000000000000000"
-	}
-	key := []byte(secret[:32])
+	hash := sha256.Sum256([]byte(secret))
+	key := hash[:]
 
 	block, err := aes.NewCipher(key)
 	if err != nil {

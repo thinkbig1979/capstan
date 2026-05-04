@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -29,6 +30,7 @@ func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/resources/images/prune", h.pruneImages)
 
 	r.GET("/resources/containers", h.listContainers)
+	r.GET("/resources/containers/:id/inspect", h.inspectContainer)
 	r.POST("/resources/containers/:id/start", h.startContainer)
 	r.POST("/resources/containers/:id/stop", h.stopContainer)
 	r.POST("/resources/containers/:id/restart", h.restartContainer)
@@ -171,6 +173,25 @@ func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
 		"deleted":        deleted,
 		"spaceReclaimed": report.SpaceReclaimed,
 	})
+}
+
+func (h *ResourcesHandler) inspectContainer(c *gin.Context) {
+	id := c.Param("id")
+	inspect, err := h.docker.InspectContainer(c.Request.Context(), id)
+	if err != nil {
+		slog.Error("Failed to inspect container", "id", id, "error", err)
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to inspect container"))
+		return
+	}
+
+	formatted, err := json.MarshalIndent(inspect, "", "  ")
+	if err != nil {
+		slog.Error("Failed to format inspect output", "id", id, "error", err)
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to format inspect output"))
+		return
+	}
+
+	c.Data(http.StatusOK, "application/json", formatted)
 }
 
 func (h *ResourcesHandler) listVolumes(c *gin.Context) {

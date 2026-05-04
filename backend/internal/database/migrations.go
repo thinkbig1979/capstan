@@ -179,6 +179,13 @@ ALTER TABLE directories ADD COLUMN root_dir TEXT NOT NULL DEFAULT '';
 INSERT OR IGNORE INTO settings (key, value) VALUES ('stack_id_version', '1');
 `,
 	},
+	{
+		Version: 7,
+		Name:    "scan_depth_setting",
+		SQL: `
+INSERT OR IGNORE INTO settings (key, value) VALUES ('scan_depth', '1');
+`,
+	},
 }
 
 func RunMigrations(db *DB) error {

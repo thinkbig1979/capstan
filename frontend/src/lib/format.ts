@@ -15,22 +15,54 @@ export function formatDuration(ms: number): string {
   return `${hours}h ${minutes % 60}m`
 }
 
-export function formatDate(dateString: string): string {
+export function formatDurationShort(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+export function formatDate(dateString: string | number | null, fallback = '-'): string {
+  if (dateString === null || dateString === undefined || dateString === 0) return fallback
+  const date = typeof dateString === 'number' ? new Date(dateString * 1000) : new Date(dateString)
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+export function formatDateFull(dateString: string | number | null | undefined): string {
+  if (!dateString) return 'N/A'
   return new Date(dateString).toLocaleString()
 }
 
-export function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString)
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
-  const diffSeconds = Math.floor(diffMs / 1000)
-  const diffMinutes = Math.floor(diffSeconds / 60)
-  const diffHours = Math.floor(diffMinutes / 60)
-  const diffDays = Math.floor(diffHours / 24)
+export function formatDateTimeLocal(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day}T${hours}:${minutes}`
+}
 
-  if (diffSeconds < 60) return 'just now'
-  if (diffMinutes < 60) return `${diffMinutes}m ago`
-  if (diffHours < 24) return `${diffHours}h ago`
-  if (diffDays < 30) return `${diffDays}d ago`
-  return date.toLocaleDateString()
+export function formatRelativeTime(dateString: string | null | undefined, fallback = '-'): string {
+  if (!dateString) return fallback
+  try {
+    const date = new Date(dateString)
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    const diffSeconds = Math.floor(diffMs / 1000)
+    const diffMinutes = Math.floor(diffSeconds / 60)
+    const diffHours = Math.floor(diffMinutes / 60)
+    const diffDays = Math.floor(diffHours / 24)
+
+    if (diffSeconds < 60) return `${diffSeconds}s ago`
+    if (diffMinutes < 60) return `${diffMinutes}m ago`
+    if (diffHours < 24) return `${diffHours}h ago`
+    if (diffDays < 30) return `${diffDays}d ago`
+    return date.toLocaleDateString()
+  } catch {
+    return dateString
+  }
 }

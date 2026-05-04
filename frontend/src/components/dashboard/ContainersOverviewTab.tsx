@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState, useMemo, useEffect, useRef } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { stacksApi, resourcesApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -16,10 +16,23 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import {
   Play, Square, RefreshCw, Download, Trash2, HelpCircle, AlertCircle,
+  Info, Copy, Check,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { DashboardStats, DashboardContainerInfo } from '@/types'
+import { EditorView, basicSetup } from 'codemirror'
+import { EditorState } from '@codemirror/state'
+import { json } from '@codemirror/lang-json'
+import { oneDark } from '@codemirror/theme-one-dark'
+import { useUIStore } from '@/stores/uiStore'
+import type { DashboardStats, DashboardContainerInfo, CommandResult } from '@/types'
 import type { DashboardContainerMetric } from '@/hooks/useDashboardMetrics'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
@@ -52,8 +65,9 @@ function isStandaloneContainer(c: DashboardContainerInfo): boolean {
   return !c.projectName
 }
 
-interface StackContainerActionsProps {
-  stackId: string
+interface ContainerActionsProps {
+  mode: 'stack' | 'standalone'
+  stackId?: string
   containerId: string
   containerName: string
   containerState: string
@@ -61,134 +75,90 @@ interface StackContainerActionsProps {
   deletePending: boolean
 }
 
-function StackContainerActions({ stackId, containerId, containerName, containerState, onDelete, deletePending }: StackContainerActionsProps) {
+function ContainerActions({ mode, stackId, containerId, containerName, containerState, onDelete, deletePending }: ContainerActionsProps) {
   const queryClient = useQueryClient()
   const isRunning = containerState === 'running'
+  const label = mode === 'stack' ? 'stack' : 'container'
 
   const startMutation = useMutation({
-    mutationFn: () => stacksApi.start(stackId),
-    onSuccess: () => {
-      toast.success('Stack started')
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
+    mutationFn: async (): Promise<CommandResult> => {
+      if (mode === 'stack' && stackId) return stacksApi.start(stackId)
+      const res = await resourcesApi.startContainer(containerId)
+      return { status: 'started', output: res.message, duration: 0 }
     },
-    onError: () => toast.error('Failed to start stack'),
+    onSuccess: () => {
+      toast.success(`${label.charAt(0).toUpperCase() + label.slice(1)} started`)
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: ['stacks'] })
+    },
+    onError: () => toast.error(`Failed to start ${label}`),
   })
 
   const stopMutation = useMutation({
-    mutationFn: () => stacksApi.stop(stackId),
-    onSuccess: () => {
-      toast.success('Stack stopped')
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
+    mutationFn: async (): Promise<CommandResult> => {
+      if (mode === 'stack' && stackId) return stacksApi.stop(stackId)
+      const res = await resourcesApi.stopContainer(containerId)
+      return { status: 'stopped', output: res.message, duration: 0 }
     },
-    onError: () => toast.error('Failed to stop stack'),
+    onSuccess: () => {
+      toast.success(`${label.charAt(0).toUpperCase() + label.slice(1)} stopped`)
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: ['stacks'] })
+    },
+    onError: () => toast.error(`Failed to stop ${label}`),
   })
 
   const restartMutation = useMutation({
-    mutationFn: () => stacksApi.restart(stackId),
-    onSuccess: () => {
-      toast.success('Stack restarted')
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
+    mutationFn: async (): Promise<CommandResult> => {
+      if (mode === 'stack' && stackId) return stacksApi.restart(stackId)
+      const res = await resourcesApi.restartContainer(containerId)
+      return { status: 'restarted', output: res.message, duration: 0 }
     },
-    onError: () => toast.error('Failed to restart stack'),
+    onSuccess: () => {
+      toast.success(`${label.charAt(0).toUpperCase() + label.slice(1)} restarted`)
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: ['stacks'] })
+    },
+    onError: () => toast.error(`Failed to restart ${label}`),
   })
 
   const pullMutation = useMutation({
-    mutationFn: () => stacksApi.pull(stackId),
-    onSuccess: () => {
-      toast.success('Images pulled')
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+    mutationFn: async (): Promise<void> => {
+      if (mode === 'stack' && stackId) await stacksApi.pull(stackId)
     },
-    onError: () => toast.error('Failed to pull images'),
+    onSuccess: () => {
+      if (mode === 'stack') {
+        toast.success('Images pulled')
+        queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      }
+    },
+    onError: () => {
+      if (mode === 'stack') toast.error('Failed to pull images')
+    },
   })
 
-  const anyPending = startMutation.isPending || stopMutation.isPending || restartMutation.isPending || pullMutation.isPending || deletePending
+  const anyPending = startMutation.isPending || stopMutation.isPending || restartMutation.isPending || (mode === 'stack' && pullMutation.isPending) || deletePending
 
   return (
     <div className="flex items-center gap-1">
       {!isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startMutation.mutate()} disabled={anyPending} title="Start stack">
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startMutation.mutate()} disabled={anyPending} title={`Start ${label}`}>
           <Play className="h-3.5 w-3.5" />
         </Button>
       )}
       {isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => stopMutation.mutate()} disabled={anyPending} title="Stop stack">
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => stopMutation.mutate()} disabled={anyPending} title={`Stop ${label}`}>
           <Square className="h-3.5 w-3.5" />
         </Button>
       )}
       {isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => restartMutation.mutate()} disabled={anyPending} title="Restart stack">
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => restartMutation.mutate()} disabled={anyPending} title={`Restart ${label}`}>
           <RefreshCw className={`h-3.5 w-3.5 ${restartMutation.isPending ? 'animate-spin' : ''}`} />
         </Button>
       )}
-      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => pullMutation.mutate()} disabled={anyPending} title="Pull images">
-        <Download className={`h-3.5 w-3.5 ${pullMutation.isPending ? 'animate-spin' : ''}`} />
-      </Button>
-      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(containerId, containerName, isRunning)} disabled={anyPending} title="Remove container">
-        <Trash2 className="h-3.5 w-3.5" />
-      </Button>
-    </div>
-  )
-}
-
-interface StandaloneContainerActionsProps {
-  containerId: string
-  containerName: string
-  containerState: string
-  onDelete: (id: string, name: string, isRunning: boolean) => void
-  deletePending: boolean
-}
-
-function StandaloneContainerActions({ containerId, containerName, containerState, onDelete, deletePending }: StandaloneContainerActionsProps) {
-  const queryClient = useQueryClient()
-  const isRunning = containerState === 'running'
-
-  const startMutation = useMutation({
-    mutationFn: () => resourcesApi.startContainer(containerId),
-    onSuccess: () => {
-      toast.success('Container started')
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-    },
-    onError: () => toast.error('Failed to start container'),
-  })
-
-  const stopMutation = useMutation({
-    mutationFn: () => resourcesApi.stopContainer(containerId),
-    onSuccess: () => {
-      toast.success('Container stopped')
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-    },
-    onError: () => toast.error('Failed to stop container'),
-  })
-
-  const restartMutation = useMutation({
-    mutationFn: () => resourcesApi.restartContainer(containerId),
-    onSuccess: () => {
-      toast.success('Container restarted')
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-    },
-    onError: () => toast.error('Failed to restart container'),
-  })
-
-  const anyPending = startMutation.isPending || stopMutation.isPending || restartMutation.isPending || deletePending
-
-  return (
-    <div className="flex items-center gap-1">
-      {!isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startMutation.mutate()} disabled={anyPending} title="Start container">
-          <Play className="h-3.5 w-3.5" />
-        </Button>
-      )}
-      {isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => stopMutation.mutate()} disabled={anyPending} title="Stop container">
-          <Square className="h-3.5 w-3.5" />
-        </Button>
-      )}
-      {isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => restartMutation.mutate()} disabled={anyPending} title="Restart container">
-          <RefreshCw className={`h-3.5 w-3.5 ${restartMutation.isPending ? 'animate-spin' : ''}`} />
+      {mode === 'stack' && (
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => pullMutation.mutate()} disabled={anyPending} title="Pull images">
+          <Download className={`h-3.5 w-3.5 ${pullMutation.isPending ? 'animate-spin' : ''}`} />
         </Button>
       )}
       <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(containerId, containerName, isRunning)} disabled={anyPending} title="Remove container">
@@ -233,16 +203,164 @@ function StatusIcon({ state }: { state: string }) {
 
 type SortKey = 'name' | 'cpu' | 'memory' | 'stack'
 
+function ContainerInspectDialog({
+  containerId,
+  containerName,
+  open,
+  onOpenChange,
+}: {
+  containerId: string
+  containerName: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const [inspectData, setInspectData] = useState<Record<string, unknown> | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const editorRef = useRef<HTMLDivElement>(null)
+  const viewRef = useRef<EditorView | null>(null)
+  const { theme } = useUIStore()
+
+  const isDark = useMemo(
+    () =>
+      theme === 'dark' ||
+      (theme === 'system' &&
+        typeof window !== 'undefined' &&
+        window.matchMedia('(prefers-color-scheme: dark)').matches),
+    [theme],
+  )
+
+  useEffect(() => {
+    if (!open) return
+    setCopied(false)
+    setLoading(true)
+    setError(null)
+    resourcesApi
+      .inspectContainer(containerId)
+      .then((data) => setInspectData(data))
+      .catch(() => setError('Failed to inspect container'))
+      .finally(() => setLoading(false))
+  }, [containerId, open])
+
+  useEffect(() => {
+    if (!inspectData || !editorRef.current || loading) return
+
+    viewRef.current?.destroy()
+    viewRef.current = null
+
+    const formattedJson = JSON.stringify(inspectData, null, 2)
+
+    const extensions = [
+      basicSetup,
+      json(),
+      EditorState.readOnly.of(true),
+      EditorView.theme({
+        '&': {
+          fontSize: '13px',
+          height: '60vh',
+        },
+        '.cm-scroller': {
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+          overflow: 'auto',
+        },
+        '.cm-content': {
+          caretColor: 'transparent',
+        },
+        '.cm-cursor': {
+          display: 'none',
+        },
+        '.cm-gutters': {
+          backgroundColor: 'transparent',
+        },
+      }),
+    ]
+
+    if (isDark) {
+      extensions.push(oneDark)
+    }
+
+    const state = EditorState.create({
+      doc: formattedJson,
+      extensions,
+    })
+
+    viewRef.current = new EditorView({
+      state,
+      parent: editorRef.current,
+    })
+
+    return () => {
+      viewRef.current?.destroy()
+      viewRef.current = null
+    }
+  }, [inspectData, isDark, loading])
+
+  const handleCopy = async () => {
+    if (!inspectData) return
+    await navigator.clipboard.writeText(JSON.stringify(inspectData, null, 2))
+    setCopied(true)
+    toast.success('Copied to clipboard')
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col p-0">
+        <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
+          <DialogTitle className="flex items-center gap-2">
+            <Info className="h-5 w-5" />
+            Inspect: {containerName}
+          </DialogTitle>
+          <DialogDescription>
+            Container ID: {containerId.slice(0, 12)}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex-1 min-h-0 px-6 pb-2 flex items-center justify-end">
+          {inspectData && (
+            <Button variant="outline" size="sm" onClick={handleCopy} className="h-7 text-xs gap-1.5">
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? 'Copied' : 'Copy JSON'}
+            </Button>
+          )}
+        </div>
+        <div className="flex-1 min-h-0 px-6 pb-6">
+          {loading && (
+            <div className="space-y-2">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} className="h-5 w-full" />
+              ))}
+            </div>
+          )}
+          {error && (
+            <div className="flex items-center justify-center py-12 text-destructive">
+              <AlertCircle className="h-5 w-5 mr-2" />
+              {error}
+            </div>
+          )}
+          {inspectData && !loading && (
+            <div ref={editorRef} className="rounded-md border overflow-hidden" />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function ContainerTable({
   containers,
   latestMetrics,
   sortBy,
+  stackDirMap,
   renderActions,
+  onInspect,
 }: {
   containers: DashboardContainerInfo[]
   latestMetrics: Record<string, DashboardContainerMetric>
   sortBy: SortKey
+  stackDirMap: Map<string, string>
   renderActions: (container: DashboardContainerInfo, deletePending: boolean) => React.ReactNode
+  onInspect: (container: DashboardContainerInfo) => void
 }) {
   const { data: policiesData } = useAutoUpdatePolicies()
 
@@ -300,19 +418,39 @@ function ContainerTable({
                   <StatusIcon state={container.state} />
                 </TableCell>
                 <TableCell>
-                  <div className="flex flex-col">
-                    <span className="font-medium text-sm">{container.name}</span>
-                    <span className="text-xs text-muted-foreground truncate max-w-[200px]">{container.image}</span>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 shrink-0"
+                      onClick={() => onInspect(container)}
+                      title="Inspect container"
+                    >
+                      <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                    </Button>
+                    <div className="flex flex-col min-w-0">
+                      <span className="font-medium text-sm truncate">{container.name}</span>
+                      <span className="text-xs text-muted-foreground truncate max-w-[200px]">{container.image}</span>
+                    </div>
                   </div>
                 </TableCell>
                 <TableCell>
                   {container.stackId ? (
-                    <a
-                      href={`/stacks/${container.stackId}`}
-                      className="text-sm text-blue-500 hover:underline"
-                    >
-                      {container.projectName}
-                    </a>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <a
+                            href={`/stacks/${container.stackId}`}
+                            className="text-sm text-blue-500 hover:underline"
+                          >
+                            {container.projectName}
+                          </a>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-md">
+                          <p className="font-mono text-xs break-all">{stackDirMap.get(container.stackId) || container.stackId}</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   ) : container.projectName ? (
                     <span className="text-sm text-muted-foreground">{container.projectName}</span>
                   ) : (
@@ -410,6 +548,19 @@ export function ContainersOverviewTab({ stats, latestMetrics }: ContainersOvervi
   const { confirm, ConfirmComponent } = useConfirm()
   const [sortBy, setSortBy] = useState<SortKey>('name')
   const [activeTab, setActiveTab] = useState<string>('stack')
+  const [inspectTarget, setInspectTarget] = useState<DashboardContainerInfo | null>(null)
+
+  const { data: stacks = [] } = useQuery({
+    queryKey: ['stacks'],
+    queryFn: () => stacksApi.list(),
+    staleTime: 30_000,
+  })
+
+  const stackDirMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const s of stacks) map.set(s.id, s.directory)
+    return map
+  }, [stacks])
 
   const deleteContainerMutation = useMutation({
     mutationFn: ({ id, isRunning }: { id: string; isRunning: boolean }) => resourcesApi.deleteContainer(id, isRunning),
@@ -506,8 +657,11 @@ export function ContainersOverviewTab({ stats, latestMetrics }: ContainersOvervi
               containers={stackContainers}
               latestMetrics={latestMetrics}
               sortBy={sortBy}
+              stackDirMap={stackDirMap}
+              onInspect={setInspectTarget}
               renderActions={(container, deletePending) => (
-                <StackContainerActions
+                <ContainerActions
+                  mode="stack"
                   stackId={container.stackId}
                   containerId={container.id}
                   containerName={container.name}
@@ -535,8 +689,11 @@ export function ContainersOverviewTab({ stats, latestMetrics }: ContainersOvervi
               containers={otherContainers}
               latestMetrics={latestMetrics}
               sortBy={sortBy}
+              stackDirMap={stackDirMap}
+              onInspect={setInspectTarget}
               renderActions={(container, deletePending) => (
-                <StandaloneContainerActions
+                <ContainerActions
+                  mode="standalone"
                   containerId={container.id}
                   containerName={container.name}
                   containerState={container.state}
@@ -549,6 +706,14 @@ export function ContainersOverviewTab({ stats, latestMetrics }: ContainersOvervi
         </TabsContent>
       </Tabs>
       <ConfirmComponent />
+      {inspectTarget && (
+        <ContainerInspectDialog
+          containerId={inspectTarget.id}
+          containerName={inspectTarget.name}
+          open={!!inspectTarget}
+          onOpenChange={(open) => { if (!open) setInspectTarget(null) }}
+        />
+      )}
     </div>
   )
 }

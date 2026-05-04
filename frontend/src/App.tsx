@@ -1,5 +1,5 @@
 import { useEffect, useState, Suspense, lazy } from 'react'
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation, Outlet } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
 import { queryClient } from '@/lib/query-client'
@@ -21,6 +21,12 @@ const SettingsPage = lazy(() =>
   import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage }))
 )
 
+const suspendedFallback = (
+  <div className="flex items-center justify-center min-h-screen">
+    <LoadingSpinner size="large" />
+  </div>
+)
+
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { canAccess, checkAuth, checkStatus } = useAuth()
   const location = useLocation()
@@ -38,6 +44,18 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   return <>{children}</>
+}
+
+function AuthenticatedLayout() {
+  return (
+    <AppShell>
+      <AuthGuard>
+        <Suspense fallback={suspendedFallback}>
+          <Outlet />
+        </Suspense>
+      </AuthGuard>
+    </AppShell>
+  )
 }
 
 function App() {
@@ -77,7 +95,7 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <ErrorBoundary>
           <AppShell>
-            <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><LoadingSpinner size="large" /></div>}>
+            <Suspense fallback={suspendedFallback}>
               <Routes>
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/stacks/:id" element={<StackPage />} />
@@ -114,54 +132,12 @@ function App() {
       <ErrorBoundary>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
-          <Route
-            path="/"
-            element={
-              <AppShell>
-                <AuthGuard>
-                  <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><LoadingSpinner size="large" /></div>}>
-                    <DashboardPage />
-                  </Suspense>
-                </AuthGuard>
-              </AppShell>
-            }
-          />
-          <Route
-            path="/stacks/:id"
-            element={
-              <AppShell>
-                <AuthGuard>
-                  <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><LoadingSpinner size="large" /></div>}>
-                    <StackPage />
-                  </Suspense>
-                </AuthGuard>
-              </AppShell>
-            }
-          />
-          <Route
-            path="/stacks/:id/:tab"
-            element={
-              <AppShell>
-                <AuthGuard>
-                  <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><LoadingSpinner size="large" /></div>}>
-                    <StackPage />
-                  </Suspense>
-                </AuthGuard>
-              </AppShell>
-            }
-          />
-          <Route
-            path="/settings"
-            element={
-              <AppShell>
-                <AuthGuard>
-                  <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><LoadingSpinner size="large" /></div>}>
-                    <SettingsPage />
-                  </Suspense>
-                </AuthGuard>
-              </AppShell>
-            }
-          />
+          <Route element={<AuthenticatedLayout />}>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/stacks/:id" element={<StackPage />} />
+            <Route path="/stacks/:id/:tab" element={<StackPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Route>
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </ErrorBoundary>
@@ -170,4 +146,4 @@ function App() {
   )
 }
 
-export default App
+export { App }

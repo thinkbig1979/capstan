@@ -1,12 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { EditorView, basicSetup } from 'codemirror'
-import { EditorState } from '@codemirror/state'
-import { yaml } from '@codemirror/lang-yaml'
-import { linter, lintGutter, type Diagnostic } from '@codemirror/lint'
-import { oneDark } from '@codemirror/theme-one-dark'
-import { keymap } from '@codemirror/view'
-import { search } from '@codemirror/search'
-import { autocompletion } from '@codemirror/autocomplete'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -20,13 +12,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Save, FileCheck, AlertCircle, AlertTriangle, Info, Variable } from 'lucide-react'
+import { Save, FileCheck, AlertCircle, Variable } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '@/lib/api'
 import { classifyError } from '@/lib/error-handler'
 import { toast } from 'sonner'
 import type { LintResult } from '@/types'
-import { useUIStore } from '@/stores/uiStore'
+import { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
+import { LintResultsPanel } from '@/components/stack/LintResultsPanel'
 
 interface ComposeEditorProps {
   stackId: string
@@ -34,23 +27,12 @@ interface ComposeEditorProps {
 
 export function ComposeEditor({ stackId }: ComposeEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null)
-  const viewRef = useRef<EditorView | null>(null)
   const handleSaveRef = useRef<(forceSave?: boolean) => void>(() => {})
-  const { theme } = useUIStore()
   const [content, setContent] = useState('')
   const [lastSaved, setLastSaved] = useState('')
   const [lintResults, setLintResults] = useState<LintResult[]>([])
   const [showSaveConfirm, setShowSaveConfirm] = useState(false)
   const [isLintingBeforeSave, setIsLintingBeforeSave] = useState(false)
-
-  const isDark = useMemo(
-    () =>
-      theme === 'dark' ||
-      (theme === 'system' &&
-        typeof window !== 'undefined' &&
-        window.matchMedia('(prefers-color-scheme: dark)').matches),
-    [theme],
-  )
 
   const queryClient = useQueryClient()
 
@@ -60,6 +42,25 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       const response = await apiClient.get(`/stacks/${stackId}/compose`)
       return (response.data as { content: string }).content
     },
+  })
+
+  const [selectedText, setSelectedText] = useState('')
+  const [extractVarName, setExtractVarName] = useState('')
+  const [showExtractDialog, setShowExtractDialog] = useState(false)
+  const [isExtracting, setIsExtracting] = useState(false)
+  const selectedTextRef = useRef('')
+
+  const { viewRef } = useCodeMirrorEditor(editorRef, {
+    doc: data || content,
+    onSave: () => {
+      handleSaveRef.current()
+      return true
+    },
+    onSelect: (text) => {
+      selectedTextRef.current = text
+      setSelectedText(text)
+    },
+    deps: [stackId],
   })
 
   useEffect(() => {
@@ -160,109 +161,8 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     lintMutation.mutate(currentContent)
   }, [lintMutation])
 
-  // Initialize CodeMirror editor
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!editorRef.current) return
-
-    const createEditor = () => {
-      const extensions = [
-        basicSetup,
-        yaml(),
-        lintGutter(),
-        linter(() => {
-          const diagnostics: Diagnostic[] = lintResults.map((result) => ({
-            from: 0,
-            to: 0,
-            severity: result.level === 'error' ? 'error' : result.level === 'warning' ? 'warning' : 'info',
-            message: result.message,
-          }))
-          return diagnostics
-        }),
-        keymap.of([
-          {
-            key: 'Mod-s',
-            run: () => {
-              handleSaveRef.current()
-              return true
-            },
-          },
-        ]),
-        search({ top: true }),
-        autocompletion(),
-        EditorView.theme({
-          '&': { fontSize: '14px' },
-          '.cm-scroller': { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' },
-        }),
-        EditorView.updateListener.of((update) => {
-          if (update.selectionSet || update.docChanged) {
-            const sel = update.state.selection.main
-            if (sel.from !== sel.to) {
-              selectedTextRef.current = update.state.sliceDoc(sel.from, sel.to)
-              setSelectedText(selectedTextRef.current)
-            } else {
-              selectedTextRef.current = ''
-              setSelectedText('')
-            }
-          }
-        }),
-      ]
-
-      if (isDark) {
-        extensions.push(oneDark)
-      }
-
-      const state = EditorState.create({
-        doc: data || content,
-        extensions,
-      })
-
-      const view = new EditorView({
-        state,
-        parent: editorRef.current || undefined,
-      })
-
-      return view
-    }
-
-    const view = createEditor()
-    viewRef.current = view
-
-    return () => {
-      view.destroy()
-      viewRef.current = null
-    }
-  }, [stackId, isDark])
-
-  // Update lint diagnostics when results change
-  useEffect(() => {
-    if (!viewRef.current) return
-
-    viewRef.current.dispatch({
-      effects: [],
-    })
-  }, [lintResults]) // eslint-disable-line react-hooks/exhaustive-deps
-
   const hasUnsavedChanges = content !== lastSaved
   const errorCount = lintResults.filter((r) => r.level === 'error').length
-
-  const getLintIcon = (level: string) => {
-    switch (level) {
-      case 'error':
-        return <AlertCircle className="h-4 w-4 text-red-500" />
-      case 'warning':
-        return <AlertTriangle className="h-4 w-4 text-yellow-500" />
-      default:
-        return <Info className="h-4 w-4 text-blue-500" />
-    }
-  }
-
-  const [selectedText, setSelectedText] = useState('')
-  const [extractVarName, setExtractVarName] = useState('')
-  const [showExtractDialog, setShowExtractDialog] = useState(false)
-  const [isExtracting, setIsExtracting] = useState(false)
-
-  const selectedTextRef = useRef('')
 
   const inferVarName = (yamlContent: string, cursorPos: number): string => {
     const lines = yamlContent.split('\n')
@@ -406,35 +306,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
         <div ref={editorRef} className="rounded-md border overflow-hidden" style={{ minHeight: '400px' }} />
       </div>
 
-      {lintResults.length > 0 && (
-        <div className="rounded-md border bg-card">
-          <div className="p-4 border-b">
-            <h3 className="font-semibold">Lint Results</h3>
-          </div>
-          <div className="divide-y">
-            {lintResults.map((result, index) => (
-              <div key={`${result.level}-${result.line || index}-${result.message}`} className="p-3 flex items-start gap-3 hover:bg-muted/50">
-                {getLintIcon(result.level)}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    {result.line && (
-                      <Badge variant="outline" className="text-xs">
-                        Line {result.line}
-                      </Badge>
-                    )}
-                    <span className="text-sm font-medium">{result.message}</span>
-                  </div>
-                  {result.rule && (
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {result.rule}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <LintResultsPanel results={lintResults} />
 
       <Dialog open={showExtractDialog} onOpenChange={setShowExtractDialog}>
         <DialogContent>

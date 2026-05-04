@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/docker-manager/backend/internal/database"
+	"github.com/docker-manager/backend/internal/middleware"
 	"github.com/docker-manager/backend/internal/models"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -110,15 +111,15 @@ func TestValidateJWT(t *testing.T) {
 	token, err := generateJWTForTest(claims, secret)
 	require.NoError(t, err)
 
-	parsed, err := validateJWT(token, secret)
+	parsed, err := middleware.ValidateJWT(token, secret)
 	assert.NoError(t, err)
 	assert.Equal(t, "user123", parsed["sub"])
 	assert.Equal(t, "testuser", parsed["username"])
 
-	_, err = validateJWT("invalid-token", secret)
+	_, err = middleware.ValidateJWT("invalid-token", secret)
 	assert.Error(t, err)
 
-	_, err = validateJWT(token, "wrong-secret")
+	_, err = middleware.ValidateJWT(token, "wrong-secret")
 	assert.Error(t, err)
 }
 
