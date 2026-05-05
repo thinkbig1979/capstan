@@ -259,6 +259,12 @@ func (d *DB) DeleteSession(id string) error {
 	return err
 }
 
+func (d *DB) DeleteSessionsByUserExcluding(userID, excludeSessionID string) error {
+	query := `DELETE FROM sessions WHERE user_id = ? AND id != ?`
+	_, err := d.db.Exec(query, userID, excludeSessionID)
+	return err
+}
+
 func (d *DB) DeleteExpiredSessions() error {
 	query := `DELETE FROM sessions WHERE expires_at < ?`
 	_, err := d.db.Exec(query, time.Now())
@@ -299,8 +305,8 @@ func (d *DB) ListDirectories() ([]models.Directory, error) {
 		if err != nil {
 			return nil, err
 		}
-		dir.GitHTTPSToken = d.decryptToken(dir.GitHTTPSToken)
 		dir.HasHTTPSToken = dir.GitHTTPSToken != ""
+		dir.GitHTTPSToken = ""
 		directories = append(directories, dir)
 	}
 	return directories, nil
@@ -315,8 +321,8 @@ func (d *DB) GetDirectory(path string) (*models.Directory, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir.GitHTTPSToken = d.decryptToken(dir.GitHTTPSToken)
 	dir.HasHTTPSToken = dir.GitHTTPSToken != ""
+	dir.GitHTTPSToken = ""
 	return &dir, nil
 }
 
@@ -837,12 +843,29 @@ func (d *DB) UpdateUpdateHistory(id string, updates map[string]interface{}) erro
 		return nil
 	}
 
+	allowedColumns := map[string]bool{
+		"status":        true,
+		"completed_at":  true,
+		"duration_ms":   true,
+		"error_message": true,
+		"new_digest":    true,
+		"new_image_ref": true,
+	}
+
 	var setClauses []string
 	var args []interface{}
 	for key, val := range updates {
+		if !allowedColumns[key] {
+			continue
+		}
 		setClauses = append(setClauses, key+" = ?")
 		args = append(args, val)
 	}
+
+	if len(setClauses) == 0 {
+		return nil
+	}
+
 	args = append(args, id)
 
 	query := "UPDATE update_history SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"

@@ -3,11 +3,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { directoriesApi, stacksApi, dashboardApi, settingsApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { StackCardSkeleton } from '@/components/LoadingSkeleton'
-import { AlertCircle, RefreshCw, Plus, Folder } from 'lucide-react'
+import { StackCardSkeleton, MetricsSkeleton } from '@/components/LoadingSkeleton'
+import { AlertCircle, RefreshCw, Plus } from 'lucide-react'
 import { CreateStackDialog } from '@/components/stack/CreateStackDialog'
 import { useStackStatusAnimation } from '@/hooks/useStackStatusAnimation'
 import { useDashboardMetrics } from '@/hooks/useDashboardMetrics'
@@ -207,12 +206,14 @@ export function DashboardPage() {
             <p className="text-muted-foreground">Loading...</p>
           </div>
         </div>
+        <div className="h-10 w-full bg-muted animate-pulse rounded-md" />
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <StackCardSkeleton />
           <StackCardSkeleton />
           <StackCardSkeleton />
           <StackCardSkeleton />
         </div>
+        <MetricsSkeleton />
       </div>
     )
   }
@@ -262,94 +263,6 @@ export function DashboardPage() {
         isRefreshing={isRefreshing}
       />
 
-      <div className="grid grid-cols-1 gap-4 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:shadow-xs md:grid-cols-2 lg:grid-cols-4">
-        <Card className="@container/card">
-          <CardHeader>
-            <CardDescription>Total Stacks</CardDescription>
-            <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-              {stacks?.length || 0}
-            </CardTitle>
-            <CardAction>
-              <Badge variant="outline">
-                <Folder className="size-3" />
-                {directories?.length || 0} dirs
-              </Badge>
-            </CardAction>
-          </CardHeader>
-          <CardFooter className="flex-col items-start gap-1.5 text-sm">
-            <div className="line-clamp-1 flex gap-2 font-medium">
-              {runningCount} running stacks
-            </div>
-            <div className="text-muted-foreground">
-              Across {directories?.length || 0} directories
-            </div>
-          </CardFooter>
-        </Card>
-        <Card className="@container/card">
-          <CardHeader>
-            <CardDescription>Running</CardDescription>
-            <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-              {runningCount}
-            </CardTitle>
-            <CardAction>
-              <Badge variant="outline" className="text-green-600 border-green-200 dark:text-green-400 dark:border-green-800">
-                Active
-              </Badge>
-            </CardAction>
-          </CardHeader>
-          <CardFooter className="flex-col items-start gap-1.5 text-sm">
-            <div className="line-clamp-1 flex gap-2 font-medium">
-              {stacks?.length ? Math.round((runningCount / stacks.length) * 100) : 0}% uptime
-            </div>
-            <div className="text-muted-foreground">
-              Stack availability
-            </div>
-          </CardFooter>
-        </Card>
-        <Card className="@container/card">
-          <CardHeader>
-            <CardDescription>Stopped</CardDescription>
-            <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-              {stoppedCount}
-            </CardTitle>
-            <CardAction>
-              <Badge variant="outline" className="text-red-600 border-red-200 dark:text-red-400 dark:border-red-800">
-                Inactive
-              </Badge>
-            </CardAction>
-          </CardHeader>
-          <CardFooter className="flex-col items-start gap-1.5 text-sm">
-            <div className="line-clamp-1 flex gap-2 font-medium">
-              {stoppedCount > 0 ? 'Needs attention' : 'All stacks running'}
-            </div>
-            <div className="text-muted-foreground">
-              Stopped or errored stacks
-            </div>
-          </CardFooter>
-        </Card>
-        <Card className="@container/card">
-          <CardHeader>
-            <CardDescription>Containers</CardDescription>
-            <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-              {containerCount}
-            </CardTitle>
-            <CardAction>
-              <Badge variant="outline">
-                {runningCount} stacks
-              </Badge>
-            </CardAction>
-          </CardHeader>
-          <CardFooter className="flex-col items-start gap-1.5 text-sm">
-            <div className="line-clamp-1 flex gap-2 font-medium">
-              Total container instances
-            </div>
-            <div className="text-muted-foreground">
-              Managed by Docker Compose
-            </div>
-          </CardFooter>
-        </Card>
-      </div>
-
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList variant="line" className="w-full">
           <TabsTrigger value="overview">Metrics</TabsTrigger>
@@ -368,6 +281,12 @@ export function DashboardPage() {
             stats={dashboardStats}
             aggregates={aggregates}
             isConnected={metricsConnected}
+            totalStacks={stacks?.length || 0}
+            runningStacks={runningCount}
+            stoppedStacks={stoppedCount}
+            totalContainers={containerCount}
+            runningContainers={dashboardStats?.runningContainers || 0}
+            directoryCount={directories?.length || 0}
           />
         </TabsContent>
 

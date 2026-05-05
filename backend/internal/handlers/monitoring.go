@@ -15,11 +15,11 @@ import (
 )
 
 type MonitoringHandler struct {
-	monitor   *services.MonitorService
-	docker    *services.DockerService
-	db        *database.DB
-	cm        *ConnectionManager
-	eventBus  *EventBus
+	monitor  *services.MonitorService
+	docker   *services.DockerService
+	db       *database.DB
+	cm       *ConnectionManager
+	eventBus *EventBus
 }
 
 func NewMonitoringHandler(monitor *services.MonitorService, docker *services.DockerService, db *database.DB, cm *ConnectionManager, eventBus *EventBus) *MonitoringHandler {
@@ -134,8 +134,8 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 }
 
 type EventBus struct {
-	mu        sync.RWMutex
-	channels  map[chan models.StackEvent]bool
+	mu       sync.RWMutex
+	channels map[chan models.StackEvent]bool
 }
 
 func NewEventBus() *EventBus {

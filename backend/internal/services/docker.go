@@ -671,6 +671,43 @@ func (s *DockerService) GetImageDiskUsage(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
+type DiskUsageBreakdown struct {
+	Images     int64 `json:"images"`
+	Containers int64 `json:"containers"`
+	Volumes    int64 `json:"volumes"`
+	BuildCache int64 `json:"buildCache"`
+	Total      int64 `json:"total"`
+}
+
+func (s *DockerService) GetDiskUsage(ctx context.Context) (*DiskUsageBreakdown, error) {
+	du, err := s.client.DiskUsage(ctx, types.DiskUsageOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("getting disk usage: %w", err)
+	}
+
+	var imagesTotal, containersTotal, volumesTotal, buildCacheTotal int64
+	for _, img := range du.Images {
+		imagesTotal += img.Size
+	}
+	for _, ctr := range du.Containers {
+		containersTotal += ctr.SizeRw
+	}
+	for _, vol := range du.Volumes {
+		volumesTotal += vol.UsageData.Size
+	}
+	for _, bc := range du.BuildCache {
+		buildCacheTotal += bc.Size
+	}
+
+	return &DiskUsageBreakdown{
+		Images:     imagesTotal,
+		Containers: containersTotal,
+		Volumes:    volumesTotal,
+		BuildCache: buildCacheTotal,
+		Total:      imagesTotal + containersTotal + volumesTotal + buildCacheTotal,
+	}, nil
+}
+
 func (s *DockerService) GetRunningContainerIDs(ctx context.Context) ([]string, error) {
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("status", "running")
@@ -1140,4 +1177,3 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect t
 
 	return nil
 }
-

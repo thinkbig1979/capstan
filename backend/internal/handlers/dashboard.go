@@ -66,10 +66,11 @@ func (h *DashboardHandler) getDashboardStats() gin.HandlerFunc {
 			}
 		}
 
-		var imageDiskUsage int64
-		imageDiskUsage, err = h.docker.GetImageDiskUsage(ctx)
+		var diskUsage *services.DiskUsageBreakdown
+		diskUsage, err = h.docker.GetDiskUsage(ctx)
 		if err != nil {
-			slog.Error("Failed to get image disk usage", "error", err)
+			slog.Error("Failed to get disk usage", "error", err)
+			diskUsage = &services.DiskUsageBreakdown{}
 		}
 
 		c.JSON(http.StatusOK, gin.H{
@@ -78,7 +79,8 @@ func (h *DashboardHandler) getDashboardStats() gin.HandlerFunc {
 			"stoppedStacks":     stoppedStacks,
 			"totalContainers":   len(containers),
 			"runningContainers": runningContainers,
-			"imageDiskUsage":    imageDiskUsage,
+			"imageDiskUsage":    diskUsage.Images,
+			"diskUsage":         diskUsage,
 			"containers":        containers,
 		})
 	}

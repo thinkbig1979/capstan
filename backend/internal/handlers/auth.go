@@ -306,23 +306,16 @@ func (h *AuthHandler) Me(c *gin.Context) {
 }
 
 func validateUsername(username string) *models.AppError {
-	if len(username) < 3 || len(username) > 50 {
-		return models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Username must be between 3 and 50 characters")
+	if !middleware.ValidateUsername(username) {
+		return models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Username must be between 3 and 50 characters and contain only letters, numbers, underscores, and hyphens")
 	}
-
-	matched, _ := regexp.MatchString(`^[a-zA-Z0-9_-]+$`, username)
-	if !matched {
-		return models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Username can only contain letters, numbers, underscores, and hyphens")
-	}
-
 	return nil
 }
 
 func validatePassword(password string) *models.AppError {
-	if len(password) < 8 || len(password) > 128 {
-		return models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Password must be between 8 and 128 characters")
+	if valid, msg := middleware.ValidatePassword(password); !valid {
+		return models.NewAppError(http.StatusBadRequest, models.ErrValidation, msg)
 	}
-
 	return nil
 }
 
@@ -360,12 +353,42 @@ func parseJWT(token, secret string) (jwtv5.MapClaims, error) {
 
 func setAuthCookies(c *gin.Context, token string, csrfToken string) {
 	secure := !strings.Contains(c.Request.Host, "localhost") && !strings.Contains(c.Request.Host, "127.0.0.1")
-	c.SetCookie("docker_manager_token", token, 86400, "/", "", secure, true)
-	c.SetCookie("docker_manager_csrf", csrfToken, 86400, "/", "", secure, false)
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     "docker_manager_token",
+		Value:    token,
+		MaxAge:   86400,
+		Path:     "/",
+		Secure:   secure,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     "docker_manager_csrf",
+		Value:    csrfToken,
+		MaxAge:   86400,
+		Path:     "/",
+		Secure:   secure,
+		HttpOnly: false,
+		SameSite: http.SameSiteLaxMode,
+	})
 	c.Header("X-CSRF-Token", csrfToken)
 }
 
 func clearAuthCookies(c *gin.Context) {
-	c.SetCookie("docker_manager_token", "", -1, "/", "", false, true)
-	c.SetCookie("docker_manager_csrf", "", -1, "/", "", false, false)
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     "docker_manager_token",
+		Value:    "",
+		MaxAge:   -1,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     "docker_manager_csrf",
+		Value:    "",
+		MaxAge:   -1,
+		Path:     "/",
+		HttpOnly: false,
+		SameSite: http.SameSiteLaxMode,
+	})
 }

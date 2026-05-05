@@ -84,7 +84,7 @@ func TestAuthHandler_Setup_Success(t *testing.T) {
 	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
 	router := setupTestRouter(handler)
 
-	reqBody := `{"username": "admin", "password": "securepassword123"}`
+	reqBody := `{"username": "admin", "password": "SecurePass123!"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/setup", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -111,7 +111,7 @@ func TestAuthHandler_Setup_AlreadyDone(t *testing.T) {
 	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
 	router := setupTestRouter(handler)
 
-	reqBody := `{"username": "admin", "password": "securepassword123"}`
+	reqBody := `{"username": "admin", "password": "SecurePass123!"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/setup", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -133,7 +133,7 @@ func TestAuthHandler_Setup_InvalidUsername(t *testing.T) {
 	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
 	router := setupTestRouter(handler)
 
-	reqBody := `{"username": "ab", "password": "securepassword123"}`
+	reqBody := `{"username": "ab", "password": "SecurePass123!"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/setup", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

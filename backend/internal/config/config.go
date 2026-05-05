@@ -8,9 +8,9 @@ import (
 )
 
 type StacksDirEntry struct {
-	Path        string `json:"path"`
-	Name        string `json:"name"`
-	IsDefault   bool   `json:"isDefault"`
+	Path      string `json:"path"`
+	Name      string `json:"name"`
+	IsDefault bool   `json:"isDefault"`
 }
 
 type Config struct {
@@ -98,16 +98,11 @@ func Load() (*Config, error) {
 
 	validateVolumePathIdentity(cfg)
 
-	redactedSecret := cfg.JWTSecret
-	if len(redactedSecret) > 4 {
-		redactedSecret = redactedSecret[:4] + "..."
-	}
-
 	slog.Info("Configuration loaded",
 		"stacks_dir", cfg.StacksDir,
 		"data_dir", cfg.DataDir,
 		"port", cfg.Port,
-		"jwt_secret", redactedSecret,
+		"jwt_secret", "[REDACTED]",
 		"log_level", cfg.LogLevel,
 		"auth_disabled", cfg.AuthDisabled,
 	)

@@ -94,11 +94,6 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 			return
 		}
 
-		if strings.HasPrefix(path, "/api/v1/ws/") {
-			c.Next()
-			return
-		}
-
 		token := c.GetHeader("Authorization")
 		if token == "" {
 			token = c.Query("token")

@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useCallback } from 'react'
+import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -119,18 +119,21 @@ function buildDirTree(
   return topNodes.map(collapseNode)
 }
 
-function loadCollapsed(
-  rootGroups?: { rootPath: string; tree: DirTreeNode[] }[],
-): Set<string> {
+function loadSavedCollapsed(): Set<string> | null {
   try {
     const raw = localStorage.getItem('dirs-tab-collapsed')
     if (raw) return new Set(JSON.parse(raw))
   } catch { /* ignore */ }
-  if (!rootGroups) return new Set()
+  return null
+}
+
+function computeDefaultCollapsed(
+  rootGroups: { rootPath: string; tree: DirTreeNode[] }[],
+): Set<string> {
   const collapsed = new Set<string>()
   const collectDeep = (nodes: DirTreeNode[], depth: number) => {
     for (const node of nodes) {
-      if (depth >= 1 && node.children.length > 0) {
+      if (depth >= 0 && node.children.length > 0) {
         collapsed.add(node.fullPath)
       }
       collectDeep(node.children, depth + 1)
@@ -190,21 +193,58 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
   }, [directories, configuredDirs])
 
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(
-    () => loadCollapsed(rootGroups),
+    () => loadSavedCollapsed() ?? new Set(),
   )
+  const defaultsApplied = useRef(false)
+
+  useEffect(() => {
+    if (defaultsApplied.current) return
+    if (rootGroups.length === 0) return
+    defaultsApplied.current = true
+    if (loadSavedCollapsed() !== null) return
+    const defaults = computeDefaultCollapsed(rootGroups)
+    if (defaults.size > 0) setCollapsedNodes(defaults)
+  }, [rootGroups])
 
   useEffect(() => {
     saveCollapsed(collapsedNodes)
   }, [collapsedNodes])
 
+  const nodeIndex = useMemo(() => {
+    const idx = new Map<string, DirTreeNode>()
+    const walk = (nodes: DirTreeNode[]) => {
+      for (const n of nodes) {
+        idx.set(n.fullPath, n)
+        walk(n.children)
+      }
+    }
+    for (const g of rootGroups) walk(g.tree)
+    return idx
+  }, [rootGroups])
+
   const toggleNode = useCallback((path: string) => {
     setCollapsedNodes((prev) => {
       const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
+      if (next.has(path)) {
+        next.delete(path)
+        const node = nodeIndex.get(path)
+        if (node) {
+          const collapse = (nodes: DirTreeNode[]) => {
+            for (const child of nodes) {
+              if (child.children.length > 0) {
+                next.add(child.fullPath)
+                collapse(child.children)
+              }
+            }
+          }
+          collapse(node.children)
+        }
+      } else {
+        next.add(path)
+      }
       return next
     })
-  }, [])
+  }, [nodeIndex])
 
   const navigateToStack = useCallback(
     (dirPath: string) => {
@@ -276,7 +316,7 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
   }
 
   return (
-    <>
+    <div className="space-y-4">
       <SortFilterBar
         sortOptions={[{ key: 'name', label: 'Name' }]}
         sortValue="name"
@@ -324,6 +364,6 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
           })}
         </div>
       )}
-    </>
+    </div>
   )
 }

@@ -86,7 +86,15 @@ func CSRFMiddleware() gin.HandlerFunc {
 
 func setCSRFCookie(c *gin.Context, token string) {
 	secure := !strings.Contains(c.Request.Host, "localhost") && !strings.Contains(c.Request.Host, "127.0.0.1")
-	c.SetCookie(csrfCookieName, token, 86400, "/", "", secure, false)
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     csrfCookieName,
+		Value:    token,
+		MaxAge:   86400,
+		Path:     "/",
+		Secure:   secure,
+		HttpOnly: false,
+		SameSite: http.SameSiteLaxMode,
+	})
 	c.Header(csrfHeaderName, token)
 }
 

@@ -95,6 +95,14 @@ export interface DashboardContainerInfo {
   imageSize: number
 }
 
+export interface DiskUsageBreakdown {
+  images: number
+  containers: number
+  volumes: number
+  buildCache: number
+  total: number
+}
+
 export interface DashboardStats {
   totalStacks: number
   runningStacks: number
@@ -102,6 +110,7 @@ export interface DashboardStats {
   totalContainers: number
   runningContainers: number
   imageDiskUsage: number
+  diskUsage: DiskUsageBreakdown
   containers: DashboardContainerInfo[]
 }
 

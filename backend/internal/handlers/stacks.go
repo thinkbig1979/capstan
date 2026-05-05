@@ -16,13 +16,13 @@ import (
 )
 
 type StacksHandler struct {
-	docker      *services.DockerService
-	scanner     *services.ScannerService
-	linter      *services.LinterService
-	db          *database.DB
-	config      *config.Config
-	actionLog   *services.ActionLogger
-	opLock      *services.OperationLock
+	docker    *services.DockerService
+	scanner   *services.ScannerService
+	linter    *services.LinterService
+	db        *database.DB
+	config    *config.Config
+	actionLog *services.ActionLogger
+	opLock    *services.OperationLock
 }
 
 func NewStacksHandler(docker *services.DockerService, scanner *services.ScannerService, linter *services.LinterService, db *database.DB, cfg *config.Config, opLock *services.OperationLock) *StacksHandler {

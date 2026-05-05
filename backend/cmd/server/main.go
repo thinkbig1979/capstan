@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,18 +27,32 @@ import (
 
 func SecurityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		nonceBytes := make([]byte, 16)
+		if _, err := rand.Read(nonceBytes); err != nil {
+			slog.Error("Failed to generate CSP nonce", "error", err)
+			nonceBytes = []byte("fallback-nonce")
+		}
+		nonce := hex.EncodeToString(nonceBytes)
+		c.Set("csp_nonce", nonce)
+
 		c.Header("X-Frame-Options", "DENY")
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-XSS-Protection", "1; mode=block")
 		c.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://localhost:* wss://localhost:*; frame-ancestors 'none';")
+		c.Header("Content-Security-Policy", fmt.Sprintf(
+			"default-src 'self'; script-src 'self' 'nonce-%s' 'strict-dynamic'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://localhost:* wss://localhost:*; frame-ancestors 'none';",
+			nonce,
+		))
 		c.Next()
 	}
 }
 
 func isLocalhost(c *gin.Context) bool {
-	host := c.Request.Host
-	return host == "localhost:5001" || host == "127.0.0.1:5001" || strings.HasPrefix(host, "127.0.0.1:") || strings.HasPrefix(host, "localhost:")
+	ip := net.ParseIP(c.ClientIP())
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
 }
 
 func main() {
@@ -136,6 +153,22 @@ func main() {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+
+	if cfg.TrustedNetworks != "" {
+		proxies := strings.Split(cfg.TrustedNetworks, ",")
+		var trimmed []string
+		for _, p := range proxies {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				trimmed = append(trimmed, p)
+			}
+		}
+		if len(trimmed) > 0 {
+			r.SetTrustedProxies(trimmed)
+		}
+	} else {
+		r.SetTrustedProxies([]string{"127.0.0.1", "::1"})
+	}
 
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.LoggingMiddleware())
@@ -269,6 +302,18 @@ func main() {
 
 	r.NoRoute(func(c *gin.Context) {
 		if !strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			if nonce, exists := c.Get("csp_nonce"); exists {
+				c.Header("Content-Type", "text/html; charset=utf-8")
+				data, err := os.ReadFile("./frontend/index.html")
+				if err != nil {
+					c.String(http.StatusInternalServerError, "Failed to load page")
+					return
+				}
+				html := strings.ReplaceAll(string(data), "<script", fmt.Sprintf("<script nonce=\"%s\"", nonce))
+				html = strings.ReplaceAll(html, "<link", fmt.Sprintf("<link nonce=\"%s\"", nonce))
+				c.String(http.StatusOK, html)
+				return
+			}
 			c.File("./frontend/index.html")
 		}
 	})

@@ -194,7 +194,7 @@ describe('useWebSocket auth-disabled behavior', () => {
       client.connect('/containers', vi.fn())
 
       expect(MockWebSocket.instance).toBeNull()
-      expect(consoleSpy).toHaveBeenCalledWith('Cannot connect: no JWT token available')
+      expect(consoleSpy).toHaveBeenCalledWith('Cannot connect: not authenticated')
       consoleSpy.mockRestore()
     })
   })

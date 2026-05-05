@@ -16,6 +16,7 @@ import (
 	"github.com/docker-manager/backend/internal/models"
 	"github.com/docker-manager/backend/internal/services"
 	"github.com/gin-gonic/gin"
+	jwtv5 "github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -174,6 +175,31 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 	}
 
 	slog.Info("Password changed", "userID", userID)
+
+	currentSessionID := ""
+	authToken := c.GetHeader("Authorization")
+	if authToken != "" {
+		tokenStr := strings.TrimPrefix(authToken, "Bearer ")
+		if parsedToken, err := jwtv5.Parse(tokenStr, func(token *jwtv5.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwtv5.SigningMethodHMAC); !ok {
+				return nil, jwtv5.ErrSignatureInvalid
+			}
+			return []byte(h.jwtSecret), nil
+		}); err == nil {
+			if claims, ok := parsedToken.Claims.(jwtv5.MapClaims); ok {
+				if jti, ok := claims["jti"].(string); ok {
+					currentSessionID = jti
+				}
+			}
+		}
+	}
+
+	if currentSessionID != "" {
+		if err := h.db.DeleteSessionsByUserExcluding(userID.(string), currentSessionID); err != nil {
+			slog.Error("Failed to invalidate other sessions after password change", "error", err, "userID", userID)
+		}
+	}
+
 	c.Status(http.StatusNoContent)
 }
 
@@ -469,17 +495,17 @@ func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"sshKey":       sshKey,
-		"httpsUser":    httpsUser,
+		"sshKey":        sshKey,
+		"httpsUser":     httpsUser,
 		"hasHttpsToken": hasToken,
 	})
 }
 
 func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 	var req struct {
-		SSHKey      string `json:"sshKey"`
-		HTTPSUser   string `json:"httpsUser"`
-		HTTPSToken  string `json:"httpsToken"`
+		SSHKey     string `json:"sshKey"`
+		HTTPSUser  string `json:"httpsUser"`
+		HTTPSToken string `json:"httpsToken"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
@@ -657,9 +683,9 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"entries": actions,
-		"total":   total,
-		"page":    page,
+		"entries":  actions,
+		"total":    total,
+		"page":     page,
 		"pageSize": pageSize,
 	})
 }

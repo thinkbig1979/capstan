@@ -72,15 +72,15 @@ func (h *DirectoriesHandler) Scan(c *gin.Context) {
 		return
 	}
 
-	directories, _ := h.db.ListDirectories()
-	directoriesCount := len(directories)
+	redactedDirs, _ := h.db.ListDirectories()
+	directoriesCount := len(redactedDirs)
 	stacks, _ := h.db.ListStacks()
 	stacksCount := len(stacks)
 
 	slog.Info("Directory scan completed", "directories", directoriesCount, "stacks", stacksCount)
 
 	c.JSON(http.StatusOK, gin.H{
-		"directories":  directories,
+		"directories":  redactedDirs,
 		"hasGlobalEnv": hasGlobalEnv,
 		"scannedAt":    time.Now(),
 	})
@@ -178,6 +178,8 @@ func (h *DirectoriesHandler) UpdateCredentials(c *gin.Context) {
 	}
 
 	slog.Info("Directory credentials updated", "path", directory.Path, "authType", authType)
+
+	updated.GitHTTPSToken = ""
 
 	c.JSON(http.StatusOK, gin.H{
 		"directory": updated,

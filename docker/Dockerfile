@@ -37,15 +37,24 @@ RUN apk add --no-cache \
     docker-cli-compose \
     git \
     openssh-client \
+    su-exec \
     tzdata \
     wget
+
+RUN addgroup -g 1000 appuser && \
+    addgroup -g 130 docker && \
+    adduser -D -u 1000 -G appuser appuser && \
+    addgroup appuser docker
 
 COPY --from=backend-build /app/server /app/
 COPY --from=frontend-build /app/frontend/dist /app/frontend/
 
-RUN chmod +x /app/server
+RUN chmod +x /app/server && \
+    mkdir -p /opt/stacks /app/data && \
+    chown -R appuser:appuser /app /opt/stacks
 
-RUN mkdir -p /opt/stacks /app/data
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 ENV STACKS_DIR=/opt/stacks
 ENV DATA_DIR=/app/data
@@ -56,4 +65,5 @@ EXPOSE 5001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:5001/health || exit 1
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/app/server"]

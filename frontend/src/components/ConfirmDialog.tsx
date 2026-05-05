@@ -86,8 +86,9 @@ function ConfirmDialogRenderer({ state, onClose }: {
 }
 
 export function useConfirm() {
-  const [state, setState] = React.useState<ConfirmState | null>(null)
+  const [, forceUpdate] = React.useState(0)
   const resolveRef = React.useRef<((value: boolean) => void) | null>(null)
+  const stateRef = React.useRef<ConfirmState | null>(null)
 
   const confirm = React.useCallback((
     title: string,
@@ -99,7 +100,7 @@ export function useConfirm() {
   ) => {
     return new Promise<boolean>((resolve) => {
       resolveRef.current = resolve
-      setState({
+      stateRef.current = {
         title,
         description,
         confirmText: options?.confirmText,
@@ -108,7 +109,8 @@ export function useConfirm() {
           resolve(true)
           resolveRef.current = null
         },
-      })
+      }
+      forceUpdate((n) => n + 1)
     })
   }, [])
 
@@ -117,14 +119,15 @@ export function useConfirm() {
       resolveRef.current(false)
       resolveRef.current = null
     }
-    setState(null)
+    stateRef.current = null
+    forceUpdate((n) => n + 1)
   }, [])
 
   const ConfirmComponent = React.useMemo(
     () => function StableConfirmComponent() {
-      return <ConfirmDialogRenderer state={state} onClose={close} />
+      return <ConfirmDialogRenderer state={stateRef.current} onClose={close} />
     },
-    [state, close],
+    [close],
   )
 
   return { confirm, ConfirmComponent }
