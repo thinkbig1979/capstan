@@ -9,6 +9,7 @@ interface UIState {
   sidebarWidth: number
   setTheme: (theme: Theme) => void
   toggleSidebar: () => void
+  closeSidebar: () => void
   setSidebarWidth: (width: number) => void
 }
 
@@ -42,6 +43,10 @@ export const useUIStore = create<UIState>()(
 
       toggleSidebar: () => {
         set((state) => ({ sidebarOpen: !state.sidebarOpen }))
+      },
+
+      closeSidebar: () => {
+        set({ sidebarOpen: false })
       },
 
       setSidebarWidth: (width: number) => {

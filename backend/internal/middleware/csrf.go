@@ -51,11 +51,16 @@ func CSRFMiddleware() gin.HandlerFunc {
 
 		csrfCookie, err := c.Cookie(csrfCookieName)
 		if err != nil || csrfCookie == "" {
+			slog.Warn("CSRF cookie missing on mutating request", "path", c.Request.URL.Path, "method", c.Request.Method)
 			token := GenerateCSRFToken()
 			if token != "" {
 				setCSRFCookie(c, token)
 			}
-			c.Next()
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":    "CSRF_COOKIE_MISSING",
+				"message": "CSRF cookie required. Reload the page and retry.",
+			})
+			c.Abort()
 			return
 		}
 

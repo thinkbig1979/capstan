@@ -97,15 +97,16 @@ func (s *DockerService) Restart(stack models.Stack) (*models.CommandResult, erro
 	defer cancel()
 
 	backoff := 100 * time.Millisecond
+waitLoop:
 	for {
 		select {
 		case <-ctx.Done():
-			break
+			break waitLoop
 		default:
 		}
 		status, _, sErr := s.Status(stack)
 		if sErr != nil || status == "stopped" {
-			break
+			break waitLoop
 		}
 		time.Sleep(backoff)
 		backoff = backoff * 2
@@ -658,7 +659,7 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 }
 
 func (s *DockerService) GetImageDiskUsage(ctx context.Context) (int64, error) {
-	images, err := s.client.ImageList(ctx, types.ImageListOptions{})
+	images, err := s.client.ImageList(ctx, image.ListOptions{})
 	if err != nil {
 		return 0, err
 	}
@@ -732,7 +733,7 @@ type DashboardDB interface {
 }
 
 func (s *DockerService) ListImages(ctx context.Context) ([]models.DockerImage, error) {
-	images, err := s.client.ImageList(ctx, types.ImageListOptions{})
+	images, err := s.client.ImageList(ctx, image.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing images: %w", err)
 	}

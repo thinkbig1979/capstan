@@ -20,7 +20,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { useUIStore } from '@/stores/uiStore'
 import { useAuth } from '@/hooks/useAuth'
 import { toast } from 'sonner'
-import { HelpCircle, Settings, Sun, Moon, Laptop } from 'lucide-react'
+import { HelpCircle, Settings, Sun, Moon, Laptop, ChevronLeft } from 'lucide-react'
 
 export function Header() {
   const location = useLocation()
@@ -118,23 +118,22 @@ export function Header() {
   return (
     <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center gap-2 border-b bg-background/90 backdrop-blur-sm px-4">
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="icon" className="md:hidden" onClick={toggleSidebar} aria-label="Toggle sidebar">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <line x1="4" x2="20" y1="12" y2="12" />
-            <line x1="4" x2="20" y1="6" y2="6" />
-            <line x1="4" x2="20" y1="18" y2="18" />
-          </svg>
-        </Button>
+        {location.pathname === '/' ? (
+          <Button variant="ghost" size="icon" className="md:hidden" onClick={toggleSidebar} aria-label="Toggle sidebar">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="4" x2="20" y1="12" y2="12" />
+              <line x1="4" x2="20" y1="6" y2="6" />
+              <line x1="4" x2="20" y1="18" y2="18" />
+            </svg>
+          </Button>
+        ) : (
+          <Button variant="ghost" size="sm" className="md:hidden gap-1" asChild>
+            <Link to="/">
+              <ChevronLeft className="h-4 w-4" />
+              Dashboard
+            </Link>
+          </Button>
+        )}
 
         <nav className="hidden md:flex items-center gap-1 text-sm text-muted-foreground" aria-label="Breadcrumb">
           {breadcrumbs.map((crumb, index) => (

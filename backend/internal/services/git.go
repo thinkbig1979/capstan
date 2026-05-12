@@ -16,9 +16,6 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/go-git/go-git/v5/storage/filesystem"
 )
 
@@ -493,114 +490,6 @@ func (s *GitService) countCommits(repo *git.Repository, base, target plumbing.Ha
 	}
 
 	return count
-}
-
-func (s *GitService) getAuthMethod(dirPath string) (transport.AuthMethod, error) {
-	repo, err := s.openRepo(dirPath)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg, err := repo.Config()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get config: %w", err)
-	}
-
-	remoteURL := ""
-	for name, remote := range cfg.Remotes {
-		if name == "origin" && len(remote.URLs) > 0 {
-			remoteURL = remote.URLs[0]
-			break
-		}
-	}
-
-	if remoteURL == "" {
-		return nil, nil
-	}
-
-	isSSH := strings.HasPrefix(remoteURL, "git@") || strings.HasPrefix(remoteURL, "ssh://")
-	isHTTPS := strings.HasPrefix(remoteURL, "https://") || strings.HasPrefix(remoteURL, "http://")
-
-	var dirAuthType, dirSSHKeyPath, dirHTTPSUser, dirHTTPSToken string
-	if s.db != nil {
-		if dir, err := s.db.GetDirectory(dirPath); err == nil && dir != nil {
-			dirAuthType = dir.GitAuthType
-			dirSSHKeyPath = dir.GitSSHKeyPath
-			dirHTTPSUser = dir.GitHTTPSUser
-			dirHTTPSToken = dir.GitHTTPSToken
-		}
-	}
-
-	if dirAuthType == "ssh" && dirSSHKeyPath != "" && isSSH {
-		publicKeys, err := ssh.NewPublicKeysFromFile("git", dirSSHKeyPath, "")
-		if err != nil {
-			slog.Warn("Failed to load per-directory SSH key", "path", dirPath, "key", dirSSHKeyPath, "error", err)
-			return nil, nil
-		}
-		return publicKeys, nil
-	}
-
-	if dirAuthType == "https" && isHTTPS {
-		user := dirHTTPSUser
-		if user == "" {
-			user = "git"
-		}
-		if dirHTTPSToken != "" {
-			return &http.BasicAuth{
-				Username: user,
-				Password: dirHTTPSToken,
-			}, nil
-		}
-	}
-
-	if dirAuthType == "inherit" || dirAuthType == "" {
-		globalSSHKey := s.config.GitSSHKey
-		globalHTTPSUser := s.config.GitHTTPSUser
-		globalHTTPSToken := s.config.GitHTTPSToken
-
-		if s.db != nil {
-			if dbKey, _ := s.db.GetSetting("git_ssh_key"); dbKey != "" {
-				globalSSHKey = dbKey
-			}
-			if dbUser, _ := s.db.GetSetting("git_https_user"); dbUser != "" {
-				globalHTTPSUser = dbUser
-			}
-			if dbToken, _ := s.db.GetSetting("git_https_token"); dbToken != "" {
-				globalHTTPSToken = dbToken
-			}
-		}
-
-		if isSSH {
-			if globalSSHKey != "" {
-				publicKeys, err := ssh.NewPublicKeysFromFile("git", globalSSHKey, "")
-				if err != nil {
-					slog.Warn("Failed to load global SSH key", "error", err)
-					return nil, nil
-				}
-				return publicKeys, nil
-			}
-
-			sshAuth, err := ssh.NewSSHAgentAuth("git")
-			if err == nil {
-				return sshAuth, nil
-			}
-
-			return nil, nil
-		}
-
-		if isHTTPS {
-			if globalHTTPSToken != "" {
-				return &http.BasicAuth{
-					Username: globalHTTPSUser,
-					Password: globalHTTPSToken,
-				}, nil
-			}
-
-			return nil, nil
-		}
-	}
-
-	return nil, nil
 }
 
 func (s *GitService) mapCommit(commit *object.Commit) *models.GitCommit {

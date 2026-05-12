@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsContent } from '@/components/ui/tabs'
+import { ResponsiveTabsList } from '@/components/ui/responsive-tabs-list'
 import { ContainerList } from './ContainerList'
 import { ComposeEditor } from './ComposeEditor'
 import { EnvEditor } from './EnvEditor'
@@ -156,14 +157,19 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
     <div className="h-full flex flex-col gap-4">
       <GitStatusComponent stack={stack} />
       <Tabs value={activeTab} onValueChange={onTabChange} className="flex-1">
-        <TabsList variant="line" className="w-full">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="compose">Compose</TabsTrigger>
-          <TabsTrigger value="environment">Environment</TabsTrigger>
-          <TabsTrigger value="logs">Logs</TabsTrigger>
-          <TabsTrigger value="terminal">Terminal</TabsTrigger>
-          <TabsTrigger value="metrics">Metrics</TabsTrigger>
-        </TabsList>
+        <ResponsiveTabsList
+          value={activeTab}
+          onValueChange={onTabChange}
+          variant="line"
+          tabs={[
+            { value: 'overview', label: 'Overview' },
+            { value: 'compose', label: 'Compose' },
+            { value: 'environment', label: 'Environment' },
+            { value: 'logs', label: 'Logs' },
+            { value: 'terminal', label: 'Terminal' },
+            { value: 'metrics', label: 'Metrics' },
+          ]}
+        />
 
         <TabsContent value="overview" className="mt-4">
           <TabErrorBoundary>

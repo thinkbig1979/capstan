@@ -4,7 +4,8 @@ import { useSearchParams } from 'react-router-dom'
 import { directoriesApi, stacksApi, dashboardApi, settingsApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsContent } from '@/components/ui/tabs'
+import { ResponsiveTabsList } from '@/components/ui/responsive-tabs-list'
 import { StackCardSkeleton, MetricsSkeleton } from '@/components/LoadingSkeleton'
 import { AlertCircle, RefreshCw, Plus } from 'lucide-react'
 import { CreateStackDialog } from '@/components/stack/CreateStackDialog'
@@ -264,17 +265,22 @@ export function DashboardPage() {
       />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList variant="line" className="w-full">
-          <TabsTrigger value="overview">Metrics</TabsTrigger>
-          <TabsTrigger value="stacks">Stacks</TabsTrigger>
-          <TabsTrigger value="directories">Dirs</TabsTrigger>
-          <TabsTrigger value="containers">Containers</TabsTrigger>
-          <TabsTrigger value="updates">Updates</TabsTrigger>
-          <TabsTrigger value="images">Images</TabsTrigger>
-          <TabsTrigger value="volumes">Volumes</TabsTrigger>
-          <TabsTrigger value="networks">Networks</TabsTrigger>
-          <TabsTrigger value="build-cache">Build Cache</TabsTrigger>
-        </TabsList>
+        <ResponsiveTabsList
+          value={activeTab}
+          onValueChange={setActiveTab}
+          variant="line"
+          tabs={[
+            { value: 'overview', label: 'Metrics' },
+            { value: 'stacks', label: 'Stacks' },
+            { value: 'directories', label: 'Dirs' },
+            { value: 'containers', label: 'Containers' },
+            { value: 'updates', label: 'Updates' },
+            { value: 'images', label: 'Images' },
+            { value: 'volumes', label: 'Volumes' },
+            { value: 'networks', label: 'Networks' },
+            { value: 'build-cache', label: 'Build Cache' },
+          ]}
+        />
 
         <TabsContent value="overview" className="mt-4">
           <DashboardMetricsTab

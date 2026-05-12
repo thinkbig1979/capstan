@@ -145,20 +145,20 @@ export function StackPage() {
   return (
     <>
       <div className="space-y-6">
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">{stack.projectName}</h1>
-            <p className="text-muted-foreground">{stack.directory}</p>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-3xl font-bold tracking-tight truncate">{stack.projectName}</h1>
+            <p className="text-muted-foreground truncate">{stack.directory}</p>
           </div>
           <Button
             variant="outline"
             size="sm"
             onClick={handleDelete}
             disabled={isDeleting || deleteMutation.isPending}
-            className="text-destructive hover:text-destructive"
+            className="text-destructive hover:text-destructive shrink-0"
           >
             <Trash2 className="mr-2 h-4 w-4" />
-            Delete Stack
+            <span className="hidden sm:inline">Delete Stack</span>
           </Button>
         </div>
 

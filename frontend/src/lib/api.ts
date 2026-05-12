@@ -31,7 +31,10 @@ function getCSRFToken(): string | null {
 
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  // Match backend stacksGroup timeout (120s in main.go) so long-running
+  // operations like pull/start don't abort client-side while the backend
+  // is still working. Streaming operations go through WebSockets, not this client.
+  timeout: 120000,
   headers: {
     'Content-Type': 'application/json',
   },

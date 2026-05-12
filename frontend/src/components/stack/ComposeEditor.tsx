@@ -260,8 +260,8 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             onClick={() => handleSave()}
             disabled={isLoading || saveMutation.isPending || !hasUnsavedChanges || isLintingBeforeSave}
@@ -289,7 +289,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
             </Badge>
           )}
         </div>
-        <div className="text-sm text-muted-foreground">
+        <div className="text-sm text-muted-foreground hidden sm:block">
           Ctrl+S to save
         </div>
       </div>

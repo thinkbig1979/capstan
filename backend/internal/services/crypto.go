@@ -15,6 +15,12 @@ type TokenEncryptor struct {
 	aead cipher.AEAD
 }
 
+// NewTokenEncryptor derives an AES-GCM key from secret via SHA-256.
+// WARNING: secret is the JWT_SECRET. Rotating JWT_SECRET will make all
+// previously-encrypted tokens (e.g. git HTTPS tokens stored per directory)
+// unreadable. If you need to rotate, decrypt with the old key first and
+// re-encrypt with the new one — or split storage key into a dedicated env
+// var (STORAGE_KEY) before rotating.
 func NewTokenEncryptor(secret string) (*TokenEncryptor, error) {
 	hash := sha256.Sum256([]byte(secret))
 	key := hash[:]

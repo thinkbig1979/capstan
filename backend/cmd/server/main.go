@@ -300,27 +300,36 @@ func main() {
 	operationsHandler := handlers.NewOperationsHandler(dockerService, db, opLock)
 	operationsHandler.RegisterRoutes(wsGroup, cfg.JWTSecret, cfg.AuthDisabled)
 
+	indexHTMLBytes, indexErr := os.ReadFile("./frontend/index.html")
+	if indexErr != nil {
+		slog.Warn("Failed to preload index.html, will fall back to disk read per request", "error", indexErr)
+	}
+	indexHTML := string(indexHTMLBytes)
+
 	r.NoRoute(func(c *gin.Context) {
-		if !strings.HasPrefix(c.Request.URL.Path, "/api/") {
-			if nonce, exists := c.Get("csp_nonce"); exists {
-				c.Header("Content-Type", "text/html; charset=utf-8")
-				data, err := os.ReadFile("./frontend/index.html")
-				if err != nil {
-					c.String(http.StatusInternalServerError, "Failed to load page")
-					return
-				}
-				html := strings.ReplaceAll(string(data), "<script", fmt.Sprintf("<script nonce=\"%s\"", nonce))
-				html = strings.ReplaceAll(html, "<link", fmt.Sprintf("<link nonce=\"%s\"", nonce))
-				c.String(http.StatusOK, html)
-				return
-			}
-			c.File("./frontend/index.html")
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			return
 		}
+		if indexHTML == "" {
+			c.File("./frontend/index.html")
+			return
+		}
+		nonce, exists := c.Get("csp_nonce")
+		if !exists {
+			c.File("./frontend/index.html")
+			return
+		}
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		html := strings.ReplaceAll(indexHTML, "<script", fmt.Sprintf("<script nonce=\"%s\"", nonce))
+		html = strings.ReplaceAll(html, "<link", fmt.Sprintf("<link nonce=\"%s\"", nonce))
+		c.String(http.StatusOK, html)
 	})
 
 	srv := &http.Server{
-		Addr:    ":" + cfg.Port,
-		Handler: r,
+		Addr:              ":" + cfg.Port,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {

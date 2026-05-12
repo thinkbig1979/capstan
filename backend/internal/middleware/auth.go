@@ -37,8 +37,7 @@ func isTrustedIP(clientIP string, trustedNetworks string) bool {
 		return false
 	}
 
-	networks := strings.Split(trustedNetworks, ",")
-	for _, networkStr := range networks {
+	for _, networkStr := range strings.Split(trustedNetworks, ",") {
 		networkStr = strings.TrimSpace(networkStr)
 		if networkStr == "" {
 			continue
@@ -67,6 +66,19 @@ func isTrustedIP(clientIP string, trustedNetworks string) bool {
 	return false
 }
 
+// extractBearerToken returns the JWT from either the Authorization header
+// or the docker_manager_token cookie. The ?token= query param is deliberately
+// not accepted to keep tokens out of access logs and Referer headers.
+func extractBearerToken(c *gin.Context) string {
+	if h := c.GetHeader("Authorization"); h != "" {
+		return strings.TrimPrefix(h, "Bearer ")
+	}
+	if cookie, err := c.Cookie("docker_manager_token"); err == nil {
+		return cookie
+	}
+	return ""
+}
+
 func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, trustedNetworks string) gin.HandlerFunc {
 	if authDisabled {
 		slog.Warn("WARNING: AUTHENTICATION DISABLED - Only safe on trusted networks!")
@@ -87,35 +99,17 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 			return
 		}
 
-		path := c.Request.URL.Path
-
-		if IsPublicPath(path) {
+		if IsPublicPath(c.Request.URL.Path) {
 			c.Next()
 			return
 		}
 
-		token := c.GetHeader("Authorization")
-		if token == "" {
-			token = c.Query("token")
-		}
-
-		if token == "" {
-			if cookie, err := c.Cookie("docker_manager_token"); err == nil && cookie != "" {
-				token = cookie
-			}
-		}
-
-		if token != "" && !strings.HasPrefix(token, "Bearer ") {
-			token = "Bearer " + token
-		}
-
+		token := extractBearerToken(c)
 		if token == "" {
 			c.JSON(401, models.NewAppError(401, models.ErrUnauthorized, "Missing authorization token"))
 			c.Abort()
 			return
 		}
-
-		token = strings.TrimPrefix(token, "Bearer ")
 
 		claims, err := ValidateJWT(token, jwtSecret)
 		if err != nil {
@@ -155,7 +149,7 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 }
 
 func ValidateJWT(token, secret string) (jwt.MapClaims, error) {
-	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, jwt.ErrSignatureInvalid
 		}

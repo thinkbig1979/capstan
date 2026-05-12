@@ -260,14 +260,17 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 	}
 
 	globalEnvPath := h.cfg.DataDir + "/global.env"
-	content := ""
+	var sb strings.Builder
 	for _, v := range req.Vars {
 		if v.Key != "" && v.Value != "" {
-			content += v.Key + "=" + v.Value + "\n"
+			sb.WriteString(v.Key)
+			sb.WriteByte('=')
+			sb.WriteString(v.Value)
+			sb.WriteByte('\n')
 		}
 	}
 
-	if err := os.WriteFile(globalEnvPath, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(globalEnvPath, []byte(sb.String()), 0600); err != nil {
 		slog.Error("Failed to write global environment file", "error", err)
 		c.JSON(http.StatusInternalServerError, models.NewAppError(
 			http.StatusInternalServerError,
@@ -650,7 +653,7 @@ func (h *SettingsHandler) isPathWithinAllowedDirs(path string) bool {
 		if err != nil {
 			continue
 		}
-		if path == absDir || filepath.HasPrefix(path, absDir+string(filepath.Separator)) {
+		if path == absDir || strings.HasPrefix(path, absDir+string(filepath.Separator)) {
 			return true
 		}
 	}

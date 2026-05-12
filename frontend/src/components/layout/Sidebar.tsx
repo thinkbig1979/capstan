@@ -58,6 +58,7 @@ function saveCollapsed(set: Set<string>) {
 export function Sidebar() {
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
+  const closeSidebar = useUIStore((s) => s.closeSidebar);
   const sidebarWidth = useUIStore((s) => s.sidebarWidth);
   const setSidebarWidth = useUIStore((s) => s.setSidebarWidth);
   const location = useLocation();
@@ -91,6 +92,14 @@ export function Sidebar() {
   useEffect(() => {
     saveCollapsed(collapsedGroups);
   }, [collapsedGroups]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 1023px)");
+    if (mq.matches) {
+      closeSidebar();
+    }
+  }, [location.pathname, closeSidebar]);
 
   const { data: stacks = [], isLoading } = useQuery({
     queryKey: ["stacks"],
@@ -297,11 +306,8 @@ export function Sidebar() {
 
   const hasFilters = searchQuery || statusFilter !== "all";
 
-  return (
-    <aside
-      className="hidden lg:flex flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[none] relative"
-      style={{ width: sidebarWidth }}
-    >
+  const sidebarContent = (
+    <>
       <div className="p-3 border-b space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold flex items-center gap-1.5">
@@ -451,16 +457,39 @@ export function Sidebar() {
           )}
         </div>
       </ScrollArea>
+    </>
+  );
 
-      <div
-        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-sidebar-ring/20 active:bg-sidebar-ring/30 transition-colors z-10"
-        onMouseDown={handleMouseDown}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Drag to resize sidebar"
-        aria-valuenow={sidebarWidth}
-        title="Drag to resize"
-      />
-    </aside>
+  return (
+    <>
+      {sidebarOpen && (
+        <div className="lg:hidden fixed inset-0 z-40">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={toggleSidebar}
+            aria-hidden="true"
+          />
+          <aside className="relative flex flex-col w-72 h-full bg-sidebar text-sidebar-foreground shadow-xl">
+            {sidebarContent}
+          </aside>
+        </div>
+      )}
+
+      <aside
+        className="hidden lg:flex flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[none] relative"
+        style={{ width: sidebarWidth }}
+      >
+        {sidebarContent}
+        <div
+          className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-sidebar-ring/20 active:bg-sidebar-ring/30 transition-colors z-10"
+          onMouseDown={handleMouseDown}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Drag to resize sidebar"
+          aria-valuenow={sidebarWidth}
+          title="Drag to resize"
+        />
+      </aside>
+    </>
   );
 }

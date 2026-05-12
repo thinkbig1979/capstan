@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"regexp"
 	"time"
 
@@ -135,7 +136,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	}
 
 	rel, err := filepath.Rel(absTargetDir, absStackDir)
-	if err != nil || filepath.HasPrefix(rel, "..") {
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
 			models.ErrPathTraversal,

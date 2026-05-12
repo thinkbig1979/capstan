@@ -3,7 +3,6 @@ package middleware
 import (
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -42,11 +41,6 @@ var (
 		"qwerty123":   true,
 		"password1":   true,
 		"password!":   true,
-	}
-
-	allowedBaseDirs = []string{
-		"/opt/stacks",
-		"/tmp/docker-manager",
 	}
 )
 
@@ -108,40 +102,6 @@ func ValidateNoPathTraversal(input string) bool {
 	return !pathTraversal.MatchString(input)
 }
 
-func validateFilePath(input string) bool {
-	normalized := filepath.Clean(input)
-
-	if filepath.IsAbs(normalized) {
-		return false
-	}
-
-	if strings.Contains(normalized, "..") {
-		return false
-	}
-
-	normalized = filepath.FromSlash(normalized)
-	if strings.Contains(normalized, "..") {
-		return false
-	}
-
-	decoded := strings.ToLower(input)
-	if strings.Contains(decoded, "%2e%2e") || strings.Contains(decoded, "%2e.") || strings.Contains(decoded, ".%2e") {
-		return false
-	}
-	if strings.Contains(decoded, "%5c") || strings.Contains(decoded, "%2f") {
-		return false
-	}
-
-	for _, baseDir := range allowedBaseDirs {
-		fullPath := filepath.Join(baseDir, normalized)
-		if strings.HasPrefix(filepath.Clean(fullPath), filepath.Clean(baseDir)) {
-			return true
-		}
-	}
-
-	return false
-}
-
 const maxRequestBodySize = 10 << 20
 
 func BodySizeLimit() gin.HandlerFunc {
@@ -153,6 +113,9 @@ func BodySizeLimit() gin.HandlerFunc {
 	}
 }
 
+// ValidateInput validates path params before they reach handlers.
+// Body validation must happen in handlers — reading the body here would consume
+// the stream and break downstream re-binding (gin's ShouldBindJSON does not cache).
 func ValidateInput() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
@@ -167,31 +130,6 @@ func ValidateInput() gin.HandlerFunc {
 				})
 				c.Abort()
 				return
-			}
-		}
-
-		if strings.Contains(path, "/auth/setup") || strings.Contains(path, "/auth/login") {
-			var req struct {
-				Username string `json:"username"`
-				Password string `json:"password"`
-			}
-			if err := c.ShouldBindJSON(&req); err == nil {
-				if !ValidateUsername(req.Username) {
-					c.JSON(400, gin.H{
-						"code":    "VALIDATION_ERROR",
-						"message": "Username must be between 3 and 50 characters and contain only letters, numbers, underscores, and hyphens",
-					})
-					c.Abort()
-					return
-				}
-				if valid, msg := ValidatePassword(req.Password); !valid {
-					c.JSON(400, gin.H{
-						"code":    "VALIDATION_ERROR",
-						"message": msg,
-					})
-					c.Abort()
-					return
-				}
 			}
 		}
 

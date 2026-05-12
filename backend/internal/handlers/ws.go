@@ -205,24 +205,6 @@ func readJSON(conn *websocket.Conn, v interface{}) error {
 	return conn.ReadJSON(v)
 }
 
-func pingLoop(ctx context.Context, conn *websocket.Conn, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				slog.Debug("Failed to send ping", "error", err)
-				return
-			}
-		}
-	}
-}
-
 func safeWriteJSON(c *Connection, v interface{}) error {
 	c.WriteMutex.Lock()
 	defer c.WriteMutex.Unlock()
