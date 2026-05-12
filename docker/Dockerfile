@@ -7,7 +7,8 @@ RUN npm install -g pnpm
 
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --ignore-scripts && \
+    pnpm rebuild esbuild
 
 COPY frontend/ ./
 
