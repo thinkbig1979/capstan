@@ -32,8 +32,14 @@ func NewAuthHandler(db *database.DB, jwtSecret string, authDisabled bool) *AuthH
 	}
 }
 
-func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup) {
+// RegisterPublicRoutes registers public bootstrap endpoints that must not be
+// subject to brute-force rate limiting. The frontend polls /status on every
+// navigation, so it cannot share a bucket with /login.
+func (h *AuthHandler) RegisterPublicRoutes(group *gin.RouterGroup) {
 	group.GET("/status", h.Status)
+}
+
+func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.POST("/setup", h.Setup)
 	group.POST("/login", h.Login)
 }

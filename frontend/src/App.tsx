@@ -115,12 +115,10 @@ function App() {
     return (
       <QueryClientProvider client={queryClient}>
         <ErrorBoundary>
-          <AppShell>
-            <Routes>
-              <Route path="/setup" element={<SetupPage />} />
-              <Route path="*" element={<Navigate to="/setup" replace />} />
-            </Routes>
-          </AppShell>
+          <Routes>
+            <Route path="/setup" element={<SetupPage />} />
+            <Route path="*" element={<Navigate to="/setup" replace />} />
+          </Routes>
         </ErrorBoundary>
         <Toaster />
       </QueryClientProvider>

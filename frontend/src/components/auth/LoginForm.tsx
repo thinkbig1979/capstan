@@ -18,9 +18,16 @@ interface LoginFormProps {
   isLoading?: boolean
   error?: string
   buttonText?: string
+  passwordHint?: string
 }
 
-export function LoginForm({ onSubmit, isLoading = false, error, buttonText = 'Login' }: LoginFormProps) {
+export function LoginForm({
+  onSubmit,
+  isLoading = false,
+  error,
+  buttonText = 'Login',
+  passwordHint = 'Minimum 8 characters',
+}: LoginFormProps) {
   const {
     register,
     handleSubmit,
@@ -45,7 +52,7 @@ export function LoginForm({ onSubmit, isLoading = false, error, buttonText = 'Lo
       <div className="space-y-2">
         <Label htmlFor="password">Password</Label>
         <Input id="password" type="password" placeholder="Enter your password" {...register('password')} />
-        <p className="text-sm text-muted-foreground">Minimum 8 characters</p>
+        <p className="text-sm text-muted-foreground">{passwordHint}</p>
         {errors.password && <p className="text-sm text-destructive">{errors.password.message}</p>}
       </div>
 

@@ -208,6 +208,7 @@ func main() {
 
 	authHandler := handlers.NewAuthHandler(db, cfg.JWTSecret, cfg.AuthDisabled)
 	authGroup := api.Group("/auth")
+	authHandler.RegisterPublicRoutes(authGroup)
 	authGroup.Use(middleware.RateLimitByIP())
 	authHandler.RegisterRoutes(authGroup)
 

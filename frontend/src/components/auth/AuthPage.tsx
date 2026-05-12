@@ -12,9 +12,20 @@ interface AuthPageProps {
   successMessage: string
   errorPrefix: string
   buttonText?: string
+  passwordHint?: string
 }
 
-export function AuthPage({ title, description, submitFn, successMessage, errorPrefix, buttonText }: AuthPageProps) {
+function extractErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error) return err.message
+  if (err && typeof err === 'object') {
+    const obj = err as Record<string, unknown>
+    if (typeof obj.message === 'string' && obj.message) return obj.message
+    if (typeof obj.error === 'string' && obj.error) return obj.error
+  }
+  return fallback
+}
+
+export function AuthPage({ title, description, submitFn, successMessage, errorPrefix, buttonText, passwordHint }: AuthPageProps) {
   const navigate = useNavigate()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | undefined>()
@@ -28,7 +39,7 @@ export function AuthPage({ title, description, submitFn, successMessage, errorPr
       toast.success(successMessage)
       navigate('/')
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : `${errorPrefix} failed`
+      const errorMessage = extractErrorMessage(err, `${errorPrefix} failed`)
       setError(errorMessage)
       toast.error(errorMessage)
     } finally {
@@ -47,7 +58,13 @@ export function AuthPage({ title, description, submitFn, successMessage, errorPr
           <CardDescription>{description}</CardDescription>
         </CardHeader>
         <CardContent>
-          <LoginForm onSubmit={handleSubmit} isLoading={isLoading} error={error} buttonText={buttonText} />
+          <LoginForm
+            onSubmit={handleSubmit}
+            isLoading={isLoading}
+            error={error}
+            buttonText={buttonText}
+            passwordHint={passwordHint}
+          />
         </CardContent>
       </Card>
     </div>
