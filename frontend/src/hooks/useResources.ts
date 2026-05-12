@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { resourcesApi, settingsApi, autoUpdateApi } from '@/lib/api'
+import { useUpdateScanStore } from '@/stores/updateScanStore'
 import type { UpdateHistoryFilters } from '@/types'
 
 export function useImages() {
@@ -35,21 +36,44 @@ export function useBuildCache() {
 }
 
 export function useCheckUpdates() {
+  const { isScanning, finishScan, startScan } = useUpdateScanStore()
   return useQuery({
     queryKey: ['resources', 'updates'],
-    queryFn: () => resourcesApi.checkUpdates(false),
-    enabled: false,
-    retry: 1,
+    queryFn: async () => {
+      const data = await resourcesApi.checkUpdates(false)
+      if (data.scanning && !isScanning) {
+        startScan()
+      } else if (!data.scanning && isScanning) {
+        finishScan()
+      }
+      return data
+    },
+    enabled: true,
+    refetchInterval: isScanning ? 3000 : false,
     staleTime: 60000,
   })
 }
 
 export function useCheckUpdatesRefresh() {
   const queryClient = useQueryClient()
+  const { startScan, finishScan } = useUpdateScanStore()
   return useMutation({
-    mutationFn: () => resourcesApi.checkUpdates(true),
+    mutationFn: async () => {
+      startScan()
+      const data = await resourcesApi.checkUpdates(true)
+      if (data.status === 'scanning') {
+        return data
+      }
+      finishScan()
+      return data
+    },
     onSuccess: (data) => {
-      queryClient.setQueryData(['resources', 'updates'], data)
+      if (data.status !== 'scanning') {
+        queryClient.setQueryData(['resources', 'updates'], data)
+      }
+    },
+    onError: () => {
+      finishScan()
     },
   })
 }

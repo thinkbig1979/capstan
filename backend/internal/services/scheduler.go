@@ -158,6 +158,75 @@ func (s *SchedulerService) IsScanning() bool {
 	return s.scanning
 }
 
+func (s *SchedulerService) StartBackgroundScan() error {
+	s.mu.Lock()
+	if s.scanning {
+		s.mu.Unlock()
+		return fmt.Errorf("scan already in progress")
+	}
+	s.scanning = true
+	s.mu.Unlock()
+
+	go func() {
+		defer func() {
+			s.mu.Lock()
+			s.scanning = false
+			s.mu.Unlock()
+		}()
+
+		results, err := s.docker.CheckForUpdates(context.Background(), s.db)
+		if err != nil {
+			if dbErr := s.db.SetSetting("update_scan_last_error", err.Error()); dbErr != nil {
+				s.logger.Error("Failed to record scan error", "error", dbErr)
+			}
+			s.logger.Error("Background scan failed", "error", err)
+			if s.broadcastFn != nil {
+				s.broadcastFn(models.StackEvent{Type: "update_scan_failed", Timestamp: time.Now()})
+			}
+			return
+		}
+
+		var cachedUpdates []models.CachedUpdate
+		now := time.Now().Format(time.RFC3339)
+		for _, r := range results {
+			cachedUpdates = append(cachedUpdates, models.CachedUpdate{
+				ID:            uuid.New().String(),
+				ContainerID:   r.ContainerID,
+				ContainerName: r.ContainerName,
+				Image:         r.ImageRef,
+				ImageRef:      r.ImageRef,
+				State:         r.State,
+				StackID:       r.StackID,
+				ProjectName:   r.ProjectName,
+				ServiceName:   r.ServiceName,
+				IsCompose:     r.IsCompose,
+				LocalDigest:   "",
+				RemoteDigest:  "",
+				ScannedAt:     now,
+			})
+		}
+
+		if err := s.db.SetCachedUpdates(cachedUpdates); err != nil {
+			s.logger.Error("Failed to cache updates", "error", err)
+		}
+
+		if err := s.db.SetSetting("update_scan_last_run", now); err != nil {
+			s.logger.Error("Failed to record scan time", "error", err)
+		}
+		if err := s.db.SetSetting("update_scan_last_error", ""); err != nil {
+			s.logger.Error("Failed to clear scan error", "error", err)
+		}
+
+		s.logger.Info("Background scan completed", "updates_found", len(cachedUpdates))
+
+		if s.broadcastFn != nil {
+			s.broadcastFn(models.StackEvent{Type: "update_scan_complete", Timestamp: time.Now()})
+		}
+	}()
+
+	return nil
+}
+
 func (s *SchedulerService) runCycle(ctx context.Context) {
 	updates, err := s.RunScan(ctx)
 	if err != nil {

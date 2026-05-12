@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useWebSocketJSON } from './useWebSocket'
 import { queryClient } from '@/lib/query-client'
+import { useUpdateScanStore } from '@/stores/updateScanStore'
 import type { Stack } from '@/types'
 
 export interface StackStatusEvent {
@@ -48,6 +49,11 @@ export interface UpdateCompletedEvent {
   timestamp: string
 }
 
+export interface UpdateScanFailedEvent {
+  type: 'update_scan_failed'
+  timestamp: string
+}
+
 export type StackEvent =
   | StackStatusEvent
   | ContainerEvent
@@ -56,6 +62,7 @@ export type StackEvent =
   | UpdateScanCompleteEvent
   | UpdatePolicyChangedEvent
   | UpdateCompletedEvent
+  | UpdateScanFailedEvent
 
 export function useStackEvents() {
   const pendingRef = useRef<Set<string>>(new Set())
@@ -125,6 +132,7 @@ export function useStackEvents() {
   }
 
   const handleUpdateScanCompleteEvent = () => {
+    useUpdateScanStore.getState().finishScan()
     scheduleInvalidations([
       ['resources', 'updates'],
       ['settings', 'updates'],
@@ -166,6 +174,9 @@ export function useStackEvents() {
           break
         case 'update_scan_complete':
           handleUpdateScanCompleteEvent()
+          break
+        case 'update_scan_failed':
+          useUpdateScanStore.getState().finishScan()
           break
         case 'update_policy_changed':
           handleUpdatePolicyChangedEvent()

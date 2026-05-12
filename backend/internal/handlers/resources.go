@@ -307,41 +307,25 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 
 	if refresh == "true" {
 		if h.scheduler != nil {
-			cachedUpdates, err := h.scheduler.RunScan(c.Request.Context())
+			err := h.scheduler.StartBackgroundScan()
 			if err != nil {
 				if err.Error() == "scan already in progress" {
-					models.HandleError(c, models.NewAppError(http.StatusConflict, "SCAN_IN_PROGRESS", "Scan already in progress"))
+					lastScanAt, _ := h.db.GetSetting("update_scan_last_run")
+					c.JSON(http.StatusAccepted, gin.H{
+						"status":    "scanning",
+						"message":   "Scan already in progress",
+						"scannedAt": lastScanAt,
+					})
 					return
 				}
-				slog.Error("Failed to scan for updates", "error", err)
-				models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to check for updates"))
+				slog.Error("Failed to start background scan", "error", err)
+				models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to start update scan"))
 				return
 			}
 
-			var updates []models.ContainerUpdateInfo
-			for _, cu := range cachedUpdates {
-				updates = append(updates, models.ContainerUpdateInfo{
-					ContainerID:   cu.ContainerID,
-					ContainerName: cu.ContainerName,
-					Image:         cu.Image,
-					ImageRef:      cu.ImageRef,
-					State:         cu.State,
-					StackID:       cu.StackID,
-					ProjectName:   cu.ProjectName,
-					ServiceName:   cu.ServiceName,
-					IsCompose:     cu.IsCompose,
-				})
-			}
-			if updates == nil {
-				updates = []models.ContainerUpdateInfo{}
-			}
-
-			lastScanAt, _ := h.db.GetSetting("update_scan_last_run")
-			BroadcastEvent(models.StackEvent{Type: "update_scan_complete", Timestamp: time.Now()})
-			c.JSON(http.StatusOK, gin.H{
-				"updates":   updates,
-				"fromCache": false,
-				"scannedAt": lastScanAt,
+			c.JSON(http.StatusAccepted, gin.H{
+				"status":  "scanning",
+				"message": "Update scan started",
 			})
 			return
 		}
@@ -359,6 +343,11 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 		return
 	}
 
+	isScanning := false
+	if h.scheduler != nil {
+		isScanning = h.scheduler.IsScanning()
+	}
+
 	cachedUpdates, err := h.db.GetCachedUpdates()
 	if err != nil {
 		slog.Error("Failed to get cached updates", "error", err)
@@ -370,6 +359,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"updates":   []models.ContainerUpdateInfo{},
 			"fromCache": false,
+			"scanning":  isScanning,
 		})
 		return
 	}
@@ -394,6 +384,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 		"updates":   updates,
 		"fromCache": true,
 		"scannedAt": lastScanAt,
+		"scanning":  isScanning,
 	})
 }
 

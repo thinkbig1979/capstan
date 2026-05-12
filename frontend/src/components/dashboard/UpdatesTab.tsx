@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useCheckUpdates, useCheckUpdatesRefresh, useUpdateContainer, useAutoUpdatePolicies } from '@/hooks/useResources'
+import { useUpdateScanStore } from '@/stores/updateScanStore'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -30,6 +31,7 @@ export function UpdatesTab() {
   const refreshMutation = useCheckUpdatesRefresh()
   const updateMutation = useUpdateContainer()
   const { data: policiesData } = useAutoUpdatePolicies()
+  const { isScanning } = useUpdateScanStore()
   const [sortBy, setSortBy] = useState<SortKey>('name')
   const [updatingId, setUpdatingId] = useState<string | null>(null)
 
@@ -84,11 +86,11 @@ export function UpdatesTab() {
   }, [updates, sortBy])
 
   const hasData = updates.length > 0
-  const isRefreshing = refreshMutation.isPending
-  const neverScanned = !updateData && !isLoading && !isError
+  const isRefreshing = isScanning
+  const neverScanned = !updateData && !isLoading && !isError && !isScanning
 
   const renderAvailableContent = () => {
-    if (isLoading || isRefreshing) {
+    if (isRefreshing) {
       return (
         <div className="space-y-4">
           <Card>
@@ -105,6 +107,16 @@ export function UpdatesTab() {
               <Skeleton key={i} className="h-12 w-full" />
             ))}
           </div>
+        </div>
+      )
+    }
+
+    if (isLoading) {
+      return (
+        <div className="space-y-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full" />
+          ))}
         </div>
       )
     }
