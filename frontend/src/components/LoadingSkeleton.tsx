@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import { Skeleton } from '@/components/ui/skeleton'
 
 const SpinnerIcon = ({ className }: { className?: string }) => (
   <svg
@@ -28,18 +29,18 @@ export function StackCardSkeleton() {
     <div className="rounded-lg border bg-card p-4">
       <div className="flex items-start justify-between mb-3">
         <div className="flex-1">
-          <div className="h-5 w-32 bg-muted animate-pulse rounded mb-2" />
-          <div className="h-4 w-48 bg-muted animate-pulse rounded" />
+          <Skeleton className="h-5 w-32 mb-2" />
+          <Skeleton className="h-4 w-48" />
         </div>
-        <div className="h-6 w-16 bg-muted animate-pulse rounded-full" />
+        <Skeleton className="h-6 w-16 rounded-full" />
       </div>
       <div className="flex gap-2 mb-3">
-        <div className="h-8 w-24 bg-muted animate-pulse rounded" />
-        <div className="h-8 w-24 bg-muted animate-pulse rounded" />
+        <Skeleton className="h-8 w-24" />
+        <Skeleton className="h-8 w-24" />
       </div>
       <div className="space-y-2">
-        <div className="h-4 w-full bg-muted animate-pulse rounded" />
-        <div className="h-4 w-3/4 bg-muted animate-pulse rounded" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-3/4" />
       </div>
     </div>
   )
@@ -56,12 +57,12 @@ export function ContainerTableSkeleton() {
       </div>
       {Array.from({ length: 3 }).map((_, i) => (
         <div key={i} className="grid grid-cols-4 gap-4 p-4 border-b last:border-0">
-          <div className="h-5 w-40 bg-muted animate-pulse rounded" />
-          <div className="h-6 w-20 bg-muted animate-pulse rounded-full" />
-          <div className="h-5 w-32 bg-muted animate-pulse rounded" />
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="h-6 w-20 rounded-full" />
+          <Skeleton className="h-5 w-32" />
           <div className="flex justify-end gap-2">
-            <div className="h-8 w-20 bg-muted animate-pulse rounded" />
-            <div className="h-8 w-16 bg-muted animate-pulse rounded" />
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-8 w-16" />
           </div>
         </div>
       ))}
@@ -73,16 +74,16 @@ export function EditorSkeleton() {
   return (
     <div className="rounded-lg border bg-card">
       <div className="flex items-center justify-between p-4 border-b">
-        <div className="h-6 w-48 bg-muted animate-pulse rounded" />
+        <Skeleton className="h-6 w-48" />
         <div className="flex gap-2">
-          <div className="h-9 w-24 bg-muted animate-pulse rounded" />
-          <div className="h-9 w-20 bg-muted animate-pulse rounded" />
+          <Skeleton className="h-9 w-24" />
+          <Skeleton className="h-9 w-20" />
         </div>
       </div>
       <div className="p-4">
         <div className="space-y-2 font-mono text-sm">
           {Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} className="h-5 w-full bg-muted animate-pulse rounded" />
+            <Skeleton key={i} className="h-5 w-full" />
           ))}
         </div>
       </div>
@@ -95,15 +96,15 @@ export function GitHistorySkeleton() {
     <div className="rounded-lg border bg-card">
       {Array.from({ length: 5 }).map((_, i) => (
         <div key={i} className="flex items-start gap-4 p-4 border-b last:border-0">
-          <div className="h-8 w-8 bg-muted animate-pulse rounded-full shrink-0" />
+          <Skeleton className="h-8 w-8 rounded-full shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="h-5 w-64 bg-muted animate-pulse rounded mb-2" />
-            <div className="h-4 w-96 bg-muted animate-pulse rounded mb-1" />
-            <div className="h-4 w-32 bg-muted animate-pulse rounded" />
+            <Skeleton className="h-5 w-64 mb-2" />
+            <Skeleton className="h-4 w-96 mb-1" />
+            <Skeleton className="h-4 w-32" />
           </div>
           <div className="flex gap-2 shrink-0">
-            <div className="h-8 w-16 bg-muted animate-pulse rounded" />
-            <div className="h-8 w-16 bg-muted animate-pulse rounded" />
+            <Skeleton className="h-8 w-16" />
+            <Skeleton className="h-8 w-16" />
           </div>
         </div>
       ))}
@@ -116,9 +117,9 @@ export function MetricsSkeleton() {
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
       {Array.from({ length: 4 }).map((_, i) => (
         <div key={i} className="rounded-lg border bg-card p-4">
-          <div className="h-4 w-24 bg-muted animate-pulse rounded mb-2" />
-          <div className="h-8 w-16 bg-muted animate-pulse rounded" />
-          <div className="h-4 w-20 bg-muted animate-pulse rounded mt-2" />
+          <Skeleton className="h-4 w-24 mb-2" />
+          <Skeleton className="h-8 w-16" />
+          <Skeleton className="h-4 w-20 mt-2" />
         </div>
       ))}
     </div>
