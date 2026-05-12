@@ -14,26 +14,38 @@ import (
 
 type EventBroadcaster func(event models.StackEvent)
 
-type SchedulerService struct {
-	docker      *DockerService
-	db          *database.DB
-	mu          sync.Mutex
-	ticker      *time.Ticker
-	done        chan struct{}
-	logger      *slog.Logger
-	scanning    bool
-	broadcastFn EventBroadcaster
+// updateChecker is the narrow interface scheduler needs from DockerService.
+type updateChecker interface {
+	CheckForUpdates(ctx context.Context, db DashboardDB) ([]models.ContainerUpdateInfo, error)
+	UpdateContainer(ctx context.Context, containerID string, db DashboardDB) (models.UpdateResult, error)
 }
 
-func NewSchedulerService(docker *DockerService, db *database.DB, logger *slog.Logger, broadcastFn EventBroadcaster) *SchedulerService {
+type SchedulerService struct {
+	docker       updateChecker
+	db           *database.DB
+	mu           sync.Mutex
+	ticker       *time.Ticker
+	done         chan struct{}
+	logger       *slog.Logger
+	scanning     bool
+	broadcastFn  EventBroadcaster
+	wg           sync.WaitGroup
+	parentCtx    context.Context
+	parentCancel context.CancelFunc
+}
+
+func NewSchedulerService(docker updateChecker, db *database.DB, logger *slog.Logger, broadcastFn EventBroadcaster) *SchedulerService {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &SchedulerService{
-		docker:      docker,
-		db:          db,
-		logger:      logger.With("component", "scheduler"),
-		broadcastFn: broadcastFn,
+		docker:       docker,
+		db:           db,
+		logger:       logger.With("component", "scheduler"),
+		broadcastFn:  broadcastFn,
+		parentCtx:    ctx,
+		parentCancel: cancel,
 	}
 }
 
@@ -48,16 +60,31 @@ func (s *SchedulerService) Start(interval time.Duration) {
 		close(s.done)
 	}
 
+	// Re-initialize the scan lifecycle context so a fresh Stop() works correctly.
+	if s.parentCancel != nil {
+		s.parentCancel()
+	}
+	s.parentCtx, s.parentCancel = context.WithCancel(context.Background())
+
 	s.ticker = time.NewTicker(interval)
 	s.done = make(chan struct{})
+
+	// Capture locals so the goroutine does not race with Stop() zeroing struct fields.
+	ticker := s.ticker
+	done := s.done
+	parentCtx := s.parentCtx
 
 	go func() {
 		s.logger.Info("Scheduler started", "interval", interval)
 		for {
 			select {
-			case <-s.ticker.C:
-				s.runCycle(context.Background())
-			case <-s.done:
+			case <-ticker.C:
+				s.wg.Add(1)
+				go func() {
+					defer s.wg.Done()
+					s.runCycle(parentCtx)
+				}()
+			case <-done:
 				s.logger.Info("Scheduler stopped")
 				return
 			}
@@ -67,7 +94,6 @@ func (s *SchedulerService) Start(interval time.Duration) {
 
 func (s *SchedulerService) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.ticker != nil {
 		s.ticker.Stop()
@@ -80,6 +106,25 @@ func (s *SchedulerService) Stop() {
 			close(s.done)
 		}
 		s.done = nil
+	}
+
+	// Cancel any in-flight background scan contexts.
+	if s.parentCancel != nil {
+		s.parentCancel()
+	}
+
+	s.mu.Unlock()
+
+	// Wait for in-flight background scan goroutines to finish.
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		s.logger.Warn("Timed out waiting for in-flight scan during shutdown")
 	}
 }
 
@@ -94,21 +139,18 @@ func (s *SchedulerService) IsRunning() bool {
 	return s.ticker != nil
 }
 
-func (s *SchedulerService) RunScan(ctx context.Context) ([]models.CachedUpdate, error) {
-	if !s.mu.TryLock() {
-		return nil, fmt.Errorf("scan already in progress")
-	}
-	defer s.mu.Unlock()
-
-	s.scanning = true
-	defer func() { s.scanning = false }()
-
+// performScan executes the update scan body. It does not touch s.mu or s.scanning.
+// On success it broadcasts update_scan_complete; on failure it broadcasts update_scan_failed.
+func (s *SchedulerService) performScan(ctx context.Context) ([]models.CachedUpdate, error) {
 	results, err := s.docker.CheckForUpdates(ctx, s.db)
 	if err != nil {
 		if dbErr := s.db.SetSetting("update_scan_last_error", err.Error()); dbErr != nil {
 			s.logger.Error("Failed to record scan error", "error", dbErr)
 		}
 		s.logger.Error("Scan failed", "error", err)
+		if s.broadcastFn != nil {
+			s.broadcastFn(models.StackEvent{Type: "update_scan_failed", Timestamp: time.Now()})
+		}
 		return nil, err
 	}
 
@@ -152,6 +194,27 @@ func (s *SchedulerService) RunScan(ctx context.Context) ([]models.CachedUpdate, 
 	return cachedUpdates, nil
 }
 
+func (s *SchedulerService) RunScan(ctx context.Context) ([]models.CachedUpdate, error) {
+	s.mu.Lock()
+	if s.scanning {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("scan already in progress")
+	}
+	s.scanning = true
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.scanning = false
+		s.mu.Unlock()
+	}()
+
+	scanCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+
+	return s.performScan(scanCtx)
+}
+
 func (s *SchedulerService) IsScanning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -165,62 +228,23 @@ func (s *SchedulerService) StartBackgroundScan() error {
 		return fmt.Errorf("scan already in progress")
 	}
 	s.scanning = true
+	parentCtx := s.parentCtx // capture under lock to avoid data race
 	s.mu.Unlock()
 
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		defer func() {
 			s.mu.Lock()
 			s.scanning = false
 			s.mu.Unlock()
 		}()
 
-		results, err := s.docker.CheckForUpdates(context.Background(), s.db)
-		if err != nil {
-			if dbErr := s.db.SetSetting("update_scan_last_error", err.Error()); dbErr != nil {
-				s.logger.Error("Failed to record scan error", "error", dbErr)
-			}
+		scanCtx, cancel := context.WithTimeout(parentCtx, 10*time.Minute)
+		defer cancel()
+
+		if _, err := s.performScan(scanCtx); err != nil {
 			s.logger.Error("Background scan failed", "error", err)
-			if s.broadcastFn != nil {
-				s.broadcastFn(models.StackEvent{Type: "update_scan_failed", Timestamp: time.Now()})
-			}
-			return
-		}
-
-		var cachedUpdates []models.CachedUpdate
-		now := time.Now().Format(time.RFC3339)
-		for _, r := range results {
-			cachedUpdates = append(cachedUpdates, models.CachedUpdate{
-				ID:            uuid.New().String(),
-				ContainerID:   r.ContainerID,
-				ContainerName: r.ContainerName,
-				Image:         r.ImageRef,
-				ImageRef:      r.ImageRef,
-				State:         r.State,
-				StackID:       r.StackID,
-				ProjectName:   r.ProjectName,
-				ServiceName:   r.ServiceName,
-				IsCompose:     r.IsCompose,
-				LocalDigest:   "",
-				RemoteDigest:  "",
-				ScannedAt:     now,
-			})
-		}
-
-		if err := s.db.SetCachedUpdates(cachedUpdates); err != nil {
-			s.logger.Error("Failed to cache updates", "error", err)
-		}
-
-		if err := s.db.SetSetting("update_scan_last_run", now); err != nil {
-			s.logger.Error("Failed to record scan time", "error", err)
-		}
-		if err := s.db.SetSetting("update_scan_last_error", ""); err != nil {
-			s.logger.Error("Failed to clear scan error", "error", err)
-		}
-
-		s.logger.Info("Background scan completed", "updates_found", len(cachedUpdates))
-
-		if s.broadcastFn != nil {
-			s.broadcastFn(models.StackEvent{Type: "update_scan_complete", Timestamp: time.Now()})
 		}
 	}()
 
