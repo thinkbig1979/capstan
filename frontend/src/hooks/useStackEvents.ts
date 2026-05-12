@@ -177,6 +177,9 @@ export function useStackEvents() {
           break
         case 'update_scan_failed':
           useUpdateScanStore.getState().finishScan()
+          scheduleInvalidations([
+            ['resources', 'updates'],
+          ])
           break
         case 'update_policy_changed':
           handleUpdatePolicyChangedEvent()

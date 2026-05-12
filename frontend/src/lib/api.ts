@@ -378,8 +378,6 @@ export const resourcesApi = {
       fromCache?: boolean
       scannedAt?: string
       scanning?: boolean
-      status?: string
-      message?: string
     }>('/resources/updates', { params })
     return response.data
   },

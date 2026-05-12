@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { resourcesApi, settingsApi, autoUpdateApi } from '@/lib/api'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
 import type { UpdateHistoryFilters } from '@/types'
@@ -36,39 +37,42 @@ export function useBuildCache() {
 }
 
 export function useCheckUpdates() {
-  const { isScanning, finishScan, startScan } = useUpdateScanStore()
-  return useQuery({
+  const isScanning = useUpdateScanStore((s) => s.isScanning)
+  const startScan = useUpdateScanStore((s) => s.startScan)
+  const finishScan = useUpdateScanStore((s) => s.finishScan)
+
+  const query = useQuery({
     queryKey: ['resources', 'updates'],
-    queryFn: async () => {
-      const data = await resourcesApi.checkUpdates(false)
-      if (data.scanning && !isScanning) {
-        startScan()
-      } else if (!data.scanning && isScanning) {
-        finishScan()
-      }
-      return data
-    },
+    queryFn: () => resourcesApi.checkUpdates(false),
     enabled: true,
     refetchInterval: isScanning ? 3000 : false,
     staleTime: 60000,
   })
+
+  useEffect(() => {
+    if (query.data?.scanning && !isScanning) startScan()
+    else if (query.data && !query.data.scanning && isScanning) finishScan()
+  }, [query.data?.scanning, isScanning, startScan, finishScan])
+
+  return query
 }
 
 export function useCheckUpdatesRefresh() {
   const queryClient = useQueryClient()
-  const { startScan, finishScan } = useUpdateScanStore()
+  const startScan = useUpdateScanStore((s) => s.startScan)
+  const finishScan = useUpdateScanStore((s) => s.finishScan)
   return useMutation({
     mutationFn: async () => {
       startScan()
       const data = await resourcesApi.checkUpdates(true)
-      if (data.status === 'scanning') {
+      if (data.scanning) {
         return data
       }
       finishScan()
       return data
     },
     onSuccess: (data) => {
-      if (data.status !== 'scanning') {
+      if (!data.scanning) {
         queryClient.setQueryData(['resources', 'updates'], data)
       }
     },

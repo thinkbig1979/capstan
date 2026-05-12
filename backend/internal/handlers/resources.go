@@ -308,24 +308,40 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 	if refresh == "true" {
 		if h.scheduler != nil {
 			err := h.scheduler.StartBackgroundScan()
-			if err != nil {
-				if err.Error() == "scan already in progress" {
-					lastScanAt, _ := h.db.GetSetting("update_scan_last_run")
-					c.JSON(http.StatusAccepted, gin.H{
-						"status":    "scanning",
-						"message":   "Scan already in progress",
-						"scannedAt": lastScanAt,
-					})
-					return
-				}
+			if err != nil && err.Error() != "scan already in progress" {
 				slog.Error("Failed to start background scan", "error", err)
 				models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to start update scan"))
 				return
 			}
 
+			cachedUpdates, err := h.db.GetCachedUpdates()
+			if err != nil {
+				slog.Error("Failed to get cached updates for refresh response", "error", err)
+				cachedUpdates = nil
+			}
+			var updates []models.ContainerUpdateInfo
+			for _, cu := range cachedUpdates {
+				updates = append(updates, models.ContainerUpdateInfo{
+					ContainerID:   cu.ContainerID,
+					ContainerName: cu.ContainerName,
+					Image:         cu.Image,
+					ImageRef:      cu.ImageRef,
+					State:         cu.State,
+					StackID:       cu.StackID,
+					ProjectName:   cu.ProjectName,
+					ServiceName:   cu.ServiceName,
+					IsCompose:     cu.IsCompose,
+				})
+			}
+			if updates == nil {
+				updates = []models.ContainerUpdateInfo{}
+			}
+			lastScanAt, _ := h.db.GetSetting("update_scan_last_run")
 			c.JSON(http.StatusAccepted, gin.H{
-				"status":  "scanning",
-				"message": "Update scan started",
+				"updates":   updates,
+				"fromCache": len(cachedUpdates) > 0,
+				"scannedAt": lastScanAt,
+				"scanning":  true,
 			})
 			return
 		}

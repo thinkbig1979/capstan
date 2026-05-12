@@ -2,7 +2,6 @@ import { create } from 'zustand'
 
 interface UpdateScanState {
   isScanning: boolean
-  scanStartedAt: number | null
   startScan: () => void
   finishScan: () => void
   resetScan: () => void
@@ -10,10 +9,9 @@ interface UpdateScanState {
 
 export const useUpdateScanStore = create<UpdateScanState>()((set) => ({
   isScanning: false,
-  scanStartedAt: null,
 
   startScan: () => {
-    set({ isScanning: true, scanStartedAt: Date.now() })
+    set({ isScanning: true })
   },
 
   finishScan: () => {
@@ -21,6 +19,6 @@ export const useUpdateScanStore = create<UpdateScanState>()((set) => ({
   },
 
   resetScan: () => {
-    set({ isScanning: false, scanStartedAt: null })
+    set({ isScanning: false })
   },
 }))
