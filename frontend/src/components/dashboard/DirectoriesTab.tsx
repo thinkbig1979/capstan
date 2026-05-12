@@ -304,7 +304,7 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
             </Badge>
           )}
           {node.dir?.isGitRepo && (node.dir.gitBehind ?? 0) > 0 && (
-            <Badge variant="secondary" className="flex items-center gap-1 text-xs text-yellow-600">
+            <Badge variant="secondary" className="flex items-center gap-1 text-xs text-warning">
               <GitPullRequest className="h-3 w-3" />
               {node.dir.gitBehind}
             </Badge>

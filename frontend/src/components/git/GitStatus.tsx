@@ -135,13 +135,13 @@ export function GitStatus({ stack }: GitStatusProps) {
           </Badge>
 
           {gitStatus.ahead > 0 && (
-            <Badge variant="secondary" className="text-xs gap-1 text-green-600">
+            <Badge variant="secondary" className="text-xs gap-1 text-success">
               <ArrowUp className="h-3 w-3" />
               {gitStatus.ahead} ahead
             </Badge>
           )}
           {gitStatus.behind > 0 && (
-            <Badge variant="secondary" className="text-xs gap-1 text-yellow-600">
+            <Badge variant="secondary" className="text-xs gap-1 text-warning">
               <ArrowDown className="h-3 w-3" />
               {gitStatus.behind} behind
             </Badge>

@@ -174,13 +174,13 @@ export function SettingsPage() {
         >
           {authDisabled ? (
             <div className="py-4">
-              <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950">
-                <Shield className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+              <div className="flex items-center gap-3 rounded-lg border border-info/30 bg-info/10 p-4">
+                <Shield className="h-5 w-5 text-info" />
                 <div>
-                  <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                  <p className="text-sm font-medium text-info">
                     Authentication is disabled
                   </p>
-                  <p className="text-sm text-blue-700 dark:text-blue-300">
+                  <p className="text-sm text-info/80">
                     Account security settings are not available because authentication is disabled. 
                     Enable authentication to manage account settings.
                   </p>

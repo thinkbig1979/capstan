@@ -42,9 +42,9 @@ import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { formatBytes } from '@/lib/format'
 
 function getMetricColor(percent: number): string {
-  if (percent >= 80) return 'bg-red-500'
-  if (percent >= 60) return 'bg-yellow-500'
-  return 'bg-green-500'
+  if (percent >= 80) return 'bg-destructive'
+  if (percent >= 60) return 'bg-warning'
+  return 'bg-success'
 }
 
 function formatUptime(startedAt: string): string {
@@ -170,14 +170,14 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
 
 function StatusIcon({ state }: { state: string }) {
   const config: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
-    running: { icon: <Play className="h-3.5 w-3.5" />, color: 'text-green-500', label: 'Running' },
-    exited: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-red-500', label: 'Stopped' },
-    dead: { icon: <AlertCircle className="h-3.5 w-3.5" />, color: 'text-red-500', label: 'Dead' },
-    restarting: { icon: <RefreshCw className="h-3.5 w-3.5" />, color: 'text-yellow-500', label: 'Restarting' },
-    paused: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-yellow-500', label: 'Paused' },
-    created: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-gray-500', label: 'Created' },
+    running: { icon: <Play className="h-3.5 w-3.5" />, color: 'text-success', label: 'Running' },
+    exited: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-destructive', label: 'Stopped' },
+    dead: { icon: <AlertCircle className="h-3.5 w-3.5" />, color: 'text-destructive', label: 'Dead' },
+    restarting: { icon: <RefreshCw className="h-3.5 w-3.5" />, color: 'text-warning', label: 'Restarting' },
+    paused: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-warning', label: 'Paused' },
+    created: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-muted-foreground', label: 'Created' },
   }
-  const c = config[state] || { icon: <HelpCircle className="h-3.5 w-3.5" />, color: 'text-gray-500', label: state }
+  const c = config[state] || { icon: <HelpCircle className="h-3.5 w-3.5" />, color: 'text-muted-foreground', label: state }
 
   return (
     <TooltipProvider>
@@ -186,7 +186,7 @@ function StatusIcon({ state }: { state: string }) {
           <span className={`inline-flex items-center justify-center ${c.color}`}>
             {state === 'running' && (
               <span className="relative flex h-3.5 w-3.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75" />
                 <span className="relative inline-flex rounded-full h-3.5 w-3.5">{c.icon}</span>
               </span>
             )}
@@ -441,7 +441,7 @@ function ContainerTable({
                         <TooltipTrigger asChild>
                           <a
                             href={`/stacks/${container.stackId}`}
-                            className="text-sm text-blue-500 hover:underline"
+                            className="text-sm text-info hover:underline"
                           >
                             {container.projectName}
                           </a>

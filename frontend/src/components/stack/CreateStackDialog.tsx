@@ -246,9 +246,10 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
               value={name}
               onChange={(e) => handleNameChange(e.target.value)}
               placeholder="my-stack"
-              className={nameError ? 'border-red-500' : ''}
+              aria-invalid={!!nameError}
+              aria-describedby={nameError ? 'stack-name-error' : undefined}
             />
-            {nameError && <p className="text-sm text-red-500">{nameError}</p>}
+            {nameError && <p id="stack-name-error" className="text-sm text-destructive">{nameError}</p>}
             {name && !nameError && (
               <p className="text-xs text-muted-foreground">
                 Directory will be {selectedDir && selectedDir !== (config?.stacksDir ?? '') ? selectedDir : (config?.stacksDir ?? '...')}/{name}
@@ -319,11 +320,11 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
               <div className="space-y-2">
                 <div
                   ref={editorRef}
-                  className={`rounded-md border overflow-hidden ${hasLintErrors ? 'border-red-500' : ''}`}
+                  className={`rounded-md border overflow-hidden ${hasLintErrors ? 'border-destructive' : ''}`}
                   style={{ minHeight: '300px' }}
                 />
                 {hasLintErrors && (
-                  <p className="text-sm text-red-500">
+                  <p className="text-sm text-destructive">
                     {lintResults.filter((r) => r.level === 'error').length} error(s) found - fix before creating
                   </p>
                 )}
@@ -342,7 +343,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
                   className="font-mono min-h-[200px] text-sm"
                 />
                 {conversionError && (
-                  <p className="text-sm text-red-500">{conversionError}</p>
+                  <p className="text-sm text-destructive">{conversionError}</p>
                 )}
                 <div className="flex items-center justify-between">
                   <p className="text-xs text-muted-foreground">
@@ -429,8 +430,8 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
             </TooltipProvider>
           </div>
           {validationErrors.length > 0 && (
-            <div className="rounded-md border border-red-200 bg-red-50 dark:bg-red-950 dark:border-red-900 p-3">
-              <div className="text-sm font-medium text-red-900 dark:text-red-100 mb-2">
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3">
+              <div className="text-sm font-medium text-destructive mb-2">
                 Please fix the following errors:
               </div>
               <ul className="space-y-1">
@@ -438,7 +439,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
                    <li key={error.field}>
                      <button
                        type="button"
-                       className="text-sm text-red-700 dark:text-red-300 hover:underline flex items-center gap-1"
+                       className="text-sm text-destructive hover:underline flex items-center gap-1"
                      >
                        <AlertCircle className="h-3 w-3" />
                        {error.message}

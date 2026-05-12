@@ -430,7 +430,7 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
           searchAddonRef.current?.clearActiveDecoration()
         }} />
       )}
-      <div className="rounded-lg border bg-[#1a1a1a] p-2">
+      <div className="rounded-lg border bg-terminal-background p-2">
         <div
           ref={terminalRef}
           className="overflow-hidden"

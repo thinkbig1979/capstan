@@ -77,7 +77,7 @@ export function AutoUpdateToggle({
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              <AlertTriangle className="h-3.5 w-3.5 text-orange-500 cursor-help" />
+              <AlertTriangle className="h-3.5 w-3.5 text-warning cursor-help" />
             </TooltipTrigger>
             <TooltipContent>
               <p>Auto-update paused after 3 consecutive failures.</p>
@@ -87,7 +87,7 @@ export function AutoUpdateToggle({
         </TooltipProvider>
       )}
       {!paused && consecutiveFailures > 0 && (
-        <span className="text-xs font-medium text-yellow-600 dark:text-yellow-400">
+        <span className="text-xs font-medium text-warning">
           {consecutiveFailures}f
         </span>
       )}

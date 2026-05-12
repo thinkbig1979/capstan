@@ -105,8 +105,8 @@ export function PruneButton({
   if (phase === 'done' && result) {
     return (
       <div className="flex items-center gap-2 animate-in fade-in duration-150">
-        <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
-        <span className="text-xs text-green-700 dark:text-green-400">
+        <CheckCircle2 className="h-3.5 w-3.5 text-success" />
+        <span className="text-xs text-success">
           Pruned {result.deleted?.length ?? 0} {resourceType}{(result.deleted?.length ?? 0) !== 1 ? 's' : ''}
           {result.spaceReclaimed ? ` (${formatBytes(result.spaceReclaimed)})` : ''}
         </span>
@@ -117,8 +117,8 @@ export function PruneButton({
   if (phase === 'error') {
     return (
       <div className="flex items-center gap-2 animate-in fade-in duration-150">
-        <XCircle className="h-3.5 w-3.5 text-red-600" />
-        <span className="text-xs text-red-700 dark:text-red-400">Prune failed</span>
+        <XCircle className="h-3.5 w-3.5 text-destructive" />
+        <span className="text-xs text-destructive">Prune failed</span>
       </div>
     )
   }
@@ -127,7 +127,7 @@ export function PruneButton({
     <Button
       variant="outline"
       size="sm"
-      className="h-7 text-xs border-orange-500/60 text-orange-600 hover:bg-orange-50 hover:text-orange-700 dark:border-orange-500/40 dark:text-orange-400 dark:hover:bg-orange-950 dark:hover:text-orange-300"
+      className="h-7 text-xs border-warning/60 text-warning hover:bg-warning/10"
       onClick={() => setPhase('confirming')}
       title={confirmDescription}
     >

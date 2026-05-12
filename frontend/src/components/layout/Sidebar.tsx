@@ -32,11 +32,11 @@ const statusIcon: Record<
   StackStatus,
   { icon: React.ComponentType<{ className?: string }>; className: string }
 > = {
-  running: { icon: Play, className: "text-green-500" },
-  partial: { icon: Minus, className: "text-yellow-500" },
+  running: { icon: Play, className: "text-success" },
+  partial: { icon: Minus, className: "text-warning" },
   stopped: { icon: Square, className: "text-muted-foreground" },
-  error: { icon: AlertTriangle, className: "text-red-500" },
-  unknown: { icon: HelpCircle, className: "text-gray-400" },
+  error: { icon: AlertTriangle, className: "text-destructive" },
+  unknown: { icon: HelpCircle, className: "text-muted-foreground" },
 };
 
 
@@ -267,7 +267,7 @@ export function Sidebar() {
         )}
         {stack.isGitRepo && stack.gitDirty && (
           <span
-            className="h-1.5 w-1.5 rounded-full bg-orange-400 shrink-0"
+            className="h-1.5 w-1.5 rounded-full bg-warning shrink-0"
             title="Uncommitted changes"
           />
         )}

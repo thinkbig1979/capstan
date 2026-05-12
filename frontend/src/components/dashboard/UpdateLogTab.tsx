@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useUpdateHistory } from '@/hooks/useResources'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Status, type StatusTone } from '@/components/ui/status'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -24,28 +25,26 @@ function truncateDigest(digest?: string): string {
   return cleaned.substring(0, 12)
 }
 
+const updateStatusTone: Record<string, StatusTone> = {
+  success: 'success',
+  failed: 'error',
+  pending: 'warning',
+  paused: 'warning',
+}
+
 function StatusBadgeComponent({ status }: { status: string }) {
-  const variants: Record<string, { variant: 'default' | 'destructive' | 'secondary' | 'outline'; className: string }> = {
-    success: { variant: 'default', className: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' },
-    failed: { variant: 'destructive', className: '' },
-    pending: { variant: 'secondary', className: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200' },
-    paused: { variant: 'outline', className: 'border-orange-400 text-orange-700 dark:text-orange-300' },
-  }
-  const config = variants[status] || variants.pending
-  return <Badge variant={config.variant} className={`text-xs ${config.className}`}>{status}</Badge>
+  const tone = updateStatusTone[status] || 'warning'
+  return <Status tone={tone} className="text-xs">{status}</Status>
 }
 
 function TriggerBadgeComponent({ trigger }: { trigger: string }) {
+  // 'auto' vs 'manual' is a categorical distinction, not status — render as a
+  // neutral outline badge with the chip text styled. The two cases differ in
+  // tone only, so we map 'auto' to info and 'manual' to neutral.
   return (
-    <Badge
-      variant="outline"
-      className={`text-xs ${trigger === 'auto'
-        ? 'border-purple-400 text-purple-700 dark:text-purple-300'
-        : 'border-blue-400 text-blue-700 dark:text-blue-300'
-      }`}
-    >
+    <Status tone={trigger === 'auto' ? 'info' : 'neutral'} className="text-xs">
       {trigger}
-    </Badge>
+    </Status>
   )
 }
 
@@ -210,7 +209,7 @@ export function UpdateLogTab() {
                   {entry.stackName ? (
                     <a
                       href={`/stacks/${entry.stackId}`}
-                      className="text-sm text-blue-500 hover:underline"
+                      className="text-sm text-info hover:underline"
                     >
                       {entry.stackName}
                     </a>

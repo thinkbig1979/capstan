@@ -83,7 +83,7 @@ export function TerminalToolbar({
         {isConnected && (
           <>
             {disconnectCountdown !== null ? (
-              <span className="flex items-center text-sm text-red-500 font-medium">
+              <span className="flex items-center text-sm text-destructive font-medium">
                 <Clock className="mr-1.5 h-4 w-4" />
                 Disconnecting in {disconnectCountdown} seconds
               </span>
@@ -94,7 +94,7 @@ export function TerminalToolbar({
               </span>
             )}
             <span className="flex items-center text-sm text-muted-foreground">
-              <span className="mr-1.5 h-2 w-2 rounded-full bg-green-500" />
+              <span className="mr-1.5 h-2 w-2 rounded-full bg-success" />
               Connected
             </span>
             <Button variant="ghost" size="sm" onClick={onCopy} disabled={!hasSelection} title="Copy (Ctrl+Shift+C)">
@@ -122,7 +122,7 @@ export function TerminalToolbar({
         )}
         {isConnecting && (
           <span className="flex items-center text-sm text-muted-foreground">
-            <span className="mr-1.5 h-2 w-2 animate-pulse rounded-full bg-yellow-500" />
+            <span className="mr-1.5 h-2 w-2 animate-pulse rounded-full bg-warning" />
             Connecting...
           </span>
         )}

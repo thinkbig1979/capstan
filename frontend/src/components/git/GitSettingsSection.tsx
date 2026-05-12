@@ -78,7 +78,7 @@ export function GitSettingsSection({
         onClick={onToggle}
       >
         {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-        <KeyRound className={`h-3.5 w-3.5 ${hasCustomCreds ? 'text-green-500' : ''}`} />
+        <KeyRound className={`h-3.5 w-3.5 ${hasCustomCreds ? 'text-success' : ''}`} />
         <span>Git Credentials</span>
         {hasCustomCreds && (
           <Badge variant="secondary" className="text-xs ml-1">{authType}</Badge>

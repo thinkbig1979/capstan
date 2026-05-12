@@ -247,7 +247,7 @@ export function UpdatesTab() {
                       {container.stackId ? (
                         <a
                           href={`/stacks/${container.stackId}`}
-                          className="text-sm text-blue-500 hover:underline"
+                          className="text-sm text-info hover:underline"
                         >
                           {container.projectName}
                         </a>

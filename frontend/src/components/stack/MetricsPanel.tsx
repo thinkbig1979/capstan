@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react'
+import { useMemo, useState, useCallback, useSyncExternalStore } from 'react'
 import { AreaChart, Area, XAxis, YAxis } from 'recharts'
 import { Cpu, HardDrive, Network, Activity, Database } from 'lucide-react'
 import { useMetricsBase, type ContainerMetricHistory } from '@/hooks/useMetricsBase'
@@ -18,15 +18,34 @@ function formatRate(bytesPerSecond: number): string {
 }
 
 function getColorForThreshold(percent: number): string {
-  if (percent >= 80) return 'bg-red-500'
-  if (percent >= 60) return 'bg-yellow-500'
-  return 'bg-green-500'
+  if (percent >= 80) return 'bg-destructive'
+  if (percent >= 60) return 'bg-warning'
+  return 'bg-success'
 }
 
-function getChartColor(percent: number): string {
-  if (percent >= 80) return '#ef4444'
-  if (percent >= 60) return '#eab308'
-  return '#22c55e'
+// Resolve the CSS custom property to an actual color string for recharts,
+// which sets SVG presentation attributes (where var(--x) is not honoured).
+function useThresholdChartColor(percent: number): string {
+  // Re-evaluate on dark-mode class flip so the chart redraws after theme change.
+  const isDark = useSyncExternalStore(
+    (cb) => {
+      if (typeof document === 'undefined') return () => {}
+      const obs = new MutationObserver(cb)
+      obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+      return () => obs.disconnect()
+    },
+    () => (typeof document !== 'undefined' ? document.documentElement.classList.contains('dark') : false),
+    () => false,
+  )
+  return useMemo(() => {
+    if (typeof window === 'undefined') return '#22c55e'
+    const cs = getComputedStyle(document.documentElement)
+    const varName = percent >= 80 ? '--destructive' : percent >= 60 ? '--warning' : '--success'
+    return cs.getPropertyValue(varName).trim() || '#22c55e'
+    // `isDark` is intentionally part of the dep set even though it isn't read directly —
+    // it forces the memo to re-compute when the theme class flips.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [percent, isDark])
 }
 
 function AggregateRow({ aggregates, timeRangeLabel }: { aggregates: { totalCpuPercent: number; totalMemUsage: number; totalMemLimit: number; totalMemPercent: number }; timeRangeLabel: string }) {
@@ -96,7 +115,7 @@ function ContainerCard({
   }, [container.metrics, rangeSeconds])
 
   const latestMetric = filteredMetrics[filteredMetrics.length - 1]
-  const cpuColor = getChartColor(latestMetric?.cpuPercent || 0)
+  const cpuColor = useThresholdChartColor(latestMetric?.cpuPercent || 0)
   const memColor = getColorForThreshold(latestMetric?.memPercent || 0)
 
   const chartData = useMemo(() => {

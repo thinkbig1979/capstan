@@ -135,7 +135,7 @@ export function BuildCacheTab() {
                 </TableCell>
                 <TableCell>
                   {entry.InUse ? (
-                    <Badge variant="outline" className="text-xs text-green-600">Yes</Badge>
+                    <Badge variant="outline" className="text-xs text-success">Yes</Badge>
                   ) : (
                     <span className="text-sm text-muted-foreground">No</span>
                   )}

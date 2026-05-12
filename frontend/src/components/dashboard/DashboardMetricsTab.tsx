@@ -7,9 +7,9 @@ import type { DashboardAggregateMetrics } from '@/hooks/useDashboardMetrics'
 import { formatBytes } from '@/lib/format'
 
 function getColorForThreshold(percent: number): string {
-  if (percent >= 80) return 'text-red-500'
-  if (percent >= 60) return 'text-yellow-500'
-  return 'text-green-500'
+  if (percent >= 80) return 'text-destructive'
+  if (percent >= 60) return 'text-warning'
+  return 'text-success'
 }
 
 interface DashboardMetricsTabProps {
@@ -100,7 +100,7 @@ export function DashboardMetricsTab({
               {runningStacks}
             </CardTitle>
             <CardAction>
-              <Badge variant="outline" className="text-green-600 border-green-200 dark:text-green-400 dark:border-green-800">
+              <Badge variant="outline" className="text-success border-success/30">
                 Active
               </Badge>
             </CardAction>
@@ -121,7 +121,7 @@ export function DashboardMetricsTab({
               {stoppedStacks}
             </CardTitle>
             <CardAction>
-              <Badge variant="outline" className="text-red-600 border-red-200 dark:text-red-400 dark:border-red-800">
+              <Badge variant="outline" className="text-destructive border-destructive/30">
                 Inactive
               </Badge>
             </CardAction>
@@ -161,7 +161,7 @@ export function DashboardMetricsTab({
 
       <div className="flex items-center gap-2">
         {isConnected ? (
-          <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+          <div className="h-2 w-2 rounded-full bg-success animate-pulse" />
         ) : (
           <div className="h-2 w-2 rounded-full bg-muted-foreground" />
         )}

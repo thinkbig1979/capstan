@@ -1,5 +1,6 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { Status } from '@/components/ui/status'
 import { Play, Square, AlertCircle, RefreshCw } from 'lucide-react'
 import type { Container } from '@/types'
 
@@ -19,8 +20,16 @@ export function ContainerList({ containers }: ContainerListProps) {
 
   const getHealthBadge = (health?: string) => {
     if (!health) return <Badge variant="outline">none</Badge>
-    if (health === 'healthy') return <Badge className="bg-green-500 hover:bg-green-600 flex items-center gap-1"><Play className="h-3 w-3" aria-hidden="true" />Healthy</Badge>
-    if (health === 'unhealthy') return <Badge className="bg-red-500 hover:bg-red-600 flex items-center gap-1"><AlertCircle className="h-3 w-3" aria-hidden="true" />Unhealthy</Badge>
+    if (health === 'healthy') return (
+      <Status tone="success" className="gap-1">
+        <Play className="h-3 w-3" aria-hidden="true" />Healthy
+      </Status>
+    )
+    if (health === 'unhealthy') return (
+      <Status tone="error" className="gap-1">
+        <AlertCircle className="h-3 w-3" aria-hidden="true" />Unhealthy
+      </Status>
+    )
     return <Badge variant="outline">{health}</Badge>
   }
 
@@ -50,10 +59,10 @@ export function ContainerList({ containers }: ContainerListProps) {
                 <TableCell className="text-sm text-muted-foreground">{container.image}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
-                    {container.state === 'running' && <Play className="h-3 w-3 text-green-500" aria-hidden="true" />}
-                    {container.state === 'exited' && <Square className="h-3 w-3 text-red-500" aria-hidden="true" />}
-                    {container.state === 'dead' && <Square className="h-3 w-3 text-red-500" aria-hidden="true" />}
-                    {container.state === 'restarting' && <RefreshCw className="h-3 w-3 text-yellow-500" aria-hidden="true" />}
+                    {container.state === 'running' && <Play className="h-3 w-3 text-success" aria-hidden="true" />}
+                    {container.state === 'exited' && <Square className="h-3 w-3 text-destructive" aria-hidden="true" />}
+                    {container.state === 'dead' && <Square className="h-3 w-3 text-destructive" aria-hidden="true" />}
+                    {container.state === 'restarting' && <RefreshCw className="h-3 w-3 text-warning" aria-hidden="true" />}
                     <span className="capitalize">{container.state}</span>
                   </div>
                 </TableCell>
@@ -83,10 +92,10 @@ export function ContainerList({ containers }: ContainerListProps) {
                 <p className="text-sm text-muted-foreground truncate">{container.image}</p>
               </div>
               <div className="flex items-center gap-2">
-                {container.state === 'running' && <Play className="h-4 w-4 text-green-500" aria-hidden="true" />}
-                {container.state === 'exited' && <Square className="h-4 w-4 text-red-500" aria-hidden="true" />}
-                {container.state === 'dead' && <Square className="h-4 w-4 text-red-500" aria-hidden="true" />}
-                {container.state === 'restarting' && <RefreshCw className="h-4 w-4 text-yellow-500" aria-hidden="true" />}
+                {container.state === 'running' && <Play className="h-4 w-4 text-success" aria-hidden="true" />}
+                {container.state === 'exited' && <Square className="h-4 w-4 text-destructive" aria-hidden="true" />}
+                {container.state === 'dead' && <Square className="h-4 w-4 text-destructive" aria-hidden="true" />}
+                {container.state === 'restarting' && <RefreshCw className="h-4 w-4 text-warning" aria-hidden="true" />}
                 <span className="text-sm capitalize">{container.state}</span>
               </div>
             </div>

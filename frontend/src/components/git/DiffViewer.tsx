@@ -94,10 +94,10 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
               )}
               <span className="flex-1 truncate">{file.path}</span>
               {file.addedLines > 0 && (
-                <span className="mr-2 text-xs text-green-600">+{file.addedLines}</span>
+                <span className="mr-2 text-xs text-success">+{file.addedLines}</span>
               )}
               {file.removedLines > 0 && (
-                <span className="text-xs text-red-600">-{file.removedLines}</span>
+                <span className="text-xs text-destructive">-{file.removedLines}</span>
               )}
             </Button>
 
@@ -121,9 +121,9 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
                             key={`${hunkIndex}-${lineIndex}`}
                             className={`${
                               line.type === 'added'
-                                ? 'bg-green-100 dark:bg-green-900/30'
+                                ? 'bg-success/15'
                                 : line.type === 'removed'
-                                ? 'bg-red-100 dark:bg-red-900/30'
+                                ? 'bg-destructive/15'
                                 : ''
                             }`}
                           >
@@ -131,9 +131,9 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
                               <span
                                 className={`${
                                   line.type === 'added'
-                                    ? 'text-green-600'
+                                    ? 'text-success'
                                     : line.type === 'removed'
-                                    ? 'text-red-600'
+                                    ? 'text-destructive'
                                     : 'text-muted-foreground'
                                 }`}
                               >
@@ -168,7 +168,7 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
                               <td
                                 className={`px-4 py-0.5 whitespace-nowrap ${
                                   line.type === 'removed'
-                                    ? 'bg-red-100 dark:bg-red-900/30 text-red-600'
+                                    ? 'bg-destructive/15 text-destructive'
                                     : 'bg-muted/50'
                                 }`}
                               >
@@ -181,7 +181,7 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
                               <td
                                 className={`px-4 py-0.5 whitespace-nowrap ${
                                   line.type === 'added'
-                                    ? 'bg-green-100 dark:bg-green-900/30 text-green-600'
+                                    ? 'bg-success/15 text-success'
                                     : 'bg-muted/50'
                                 }`}
                               >

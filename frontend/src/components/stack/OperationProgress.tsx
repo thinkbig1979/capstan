@@ -36,15 +36,15 @@ export function OperationProgress({ status, lines, action, error, onDismiss }: O
   return (
     <div className={cn(
       'rounded-lg border overflow-hidden',
-      isDone && status === 'success' && 'border-green-500/30',
-      isDone && status === 'error' && 'border-red-500/30',
-      isRunning && 'border-blue-500/30',
+      isDone && status === 'success' && 'border-success/30',
+      isDone && status === 'error' && 'border-destructive/30',
+      isRunning && 'border-info/30',
     )}>
       <div className={cn(
         'flex items-center justify-between px-4 py-2 text-sm font-medium',
-        isRunning && 'bg-blue-500/10 text-blue-400',
-        status === 'success' && 'bg-green-500/10 text-green-400',
-        status === 'error' && 'bg-red-500/10 text-red-400',
+        isRunning && 'bg-info/10 text-info',
+        status === 'success' && 'bg-success/10 text-success',
+        status === 'error' && 'bg-destructive/10 text-destructive',
       )}>
         <div className="flex items-center gap-2">
           {isRunning && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -63,26 +63,26 @@ export function OperationProgress({ status, lines, action, error, onDismiss }: O
       </div>
       <div
         ref={scrollRef}
-        className="max-h-64 overflow-y-auto bg-[#1a1a1a] p-3 font-mono text-xs leading-relaxed"
+        className="max-h-64 overflow-y-auto bg-terminal-background text-terminal-foreground p-3 font-mono text-xs leading-relaxed"
       >
         {lines.map((line, i) => (
           <div key={`${i}-${line.slice(0, 20)}`} className={cn(
             'whitespace-pre-wrap break-all',
-            line.startsWith('Error:') && 'text-red-400',
-            line.startsWith('---') && 'text-blue-400',
-            !line.startsWith('Error:') && !line.startsWith('---') && 'text-zinc-300',
+            line.startsWith('Error:') && 'text-destructive',
+            line.startsWith('---') && 'text-info',
+            !line.startsWith('Error:') && !line.startsWith('---') && 'text-terminal-foreground',
           )}>
             {line}
           </div>
         ))}
         {isRunning && (
-          <div className="flex items-center gap-1 text-zinc-500">
+          <div className="flex items-center gap-1 text-terminal-foreground/60">
             <span className="animate-pulse">_</span>
           </div>
         )}
       </div>
       {error && (
-        <div className="px-4 py-2 text-xs text-red-400 bg-red-500/5 border-t border-red-500/20">
+        <div className="px-4 py-2 text-xs text-destructive bg-destructive/5 border-t border-destructive/20">
           {error}
         </div>
       )}

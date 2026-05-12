@@ -158,9 +158,9 @@ export function UpdateScheduleContent() {
           </div>
         </div>
         {effectiveAutoUpdate && (
-          <div className="flex items-start gap-2 rounded-lg border border-yellow-200 bg-yellow-50 p-3 dark:border-yellow-900 dark:bg-yellow-950">
-            <AlertCircle className="h-4 w-4 mt-0.5 text-yellow-600 dark:text-yellow-400 shrink-0" />
-            <p className="text-sm text-yellow-800 dark:text-yellow-200">
+          <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3">
+            <AlertCircle className="h-4 w-4 mt-0.5 text-warning shrink-0" />
+            <p className="text-sm text-warning">
               Only containers and stacks with auto-update turned on will be updated. Updates happen when new images are detected during scans and may cause brief service interruption.
             </p>
           </div>

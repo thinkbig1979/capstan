@@ -39,6 +39,9 @@ interface LogViewerProps {
 }
 
 const MAX_LOG_BUFFER = 10000
+// Per-container identifier hues. Not status — purely a visual diff between
+// container names in interleaved log output. Kept as a fixed palette because
+// they need to remain visually distinct, not adapt to theme semantics.
 const CONTAINER_COLORS = [
   'text-red-500',
   'text-orange-500',
@@ -91,13 +94,13 @@ const TIME_RANGE_OPTIONS: TimeRangeConfig[] = [
 function getLogLevelColor(message: string): string {
   const upperMsg = message.toUpperCase()
   if (upperMsg.includes('ERROR') || upperMsg.includes('FATAL') || upperMsg.includes('PANIC')) {
-    return 'text-red-500'
+    return 'text-destructive'
   }
   if (upperMsg.includes('WARN') || upperMsg.includes('WARNING')) {
-    return 'text-yellow-500'
+    return 'text-warning'
   }
   if (upperMsg.includes('DEBUG') || upperMsg.includes('TRACE')) {
-    return 'text-gray-400'
+    return 'text-muted-foreground'
   }
   return ''
 }
@@ -113,7 +116,7 @@ function highlightSearchTerm(text: string, searchTerm: string): React.ReactNode 
   const parts = text.split(new RegExp(`(${escaped})`, 'gi'))
   return parts.map((part, i) =>
     part.toLowerCase() === searchTerm.toLowerCase() ? (
-      <mark key={i} className="bg-yellow-300 text-yellow-900 rounded px-0.5">
+      <mark key={i} className="bg-warning/40 text-warning-foreground rounded px-0.5">
         {part}
       </mark>
     ) : (
@@ -391,7 +394,7 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
       )}
 
       {isDisconnected && hasRunningContainers && (
-        <div className="flex items-center justify-between rounded-lg border border-yellow-500/50 bg-yellow-500/10 px-4 py-2 text-yellow-600 dark:text-yellow-400">
+        <div className="flex items-center justify-between rounded-lg border border-warning/40 bg-warning/10 px-4 py-2 text-warning">
           <div className="flex items-center gap-2">
             <AlertCircle className="h-4 w-4" />
             <span>
