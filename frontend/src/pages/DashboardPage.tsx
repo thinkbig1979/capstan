@@ -272,8 +272,8 @@ export function DashboardPage() {
           tabs={[
             { value: 'overview', label: 'Metrics' },
             { value: 'stacks', label: 'Stacks' },
-            { value: 'directories', label: 'Dirs' },
             { value: 'containers', label: 'Containers' },
+            { value: 'directories', label: 'Dirs' },
             { value: 'updates', label: 'Updates' },
             { value: 'images', label: 'Images' },
             { value: 'volumes', label: 'Volumes' },
@@ -320,16 +320,16 @@ export function DashboardPage() {
           />
         </TabsContent>
 
+        <TabsContent value="containers" className="mt-4">
+          <ContainersOverviewTab stats={dashboardStats} latestMetrics={latestMetrics} />
+        </TabsContent>
+
         <TabsContent value="directories" className="mt-4">
           <DirectoriesTab
             directories={sortedDirectories}
             stacks={stacks || []}
             configuredDirs={configuredDirs}
           />
-        </TabsContent>
-
-        <TabsContent value="containers" className="mt-4">
-          <ContainersOverviewTab stats={dashboardStats} latestMetrics={latestMetrics} />
         </TabsContent>
 
         <TabsContent value="updates" className="mt-4">
