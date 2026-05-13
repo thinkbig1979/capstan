@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
+
+	dockertypes "github.com/docker/docker/api/types"
 
 	"github.com/docker-manager/backend/internal/database"
 	"github.com/docker-manager/backend/internal/models"
@@ -52,6 +55,7 @@ func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/resources/volumes/prune", h.pruneVolumes)
 
 	r.GET("/resources/networks", h.listNetworks)
+	r.POST("/resources/networks", h.createNetwork)
 	r.DELETE("/resources/networks/:id", h.deleteNetwork)
 	r.POST("/resources/networks/prune", h.pruneNetworks)
 
@@ -243,6 +247,45 @@ func (h *ResourcesHandler) listNetworks(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"networks": networks})
+}
+
+type createNetworkRequest struct {
+	Name       string `json:"name" binding:"required"`
+	Driver     string `json:"driver"`
+	Internal   bool   `json:"internal"`
+	Attachable bool   `json:"attachable"`
+}
+
+var networkNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
+
+func (h *ResourcesHandler) createNetwork(c *gin.Context) {
+	var req createNetworkRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		models.HandleError(c, models.NewAppError(http.StatusBadRequest, "INVALID_INPUT", "Invalid request body"))
+		return
+	}
+	if !networkNameRegex.MatchString(req.Name) {
+		models.HandleError(c, models.NewAppError(http.StatusBadRequest, "INVALID_INPUT", "Network name must start with a letter or digit and contain only letters, digits, '_', '.', or '-' (max 63 chars)"))
+		return
+	}
+	driver := req.Driver
+	if driver == "" {
+		driver = "bridge"
+	}
+
+	opts := dockertypes.NetworkCreate{
+		Driver:     driver,
+		Internal:   req.Internal,
+		Attachable: req.Attachable,
+	}
+	id, err := h.docker.CreateNetwork(c.Request.Context(), req.Name, opts)
+	if err != nil {
+		slog.Error("Failed to create network", "name", req.Name, "error", err)
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to create network"))
+		return
+	}
+	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "network_create", Timestamp: time.Now()})
+	c.JSON(http.StatusCreated, gin.H{"id": id, "name": req.Name})
 }
 
 func (h *ResourcesHandler) deleteNetwork(c *gin.Context) {

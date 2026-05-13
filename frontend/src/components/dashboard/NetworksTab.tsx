@@ -9,10 +9,11 @@ import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
-import { Network, Trash2 } from 'lucide-react'
+import { Network, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
+import { CreateNetworkDialog } from '@/components/dashboard/CreateNetworkDialog'
 import { useConfirm } from '@/components/ConfirmDialog'
 import type { DockerNetwork } from '@/types'
 
@@ -24,6 +25,7 @@ export function NetworksTab() {
   const { data: networks, isLoading } = useNetworks()
   const [sortBy, setSortBy] = useState<SortKey>('name')
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => resourcesApi.deleteNetwork(id),
@@ -81,15 +83,22 @@ export function NetworksTab() {
 
   if (!networks || networks.length === 0) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12">
-          <Network className="h-12 w-12 text-muted-foreground mb-4" />
-          <p className="text-lg font-semibold">No Networks</p>
-          <p className="text-sm text-muted-foreground">
-            No Docker networks found on this host
-          </p>
-        </CardContent>
-      </Card>
+      <>
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            <Network className="h-12 w-12 text-muted-foreground mb-4" />
+            <p className="text-lg font-semibold">No Networks</p>
+            <p className="text-sm text-muted-foreground mb-4">
+              No Docker networks found on this host
+            </p>
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Network
+            </Button>
+          </CardContent>
+        </Card>
+        <CreateNetworkDialog open={createOpen} onOpenChange={setCreateOpen} />
+      </>
     )
   }
 
@@ -106,13 +115,19 @@ export function NetworksTab() {
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
         actions={
-          <PruneButton
-            resourceType="network"
-            pruneFn={() => resourcesApi.pruneNetworks()}
-            confirmMessage="Prune Unused Networks?"
-            confirmDescription="All networks not referenced by any container will be permanently removed."
-            invalidateKeys={[['resources', 'networks']]}
-          />
+          <>
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create
+            </Button>
+            <PruneButton
+              resourceType="network"
+              pruneFn={() => resourcesApi.pruneNetworks()}
+              confirmMessage="Prune Unused Networks?"
+              confirmDescription="All networks not referenced by any container will be permanently removed."
+              invalidateKeys={[['resources', 'networks']]}
+            />
+          </>
         }
         countDisplay={`${networks.length} networks`}
       />
@@ -180,6 +195,7 @@ export function NetworksTab() {
         </Table>
       </div>
       <ConfirmComponent />
+      <CreateNetworkDialog open={createOpen} onOpenChange={setCreateOpen} />
     </div>
   )
 }

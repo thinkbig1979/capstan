@@ -420,6 +420,10 @@ export const resourcesApi = {
     const response = await apiClient.get<{ networks: DockerNetwork[] }>('/resources/networks')
     return response.data.networks
   },
+  createNetwork: async (input: { name: string; driver?: string; internal?: boolean; attachable?: boolean }) => {
+    const response = await apiClient.post<{ id: string; name: string }>('/resources/networks', input)
+    return response.data
+  },
   deleteNetwork: async (id: string) => {
     const response = await apiClient.delete<{ deleted: string }>(`/resources/networks/${encodeURIComponent(id)}`)
     return response.data

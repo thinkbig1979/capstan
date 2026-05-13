@@ -858,6 +858,14 @@ func (s *DockerService) DeleteNetwork(ctx context.Context, networkID string) err
 	return s.client.NetworkRemove(ctx, networkID)
 }
 
+func (s *DockerService) CreateNetwork(ctx context.Context, name string, opts types.NetworkCreate) (string, error) {
+	resp, err := s.client.NetworkCreate(ctx, name, opts)
+	if err != nil {
+		return "", fmt.Errorf("creating network: %w", err)
+	}
+	return resp.ID, nil
+}
+
 func (s *DockerService) PruneNetworks(ctx context.Context) (types.NetworksPruneReport, error) {
 	return s.client.NetworksPrune(ctx, filters.NewArgs())
 }

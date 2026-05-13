@@ -343,6 +343,7 @@ func TestResourcesHandler_RoutesRegistered(t *testing.T) {
 		"DELETE:/api/resources/volumes/:name",
 		"POST:/api/resources/volumes/prune",
 		"GET:/api/resources/networks",
+		"POST:/api/resources/networks",
 		"DELETE:/api/resources/networks/:id",
 		"POST:/api/resources/networks/prune",
 		"GET:/api/resources/build-cache",
