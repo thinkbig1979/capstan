@@ -151,6 +151,25 @@ export function useGitSettings() {
   })
 }
 
+export function useGlobalEnv() {
+  return useQuery({
+    queryKey: ['settings', 'global-env'],
+    queryFn: () => settingsApi.getGlobalEnv(),
+    retry: 1,
+  })
+}
+
+export function useUpdateGlobalEnv() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (vars: Array<{ key: string; value: string }>) =>
+      settingsApi.updateGlobalEnv(vars),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings', 'global-env'] })
+    },
+  })
+}
+
 export function useUpdateGitSettings() {
   const queryClient = useQueryClient()
   return useMutation({

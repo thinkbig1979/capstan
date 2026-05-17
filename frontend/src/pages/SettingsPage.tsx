@@ -9,7 +9,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { toast } from 'sonner'
 import { classifyError } from '@/lib/error-handler'
 import { formatDateFull } from '@/lib/format'
-import { Sun, Moon, Monitor, Shield, Palette, Clock, KeyRound, FolderCog, ScrollText } from 'lucide-react'
+import { Sun, Moon, Monitor, Shield, Palette, Clock, KeyRound, FolderCog, ScrollText, Globe } from 'lucide-react'
 import { authApi } from '@/lib/api'
 import {
   Select,
@@ -23,6 +23,7 @@ import { UpdateScheduleContent } from '@/components/settings/UpdateScheduleConte
 import { GitSettingsContent } from '@/components/settings/GitSettingsContent'
 import { DirectoriesSettingsContent } from '@/components/settings/DirectoriesSettingsContent'
 import { AuditLogContent } from '@/components/settings/AuditLogContent'
+import { GlobalEnvSettingsContent } from '@/components/settings/GlobalEnvSettingsContent'
 
 interface SettingsSection {
   id: string
@@ -59,6 +60,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     title: 'Git',
     description: 'Configure global git credentials for repository access',
     icon: <KeyRound className="h-5 w-5" />,
+    defaultExpanded: false,
+  },
+  {
+    id: 'global-env',
+    title: 'Global Environment Variables',
+    description: 'Variables applied to every stack before its own .env file',
+    icon: <Globe className="h-5 w-5" />,
     defaultExpanded: false,
   },
   {
@@ -370,6 +378,14 @@ export function SettingsPage() {
 
         <CollapsibleSection
           section={SETTINGS_SECTIONS[4]}
+          expanded={isSectionExpanded('global-env')}
+          onToggle={() => toggleSection('global-env')}
+        >
+          <GlobalEnvSettingsContent />
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          section={SETTINGS_SECTIONS[5]}
           expanded={isSectionExpanded('update-schedule')}
           onToggle={() => toggleSection('update-schedule')}
         >
@@ -377,7 +393,7 @@ export function SettingsPage() {
         </CollapsibleSection>
 
         <CollapsibleSection
-          section={SETTINGS_SECTIONS[5]}
+          section={SETTINGS_SECTIONS[6]}
           expanded={isSectionExpanded('audit-log')}
           onToggle={() => toggleSection('audit-log')}
         >
