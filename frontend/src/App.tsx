@@ -28,16 +28,8 @@ const suspendedFallback = (
 )
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { canAccess, checkAuth, checkStatus } = useAuth()
+  const { canAccess } = useAuth()
   const location = useLocation()
-
-  useEffect(() => {
-    const init = async () => {
-      await checkStatus()
-      await checkAuth()
-    }
-    init()
-  }, [checkAuth, checkStatus])
 
   if (!canAccess) {
     return <Navigate to="/login" state={{ from: location }} replace />
@@ -59,7 +51,7 @@ function AuthenticatedLayout() {
 }
 
 function App() {
-  const { authDisabled, needsSetup, isAuthenticated, checkStatus } = useAuth()
+  const { authDisabled, needsSetup, isAuthenticated, checkStatus, checkAuth } = useAuth()
   const [statusChecked, setStatusChecked] = useState(false)
 
   useEffect(() => {
@@ -74,6 +66,7 @@ function App() {
   useEffect(() => {
     const init = async () => {
       await checkStatus()
+      await checkAuth()
       setStatusChecked(true)
     }
     init()
