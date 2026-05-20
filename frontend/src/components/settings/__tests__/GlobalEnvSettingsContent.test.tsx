@@ -2,19 +2,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { GlobalEnvSettingsContent } from '../GlobalEnvSettingsContent'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 const mockGetGlobalEnv = vi.fn()
 const mockUpdateGlobalEnv = vi.fn()
+const mockVerifyPassword = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   settingsApi: {
     getGlobalEnv: (...args: unknown[]) => mockGetGlobalEnv(...args),
     updateGlobalEnv: (...args: unknown[]) => mockUpdateGlobalEnv(...args),
   },
+  authApi: {
+    verifyPassword: (...args: unknown[]) => mockVerifyPassword(...args),
+  },
 }))
 
 vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }))
 
 function renderWithClient() {
@@ -31,6 +36,7 @@ function renderWithClient() {
 describe('GlobalEnvSettingsContent', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    useEnvUnlockStore.getState().lock()
   })
 
   it('renders existing variables from the API', async () => {
@@ -85,7 +91,7 @@ describe('GlobalEnvSettingsContent', () => {
     expect(keyInputs.length).toBeGreaterThan(0)
   })
 
-  it('masks sensitive values by key pattern and toggles visibility', async () => {
+  it('masks sensitive values by key pattern', async () => {
     mockGetGlobalEnv.mockResolvedValue({
       vars: [{ key: 'DATABASE_PASSWORD', value: 'topsecret' }],
     })
@@ -93,13 +99,43 @@ describe('GlobalEnvSettingsContent', () => {
 
     const valueInputs = (await screen.findAllByDisplayValue('topsecret')) as HTMLInputElement[]
     expect(valueInputs[0].type).toBe('password')
+  })
+
+  it('prompts for password before revealing a sensitive value when locked', async () => {
+    mockGetGlobalEnv.mockResolvedValue({
+      vars: [{ key: 'DATABASE_PASSWORD', value: 'topsecret' }],
+    })
+    renderWithClient()
+
+    await screen.findAllByDisplayValue('topsecret')
 
     const toggles = screen.getAllByRole('button', { name: /show value/i })
     fireEvent.click(toggles[0])
+
+    expect(await screen.findByText('Unlock environment variables')).toBeInTheDocument()
+  })
+
+  it('reveals the value after a successful unlock', async () => {
+    mockGetGlobalEnv.mockResolvedValue({
+      vars: [{ key: 'DATABASE_PASSWORD', value: 'topsecret' }],
+    })
+    mockVerifyPassword.mockResolvedValue({ ok: true })
+
+    renderWithClient()
+
+    await screen.findAllByDisplayValue('topsecret')
+
+    const toggles = screen.getAllByRole('button', { name: /show value/i })
+    fireEvent.click(toggles[0])
+
+    const passwordInput = await screen.findByLabelText('Password')
+    fireEvent.change(passwordInput, { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }))
 
     await waitFor(() => {
       const refreshed = screen.getAllByDisplayValue('topsecret') as HTMLInputElement[]
       expect(refreshed[0].type).toBe('text')
     })
+    expect(mockVerifyPassword).toHaveBeenCalledWith('mypassword')
   })
 })

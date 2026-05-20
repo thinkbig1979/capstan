@@ -6,7 +6,11 @@ import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { Badge } from '@/components/ui/badge'
 import { Eye, EyeOff, Plus, Save, Trash2 } from 'lucide-react'
 import { useGlobalEnv, useUpdateGlobalEnv } from '@/hooks/useResources'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
+import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
+import { EnvUnlockStatus } from '@/components/EnvUnlockStatus'
 import { classifyError } from '@/lib/error-handler'
+import { useAuth } from '@/hooks/useAuth'
 import { toast } from 'sonner'
 
 type EnvVar = { key: string; value: string }
@@ -21,10 +25,15 @@ function isSensitiveKey(key: string) {
 export function GlobalEnvSettingsContent() {
   const { data, isLoading, isError } = useGlobalEnv()
   const updateGlobalEnv = useUpdateGlobalEnv()
+  const { authDisabled } = useAuth()
+  const isUnlocked = useEnvUnlockStore((s) => s.isUnlocked)
+  const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
 
   const [vars, setVars] = useState<EnvVar[]>([])
   const [visible, setVisible] = useState<Record<number, boolean>>({})
   const [dirty, setDirty] = useState(false)
+  const [unlockDialogOpen, setUnlockDialogOpen] = useState(false)
+  const [pendingRevealIndex, setPendingRevealIndex] = useState<number | null>(null)
 
   useEffect(() => {
     if (!data) return
@@ -36,6 +45,13 @@ export function GlobalEnvSettingsContent() {
      
     setDirty(false)
   }, [data])
+
+  // Re-mask all values when the unlock session ends.
+  useEffect(() => {
+    if (unlockedUntil !== null) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setVisible({})
+  }, [unlockedUntil])
 
   const handleChange = (index: number, field: keyof EnvVar, value: string) => {
     setVars((prev) => {
@@ -62,7 +78,24 @@ export function GlobalEnvSettingsContent() {
   }
 
   const toggleVisible = (index: number) => {
-    setVisible((prev) => ({ ...prev, [index]: !prev[index] }))
+    if (visible[index]) {
+      // Hiding never requires unlock.
+      setVisible((prev) => ({ ...prev, [index]: false }))
+      return
+    }
+    if (authDisabled || isUnlocked()) {
+      setVisible((prev) => ({ ...prev, [index]: true }))
+      return
+    }
+    setPendingRevealIndex(index)
+    setUnlockDialogOpen(true)
+  }
+
+  const handleUnlocked = () => {
+    if (pendingRevealIndex !== null) {
+      setVisible((prev) => ({ ...prev, [pendingRevealIndex]: true }))
+    }
+    setPendingRevealIndex(null)
   }
 
   const handleSave = () => {
@@ -100,12 +133,23 @@ export function GlobalEnvSettingsContent() {
           stack&apos;s own <code className="text-xs">.env</code>, which can still override them.
           Changes take effect on the next stack restart.
         </p>
-        {dirty && (
-          <Badge variant="secondary" className="text-xs whitespace-nowrap">
-            Unsaved changes
-          </Badge>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          <EnvUnlockStatus />
+          {dirty && (
+            <Badge variant="secondary" className="text-xs whitespace-nowrap">
+              Unsaved changes
+            </Badge>
+          )}
+        </div>
       </div>
+      <EnvUnlockDialog
+        open={unlockDialogOpen}
+        onOpenChange={(open) => {
+          setUnlockDialogOpen(open)
+          if (!open) setPendingRevealIndex(null)
+        }}
+        onUnlocked={handleUnlocked}
+      />
 
       <div className="hidden md:block rounded-md border">
         <Table>

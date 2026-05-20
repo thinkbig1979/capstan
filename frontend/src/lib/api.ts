@@ -111,6 +111,11 @@ export const authApi = {
     })
     return response.data
   },
+
+  verifyPassword: async (password: string) => {
+    const response = await apiClient.post<{ ok: boolean }>('/auth/verify-password', { password })
+    return response.data
+  },
 }
 
 export const settingsApi = {

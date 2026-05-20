@@ -47,6 +47,7 @@ func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *AuthHandler) RegisterProtectedRoutes(group *gin.RouterGroup) {
 	group.POST("/auth/logout", h.Logout)
 	group.GET("/auth/me", h.Me)
+	group.POST("/auth/verify-password", h.VerifyPassword)
 }
 
 func (h *AuthHandler) Status(c *gin.Context) {
@@ -309,6 +310,63 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		"id":       user.ID,
 		"username": user.Username,
 	})
+}
+
+// VerifyPassword re-checks the current user's password without issuing a new
+// session. Used by the env-reveal unlock flow.
+func (h *AuthHandler) VerifyPassword(c *gin.Context) {
+	if h.authDisabled {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, models.NewAppError(
+			http.StatusUnauthorized,
+			models.ErrUnauthorized,
+			"Not authenticated",
+		))
+		return
+	}
+
+	var req struct {
+		Password string `json:"password" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid request body",
+		))
+		return
+	}
+
+	user, err := h.db.GetUserByID(userID.(string))
+	if err != nil || user == nil {
+		c.JSON(http.StatusUnauthorized, models.NewAppError(
+			http.StatusUnauthorized,
+			models.ErrUnauthorized,
+			"User not found",
+		))
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
+		slog.Warn("Failed env unlock attempt",
+			"ip", c.ClientIP(),
+			"username", user.Username,
+			"timestamp", time.Now(),
+		)
+		c.JSON(http.StatusUnauthorized, models.NewAppError(
+			http.StatusUnauthorized,
+			models.ErrUnauthorized,
+			"Invalid password",
+		))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func validateUsername(username string) *models.AppError {

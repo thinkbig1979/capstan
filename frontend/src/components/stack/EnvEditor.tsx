@@ -10,6 +10,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '@/lib/api'
 import { toast } from 'sonner'
 import type { EnvEntry } from '@/types'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
+import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
+import { EnvUnlockStatus } from '@/components/EnvUnlockStatus'
+import { useAuth } from '@/hooks/useAuth'
 
 interface EnvEditorProps {
   stackId: string
@@ -17,6 +21,9 @@ interface EnvEditorProps {
 
 export function EnvEditor({ stackId }: EnvEditorProps) {
   const queryClient = useQueryClient()
+  const { authDisabled } = useAuth()
+  const isUnlocked = useEnvUnlockStore((s) => s.isUnlocked)
+  const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
   const [view, setView] = useState<'table' | 'raw'>('table')
   const [entries, setEntries] = useState<EnvEntry[]>([])
   const [rawContent, setRawContent] = useState('')
@@ -24,6 +31,8 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const [showEnvSection, setShowEnvSection] = useState(false)
   const [history, setHistory] = useState<{ entries: EnvEntry[]; raw: string }[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
+  const [unlockDialogOpen, setUnlockDialogOpen] = useState(false)
+  const [pendingRevealIndex, setPendingRevealIndex] = useState<number | null>(null)
   const MAX_HISTORY = 50
 
   const pushToHistory = useCallback(
@@ -101,13 +110,20 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
 
   useEffect(() => {
     if (envData) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setEntries(envData.entries)
+       
       setRawContent(envData.raw)
+       
       setHasUnsavedChanges(false)
+       
       setShowEnvSection(true)
+       
       setHistory([{ entries: envData.entries, raw: envData.raw }])
+       
       setHistoryIndex(0)
     } else {
+       
       setShowEnvSection(false)
     }
   }, [envData])
@@ -170,12 +186,48 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     saveMutation.mutate({ raw: rawContent })
   }
 
-  const toggleVisibility = (index: number) => {
+  const applyVisibilityToggle = (index: number) => {
     const newEntries = [...entries]
     newEntries[index] = { ...newEntries[index], sensitive: !newEntries[index].sensitive }
     setEntries(newEntries)
     pushToHistory(newEntries, rawContent)
   }
+
+  const toggleVisibility = (index: number) => {
+    const current = entries[index]
+    const willReveal = current?.sensitive === true
+    if (!willReveal || authDisabled || isUnlocked()) {
+      applyVisibilityToggle(index)
+      return
+    }
+    setPendingRevealIndex(index)
+    setUnlockDialogOpen(true)
+  }
+
+  const handleUnlocked = () => {
+    if (pendingRevealIndex !== null) {
+      applyVisibilityToggle(pendingRevealIndex)
+    }
+    setPendingRevealIndex(null)
+  }
+
+  // When the unlock session ends (manual lock or auto-expiry), re-mask any
+  // sensitive-by-name entries the user had revealed during the session.
+  useEffect(() => {
+    if (unlockedUntil !== null) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setEntries((prev) => {
+      let changed = false
+      const next = prev.map((e) => {
+        if (!e.sensitive && isSensitiveKey(e.key)) {
+          changed = true
+          return { ...e, sensitive: true }
+        }
+        return e
+      })
+      return changed ? next : prev
+    })
+  }, [unlockedUntil])
 
   const isSensitiveKey = (key: string) => {
     const sensitivePatterns = ['_KEY', '_SECRET', '_PASSWORD', '_TOKEN', '_API_']
@@ -240,12 +292,23 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
           </div>
         </div>
 
-        {hasUnsavedChanges && (
-          <Badge variant="secondary" className="text-xs">
-            Unsaved changes
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          <EnvUnlockStatus />
+          {hasUnsavedChanges && (
+            <Badge variant="secondary" className="text-xs">
+              Unsaved changes
+            </Badge>
+          )}
+        </div>
       </div>
+      <EnvUnlockDialog
+        open={unlockDialogOpen}
+        onOpenChange={(open) => {
+          setUnlockDialogOpen(open)
+          if (!open) setPendingRevealIndex(null)
+        }}
+        onUnlocked={handleUnlocked}
+      />
 
       {view === 'table' && (
         <div className="space-y-4">
