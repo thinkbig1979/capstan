@@ -63,7 +63,14 @@ apiClient.interceptors.response.use(
   (error: AxiosError<ApiError>) => {
     if (error.response?.status === 401 && logout) {
       const url = error.config?.url
-      const isAuthEndpoint = url?.includes('/auth/status') || url?.includes('/auth/login')
+      // /auth/me is the boot-time session probe; a 401 just means "not
+      // logged in" and is handled by the store, not a session-expiry signal.
+      // /auth/status and /auth/login also routinely 401 without meaning
+      // the user was logged out mid-session.
+      const isAuthEndpoint =
+        url?.includes('/auth/status') ||
+        url?.includes('/auth/login') ||
+        url?.includes('/auth/me')
       if (!isAuthEndpoint) {
         logout()
       }
