@@ -357,6 +357,26 @@ export function SettingsPage() {
                 Theme selection is also available in header using the theme toggle button.
               </p>
             </div>
+
+            <div className="space-y-2 pt-4 border-t">
+              <Label>Layout Preferences</Label>
+              <p className="text-sm text-muted-foreground">
+                Reset sidebar width, sidebar filters, dashboard sort/filter, and section expansion to defaults. Your theme, account, and stack data are not affected.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (window.confirm('Reset all layout preferences to defaults? Theme and account settings will not be affected.')) {
+                    useUIStore.getState().resetLayout()
+                    toast.success('Layout preferences reset. Reloading to apply…')
+                    setTimeout(() => window.location.reload(), 600)
+                  }
+                }}
+              >
+                Reset layout preferences
+              </Button>
+            </div>
           </div>
         </CollapsibleSection>
 

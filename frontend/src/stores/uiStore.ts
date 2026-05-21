@@ -11,7 +11,21 @@ interface UIState {
   toggleSidebar: () => void
   closeSidebar: () => void
   setSidebarWidth: (width: number) => void
+  resetLayout: () => void
 }
+
+const DEFAULT_SIDEBAR_OPEN = true
+const DEFAULT_SIDEBAR_WIDTH = 256
+
+const LAYOUT_STORAGE_KEYS = [
+  'sidebar-search',
+  'sidebar-filter',
+  'sidebar-sort',
+  'sidebar-collapsed',
+  'dashboard-sort',
+  'dashboard-filter',
+  'settings-section-states',
+] as const
 
 function getSystemTheme(): 'light' | 'dark' {
   if (typeof window === 'undefined') return 'light'
@@ -51,6 +65,15 @@ export const useUIStore = create<UIState>()(
 
       setSidebarWidth: (width: number) => {
         set({ sidebarWidth: Math.min(Math.max(width, 200), 480) })
+      },
+
+      resetLayout: () => {
+        set({ sidebarOpen: DEFAULT_SIDEBAR_OPEN, sidebarWidth: DEFAULT_SIDEBAR_WIDTH })
+        if (typeof window !== 'undefined') {
+          for (const key of LAYOUT_STORAGE_KEYS) {
+            localStorage.removeItem(key)
+          }
+        }
       },
     }),
     {
