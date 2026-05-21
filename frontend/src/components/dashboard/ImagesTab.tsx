@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/table'
 import { ImageIcon, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/components/ConfirmDialog'
@@ -34,8 +35,8 @@ export function ImagesTab() {
       queryClient.invalidateQueries({ queryKey: ['resources', 'images'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
     },
-    onError: () => {
-      toast.error('Failed to remove image')
+    onError: (err) => {
+      toast.error(classifyError(err).message || 'Failed to remove image')
       setDeletingId(null)
     },
   })
@@ -163,7 +164,7 @@ export function ImagesTab() {
                   )}
                 </TableCell>
                 <TableCell>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(image)} disabled={deletingId === image.id || deleteMutation.isPending} title="Remove image">
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(image)} disabled={deletingId === image.id || deleteMutation.isPending} title="Remove image" aria-label={`Remove image ${image.repoTags?.[0] ?? image.id}`}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </TableCell>

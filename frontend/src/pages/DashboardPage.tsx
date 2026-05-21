@@ -25,6 +25,7 @@ import { classifyError } from '@/lib/error-handler'
 import { useStackActions } from '@/hooks/useStackActions'
 import { toast } from 'sonner'
 import { useConfirm } from '@/components/ConfirmDialog'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 
 type SortOption = 'name' | 'status'
 type StatusFilter = 'all' | 'running' | 'stopped'
@@ -283,73 +284,91 @@ export function DashboardPage() {
         />
 
         <TabsContent value="overview" className="mt-4">
-          <DashboardMetricsTab
-            stats={dashboardStats}
-            aggregates={aggregates}
-            isConnected={metricsConnected}
-            totalStacks={stacks?.length || 0}
-            runningStacks={runningCount}
-            stoppedStacks={stoppedCount}
-            totalContainers={containerCount}
-            runningContainers={dashboardStats?.runningContainers || 0}
-            directoryCount={directories?.length || 0}
-          />
+          <ErrorBoundary>
+            <DashboardMetricsTab
+              stats={dashboardStats}
+              aggregates={aggregates}
+              isConnected={metricsConnected}
+              totalStacks={stacks?.length || 0}
+              runningStacks={runningCount}
+              stoppedStacks={stoppedCount}
+              totalContainers={containerCount}
+              runningContainers={dashboardStats?.runningContainers || 0}
+              directoryCount={directories?.length || 0}
+            />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="stacks" className="mt-4">
-          <StacksTab
-            stacks={stacks || []}
-            filteredStacks={filteredStacks}
-            configuredDirs={configuredDirs}
-            sortBy={sortBy}
-            statusFilter={statusFilter}
-            onSortChange={setSortBy}
-            onFilterChange={setStatusFilter}
-            onNavigateToDirectories={() => setActiveTab('directories')}
-            onCreateStack={() => setCreateDialogOpen(true)}
-            onStart={handleStart}
-            onStop={handleStop}
-            onRestart={handleRestart}
-            onDelete={handleDelete}
-            deletingStackId={deletingStackId}
-            startPending={startMutation.isPending}
-            stopPending={stopMutation.isPending}
-            restartPending={restartMutation.isPending}
-            deletePending={deleteMutation.isPending}
-            isAnimating={isAnimating}
-          />
+          <ErrorBoundary>
+            <StacksTab
+              stacks={stacks || []}
+              filteredStacks={filteredStacks}
+              configuredDirs={configuredDirs}
+              sortBy={sortBy}
+              statusFilter={statusFilter}
+              onSortChange={setSortBy}
+              onFilterChange={setStatusFilter}
+              onNavigateToDirectories={() => setActiveTab('directories')}
+              onCreateStack={() => setCreateDialogOpen(true)}
+              onStart={handleStart}
+              onStop={handleStop}
+              onRestart={handleRestart}
+              onDelete={handleDelete}
+              deletingStackId={deletingStackId}
+              startPending={startMutation.isPending}
+              stopPending={stopMutation.isPending}
+              restartPending={restartMutation.isPending}
+              deletePending={deleteMutation.isPending}
+              isAnimating={isAnimating}
+            />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="containers" className="mt-4">
-          <ContainersOverviewTab stats={dashboardStats} latestMetrics={latestMetrics} />
+          <ErrorBoundary>
+            <ContainersOverviewTab stats={dashboardStats} latestMetrics={latestMetrics} />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="directories" className="mt-4">
-          <DirectoriesTab
-            directories={sortedDirectories}
-            stacks={stacks || []}
-            configuredDirs={configuredDirs}
-          />
+          <ErrorBoundary>
+            <DirectoriesTab
+              directories={sortedDirectories}
+              stacks={stacks || []}
+              configuredDirs={configuredDirs}
+            />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="updates" className="mt-4">
-          <UpdatesTab />
+          <ErrorBoundary>
+            <UpdatesTab />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="images" className="mt-4">
-          <ImagesTab />
+          <ErrorBoundary>
+            <ImagesTab />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="volumes" className="mt-4">
-          <VolumesTab />
+          <ErrorBoundary>
+            <VolumesTab />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="networks" className="mt-4">
-          <NetworksTab />
+          <ErrorBoundary>
+            <NetworksTab />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="build-cache" className="mt-4">
-          <BuildCacheTab />
+          <ErrorBoundary>
+            <BuildCacheTab />
+          </ErrorBoundary>
         </TabsContent>
       </Tabs>
 

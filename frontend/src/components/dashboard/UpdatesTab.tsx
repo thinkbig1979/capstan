@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/table'
 import { RefreshCw, Download, ArrowUpDown, History, Settings } from 'lucide-react'
 import { toast } from 'sonner'
+import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
@@ -61,8 +62,8 @@ export function UpdatesTab() {
         toast.success(`${container.containerName} ${action}`)
         setUpdatingId(null)
       },
-      onError: () => {
-        toast.error(`Failed to update ${container.containerName}`)
+      onError: (err) => {
+        toast.error(classifyError(err).message || `Failed to update ${container.containerName}`)
         setUpdatingId(null)
       },
     })

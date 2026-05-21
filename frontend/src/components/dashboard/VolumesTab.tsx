@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/table'
 import { HardDrive, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/components/ConfirmDialog'
@@ -33,8 +34,8 @@ export function VolumesTab() {
       setDeletingName(null)
       queryClient.invalidateQueries({ queryKey: ['resources', 'volumes'] })
     },
-    onError: () => {
-      toast.error('Failed to remove volume')
+    onError: (err) => {
+      toast.error(classifyError(err).message || 'Failed to remove volume')
       setDeletingName(null)
     },
   })
@@ -152,7 +153,7 @@ export function VolumesTab() {
                   </span>
                 </TableCell>
                 <TableCell>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(vol)} disabled={deletingName === vol.name || deleteMutation.isPending} title="Remove volume">
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(vol)} disabled={deletingName === vol.name || deleteMutation.isPending} title="Remove volume" aria-label={`Remove volume ${vol.name}`}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </TableCell>

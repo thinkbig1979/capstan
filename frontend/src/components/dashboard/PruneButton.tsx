@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Scissors, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { classifyError } from '@/lib/error-handler'
 import { formatBytes } from '@/lib/format'
 
 interface PruneResult {
@@ -59,9 +60,9 @@ export function PruneButton({
         setResult(null)
       }, 5000)
     },
-    onError: () => {
+    onError: (err) => {
       setPhase('error')
-      toast.error(`Failed to prune ${resourceType}`)
+      toast.error(classifyError(err).message || `Failed to prune ${resourceType}`)
       timerRef.current = setTimeout(() => setPhase('idle'), 4000)
     },
   })

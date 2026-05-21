@@ -33,21 +33,21 @@ export function StackRowActions({
   return (
     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()} role="group" aria-label="Stack actions">
       {status !== 'running' && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => onStart(stackId, e)} disabled={startPending} title="Start">
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => onStart(stackId, e)} disabled={startPending} title="Start" aria-label={`Start ${stackName}`}>
           <Play className="h-3.5 w-3.5" />
         </Button>
       )}
       {status === 'running' && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => onStop(stackId, e)} disabled={stopPending} title="Stop">
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => onStop(stackId, e)} disabled={stopPending} title="Stop" aria-label={`Stop ${stackName}`}>
           <Square className="h-3.5 w-3.5" />
         </Button>
       )}
       {status === 'running' && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => onRestart(stackId, e)} disabled={restartPending} title="Restart">
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => onRestart(stackId, e)} disabled={restartPending} title="Restart" aria-label={`Restart ${stackName}`}>
           <RefreshCw className={`h-3.5 w-3.5 ${restartPending ? 'animate-spin' : ''}`} />
         </Button>
       )}
-      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={(e) => onDelete(stackId, stackName, e)} disabled={isDeleting || deletePending} title="Delete">
+      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={(e) => onDelete(stackId, stackName, e)} disabled={isDeleting || deletePending} title="Delete" aria-label={`Delete ${stackName}`}>
         <Trash2 className="h-3.5 w-3.5" />
       </Button>
     </div>

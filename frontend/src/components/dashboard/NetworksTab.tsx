@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/table'
 import { Network, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { CreateNetworkDialog } from '@/components/dashboard/CreateNetworkDialog'
@@ -34,8 +35,8 @@ export function NetworksTab() {
       setDeletingId(null)
       queryClient.invalidateQueries({ queryKey: ['resources', 'networks'] })
     },
-    onError: () => {
-      toast.error('Failed to remove network')
+    onError: (err) => {
+      toast.error(classifyError(err).message || 'Failed to remove network')
       setDeletingId(null)
     },
   })
@@ -185,7 +186,7 @@ export function NetworksTab() {
                   )}
                 </TableCell>
                 <TableCell>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(net)} disabled={deletingId === net.id || deleteMutation.isPending} title="Remove network">
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(net)} disabled={deletingId === net.id || deleteMutation.isPending} title="Remove network" aria-label={`Remove network ${net.name}`}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </TableCell>

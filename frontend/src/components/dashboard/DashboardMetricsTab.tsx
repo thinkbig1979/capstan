@@ -159,11 +159,11 @@ export function DashboardMetricsTab({
         </Card>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2" role="status">
         {isConnected ? (
-          <div className="h-2 w-2 rounded-full bg-success animate-pulse" />
+          <div className="h-2 w-2 rounded-full bg-success animate-pulse" aria-hidden="true" />
         ) : (
-          <div className="h-2 w-2 rounded-full bg-muted-foreground" />
+          <div className="h-2 w-2 rounded-full bg-muted-foreground" aria-hidden="true" />
         )}
         <span className="text-xs text-muted-foreground">
           {isConnected ? 'Live metrics' : 'Connecting...'}

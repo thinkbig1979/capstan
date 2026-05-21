@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { AlertTriangle, Lock } from 'lucide-react'
+import { toast } from 'sonner'
 import { useToggleAutoUpdate } from '@/hooks/useResources'
+import { classifyError } from '@/lib/error-handler'
 
 interface AutoUpdateToggleProps {
   targetType: 'container' | 'stack'
@@ -33,8 +35,9 @@ export function AutoUpdateToggle({
     toggleMutation.mutate(
       { targetType, targetId, enabled: checked },
       {
-        onError: () => {
+        onError: (err) => {
           setOptimisticEnabled(!checked)
+          toast.error(classifyError(err).message || 'Failed to toggle auto-update')
         },
       },
     )

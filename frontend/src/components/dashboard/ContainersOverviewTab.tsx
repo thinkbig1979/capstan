@@ -27,6 +27,7 @@ import {
   Info, Copy, Check,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { classifyError } from '@/lib/error-handler'
 import { EditorView, basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
 import { json } from '@codemirror/lang-json'
@@ -91,7 +92,7 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
       if (mode === 'stack') queryClient.invalidateQueries({ queryKey: ['stacks'] })
     },
-    onError: () => toast.error(`Failed to start ${label}`),
+    onError: (err) => toast.error(classifyError(err).message || `Failed to start ${label}`),
   })
 
   const stopMutation = useMutation({
@@ -105,7 +106,7 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
       if (mode === 'stack') queryClient.invalidateQueries({ queryKey: ['stacks'] })
     },
-    onError: () => toast.error(`Failed to stop ${label}`),
+    onError: (err) => toast.error(classifyError(err).message || `Failed to stop ${label}`),
   })
 
   const restartMutation = useMutation({
@@ -119,7 +120,7 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
       if (mode === 'stack') queryClient.invalidateQueries({ queryKey: ['stacks'] })
     },
-    onError: () => toast.error(`Failed to restart ${label}`),
+    onError: (err) => toast.error(classifyError(err).message || `Failed to restart ${label}`),
   })
 
   const pullMutation = useMutation({
@@ -132,8 +133,8 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
         queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
       }
     },
-    onError: () => {
-      if (mode === 'stack') toast.error('Failed to pull images')
+    onError: (err) => {
+      if (mode === 'stack') toast.error(classifyError(err).message || 'Failed to pull images')
     },
   })
 
@@ -142,26 +143,26 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
   return (
     <div className="flex items-center gap-1">
       {!isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startMutation.mutate()} disabled={anyPending} title={`Start ${label}`}>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startMutation.mutate()} disabled={anyPending} title={`Start ${label}`} aria-label={`Start ${label}`}>
           <Play className="h-3.5 w-3.5" />
         </Button>
       )}
       {isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => stopMutation.mutate()} disabled={anyPending} title={`Stop ${label}`}>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => stopMutation.mutate()} disabled={anyPending} title={`Stop ${label}`} aria-label={`Stop ${label}`}>
           <Square className="h-3.5 w-3.5" />
         </Button>
       )}
       {isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => restartMutation.mutate()} disabled={anyPending} title={`Restart ${label}`}>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => restartMutation.mutate()} disabled={anyPending} title={`Restart ${label}`} aria-label={`Restart ${label}`}>
           <RefreshCw className={`h-3.5 w-3.5 ${restartMutation.isPending ? 'animate-spin' : ''}`} />
         </Button>
       )}
       {mode === 'stack' && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => pullMutation.mutate()} disabled={anyPending} title="Pull images">
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => pullMutation.mutate()} disabled={anyPending} title="Pull images" aria-label={`Pull images for ${label}`}>
           <Download className={`h-3.5 w-3.5 ${pullMutation.isPending ? 'animate-spin' : ''}`} />
         </Button>
       )}
-      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(containerId, containerName, isRunning)} disabled={anyPending} title="Remove container">
+      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(containerId, containerName, isRunning)} disabled={anyPending} title="Remove container" aria-label={`Remove ${label}`}>
         <Trash2 className="h-3.5 w-3.5" />
       </Button>
     </div>
@@ -233,8 +234,11 @@ function ContainerInspectDialog({
 
   useEffect(() => {
     if (!open) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCopied(false)
+     
     setLoading(true)
+     
     setError(null)
     resourcesApi
       .inspectContainer(containerId)
@@ -569,7 +573,7 @@ export function ContainersOverviewTab({ stats, latestMetrics }: ContainersOvervi
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
       queryClient.invalidateQueries({ queryKey: ['stacks'] })
     },
-    onError: () => toast.error('Failed to remove container'),
+    onError: (err) => toast.error(classifyError(err).message || 'Failed to remove container'),
   })
 
   const handleDeleteContainer = async (containerId: string, containerName: string, isRunning: boolean) => {
