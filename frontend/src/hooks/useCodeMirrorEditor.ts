@@ -25,9 +25,12 @@ export function useCodeMirrorEditor(
   const onSaveRef = useRef(options.onSave)
   const onChangeRef = useRef(options.onChange)
   const onSelectRef = useRef(options.onSelect)
-  onSaveRef.current = options.onSave
-  onChangeRef.current = options.onChange
-  onSelectRef.current = options.onSelect
+
+  useEffect(() => {
+    onSaveRef.current = options.onSave
+    onChangeRef.current = options.onChange
+    onSelectRef.current = options.onSelect
+  })
 
   const isDark = useMemo(
     () =>
@@ -102,6 +105,17 @@ export function useCodeMirrorEditor(
       viewRef.current = null
     }
   }, [isDark, ...(options.deps || [])]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    const currentDoc = view.state.doc.toString()
+    if (options.doc !== currentDoc) {
+      view.dispatch({
+        changes: { from: 0, to: currentDoc.length, insert: options.doc },
+      })
+    }
+  }, [options.doc])
 
   return { viewRef, isDark }
 }

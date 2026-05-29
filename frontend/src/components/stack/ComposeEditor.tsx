@@ -67,11 +67,6 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     if (data) {
       setContent(data)
       setLastSaved(data)
-      if (viewRef.current) {
-        viewRef.current.dispatch({
-          changes: { from: 0, to: viewRef.current.state.doc.length, insert: data },
-        })
-      }
     }
   }, [data])
 
