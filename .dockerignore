@@ -1,0 +1,55 @@
+# Build context filter for `docker build` (read from the context root, which is
+# the repo root — this is the file BuildKit actually honors; docker/.dockerignore
+# is not used when the context is the repo root).
+#
+# Keep: backend/, frontend/, docker/entrypoint.sh — everything the Dockerfile COPYs.
+# Exclude: VCS, deps, build output, local data, secrets, docs, and agent tooling
+# so the context stays small and no secrets are ever sent to the daemon.
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Dependencies and build output (reinstalled/rebuilt inside the image)
+**/node_modules
+**/dist
+**/.cache
+
+# Local runtime state and secrets — never ship these into the build context
+data/
+keys/
+.env
+.env.*
+!.env.example
+*.log
+
+# Test artifacts and coverage
+coverage
+.nyc_output
+testing/
+reports/
+*.test
+
+# Docs and assets not needed at build time
+**/*.md
+!README.md
+Supporting-Docs/
+screenshots/
+scorecard.png
+
+# Agent / editor / tooling config
+.agent-os/
+.beads/
+.claude/
+.opencode/
+.drift/
+.desloppify/
+.vscode/
+.idea/
+.mcp.json
+.driftignore
+
+# OS cruft
+.DS_Store
+Thumbs.db

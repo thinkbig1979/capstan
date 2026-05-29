@@ -1,5 +1,7 @@
-# Frontend build stage
-FROM node:22-alpine AS frontend-build
+# Frontend build stage — runs on the build host's native arch ($BUILDPLATFORM),
+# not the target arch, because the compiled output (static JS/CSS in dist/) is
+# architecture-neutral. This avoids slow QEMU emulation of the Node build.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-build
 
 WORKDIR /app/frontend
 
@@ -14,8 +16,10 @@ COPY frontend/ ./
 
 RUN npm run build
 
-# Backend build stage
-FROM golang:1.24-alpine AS backend-build
+# Backend build stage — also pinned to $BUILDPLATFORM. Go cross-compiles
+# natively (CGO disabled), so we build on the fast host arch and emit a binary
+# for the requested $TARGETARCH. TARGETOS/TARGETARCH are provided by Buildx.
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS backend-build
 
 WORKDIR /app
 
@@ -25,7 +29,9 @@ COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 
 COPY backend/ ./
-RUN CGO_ENABLED=0 GOOS=linux go build -a -o server ./cmd/server
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a -o server ./cmd/server
 
 # Runtime stage
 FROM alpine:3.21

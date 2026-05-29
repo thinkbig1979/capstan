@@ -1,7 +1,9 @@
 services:
   app:
     container_name: capstan
-    image: capstan:latest
+    # Published by .github/workflows/docker-publish.yml. Pin to a version tag
+    # (e.g. :0.1.0) in production; :latest tracks the most recent release.
+    image: ghcr.io/thinkbig1979/capstan:latest
     restart: unless-stopped
     ports:
       - "5001:5001"

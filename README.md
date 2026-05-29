@@ -7,9 +7,38 @@
 
 <h1 align="center">Capstan</h1>
 
+<p align="center">
+  <a href="https://github.com/thinkbig1979/capstan/actions/workflows/docker-publish.yml"><img alt="Build and publish image" src="https://github.com/thinkbig1979/capstan/actions/workflows/docker-publish.yml/badge.svg"></a>
+  <a href="https://github.com/thinkbig1979/capstan/pkgs/container/capstan"><img alt="GHCR image" src="https://img.shields.io/badge/ghcr.io-capstan-2496ED?logo=docker&logoColor=white"></a>
+  <img alt="Architectures" src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-blue">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+  <a href="https://claude.com/claude-code"><img alt="Built with AI assistance" src="https://img.shields.io/badge/built%20with-AI%20assistance-8A2BE2"></a>
+</p>
+
 A web-based Docker Compose stack manager with Git integration.
 
 ## Quick Start
+
+### Run the published image (any machine)
+
+Pre-built multi-arch images (`linux/amd64`, `linux/arm64`) are published to the
+GitHub Container Registry on each release:
+
+```bash
+docker pull ghcr.io/thinkbig1979/capstan:latest
+```
+
+The fastest way to run it is with `docker-compose.prod.yaml`, which already
+points at the published image:
+
+```bash
+docker compose -f docker-compose.prod.yaml up -d
+```
+
+Pin a version tag (e.g. `ghcr.io/thinkbig1979/capstan:0.1.0`) for reproducible
+deployments; `:latest` tracks the most recent release.
+
+### Run from source (local development)
 
 ```bash
 # Start everything (backend + frontend)
