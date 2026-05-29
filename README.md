@@ -35,7 +35,7 @@ points at the published image:
 docker compose -f docker-compose.prod.yaml up -d
 ```
 
-Pin a version tag (e.g. `ghcr.io/thinkbig1979/capstan:0.1.0`) for reproducible
+Pin a version tag (e.g. `ghcr.io/thinkbig1979/capstan:0.7.0`) for reproducible
 deployments; `:latest` tracks the most recent release.
 
 ### Run from source (local development)
@@ -347,6 +347,28 @@ For detailed production deployment instructions, see the [Deployment Guide](Supp
 - UI: Tailwind CSS
 - State: TanStack Query
 - Editor: CodeMirror 6
+
+## Versioning
+
+Capstan follows [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`),
+published as git tags prefixed with `v` (e.g. `v0.1.0`).
+
+While in the **`0.x` range, Capstan is pre-stable**: it offers no
+backward-compatibility guarantees yet. During this phase, treat a `MINOR` bump
+(`0.1.x` → `0.2.0`) as potentially breaking and a `PATCH` bump (`0.1.0` →
+`0.1.1`) as fixes only. The first stable release will be `v1.0.0`, after which
+standard SemVer rules apply (`MAJOR` for breaking changes).
+
+Each release tag publishes the matching container image tags:
+
+| Git tag      | Image tags                                |
+| ------------ | ----------------------------------------- |
+| `v0.7.0`     | `:0.7.0`, `:0.7`, `:latest`               |
+| `v0.8.0-rc.1`| `:0.8.0-rc.1` (pre-release; **not** `:latest`) |
+
+Pin a specific version (e.g. `ghcr.io/thinkbig1979/capstan:0.7.0`) for
+reproducible deployments; `:latest` always tracks the most recent stable
+release.
 
 ## License
 
