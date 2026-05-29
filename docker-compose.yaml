@@ -8,7 +8,7 @@ services:
     ports:
       - "5001:5001"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
       - /home/edwin/development:/home/edwin/development
       - ./keys:/app/keys:ro
       - app_data:/app/data
@@ -16,6 +16,8 @@ services:
       - STACKS_DIR=/home/edwin/development
       - HOST_STACKS_DIR=/home/edwin/development
       - DATA_DIR=/app/data
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - TRUSTED_NETWORKS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,172.18.0.0/16,127.0.0.1,::1
     env_file:
       - ./backend/.env

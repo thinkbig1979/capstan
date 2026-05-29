@@ -57,6 +57,84 @@ See [Volume Path Identity](Supporting-Docs/Security/Volume-Path-Identity.md) for
 - Troubleshooting steps
 - Migration guide from Dockge
 
+## Docker Socket & Security
+
+Capstan manages your stacks by talking to the host's Docker daemon through the
+mounted socket (`/var/run/docker.sock`). A few things worth understanding:
+
+### It runs as non-root, with zero host changes
+
+You do **not** need to create users, edit groups, or change any permissions on
+your host. Just mount the socket and a data directory:
+
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+  - ./data:/app/data
+  - /opt/stacks:/opt/stacks   # your compose projects
+```
+
+On startup the container briefly runs as root only to:
+1. discover the **actual group GID** of the mounted socket (it differs per
+   host — Debian/Ubuntu often use `999`, others `998`/`130`/…) and join it, and
+2. align its runtime user to your file owner,
+
+then it drops privileges and runs the app as the non-root `appuser`. Because the
+socket's group is detected at runtime, the same image works on any host without
+rebuilding.
+
+### Matching file ownership (PUID / PGID)
+
+`appuser` defaults to UID/GID **1000** — the typical first Linux user, so on most
+single-user hosts it "just works" and your stack files stay editable from the
+host. If the user that owns your stacks/data is a different ID, set:
+
+```yaml
+environment:
+  - PUID=1001
+  - PGID=1001
+```
+
+Capstan owns and chowns its own `./data` dir; it does **not** rewrite ownership
+of your existing compose projects — it matches their owner via PUID/PGID instead.
+
+### The honest security note
+
+Anyone who can reach `/var/run/docker.sock` has **root-equivalent control of the
+host** (the Docker API can start a privileged container that mounts `/`). This is
+true regardless of the in-container user, so the non-root `appuser` is
+defense-in-depth for Capstan's own files — not a containment boundary for Docker
+itself. Two consequences:
+
+- **`:ro` on the socket mount is cosmetic.** It makes the socket *file*
+  read-only but the Docker API still accepts write commands (create/start/delete)
+  through it, so it is not a safeguard. Capstan does not use it.
+- **For real least-privilege**, put a socket proxy in front of Capstan and expose
+  only the API endpoints it needs (containers, exec, and the system/version
+  endpoints), denying the rest:
+
+  ```yaml
+  services:
+    docker-proxy:
+      image: tecnativa/docker-socket-proxy
+      environment:
+        CONTAINERS: 1
+        SERVICES: 1
+        TASKS: 1
+        POST: 1            # required for start/stop/create
+        EXEC: 1            # required for the in-app terminal
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock:ro
+      networks: [capstan-network]
+
+    capstan:
+      image: capstan:latest
+      environment:
+        - DOCKER_HOST=tcp://docker-proxy:2375
+      # no socket mount on Capstan itself
+      networks: [capstan-network]
+  ```
+
 ## Project Structure
 
 ```

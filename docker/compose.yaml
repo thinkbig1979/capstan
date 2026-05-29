@@ -8,7 +8,10 @@ services:
     ports:
       - "5001:5001"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # The Docker socket. Capstan joins its group automatically at runtime,
+      # so no host changes are needed. (:ro is not used — it would not block
+      # the Docker API anyway; see the README "Docker socket & security".)
+      - /var/run/docker.sock:/var/run/docker.sock
       - /opt/stacks:/opt/stacks
       - ./data:/app/data
     environment:
@@ -20,6 +23,9 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - LOG_LEVEL=info
       - CORS_ORIGINS=${CORS_ORIGINS:-}
+      # Match the host user that owns your stacks/data (default 1000).
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
     networks:
       - capstan-network
     deploy:

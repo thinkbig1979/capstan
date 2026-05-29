@@ -6,10 +6,15 @@ services:
     ports:
       - "5001:5001"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Capstan joins the socket's group at runtime; no host changes needed.
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./stacks:/opt/stacks
       - ./data:/app/data
       - ./keys:/app/keys:ro
+    environment:
+      # Match the host user that owns your stacks/data (default 1000).
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
     env_file:
       - .env
     networks:

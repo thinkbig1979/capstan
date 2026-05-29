@@ -38,21 +38,24 @@ RUN apk add --no-cache \
     docker-cli-compose \
     git \
     openssh-client \
+    shadow \
     su-exec \
     tzdata \
     wget
 
+# Non-root runtime user. The Docker socket's group GID differs from host to
+# host, so it is deliberately NOT hardcoded here — entrypoint.sh discovers the
+# mounted socket's group at runtime and joins it. UID/GID default to 1000 and
+# can be remapped to the host owner via the PUID/PGID env vars.
 RUN addgroup -g 1000 appuser && \
-    addgroup -g 130 docker && \
-    adduser -D -u 1000 -G appuser appuser && \
-    addgroup appuser docker
+    adduser -D -u 1000 -G appuser appuser
 
 COPY --from=backend-build /app/server /app/
 COPY --from=frontend-build /app/frontend/dist /app/frontend/
 
 RUN chmod +x /app/server && \
     mkdir -p /opt/stacks /app/data && \
-    chown -R appuser:appuser /app /opt/stacks
+    chown -R appuser:appuser /app
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
@@ -60,6 +63,10 @@ RUN chmod +x /entrypoint.sh
 ENV STACKS_DIR=/opt/stacks
 ENV DATA_DIR=/app/data
 ENV PORT=5001
+# Remap the runtime user to match the host owner of your stacks/data volumes.
+# Defaults to 1000 (the typical first Linux user); no host changes required.
+ENV PUID=1000
+ENV PGID=1000
 
 EXPOSE 5001
 
