@@ -55,6 +55,10 @@ backend/server
 keys/*
 !keys/README.md
 
+# Runtime bind-mount data (compose mounts ./data and ./stacks into the container)
+/data/
+/stacks/
+
 # Backend embedded frontend (built during Docker build)
 backend/frontend/assets/
 :memory:
