@@ -31,6 +31,13 @@ dist/
 build/
 *.log
 
+# Compiled Go binaries and test binaries
+/server
+backend/server
+backend/server-new
+backend/bin/
+*.test
+
 # Dependencies
 node_modules/
 vendor/
