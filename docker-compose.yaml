@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    container_name: docker-manager
+    container_name: capstan
     restart: unless-stopped
     ports:
       - "5001:5001"

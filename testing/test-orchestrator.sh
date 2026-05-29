@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Docker Manager E2E Test Orchestrator
+# Capstan E2E Test Orchestrator
 # Coordinates parallel execution of multiple subagents for e2e browser testing
 
 set -euo pipefail

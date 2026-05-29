@@ -1,4 +1,4 @@
-# Multi-stage build for Docker Manager Backend
+# Multi-stage build for Capstan Backend
 FROM golang:1.24-alpine AS builder
 
 WORKDIR /build

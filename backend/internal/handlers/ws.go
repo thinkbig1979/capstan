@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker-manager/backend/internal/database"
-	"github.com/docker-manager/backend/internal/middleware"
-	"github.com/docker-manager/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -254,7 +254,7 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 	if authDisabled {
 		userID = "anonymous"
 	} else {
-		cookieToken, cookieErr := c.Cookie("docker_manager_token")
+		cookieToken, cookieErr := c.Cookie("capstan_token")
 
 		if cookieErr == nil && cookieToken != "" {
 			userID, err = authenticateToken(cookieToken, db, jwtSecret)

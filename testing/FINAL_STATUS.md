@@ -68,12 +68,12 @@ curl -X POST http://localhost:5001/api/v1/auth/setup \
 
 ### 2. Configure Stack Discovery
 
-The Docker Manager application needs to discover the test stacks:
+The Capstan application needs to discover the test stacks:
 
 **Current Configuration:**
-- Test stacks location: `/home/edwin/development/docker-manager/testing/docker-test-stacks`
+- Test stacks location: `/home/edwin/development/capstan/testing/docker-test-stacks`
 - Application location: `/opt/stacks` (inside container)
-- Volume mount: `/home/edwin/development/docker-manager/testing/docker-test-stacks:/opt/stacks`
+- Volume mount: `/home/edwin/development/capstan/testing/docker-test-stacks:/opt/stacks`
 
 **Status**: ✅ Correctly configured
 
@@ -81,7 +81,7 @@ The Docker Manager application needs to discover the test stacks:
 
 When running tests, set:
 ```bash
-export TEST_STACKS_DIR="/home/edwin/development/docker-manager/testing/docker-test-stacks"
+export TEST_STACKS_DIR="/home/edwin/development/capstan/testing/docker-test-stacks"
 ```
 
 ---

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker-manager/backend/internal/config"
-	"github.com/docker-manager/backend/internal/database"
-	"github.com/docker-manager/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"

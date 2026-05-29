@@ -9,7 +9,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker-manager/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"gopkg.in/yaml.v3"
 )
 

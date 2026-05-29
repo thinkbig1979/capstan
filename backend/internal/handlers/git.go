@@ -10,10 +10,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/docker-manager/backend/internal/config"
-	"github.com/docker-manager/backend/internal/database"
-	"github.com/docker-manager/backend/internal/models"
-	"github.com/docker-manager/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/gin-gonic/gin"
 )
 

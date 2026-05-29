@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { LoginForm, type LoginFormData } from '@/components/auth/LoginForm'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { Logo } from '@/components/Logo'
 import { toast } from 'sonner'
 
 interface AuthPageProps {
@@ -48,9 +49,13 @@ export function AuthPage({ title, description, submitFn, successMessage, errorPr
   }
 
   return (
-    <div className="relative min-h-screen flex items-center justify-center p-4">
+    <div className="relative min-h-screen flex flex-col items-center justify-center p-4">
       <div className="absolute top-4 right-4">
         <ThemeToggle />
+      </div>
+      <div className="mb-6 flex flex-col items-center gap-3">
+        <Logo className="h-12 w-12" />
+        <span className="text-xl font-semibold tracking-tight">Capstan</span>
       </div>
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">

@@ -31,12 +31,12 @@ func TestCSRF_GETSetsCookie(t *testing.T) {
 	cookies := w.Result().Cookies()
 	found := false
 	for _, c := range cookies {
-		if c.Name == "docker_manager_csrf" && c.Value != "" {
+		if c.Name == "capstan_csrf" && c.Value != "" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("expected docker_manager_csrf cookie to be set on GET")
+		t.Fatal("expected capstan_csrf cookie to be set on GET")
 	}
 }
 
@@ -57,7 +57,7 @@ func TestCSRF_POSTWithoutCookieIsRejected(t *testing.T) {
 func TestCSRF_POSTWithMatchingHeaderAndCookiePasses(t *testing.T) {
 	r := newCSRFTestRouter()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks", strings.NewReader("{}"))
-	req.AddCookie(&http.Cookie{Name: "docker_manager_csrf", Value: "abc123"})
+	req.AddCookie(&http.Cookie{Name: "capstan_csrf", Value: "abc123"})
 	req.Header.Set("X-CSRF-Token", "abc123")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -70,7 +70,7 @@ func TestCSRF_POSTWithMatchingHeaderAndCookiePasses(t *testing.T) {
 func TestCSRF_POSTWithMismatchedHeaderRejected(t *testing.T) {
 	r := newCSRFTestRouter()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks", strings.NewReader("{}"))
-	req.AddCookie(&http.Cookie{Name: "docker_manager_csrf", Value: "abc123"})
+	req.AddCookie(&http.Cookie{Name: "capstan_csrf", Value: "abc123"})
 	req.Header.Set("X-CSRF-Token", "different")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

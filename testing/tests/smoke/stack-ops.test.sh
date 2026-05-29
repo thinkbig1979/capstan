@@ -129,7 +129,7 @@ test_start_stack() {
   
   # First, ensure stack is stopped
   log_info "Ensuring stack is stopped first..."
-  docker stop docker-manager-nginx-test 2>/dev/null || true
+  docker stop capstan-nginx-test 2>/dev/null || true
   sleep 2
   
   # Navigate to stack
@@ -165,7 +165,7 @@ test_start_stack() {
   fi
   
   # Verify container is actually running in Docker
-  if ! docker ps --format '{{.Names}}' | grep -q "^docker-manager-nginx-test$"; then
+  if ! docker ps --format '{{.Names}}' | grep -q "^capstan-nginx-test$"; then
     test_fail "Docker container is not actually running"
     return 1
   fi
@@ -182,7 +182,7 @@ test_stop_stack() {
   
   # First, ensure stack is running
   log_info "Ensuring stack is running first..."
-  docker start docker-manager-nginx-test 2>/dev/null || true
+  docker start capstan-nginx-test 2>/dev/null || true
   sleep 2
   
   # Navigate to stack
@@ -218,7 +218,7 @@ test_stop_stack() {
   fi
   
   # Verify container is actually stopped in Docker
-  if docker ps --format '{{.Names}}' | grep -q "^docker-manager-nginx-test$"; then
+  if docker ps --format '{{.Names}}' | grep -q "^capstan-nginx-test$"; then
     test_fail "Docker container is still running"
     return 1
   fi
@@ -235,7 +235,7 @@ test_restart_stack() {
   
   # Ensure stack is running first
   log_info "Ensuring stack is running..."
-  docker start docker-manager-nginx-test 2>/dev/null || true
+  docker start capstan-nginx-test 2>/dev/null || true
   sleep 2
   
   # Navigate to stack
@@ -259,7 +259,7 @@ test_restart_stack() {
   
   # Get container ID before restart
   local container_id_before
-  container_id_before=$(docker ps --filter "name=docker-manager-nginx-test" --format "{{.ID}}")
+  container_id_before=$(docker ps --filter "name=capstan-nginx-test" --format "{{.ID}}")
   
   # Click restart
   log_info "Clicking restart button..."
@@ -275,7 +275,7 @@ test_restart_stack() {
   fi
   
   # Verify container restarted (ID may or may not change)
-  if ! docker ps --format '{{.Names}}' | grep -q "^docker-manager-nginx-test$"; then
+  if ! docker ps --format '{{.Names}}' | grep -q "^capstan-nginx-test$"; then
     test_fail "Docker container is not running after restart"
     return 1
   fi

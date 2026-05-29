@@ -12,7 +12,7 @@ export function DashboardHeader({ onRefresh, onCreateStack, isRefreshing }: Dash
     <div className="flex items-center justify-between">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-        <p className="text-muted-foreground">Welcome to Docker Manager</p>
+        <p className="text-muted-foreground">Welcome to Capstan</p>
       </div>
       <div className="flex items-center gap-2">
         <Button variant="outline" size="icon" onClick={onRefresh} disabled={isRefreshing} aria-label="Refresh dashboard">

@@ -8,7 +8,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== Docker Manager Frontend - Quick Start ===${NC}"
+echo -e "${GREEN}=== Capstan Frontend - Quick Start ===${NC}"
 
 # Check if we're in the right directory
 if [ ! -f "package.json" ]; then

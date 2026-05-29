@@ -1,7 +1,7 @@
 services:
   app:
-    container_name: docker-manager
-    image: docker-manager:latest
+    container_name: capstan
+    image: capstan:latest
     restart: unless-stopped
     ports:
       - "5001:5001"
@@ -13,7 +13,7 @@ services:
     env_file:
       - .env
     networks:
-      - docker-manager-network
+      - capstan-network
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
     healthcheck:
@@ -24,5 +24,5 @@ services:
       retries: 3
 
 networks:
-  docker-manager-network:
+  capstan-network:
     external: true

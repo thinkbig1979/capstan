@@ -1,6 +1,6 @@
-# Docker Manager E2E Testing
+# Capstan E2E Testing
 
-This directory contains end-to-end (E2E) browser tests for the Docker Manager application using the `agent-browser` skill and orchestrated parallel execution with multiple subagents.
+This directory contains end-to-end (E2E) browser tests for the Capstan application using the `agent-browser` skill and orchestrated parallel execution with multiple subagents.
 
 ## Quick Start
 
@@ -117,7 +117,7 @@ Tests are organized into 5 functional domains that run in parallel:
    - Test stacks use Docker Compose
    - Docker socket access required
 
-3. **Docker Manager**: The application under test
+3. **Capstan**: The application under test
    - Should be running on `http://localhost:3001`
    - Or will be started by the test orchestrator
 
@@ -141,7 +141,7 @@ The test environment includes:
   - Password: `TestPass123!`
 
 - **Test Data**: Isolated directory structure
-  - Test stacks: `/tmp/docker-manager-test-stacks`
+  - Test stacks: `/tmp/capstan-test-stacks`
   - Test reports: `testing/reports/`
 
 ### Manual Setup
@@ -150,10 +150,10 @@ The test environment includes:
 # Set up test environment
 ./testing/environments/setup.sh
 
-# Configure Docker Manager to use test stacks
-export STACKS_DIR=/tmp/docker-manager-test-stacks
+# Configure Capstan to use test stacks
+export STACKS_DIR=/tmp/capstan-test-stacks
 
-# Start Docker Manager (if not running)
+# Start Capstan (if not running)
 cd ..
 docker-compose up -d
 ```
@@ -439,4 +439,4 @@ For issues or questions:
 
 ## License
 
-These tests are part of the Docker Manager project and follow the same license.
+These tests are part of the Capstan project and follow the same license.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker-manager/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

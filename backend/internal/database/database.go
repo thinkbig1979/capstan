@@ -9,7 +9,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/docker-manager/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 type TokenEncryptor interface {
@@ -34,7 +34,7 @@ func NewWithEncryptor(dataDir string, encryptor TokenEncryptor) (*DB, error) {
 		if err := os.MkdirAll(dataDir, 0755); err != nil {
 			return nil, err
 		}
-		dbPath = dataDir + "/docker-manager.db"
+		dbPath = dataDir + "/capstan.db"
 	}
 
 	db, err := sql.Open("sqlite", dbPath)

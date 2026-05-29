@@ -1,9 +1,9 @@
 services:
-  docker-manager:
+  capstan:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: docker-manager
+    container_name: capstan
     restart: unless-stopped
     ports:
       - "5001:5001"
@@ -21,7 +21,7 @@ services:
       - LOG_LEVEL=info
       - CORS_ORIGINS=${CORS_ORIGINS:-}
     networks:
-      - docker-manager-network
+      - capstan-network
     deploy:
       resources:
         limits:
@@ -39,8 +39,8 @@ services:
       start_period: 5s
 
 networks:
-  docker-manager-network:
+  capstan-network:
     driver: bridge
 
 volumes:
-  docker-manager-data:
+  capstan-data:

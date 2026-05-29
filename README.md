@@ -1,4 +1,11 @@
-# Docker Manager
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="Supporting-Docs/Branding/capstan-mark-dark.svg">
+    <img alt="Capstan" src="Supporting-Docs/Branding/capstan-mark-light.svg" width="96" height="96">
+  </picture>
+</p>
+
+<h1 align="center">Capstan</h1>
 
 A web-based Docker Compose stack manager with Git integration.
 
@@ -22,7 +29,7 @@ Then open http://localhost:3001
 
 ## Volume Path Identity
 
-**Important:** Docker Manager requires that the `STACKS_DIR` path inside the container must match the path on the host system for Docker Compose operations to work correctly.
+**Important:** Capstan requires that the `STACKS_DIR` path inside the container must match the path on the host system for Docker Compose operations to work correctly.
 
 ### Quick Setup
 
@@ -36,7 +43,7 @@ environment:
 
 ### Verification
 
-On startup, Docker Manager validates path identity and logs warnings if paths don't match:
+On startup, Capstan validates path identity and logs warnings if paths don't match:
 
 ```bash
 docker-compose logs backend | grep "Volume path identity"
@@ -53,7 +60,7 @@ See [Volume Path Identity](Supporting-Docs/Security/Volume-Path-Identity.md) for
 ## Project Structure
 
 ```
-docker-manager/
+capstan/
 ├── backend/          # Go backend API
 │   ├── cmd/         # Main application
 │   ├── internal/    # Internal packages
@@ -139,7 +146,7 @@ npm run build           # Build for production
 Migrating from Dockge? See the comprehensive [Migration from Dockge guide](Supporting-Docs/Migration-From-Dockge.md) for:
 - Prerequisites and backup procedures
 - Side-by-side setup (both apps running)
-- Port differences (Dockge 5001 → Docker Manager 5001)
+- Port differences (Dockge 5001 → Capstan 5001)
 - Account migration (manual: create new admin)
 - Complete feature comparison table
 - Troubleshooting common migration issues
@@ -153,7 +160,7 @@ For a quick overview:
    cp -r /opt/stacks /opt/stacks.backup
    ```
 
-2. **Update environment variables** (Dockge uses `DOCKGE_STACKS_DIR`, Docker Manager uses `STACKS_DIR`):
+2. **Update environment variables** (Dockge uses `DOCKGE_STACKS_DIR`, Capstan uses `STACKS_DIR`):
    ```yaml
    environment:
      - STACKS_DIR=/opt/stacks

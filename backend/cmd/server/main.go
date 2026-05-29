@@ -16,11 +16,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/docker-manager/backend/internal/config"
-	"github.com/docker-manager/backend/internal/database"
-	"github.com/docker-manager/backend/internal/handlers"
-	"github.com/docker-manager/backend/internal/middleware"
-	"github.com/docker-manager/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/handlers"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/docker/docker/client"
 	"github.com/gin-gonic/gin"
 )
@@ -56,7 +56,7 @@ func isLocalhost(c *gin.Context) bool {
 }
 
 func main() {
-	slog.Info("Starting Docker Manager backend")
+	slog.Info("Starting Capstan backend")
 
 	cfg, err := config.Load()
 	if err != nil {

@@ -25,7 +25,7 @@ import type {
 const API_BASE_URL = '/api/v1'
 
 function getCSRFToken(): string | null {
-  const match = document.cookie.match(/(?:^|;\s*)docker_manager_csrf=([^;]*)/)
+  const match = document.cookie.match(/(?:^|;\s*)capstan_csrf=([^;]*)/)
   return match ? decodeURIComponent(match[1]) : null
 }
 

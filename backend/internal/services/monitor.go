@@ -13,7 +13,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 
-	"github.com/docker-manager/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 type MonitorService struct {

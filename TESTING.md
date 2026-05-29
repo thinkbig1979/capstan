@@ -1,4 +1,4 @@
-# Docker Manager - Local Testing Guide
+# Capstan - Local Testing Guide
 
 ## Quick Start
 
@@ -43,7 +43,7 @@ cd frontend
 ## Directory Structure
 
 ```
-docker-manager/
+capstan/
 ├── backend/              # Go backend
 │   ├── cmd/server/      # Main application
 │   ├── internal/        # Internal packages
@@ -110,26 +110,26 @@ docker-compose down -v
 
 ```bash
 cd backend
-docker build -t docker-manager-backend .
+docker build -t capstan-backend .
 docker run -d \
   -p 5001:5001 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v $(pwd)/stacks:/opt/stacks \
   -v $(pwd)/data:/app/data \
   --env-file .env \
-  --name docker-manager-backend \
-  docker-manager-backend
+  --name capstan-backend \
+  capstan-backend
 ```
 
 ### Frontend
 
 ```bash
 cd frontend
-docker build -t docker-manager-frontend .
+docker build -t capstan-frontend .
 docker run -d \
   -p 3001:80 \
-  --name docker-manager-frontend \
-  docker-manager-frontend
+  --name capstan-frontend \
+  capstan-frontend
 ```
 
 ## Testing the Backend
@@ -186,7 +186,7 @@ The backend needs access to the Docker socket. Ensure:
 
 The SQLite database is created automatically. If you see errors:
 1. Check DATA_DIR is writable
-2. Remove the database: `rm /tmp/docker-manager-data/docker-manager.db` (or docker volume)
+2. Remove the database: `rm /tmp/capstan-data/capstan.db` (or docker volume)
 3. Restart the backend
 
 ## Development

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker-manager/backend/internal/database"
-	"github.com/docker-manager/backend/internal/middleware"
-	"github.com/docker-manager/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/gin-gonic/gin"
 	jwtv5 "github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -418,7 +418,7 @@ func parseJWT(token, secret string) (jwtv5.MapClaims, error) {
 func setAuthCookies(c *gin.Context, token string, csrfToken string) {
 	secure := !strings.Contains(c.Request.Host, "localhost") && !strings.Contains(c.Request.Host, "127.0.0.1")
 	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     "docker_manager_token",
+		Name:     "capstan_token",
 		Value:    token,
 		MaxAge:   86400,
 		Path:     "/",
@@ -427,7 +427,7 @@ func setAuthCookies(c *gin.Context, token string, csrfToken string) {
 		SameSite: http.SameSiteLaxMode,
 	})
 	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     "docker_manager_csrf",
+		Name:     "capstan_csrf",
 		Value:    csrfToken,
 		MaxAge:   86400,
 		Path:     "/",
@@ -440,7 +440,7 @@ func setAuthCookies(c *gin.Context, token string, csrfToken string) {
 
 func clearAuthCookies(c *gin.Context) {
 	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     "docker_manager_token",
+		Name:     "capstan_token",
 		Value:    "",
 		MaxAge:   -1,
 		Path:     "/",
@@ -448,7 +448,7 @@ func clearAuthCookies(c *gin.Context) {
 		SameSite: http.SameSiteLaxMode,
 	})
 	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     "docker_manager_csrf",
+		Name:     "capstan_csrf",
 		Value:    "",
 		MaxAge:   -1,
 		Path:     "/",

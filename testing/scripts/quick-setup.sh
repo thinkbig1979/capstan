@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Docker Manager E2E Test Orchestrator - Quick Setup
+# Capstan E2E Test Orchestrator - Quick Setup
 # Automates admin account creation for testing
 
 set -euo pipefail

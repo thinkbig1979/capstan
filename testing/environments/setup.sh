@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Docker Manager Test Environment Setup
+# Capstan Test Environment Setup
 # Creates test Docker stacks and test data
 
 set -euo pipefail
@@ -9,7 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTING_DIR="$(dirname "$SCRIPT_DIR")"
 STACKS_DIR="$SCRIPT_DIR/stacks"
-TEST_STACKS_DIR="${TEST_STACKS_DIR:-/tmp/docker-manager-test-stacks}"
+TEST_STACKS_DIR="${TEST_STACKS_DIR:-/tmp/capstan-test-stacks}"
 
 # Colors
 export RED='\033[0;31m'
@@ -56,7 +56,7 @@ version: '3.8'
 services:
   nginx:
     image: nginx:1.25-alpine
-    container_name: docker-manager-nginx-test
+    container_name: capstan-nginx-test
     ports:
       - "8080:80"
     restart: unless-stopped
@@ -83,7 +83,7 @@ version: '3.8'
 services:
   redis:
     image: redis:7-alpine
-    container_name: docker-manager-redis-test
+    container_name: capstan-redis-test
     ports:
       - "6379:6379"
     restart: unless-stopped
@@ -110,7 +110,7 @@ version: '3.8'
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: docker-manager-postgres-test
+    container_name: capstan-postgres-test
     environment:
       POSTGRES_PASSWORD: testpass123
       POSTGRES_DB: testdb
@@ -145,7 +145,7 @@ version: '3.8'
 services:
   app:
     image: alpine:3.19
-    container_name: docker-manager-env-test
+    container_name: capstan-env-test
     restart: unless-stopped
     environment:
       - APP_NAME=${APP_NAME:-test-app}
@@ -179,7 +179,7 @@ version: '3.8'
 services:
   web:
     image: nginx:1.25-alpine
-    container_name: docker-manager-git-test
+    container_name: capstan-git-test
     ports:
       - "8081:80"
     restart: unless-stopped
@@ -213,7 +213,7 @@ version: '3.8'
 services:
   nginx:
     image: nginx:1.25-alpine
-    container_name: docker-manager-complex-nginx
+    container_name: capstan-complex-nginx
     ports:
       - "8082:80"
     restart: unless-stopped
@@ -224,7 +224,7 @@ services:
 
   app:
     image: alpine:3.19
-    container_name: docker-manager-complex-app
+    container_name: capstan-complex-app
     restart: unless-stopped
     environment:
       - LOG_LEVEL=info
@@ -235,7 +235,7 @@ services:
 
   busybox:
     image: busybox:latest
-    container_name: docker-manager-complex-busybox
+    container_name: capstan-complex-busybox
     restart: unless-stopped
     command: ["tail", "-f", "/dev/null"]
     networks:
@@ -267,9 +267,9 @@ create_test_user() {
   log_success "Test user credentials ready"
 }
 
-# Configure Docker Manager to use test stacks
-configure_docker_manager() {
-  log_info "Configuring Docker Manager to use test stacks..."
+# Configure Capstan to use test stacks
+configure_capstan() {
+  log_info "Configuring Capstan to use test stacks..."
   
   # Get the configured STACKS_DIR from docker-compose.yaml
   local docker_compose_file="$TESTING_DIR/../docker-compose.yaml"
@@ -311,7 +311,7 @@ configure_docker_manager() {
     log_success "Created symlink: $configured_stacks_dir -> $TEST_STACKS_DIR"
   else
     log_warning "Cannot symlink (directory doesn't exist or not writable): $configured_stacks_dir"
-    log_info "You may need to manually configure Docker Manager to use: $TEST_STACKS_DIR"
+    log_info "You may need to manually configure Capstan to use: $TEST_STACKS_DIR"
   fi
   
   log_success "Configuration complete"
@@ -418,8 +418,8 @@ setup() {
   # Create test user
   create_test_user
   
-  # Configure Docker Manager
-  configure_docker_manager
+  # Configure Capstan
+  configure_capstan
   
   # Print information
   print_info
@@ -433,15 +433,15 @@ cleanup() {
   
   # Stop and remove test containers
   log_info "Stopping test containers..."
-  docker stop docker-manager-nginx-test docker-manager-redis-test docker-manager-postgres-test \
-             docker-manager-env-test docker-manager-git-test \
-             docker-manager-complex-nginx docker-manager-complex-app docker-manager-complex-busybox \
+  docker stop capstan-nginx-test capstan-redis-test capstan-postgres-test \
+             capstan-env-test capstan-git-test \
+             capstan-complex-nginx capstan-complex-app capstan-complex-busybox \
              2>/dev/null || true
   
   log_info "Removing test containers..."
-  docker rm docker-manager-nginx-test docker-manager-redis-test docker-manager-postgres-test \
-            docker-manager-env-test docker-manager-git-test \
-            docker-manager-complex-nginx docker-manager-complex-app docker-manager-complex-busybox \
+  docker rm capstan-nginx-test capstan-redis-test capstan-postgres-test \
+            capstan-env-test capstan-git-test \
+            capstan-complex-nginx capstan-complex-app capstan-complex-busybox \
             2>/dev/null || true
   
   # Remove test stacks directory

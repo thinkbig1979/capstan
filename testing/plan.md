@@ -1,4 +1,4 @@
-# Docker Manager E2E Browser Testing Plan
+# Capstan E2E Browser Testing Plan
 
 **Version**: 1.0.0  
 **Date**: 2025-02-15  
@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-This plan outlines a comprehensive end-to-end (E2E) browser testing strategy for the Docker Manager application using the `browser-automating` skill. The approach uses multiple parallel subagents to execute tests efficiently, with all test artifacts contained within the `testing/` directory to avoid polluting the system.
+This plan outlines a comprehensive end-to-end (E2E) browser testing strategy for the Capstan application using the `browser-automating` skill. The approach uses multiple parallel subagents to execute tests efficiently, with all test artifacts contained within the `testing/` directory to avoid polluting the system.
 
 ### Key Objectives
 
@@ -210,7 +210,7 @@ log_info "Setting up test environment..."
 
 # Phase 2: Start Application (if not running)
 if ! curl -sf http://localhost:3001 > /dev/null; then
-  log_info "Starting Docker Manager..."
+  log_info "Starting Capstan..."
   docker-compose up -d
   wait_for_app "http://localhost:3001" 60
 fi

@@ -18,7 +18,7 @@ The E2E testing infrastructure is **70% complete** and **partially functional**.
 **Problem**: When navigating to `/login`, the application redirects to `/` (root/dashboard)
 
 **Root Cause**: 
-1. The Docker Manager application's authentication behavior is complex
+1. The Capstan application's authentication behavior is complex
 2. Even with `AUTH_DISABLED=false` in backend/.env, the frontend may redirect based on stored state
 3. React Router navigation can cause client-side redirects
 
@@ -34,11 +34,11 @@ The test infrastructure includes storage clearing, but you may need to:
 
 ### Issue 2: Stack Discovery
 
-**Problem**: Test stacks are not discovered by Docker Manager
+**Problem**: Test stacks are not discovered by Capstan
 
 **Root Cause**:
-- Docker Manager is configured to use `/opt/stacks` (inside container)
-- Test stacks are created in `/tmp/docker-manager-test-stacks` (on host)
+- Capstan is configured to use `/opt/stacks` (inside container)
+- Test stacks are created in `/tmp/capstan-test-stacks` (on host)
 - These paths don't match, so stacks aren't discovered
 
 **Workarounds**:
@@ -47,14 +47,14 @@ The test infrastructure includes storage clearing, but you may need to:
 ```bash
 # Copy test stacks to configured location
 sudo mkdir -p /opt/stacks
-sudo cp -r /tmp/docker-manager-test-stacks/* /opt/stacks/
+sudo cp -r /tmp/capstan-test-stacks/* /opt/stacks/
 sudo chown -R $USER:$USER /opt/stacks
 ```
 
 **Option 2: Update docker-compose.yaml** (Temporary)
 ```yaml
 volumes:
-  - /tmp/docker-manager-test-stacks:/opt/stacks  # Use test directory
+  - /tmp/capstan-test-stacks:/opt/stacks  # Use test directory
 ```
 
 **Option 3: Environment Variable Override** (Runtime)
@@ -64,11 +64,11 @@ docker compose stop backend
 
 # Override STACKS_DIR
 docker compose run -d \
-  -e STACKS_DIR=/tmp/docker-manager-test-stacks \
-  -e HOST_STACKS_DIR=/tmp/docker-manager-test-stacks \
-  -v /tmp/docker-manager-test-stacks:/tmp/docker-manager-test-stacks \
-  --name docker-manager-backend \
-  docker-manager-backend
+  -e STACKS_DIR=/tmp/capstan-test-stacks \
+  -e HOST_STACKS_DIR=/tmp/capstan-test-stacks \
+  -v /tmp/capstan-test-stacks:/tmp/capstan-test-stacks \
+  --name capstan-backend \
+  capstan-backend
 ```
 
 **Status**: Requires manual configuration
@@ -148,7 +148,7 @@ Test results are available in:
 # 1. Set up test environment
 ./testing/environments/setup.sh
 
-# 2. Configure Docker Manager (see Configuration Requirements above)
+# 2. Configure Capstan (see Configuration Requirements above)
 
 # 3. Run tests
 cd testing
@@ -190,7 +190,7 @@ cd testing
 **Solution**:
 1. Check STACKS_DIR configuration
 2. Ensure test stacks exist at configured location
-3. Try manual rescan in Docker Manager UI
+3. Try manual rescan in Capstan UI
 4. Check backend logs for stack discovery errors
 
 ### Browser Automation Issues
@@ -225,8 +225,8 @@ cd testing
 
 ### Future Enhancements
 
-1. **Automatic Configuration** - Auto-configure Docker Manager for testing
-2. **Mock Backend** - Use test backend instead of real Docker Manager
+1. **Automatic Configuration** - Auto-configure Capstan for testing
+2. **Mock Backend** - Use test backend instead of real Capstan
 3. **Test Data Generation** - Random test data for better coverage
 4. **Flaky Test Detection** - Auto-detect and retry flaky tests
 

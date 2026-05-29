@@ -7,7 +7,7 @@ export function LoginPage() {
   return (
     <AuthPage
       title="Login"
-      description="Enter your credentials to access Docker Manager"
+      description="Enter your credentials to access Capstan"
       submitFn={login}
       successMessage="Logged in successfully"
       errorPrefix="Login"

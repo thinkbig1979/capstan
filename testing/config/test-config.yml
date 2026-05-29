@@ -1,4 +1,4 @@
-# Test Configuration for Docker Manager E2E Tests
+# Test Configuration for Capstan E2E Tests
 
 # Application settings
 app:
@@ -13,7 +13,7 @@ credentials:
 
 # Test environment
 environment:
-  stacks_dir: "/tmp/docker-manager-test-stacks"
+  stacks_dir: "/tmp/capstan-test-stacks"
   reports_dir: "./testing/reports"
   screenshots_dir: "./testing/reports/screenshots"
   logs_dir: "./testing/reports/logs"

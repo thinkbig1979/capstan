@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker-manager/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/fsnotify/fsnotify"
 )
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Docker Manager Test Environment Cleanup
+# Capstan Test Environment Cleanup
 # Removes test Docker stacks and cleans up test data
 
 set -euo pipefail
@@ -8,7 +8,7 @@ set -euo pipefail
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTING_DIR="$(dirname "$SCRIPT_DIR")"
-TEST_STACKS_DIR="${TEST_STACKS_DIR:-/tmp/docker-manager-test-stacks}"
+TEST_STACKS_DIR="${TEST_STACKS_DIR:-/tmp/capstan-test-stacks}"
 
 # Colors
 export RED='\033[0;31m'
@@ -39,14 +39,14 @@ cleanup_containers() {
   
   # List of test container names
   local containers=(
-    "docker-manager-nginx-test"
-    "docker-manager-redis-test"
-    "docker-manager-postgres-test"
-    "docker-manager-env-test"
-    "docker-manager-git-test"
-    "docker-manager-complex-nginx"
-    "docker-manager-complex-app"
-    "docker-manager-complex-busybox"
+    "capstan-nginx-test"
+    "capstan-redis-test"
+    "capstan-postgres-test"
+    "capstan-env-test"
+    "capstan-git-test"
+    "capstan-complex-nginx"
+    "capstan-complex-app"
+    "capstan-complex-busybox"
   )
   
   local stopped_count=0
@@ -218,7 +218,7 @@ dry_run() {
   echo ""
   
   log_info "Would stop and remove containers:"
-  docker ps -a --filter "name=docker-manager-*" --format "  - {{.Names}}"
+  docker ps -a --filter "name=capstan-*" --format "  - {{.Names}}"
   echo ""
   
   log_info "Would remove volumes:"

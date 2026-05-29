@@ -10,7 +10,7 @@ Place SSH private keys here for git repository access. Mount this directory as r
    chmod 600 ./keys/my-project-key
    ```
 
-2. In the Docker Manager UI:
+2. In the Capstan UI:
    - **Global default**: Settings > Git > set SSH Key Path to `/app/keys/my-project-key`
    - **Per-stack override**: Stack detail > Git Status > Git Credentials > SSH key > set path to `/app/keys/another-key`
 

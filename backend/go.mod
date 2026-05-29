@@ -1,4 +1,4 @@
-module github.com/docker-manager/backend
+module github.com/thinkbig1979/capstan/backend
 
 go 1.24.0
 

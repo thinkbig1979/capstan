@@ -6,7 +6,7 @@ export function SetupPage() {
 
   return (
     <AuthPage
-      title="Setup Docker Manager"
+      title="Setup Capstan"
       description="Create your admin account to get started"
       submitFn={setup}
       successMessage="Admin account created successfully"

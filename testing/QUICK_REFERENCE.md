@@ -1,4 +1,4 @@
-# Docker Manager E2E Testing - Quick Reference
+# Capstan E2E Testing - Quick Reference
 
 ## Essential Commands
 
@@ -138,8 +138,8 @@ cat testing/reports/results/auth.log
 
 ## Test Stacks Location
 
-- Directory: `/tmp/docker-manager-test-stacks`
-- Configure: `export STACKS_DIR=/tmp/docker-manager-test-stacks`
+- Directory: `/tmp/capstan-test-stacks`
+- Configure: `export STACKS_DIR=/tmp/capstan-test-stacks`
 
 ## Troubleshooting
 
@@ -192,7 +192,7 @@ chmod +x testing/lib/*.sh
 ## Integration Points
 
 - **Base URL**: `http://localhost:3001`
-- **Stacks Dir**: `/tmp/docker-manager-test-stacks`
+- **Stacks Dir**: `/tmp/capstan-test-stacks`
 - **Reports Dir**: `testing/reports/`
 - **Test User**: `testadmin@example.com` / `TestPass123!`
 

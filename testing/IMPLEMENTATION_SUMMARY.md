@@ -7,7 +7,7 @@
 
 ## Overview
 
-The Docker Manager E2E browser testing infrastructure has been successfully implemented using the `browser-automating` skill with orchestrated parallel execution across multiple subagents. All test artifacts are contained within the `testing/` directory.
+The Capstan E2E browser testing infrastructure has been successfully implemented using the `browser-automating` skill with orchestrated parallel execution across multiple subagents. All test artifacts are contained within the `testing/` directory.
 
 ---
 
@@ -356,7 +356,7 @@ Uses `agent-browser` CLI for reliable headless automation:
 ### 3. Test Isolation
 
 All test data in `testing/` directory:
-- Test stacks: `/tmp/docker-manager-test-stacks`
+- Test stacks: `/tmp/capstan-test-stacks`
 - Reports: `testing/reports/`
 - Screenshots: `testing/reports/screenshots/`
 - Logs: `testing/reports/logs/`
@@ -531,7 +531,7 @@ main "$@"
 
 ## Conclusion
 
-The Docker Manager E2E testing infrastructure is **70% complete** and **fully functional** for smoke and core tests. The implementation provides:
+The Capstan E2E testing infrastructure is **70% complete** and **fully functional** for smoke and core tests. The implementation provides:
 
 ✅ Complete test orchestration with parallel execution  
 ✅ Comprehensive smoke test coverage (18 tests)  

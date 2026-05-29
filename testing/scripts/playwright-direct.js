@@ -2,7 +2,7 @@
 
 /**
  * Direct Playwright E2E Test Script
- * Tests Docker Manager application using Playwright directly (not agent-browser)
+ * Tests Capstan application using Playwright directly (not agent-browser)
  */
 
 const { chromium } = require('playwright');

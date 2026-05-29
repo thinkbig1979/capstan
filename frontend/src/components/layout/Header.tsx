@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useLocation, Link } from 'react-router-dom'
+import { Logo } from '@/components/Logo'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -125,6 +126,10 @@ export function Header() {
             <line x1="4" x2="20" y1="18" y2="18" />
           </svg>
         </Button>
+        <Link to="/" className="flex items-center gap-2 font-semibold tracking-tight" aria-label="Capstan home">
+          <Logo className="h-7 w-7" />
+          <span className="hidden sm:inline text-base">Capstan</span>
+        </Link>
         {location.pathname !== '/' && (
           <Button variant="ghost" size="sm" className="md:hidden gap-1" asChild>
             <Link to="/">

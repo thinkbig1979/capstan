@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/docker-manager/backend/internal/database"
-	"github.com/docker-manager/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/gin-gonic/gin"
 )
 

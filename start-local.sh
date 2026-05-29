@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Docker Manager - Startup Script
+# Capstan - Startup Script
 
 set -e
 
@@ -10,7 +10,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}=== Docker Manager Local Setup ===${NC}"
+echo -e "${GREEN}=== Capstan Local Setup ===${NC}"
 
 # Check if we're in the right directory
 if [ ! -f "docker-compose.yaml" ]; then
@@ -42,7 +42,7 @@ EOF
 fi
 
 # Create local directories
-mkdir -p /tmp/stacks /tmp/docker-manager-data
+mkdir -p /tmp/stacks /tmp/capstan-data
 echo -e "${GREEN}Created local directories${NC}"
 
 # Build and start services
@@ -82,7 +82,7 @@ fi
 
 # Display service URLs
 echo ""
-echo -e "${GREEN}=== Docker Manager is running! ===${NC}"
+echo -e "${GREEN}=== Capstan is running! ===${NC}"
 echo ""
 echo "Services:"
 echo "  - Backend:  http://localhost:5001"

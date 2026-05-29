@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker-manager/backend/internal/database"
-	"github.com/docker-manager/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -67,13 +67,13 @@ func isTrustedIP(clientIP string, trustedNetworks string) bool {
 }
 
 // extractBearerToken returns the JWT from either the Authorization header
-// or the docker_manager_token cookie. The ?token= query param is deliberately
+// or the capstan_token cookie. The ?token= query param is deliberately
 // not accepted to keep tokens out of access logs and Referer headers.
 func extractBearerToken(c *gin.Context) string {
 	if h := c.GetHeader("Authorization"); h != "" {
 		return strings.TrimPrefix(h, "Bearer ")
 	}
-	if cookie, err := c.Cookie("docker_manager_token"); err == nil {
+	if cookie, err := c.Cookie("capstan_token"); err == nil {
 		return cookie
 	}
 	return ""

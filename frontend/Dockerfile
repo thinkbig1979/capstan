@@ -1,4 +1,4 @@
-# Multi-stage build for Docker Manager Frontend
+# Multi-stage build for Capstan Frontend
 FROM node:22-alpine AS builder
 
 WORKDIR /app

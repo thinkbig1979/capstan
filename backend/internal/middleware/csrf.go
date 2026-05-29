@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	csrfCookieName = "docker_manager_csrf"
+	csrfCookieName = "capstan_csrf"
 	csrfHeaderName = "X-CSRF-Token"
 	csrfTokenLen   = 32
 )
