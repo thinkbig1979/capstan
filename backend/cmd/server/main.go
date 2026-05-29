@@ -40,7 +40,12 @@ func SecurityHeaders() gin.HandlerFunc {
 		c.Header("X-XSS-Protection", "1; mode=block")
 		c.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		c.Header("Content-Security-Policy", fmt.Sprintf(
-			"default-src 'self'; script-src 'self' 'nonce-%s' 'strict-dynamic'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://localhost:* wss://localhost:*; frame-ancestors 'none';",
+			// 'unsafe-eval' is required by the charting bundle (recharts) on the
+			// dashboard. With 'strict-dynamic' + a per-request nonce, only
+			// nonce-authorized scripts run, so this only permits eval *within*
+			// already-trusted scripts — an acceptable trade-off for a first-party,
+			// single-origin app. Tighten by replacing the eval-using lib if needed.
+			"default-src 'self'; script-src 'self' 'nonce-%s' 'strict-dynamic' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://localhost:* wss://localhost:*; frame-ancestors 'none';",
 			nonce,
 		))
 		c.Next()
