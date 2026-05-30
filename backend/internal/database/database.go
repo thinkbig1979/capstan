@@ -505,6 +505,13 @@ func (d *DB) GetRecentActions(limit int) ([]models.ActionLog, error) {
 	return actions, nil
 }
 
+// sensitiveSettingKeys is the set of settings keys whose values are encrypted
+// at rest via TokenEncryptor. Extend this set when adding new secret settings.
+var sensitiveSettingKeys = map[string]bool{
+	"git_https_token": true,
+	"restic_password": true,
+}
+
 func (d *DB) GetSetting(key string) (string, error) {
 	var value string
 	query := `SELECT value FROM settings WHERE key = ?`
@@ -512,7 +519,7 @@ func (d *DB) GetSetting(key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if d.encryptor != nil && key == "git_https_token" && value != "" {
+	if d.encryptor != nil && sensitiveSettingKeys[key] && value != "" {
 		decrypted, err := d.encryptor.Decrypt(value)
 		if err != nil {
 			return "", err
@@ -523,7 +530,7 @@ func (d *DB) GetSetting(key string) (string, error) {
 }
 
 func (d *DB) SetSetting(key, value string) error {
-	if d.encryptor != nil && key == "git_https_token" && value != "" {
+	if d.encryptor != nil && sensitiveSettingKeys[key] && value != "" {
 		encrypted, err := d.encryptor.Encrypt(value)
 		if err != nil {
 			return fmt.Errorf("failed to encrypt setting: %w", err)

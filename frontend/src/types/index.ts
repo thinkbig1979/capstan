@@ -317,3 +317,90 @@ export interface UpdateHistoryFilters {
   from?: string
   to?: string
 }
+
+// ────────────────────────────────────────────────
+// Backup types
+// ────────────────────────────────────────────────
+
+export interface BackupPolicy {
+  id: string
+  targetType: 'stack'
+  targetId: string
+  enabled: boolean
+  stopPolicy: 'stop' | 'hot'
+  createdAt: string
+  updatedAt: string
+}
+
+export interface BackupRun {
+  id: string
+  kind: 'backup' | 'sync' | 'restore' | 'dr_restore' | 'prune'
+  trigger: 'manual' | 'scheduled'
+  status: 'running' | 'success' | 'partial' | 'failed'
+  startedAt: string
+  finishedAt?: string | null
+  stacksTotal: number
+  stacksOk: number
+  stacksFailed: number
+  bytesAdded?: number | null
+  errorMessage?: string
+}
+
+export interface BackupRunItem {
+  id: string
+  runId: string
+  stackId: string
+  status: 'skipped' | 'success' | 'failed'
+  snapshotId?: string
+  stopApplied: boolean
+  durationMs: number
+  errorMessage?: string
+}
+
+export interface BackupSnapshot {
+  id: string
+  shortId: string
+  time: string
+  hostname: string
+  tags: string[]
+  paths: string[]
+  sizeBytes?: number
+}
+
+export interface BackupSettings {
+  repository: string
+  repositorySource: 'env' | 'db' | 'default'
+  hasPassword: boolean
+  passwordSource: 'env' | 'db' | 'default'
+  keepDaily: number
+  keepWeekly: number
+  keepMonthly: number
+  keepYearly: number
+  autoPrune: boolean
+  scheduleIntervalMinutes: number
+  syncAfterBackup: boolean
+  rcloneRemote: string
+  rclonePath: string
+  rcloneTransfers: number
+  hostname: string
+  resticAvailable: boolean
+  rcloneAvailable: boolean
+  repositoryInitialized: boolean
+}
+
+export interface BackupStatus {
+  resticAvailable: boolean
+  rcloneAvailable: boolean
+  repositoryInitialized: boolean
+  enabledStackCount: number
+  lastRun: BackupRun | null
+  nextRunAt: string | null
+  repoSizeBytes: number | null
+  schedulerRunning: boolean
+}
+
+/** Response shape for operation endpoints that stream output over WS */
+export interface BackupOperationResult {
+  runId: string
+  wsUrl: string
+}

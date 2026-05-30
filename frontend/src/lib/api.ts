@@ -20,6 +20,13 @@ import type {
   UpdateHistoryFilters,
   GitStatus,
   GitCommit,
+  BackupPolicy,
+  BackupRun,
+  BackupRunItem,
+  BackupSnapshot,
+  BackupSettings,
+  BackupStatus,
+  BackupOperationResult,
 } from '@/types'
 
 const API_BASE_URL = '/api/v1'
@@ -451,6 +458,100 @@ export const resourcesApi = {
   },
   pruneBuildCache: async () => {
     const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>('/resources/build-cache/prune')
+    return response.data
+  },
+}
+
+export const backupApi = {
+  // Settings
+  getSettings: async () => {
+    const response = await apiClient.get<BackupSettings>('/settings/backup')
+    return response.data
+  },
+
+  updateSettings: async (data: Partial<Pick<BackupSettings, 'repository' | 'keepDaily' | 'keepWeekly' | 'keepMonthly' | 'keepYearly' | 'autoPrune' | 'scheduleIntervalMinutes' | 'syncAfterBackup' | 'rcloneRemote' | 'rclonePath' | 'rcloneTransfers' | 'hostname'>> & { password?: string }) => {
+    const response = await apiClient.put<BackupSettings>('/settings/backup', data)
+    return response.data
+  },
+
+  // Policies (mirrors autoUpdateApi)
+  getPolicies: async () => {
+    const response = await apiClient.get<{ policies: BackupPolicy[] }>('/backups/policies')
+    return response.data
+  },
+
+  setPolicy: async (stackId: string, data: { enabled: boolean; stopPolicy?: 'stop' | 'hot' }) => {
+    const response = await apiClient.put<BackupPolicy>(
+      `/backups/policies/stack/${encodeURIComponent(stackId)}`,
+      data,
+    )
+    return response.data
+  },
+
+  deletePolicy: async (stackId: string) => {
+    await apiClient.delete(`/backups/policies/stack/${encodeURIComponent(stackId)}`)
+  },
+
+  // Status & history
+  getStatus: async () => {
+    const response = await apiClient.get<BackupStatus>('/backups/status')
+    return response.data
+  },
+
+  getHistory: async (limit = 50) => {
+    const response = await apiClient.get<{ runs: BackupRun[] }>('/backups/history', { params: { limit } })
+    return response.data
+  },
+
+  getRun: async (runId: string) => {
+    const response = await apiClient.get<{ run: BackupRun; items: BackupRunItem[] }>(`/backups/runs/${encodeURIComponent(runId)}`)
+    return response.data
+  },
+
+  // Snapshots
+  listSnapshots: async (stackId: string) => {
+    const response = await apiClient.get<BackupSnapshot[]>('/backups/snapshots', { params: { stackId } })
+    return response.data
+  },
+
+  previewSnapshot: async (snapshotId: string) => {
+    const response = await apiClient.get<{ entries: string[] }>(`/backups/snapshots/${encodeURIComponent(snapshotId)}/preview`)
+    return response.data
+  },
+
+  // Operations — all return { runId, wsUrl } for streaming over WS
+  runBackup: async (data?: { stackIds?: string[] | null; dryRun?: boolean }) => {
+    const response = await apiClient.post<BackupOperationResult>('/backups/run', data ?? {})
+    return response.data
+  },
+
+  runSync: async () => {
+    const response = await apiClient.post<BackupOperationResult>('/backups/sync')
+    return response.data
+  },
+
+  restore: async (data: { stackId: string; snapshotId: string; target?: string }) => {
+    const response = await apiClient.post<BackupOperationResult>('/backups/restore', data)
+    return response.data
+  },
+
+  drRestore: async (data: { confirm: boolean }) => {
+    const response = await apiClient.post<BackupOperationResult>('/backups/dr-restore', data)
+    return response.data
+  },
+
+  initRepo: async () => {
+    const response = await apiClient.post<{ initialized: boolean }>('/backups/repo/init')
+    return response.data
+  },
+
+  testCloud: async () => {
+    const response = await apiClient.post<{ ok: boolean }>('/backups/cloud/test')
+    return response.data
+  },
+
+  prune: async (data?: { dryRun?: boolean }) => {
+    const response = await apiClient.post<BackupOperationResult>('/backups/prune', data ?? {})
     return response.data
   },
 }
