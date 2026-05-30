@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/database"
-	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 const (
@@ -24,6 +24,8 @@ const (
 	ActionLogout      = "logout"
 	ActionSetup       = "setup"
 	ActionScan        = "scan"
+	ActionBackup      = "backup"
+	ActionRestore     = "restore"
 )
 
 type ActionLogger struct {

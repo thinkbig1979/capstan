@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
+import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { TabErrorBoundary } from '@/components/TabErrorBoundary'
 import { Download, Play, Square, RefreshCw, Info } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -130,6 +131,13 @@ function OverviewTabContent({
               </TooltipContent>
             </Tooltip>
           )}
+        </div>
+
+        <Separator orientation="vertical" className="h-6 mx-1" />
+
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">Backup</span>
+          <BackupToggle stackId={stack.id} />
         </div>
       </div>
     </div>

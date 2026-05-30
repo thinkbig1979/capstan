@@ -15,6 +15,7 @@ import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
+import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { UpdateLogTab } from '@/components/dashboard/UpdateLogTab'
 import type { ContainerUpdateInfo, CachedUpdate, AutoUpdatePolicy } from '@/types'
 import { formatRelativeTime } from '@/lib/format'
@@ -274,23 +275,28 @@ export function UpdatesTab() {
                       <StatusBadge status={container.state === 'running' ? 'running' : 'stopped'} />
                     </TableCell>
                     <TableCell>
-                      {activePolicy ? (
-                        <AutoUpdateToggle
-                          targetType={containerPolicy ? 'container' : 'stack'}
-                          targetId={containerPolicy ? container.containerId : (container.stackId || '')}
-                          enabled={activePolicy.enabled}
-                          paused={activePolicy.paused}
-                          consecutiveFailures={activePolicy.consecutiveFailures}
-                        />
-                      ) : (
-                        <AutoUpdateToggle
-                          targetType="container"
-                          targetId={container.containerId}
-                          enabled={false}
-                          paused={false}
-                          consecutiveFailures={0}
-                        />
-                      )}
+                      <div className="flex items-center gap-2">
+                        {activePolicy ? (
+                          <AutoUpdateToggle
+                            targetType={containerPolicy ? 'container' : 'stack'}
+                            targetId={containerPolicy ? container.containerId : (container.stackId || '')}
+                            enabled={activePolicy.enabled}
+                            paused={activePolicy.paused}
+                            consecutiveFailures={activePolicy.consecutiveFailures}
+                          />
+                        ) : (
+                          <AutoUpdateToggle
+                            targetType="container"
+                            targetId={container.containerId}
+                            enabled={false}
+                            paused={false}
+                            consecutiveFailures={0}
+                          />
+                        )}
+                        {!containerPolicy && container.stackId && (
+                          <BackupToggle stackId={container.stackId} />
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Button
