@@ -16,13 +16,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/docker/docker/client"
+	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/handlers"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
-	"github.com/docker/docker/client"
-	"github.com/gin-gonic/gin"
 )
 
 func SecurityHeaders() gin.HandlerFunc {
@@ -306,6 +306,33 @@ func main() {
 	operationsHandler := handlers.NewOperationsHandler(dockerService, db, opLock)
 	operationsHandler.RegisterRoutes(wsGroup, cfg.JWTSecret, cfg.AuthDisabled)
 
+	// ── Backup engine ──────────────────────────────────────────────────────────
+	//
+	// Wire BackupService, BackupScheduler, and BackupHandler mirroring the
+	// SchedulerService + OperationsHandler pattern above. Graceful degradation:
+	// if restic/rclone are absent the service still starts and returns
+	// ErrBackupUnavailable on write operations; the UI shows its own banner.
+	actionLogger := services.NewActionLogger(db)
+	backupSvc := services.NewBackupService(cfg, db, dockerService, opLock, actionLogger)
+	backupSched := services.NewBackupScheduler(backupSvc, db, slog.Default())
+	backupSvc.SetScheduler(backupSched)
+	backupHandler := handlers.NewBackupHandler(backupSvc, db, slog.Default())
+
+	// REST routes sit under the same protected group as StacksHandler/ResourcesHandler.
+	backupHandler.RegisterRoutes(protected)
+	// WS streaming routes sit under the same wsGroup as OperationsHandler.
+	backupHandler.RegisterWSRoutes(wsGroup, cfg.JWTSecret, cfg.AuthDisabled)
+
+	// Log availability so operators know at startup whether backup is functional.
+	if av := backupSvc.Available(); !av.Available {
+		slog.Warn("Backup engine degraded: backup features disabled until tools are installed",
+			"reason", av.Message,
+		)
+	}
+
+	// Start the scheduler only if an interval has been configured.
+	backupSvc.StartScheduler()
+
 	indexHTMLBytes, indexErr := os.ReadFile("./frontend/index.html")
 	if indexErr != nil {
 		slog.Warn("Failed to preload index.html, will fall back to disk read per request", "error", indexErr)
@@ -356,6 +383,8 @@ func main() {
 	if schedulerService != nil {
 		schedulerService.Stop()
 	}
+
+	backupSvc.StopScheduler()
 
 	watcherService.Stop()
 

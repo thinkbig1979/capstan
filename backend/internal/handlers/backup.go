@@ -2,10 +2,10 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +14,90 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
+
+// ───────────────────────────────────────────
+// In-memory pending-operation registry
+// ───────────────────────────────────────────
+
+// pendingOpKind names the five streamable operation types.
+type pendingOpKind string
+
+const (
+	opKindRun       pendingOpKind = "run"
+	opKindSync      pendingOpKind = "sync"
+	opKindRestore   pendingOpKind = "restore"
+	opKindDRRestore pendingOpKind = "dr-restore"
+	opKindPrune     pendingOpKind = "prune"
+)
+
+// pendingOp holds the parameters stashed by the POST handler so the WS handler
+// can run the operation without repeating validation or re-parsing query strings.
+//
+// Design note — why in-memory registry (approach B) over stateless query params:
+//   - POST already validates stack existence, availability, confirm gates, and
+//     parses the JSON body. The registry lets the WS handler stay thin and
+//     avoids re-doing that work over query strings.
+//   - stackIds arrays and complex fields are awkward to URL-encode.
+//   - The runId in wsUrl is a correlation/session id only; the real backup_runs
+//     rows are created and finalized by BackupService, which generates its own
+//     UUIDs. GET /backups/history/runs surfaces those rows to the UI.
+//   - Entries expire after 5 minutes to guard against abandoned connections.
+type pendingOp struct {
+	kind      pendingOpKind
+	expiresAt time.Time
+
+	// run
+	stackIDs []string
+	dryRun   bool
+
+	// restore
+	stackID    string
+	snapshotID string
+	target     string
+
+	// dr-restore
+	localRepoPath string
+}
+
+// pendingOps is the package-level registry of operations waiting for a WS
+// connection. A short 5-minute TTL prevents unbounded growth when the client
+// never connects after the POST.
+var (
+	pendingOpsMu sync.Mutex
+	pendingOps   = make(map[string]*pendingOp)
+)
+
+const pendingOpTTL = 5 * time.Minute
+
+// stashOp stores op under runID and returns it.
+func stashOp(runID string, op *pendingOp) {
+	op.expiresAt = time.Now().Add(pendingOpTTL)
+	pendingOpsMu.Lock()
+	defer pendingOpsMu.Unlock()
+	// Evict expired entries on every write to bound memory.
+	for id, p := range pendingOps {
+		if time.Now().After(p.expiresAt) {
+			delete(pendingOps, id)
+		}
+	}
+	pendingOps[runID] = op
+}
+
+// popOp atomically retrieves and deletes the pending op for runID.
+// Returns nil when the runID is unknown or expired.
+func popOp(runID string) *pendingOp {
+	pendingOpsMu.Lock()
+	defer pendingOpsMu.Unlock()
+	op, ok := pendingOps[runID]
+	if !ok {
+		return nil
+	}
+	delete(pendingOps, runID)
+	if time.Now().After(op.expiresAt) {
+		return nil
+	}
+	return op
+}
 
 // BackupHandler serves all /api/settings/backup and /api/backups/* REST
 // endpoints. WebSocket streaming routes (/ws/backups/*) are wired in a
@@ -535,25 +619,14 @@ func (h *BackupHandler) runBackup(c *gin.Context) {
 		return
 	}
 
+	// Stash params for the WS handler; the operation runs when the client
+	// connects to the websocket, mirroring the OperationsHandler pattern.
 	runID := uuid.New().String()
-	out := make(chan services.StreamLine, 256)
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
-		defer cancel()
-		defer close(out)
-		_, err := h.svc.RunBackup(ctx, req.StackIDs, req.DryRun, "api", out)
-		if err != nil && !errors.Is(err, services.ErrBackupBusy) && !errors.Is(err, services.ErrBackupUnavailable) {
-			h.logger.Error("background backup run failed", "run_id", runID, "error", err)
-		}
-	}()
-
-	// Drain the channel so the goroutine does not block. WS upgrade in a70.9
-	// will replace this with a real broadcast.
-	go func() {
-		for range out {
-		}
-	}()
+	stashOp(runID, &pendingOp{
+		kind:     opKindRun,
+		stackIDs: req.StackIDs,
+		dryRun:   req.DryRun,
+	})
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"runId": runID,
@@ -567,21 +640,7 @@ func (h *BackupHandler) runSync(c *gin.Context) {
 	}
 
 	runID := uuid.New().String()
-	out := make(chan services.StreamLine, 256)
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
-		defer cancel()
-		defer close(out)
-		if err := h.svc.RunSync(ctx, out); err != nil && !errors.Is(err, services.ErrBackupBusy) {
-			h.logger.Error("background sync failed", "run_id", runID, "error", err)
-		}
-	}()
-
-	go func() {
-		for range out {
-		}
-	}()
+	stashOp(runID, &pendingOp{kind: opKindSync})
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"runId": runID,
@@ -629,23 +688,12 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 	}
 
 	runID := uuid.New().String()
-	out := make(chan services.StreamLine, 256)
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
-		defer cancel()
-		defer close(out)
-		if err := h.svc.RunRestore(ctx, req.StackID, req.SnapshotID, req.Target, out); err != nil {
-			if !errors.Is(err, services.ErrBackupBusy) {
-				h.logger.Error("background restore failed", "run_id", runID, "error", err)
-			}
-		}
-	}()
-
-	go func() {
-		for range out {
-		}
-	}()
+	stashOp(runID, &pendingOp{
+		kind:       opKindRestore,
+		stackID:    req.StackID,
+		snapshotID: req.SnapshotID,
+		target:     req.Target,
+	})
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"runId": runID,
@@ -698,23 +746,10 @@ func (h *BackupHandler) runDRRestore(c *gin.Context) {
 	}
 
 	runID := uuid.New().String()
-	out := make(chan services.StreamLine, 256)
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Hour)
-		defer cancel()
-		defer close(out)
-		if err := h.svc.RunDRRestore(ctx, req.LocalRepoPath, out); err != nil {
-			if !errors.Is(err, services.ErrBackupBusy) {
-				h.logger.Error("background DR restore failed", "run_id", runID, "error", err)
-			}
-		}
-	}()
-
-	go func() {
-		for range out {
-		}
-	}()
+	stashOp(runID, &pendingOp{
+		kind:          opKindDRRestore,
+		localRepoPath: req.LocalRepoPath,
+	})
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"runId": runID,
@@ -753,23 +788,10 @@ func (h *BackupHandler) runPrune(c *gin.Context) {
 	}
 
 	runID := uuid.New().String()
-	out := make(chan services.StreamLine, 256)
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
-		defer cancel()
-		defer close(out)
-		if err := h.svc.Prune(ctx, req.DryRun, out); err != nil {
-			if !errors.Is(err, services.ErrBackupBusy) {
-				h.logger.Error("background prune failed", "run_id", runID, "error", err)
-			}
-		}
-	}()
-
-	go func() {
-		for range out {
-		}
-	}()
+	stashOp(runID, &pendingOp{
+		kind:   opKindPrune,
+		dryRun: req.DryRun,
+	})
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"runId": runID,
@@ -941,4 +963,350 @@ func settingBoolOrDefault(s string, defaultVal bool) bool {
 		return defaultVal
 	}
 	return s == "true"
+}
+
+// ───────────────────────────────────────────
+// WebSocket streaming routes
+// ───────────────────────────────────────────
+
+// RegisterWSRoutes registers the five backup streaming endpoints on the shared
+// wsGroup (the same group that OperationsHandler uses). Each route upgrades the
+// HTTP connection to a WebSocket, pops the pending op stashed by the POST
+// handler, runs the service method, and streams each StreamLine to the client
+// exactly like OperationsHandler.handleOperation.
+func (h *BackupHandler) RegisterWSRoutes(group *gin.RouterGroup, jwtSecret string, authDisabled bool) {
+	group.GET("/ws/backups/run/:runId", h.wsBackupRun(jwtSecret, authDisabled))
+	group.GET("/ws/backups/sync/:runId", h.wsBackupSync(jwtSecret, authDisabled))
+	group.GET("/ws/backups/restore/:runId", h.wsBackupRestore(jwtSecret, authDisabled))
+	group.GET("/ws/backups/dr-restore/:runId", h.wsBackupDRRestore(jwtSecret, authDisabled))
+	group.GET("/ws/backups/prune/:runId", h.wsBackupPrune(jwtSecret, authDisabled))
+}
+
+// wsBackupRun streams output for a POST /backups/run operation.
+func (h *BackupHandler) wsBackupRun(jwtSecret string, authDisabled bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		runID := c.Param("runId")
+
+		op := popOp(runID)
+		if op == nil || op.kind != opKindRun {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrNotFound,
+				"No pending backup run found for this runId (expired or unknown)",
+			))
+			return
+		}
+
+		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
+		if err != nil {
+			return
+		}
+		defer conn.Conn.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go safePingLoop(ctx, conn, DefaultPingInterval)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					_, _, err := conn.Conn.ReadMessage()
+					if err != nil {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+
+		safeWriteJSON(conn, gin.H{"type": "start", "action": "run"})
+
+		out := make(chan services.StreamLine, 256)
+		opErrCh := make(chan error, 1)
+
+		go func() {
+			defer close(out)
+			_, err := h.svc.RunBackup(ctx, op.stackIDs, op.dryRun, "api", out)
+			opErrCh <- err
+		}()
+
+		h.streamAndFinalize(ctx, conn, out, opErrCh, runID, "backup")
+	}
+}
+
+// wsBackupSync streams output for a POST /backups/sync operation.
+func (h *BackupHandler) wsBackupSync(jwtSecret string, authDisabled bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		runID := c.Param("runId")
+
+		op := popOp(runID)
+		if op == nil || op.kind != opKindSync {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrNotFound,
+				"No pending sync operation found for this runId (expired or unknown)",
+			))
+			return
+		}
+
+		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
+		if err != nil {
+			return
+		}
+		defer conn.Conn.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go safePingLoop(ctx, conn, DefaultPingInterval)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					_, _, err := conn.Conn.ReadMessage()
+					if err != nil {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+
+		safeWriteJSON(conn, gin.H{"type": "start", "action": "sync"})
+
+		out := make(chan services.StreamLine, 256)
+		opErrCh := make(chan error, 1)
+
+		go func() {
+			defer close(out)
+			opErrCh <- h.svc.RunSync(ctx, out)
+		}()
+
+		h.streamAndFinalize(ctx, conn, out, opErrCh, runID, "sync")
+	}
+}
+
+// wsBackupRestore streams output for a POST /backups/restore operation.
+func (h *BackupHandler) wsBackupRestore(jwtSecret string, authDisabled bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		runID := c.Param("runId")
+
+		op := popOp(runID)
+		if op == nil || op.kind != opKindRestore {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrNotFound,
+				"No pending restore operation found for this runId (expired or unknown)",
+			))
+			return
+		}
+
+		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
+		if err != nil {
+			return
+		}
+		defer conn.Conn.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go safePingLoop(ctx, conn, DefaultPingInterval)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					_, _, err := conn.Conn.ReadMessage()
+					if err != nil {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+
+		safeWriteJSON(conn, gin.H{"type": "start", "action": "restore"})
+
+		out := make(chan services.StreamLine, 256)
+		opErrCh := make(chan error, 1)
+
+		go func() {
+			defer close(out)
+			opErrCh <- h.svc.RunRestore(ctx, op.stackID, op.snapshotID, op.target, out)
+		}()
+
+		h.streamAndFinalize(ctx, conn, out, opErrCh, runID, "restore")
+	}
+}
+
+// wsBackupDRRestore streams output for a POST /backups/dr-restore operation.
+func (h *BackupHandler) wsBackupDRRestore(jwtSecret string, authDisabled bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		runID := c.Param("runId")
+
+		op := popOp(runID)
+		if op == nil || op.kind != opKindDRRestore {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrNotFound,
+				"No pending DR-restore operation found for this runId (expired or unknown)",
+			))
+			return
+		}
+
+		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
+		if err != nil {
+			return
+		}
+		defer conn.Conn.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go safePingLoop(ctx, conn, DefaultPingInterval)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					_, _, err := conn.Conn.ReadMessage()
+					if err != nil {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+
+		safeWriteJSON(conn, gin.H{"type": "start", "action": "dr-restore"})
+
+		out := make(chan services.StreamLine, 256)
+		opErrCh := make(chan error, 1)
+
+		go func() {
+			defer close(out)
+			opErrCh <- h.svc.RunDRRestore(ctx, op.localRepoPath, out)
+		}()
+
+		h.streamAndFinalize(ctx, conn, out, opErrCh, runID, "dr-restore")
+	}
+}
+
+// wsBackupPrune streams output for a POST /backups/prune operation.
+func (h *BackupHandler) wsBackupPrune(jwtSecret string, authDisabled bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		runID := c.Param("runId")
+
+		op := popOp(runID)
+		if op == nil || op.kind != opKindPrune {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrNotFound,
+				"No pending prune operation found for this runId (expired or unknown)",
+			))
+			return
+		}
+
+		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
+		if err != nil {
+			return
+		}
+		defer conn.Conn.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go safePingLoop(ctx, conn, DefaultPingInterval)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					_, _, err := conn.Conn.ReadMessage()
+					if err != nil {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+
+		safeWriteJSON(conn, gin.H{"type": "start", "action": "prune"})
+
+		out := make(chan services.StreamLine, 256)
+		opErrCh := make(chan error, 1)
+
+		go func() {
+			defer close(out)
+			opErrCh <- h.svc.Prune(ctx, op.dryRun, out)
+		}()
+
+		h.streamAndFinalize(ctx, conn, out, opErrCh, runID, "prune")
+	}
+}
+
+// streamAndFinalize ranges over out forwarding each StreamLine to the client as
+// a {"type":"data","line":"..."} frame, then sends a final {"type":"done",...}
+// frame once the channel is closed. It mirrors the OperationsHandler pattern
+// exactly. Respects ctx cancellation (client disconnect) — stops writing early.
+//
+// opErrCh must be a buffered chan(1) whose single value is sent by the service
+// goroutine before it closes out; this function reads from it after the range.
+func (h *BackupHandler) streamAndFinalize(
+	ctx context.Context,
+	conn *Connection,
+	out <-chan services.StreamLine,
+	opErrCh <-chan error,
+	runID string,
+	action string,
+) {
+	for line := range out {
+		if ctx.Err() != nil {
+			// Client disconnected — drain the channel so the service goroutine
+			// can finish writing without blocking.
+			go func() {
+				for range out {
+				}
+			}()
+			return
+		}
+		if err := safeWriteJSON(conn, gin.H{
+			"type": "data",
+			"line": line.Line,
+		}); err != nil {
+			h.logger.Debug("Failed to write backup stream line", "run_id", runID, "error", err)
+			go func() {
+				for range out {
+				}
+			}()
+			return
+		}
+	}
+
+	// Channel is closed: collect the service error and send a done frame.
+	opErr := <-opErrCh
+
+	success := opErr == nil
+	doneMsg := gin.H{"type": "done", "success": success}
+	if opErr != nil {
+		doneMsg["error"] = opErr.Error()
+	}
+
+	if err := safeWriteJSON(conn, doneMsg); err != nil {
+		h.logger.Debug("Failed to write backup done frame", "run_id", runID, "error", err)
+	}
+
+	h.logger.Info("Backup WS operation completed",
+		"run_id", runID,
+		"action", action,
+		"success", success,
+	)
 }

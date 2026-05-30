@@ -129,6 +129,24 @@ func (s *BackupService) SetScheduler(sched BackupScheduler) {
 	s.sched = sched
 }
 
+// SetBins overrides the cached binary paths resolved at construction time.
+// This is used by tests (including tests in external packages) to control
+// availability without requiring real restic/rclone binaries on the host.
+func (s *BackupService) SetBins(resticBin, rcloneBin string) {
+	s.resticBin = resticBin
+	s.rcloneBin = rcloneBin
+}
+
+// ForceSetBusy sets the busy flag to 1 (true) or 0 (false). It is used only
+// by tests that need to simulate an in-progress operation.
+func (s *BackupService) ForceSetBusy(busy bool) {
+	if busy {
+		s.busy.Store(1)
+	} else {
+		s.busy.Store(0)
+	}
+}
+
 // StartScheduler starts the scheduler if it has been set and the configured
 // interval is non-zero. It is called from main.go after wiring.
 func (s *BackupService) StartScheduler() {

@@ -549,6 +549,29 @@ func (r *conditionalRunner) Output(ctx context.Context, name string, args []stri
 	return r.onOutput(ctx, name, args, env)
 }
 
+// --- RestorePreview argv tests ---
+
+func TestResticManager_RestorePreview_Args(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	m := newResticManagerWithRunner(testBackupConfig(), runner, nil)
+
+	out := make(chan StreamLine, 32)
+	go func() {
+		for range out {
+		}
+	}()
+	err := m.RestorePreview(context.Background(), "abc123", out)
+	require.NoError(t, err)
+	close(out)
+
+	call := runner.lastCall()
+	assert.Equal(t, "restic", call.Binary)
+	assert.Equal(t, "ls", call.Args[0])
+	assert.Equal(t, "abc123", call.Args[1])
+}
+
 // --- Missing password test ---
 
 func TestResticManager_MissingPassword_ReturnsError(t *testing.T) {

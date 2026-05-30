@@ -1,8 +1,14 @@
 package database
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -275,6 +281,143 @@ func TestAddBackupRunItem_AndGetBackupRunItems(t *testing.T) {
 	assert.Equal(t, "abc12345", items[0].SnapshotID)
 	assert.True(t, items[0].StopApplied)
 	assert.Equal(t, int64(4200), items[0].DurationMs)
+}
+
+// ─────────────────────────────────────────────────────────────
+// Ciphertext-at-rest assertion (Parked Follow-up 2 / a70.3)
+// ─────────────────────────────────────────────────────────────
+
+// testAESGCMEncryptor is a minimal AES-GCM TokenEncryptor for DB tests.
+// It is intentionally local to avoid importing the services package (which
+// would create an import cycle). Its behaviour is identical to the production
+// services.TokenEncryptor.
+type testAESGCMEncryptor struct {
+	aead cipher.AEAD
+}
+
+func newTestEncryptor(t *testing.T, secret string) *testAESGCMEncryptor {
+	t.Helper()
+	hash := sha256.Sum256([]byte(secret))
+	block, err := aes.NewCipher(hash[:])
+	require.NoError(t, err)
+	aead, err := cipher.NewGCM(block)
+	require.NoError(t, err)
+	return &testAESGCMEncryptor{aead: aead}
+}
+
+func (e *testAESGCMEncryptor) Encrypt(plaintext string) (string, error) {
+	if plaintext == "" {
+		return "", nil
+	}
+	nonce := make([]byte, e.aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+	ct := e.aead.Seal(nonce, nonce, []byte(plaintext), nil)
+	return base64.StdEncoding.EncodeToString(ct), nil
+}
+
+func (e *testAESGCMEncryptor) Decrypt(encoded string) (string, error) {
+	ct, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", err
+	}
+	ns := e.aead.NonceSize()
+	if len(ct) < ns {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+	pt, err := e.aead.Open(nil, ct[:ns], ct[ns:], nil)
+	if err != nil {
+		return "", err
+	}
+	return string(pt), nil
+}
+
+// rawSettingValue reads the raw (un-decrypted) value from the settings table.
+// It bypasses GetSetting so we can assert the stored bytes are ciphertext.
+func rawSettingValue(t *testing.T, db *DB, key string) string {
+	t.Helper()
+	var val string
+	err := db.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&val)
+	require.NoError(t, err)
+	return val
+}
+
+// TestResticPasswordCiphertextAtRest asserts that SetSetting("restic_password", ...)
+// stores ciphertext (not plaintext) in the settings table, satisfying the gate
+// "plaintext never in DB". GetSetting decrypts transparently; the raw row value
+// must not equal the original plaintext.
+func TestResticPasswordCiphertextAtRest(t *testing.T) {
+	t.Parallel()
+
+	const plaintext = "super-secret-restic-passphrase"
+	const secret = "test-aes-gcm-key-32chars-padding"
+
+	enc := newTestEncryptor(t, secret)
+	db, err := NewWithMigrationsAndEncryptor(":memory:", enc)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.SetSetting("restic_password", plaintext))
+
+	// The raw DB value must NOT be the plaintext.
+	raw := rawSettingValue(t, db, "restic_password")
+	assert.NotEqual(t, plaintext, raw,
+		"raw DB value must be ciphertext, not the plaintext password")
+
+	// The raw value must be valid base64 (as produced by AES-GCM + base64 encoding).
+	_, decodeErr := base64.StdEncoding.DecodeString(raw)
+	assert.NoError(t, decodeErr, "raw DB value must be base64-encoded ciphertext")
+
+	// GetSetting must still return the original plaintext (transparent decryption).
+	got, err := db.GetSetting("restic_password")
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, got, "GetSetting must return the original plaintext via transparent decryption")
+}
+
+// TestGitHTTPSTokenCiphertextAtRest performs the same ciphertext gate for the
+// git_https_token sensitive key, confirming the generalised sensitive-key set
+// works correctly for both keys.
+func TestGitHTTPSTokenCiphertextAtRest(t *testing.T) {
+	t.Parallel()
+
+	const plaintext = "ghp_SomeGitHubPersonalAccessToken"
+	const secret = "test-aes-gcm-key-32chars-padding"
+
+	enc := newTestEncryptor(t, secret)
+	db, err := NewWithMigrationsAndEncryptor(":memory:", enc)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.SetSetting("git_https_token", plaintext))
+
+	raw := rawSettingValue(t, db, "git_https_token")
+	assert.NotEqual(t, plaintext, raw,
+		"raw DB value must be ciphertext for git_https_token")
+
+	got, err := db.GetSetting("git_https_token")
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, got)
+}
+
+// TestNonSensitiveSettingNotEncrypted confirms that non-sensitive keys (e.g.
+// restic_repository) are stored as plaintext in the DB row.
+func TestNonSensitiveSettingNotEncrypted(t *testing.T) {
+	t.Parallel()
+
+	const value = "/data/restic-repo"
+	const secret = "test-aes-gcm-key-32chars-padding"
+
+	enc := newTestEncryptor(t, secret)
+	db, err := NewWithMigrationsAndEncryptor(":memory:", enc)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.SetSetting("restic_repository", value))
+
+	raw := rawSettingValue(t, db, "restic_repository")
+	assert.Equal(t, value, raw,
+		"non-sensitive setting must be stored as plaintext")
 }
 
 func TestGetBackupRunItems_EmptyForUnknownRun(t *testing.T) {
