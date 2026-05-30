@@ -652,6 +652,7 @@ type runRestoreRequest struct {
 	StackID    string `json:"stackId"`
 	SnapshotID string `json:"snapshotId"`
 	Target     string `json:"target"`
+	Confirm    bool   `json:"confirm"`
 }
 
 func (h *BackupHandler) runRestore(c *gin.Context) {
@@ -670,6 +671,18 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 			http.StatusBadRequest,
 			models.ErrValidation,
 			"stackId and snapshotId are required",
+		))
+		return
+	}
+
+	// Restore is destructive: require explicit confirmation (mirrors
+	// dr-restore/prune). The frontend obtains this via a ConfirmDialog; a direct
+	// API call must set confirm=true.
+	if !req.Confirm {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			"CONFIRMATION_REQUIRED",
+			"Destructive operation: set confirm=true to proceed",
 		))
 		return
 	}

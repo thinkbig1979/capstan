@@ -261,6 +261,7 @@ describe('BackupsTab — restore flow', () => {
       expect(mockRestore).toHaveBeenCalledWith({
         stackId: STACK_ID,
         snapshotId: 'abcdef1234567890abcdef1234567890abcdef12',
+        confirm: true,
       })
     })
   })

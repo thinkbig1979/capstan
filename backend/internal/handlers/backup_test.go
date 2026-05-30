@@ -642,6 +642,7 @@ func TestRunRestore_Kickoff_Returns202(t *testing.T) {
 		"stackId":    "myapp",
 		"snapshotId": "abc123",
 		"target":     "/opt/stacks/myapp",
+		"confirm":    true,
 	})
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -673,6 +674,7 @@ func TestRunRestore_StackNotFound_Returns404(t *testing.T) {
 	req := jsonReq(t, http.MethodPost, "/api/backups/restore", map[string]interface{}{
 		"stackId":    "no-such-stack",
 		"snapshotId": "abc123",
+		"confirm":    true,
 	})
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -680,6 +682,28 @@ func TestRunRestore_StackNotFound_Returns404(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, w.Code)
 	body := decodeBody(t, w)
 	assert.Equal(t, models.ErrStackNotFound, body["code"])
+}
+
+func TestRunRestore_NoConfirm_Returns400(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	seedHandlerStack(t, db, "myapp")
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	// confirm omitted (defaults false) — restore is destructive and must be gated.
+	req := jsonReq(t, http.MethodPost, "/api/backups/restore", map[string]interface{}{
+		"stackId":    "myapp",
+		"snapshotId": "abc123",
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	body := decodeBody(t, w)
+	assert.Equal(t, "CONFIRMATION_REQUIRED", body["code"])
 }
 
 func TestRunRestore_MissingFields_Returns400(t *testing.T) {
