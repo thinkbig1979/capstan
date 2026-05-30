@@ -1,4 +1,5 @@
-import { http, HttpResponse, delay, setupServer } from 'msw'
+import { http, HttpResponse, delay } from 'msw'
+import { setupServer } from 'msw/node'
 
 export const handlers = [
   http.get('/api/v1/auth/status', async () => {

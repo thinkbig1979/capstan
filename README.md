@@ -56,6 +56,96 @@ Then open http://localhost:3001
 - **Real-time Updates**: File watching for automatic stack detection
 - **Action Logging**: Audit trail of all operations
 
+## Backups
+
+Capstan includes a built-in backup engine powered by [restic](https://restic.net) and
+[rclone](https://rclone.org), both shipped inside the container image at pinned versions:
+
+| Tool   | Version | Purpose                          |
+| ------ | ------- | -------------------------------- |
+| restic | 0.18.0  | Local encrypted snapshot backups |
+| rclone | 1.68.2  | Cloud sync / offsite DR copies   |
+
+### What gets backed up
+
+Each stack's compose directory is backed up as a restic snapshot tagged with the stack ID.
+Backups can be triggered manually (Settings, Backup tab) or run on a schedule.
+
+### Configuration
+
+The quickest path is the **Settings UI** (Settings, Backup). All fields save to the
+encrypted database and take effect without a restart.
+
+Alternatively, set env vars in your `.env` file (see `.env.example` for the full list).
+The UI always wins over env vars.
+
+Key variables:
+
+| Variable             | Default                    | Notes                                     |
+| -------------------- | -------------------------- | ----------------------------------------- |
+| `RESTIC_REPOSITORY`  | `/app/data/restic-repo`    | Path inside the container                 |
+| `RESTIC_PASSWORD`    | _(none)_                   | Required; stored encrypted when set in UI |
+| `RCLONE_REMOTE`      | _(none)_                   | rclone remote name (optional)             |
+| `RCLONE_PATH`        | `capstan-backups`          | Destination path on the remote            |
+
+### Bind-mount requirement
+
+The restic repository lives inside `/app/data`. Your compose file MUST mount this
+as a host bind mount so that snapshots survive container recreation:
+
+```yaml
+volumes:
+  - ./data:/app/data   # host bind mount — required for backup persistence
+```
+
+Never replace this with a Docker named volume. The `docker-compose.prod.yaml` and
+`docker/compose.yaml` both use a bind mount by default.
+
+### Running a backup
+
+```bash
+# Via the UI: Settings → Backup → Run Backup Now
+# Via the API:
+curl -X POST http://localhost:5001/api/v1/backup/run
+```
+
+### Cloud sync (optional)
+
+Configure an rclone remote and set `RCLONE_REMOTE` (or use the UI). Enable
+"Sync after backup" to push every snapshot to the remote automatically.
+
+Rclone config file: mount it read-only into the container if you manage it externally:
+
+```yaml
+volumes:
+  - ~/.config/rclone/rclone.conf:/home/appuser/.config/rclone/rclone.conf:ro
+```
+
+### Restore
+
+```bash
+# List snapshots for a stack:
+curl http://localhost:5001/api/v1/backup/snapshots?stackId=<id>
+
+# Restore a snapshot via UI: Settings → Backup → Snapshots → Restore
+# Or via API:
+curl -X POST http://localhost:5001/api/v1/backup/restore \
+  -H 'Content-Type: application/json' \
+  -d '{"stackId":"<id>","snapshotId":"<short-id>"}'
+```
+
+### Disaster recovery
+
+If the host is lost, recover from an rclone remote:
+
+1. Deploy a fresh Capstan instance with the same `./data` bind mount path.
+2. Trigger a DR restore (Settings, Backup, DR Restore) pointing at your rclone remote.
+   This syncs the full restic repository back to `/app/data/restic-repo`.
+3. Restore individual stacks via the Snapshots panel.
+
+The restic repository password is required for DR recovery. Store it separately
+from the server (e.g. a password manager).
+
 ## Volume Path Identity
 
 **Important:** Capstan requires that the `STACKS_DIR` path inside the container must match the path on the host system for Docker Compose operations to work correctly.
