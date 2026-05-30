@@ -439,18 +439,7 @@ func TestRunBackup_PerStackFailureIsolation_Partial(t *testing.T) {
 	db := newBackupTestDB(t)
 	docker := &fakeDocker{statusStr: "stopped"}
 
-	callCount := 0
-	runner := &fakeRunner{
-		onRun: func(name string, args []string, out chan<- StreamLine) {
-			// Fail the first backup call (for stack-a), succeed the rest.
-			if name == "restic" && len(args) > 0 && args[0] == "backup" {
-				callCount++
-				if callCount == 1 {
-					// Return error via runErr — set it dynamically.
-				}
-			}
-		},
-	}
+	runner := &fakeRunner{} // unused; multiCallRunner below drives all calls
 
 	// Use a multi-call runner: fail stack-a, succeed stack-b.
 	multiRunner := &multiCallRunner{
