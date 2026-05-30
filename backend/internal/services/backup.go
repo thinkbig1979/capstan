@@ -75,6 +75,11 @@ type BackupService struct {
 	// busy is 1 while a global operation (backup/sync/restore/dr) is running.
 	busy atomic.Int32
 
+	// schedulerActive tracks whether the periodic backup scheduler is currently
+	// started. It reflects StartScheduler/StopScheduler rather than the busy flag
+	// so status endpoints can report the scheduler state accurately.
+	schedulerActive atomic.Bool
+
 	// resticBin / rcloneBin cache the resolved binary paths at construction
 	// time for fast availability checks. Empty = binary absent.
 	resticBin string
@@ -135,6 +140,7 @@ func (s *BackupService) StartScheduler() {
 		return
 	}
 	s.sched.Start(time.Duration(bc.ScheduleInterval) * time.Minute)
+	s.schedulerActive.Store(true)
 }
 
 // StopScheduler stops the scheduler gracefully.
@@ -142,6 +148,14 @@ func (s *BackupService) StopScheduler() {
 	if s.sched != nil {
 		s.sched.Stop()
 	}
+	s.schedulerActive.Store(false)
+}
+
+// SchedulerRunning reports whether the periodic backup scheduler is currently
+// started. Unlike IsBusy (which reflects an in-flight operation) this reflects
+// the scheduler lifecycle and is what status endpoints should surface.
+func (s *BackupService) SchedulerRunning() bool {
+	return s.schedulerActive.Load()
 }
 
 // Available returns the current availability state of the backup engine.

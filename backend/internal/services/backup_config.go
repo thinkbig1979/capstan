@@ -126,6 +126,13 @@ func resolveBackupConfig(db *database.DB, cfg *config.Config) BackupConfig {
 	return bc
 }
 
+// ResolveBackupConfig is the exported variant of resolveBackupConfig for use
+// by the BackupHandler. It builds the effective BackupConfig from DB settings,
+// using an empty Config struct as the env-var fallback layer (DB values win).
+func ResolveBackupConfig(db *database.DB) BackupConfig {
+	return resolveBackupConfig(db, &config.Config{})
+}
+
 // resolveIntSetting reads a DB setting, falls back to envVal string, then to
 // defaultVal. It silently ignores parse errors and uses the default.
 func resolveIntSetting(db *database.DB, key, envVal string, defaultVal int) int {
