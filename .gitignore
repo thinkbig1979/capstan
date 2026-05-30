@@ -62,3 +62,6 @@ keys/*
 # Backend embedded frontend (built during Docker build)
 backend/frontend/assets/
 :memory:
+
+# Beads / Dolt files (added by bd init)
+.beads-credential-key
