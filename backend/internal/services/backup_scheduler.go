@@ -192,7 +192,7 @@ func (s *BackupSchedulerService) runCycle(ctx context.Context) {
 		}
 	}()
 
-	run, err := s.runner.RunBackup(cycleCtx, nil, false, "scheduled", out)
+	run, err := s.runner.RunBackup(cycleCtx, nil, false, TriggerScheduled, out)
 
 	// RunBackup does NOT close out, so we close it here to unblock the drain goroutine.
 	close(out)

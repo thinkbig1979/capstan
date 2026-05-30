@@ -274,6 +274,37 @@ func TestRunBackup_UnavailableWhenNoRestic(t *testing.T) {
 	assert.ErrorIs(t, err, ErrBackupUnavailable)
 }
 
+// TestRunBackup_TriggerConstraint guards docker-manager-ly6: a user-initiated
+// backup must use a trigger value permitted by the backup_runs.trigger CHECK
+// constraint (manual|scheduled). The WS/UI handler previously passed "api",
+// which made CreateBackupRun fail and broke every "Back up now". This pins both
+// the failure mode and the fix. CreateBackupRun runs before policy resolution,
+// so the constraint is exercised even with no enabled policies.
+func TestRunBackup_TriggerConstraint(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	docker := &fakeDocker{}
+	runner := &fakeRunner{}
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	// Invalid trigger (the old "api" value) must fail at run creation.
+	out := make(chan StreamLine, 256)
+	_, err := svc.RunBackup(context.Background(), nil, false, "api", out)
+	assert.Error(t, err, "invalid trigger must violate the backup_runs CHECK constraint")
+
+	// The constant the handler now uses must be accepted and persisted.
+	out = make(chan StreamLine, 256)
+	_, err = svc.RunBackup(context.Background(), nil, false, TriggerManual, out)
+	assert.NoError(t, err)
+
+	runs, err := db.GetBackupRuns(1)
+	assert.NoError(t, err)
+	if assert.Len(t, runs, 1) {
+		assert.Equal(t, TriggerManual, runs[0].Trigger)
+	}
+}
+
 // ============================================================
 // Single-flight / concurrency guard
 // ============================================================

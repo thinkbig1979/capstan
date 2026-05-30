@@ -27,6 +27,16 @@ var ErrBackupBusy = errors.New("backup operation already in progress")
 // the repository is not reachable.
 var ErrBackupUnavailable = errors.New("backup engine unavailable")
 
+// Backup run trigger values. These MUST match the backup_runs.trigger CHECK
+// constraint in migrations.go (trigger IN ('manual','scheduled')). Passing any
+// other value makes CreateBackupRun fail with a CHECK constraint error, which
+// previously broke every user-initiated "Back up now" (the WS handler passed
+// "api"). See docker-manager-ly6.
+const (
+	TriggerManual    = "manual"    // user-initiated (UI "Back up now" / API)
+	TriggerScheduled = "scheduled" // automatic, from the backup scheduler
+)
+
 // BackupAvailability describes which parts of the engine are functional.
 type BackupAvailability struct {
 	ResticPresent bool   `json:"resticPresent"`

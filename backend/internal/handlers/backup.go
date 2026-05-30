@@ -1042,7 +1042,7 @@ func (h *BackupHandler) wsBackupRun(jwtSecret string, authDisabled bool) gin.Han
 
 		go func() {
 			defer close(out)
-			_, err := h.svc.RunBackup(ctx, op.stackIDs, op.dryRun, "api", out)
+			_, err := h.svc.RunBackup(ctx, op.stackIDs, op.dryRun, services.TriggerManual, out)
 			opErrCh <- err
 		}()
 
