@@ -94,6 +94,7 @@ function App() {
                 <Route path="/stacks/:id" element={<StackPage />} />
                 <Route path="/stacks/:id/:tab" element={<StackPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/settings/:section" element={<SettingsPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </Suspense>
@@ -128,6 +129,7 @@ function App() {
             <Route path="/stacks/:id" element={<StackPage />} />
             <Route path="/stacks/:id/:tab" element={<StackPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/:section" element={<SettingsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>

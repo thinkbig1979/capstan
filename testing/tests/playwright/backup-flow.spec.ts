@@ -59,20 +59,24 @@ let csrfToken = ''
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Expand the collapsible "Backup" settings section so its fields render.
+ * Show the Backup settings pane.
  *
- * SettingsPage renders each group as a CollapsibleSection (an accordion Card),
- * not a tab. The Backup section is collapsed by default and its body — the
- * #backup-repository input, the "Initialized" badge, etc. — is only mounted
- * when expanded. The chevron Button carries aria-label "Expand Backup" (it flips
- * to "Collapse Backup" once open), so clicking "Expand Backup" is idempotent:
- * a no-op selector miss when already open.
+ * SettingsPage is a master-detail layout: a left sidebar nav (one Link per
+ * section, deep-linkable as /settings/<id>) plus a content pane that renders
+ * only the active section. The backup fields (#backup-repository, the
+ * "Initialized" badge, etc.) mount only when "Backup" is the active section, so
+ * we click the sidebar "Backup" link. Falls back to the deep link if the nav
+ * link isn't present (e.g. the mobile dropdown layout).
  */
 async function expandBackupSection(page: Page): Promise<void> {
-  const expandBtn = page.getByRole('button', { name: /^expand backup$/i })
-  if (await expandBtn.count() > 0) {
-    await expandBtn.first().click()
+  const navLink = page.getByRole('link', { name: 'Backup', exact: true })
+  if (await navLink.count() > 0) {
+    await navLink.first().click()
+    await page.waitForLoadState('networkidle')
+    return
   }
+  await page.goto(`${BASE_URL}/settings/backup`)
+  await page.waitForLoadState('networkidle')
 }
 
 /** Log in via the UI; skip if AUTH_DISABLED. */

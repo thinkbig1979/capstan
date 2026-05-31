@@ -273,32 +273,16 @@ do_browser_login() {
 # ─── Navigate to Settings → Backup ───────────────────────────────────────────
 
 navigate_to_backup_settings() {
-  navigate_to "${TEST_BASE_URL}/settings"
+  # Settings is a master-detail layout with deep-linkable sections, so navigate
+  # straight to the Backup pane rather than clicking through the sidebar.
+  navigate_to "${TEST_BASE_URL}/settings/backup"
   agent-browser wait 2000
 
+  # Verify the backup settings fields are actually rendered (Repository input,
+  # the restic repo path, etc.) — not just the word "backup" in the nav.
   local snapshot
   snapshot=$(browser_snapshot)
-
-  # Look for "Backup" tab or link in settings navigation
-  local backup_ref
-  backup_ref=$(echo "$snapshot" | grep -i "backup" | grep -oP '(?<=@e)\d+' | head -1)
-
-  if [ -z "$backup_ref" ]; then
-    # Fall back: try direct URL (settings page with backup section/hash)
-    navigate_to "${TEST_BASE_URL}/settings?tab=backup"
-    agent-browser wait 2000
-    snapshot=$(browser_snapshot)
-    backup_ref=$(echo "$snapshot" | grep -i "backup" | grep -oP '(?<=@e)\d+' | head -1)
-  fi
-
-  if [ -n "$backup_ref" ]; then
-    agent-browser click "@e${backup_ref}"
-    agent-browser wait 1500
-  fi
-
-  # Verify we can see backup settings fields
-  snapshot=$(browser_snapshot)
-  if echo "$snapshot" | grep -qi "repository\|restic\|backup"; then
+  if echo "$snapshot" | grep -qi "repository\|restic"; then
     log_success "Backup settings section is visible"
     return 0
   fi
