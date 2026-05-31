@@ -48,8 +48,32 @@ const BACKUP_PASSPHRASE = process.env.CAPSTAN_BACKUP_PASSPHRASE ?? 'capstan-e2e-
 let authToken = ''
 let testStackId = ''
 let firstSnapshotId = ''
+// CSRF double-submit token. The backend (middleware/csrf.go) sets a
+// `capstan_csrf` cookie on any GET and requires the same value echoed in the
+// `X-CSRF-Token` header on every mutating request. The real UI (axios) does
+// this automatically; Playwright's APIRequestContext does not, so we bootstrap
+// it per test via ensureCsrf() below. Each test gets a fresh request context
+// (fresh cookie jar), so this must run before the first mutation in each test.
+let csrfToken = ''
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Expand the collapsible "Backup" settings section so its fields render.
+ *
+ * SettingsPage renders each group as a CollapsibleSection (an accordion Card),
+ * not a tab. The Backup section is collapsed by default and its body — the
+ * #backup-repository input, the "Initialized" badge, etc. — is only mounted
+ * when expanded. The chevron Button carries aria-label "Expand Backup" (it flips
+ * to "Collapse Backup" once open), so clicking "Expand Backup" is idempotent:
+ * a no-op selector miss when already open.
+ */
+async function expandBackupSection(page: Page): Promise<void> {
+  const expandBtn = page.getByRole('button', { name: /^expand backup$/i })
+  if (await expandBtn.count() > 0) {
+    await expandBtn.first().click()
+  }
+}
 
 /** Log in via the UI; skip if AUTH_DISABLED. */
 async function loginIfNeeded(page: Page): Promise<void> {
@@ -80,7 +104,23 @@ async function apiGet(request: APIRequestContext, path: string) {
   return request.get(`${API_URL}${path}`, { headers })
 }
 
-/** PUT/POST with JSON body. */
+/**
+ * Bootstrap the CSRF double-submit token for this request context.
+ *
+ * A GET makes the backend set the `capstan_csrf` cookie (its value IS the
+ * token). We read it back from the context's cookie jar via storageState() so
+ * the header we send on mutations always matches the cookie. Idempotent and
+ * safe to call multiple times; only updates the token when a cookie is present.
+ */
+async function ensureCsrf(request: APIRequestContext): Promise<string> {
+  await apiGet(request, '/api/v1/stacks')
+  const state = await request.storageState()
+  const cookie = state.cookies.find((c) => c.name === 'capstan_csrf')
+  if (cookie?.value) csrfToken = cookie.value
+  return csrfToken
+}
+
+/** PUT/POST with JSON body. Includes the CSRF header for the double-submit check. */
 async function apiMutate(
   request: APIRequestContext,
   method: 'PUT' | 'POST',
@@ -89,10 +129,54 @@ async function apiMutate(
 ) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (authToken) headers['Authorization'] = `Bearer ${authToken}`
+  if (csrfToken) headers['X-CSRF-Token'] = csrfToken
   if (method === 'PUT') {
     return request.put(`${API_URL}${path}`, { headers, data })
   }
   return request.post(`${API_URL}${path}`, { headers, data })
+}
+
+/**
+ * Trigger a stashed backup/restore operation by connecting its WebSocket.
+ *
+ * POST /backups/run and /backups/restore return 202 + a wsUrl and only STASH a
+ * pending op (5-min TTL). The engine executes ONLY when a client connects the
+ * WS, exactly as the real UI does. We open it here and await the streamed
+ * `{type:"done"}` event. Node 22 (the Playwright runner) exposes a global
+ * WebSocket, so no extra dependency is needed.
+ *
+ * wsUrl is the backend-relative path (e.g. "/ws/backups/run/<id>"); it lives
+ * under /api/v1 on the BACKEND, which vite does NOT proxy — so we always dial
+ * API_URL directly, never BASE_URL.
+ */
+async function runViaWs(
+  wsUrl: string,
+  timeoutMs = 90_000,
+): Promise<{ success: boolean; events: string[] }> {
+  const wsBase = API_URL.replace(/^http/, 'ws') + '/api/v1'
+  return new Promise((resolve) => {
+    const events: string[] = []
+    const ws = new WebSocket(wsBase + wsUrl)
+    let settled = false
+    const finish = (success: boolean) => {
+      if (settled) return
+      settled = true
+      try { ws.close() } catch { /* already closing */ }
+      resolve({ success, events })
+    }
+    ws.onmessage = (m: MessageEvent) => {
+      const raw = String(m.data)
+      events.push(raw.slice(0, 200))
+      try {
+        const j = JSON.parse(raw)
+        if (j.type === 'done') finish(j.success === true)
+      } catch { /* non-JSON stream line */ }
+    }
+    // A clean close before a done event means the op failed/expired.
+    ws.onclose = () => finish(false)
+    ws.onerror = () => { /* close handler resolves */ }
+    setTimeout(() => finish(false), timeoutMs)
+  })
 }
 
 /** Poll a condition until it returns a truthy value or timeout expires. */
@@ -134,6 +218,7 @@ test.describe('Backup flow E2E', () => {
     }
 
     // ── Configure via API ──────────────────────────────────────────────────
+    await ensureCsrf(request)
     const settingsResp = await apiMutate(request, 'PUT', '/api/v1/settings/backup', {
       repository: BACKUP_REPO_PATH,
       password: BACKUP_PASSPHRASE,
@@ -146,13 +231,10 @@ test.describe('Backup flow E2E', () => {
     await page.goto(`${BASE_URL}/settings`)
     await page.waitForLoadState('networkidle')
 
-    // Click the "Backup" tab in settings if present
-    const backupTab = page.getByRole('tab', { name: /backup/i })
-      .or(page.getByRole('link', { name: /backup/i }))
-    if (await backupTab.count() > 0) {
-      await backupTab.first().click()
-      await page.waitForLoadState('networkidle')
-    }
+    // Backup settings live in a collapsible accordion section (not a tab). The
+    // section is collapsed by default, so expand it via its chevron button
+    // (aria-label "Expand Backup") before the fields render.
+    await expandBackupSection(page)
 
     // Repository input should be present
     const repoInput = page.locator('#backup-repository')
@@ -167,6 +249,7 @@ test.describe('Backup flow E2E', () => {
 
   test('BACKUP-PW-002: initialize restic repository', async ({ page, request }) => {
     await loginIfNeeded(page)
+    await ensureCsrf(request)
 
     // POST /api/v1/backups/repo/init
     const initResp = await apiMutate(request, 'POST', '/api/v1/backups/repo/init', {})
@@ -178,15 +261,11 @@ test.describe('Backup flow E2E', () => {
     await page.goto(`${BASE_URL}/settings`)
     await page.waitForLoadState('networkidle')
 
-    const backupTab = page.getByRole('tab', { name: /backup/i })
-      .or(page.getByRole('link', { name: /backup/i }))
-    if (await backupTab.count() > 0) {
-      await backupTab.first().click()
-      await page.waitForLoadState('networkidle')
-    }
+    await expandBackupSection(page)
 
-    // "Initialized" badge or text
-    const initializedBadge = page.getByText(/initialized/i)
+    // Match the positive state exactly — "Not initialized" also contains the
+    // substring "initialized", so an exact match avoids a false positive.
+    const initializedBadge = page.getByText('Initialized', { exact: true })
     await expect(initializedBadge.first()).toBeVisible({ timeout: 10_000 })
   })
 
@@ -197,6 +276,7 @@ test.describe('Backup flow E2E', () => {
     request,
   }) => {
     await loginIfNeeded(page)
+    await ensureCsrf(request)
 
     // ── Resolve stack ID ──────────────────────────────────────────────────
     const stacksResp = await apiGet(request, '/api/v1/stacks')
@@ -249,6 +329,7 @@ test.describe('Backup flow E2E', () => {
 
   test('BACKUP-PW-004: run backup and verify completion', async ({ page, request }) => {
     await loginIfNeeded(page)
+    await ensureCsrf(request)
 
     // ── Option A: click "Back up now" in the BackupStatusCard ─────────────
     await page.goto(`${BASE_URL}/dashboard`)
@@ -284,7 +365,17 @@ test.describe('Backup flow E2E', () => {
       expect(runResp.status()).toBe(202)
       const runBody = await runResp.json()
       const runId: string = runBody.runId
+      const wsUrl: string = runBody.wsUrl
       expect(runId).toBeTruthy()
+      expect(wsUrl, 'run response must include a wsUrl').toBeTruthy()
+
+      // The op is only stashed; connect the WS to actually execute the backup
+      // and await the streamed completion before asserting on history.
+      const wsResult = await runViaWs(wsUrl)
+      expect(
+        wsResult.success,
+        `Backup WS did not report success. Last events: ${wsResult.events.slice(-3).join(' | ')}`,
+      ).toBe(true)
 
       // Poll history until the run completes
       const completedRun = await pollUntil(async () => {
@@ -375,6 +466,7 @@ test.describe('Backup flow E2E', () => {
     request,
   }) => {
     await loginIfNeeded(page)
+    await ensureCsrf(request)
 
     // Resolve snapshot ID if not set from previous test
     if (!firstSnapshotId) {
@@ -453,7 +545,16 @@ test.describe('Backup flow E2E', () => {
       expect(restoreResp.status()).toBe(202)
       const restoreBody = await restoreResp.json()
       const restoreRunId: string = restoreBody.runId
+      const restoreWsUrl: string = restoreBody.wsUrl
       expect(restoreRunId).toBeTruthy()
+      expect(restoreWsUrl, 'restore response must include a wsUrl').toBeTruthy()
+
+      // Connect the WS to actually run the restore and await completion.
+      const wsResult = await runViaWs(restoreWsUrl)
+      expect(
+        wsResult.success,
+        `Restore WS did not report success. Last events: ${wsResult.events.slice(-3).join(' | ')}`,
+      ).toBe(true)
 
       // Poll for completion
       const done = await pollUntil(async () => {
@@ -482,7 +583,12 @@ test.describe('Backup flow E2E', () => {
     // ── Dashboard accessible ───────────────────────────────────────────────
     await page.goto(`${BASE_URL}/dashboard`)
     await page.waitForLoadState('networkidle')
-    await expect(page.locator('body')).not.toContainText(/error|crash|broken/i)
+    // Look only for crash/error-boundary phrases — a bare word like "Error"
+    // legitimately appears in the dashboard's status-filter chips, so the old
+    // /error|crash|broken/i was too broad and matched normal UI chrome.
+    await expect(page.locator('body')).not.toContainText(
+      /something went wrong|application error|unhandled (error|exception|rejection)|cannot read propert|is not a function|chunkloaderror/i,
+    )
 
     // ── Snapshots still present in API ────────────────────────────────────
     const snapshotsResp = await apiGet(request, '/api/v1/backups/snapshots')

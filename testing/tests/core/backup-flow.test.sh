@@ -17,7 +17,12 @@
 #   # or via orchestrator:
 #   DOMAIN=backup ./testing/test-orchestrator.sh all backup
 
-set -euo pipefail
+# NOTE: intentionally no `-e`. This harness drives a real browser via
+# agent-browser and extracts element refs with grep pipelines that legitimately
+# find nothing (a button not on the current view → grep exit 1). Control flow is
+# explicit: each test checks results and calls test_fail/return. `set -e` would
+# abort the whole run on a benign no-match, so we keep `-uo pipefail` only.
+set -uo pipefail
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
@@ -38,8 +43,16 @@ AUTH_DISABLED="${AUTH_DISABLED:-false}"
 
 # Backup-specific test values
 BACKUP_TEST_STACK="test-app"
-BACKUP_REPO_PATH="/tmp/capstan-e2e-restic-repo-$$"
+BACKUP_REPO_PATH="${CAPSTAN_BACKUP_REPO:-/tmp/capstan-e2e-restic-repo-$$}"
 BACKUP_PASSPHRASE="capstan-e2e-test-passphrase-2026"
+
+# CSRF double-submit state. The backend (middleware/csrf.go) sets a `capstan_csrf`
+# cookie on any GET and requires the same value echoed in the `X-CSRF-Token`
+# header on every mutating request. curl needs an explicit cookie jar plus the
+# header — ensure_csrf() bootstraps both. Without this, every PUT/POST gets 403
+# (which the old suite mis-reported as "app not reachable" and skipped).
+CSRF_COOKIE_JAR="$(mktemp "/tmp/capstan-e2e-csrf-XXXXXX.jar")"
+CSRF_TOKEN=""
 
 # Derived: screenshot dir
 SCREENSHOT_DIR="${TESTING_DIR}/reports/screenshots"
@@ -144,6 +157,46 @@ api_call() {
   fi
 }
 
+# Bootstrap the CSRF double-submit token. A GET makes the backend set the
+# `capstan_csrf` cookie (its value IS the token) and echo it in the
+# X-CSRF-Token response header. We persist the cookie in a jar and read the
+# token from the response header (falling back to the jar), so every mutation
+# can send a matching cookie + header pair.
+ensure_csrf() {
+  local hdrs
+  hdrs=$(curl -sf -c "$CSRF_COOKIE_JAR" -b "$CSRF_COOKIE_JAR" -D - -o /dev/null \
+    "${TEST_API_URL}/api/v1/stacks" 2>/dev/null || true)
+  CSRF_TOKEN=$(printf '%s' "$hdrs" | grep -i '^x-csrf-token:' | tr -d '\r' | awk '{print $2}' | head -1)
+  if [ -z "$CSRF_TOKEN" ]; then
+    # Netscape cookie jar: capstan_csrf value is the 7th field.
+    CSRF_TOKEN=$(awk '/capstan_csrf/{print $7}' "$CSRF_COOKIE_JAR" 2>/dev/null | tail -1)
+  fi
+}
+
+# Connect a stashed backup/restore op's WebSocket so the engine actually runs.
+# POST /backups/run and /backups/restore return 202 + wsUrl and only STASH a
+# pending op; the run executes when a client connects the WS. Node 22 ships a
+# global WebSocket, so we drive it inline. Echoes WS_DONE_SUCCESS / WS_DONE_FAIL
+# and exits 0 only on a streamed {type:"done",success:true}.
+trigger_ws() {
+  local ws_path="$1"
+  node -e '
+    const api = process.argv[1].replace(/^http/, "ws") + "/api/v1";
+    const ws = new WebSocket(api + process.argv[2]);
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return; settled = true;
+      try { ws.close(); } catch {}
+      console.log(ok ? "WS_DONE_SUCCESS" : "WS_DONE_FAIL");
+      process.exit(ok ? 0 : 1);
+    };
+    ws.onmessage = (m) => { try { const j = JSON.parse(String(m.data)); if (j.type === "done") done(j.success === true); } catch {} };
+    ws.onclose = () => done(false);
+    ws.onerror = () => {};
+    setTimeout(() => done(false), 90000);
+  ' "$TEST_API_URL" "$ws_path" 2>/dev/null
+}
+
 # Simpler curl wrapper — avoids eval quoting issues.
 capstan_api() {
   local method="$1"
@@ -155,8 +208,12 @@ capstan_api() {
   if [ -n "${AUTH_TOKEN:-}" ]; then
     headers+=("-H" "Authorization: Bearer ${AUTH_TOKEN}")
   fi
+  if [ -n "${CSRF_TOKEN:-}" ]; then
+    headers+=("-H" "X-CSRF-Token: ${CSRF_TOKEN}")
+  fi
 
   curl -sf -X "$method" "${TEST_API_URL}${path}" \
+    -c "$CSRF_COOKIE_JAR" -b "$CSRF_COOKIE_JAR" \
     "${headers[@]}" \
     -H "Content-Type: application/json" \
     "${extra_args[@]}" 2>/dev/null
@@ -176,7 +233,7 @@ do_browser_login() {
   agent-browser wait 2000
 
   local snapshot
-  snapshot=$(browser_snapshot -i)
+  snapshot=$(browser_snapshot)
 
   local email_ref password_ref
   email_ref=$(echo "$snapshot" | grep -i "email" | grep -oP '(?<=@e)\d+' | head -1)
@@ -220,7 +277,7 @@ navigate_to_backup_settings() {
   agent-browser wait 2000
 
   local snapshot
-  snapshot=$(browser_snapshot -i)
+  snapshot=$(browser_snapshot)
 
   # Look for "Backup" tab or link in settings navigation
   local backup_ref
@@ -230,7 +287,7 @@ navigate_to_backup_settings() {
     # Fall back: try direct URL (settings page with backup section/hash)
     navigate_to "${TEST_BASE_URL}/settings?tab=backup"
     agent-browser wait 2000
-    snapshot=$(browser_snapshot -i)
+    snapshot=$(browser_snapshot)
     backup_ref=$(echo "$snapshot" | grep -i "backup" | grep -oP '(?<=@e)\d+' | head -1)
   fi
 
@@ -259,7 +316,7 @@ navigate_to_stack_backups_tab() {
   agent-browser wait 2000
 
   local snapshot
-  snapshot=$(browser_snapshot -i)
+  snapshot=$(browser_snapshot)
 
   # Click the stack card
   local stack_ref
@@ -274,7 +331,7 @@ navigate_to_stack_backups_tab() {
   agent-browser wait 2000
 
   # Find and click the Backups tab
-  snapshot=$(browser_snapshot -i)
+  snapshot=$(browser_snapshot)
   local backups_tab_ref
   backups_tab_ref=$(echo "$snapshot" | grep -i "backups\b" | grep -oP '(?<=@e)\d+' | head -1)
 
@@ -501,7 +558,7 @@ test_run_backup() {
     agent-browser wait 3000
 
     local snapshot
-    snapshot=$(browser_snapshot -i)
+    snapshot=$(browser_snapshot)
 
     local backup_now_ref
     backup_now_ref=$(echo "$snapshot" | grep -i "back up now\|backup now" | grep -oP '(?<=@e)\d+' | head -1)
@@ -555,6 +612,21 @@ test_run_backup() {
 
   if [ -z "$run_id" ]; then
     test_fail "No runId in backup run response: $run_response"
+    return 1
+  fi
+
+  # The op is only stashed; connect the WS to actually execute the backup and
+  # await the streamed completion before polling history.
+  if [ -n "$ws_url" ]; then
+    log_info "Connecting backup WS to trigger execution (${ws_url})..."
+    if trigger_ws "$ws_url" | grep -q "WS_DONE_SUCCESS"; then
+      log_success "Backup WS reported success"
+    else
+      test_fail "Backup WS did not report success (runId=${run_id})"
+      return 1
+    fi
+  else
+    test_fail "No wsUrl in backup run response: $run_response"
     return 1
   fi
 
@@ -678,7 +750,7 @@ for s in items:
     agent-browser wait 2000
 
     local page_snapshot
-    page_snapshot=$(browser_snapshot -i)
+    page_snapshot=$(browser_snapshot)
 
     local backups_tab_ref
     backups_tab_ref=$(echo "$page_snapshot" | grep -i "backups" | grep -oP '(?<=@e)\d+' | head -1)
@@ -794,7 +866,7 @@ for s in items:
   agent-browser wait 2000
 
   local page_snapshot
-  page_snapshot=$(browser_snapshot -i)
+  page_snapshot=$(browser_snapshot)
 
   local backups_tab_ref
   backups_tab_ref=$(echo "$page_snapshot" | grep -i "backups" | grep -oP '(?<=@e)\d+' | head -1)
@@ -805,7 +877,7 @@ for s in items:
     agent-browser click "@e${backups_tab_ref}"
     agent-browser wait 2000
 
-    page_snapshot=$(browser_snapshot -i)
+    page_snapshot=$(browser_snapshot)
 
     # Find the "Restore" button for a snapshot row.
     # aria-label is "Restore snapshot <shortId>" per BackupsTab SnapshotRow.
@@ -824,7 +896,7 @@ for s in items:
       ui_restore_attempted=true
 
       # ConfirmDialog opens — look for confirm button text "Restore" in the dialog
-      page_snapshot=$(browser_snapshot -i)
+      page_snapshot=$(browser_snapshot)
       local confirm_btn_ref
       confirm_btn_ref=$(echo "$page_snapshot" | grep -iP "confirm|^Restore$" | grep -oP '(?<=@e)\d+' | tail -1)
 
@@ -876,15 +948,30 @@ for s in items:
     return 0
   fi
 
-  local restore_run_id
+  local restore_run_id restore_ws_url
   restore_run_id=$(echo "$restore_response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('runId',''))" 2>/dev/null || true)
+  restore_ws_url=$(echo "$restore_response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('wsUrl',''))" 2>/dev/null || true)
 
   if [ -z "$restore_run_id" ]; then
     test_fail "Restore API did not return runId: $restore_response"
     return 1
   fi
 
-  log_info "Restore run started: runId=${restore_run_id}"
+  log_info "Restore run started: runId=${restore_run_id}, wsUrl=${restore_ws_url}"
+
+  # Connect the WS to actually run the restore and await completion.
+  if [ -n "$restore_ws_url" ]; then
+    log_info "Connecting restore WS to trigger execution..."
+    if trigger_ws "$restore_ws_url" | grep -q "WS_DONE_SUCCESS"; then
+      log_success "Restore WS reported success"
+    else
+      test_fail "Restore WS did not report success (runId=${restore_run_id})"
+      return 1
+    fi
+  else
+    test_fail "No wsUrl in restore response: $restore_response"
+    return 1
+  fi
 
   # Poll history for this restore completing
   local poll_count=0
@@ -981,7 +1068,10 @@ print(len(snaps))
   local page_snapshot
   page_snapshot=$(browser_snapshot)
 
-  if echo "$page_snapshot" | grep -qi "error\|crash\|broken"; then
+  # Match only crash/error-boundary phrases — a bare "Error" legitimately
+  # appears in the dashboard's status-filter chips, so "error|crash|broken"
+  # was too broad and matched normal UI chrome.
+  if echo "$page_snapshot" | grep -qiE "something went wrong|application error|unhandled (error|exception|rejection)|cannot read propert|chunkloaderror"; then
     test_fail "Dashboard shows error state after restore"
     return 1
   fi
@@ -990,7 +1080,7 @@ print(len(snaps))
   navigate_to "${TEST_BASE_URL}/stacks/${stack_id}"
   agent-browser wait 2000
 
-  page_snapshot=$(browser_snapshot -i)
+  page_snapshot=$(browser_snapshot)
   local backups_tab_ref
   backups_tab_ref=$(echo "$page_snapshot" | grep -i "backups" | grep -oP '(?<=@e)\d+' | head -1)
 
@@ -1014,6 +1104,7 @@ print(len(snaps))
 cleanup_test_artifacts() {
   log_info "Cleaning up test backup repo (${BACKUP_REPO_PATH})..."
   rm -rf "$BACKUP_REPO_PATH" 2>/dev/null || true
+  rm -f "$CSRF_COOKIE_JAR" 2>/dev/null || true
   log_success "Cleanup complete"
 }
 
@@ -1036,6 +1127,14 @@ main() {
   if ! curl -sf "${TEST_API_URL}/health" > /dev/null 2>&1; then
     log_warning "Backend not reachable at ${TEST_API_URL}/health"
     log_warning "Tests will run in degraded mode (API calls will return empty, tests will be skipped)"
+  fi
+
+  # ── Bootstrap CSRF token (double-submit cookie + header) ─────────────────
+  ensure_csrf
+  if [ -n "$CSRF_TOKEN" ]; then
+    log_info "CSRF token obtained (${#CSRF_TOKEN} chars)"
+  else
+    log_warning "CSRF token not obtained — mutating API calls may be rejected"
   fi
 
   # ── Obtain auth token for API calls ──────────────────────────────────────
