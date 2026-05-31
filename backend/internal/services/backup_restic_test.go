@@ -573,6 +573,60 @@ func TestResticManager_RestorePreview_Args(t *testing.T) {
 	assert.Equal(t, "abc123", call.Args[1])
 }
 
+// --- Stats tests ---
+
+func TestResticManager_Stats_ParsesTotalSize(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{"total_size": 1048576, "total_file_count": 42}`)
+	runner := &fakeRunner{outputData: raw}
+	m := newResticManagerWithRunner(testBackupConfig(), runner, nil)
+
+	size, err := m.Stats(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1048576), size)
+}
+
+func TestResticManager_Stats_UsesRawDataMode(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{"total_size": 0}`)
+	runner := &fakeRunner{outputData: raw}
+	m := newResticManagerWithRunner(testBackupConfig(), runner, nil)
+
+	_, err := m.Stats(context.Background())
+	require.NoError(t, err)
+
+	call := runner.lastCall()
+	assert.Equal(t, "restic", call.Binary)
+	assert.Equal(t, "stats", call.Args[0])
+	assert.True(t, argPairContains(call.Args, "--mode", "raw-data"), "--mode raw-data must be present")
+	assert.True(t, argContains(call.Args, "--json"), "--json must be present")
+}
+
+func TestResticManager_Stats_RunnerErrorPropagated(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{outputErr: fmt.Errorf("restic not found")}
+	m := newResticManagerWithRunner(testBackupConfig(), runner, nil)
+
+	_, err := m.Stats(context.Background())
+	assert.Error(t, err)
+}
+
+func TestResticManager_Stats_MissingPassword(t *testing.T) {
+	t.Parallel()
+
+	cfg := testBackupConfig()
+	cfg.ResticPassword = ""
+	runner := &fakeRunner{}
+	m := newResticManagerWithRunner(cfg, runner, nil)
+
+	_, err := m.Stats(context.Background())
+	assert.Error(t, err, "Stats must fail when ResticPassword is empty")
+	assert.Empty(t, runner.calls)
+}
+
 // --- Missing password test ---
 
 func TestResticManager_MissingPassword_ReturnsError(t *testing.T) {

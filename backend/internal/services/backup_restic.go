@@ -428,6 +428,38 @@ func (m *ResticManager) RestorePreview(ctx context.Context, snapshotID string, o
 	return m.runner.Run(ctx, "restic", []string{"ls", snapshotID}, m.resticEnv(pwFile), out)
 }
 
+// resticStatsOutput is the JSON shape returned by `restic stats --json`.
+// Only the fields Capstan uses are mapped; extras are silently discarded.
+type resticStatsOutput struct {
+	TotalSize uint64 `json:"total_size"`
+}
+
+// Stats runs `restic stats --mode raw-data --json` and returns the total
+// on-disk size of the repository in bytes. It uses the Output helper (no
+// streaming) and applies a 60-second timeout matching ListSnapshots.
+func (m *ResticManager) Stats(ctx context.Context) (int64, error) {
+	pwFile, cleanup, err := m.withPasswordFile()
+	if err != nil {
+		return 0, err
+	}
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	args := []string{"stats", "--mode", "raw-data", "--json"}
+	raw, err := m.runner.Output(ctx, "restic", args, m.resticEnv(pwFile))
+	if err != nil {
+		return 0, fmt.Errorf("restic stats: %w", err)
+	}
+
+	var out resticStatsOutput
+	if jsonErr := json.Unmarshal(bytes.TrimSpace(raw), &out); jsonErr != nil {
+		return 0, fmt.Errorf("parse restic stats JSON: %w", jsonErr)
+	}
+	return int64(out.TotalSize), nil
+}
+
 // Restore restores the given snapshot to targetPath via `restic restore --target`.
 func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, targetPath string, out chan<- StreamLine) error {
 	pwFile, cleanup, err := m.withPasswordFile()

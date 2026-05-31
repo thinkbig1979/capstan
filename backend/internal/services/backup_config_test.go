@@ -250,6 +250,130 @@ func TestResolveBackupConfig_HostnameFromOS(t *testing.T) {
 	}
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// RepoSettingSources
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestRepoSettingSources_AllDefault verifies "default" when DB and env are empty.
+func TestRepoSettingSources_AllDefault(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	cfg := baseCfg("/data")
+
+	repoSrc, pwSrc, hasPassword := RepoSettingSources(db, cfg)
+
+	if repoSrc != settingSourceDefault {
+		t.Errorf("repoSource = %q; want %q", repoSrc, settingSourceDefault)
+	}
+	if pwSrc != settingSourceDefault {
+		t.Errorf("pwSource = %q; want %q", pwSrc, settingSourceDefault)
+	}
+	if hasPassword {
+		t.Error("hasPassword must be false when no password is configured")
+	}
+}
+
+// TestRepoSettingSources_DBSources verifies "db" when DB has values.
+func TestRepoSettingSources_DBSources(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	cfg := baseCfg("/data")
+
+	if err := db.SetSetting("restic_repository", "/db/repo"); err != nil {
+		t.Fatalf("SetSetting restic_repository: %v", err)
+	}
+	if err := db.SetSetting("restic_password", "db-secret"); err != nil {
+		t.Fatalf("SetSetting restic_password: %v", err)
+	}
+
+	repoSrc, pwSrc, hasPassword := RepoSettingSources(db, cfg)
+
+	if repoSrc != settingSourceDB {
+		t.Errorf("repoSource = %q; want %q", repoSrc, settingSourceDB)
+	}
+	if pwSrc != settingSourceDB {
+		t.Errorf("pwSource = %q; want %q", pwSrc, settingSourceDB)
+	}
+	if !hasPassword {
+		t.Error("hasPassword must be true when DB has a password")
+	}
+}
+
+// TestRepoSettingSources_EnvSources verifies "env" when DB is empty but env supplies values.
+func TestRepoSettingSources_EnvSources(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	cfg := baseCfg("/data")
+	cfg.ResticRepository = "/env/repo"
+	cfg.ResticPassword = "env-secret"
+
+	repoSrc, pwSrc, hasPassword := RepoSettingSources(db, cfg)
+
+	if repoSrc != settingSourceEnv {
+		t.Errorf("repoSource = %q; want %q", repoSrc, settingSourceEnv)
+	}
+	if pwSrc != settingSourceEnv {
+		t.Errorf("pwSource = %q; want %q", pwSrc, settingSourceEnv)
+	}
+	if !hasPassword {
+		t.Error("hasPassword must be true when env has a password")
+	}
+}
+
+// TestRepoSettingSources_DBWinsOverEnv verifies DB takes precedence over env.
+func TestRepoSettingSources_DBWinsOverEnv(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	cfg := baseCfg("/data")
+	// Env fallbacks are set but DB values should win.
+	cfg.ResticRepository = "/env/repo"
+	cfg.ResticPassword = "env-secret"
+
+	if err := db.SetSetting("restic_repository", "/db/repo"); err != nil {
+		t.Fatalf("SetSetting restic_repository: %v", err)
+	}
+	if err := db.SetSetting("restic_password", "db-secret"); err != nil {
+		t.Fatalf("SetSetting restic_password: %v", err)
+	}
+
+	repoSrc, pwSrc, hasPassword := RepoSettingSources(db, cfg)
+
+	if repoSrc != settingSourceDB {
+		t.Errorf("repoSource = %q; want %q (DB must win over env)", repoSrc, settingSourceDB)
+	}
+	if pwSrc != settingSourceDB {
+		t.Errorf("pwSource = %q; want %q (DB must win over env)", pwSrc, settingSourceDB)
+	}
+	if !hasPassword {
+		t.Error("hasPassword must be true when DB has a password")
+	}
+}
+
+// TestRepoSettingSources_MixedSources verifies independent source tracking.
+func TestRepoSettingSources_MixedSources(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	cfg := baseCfg("/data")
+	// Repo from DB, password from env.
+	cfg.ResticPassword = "env-secret"
+
+	if err := db.SetSetting("restic_repository", "/db/repo"); err != nil {
+		t.Fatalf("SetSetting restic_repository: %v", err)
+	}
+
+	repoSrc, pwSrc, hasPassword := RepoSettingSources(db, cfg)
+
+	if repoSrc != settingSourceDB {
+		t.Errorf("repoSource = %q; want %q", repoSrc, settingSourceDB)
+	}
+	if pwSrc != settingSourceEnv {
+		t.Errorf("pwSource = %q; want %q", pwSrc, settingSourceEnv)
+	}
+	if !hasPassword {
+		t.Error("hasPassword must be true when env has a password")
+	}
+}
+
 // TestGitHTTPSTokenEncryptionUnchanged verifies that the existing git_https_token
 // encryption behaviour is intact after generalising the sensitive-key set.
 func TestGitHTTPSTokenEncryptionUnchanged(t *testing.T) {

@@ -133,6 +133,59 @@ func ResolveBackupConfig(db *database.DB) BackupConfig {
 	return resolveBackupConfig(db, &config.Config{})
 }
 
+// ResolveBackupConfigWithCfg is like ResolveBackupConfig but accepts a
+// config.Config so env-var fallbacks are applied. Use this when the caller
+// has access to the live Config (e.g. from BackupService.Config()).
+func ResolveBackupConfigWithCfg(db *database.DB, cfg *config.Config) BackupConfig {
+	return resolveBackupConfig(db, cfg)
+}
+
+// settingSourceKind classifies where the effective value for a setting came from.
+type settingSourceKind string
+
+const (
+	// settingSourceDB means the value was explicitly stored in the database.
+	settingSourceDB settingSourceKind = "db"
+	// settingSourceEnv means the DB had no value but the environment supplied one.
+	settingSourceEnv settingSourceKind = "env"
+	// settingSourceDefault means neither DB nor env provided a value.
+	settingSourceDefault settingSourceKind = "default"
+)
+
+// RepoSettingSources returns the source classifications for restic_repository
+// and restic_password given the raw DB values and the live config.
+// It determines sources without exposing the password value.
+//
+// repoSource is "db" / "env" / "default".
+// pwSource  is "db" / "env" / "default".
+// hasPassword is true when any source provides a non-empty password.
+func RepoSettingSources(db *database.DB, cfg *config.Config) (repoSource, pwSource settingSourceKind, hasPassword bool) {
+	dbRepo, _ := db.GetSetting("restic_repository")
+	switch {
+	case dbRepo != "":
+		repoSource = settingSourceDB
+	case cfg.ResticRepository != "":
+		repoSource = settingSourceEnv
+	default:
+		repoSource = settingSourceDefault
+	}
+
+	dbPw, _ := db.GetSetting("restic_password")
+	switch {
+	case dbPw != "":
+		pwSource = settingSourceDB
+		hasPassword = true
+	case cfg.ResticPassword != "":
+		pwSource = settingSourceEnv
+		hasPassword = true
+	default:
+		pwSource = settingSourceDefault
+		hasPassword = false
+	}
+
+	return repoSource, pwSource, hasPassword
+}
+
 // resolveIntSetting reads a DB setting, falls back to envVal string, then to
 // defaultVal. It silently ignores parse errors and uses the default.
 func resolveIntSetting(db *database.DB, key, envVal string, defaultVal int) int {

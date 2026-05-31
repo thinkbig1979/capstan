@@ -1263,6 +1263,141 @@ func TestDrainOut_ForwardsAllLines(t *testing.T) {
 }
 
 // ============================================================
+// NextRunAt
+// ============================================================
+
+func TestNextRunAt_NilWhenSchedulerNotRunning(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	require.NoError(t, db.SetSetting("backup_schedule_interval", "60"))
+	docker := &fakeDocker{}
+	runner := &fakeRunner{}
+	svc := buildSvc(t, db, docker, runner, runner)
+	// Do NOT call StartScheduler / SetScheduler — schedulerActive is false.
+
+	assert.Nil(t, svc.NextRunAt(), "NextRunAt must be nil when scheduler is not running")
+}
+
+func TestNextRunAt_NilWhenIntervalZero(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	// backup_schedule_interval not set → 0 → disabled
+	docker := &fakeDocker{}
+	runner := &fakeRunner{}
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	sched := &fakeScheduler{}
+	svc.SetScheduler(sched)
+	// Force schedulerActive=true without a real interval, to isolate the zero-interval branch.
+	svc.schedulerActive.Store(true)
+
+	assert.Nil(t, svc.NextRunAt(), "NextRunAt must be nil when interval is 0")
+}
+
+func TestNextRunAt_UsesLastRunFinishedAt(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	require.NoError(t, db.SetSetting("backup_schedule_interval", "30"))
+
+	docker := &fakeDocker{}
+	runner := &fakeRunner{}
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	sched := &fakeScheduler{}
+	svc.SetScheduler(sched)
+	svc.schedulerActive.Store(true)
+
+	// Seed a finished run 15 minutes ago.
+	finishedAt := time.Now().UTC().Add(-15 * time.Minute).Format(time.RFC3339)
+	run := &models.BackupRun{
+		ID:         "run-001",
+		Kind:       "backup",
+		Trigger:    "scheduled",
+		Status:     "success",
+		StartedAt:  time.Now().UTC().Add(-16 * time.Minute).Format(time.RFC3339),
+		FinishedAt: &finishedAt,
+	}
+	require.NoError(t, db.CreateBackupRun(run))
+
+	next := svc.NextRunAt()
+	require.NotNil(t, next)
+
+	// next should be ~15 minutes in the future (finishedAt + 30m - now ~= 15m).
+	diff := time.Until(*next)
+	assert.True(t, diff > 10*time.Minute && diff < 20*time.Minute,
+		"nextRunAt should be ~15 minutes from now, got %v", diff)
+}
+
+func TestNextRunAt_FallsBackToNowWhenNoRuns(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	require.NoError(t, db.SetSetting("backup_schedule_interval", "60"))
+	docker := &fakeDocker{}
+	runner := &fakeRunner{}
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	svc.schedulerActive.Store(true)
+
+	before := time.Now().UTC()
+	next := svc.NextRunAt()
+	after := time.Now().UTC()
+
+	require.NotNil(t, next, "NextRunAt must not be nil when scheduler is active")
+	// Should be now+60m (with a small window for test execution time).
+	assert.True(t, next.After(before.Add(59*time.Minute)),
+		"nextRunAt must be at least 59 minutes from now")
+	assert.True(t, next.Before(after.Add(61*time.Minute)),
+		"nextRunAt must be at most 61 minutes from now")
+}
+
+// ============================================================
+// RepoSizeBytes
+// ============================================================
+
+func TestRepoSizeBytes_NilWhenNoBinary(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	docker := &fakeDocker{}
+	runner := &fakeRunner{}
+	svc := buildSvc(t, db, docker, runner, runner)
+	svc.resticBin = ""
+
+	result := svc.RepoSizeBytes(context.Background())
+	assert.Nil(t, result, "RepoSizeBytes must return nil when resticBin is empty")
+}
+
+func TestRepoSizeBytes_NilWhenRunnerFails(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	docker := &fakeDocker{}
+	runner := &fakeRunner{outputErr: errors.New("repo unreachable")}
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	result := svc.RepoSizeBytes(context.Background())
+	assert.Nil(t, result, "RepoSizeBytes must return nil on runner error")
+}
+
+func TestRepoSizeBytes_ReturnsSizeOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	docker := &fakeDocker{}
+	raw := []byte(`{"total_size": 2097152}`)
+	runner := &fakeRunner{outputData: raw}
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	result := svc.RepoSizeBytes(context.Background())
+	require.NotNil(t, result)
+	assert.Equal(t, int64(2097152), *result)
+}
+
+// ============================================================
 // resolveAllEnabled (used by scheduler)
 // ============================================================
 

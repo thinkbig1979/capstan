@@ -160,21 +160,17 @@ func (h *BackupHandler) RegisterRoutes(group *gin.RouterGroup) {
 
 func (h *BackupHandler) getSettings(c *gin.Context) {
 	db := h.db
+	cfg := h.svc.Config()
 
-	repository, _ := db.GetSetting("restic_repository")
-	repoSource := "default"
-	if repository != "" {
-		repoSource = "db"
-	}
+	// Resolve effective values and source classifications for repository/password.
+	// ResolveBackupConfigWithCfg reads DB first, falls back to env, then defaults.
+	bc := services.ResolveBackupConfigWithCfg(db, cfg)
+	repoSrc, pwSrc, hasPassword := services.RepoSettingSources(db, cfg)
 
-	// Password must NEVER be returned in the response.
-	// Report only a boolean indicating whether one is configured.
-	pwDB, _ := db.GetSetting("restic_password")
-	hasPassword := pwDB != ""
-	passwordSource := "default"
-	if pwDB != "" {
-		passwordSource = "db"
-	}
+	// Password must NEVER be returned in the response (see invariant below).
+	// Use the effective repository so the UI shows what will actually be used,
+	// regardless of whether it came from DB, env, or the computed default.
+	repository := bc.ResticRepository
 
 	keepDaily, _ := db.GetSetting("backup_keep_daily")
 	keepWeekly, _ := db.GetSetting("backup_keep_weekly")
@@ -193,9 +189,9 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"repository":              repository,
-		"repositorySource":        repoSource,
+		"repositorySource":        repoSrc,
 		"hasPassword":             hasPassword,
-		"passwordSource":          passwordSource,
+		"passwordSource":          pwSrc,
 		"keepDaily":               settingIntOrDefault(keepDaily, 7),
 		"keepWeekly":              settingIntOrDefault(keepWeekly, 4),
 		"keepMonthly":             settingIntOrDefault(keepMonthly, 6),
@@ -470,14 +466,22 @@ func (h *BackupHandler) getStatus(c *gin.Context) {
 		lastRun = &runs[0]
 	}
 
+	// repoSizeBytes is only meaningful (and safe to fetch) when restic can reach
+	// the repository. Gate it on RepoReachable so the stats call is skipped
+	// entirely when the repo is uninitialised or unreachable.
+	var repoSizeBytes *int64
+	if repoStatus.RepoReachable {
+		repoSizeBytes = h.svc.RepoSizeBytes(c.Request.Context())
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"resticAvailable":       av.ResticPresent,
 		"rcloneAvailable":       av.RclonePresent,
 		"repositoryInitialized": repoStatus.RepoReachable,
 		"enabledStackCount":     len(policies),
 		"lastRun":               lastRun,
-		"nextRunAt":             nil,
-		"repoSizeBytes":         nil,
+		"nextRunAt":             h.svc.NextRunAt(),
+		"repoSizeBytes":         repoSizeBytes,
 		"schedulerRunning":      h.svc.SchedulerRunning(),
 	})
 }

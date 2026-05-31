@@ -139,6 +139,12 @@ func (s *BackupService) SetScheduler(sched BackupScheduler) {
 	s.sched = sched
 }
 
+// Config returns the config.Config that was supplied at construction time.
+// Handlers use it to determine whether a setting value comes from env or DB.
+func (s *BackupService) Config() *config.Config {
+	return s.cfg
+}
+
 // SetBins overrides the cached binary paths resolved at construction time.
 // This is used by tests (including tests in external packages) to control
 // availability without requiring real restic/rclone binaries on the host.
@@ -184,6 +190,59 @@ func (s *BackupService) StopScheduler() {
 // the scheduler lifecycle and is what status endpoints should surface.
 func (s *BackupService) SchedulerRunning() bool {
 	return s.schedulerActive.Load()
+}
+
+// NextRunAt returns the estimated timestamp of the next scheduled automatic
+// backup, or nil when the scheduler is not running or the interval is zero.
+//
+// Because the scheduler uses a plain time.Ticker whose start time is not
+// persisted, the estimate is derived from the most recent backup run's
+// FinishedAt timestamp plus the configured interval. When no run exists yet
+// (scheduler just started) the estimate is time.Now plus the interval.
+func (s *BackupService) NextRunAt() *time.Time {
+	if !s.schedulerActive.Load() {
+		return nil
+	}
+	bc := resolveBackupConfig(s.db, s.cfg)
+	if bc.ScheduleInterval <= 0 {
+		return nil
+	}
+	interval := time.Duration(bc.ScheduleInterval) * time.Minute
+
+	// Use the most recent run's finish time as the base, falling back to now.
+	var base time.Time
+	runs, err := s.db.GetBackupRuns(1)
+	if err == nil && len(runs) > 0 && runs[0].FinishedAt != nil {
+		parsed, parseErr := time.Parse(time.RFC3339, *runs[0].FinishedAt)
+		if parseErr == nil {
+			base = parsed
+		}
+	}
+	if base.IsZero() {
+		base = time.Now().UTC()
+	}
+
+	next := base.Add(interval)
+	return &next
+}
+
+// RepoSizeBytes returns the raw-data size of the restic repository in bytes,
+// or nil when the repository is not reachable, the binary is absent, or stats
+// cannot be retrieved. It never returns an error — failures are silently
+// swallowed so that the status endpoint remains responsive.
+func (s *BackupService) RepoSizeBytes(ctx context.Context) *int64 {
+	if s.resticBin == "" {
+		return nil
+	}
+	bc := resolveBackupConfig(s.db, s.cfg)
+	restic := s.newResticMgr(bc)
+
+	size, err := restic.Stats(ctx)
+	if err != nil {
+		s.logger.Debug("RepoSizeBytes: stats failed", "error", err)
+		return nil
+	}
+	return &size
 }
 
 // Available returns the current availability state of the backup engine.

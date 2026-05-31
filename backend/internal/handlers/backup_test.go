@@ -218,6 +218,94 @@ func TestGetSettings_ShapeContainsExpectedFields(t *testing.T) {
 	}
 }
 
+func TestGetSettings_RepositorySource_DB(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	require.NoError(t, db.SetSetting("restic_repository", "/db/repo"))
+
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := decodeBody(t, w)
+
+	assert.Equal(t, "db", body["repositorySource"], "repositorySource must be 'db' when DB has a value")
+	assert.Equal(t, "/db/repo", body["repository"], "repository must reflect the DB value")
+}
+
+func TestGetSettings_RepositorySource_Default(t *testing.T) {
+	t.Parallel()
+
+	// Neither DB nor env provides a repository value.
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	// buildBackupSvc uses a config.Config with DataDir = t.TempDir() and empty
+	// ResticRepository, so the default path is computed from DataDir.
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := decodeBody(t, w)
+
+	assert.Equal(t, "default", body["repositorySource"], "repositorySource must be 'default' when neither DB nor env set")
+	// The returned repository must be the computed default (non-empty path ending in restic-repo).
+	repo, _ := body["repository"].(string)
+	assert.NotEmpty(t, repo, "repository must be non-empty (computed default)")
+}
+
+func TestGetSettings_PasswordSource_DB(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	require.NoError(t, db.SetSetting("restic_password", "secret"))
+
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := decodeBody(t, w)
+
+	assert.Equal(t, "db", body["passwordSource"], "passwordSource must be 'db' when DB has a password")
+	hasPassword, _ := body["hasPassword"].(bool)
+	assert.True(t, hasPassword, "hasPassword must be true when DB has a password")
+}
+
+func TestGetSettings_PasswordSource_Default(t *testing.T) {
+	t.Parallel()
+
+	// No DB password, no env password.
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false) // cfg.ResticPassword is ""
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := decodeBody(t, w)
+
+	assert.Equal(t, "default", body["passwordSource"], "passwordSource must be 'default' when neither DB nor env has a password")
+	hasPassword, _ := body["hasPassword"].(bool)
+	assert.False(t, hasPassword, "hasPassword must be false when no password configured")
+}
+
 // ─────────────────────────────────────────────
 // updateSettings
 // ─────────────────────────────────────────────
@@ -458,6 +546,50 @@ func TestGetStatus_Shape(t *testing.T) {
 		_, ok := body[key]
 		assert.True(t, ok, "status response must contain key %q", key)
 	}
+}
+
+func TestGetStatus_NextRunAtNilWhenSchedulerOff(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	// Scheduler is not started → NextRunAt must be nil → JSON null.
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/backups/status", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := decodeBody(t, w)
+
+	// nextRunAt must be present in the response and null when scheduler is off.
+	_, hasKey := body["nextRunAt"]
+	assert.True(t, hasKey, "nextRunAt must be present in status response")
+	assert.Nil(t, body["nextRunAt"], "nextRunAt must be null when scheduler is not running")
+}
+
+func TestGetStatus_RepoSizeBytesNilWhenRepoUnreachable(t *testing.T) {
+	t.Parallel()
+
+	// With no real restic binary and no repository, repoStatus.RepoReachable
+	// will be false, so repoSizeBytes must be null.
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/backups/status", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := decodeBody(t, w)
+
+	_, hasKey := body["repoSizeBytes"]
+	assert.True(t, hasKey, "repoSizeBytes must be present in status response")
+	assert.Nil(t, body["repoSizeBytes"], "repoSizeBytes must be null when repo is not reachable")
 }
 
 func TestGetHistory_Shape(t *testing.T) {
