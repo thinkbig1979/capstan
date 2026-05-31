@@ -597,7 +597,9 @@ func (s *BackupService) RunRestore(
 	}
 
 	stream(out, "info", fmt.Sprintf("[%s] restoring snapshot %s to %s", stackID, snapshotID, restoreTarget))
-	if err := restic.Restore(ctx, snapshotID, restoreTarget, out); err != nil {
+	// stackDir is the snapshot's stored source path; pass it so restic strips that
+	// prefix and restores contents into restoreTarget rather than nesting them.
+	if err := restic.Restore(ctx, snapshotID, stackDir, restoreTarget, out); err != nil {
 		return fmt.Errorf("restic restore: %w", err)
 	}
 

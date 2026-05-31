@@ -429,13 +429,21 @@ func (m *ResticManager) RestorePreview(ctx context.Context, snapshotID string, o
 }
 
 // Restore restores the given snapshot to targetPath via `restic restore --target`.
-func (m *ResticManager) Restore(ctx context.Context, snapshotID, targetPath string, out chan<- StreamLine) error {
+func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, targetPath string, out chan<- StreamLine) error {
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	args := []string{"restore", snapshotID, "--target", targetPath, "--verbose"}
+	// Backups store the stack's absolute path, so a plain `restore <id> --target X`
+	// recreates that absolute tree *under* X (X/home/.../stack/...). Use restic's
+	// `<snapshotID>:<subfolder>` form to strip the stored source prefix so the
+	// snapshot contents land directly in targetPath (true in-place restore).
+	ref := snapshotID
+	if sourcePath != "" {
+		ref = snapshotID + ":" + sourcePath
+	}
+	args := []string{"restore", ref, "--target", targetPath, "--verbose"}
 	return m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out)
 }

@@ -400,6 +400,16 @@ func (h *BackupHandler) upsertPolicy(c *gin.Context) {
 	if stopPolicy == "" {
 		stopPolicy = "stop"
 	}
+	// Validate against the DB CHECK constraint (stop_policy IN ('stop','hot')) so an
+	// invalid value returns a 400 rather than surfacing as a 500 at the DB layer.
+	if stopPolicy != "stop" && stopPolicy != "hot" {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"stopPolicy must be 'stop' or 'hot'",
+		))
+		return
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 

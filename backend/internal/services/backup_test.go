@@ -1587,6 +1587,11 @@ func TestRunRestore_HappyPathConfinesTarget(t *testing.T) {
 			require.NotNil(t, restoreCall, "restic restore must have been invoked")
 			assert.True(t, argPairContains(restoreCall.Args, "--target", tc.wantTarget),
 				"--target must be %q in restic restore args %v", tc.wantTarget, restoreCall.Args)
+			// The snapshot ref must strip the stored source prefix (the stack dir)
+			// so contents land in the target instead of nesting under it. The strip
+			// source is always the stack dir, independent of the (confined) target.
+			assert.Equal(t, "snap001:/opt/stacks/myapp", restoreCall.Args[1],
+				"restic restore ref must carry the source-prefix strip in args %v", restoreCall.Args)
 		})
 	}
 }

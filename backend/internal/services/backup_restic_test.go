@@ -464,13 +464,14 @@ func TestResticManager_Restore_Args(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.Restore(context.Background(), "abc123", "/restore/here", out)
+	err := m.Restore(context.Background(), "abc123", "/orig/src", "/restore/here", out)
 	require.NoError(t, err)
 	close(out)
 
 	call := runner.lastCall()
 	assert.Equal(t, "restore", call.Args[0])
-	assert.Equal(t, "abc123", call.Args[1])
+	// The snapshot ref carries the stored source prefix so restic strips it.
+	assert.Equal(t, "abc123:/orig/src", call.Args[1])
 	assert.True(t, argPairContains(call.Args, "--target", "/restore/here"))
 }
 
