@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { Lock, CheckCircle2, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { useToggleBackup, useBackupPolicies, useBackupStatus } from '@/hooks/useBackup'
@@ -132,27 +132,41 @@ export function BackupToggle({ stackId }: BackupToggleProps) {
                   aria-label="Stop policy for backup"
                   data-testid={`backup-stop-policy-${stackId}`}
                 >
-                  <SelectValue />
+                  {/* Compact chip: show a short label, not the full two-line option. */}
+                  <span>
+                    {optimisticStopPolicy === 'stop' ? 'Stop during backup' : 'Back up live'}
+                  </span>
                 </SelectTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="max-w-64">
                 <p>
-                  <strong>Stop for consistency</strong> briefly takes the stack down during
-                  backup for consistent data.
+                  <strong>Stop during backup</strong> pauses the stack while it copies, so the
+                  backup is a consistent point in time. Causes brief downtime.
                 </p>
                 <p className="mt-1">
-                  <strong>Hot backup</strong> keeps it running (faster, but risks
-                  inconsistent data for databases).
+                  <strong>Back up live</strong> copies without stopping the stack, so there is
+                  no downtime. A file being written during the copy (a database, for example)
+                  may be captured in an inconsistent state.
                 </p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
           <SelectContent>
             <SelectItem value="stop" data-testid="backup-stop-policy-stop">
-              Stop for consistency
+              <div className="flex flex-col">
+                <span>Stop during backup</span>
+                <span className="text-xs text-muted-foreground">
+                  Pauses the stack for a consistent copy. Brief downtime.
+                </span>
+              </div>
             </SelectItem>
             <SelectItem value="hot" data-testid="backup-stop-policy-hot">
-              Hot backup
+              <div className="flex flex-col">
+                <span>Back up live</span>
+                <span className="text-xs text-muted-foreground">
+                  No downtime, but a database mid-write may be inconsistent.
+                </span>
+              </div>
             </SelectItem>
           </SelectContent>
         </Select>

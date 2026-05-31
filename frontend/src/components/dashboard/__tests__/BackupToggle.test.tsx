@@ -227,8 +227,8 @@ describe('BackupToggle — stop policy select', () => {
     const select = screen.getByRole('combobox', { name: /stop policy/i })
     fireEvent.click(select)
 
-    // Select the "Hot backup" option.
-    const hotOption = await screen.findByRole('option', { name: /hot backup/i })
+    // Select the "Back up live" (hot) option.
+    const hotOption = await screen.findByRole('option', { name: /back up live/i })
     fireEvent.click(hotOption)
 
     expect(mockMutate).toHaveBeenCalledWith(
@@ -242,7 +242,7 @@ describe('BackupToggle — stop policy select', () => {
     render(<BackupToggle stackId={STACK_ID} />)
 
     // The select trigger displays the current value label.
-    expect(screen.getByText(/hot backup/i)).toBeInTheDocument()
+    expect(screen.getByText(/back up live/i)).toBeInTheDocument()
   })
 })
 
