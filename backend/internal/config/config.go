@@ -27,6 +27,21 @@ type Config struct {
 	CORSOrigins     string
 	TrustedNetworks string
 	ExtraStacksDirs []string
+
+	// Backup / restic env-var fallbacks (DB settings take precedence at runtime).
+	ResticRepository       string
+	ResticPassword         string
+	BackupKeepDaily        string
+	BackupKeepWeekly       string
+	BackupKeepMonthly      string
+	BackupKeepYearly       string
+	BackupAutoPrune        string
+	BackupScheduleInterval string
+	BackupSyncAfter        string
+	RcloneRemote           string
+	RclonePath             string
+	RcloneTransfers        string
+	BackupHostname         string
 }
 
 func Load() (*Config, error) {
@@ -83,6 +98,21 @@ func Load() (*Config, error) {
 			}
 		}
 	}
+
+	// Backup env-var fallbacks (DB settings override these at runtime via resolveBackupConfig).
+	cfg.ResticRepository = os.Getenv("RESTIC_REPOSITORY")
+	cfg.ResticPassword = os.Getenv("RESTIC_PASSWORD")
+	cfg.BackupKeepDaily = os.Getenv("BACKUP_KEEP_DAILY")
+	cfg.BackupKeepWeekly = os.Getenv("BACKUP_KEEP_WEEKLY")
+	cfg.BackupKeepMonthly = os.Getenv("BACKUP_KEEP_MONTHLY")
+	cfg.BackupKeepYearly = os.Getenv("BACKUP_KEEP_YEARLY")
+	cfg.BackupAutoPrune = os.Getenv("BACKUP_AUTO_PRUNE")
+	cfg.BackupScheduleInterval = os.Getenv("BACKUP_SCHEDULE_INTERVAL")
+	cfg.BackupSyncAfter = os.Getenv("BACKUP_SYNC_AFTER")
+	cfg.RcloneRemote = os.Getenv("RCLONE_REMOTE")
+	cfg.RclonePath = os.Getenv("RCLONE_PATH")
+	cfg.RcloneTransfers = os.Getenv("RCLONE_TRANSFERS")
+	cfg.BackupHostname = os.Getenv("BACKUP_HOSTNAME")
 
 	if err := validate(cfg); err != nil {
 		return nil, err

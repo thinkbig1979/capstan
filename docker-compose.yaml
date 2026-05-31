@@ -21,5 +21,12 @@ services:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
       - TRUSTED_NETWORKS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,172.18.0.0/16,127.0.0.1,::1
+      # Backup — optional env-var fallbacks; DB settings (Settings → Backup) take
+      # precedence at runtime. RESTIC_REPOSITORY defaults to /app/data/restic-repo
+      # which lives inside the ./data bind mount below.
+      # - RESTIC_REPOSITORY=/app/data/restic-repo
+      # - RESTIC_PASSWORD=change-me-use-settings-ui-instead
+      # - RCLONE_REMOTE=myremote
+      # - RCLONE_PATH=capstan-backups
     env_file:
       - ./backend/.env

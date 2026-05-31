@@ -7,12 +7,14 @@ import { EnvEditor } from './EnvEditor'
 import { TerminalComponent } from './Terminal'
 import { LogViewer } from './LogViewer'
 import { MetricsPanel } from './MetricsPanel'
+import { BackupsTab } from './BackupsTab'
 import { OperationProgress } from './OperationProgress'
 import { GitStatus as GitStatusComponent } from '../git/GitStatus'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
+import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { TabErrorBoundary } from '@/components/TabErrorBoundary'
 import { Download, Play, Square, RefreshCw, Info } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -131,6 +133,13 @@ function OverviewTabContent({
             </Tooltip>
           )}
         </div>
+
+        <Separator orientation="vertical" className="h-6 mx-1" />
+
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">Backup</span>
+          <BackupToggle stackId={stack.id} />
+        </div>
       </div>
     </div>
   )
@@ -168,6 +177,7 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
             { value: 'logs', label: 'Logs' },
             { value: 'terminal', label: 'Terminal' },
             { value: 'metrics', label: 'Metrics' },
+            { value: 'backups', label: 'Backups' },
           ]}
         />
 
@@ -214,6 +224,12 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
         <TabsContent value="metrics" className="mt-4">
           <TabErrorBoundary>
             <MetricsPanel stackId={stack.id} />
+          </TabErrorBoundary>
+        </TabsContent>
+
+        <TabsContent value="backups" className="mt-4">
+          <TabErrorBoundary>
+            <BackupsTab stackId={stack.id} />
           </TabErrorBoundary>
         </TabsContent>
       </Tabs>

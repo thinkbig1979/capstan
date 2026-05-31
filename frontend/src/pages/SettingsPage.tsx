@@ -9,7 +9,8 @@ import { useUIStore } from '@/stores/uiStore'
 import { toast } from 'sonner'
 import { classifyError } from '@/lib/error-handler'
 import { formatDateFull } from '@/lib/format'
-import { Sun, Moon, Monitor, Shield, Palette, Clock, KeyRound, FolderCog, ScrollText, Globe } from 'lucide-react'
+import { Sun, Moon, Monitor, Shield, Palette, Clock, KeyRound, FolderCog, ScrollText, Globe, HardDrive } from 'lucide-react'
+import { BackupSettingsContent } from '@/components/settings/BackupSettingsContent'
 import { authApi } from '@/lib/api'
 import {
   Select,
@@ -74,6 +75,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     title: 'Updates',
     description: 'Configure image update scanning and auto-update settings',
     icon: <Clock className="h-5 w-5" />,
+    defaultExpanded: false,
+  },
+  {
+    id: 'backup',
+    title: 'Backup',
+    description: 'Configure restic repository, retention policy, schedule, and rclone cloud sync',
+    icon: <HardDrive className="h-5 w-5" />,
     defaultExpanded: false,
   },
   {
@@ -414,6 +422,14 @@ export function SettingsPage() {
 
         <CollapsibleSection
           section={SETTINGS_SECTIONS[6]}
+          expanded={isSectionExpanded('backup')}
+          onToggle={() => toggleSection('backup')}
+        >
+          <BackupSettingsContent />
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          section={SETTINGS_SECTIONS[7]}
           expanded={isSectionExpanded('audit-log')}
           onToggle={() => toggleSection('audit-log')}
         >

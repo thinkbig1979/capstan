@@ -11,12 +11,22 @@ services:
       # Capstan joins the socket's group at runtime; no host changes needed.
       - /var/run/docker.sock:/var/run/docker.sock
       - ./stacks:/opt/stacks
+      # ./data is a host bind mount — the restic backup repository lives at
+      # ./data/restic-repo (container path /app/data/restic-repo) by default.
+      # Snapshots survive container recreation as long as this directory exists.
       - ./data:/app/data
       - ./keys:/app/keys:ro
     environment:
       # Match the host user that owns your stacks/data (default 1000).
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
+      # Backup — optional env-var fallbacks; DB settings (Settings → Backup) take
+      # precedence at runtime. Set these if you prefer environment-level config
+      # over the UI, or for scripted/headless deployments.
+      # - RESTIC_REPOSITORY=/app/data/restic-repo
+      # - RESTIC_PASSWORD=change-me
+      # - RCLONE_REMOTE=myremote
+      # - RCLONE_PATH=capstan-backups
     env_file:
       - .env
     networks:

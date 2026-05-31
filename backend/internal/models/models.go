@@ -304,3 +304,48 @@ type UpdateSettingsResponse struct {
 		UpdatesLast30Days int `json:"updatesLast30Days"`
 	} `json:"autoUpdateStats"`
 }
+
+type BackupPolicy struct {
+	ID         string `json:"id"`
+	TargetType string `json:"targetType"`
+	TargetID   string `json:"targetId"`
+	Enabled    bool   `json:"enabled"`
+	StopPolicy string `json:"stopPolicy"` // "stop" | "hot"
+	CreatedAt  string `json:"createdAt"`
+	UpdatedAt  string `json:"updatedAt"`
+}
+
+type BackupRun struct {
+	ID           string  `json:"id"`
+	Kind         string  `json:"kind"`
+	Trigger      string  `json:"trigger"`
+	Status       string  `json:"status"`
+	StartedAt    string  `json:"startedAt"`
+	FinishedAt   *string `json:"finishedAt,omitempty"`
+	StacksTotal  int     `json:"stacksTotal"`
+	StacksOK     int     `json:"stacksOk"`
+	StacksFailed int     `json:"stacksFailed"`
+	BytesAdded   *int64  `json:"bytesAdded,omitempty"`
+	ErrorMessage string  `json:"errorMessage,omitempty"`
+}
+
+type BackupRunItem struct {
+	ID           string `json:"id"`
+	RunID        string `json:"runId"`
+	StackID      string `json:"stackId"`
+	Status       string `json:"status"`
+	SnapshotID   string `json:"snapshotId,omitempty"`
+	StopApplied  bool   `json:"stopApplied"`
+	DurationMs   int64  `json:"durationMs"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
+}
+
+type BackupSnapshot struct {
+	ID        string   `json:"id"`
+	ShortID   string   `json:"shortId"`
+	Time      string   `json:"time"`
+	Hostname  string   `json:"hostname"`
+	Tags      []string `json:"tags"`
+	Paths     []string `json:"paths"`
+	SizeBytes int64    `json:"sizeBytes,omitempty"`
+}

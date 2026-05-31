@@ -186,6 +186,54 @@ INSERT OR IGNORE INTO settings (key, value) VALUES ('stack_id_version', '1');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('scan_depth', '1');
 `,
 	},
+	{
+		Version: 8,
+		Name:    "backup_engine_schema",
+		SQL: `
+CREATE TABLE IF NOT EXISTS backup_policies (
+    id            TEXT PRIMARY KEY,
+    target_type   TEXT NOT NULL CHECK (target_type IN ('stack')),
+    target_id     TEXT NOT NULL,
+    enabled       BOOLEAN NOT NULL DEFAULT FALSE,
+    stop_policy   TEXT NOT NULL DEFAULT 'stop'   CHECK (stop_policy IN ('stop','hot')),
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(target_type, target_id)
+);
+
+CREATE TABLE IF NOT EXISTS backup_runs (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL CHECK (kind IN ('backup','sync','restore','dr_restore','prune')),
+    trigger       TEXT NOT NULL CHECK (trigger IN ('manual','scheduled')),
+    status        TEXT NOT NULL CHECK (status IN ('running','success','partial','failed')),
+    started_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at   DATETIME,
+    stacks_total  INTEGER NOT NULL DEFAULT 0,
+    stacks_ok     INTEGER NOT NULL DEFAULT 0,
+    stacks_failed INTEGER NOT NULL DEFAULT 0,
+    bytes_added   INTEGER,
+    error_message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_backup_runs_kind ON backup_runs(kind);
+
+CREATE TABLE IF NOT EXISTS backup_run_items (
+    id            TEXT PRIMARY KEY,
+    run_id        TEXT NOT NULL,
+    stack_id      TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('skipped','success','failed')),
+    snapshot_id   TEXT,
+    stop_applied  BOOLEAN NOT NULL DEFAULT FALSE,
+    duration_ms   INTEGER,
+    error_message TEXT,
+    FOREIGN KEY (run_id) REFERENCES backup_runs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_backup_run_items_run_id ON backup_run_items(run_id);
+CREATE INDEX IF NOT EXISTS idx_backup_run_items_stack_id ON backup_run_items(stack_id);
+`,
+	},
 }
 
 func RunMigrations(db *DB) error {
