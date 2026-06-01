@@ -11,7 +11,10 @@ import (
 )
 
 var (
-	stackIDRegex  = regexp.MustCompile(`^[a-zA-Z0-9._:~-]+$`)
+	// Spaces are allowed: stacks scanned from existing directories can have
+	// spaces in their name (e.g. "backup script-test"), and the ID is only a DB
+	// lookup key — the on-disk path comes from the stack record, not the ID.
+	stackIDRegex  = regexp.MustCompile(`^[a-zA-Z0-9 ._:~-]+$`)
 	usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 	pathTraversal = regexp.MustCompile(`\.\.`)
 

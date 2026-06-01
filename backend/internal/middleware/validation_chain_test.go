@@ -72,3 +72,34 @@ func TestValidateInput_StackIDStillRejected(t *testing.T) {
 		t.Fatalf("expected 400 for bad stack id, got %d (%s)", w.Code, w.Body.String())
 	}
 }
+
+// TestValidateInput_StackIDWithSpaceAccepted reproduces the bug where a stack
+// scanned from a directory whose name contains a space (e.g. "backup script-test",
+// id "development~backup script-test:test") is listed by GET /stacks but 400s on
+// its detail page because the ID validator's regex excluded spaces. The ID is only
+// a DB lookup key, so a space is safe; the request must reach the handler.
+func TestValidateInput_StackIDWithSpaceAccepted(t *testing.T) {
+	const idWithSpace = "development~backup script-test:test"
+
+	if !ValidateStackID(idWithSpace) {
+		t.Fatalf("ValidateStackID rejected a valid scanned stack id with a space: %q", idWithSpace)
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(ValidateInput())
+	var reached bool
+	r.GET("/api/v1/stacks/:id", func(c *gin.Context) {
+		reached = true
+		c.Status(http.StatusOK)
+	})
+
+	// %20 is the URL-encoded space the frontend sends for this id.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks/development~backup%20script-test:test", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if !reached || w.Code != http.StatusOK {
+		t.Fatalf("expected handler reached with 200 for space-containing id, got %d (%s)", w.Code, w.Body.String())
+	}
+}
