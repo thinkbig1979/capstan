@@ -154,7 +154,7 @@ func TestResticManager_PasswordFile_EnvUsedNotArgv(t *testing.T) {
 		}
 	}()
 
-	err := m.Backup(context.Background(), "/srv/stacks/mystack", []string{"mystack"}, out)
+	_, err := m.Backup(context.Background(), "/srv/stacks/mystack", []string{"mystack"}, out)
 	require.NoError(t, err)
 	close(out)
 
@@ -189,7 +189,7 @@ func TestResticManager_Backup_RequiredFlags(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.Backup(context.Background(), "/data/stack1", []string{"stack1"}, out)
+	_, err := m.Backup(context.Background(), "/data/stack1", []string{"stack1"}, out)
 	require.NoError(t, err)
 	close(out)
 
@@ -213,7 +213,7 @@ func TestResticManager_Backup_Tags(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.Backup(context.Background(), "/data/mystack", []string{stackID}, out)
+	_, err := m.Backup(context.Background(), "/data/mystack", []string{stackID}, out)
 	require.NoError(t, err)
 	close(out)
 
@@ -237,7 +237,7 @@ func TestResticManager_Backup_Hostname(t *testing.T) {
 		for range out {
 		}
 	}()
-	_ = m.Backup(context.Background(), "/srv/s", []string{"s"}, out)
+	_, _ = m.Backup(context.Background(), "/srv/s", []string{"s"}, out)
 	close(out)
 
 	call := runner.lastCall()
@@ -493,7 +493,7 @@ func TestResticManager_Backup_ContextCancel(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.Backup(ctx, "/data/s", []string{"s"}, out)
+	_, err := m.Backup(ctx, "/data/s", []string{"s"}, out)
 	close(out)
 
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
@@ -627,6 +627,111 @@ func TestResticManager_Stats_MissingPassword(t *testing.T) {
 	assert.Empty(t, runner.calls)
 }
 
+// --- FLAG 3: restic --json summary parsing / friendly stream translation ---
+
+func TestHumanizeBytes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   int64
+		want string
+	}{
+		{0, "0 B"},
+		{512, "512 B"},
+		{1024, "1.000 KiB"},
+		{5242880, "5.000 MiB"},
+		{1073741824, "1.000 GiB"},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, humanizeBytes(c.in), "humanizeBytes(%d)", c.in)
+	}
+}
+
+func TestResticJSONToLine(t *testing.T) {
+	t.Parallel()
+
+	// summary message: captured into summary + rendered as a friendly line.
+	var s ResticBackupSummary
+	line, handled := resticJSONToLine(
+		`{"message_type":"summary","files_new":12,"files_changed":3,"data_added":5242880,"data_added_packed":2097152,"snapshot_id":"a1b2c3d4e5f6deadbeef"}`, &s)
+	assert.True(t, handled)
+	assert.Equal(t, int64(5242880), s.BytesAdded)
+	assert.Equal(t, int64(2097152), s.BytesStored)
+	assert.Equal(t, "a1b2c3d4e5f6deadbeef", s.SnapshotID)
+	assert.Equal(t, 12, s.FilesNew)
+	assert.Contains(t, line, "Added 5.000 MiB (2.000 MiB stored), 12 new / 3 changed files")
+	assert.Contains(t, line, "snapshot a1b2c3d4 saved")
+
+	// zero data_added → "No change" rather than "Added 0 B".
+	var s2 ResticBackupSummary
+	line, handled = resticJSONToLine(
+		`{"message_type":"summary","data_added":0,"snapshot_id":"deadbeefcafe"}`, &s2)
+	assert.True(t, handled)
+	assert.Equal(t, int64(0), s2.BytesAdded)
+	assert.Contains(t, line, "No change")
+	assert.Contains(t, line, "snapshot deadbeef saved")
+
+	// status progress is suppressed (handled, empty line).
+	line, handled = resticJSONToLine(`{"message_type":"status","percent_done":0.5,"bytes_done":10}`, nil)
+	assert.True(t, handled)
+	assert.Empty(t, line)
+
+	// error message → friendly Error: line including the item.
+	line, handled = resticJSONToLine(
+		`{"message_type":"error","error":{"message":"permission denied"},"item":"/data/x"}`, nil)
+	assert.True(t, handled)
+	assert.Equal(t, "Error: /data/x: permission denied", line)
+
+	// non-JSON (e.g. a stderr warning) is not handled → caller forwards verbatim.
+	line, handled = resticJSONToLine("open repository", nil)
+	assert.False(t, handled)
+	assert.Empty(t, line)
+}
+
+// TestResticManager_Backup_ParsesSummaryAndTranslates reproduces FLAG 3 (ST-3):
+// the backup must capture real bytesAdded from restic's --json summary and the
+// live stream must show friendly text, not raw restic JSON.
+func TestResticManager_Backup_ParsesSummaryAndTranslates(t *testing.T) {
+	t.Parallel()
+
+	summaryJSON := `{"message_type":"summary","files_new":12,"files_changed":3,"data_added":5242880,"data_added_packed":2097152,"snapshot_id":"a1b2c3d4e5f6deadbeef"}`
+	runner := &fakeRunner{
+		onRun: func(name string, args []string, out chan<- StreamLine) {
+			// restic emits frequent status progress, then a final summary.
+			out <- StreamLine{Type: "data", Line: `{"message_type":"status","percent_done":0.5,"bytes_done":10}`}
+			out <- StreamLine{Type: "data", Line: summaryJSON}
+		},
+	}
+	m := newResticManagerWithRunner(testBackupConfig(), runner, nil)
+
+	out := make(chan StreamLine, 64)
+	var lines []string
+	collected := make(chan struct{})
+	go func() {
+		for sl := range out {
+			lines = append(lines, sl.Line)
+		}
+		close(collected)
+	}()
+
+	summary, err := m.Backup(context.Background(), "/data/s", []string{"s"}, out)
+	close(out)
+	<-collected
+
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.Equal(t, int64(5242880), summary.BytesAdded)
+	assert.Equal(t, "a1b2c3d4e5f6deadbeef", summary.SnapshotID)
+
+	joined := strings.Join(lines, "\n")
+	assert.Contains(t, joined, "Added 5.000 MiB (2.000 MiB stored), 12 new / 3 changed files")
+	assert.Contains(t, joined, "snapshot a1b2c3d4 saved")
+	assert.NotContains(t, joined, "message_type", "raw restic JSON must not reach the live stream")
+
+	// --json must be passed to restic (not --verbose).
+	assert.True(t, argContains(runner.lastCall().Args, "--json"), "--json must be present")
+	assert.False(t, argContains(runner.lastCall().Args, "--verbose"), "--verbose must be gone")
+}
+
 // --- Missing password test ---
 
 func TestResticManager_MissingPassword_ReturnsError(t *testing.T) {
@@ -642,7 +747,7 @@ func TestResticManager_MissingPassword_ReturnsError(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.Backup(context.Background(), "/data/s", []string{"s"}, out)
+	_, err := m.Backup(context.Background(), "/data/s", []string{"s"}, out)
 	close(out)
 
 	assert.Error(t, err, "Backup must fail when ResticPassword is empty")

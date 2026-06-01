@@ -232,12 +232,39 @@ func (m *ResticManager) EnsureRepository(ctx context.Context) error {
 	return nil
 }
 
+// ResticBackupSummary holds the machine-readable result of a restic backup,
+// parsed from the final `summary` message emitted by `restic backup --json`.
+type ResticBackupSummary struct {
+	SnapshotID   string
+	BytesAdded   int64 // data_added: new bytes written to the repo (pre-compression)
+	BytesStored  int64 // data_added_packed: bytes actually stored after dedup/compression
+	FilesNew     int
+	FilesChanged int
+}
+
+// resticJSONMessage is the subset of restic's `backup --json` message schema we
+// care about (status progress is ignored; summary carries the result).
+type resticJSONMessage struct {
+	MessageType     string `json:"message_type"`
+	FilesNew        int    `json:"files_new"`
+	FilesChanged    int    `json:"files_changed"`
+	DataAdded       int64  `json:"data_added"`
+	DataAddedPacked int64  `json:"data_added_packed"`
+	SnapshotID      string `json:"snapshot_id"`
+	Error           struct {
+		Message string `json:"message"`
+	} `json:"error"`
+	Item string `json:"item"`
+}
+
 // Backup backs up stackDir with the required Capstan tags plus any additional
-// tags provided by the caller. It streams output to out.
-func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []string, out chan<- StreamLine) error {
+// tags provided by the caller. It runs `restic backup --json`, translating the
+// machine output into friendly human-readable lines on out while capturing the
+// final summary (data_added, snapshot_id) which it returns to the caller.
+func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []string, out chan<- StreamLine) (*ResticBackupSummary, error) {
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer cleanup()
 
@@ -245,7 +272,7 @@ func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []stri
 
 	args := []string{
 		"backup",
-		"--verbose",
+		"--json",
 		"--one-file-system",
 		"--exclude-caches",
 	}
@@ -263,7 +290,90 @@ func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []stri
 
 	args = append(args, stackDir)
 
-	return m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out)
+	// Translate restic's --json stream into friendly lines while capturing the
+	// summary. The runner writes raw lines to an intermediate channel; this
+	// goroutine forwards human-readable lines to out and records the summary.
+	summary := &ResticBackupSummary{}
+	raw := make(chan StreamLine, 32)
+	translateDone := make(chan struct{})
+	go func() {
+		defer close(translateDone)
+		for sl := range raw {
+			if sl.Type != "data" {
+				out <- sl
+				continue
+			}
+			if line, handled := resticJSONToLine(sl.Line, summary); handled {
+				if line != "" {
+					out <- StreamLine{Type: "data", Line: line}
+				}
+			} else {
+				// Non-JSON line (e.g. a stderr warning) — forward verbatim.
+				out <- StreamLine{Type: "data", Line: sl.Line}
+			}
+		}
+	}()
+
+	runErr := m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), raw)
+	close(raw)
+	<-translateDone
+
+	return summary, runErr
+}
+
+// resticJSONToLine converts one line of `restic backup --json` output into a
+// friendly stream line. When the line is a recognised restic JSON message it
+// returns handled=true (with an empty line for noisy progress that should be
+// suppressed); summary is updated in place when a summary message is seen.
+// Non-JSON lines return handled=false so the caller can forward them verbatim.
+func resticJSONToLine(raw string, summary *ResticBackupSummary) (line string, handled bool) {
+	var msg resticJSONMessage
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil || msg.MessageType == "" {
+		return "", false
+	}
+
+	switch msg.MessageType {
+	case "summary":
+		summary.SnapshotID = msg.SnapshotID
+		summary.BytesAdded = msg.DataAdded
+		summary.BytesStored = msg.DataAddedPacked
+		summary.FilesNew = msg.FilesNew
+		summary.FilesChanged = msg.FilesChanged
+
+		short := msg.SnapshotID
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		if msg.DataAdded == 0 {
+			return fmt.Sprintf("No change: nothing new to back up; snapshot %s saved", short), true
+		}
+		return fmt.Sprintf("Added %s (%s stored), %d new / %d changed files; snapshot %s saved",
+			humanizeBytes(msg.DataAdded), humanizeBytes(msg.DataAddedPacked),
+			msg.FilesNew, msg.FilesChanged, short), true
+	case "error":
+		m := msg.Error.Message
+		if msg.Item != "" {
+			m = msg.Item + ": " + m
+		}
+		return "Error: " + m, true
+	default:
+		// status / verbose_status / other progress — suppress the noise.
+		return "", true
+	}
+}
+
+// humanizeBytes formats a byte count using binary (1024) units, e.g. "4.696 MiB".
+func humanizeBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.3f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // Verify confirms the most recent snapshot for tag is readable by running

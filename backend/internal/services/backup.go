@@ -373,15 +373,24 @@ func (s *BackupService) RunBackup(
 
 	run.StacksTotal = len(policies)
 
+	var totalBytesAdded int64
 	for _, policy := range policies {
 		stackID := policy.TargetID
-		itemErr := s.backupStack(ctx, restic, stackID, policy.StopPolicy, dryRun, run.ID, out)
+		itemBytes, itemErr := s.backupStack(ctx, restic, stackID, policy.StopPolicy, dryRun, run.ID, out)
 		if itemErr != nil {
 			run.StacksFailed++
 			stream(out, "error", fmt.Sprintf("stack %s failed: %v", stackID, itemErr))
 		} else {
 			run.StacksOK++
+			totalBytesAdded += itemBytes
 		}
+	}
+
+	// Record the aggregate new bytes written to the repo when at least one stack
+	// backed up successfully. A non-nil zero means "ran, added nothing" (dedup /
+	// no change); nil means unknown (e.g. the whole run failed before any backup).
+	if run.StacksOK > 0 {
+		run.BytesAdded = &totalBytesAdded
 	}
 
 	// Determine final run status.
@@ -427,13 +436,13 @@ func (s *BackupService) backupStack(
 	dryRun bool,
 	runID string,
 	out chan<- StreamLine,
-) (retErr error) {
+) (bytesAdded int64, retErr error) {
 	startedAt := time.Now()
 
 	// Per-stack operation lock — prevents a deploy from racing a backup.
 	lockToken, lockErr := s.opLock.Acquire(stackID)
 	if lockErr != nil {
-		return fmt.Errorf("acquire lock: %w", lockErr)
+		return 0, fmt.Errorf("acquire lock: %w", lockErr)
 	}
 	defer s.opLock.Release(lockToken)
 
@@ -442,7 +451,7 @@ func (s *BackupService) backupStack(
 	// Resolve the full stack record so we have the directory path.
 	stackRecord, dbErr := s.db.GetStack(stackID)
 	if dbErr != nil {
-		return fmt.Errorf("get stack %s: %w", stackID, dbErr)
+		return 0, fmt.Errorf("get stack %s: %w", stackID, dbErr)
 	}
 	stack := *stackRecord
 
@@ -471,7 +480,7 @@ func (s *BackupService) backupStack(
 	if stopPolicy == "stop" && !dryRun {
 		stream(out, "info", fmt.Sprintf("[%s] stopping stack", stackID))
 		if _, stopErr := s.docker.Stop(stack); stopErr != nil {
-			return fmt.Errorf("stop stack: %w", stopErr)
+			return 0, fmt.Errorf("stop stack: %w", stopErr)
 		}
 		stopApplied = true
 	}
@@ -479,15 +488,19 @@ func (s *BackupService) backupStack(
 	if dryRun {
 		stream(out, "info", fmt.Sprintf("[%s] dry-run: skipping restic backup", stackID))
 		s.recordItem(runID, stackID, "success", "", stopApplied, time.Since(startedAt))
-		return nil
+		return 0, nil
 	}
 
 	// Run backup using the stack's directory as the source path.
 	tags := []string{stackID}
-	if backupErr := restic.Backup(ctx, stack.Directory, tags, out); backupErr != nil {
+	summary, backupErr := restic.Backup(ctx, stack.Directory, tags, out)
+	if backupErr != nil {
 		retErr = fmt.Errorf("restic backup: %w", backupErr)
 		s.recordItem(runID, stackID, "failed", "", stopApplied, time.Since(startedAt))
-		return retErr
+		return 0, retErr
+	}
+	if summary != nil {
+		bytesAdded = summary.BytesAdded
 	}
 
 	// Verify the snapshot we just created.
@@ -511,7 +524,7 @@ func (s *BackupService) backupStack(
 	stream(out, "info", fmt.Sprintf("[%s] completed successfully", stackID))
 
 	// The deferred restart will fire here for the stop-policy path if wasRunning.
-	return nil
+	return bytesAdded, nil
 }
 
 // --- RunSync ---
