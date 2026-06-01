@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -140,6 +141,24 @@ func TestStacksHandler_List_Success(t *testing.T) {
 
 	stacks := response["stacks"].([]interface{})
 	assert.Len(t, stacks, 1)
+}
+
+// TestComposeUnreadable covers the error-vs-stopped decision for a stack with no
+// live containers: a readable compose file means the stack is simply down
+// ("stopped"), a missing/unreadable one means Capstan can't resolve it ("error" —
+// what the old `docker compose ps` surfaced as "unknown").
+func TestComposeUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services: {}\n"), 0o644))
+
+	readable := models.Stack{Directory: dir, ComposeFile: "compose.yaml"}
+	assert.False(t, composeUnreadable(readable), "present compose file -> stopped, not error")
+
+	missingFile := models.Stack{Directory: dir, ComposeFile: "nope.yaml"}
+	assert.True(t, composeUnreadable(missingFile), "missing compose file -> error")
+
+	missingDir := models.Stack{Directory: filepath.Join(dir, "gone"), ComposeFile: "compose.yaml"}
+	assert.True(t, composeUnreadable(missingDir), "unreadable/missing dir -> error")
 }
 
 func TestStacksHandler_Get_Success(t *testing.T) {

@@ -48,18 +48,36 @@ function getMetricColor(percent: number): string {
   return 'bg-success'
 }
 
-function formatUptime(startedAt: string): string {
-  if (!startedAt) return '-'
+export function formatUptime(startedAt: string): string {
+  if (!startedAt) return '—'
   const start = new Date(startedAt)
+  // Guard unset/zero timestamps: a stopped or never-started container reports
+  // Go's zero time (0001-01-01T00:00:00Z), which would otherwise render as ~739766d.
+  if (isNaN(start.getTime()) || start.getUTCFullYear() < 2000) return '—'
   const now = new Date()
   const diffMs = now.getTime() - start.getTime()
-  if (diffMs < 0) return '-'
+  if (diffMs < 0) return '—'
   const diffMins = Math.floor(diffMs / 60000)
   if (diffMins < 60) return `${diffMins}m`
   const diffHours = Math.floor(diffMins / 60)
   if (diffHours < 24) return `${diffHours}h ${diffMins % 60}m`
   const diffDays = Math.floor(diffHours / 24)
   return `${diffDays}d ${diffHours % 24}h`
+}
+
+type MetricsStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting'
+
+// Distinguishes the three reasons a live-stat cell can be empty so it never reads as a dead
+// feature: a stopped container has no stats (—), a connecting stream shows a loading skeleton,
+// and a dropped stream shows an explicit "unavailable" hint.
+function StatPlaceholder({ state, status }: { state: string; status: MetricsStatus }) {
+  if (state !== 'running') {
+    return <span className="text-xs text-muted-foreground" title="No live stats for a stopped container">—</span>
+  }
+  if (status === 'disconnected') {
+    return <span className="text-xs italic text-muted-foreground" title="Metrics stream disconnected">unavailable</span>
+  }
+  return <span className="block h-1.5 w-16 rounded-full bg-muted animate-pulse" aria-label="Loading stats" />
 }
 
 function isStandaloneContainer(c: DashboardContainerInfo): boolean {
@@ -143,26 +161,27 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
   return (
     <div className="flex items-center gap-1">
       {!isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startMutation.mutate()} disabled={anyPending} title={`Start ${label}`} aria-label={`Start ${label}`}>
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => startMutation.mutate()} disabled={anyPending} title={`Start ${label}`} aria-label={`Start ${label}`}>
           <Play className="h-3.5 w-3.5" />
         </Button>
       )}
       {isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => stopMutation.mutate()} disabled={anyPending} title={`Stop ${label}`} aria-label={`Stop ${label}`}>
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => stopMutation.mutate()} disabled={anyPending} title={`Stop ${label}`} aria-label={`Stop ${label}`}>
           <Square className="h-3.5 w-3.5" />
         </Button>
       )}
       {isRunning && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => restartMutation.mutate()} disabled={anyPending} title={`Restart ${label}`} aria-label={`Restart ${label}`}>
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => restartMutation.mutate()} disabled={anyPending} title={`Restart ${label}`} aria-label={`Restart ${label}`}>
           <RefreshCw className={`h-3.5 w-3.5 ${restartMutation.isPending ? 'animate-spin' : ''}`} />
         </Button>
       )}
       {mode === 'stack' && (
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => pullMutation.mutate()} disabled={anyPending} title="Pull images" aria-label={`Pull images for ${label}`}>
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => pullMutation.mutate()} disabled={anyPending} title="Pull images" aria-label={`Pull images for ${label}`}>
           <Download className={`h-3.5 w-3.5 ${pullMutation.isPending ? 'animate-spin' : ''}`} />
         </Button>
       )}
-      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(containerId, containerName, isRunning)} disabled={anyPending} title="Remove container" aria-label={`Remove ${label}`}>
+      <div className="mx-0.5 h-5 w-px bg-border" aria-hidden="true" />
+      <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => onDelete(containerId, containerName, isRunning)} disabled={anyPending} title="Remove container" aria-label={`Remove ${label}`}>
         <Trash2 className="h-3.5 w-3.5" />
       </Button>
     </div>
@@ -354,6 +373,7 @@ function ContainerInspectDialog({
 function ContainerTable({
   containers,
   latestMetrics,
+  metricsStatus,
   sortBy,
   stackDirMap,
   renderActions,
@@ -361,6 +381,7 @@ function ContainerTable({
 }: {
   containers: DashboardContainerInfo[]
   latestMetrics: Record<string, DashboardContainerMetric>
+  metricsStatus: MetricsStatus
   sortBy: SortKey
   stackDirMap: Map<string, string>
   renderActions: (container: DashboardContainerInfo, deletePending: boolean) => React.ReactNode
@@ -410,7 +431,7 @@ function ContainerTable({
             <TableHead className="hidden lg:table-cell">Uptime</TableHead>
             <TableHead className="hidden md:table-cell">Restarts</TableHead>
             <TableHead className="hidden md:table-cell">Auto-Update</TableHead>
-            <TableHead>Actions</TableHead>
+            <TableHead className="sticky right-0 z-20 bg-background shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.25)]">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -473,7 +494,7 @@ function ContainerTable({
                       </div>
                     </div>
                   ) : (
-                    <span className="text-xs text-muted-foreground">-</span>
+                    <StatPlaceholder state={container.state} status={metricsStatus} />
                   )}
                 </TableCell>
                 <TableCell>
@@ -488,7 +509,7 @@ function ContainerTable({
                       </div>
                     </div>
                   ) : (
-                    <span className="text-xs text-muted-foreground">-</span>
+                    <StatPlaceholder state={container.state} status={metricsStatus} />
                   )}
                 </TableCell>
                 <TableCell className="hidden lg:table-cell">
@@ -498,7 +519,7 @@ function ContainerTable({
                       <div>↑ {formatBytes(m.netTx)}</div>
                     </div>
                   ) : (
-                    <span className="text-xs text-muted-foreground">-</span>
+                    <StatPlaceholder state={container.state} status={metricsStatus} />
                   )}
                 </TableCell>
                 <TableCell className="hidden xl:table-cell">
@@ -530,7 +551,7 @@ function ContainerTable({
                     />
                   </div>
                 </TableCell>
-                <TableCell>
+                <TableCell className="sticky right-0 bg-background shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.25)]">
                   {renderActions(container, false)}
                 </TableCell>
               </TableRow>
@@ -545,9 +566,10 @@ function ContainerTable({
 interface ContainersOverviewTabProps {
   stats: DashboardStats | undefined
   latestMetrics: Record<string, DashboardContainerMetric>
+  metricsStatus: MetricsStatus
 }
 
-export function ContainersOverviewTab({ stats, latestMetrics }: ContainersOverviewTabProps) {
+export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: ContainersOverviewTabProps) {
   const queryClient = useQueryClient()
   const { confirm, ConfirmComponent } = useConfirm()
   const [sortBy, setSortBy] = useState<SortKey>('name')
@@ -660,6 +682,7 @@ export function ContainersOverviewTab({ stats, latestMetrics }: ContainersOvervi
             <ContainerTable
               containers={stackContainers}
               latestMetrics={latestMetrics}
+              metricsStatus={metricsStatus}
               sortBy={sortBy}
               stackDirMap={stackDirMap}
               onInspect={setInspectTarget}
@@ -692,6 +715,7 @@ export function ContainersOverviewTab({ stats, latestMetrics }: ContainersOvervi
             <ContainerTable
               containers={otherContainers}
               latestMetrics={latestMetrics}
+              metricsStatus={metricsStatus}
               sortBy={sortBy}
               stackDirMap={stackDirMap}
               onInspect={setInspectTarget}

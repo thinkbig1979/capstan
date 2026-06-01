@@ -13,6 +13,7 @@ export function SetupPage() {
       errorPrefix="Setup"
       buttonText="Create Account"
       passwordHint="At least 8 characters, including uppercase, lowercase, number, and special character"
+      enforceComplexity
     />
   )
 }

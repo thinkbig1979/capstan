@@ -54,14 +54,14 @@ export function AutoUpdateToggle({
               <Switch
                 checked={false}
                 disabled
-                aria-label={`Auto-update ${targetType} ${targetId}`}
+                aria-label={`Auto-update ${targetType} ${targetId} (locked, global auto-update is off)`}
               />
               <Lock className="h-3 w-3 text-muted-foreground" />
             </div>
           </TooltipTrigger>
           <TooltipContent>
-            <p>Auto-update is not enabled.</p>
-            <p>Enable it in Settings to configure per-container updates.</p>
+            <p>Auto-update is locked.</p>
+            <p>The global master switch is off — enable it in Settings to unlock per-{targetType} toggles.</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>

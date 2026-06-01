@@ -150,11 +150,25 @@ beforeEach(() => {
 describe('BackupsTab — empty state', () => {
   it('renders EmptyState when there are no snapshots', async () => {
     mockListSnapshots.mockResolvedValue([])
+    // No successful backup runs, so this is a genuinely-empty repo, not the
+    // ST-3 "ran but nothing listed" reconciliation branch.
+    mockGetHistory.mockResolvedValue({ runs: [] })
     const wrapper = createWrapper()
     render(<BackupsTab stackId={STACK_ID} />, { wrapper })
 
     await waitFor(() => {
       expect(screen.getByText('No snapshots yet')).toBeInTheDocument()
+    })
+  })
+
+  it('reconciles the empty state when runs succeeded but no snapshots are listed (ST-3)', async () => {
+    mockListSnapshots.mockResolvedValue([])
+    mockGetHistory.mockResolvedValue({ runs: [makeRun({ status: 'success' })] })
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText('No snapshots listed')).toBeInTheDocument()
     })
   })
 

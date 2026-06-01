@@ -675,7 +675,14 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 
 	offset := (page - 1) * pageSize
 
-	actions, total, err := h.db.ListActionLogsPaginated(pageSize, offset)
+	filter := database.ActionLogFilter{
+		Action:   c.Query("action"),
+		Search:   c.Query("search"),
+		DateFrom: c.Query("dateFrom"),
+		DateTo:   c.Query("dateTo"),
+	}
+
+	actions, total, err := h.db.ListActionLogsFiltered(pageSize, offset, filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.NewAppError(
 			http.StatusInternalServerError,
@@ -685,11 +692,17 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 		return
 	}
 
+	availableActions, err := h.db.DistinctActionLogActions()
+	if err != nil {
+		availableActions = []string{}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"entries":  actions,
-		"total":    total,
-		"page":     page,
-		"pageSize": pageSize,
+		"entries":          actions,
+		"total":            total,
+		"page":             page,
+		"pageSize":         pageSize,
+		"availableActions": availableActions,
 	})
 }
 

@@ -5,14 +5,16 @@ interface DashboardHeaderProps {
   onRefresh: () => void
   onCreateStack: () => void
   isRefreshing: boolean
+  /** One-line state summary (e.g. "25 stacks · 3 running · 24 containers"). */
+  subtitle?: string
 }
 
-export function DashboardHeader({ onRefresh, onCreateStack, isRefreshing }: DashboardHeaderProps) {
+export function DashboardHeader({ onRefresh, onCreateStack, isRefreshing, subtitle }: DashboardHeaderProps) {
   return (
     <div className="flex items-center justify-between">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-        <p className="text-muted-foreground">Welcome to Capstan</p>
+        {subtitle && <p className="text-muted-foreground tabular-nums">{subtitle}</p>}
       </div>
       <div className="flex items-center gap-2">
         <Button variant="outline" size="icon" onClick={onRefresh} disabled={isRefreshing} aria-label="Refresh dashboard">

@@ -17,6 +17,7 @@ describe('StatusBadge', () => {
       ['running', 'Running'],
       ['stopped', 'Stopped'],
       ['partial', 'Partial'],
+      ['error', 'Error'],
       ['unknown', 'Unknown'],
     ] as [Status, string][])('renders label "%s" for status "%s"', (status, label) => {
       renderWithProviders(<StatusBadge status={status} pulse={false} />)
@@ -86,6 +87,14 @@ describe('StatusBadge', () => {
     it('applies error tone for stopped', () => {
       renderWithProviders(<StatusBadge status="stopped" pulse={false} />)
       const badge = getStatusByText('Stopped')
+      expect(badge.getAttribute('data-tone')).toBe('error')
+      expect(badge.className).toContain('text-destructive')
+      expect(badge.className).toContain('bg-destructive/15')
+    })
+
+    it('applies error tone for error (broken/unreadable stack)', () => {
+      renderWithProviders(<StatusBadge status="error" pulse={false} />)
+      const badge = getStatusByText('Error')
       expect(badge.getAttribute('data-tone')).toBe('error')
       expect(badge.className).toContain('text-destructive')
       expect(badge.className).toContain('bg-destructive/15')

@@ -34,12 +34,17 @@ interface CreateStackDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-const DEFAULT_COMPOSE = `services:
+const DEFAULT_COMPOSE = `# Starter template — edit the service below or replace it entirely.
+services:
   app:
-    image: nginx:latest
-    restart: unless-stopped
+    image: nginx:latest          # image to run
+    restart: unless-stopped      # auto-restart unless you stop it
     ports:
-      - "8080:80"
+      - "8080:80"                # host:container
+    # volumes:
+    #   - ./data:/usr/share/nginx/html
+    # environment:
+    #   - KEY=value
 `
 
 export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps) {
@@ -63,6 +68,11 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
   const [dockerRunInput, setDockerRunInput] = useState('')
   const [conversionError, setConversionError] = useState('')
   const [pendingCompose, setPendingCompose] = useState<string | null>(null)
+  // The editor lives inside a Radix Dialog portal; on the first open the
+  // container ref isn't attached yet when the CodeMirror mount effect fires,
+  // leaving a blank editor until the user toggles tabs. Bump this after the
+  // dialog has laid out so the mount effect re-runs with the ref present.
+  const [editorEpoch, setEditorEpoch] = useState(0)
   const editorRef = useRef<HTMLDivElement>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const composeRef = useRef<HTMLDivElement>(null)
@@ -198,8 +208,14 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
         })
       }
     },
-    deps: [open, composeTab],
+    deps: [open, composeTab, editorEpoch],
   })
+
+  useEffect(() => {
+    if (!open) return
+    const id = requestAnimationFrame(() => setEditorEpoch((e) => e + 1))
+    return () => cancelAnimationFrame(id)
+  }, [open])
 
   useEffect(() => {
     if (pendingCompose) {

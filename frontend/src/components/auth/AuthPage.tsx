@@ -14,6 +14,7 @@ interface AuthPageProps {
   errorPrefix: string
   buttonText?: string
   passwordHint?: string
+  enforceComplexity?: boolean
 }
 
 function extractErrorMessage(err: unknown, fallback: string): string {
@@ -26,7 +27,7 @@ function extractErrorMessage(err: unknown, fallback: string): string {
   return fallback
 }
 
-export function AuthPage({ title, description, submitFn, successMessage, errorPrefix, buttonText, passwordHint }: AuthPageProps) {
+export function AuthPage({ title, description, submitFn, successMessage, errorPrefix, buttonText, passwordHint, enforceComplexity }: AuthPageProps) {
   const navigate = useNavigate()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | undefined>()
@@ -40,9 +41,10 @@ export function AuthPage({ title, description, submitFn, successMessage, errorPr
       toast.success(successMessage)
       navigate('/')
     } catch (err: unknown) {
+      // Surface auth/validation failures inline next to the form only; a toast
+      // here would duplicate the same message (AU-4).
       const errorMessage = extractErrorMessage(err, `${errorPrefix} failed`)
       setError(errorMessage)
-      toast.error(errorMessage)
     } finally {
       setIsLoading(false)
     }
@@ -69,6 +71,7 @@ export function AuthPage({ title, description, submitFn, successMessage, errorPr
             error={error}
             buttonText={buttonText}
             passwordHint={passwordHint}
+            enforceComplexity={enforceComplexity}
           />
         </CardContent>
       </Card>

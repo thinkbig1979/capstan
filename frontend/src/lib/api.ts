@@ -168,13 +168,23 @@ export const settingsApi = {
     return response.data
   },
 
-  getAuditLog: async (page = 1, pageSize = 50) => {
+  getAuditLog: async (
+    page = 1,
+    pageSize = 50,
+    filters: { action?: string; search?: string; dateFrom?: string; dateTo?: string } = {},
+  ) => {
+    const params: Record<string, string | number> = { page, pageSize }
+    if (filters.action) params.action = filters.action
+    if (filters.search) params.search = filters.search
+    if (filters.dateFrom) params.dateFrom = filters.dateFrom
+    if (filters.dateTo) params.dateTo = filters.dateTo
     const response = await apiClient.get<{
       entries: Array<{ id: string; userId: string; stackId: string; action: string; detail: string; createdAt: string }>
       total: number
       page: number
       pageSize: number
-    }>('/settings/audit-log', { params: { page, pageSize } })
+      availableActions: string[]
+    }>('/settings/audit-log', { params })
     return response.data
   },
 

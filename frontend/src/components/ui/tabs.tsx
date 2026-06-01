@@ -23,6 +23,13 @@ function Tabs({
   )
 }
 
+// Tab / toggle role conventions (keep these three roles distinct — see audit D-5):
+//   1. Primary navigation  → <TabsList variant="line"> (underline). Routes/sections,
+//      e.g. the dashboard top tabs and stack-detail tabs.
+//   2. In-content view switch → <TabsList variant="default"> (segmented box). Toggling
+//      what a panel shows without navigating, e.g. Updates (Available/Log) and the
+//      Containers Stack/Other switch. Keep these label-only and visually identical.
+//   3. Filters / sort → ghost-vs-default Button pills (see SortFilterBar). Never tabs.
 const tabsListVariants = cva(
   'group/tabs-list inline-flex w-fit items-center justify-center rounded-lg p-[3px] text-muted-foreground group-data-[orientation=horizontal]/tabs:h-9 group-data-[orientation=vertical]/tabs:h-fit group-data-[orientation=vertical]/tabs:flex-col data-[variant=line]:rounded-none',
   {

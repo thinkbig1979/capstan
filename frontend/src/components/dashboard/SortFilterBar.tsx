@@ -68,12 +68,14 @@ export function SortFilterBar({
           </div>
         </>
       )}
-      {actions && (
-        <div className="flex items-center gap-2 ml-2">
-          {actions}
-        </div>
-      )}
-      <span className="text-sm text-muted-foreground ml-auto shrink-0">{countDisplay}</span>
+      <div className="flex items-center gap-3 ml-auto">
+        <span className="text-sm text-muted-foreground shrink-0">{countDisplay}</span>
+        {actions && (
+          <div className="flex items-center gap-2 border-l pl-3">
+            {actions}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

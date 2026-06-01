@@ -3,8 +3,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useImages } from '@/hooks/useResources'
 import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -14,9 +14,12 @@ import { toast } from 'sonner'
 import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
+import { TablePagination, usePagination } from '@/components/dashboard/TablePagination'
 import { useConfirm } from '@/components/ConfirmDialog'
 import type { DockerImage } from '@/types'
 import { formatBytes, formatDate } from '@/lib/format'
+
+const PAGE_SIZE = 50
 
 type SortKey = 'name' | 'size' | 'created' | 'containers'
 
@@ -74,6 +77,8 @@ export function ImagesTab() {
     }
   }, [images, sortBy])
 
+  const { page, setPage, totalPages, pageItems } = usePagination(sortedImages, PAGE_SIZE)
+
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -86,15 +91,11 @@ export function ImagesTab() {
 
   if (!images || images.length === 0) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12">
-          <ImageIcon className="h-12 w-12 text-muted-foreground mb-4" />
-          <p className="text-lg font-semibold">No Images</p>
-          <p className="text-sm text-muted-foreground">
-            No Docker images found on this host
-          </p>
-        </CardContent>
-      </Card>
+      <EmptyState
+        icon={<ImageIcon className="h-12 w-12 text-muted-foreground" />}
+        title="No Images"
+        description="No Docker images found on this host"
+      />
     )
   }
 
@@ -130,19 +131,25 @@ export function ImagesTab() {
               <TableHead>Size</TableHead>
               <TableHead>Created</TableHead>
               <TableHead className="text-center">Containers</TableHead>
-              <TableHead>Actions</TableHead>
+              <TableHead className="sticky right-0 z-20 bg-background shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.25)]">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {sortedImages.map((image: DockerImage) => (
+            {pageItems.map((image: DockerImage) => (
               <TableRow key={image.id}>
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
-                    {image.repoTags.map((tag) => (
-                      <Badge key={tag} variant="secondary" className="text-xs font-mono">
-                        {tag}
+                    {image.repoTags.length > 0 ? (
+                      image.repoTags.map((tag) => (
+                        <Badge key={tag} variant="secondary" className="text-xs font-mono">
+                          {tag}
+                        </Badge>
+                      ))
+                    ) : (
+                      <Badge variant="outline" className="text-xs font-mono text-muted-foreground" title="Untagged (dangling) image">
+                        &lt;none&gt;:&lt;none&gt;
                       </Badge>
-                    ))}
+                    )}
                   </div>
                 </TableCell>
                 <TableCell>
@@ -163,8 +170,8 @@ export function ImagesTab() {
                     <span className="text-sm text-muted-foreground">0</span>
                   )}
                 </TableCell>
-                <TableCell>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(image)} disabled={deletingId === image.id || deleteMutation.isPending} title="Remove image" aria-label={`Remove image ${image.repoTags?.[0] ?? image.id}`}>
+                <TableCell className="sticky right-0 bg-background shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.25)]">
+                  <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => handleDelete(image)} disabled={deletingId === image.id || deleteMutation.isPending} title="Remove image" aria-label={`Remove image ${image.repoTags?.[0] ?? image.id}`}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </TableCell>
@@ -173,6 +180,14 @@ export function ImagesTab() {
           </TableBody>
         </Table>
       </div>
+      <TablePagination
+        page={page}
+        totalPages={totalPages}
+        pageSize={PAGE_SIZE}
+        total={sortedImages.length}
+        onPageChange={setPage}
+        label="images"
+      />
       <ConfirmComponent />
     </div>
   )

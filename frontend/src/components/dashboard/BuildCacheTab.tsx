@@ -2,16 +2,19 @@ import { useState, useMemo } from 'react'
 import { useBuildCache } from '@/hooks/useResources'
 import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/EmptyState'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { Database } from 'lucide-react'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
+import { TablePagination, usePagination } from '@/components/dashboard/TablePagination'
 import type { BuildCacheEntry } from '@/types'
 import { formatBytes, formatDate, formatRelativeTime } from '@/lib/format'
+
+const PAGE_SIZE = 50
 
 type SortKey = 'id' | 'type' | 'size' | 'lastUsed' | 'usageCount'
 
@@ -42,6 +45,8 @@ export function BuildCacheTab() {
     }
   }, [entries, sortBy])
 
+  const { page, setPage, totalPages, pageItems } = usePagination(sortedEntries, PAGE_SIZE)
+
   const totalSize = entries?.reduce((sum, e) => sum + e.Size, 0) || 0
 
   const pruneDescription = `This will remove all unused build cache entries${totalSize > 0 ? ` (${formatBytes(totalSize)})` : ''}. This cannot be undone.`
@@ -58,15 +63,11 @@ export function BuildCacheTab() {
 
   if (!entries || entries.length === 0) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12">
-          <Database className="h-12 w-12 text-muted-foreground mb-4" />
-          <p className="text-lg font-semibold">No Build Cache</p>
-          <p className="text-sm text-muted-foreground">
-            Build cache is empty
-          </p>
-        </CardContent>
-      </Card>
+      <EmptyState
+        icon={<Database className="h-12 w-12 text-muted-foreground" />}
+        title="No Build Cache"
+        description="Build cache is empty"
+      />
     )
   }
 
@@ -109,7 +110,7 @@ export function BuildCacheTab() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {sortedEntries.map((entry: BuildCacheEntry) => (
+            {pageItems.map((entry: BuildCacheEntry) => (
               <TableRow key={entry.ID}>
                 <TableCell>
                   <span className="text-xs font-mono text-muted-foreground">
@@ -145,6 +146,14 @@ export function BuildCacheTab() {
           </TableBody>
         </Table>
       </div>
+      <TablePagination
+        page={page}
+        totalPages={totalPages}
+        pageSize={PAGE_SIZE}
+        total={sortedEntries.length}
+        onPageChange={setPage}
+        label="entries"
+      />
     </div>
   )
 }

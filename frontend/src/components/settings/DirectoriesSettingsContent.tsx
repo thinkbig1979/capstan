@@ -117,12 +117,14 @@ export function DirectoriesSettingsContent() {
             How many levels deep to scan within each monitored directory for compose files. A value of 1 only scans immediate subdirectories. After changing this, trigger a rescan to discover newly visible stacks.
           </p>
         </div>
-        <Button
-          onClick={() => scanDepthMutation.mutate(Number(effectiveDepth))}
-          disabled={effectiveDepth === String(scanDepthData?.scanDepth) || scanDepthMutation.isPending}
-        >
-          {scanDepthMutation.isPending ? <LoadingSpinner size="small" /> : 'Save Scan Depth'}
-        </Button>
+        <div className="flex justify-end">
+          <Button
+            onClick={() => scanDepthMutation.mutate(Number(effectiveDepth))}
+            disabled={effectiveDepth === String(scanDepthData?.scanDepth) || scanDepthMutation.isPending}
+          >
+            {scanDepthMutation.isPending ? <LoadingSpinner size="small" /> : 'Save Scan Depth'}
+          </Button>
+        </div>
       </div>
 
       {allDirs.length > 1 && (
@@ -146,9 +148,11 @@ export function DirectoriesSettingsContent() {
               New stacks will be created in this directory by default unless changed in the creation dialog.
             </p>
           </div>
-          <Button onClick={handleSaveDefault} disabled={effectiveDefault === config?.stacksDir}>
-            Save Default Directory
-          </Button>
+          <div className="flex justify-end">
+            <Button onClick={handleSaveDefault} disabled={effectiveDefault === config?.stacksDir}>
+              Save Default Directory
+            </Button>
+          </div>
         </div>
       )}
     </div>

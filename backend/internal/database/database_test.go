@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -516,4 +517,91 @@ func TestFKCascade_DeleteRunRemovesItems(t *testing.T) {
 	items, err = db.GetBackupRunItems("run-cascade")
 	require.NoError(t, err)
 	assert.Empty(t, items, "deleting a run must cascade-delete its items")
+}
+
+// --- Audit-log filtering tests ---
+
+func seedActionLogs(t *testing.T, db *DB) {
+	t.Helper()
+	// Global actions (e.g. backup) are logged with an empty user/stack id and no
+	// matching users/stacks row. Production pools connections so its per-connection
+	// foreign_keys pragma doesn't enforce these; the single-connection in-memory
+	// test DB does, so relax it here to seed the same shape production stores.
+	_, err := db.db.Exec("PRAGMA foreign_keys=OFF")
+	require.NoError(t, err)
+
+	entries := []models.ActionLog{
+		{ID: "al-1", UserID: "system", Action: "backup", Detail: `{"status":"success"}`, CreatedAt: mustTime(t, "2026-05-29T10:00:00Z")},
+		{ID: "al-2", UserID: "admin", Action: "stack_start", Detail: `{"stack":"web"}`, CreatedAt: mustTime(t, "2026-05-30T11:00:00Z")},
+		{ID: "al-3", UserID: "admin", Action: "stack_stop", Detail: `{"stack":"web"}`, CreatedAt: mustTime(t, "2026-05-31T12:00:00Z")},
+		{ID: "al-4", UserID: "system", Action: "backup", Detail: `{"status":"failed"}`, CreatedAt: mustTime(t, "2026-05-31T13:00:00Z")},
+	}
+	for _, e := range entries {
+		require.NoError(t, db.LogAction(e))
+	}
+}
+
+func mustTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	require.NoError(t, err)
+	return parsed
+}
+
+func TestListActionLogsFiltered_ByAction(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	seedActionLogs(t, db)
+
+	rows, total, err := db.ListActionLogsFiltered(50, 0, ActionLogFilter{Action: "backup"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	assert.Len(t, rows, 2)
+	for _, r := range rows {
+		assert.Equal(t, "backup", r.Action)
+	}
+}
+
+func TestListActionLogsFiltered_Search(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	seedActionLogs(t, db)
+
+	rows, total, err := db.ListActionLogsFiltered(50, 0, ActionLogFilter{Search: "failed"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "al-4", rows[0].ID)
+}
+
+func TestListActionLogsFiltered_DateRange(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	seedActionLogs(t, db)
+
+	rows, total, err := db.ListActionLogsFiltered(50, 0, ActionLogFilter{DateFrom: "2026-05-31", DateTo: "2026-05-31"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, total, "only the two 2026-05-31 entries match")
+	assert.Len(t, rows, 2)
+}
+
+func TestListActionLogsFiltered_EmptyFilterReturnsAll(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	seedActionLogs(t, db)
+
+	rows, total, err := db.ListActionLogsFiltered(50, 0, ActionLogFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 4, total)
+	assert.Len(t, rows, 4)
+}
+
+func TestDistinctActionLogActions(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	seedActionLogs(t, db)
+
+	actions, err := db.DistinctActionLogActions()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"backup", "stack_start", "stack_stop"}, actions)
 }

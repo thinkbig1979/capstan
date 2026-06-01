@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { AuthPage } from '../AuthPage'
 
 const mockNavigate = vi.fn()
@@ -57,7 +58,29 @@ describe('AuthPage', () => {
       />
     )
     expect(screen.getByLabelText(/username/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('Password')).toBeInTheDocument()
+  })
+
+  it('shows a failure inline only, without a duplicate error toast (AU-4)', async () => {
+    const user = userEvent.setup()
+    const submitFn = vi.fn().mockRejectedValue(new Error('Invalid username or password'))
+    render(
+      <AuthPage
+        title="Sign In"
+        description="Enter credentials"
+        submitFn={submitFn}
+        successMessage="Welcome"
+        errorPrefix="Login"
+      />
+    )
+
+    await user.type(screen.getByLabelText(/username/i), 'admin')
+    await user.type(screen.getByLabelText('Password'), 'plainpass')
+    await user.click(screen.getByRole('button', { name: /login/i }))
+
+    expect(await screen.findByText(/invalid username or password/i)).toBeInTheDocument()
+    await waitFor(() => expect(submitFn).toHaveBeenCalledTimes(1))
+    expect(mockToastError).not.toHaveBeenCalled()
   })
 
   it('renders login form within a card', () => {

@@ -16,7 +16,7 @@ import {
 import type { Stack } from '@/types'
 
 type SortOption = 'name' | 'status'
-type StatusFilter = 'all' | 'running' | 'stopped'
+type StatusFilter = 'all' | 'running' | 'stopped' | 'error'
 
 interface StacksTabProps {
   stacks: Stack[]
@@ -114,11 +114,11 @@ export function StacksTab({
               </span>
             </TableCell>
             <TableCell>
-              <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'unknown'} pulse={isAnimating(stack.id)} />
+              <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'error' | 'unknown'} pulse={isAnimating(stack.id)} />
             </TableCell>
             <TableCell>
-              {stack.containerCount !== undefined ? (
-                <Badge variant="outline">{stack.containerCount}</Badge>
+              {stack.containers?.length ? (
+                <Badge variant="outline">{stack.containers.length}</Badge>
               ) : (
                 <span className="text-sm text-muted-foreground">-</span>
               )}
@@ -161,6 +161,7 @@ export function StacksTab({
           { key: 'all', label: 'All' },
           { key: 'running', label: 'Running' },
           { key: 'stopped', label: 'Stopped' },
+          { key: 'error', label: 'Error' },
         ]}
         filterValue={statusFilter}
         onFilterChange={(key) => onFilterChange(key as StatusFilter)}
@@ -176,7 +177,7 @@ export function StacksTab({
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
-                <TableHead>Directory</TableHead>
+                <TableHead>Compose file</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Containers</TableHead>
                 <TableHead>Actions</TableHead>
@@ -218,18 +219,18 @@ export function StacksTab({
                           }
                         }}
                       >
-                        {stack.directory}
+                        {stack.composeFile}
                         {stack.isGitRepo && (
                           <GitBranch className="h-3 w-3 text-muted-foreground" />
                         )}
                       </span>
                     </TableCell>
                     <TableCell>
-                      <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'unknown'} pulse={isAnimating(stack.id)} />
+                      <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'error' | 'unknown'} pulse={isAnimating(stack.id)} />
                     </TableCell>
                     <TableCell>
-                      {stack.containerCount !== undefined ? (
-                        <Badge variant="outline">{stack.containerCount}</Badge>
+                      {stack.containers?.length ? (
+                        <Badge variant="outline">{stack.containers.length}</Badge>
                       ) : (
                         <span className="text-sm text-muted-foreground">-</span>
                       )}

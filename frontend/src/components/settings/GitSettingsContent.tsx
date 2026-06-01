@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { useGitSettings, useUpdateGitSettings } from '@/hooks/useResources'
+import { Eye, EyeOff } from 'lucide-react'
 import { toast } from 'sonner'
 
 export function GitSettingsContent() {
@@ -13,6 +14,7 @@ export function GitSettingsContent() {
   const [sshKey, setSshKey] = useState<string | undefined>(undefined)
   const [httpsUser, setHttpsUser] = useState<string | undefined>(undefined)
   const [httpsToken, setHttpsToken] = useState('')
+  const [showToken, setShowToken] = useState(false)
 
   const effectiveSshKey = sshKey !== undefined ? sshKey : (gitSettings?.sshKey || '')
   const effectiveHttpsUser = httpsUser !== undefined ? httpsUser : (gitSettings?.httpsUser || '')
@@ -75,30 +77,44 @@ export function GitSettingsContent() {
               <span className="ml-2 text-xs text-muted-foreground font-normal">(currently set)</span>
             )}
           </Label>
-          <Input
-            id="git-https-token"
-            type="password"
-            placeholder={gitSettings?.hasHttpsToken ? 'Leave blank to keep current token' : 'ghp_xxxx or glpat-xxxx'}
-            value={httpsToken}
-            onChange={(e) => setHttpsToken(e.target.value)}
-            className="max-w-md"
-          />
+          <div className="flex items-center gap-2 max-w-md">
+            <Input
+              id="git-https-token"
+              type={showToken ? 'text' : 'password'}
+              placeholder={gitSettings?.hasHttpsToken ? 'Leave blank to keep current token' : 'ghp_xxxx or glpat-xxxx'}
+              value={httpsToken}
+              onChange={(e) => setHttpsToken(e.target.value)}
+              className="flex-1"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowToken((v) => !v)}
+              title={showToken ? 'Hide token' : 'Reveal token'}
+              aria-label={showToken ? 'Hide access token' : 'Reveal access token'}
+            >
+              {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </Button>
+          </div>
           <p className="text-xs text-muted-foreground">
             Used as the default token for HTTPS git remotes. Individual stack credentials override these.
           </p>
         </div>
       </div>
 
-      <Button type="submit" disabled={updateGitSettings.isPending}>
-        {updateGitSettings.isPending ? (
-          <>
-            <span className="mr-2"><LoadingSpinner size="small" /></span>
-            Saving...
-          </>
-        ) : (
-          'Save Git Settings'
-        )}
-      </Button>
+      <div className="flex justify-end">
+        <Button type="submit" disabled={updateGitSettings.isPending}>
+          {updateGitSettings.isPending ? (
+            <>
+              <span className="mr-2"><LoadingSpinner size="small" /></span>
+              Saving...
+            </>
+          ) : (
+            'Save Git Settings'
+          )}
+        </Button>
+      </div>
     </form>
   )
 }

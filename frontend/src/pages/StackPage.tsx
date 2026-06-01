@@ -133,8 +133,8 @@ export function StackPage() {
     if (!stack) return
     const confirmed = await confirm(
       `Delete Stack "${stack.projectName}"?`,
-      'This action cannot be undone. The stack and all its data will be permanently removed.',
-      { confirmText: 'Delete', isDangerous: true }
+      `This permanently removes the stack and everything under ${stack.directory}, including its compose file and any data. This cannot be undone.`,
+      { confirmText: 'Delete', isDangerous: true, requireConfirmationText: stack.projectName }
     )
     if (confirmed) {
       setIsDeleting(true)

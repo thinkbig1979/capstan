@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -331,12 +332,30 @@ func (h *StacksHandler) List(c *gin.Context) {
 		return
 	}
 
-	for i := range stacks {
-		if h.docker != nil {
-			status, containers, err := h.docker.Status(stacks[i])
-			if err == nil {
-				stacks[i].Status = status
-				stacks[i].Containers = containers
+	if h.docker != nil {
+		// One ContainerList snapshot bucketed by compose project replaces the
+		// former per-stack `docker compose ps` subprocess fan-out (O(1) Docker
+		// call instead of O(N) process spawns). On snapshot error we leave each
+		// stack's stored DB status untouched (same graceful fallback as before).
+		statuses, err := h.docker.GetStackStatuses(c.Request.Context(), h.db)
+		if err != nil {
+			slog.Error("Failed to derive live stack statuses", "error", err)
+		} else {
+			for i := range stacks {
+				if ls, ok := statuses[stacks[i].ProjectName]; ok && stacks[i].ProjectName != "" {
+					stacks[i].Status = ls.Status
+					stacks[i].Containers = ls.Containers
+					continue
+				}
+				// No live containers for this project. Distinguish a stack that's
+				// simply down ("stopped") from one Capstan can't read ("error") —
+				// the latter is what the old `compose ps` surfaced as "unknown".
+				stacks[i].Containers = nil
+				if composeUnreadable(stacks[i]) {
+					stacks[i].Status = "error"
+				} else {
+					stacks[i].Status = "stopped"
+				}
 			}
 		}
 	}
@@ -344,6 +363,16 @@ func (h *StacksHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"stacks": stacks,
 	})
+}
+
+// composeUnreadable reports whether a stack's compose file can't be stat'd
+// (missing/unreadable dir or file) — the condition that made `docker compose ps`
+// return "unknown". Used to mark a container-less stack as "error" rather than
+// "stopped" so a broken stack surfaces instead of hiding among intentionally
+// stopped ones.
+func composeUnreadable(s models.Stack) bool {
+	_, err := os.Stat(filepath.Join(s.Directory, s.ComposeFile))
+	return err != nil
 }
 
 func (h *StacksHandler) Get(c *gin.Context) {

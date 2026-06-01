@@ -292,6 +292,72 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 	return status, containers, nil
 }
 
+// LiveStatus is a stack's live state derived from the shared container snapshot:
+// a status string plus the project's reconstructed container list.
+type LiveStatus struct {
+	Status     string
+	Containers []models.Container
+}
+
+// BuildStackStatuses buckets a single container snapshot by compose project and
+// derives each project's live status and container list — no Docker calls and no
+// per-stack `docker compose ps`. Status mirrors Status(): "running" when every
+// container in the project is running, "partial" when the project has containers
+// but not all are running. A project with no containers is simply absent from the
+// returned map; it cannot reproduce Status()'s "unknown" (which means `compose
+// ps` itself errored on an unreadable dir / invalid file — a condition container
+// labels can't reveal), so the caller decides between "stopped" and "error" for
+// absent projects. Multiple stacks sharing a project name each resolve to that
+// project's containers (mirroring current /stacks behavior); production project
+// names are unique per stack so this is moot there.
+func BuildStackStatuses(containers []models.DashboardContainerInfo) map[string]LiveStatus {
+	byProject := make(map[string][]models.Container)
+	allRunning := make(map[string]bool)
+
+	for _, c := range containers {
+		if c.ProjectName == "" {
+			continue
+		}
+		if _, seen := allRunning[c.ProjectName]; !seen {
+			allRunning[c.ProjectName] = true
+		}
+		if c.State != "running" {
+			allRunning[c.ProjectName] = false
+		}
+		byProject[c.ProjectName] = append(byProject[c.ProjectName], models.Container{
+			ID:     c.ID,
+			Name:   c.Name,
+			Image:  c.Image,
+			State:  c.State,
+			Status: c.Status,
+			Ports:  c.Ports,
+			Health: c.Health,
+		})
+	}
+
+	result := make(map[string]LiveStatus, len(byProject))
+	for project, list := range byProject {
+		status := "partial"
+		if allRunning[project] {
+			status = "running"
+		}
+		result[project] = LiveStatus{Status: status, Containers: list}
+	}
+	return result
+}
+
+// GetStackStatuses fetches a single container snapshot (one ContainerList) and
+// returns live status per compose project, replacing the per-stack `docker
+// compose ps` subprocess fan-out the stack list used to run (O(1) Docker call
+// instead of O(N) process spawns).
+func (s *DockerService) GetStackStatuses(ctx context.Context, db DashboardDB) (map[string]LiveStatus, error) {
+	containers, err := s.GetAllContainersWithDetails(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	return BuildStackStatuses(containers), nil
+}
+
 func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
 	args := s.buildComposeArgs(stack, "logs", []string{"--tail", fmt.Sprintf("%d", tail), "--timestamps"})
 
@@ -763,6 +829,27 @@ func (s *DockerService) ListVolumes(ctx context.Context) ([]models.DockerVolume,
 		return nil, fmt.Errorf("listing volumes: %w", err)
 	}
 
+	// VolumeList does not populate UsageData, so size comes back as zero and there is no way
+	// to tell which volumes are in use. DiskUsage (docker system df) computes both, keyed by
+	// name. It is heavier, so a failure here degrades to "size unknown" rather than erroring.
+	type volUsage struct {
+		size     int64
+		refCount int64
+	}
+	usageByName := make(map[string]volUsage)
+	usageComputed := false
+	if du, duErr := s.client.DiskUsage(ctx, types.DiskUsageOptions{}); duErr == nil {
+		usageComputed = true
+		for _, v := range du.Volumes {
+			if v == nil || v.UsageData == nil {
+				continue
+			}
+			usageByName[v.Name] = volUsage{size: v.UsageData.Size, refCount: v.UsageData.RefCount}
+		}
+	} else {
+		slog.Warn("Failed to compute volume disk usage; size and in-use state unavailable", "error", duErr)
+	}
+
 	result := make([]models.DockerVolume, 0, len(volumes.Volumes))
 	for _, vol := range volumes.Volumes {
 		if vol == nil {
@@ -774,16 +861,15 @@ func (s *DockerService) ListVolumes(ctx context.Context) ([]models.DockerVolume,
 			stack = vol.Labels["com.docker.compose.project"]
 		}
 
-		var usageData int64
-		if vol.UsageData != nil {
-			usageData = vol.UsageData.Size
-		}
+		u, hasUsage := usageByName[vol.Name]
 
 		result = append(result, models.DockerVolume{
 			Name:       vol.Name,
 			Driver:     vol.Driver,
 			Mountpoint: vol.Mountpoint,
-			Size:       usageData,
+			Size:       u.size,
+			SizeKnown:  usageComputed && hasUsage,
+			InUse:      u.refCount > 0,
 			Created:    vol.CreatedAt,
 			Stack:      stack,
 		})

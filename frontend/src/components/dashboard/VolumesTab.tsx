@@ -3,20 +3,24 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useVolumes } from '@/hooks/useResources'
 import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { HardDrive, Trash2 } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { toast } from 'sonner'
 import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
+import { TablePagination, usePagination } from '@/components/dashboard/TablePagination'
 import { useConfirm } from '@/components/ConfirmDialog'
 import type { DockerVolume } from '@/types'
 import { formatBytes } from '@/lib/format'
+
+const PAGE_SIZE = 50
 
 type SortKey = 'name' | 'driver' | 'size' | 'stack'
 
@@ -69,6 +73,8 @@ export function VolumesTab() {
     }
   }, [volumes, sortBy])
 
+  const { page, setPage, totalPages, pageItems } = usePagination(sortedVolumes, PAGE_SIZE)
+
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -81,15 +87,11 @@ export function VolumesTab() {
 
   if (!volumes || volumes.length === 0) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12">
-          <HardDrive className="h-12 w-12 text-muted-foreground mb-4" />
-          <p className="text-lg font-semibold">No Volumes</p>
-          <p className="text-sm text-muted-foreground">
-            No Docker volumes found on this host
-          </p>
-        </CardContent>
-      </Card>
+      <EmptyState
+        icon={<HardDrive className="h-12 w-12 text-muted-foreground" />}
+        title="No Volumes"
+        description="No Docker volumes found on this host"
+      />
     )
   }
 
@@ -125,11 +127,11 @@ export function VolumesTab() {
               <TableHead>Size</TableHead>
               <TableHead>Stack</TableHead>
               <TableHead className="hidden lg:table-cell">Mountpoint</TableHead>
-              <TableHead>Actions</TableHead>
+              <TableHead className="sticky right-0 z-20 bg-background shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.25)]">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {sortedVolumes.map((vol: DockerVolume) => (
+            {pageItems.map((vol: DockerVolume) => (
               <TableRow key={vol.name}>
                 <TableCell>
                   <span className="font-mono text-sm">{vol.name}</span>
@@ -138,7 +140,11 @@ export function VolumesTab() {
                   <Badge variant="outline">{vol.driver}</Badge>
                 </TableCell>
                 <TableCell>
-                  <span className="text-sm">{formatBytes(vol.size)}</span>
+                  {vol.sizeKnown ? (
+                    <span className="text-sm">{formatBytes(vol.size)}</span>
+                  ) : (
+                    <span className="text-sm text-muted-foreground" title="Size not calculated">—</span>
+                  )}
                 </TableCell>
                 <TableCell>
                   {vol.stack ? (
@@ -152,16 +158,39 @@ export function VolumesTab() {
                     {vol.mountpoint}
                   </span>
                 </TableCell>
-                <TableCell>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDelete(vol)} disabled={deletingName === vol.name || deleteMutation.isPending} title="Remove volume" aria-label={`Remove volume ${vol.name}`}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                <TableCell className="sticky right-0 bg-background shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.25)]">
+                  {vol.inUse ? (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span tabIndex={0} className="inline-flex">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" disabled aria-label={`Remove volume ${vol.name} (in use, cannot be removed)`}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>In use by a container, stop it first to remove this volume</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : (
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => handleDelete(vol)} disabled={deletingName === vol.name || deleteMutation.isPending} title="Remove volume" aria-label={`Remove volume ${vol.name}`}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </div>
+      <TablePagination
+        page={page}
+        totalPages={totalPages}
+        pageSize={PAGE_SIZE}
+        total={sortedVolumes.length}
+        onPageChange={setPage}
+        label="volumes"
+      />
       <ConfirmComponent />
     </div>
   )

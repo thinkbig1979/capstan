@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { TerminalToolbar } from '@/components/stack/TerminalToolbar'
 import { TerminalSearchBar } from '@/components/stack/TerminalSearchBar'
+import { EmptyState } from '@/components/EmptyState'
+import { TerminalSquare } from 'lucide-react'
 import type { Stack } from '@/types'
 
 const SESSION_WARNING_MINUTES = 25
@@ -399,8 +401,14 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
     }
   }, [fitTerminal, handleKeyDown])
 
+  // The terminal attaches to a running container; with none, show an explanatory empty state
+  // instead of a black void (matching the Logs and Metrics tabs). The xterm box stays mounted
+  // but hidden so its lifecycle is not torn down when containers come and go.
+  const hasRunningContainers = runningContainers.length > 0
+
   return (
     <div className="flex h-full flex-col space-y-4">
+      {hasRunningContainers && (
       <TerminalToolbar
         selectedContainer={selectedContainer}
         runningContainers={runningContainers}
@@ -423,6 +431,7 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
         onReconnect={handleReconnect}
         onClose={() => setSelectedContainer('')}
       />
+      )}
       {showSearch && isConnected && (
         <TerminalSearchBar searchAddon={searchAddonInstance} onClose={() => {
           setShowSearch(false)
@@ -430,7 +439,14 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
           searchAddonRef.current?.clearActiveDecoration()
         }} />
       )}
-      <div className="rounded-lg border bg-terminal-background p-2">
+      {!hasRunningContainers && (
+        <EmptyState
+          icon={<TerminalSquare className="h-12 w-12 text-muted-foreground" />}
+          title="No running containers"
+          description="The terminal opens a shell inside a running container. Start the stack to use it."
+        />
+      )}
+      <div className={`rounded-lg border bg-terminal-background p-2 ${hasRunningContainers ? '' : 'hidden'}`}>
         <div
           ref={terminalRef}
           className="overflow-hidden"

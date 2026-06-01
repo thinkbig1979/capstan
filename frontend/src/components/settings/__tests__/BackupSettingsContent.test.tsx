@@ -277,20 +277,16 @@ describe('BackupSettingsContent — editing and saving', () => {
     })
   })
 
-  it('shows a "No changes to save" toast when saving without any edits', async () => {
-    const { toast } = await import('sonner')
+  it('disables Save and shows "All changes saved" when there are no edits', async () => {
     const wrapper = createWrapper()
     render(<BackupSettingsContent />, { wrapper })
 
     // Wait for component to fully load.
-    await screen.findByRole('button', { name: /save backup settings/i })
+    const saveButton = await screen.findByRole('button', { name: /save backup settings/i })
 
-    // Click save without making any changes.
-    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
-
-    await waitFor(() => {
-      expect(toast.info).toHaveBeenCalledWith('No changes to save')
-    })
+    // With no pending edits the sticky bar reports a clean state and Save is disabled.
+    expect(saveButton).toBeDisabled()
+    expect(screen.getByText(/all changes saved/i)).toBeInTheDocument()
   })
 
   it('calls updateSettings with empty password string when "Clear saved password" is clicked', async () => {

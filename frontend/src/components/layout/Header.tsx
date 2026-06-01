@@ -96,13 +96,21 @@ export function Header() {
       return [{ label: 'Dashboard', path: '/' }]
     }
     if (path.startsWith('/stacks/')) {
-      const searchParams = new URLSearchParams(location.search)
-      const tab = searchParams.get('tab') || 'overview'
+      // Routes are /stacks/<id>/<tab>; the tab lives in the path, not the query string.
+      const segments = path.split('/').filter(Boolean) // ['stacks', '<encId>', '<tab>?']
+      const encId = segments[1] || ''
+      const tab = segments[2] || 'overview'
       const tabLabel = tab.charAt(0).toUpperCase() + tab.slice(1)
+      // Derive a friendly stack name from the id (format: <dir>~<name>:<profile>).
+      let decodedId = encId
+      try { decodedId = decodeURIComponent(encId) } catch { /* keep raw */ }
+      const nameMatch = decodedId.match(/~([^~:]+)(?::[^:]*)?$/)
+      const stackName = nameMatch ? nameMatch[1] : 'Stack Details'
+      const stackPath = `/stacks/${encId}`
       return [
         { label: 'Dashboard', path: '/' },
-        { label: 'Stack Details', path: location.pathname },
-        { label: tabLabel, path: `${location.pathname}?tab=${tab}` },
+        { label: stackName, path: stackPath },
+        { label: tabLabel, path: `${stackPath}/${tab}` },
       ]
     }
     if (path === '/settings') {
@@ -119,7 +127,7 @@ export function Header() {
   return (
     <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center gap-2 border-b bg-background/90 backdrop-blur-sm px-4">
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="icon" onClick={toggleSidebar} aria-label="Toggle sidebar" title="Toggle sidebar">
+        <Button variant="ghost" size="icon" className="md:hidden" onClick={toggleSidebar} aria-label="Toggle sidebar" title="Toggle sidebar">
           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="4" x2="20" y1="12" y2="12" />
             <line x1="4" x2="20" y1="6" y2="6" />
@@ -186,7 +194,7 @@ export function Header() {
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label={`Current theme: ${theme}. Click to change theme`}>
+            <Button variant="ghost" size="icon" title={`Theme: ${theme} (click to change)`} aria-label={`Current theme: ${theme}. Click to change theme`}>
               {theme === 'light' && <Sun className="h-5 w-5" />}
               {theme === 'dark' && <Moon className="h-5 w-5" />}
               {theme === 'system' && <Laptop className="h-5 w-5" />}
@@ -211,7 +219,7 @@ export function Header() {
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label="User menu">
+            <Button variant="ghost" size="icon" title="Account" aria-label="User menu">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 width="20"

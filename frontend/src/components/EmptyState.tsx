@@ -7,6 +7,8 @@ interface EmptyStateProps {
   action?: ReactNode
 }
 
+// Neutral "empty tray" illustration. A plain circle-plus reads as an actionable
+// "add" button (ST-7); an inbox glyph reads as "nothing here yet" instead.
 const DefaultIcon = () => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
@@ -19,10 +21,10 @@ const DefaultIcon = () => (
     strokeLinecap="round"
     strokeLinejoin="round"
     className="text-muted-foreground"
+    aria-hidden="true"
   >
-    <circle cx="12" cy="12" r="10" />
-    <path d="M12 8v8" />
-    <path d="M8 12h8" />
+    <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+    <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
   </svg>
 )
 

@@ -327,6 +327,12 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
 
   const isRestoring = stream.status === 'running' || restoreMutation.isPending
 
+  // Reconcile the two panels: if backups have succeeded but no snapshots are listed, the empty
+  // state must not imply nothing has happened (the ST-3 contradiction).
+  const hasSuccessfulBackupRuns = runs.some(
+    (r) => r.kind === 'backup' && (r.status === 'success' || r.status === 'partial') && r.stacksOk > 0,
+  )
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
@@ -364,10 +370,17 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
         )}
 
         {!snapshotsLoading && !snapshotsError && (!snapshots || snapshots.length === 0) && (
-          <EmptyState
-            title="No snapshots yet"
-            description="No restic snapshots found for this stack. Run a backup to create the first one."
-          />
+          hasSuccessfulBackupRuns ? (
+            <EmptyState
+              title="No snapshots listed"
+              description="Recent runs report success, but no snapshots are in the repository right now. The repository may be unavailable or was reset, check the Backup settings and repository."
+            />
+          ) : (
+            <EmptyState
+              title="No snapshots yet"
+              description="No restic snapshots found for this stack. Run a backup to create the first one."
+            />
+          )
         )}
 
         {snapshots && snapshots.length > 0 && (
@@ -435,7 +448,9 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
                   <th className="py-2 px-4 text-left font-medium text-muted-foreground">Kind</th>
                   <th className="py-2 px-4 text-left font-medium text-muted-foreground">Trigger</th>
                   <th className="py-2 px-4 text-left font-medium text-muted-foreground">Status</th>
-                  <th className="py-2 px-4 text-left font-medium text-muted-foreground">Added</th>
+                  <th className="py-2 px-4 text-left font-medium text-muted-foreground">
+                    <span title="New data written to the repository. restic deduplicates, so an unchanged backup adds little or nothing.">New data</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -448,7 +463,13 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
                       <RunStatusBadge status={run.status} />
                     </td>
                     <td className="py-3 px-4 text-muted-foreground">
-                      {run.bytesAdded != null ? formatBytes(run.bytesAdded) : '—'}
+                      {run.bytesAdded == null ? (
+                        <span title="Not recorded">—</span>
+                      ) : run.bytesAdded === 0 ? (
+                        'No change'
+                      ) : (
+                        formatBytes(run.bytesAdded)
+                      )}
                     </td>
                   </tr>
                 ))}

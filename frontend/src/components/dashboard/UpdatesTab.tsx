@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
-import { RefreshCw, Download, ArrowUpDown, History, Settings, DatabaseBackup } from 'lucide-react'
+import { RefreshCw, Download, ArrowUpDown, Settings } from 'lucide-react'
 import { toast } from 'sonner'
 import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
@@ -17,7 +17,6 @@ import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { UpdateLogTab } from '@/components/dashboard/UpdateLogTab'
-import { BackupStatusCard } from '@/components/dashboard/BackupStatusCard'
 import type { ContainerUpdateInfo, CachedUpdate, AutoUpdatePolicy } from '@/types'
 import { formatRelativeTime } from '@/lib/format'
 
@@ -341,13 +340,8 @@ export function UpdatesTab() {
             </Badge>
           )}
         </TabsTrigger>
-        <TabsTrigger value="log" className="gap-1.5">
-          <History className="h-3.5 w-3.5" />
+        <TabsTrigger value="log">
           Update Log
-        </TabsTrigger>
-        <TabsTrigger value="backup" className="gap-1.5">
-          <DatabaseBackup className="h-3.5 w-3.5" />
-          Backup
         </TabsTrigger>
       </TabsList>
 
@@ -357,10 +351,6 @@ export function UpdatesTab() {
 
       <TabsContent value="log" className="mt-4">
         <UpdateLogTab />
-      </TabsContent>
-
-      <TabsContent value="backup" className="mt-4">
-        <BackupStatusCard />
       </TabsContent>
     </Tabs>
   )

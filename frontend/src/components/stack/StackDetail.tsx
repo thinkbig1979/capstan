@@ -65,13 +65,8 @@ function OverviewTabContent({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h3 className="mb-3 text-lg font-semibold">Containers</h3>
-        <ContainerList
-          containers={stack.containers || []}
-        />
-      </div>
-
+      {/* Action bar sits directly under the tabs so Start is the obvious next step on a
+          stopped stack, rather than being orphaned below the container list. */}
       <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="outline"
@@ -140,6 +135,13 @@ function OverviewTabContent({
           <span className="text-sm text-muted-foreground">Backup</span>
           <BackupToggle stackId={stack.id} />
         </div>
+      </div>
+
+      <div>
+        <h3 className="mb-3 text-lg font-semibold">Containers</h3>
+        <ContainerList
+          containers={stack.containers || []}
+        />
       </div>
     </div>
   )

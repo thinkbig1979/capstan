@@ -62,4 +62,35 @@ describe('ConfirmDialog', () => {
     )
     expect(screen.getByText('Delete')).toBeInTheDocument()
   })
+
+  it('keeps confirm disabled until the required text is typed (X-1)', () => {
+    const onConfirm = vi.fn()
+    render(
+      <ConfirmDialog
+        open={true}
+        onOpenChange={() => {}}
+        title="Delete Stack?"
+        description="Irreversible"
+        confirmText="Delete"
+        onConfirm={onConfirm}
+        isDangerous
+        requireConfirmationText="my-stack"
+      />
+    )
+    const confirmBtn = screen.getByText('Delete').closest('button')!
+    expect(confirmBtn).toBeDisabled()
+
+    // Wrong text keeps it disabled
+    const input = screen.getByLabelText('Type my-stack to confirm')
+    fireEvent.change(input, { target: { value: 'wrong' } })
+    expect(confirmBtn).toBeDisabled()
+    fireEvent.click(confirmBtn)
+    expect(onConfirm).not.toHaveBeenCalled()
+
+    // Exact match enables it
+    fireEvent.change(input, { target: { value: 'my-stack' } })
+    expect(confirmBtn).toBeEnabled()
+    fireEvent.click(confirmBtn)
+    expect(onConfirm).toHaveBeenCalledOnce()
+  })
 })

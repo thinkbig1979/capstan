@@ -1,3 +1,17 @@
+/**
+ * Error-feedback convention (X-2). Use ONE channel per failure, never both:
+ *
+ *  - INLINE — for in-context form/validation/auth failures, next to the field or
+ *    submit button the user is looking at (e.g. LoginForm/AuthPage, the compose
+ *    editor lint panel). The user's attention is already there; a toast would
+ *    duplicate it.
+ *  - TOAST  — for background/async action outcomes the user fired and looked away
+ *    from (start/stop/restart, prune, delete, save-then-navigate). Success toasts
+ *    follow the same rule.
+ *
+ * When a mutation both has an inline surface AND navigates/runs in the background,
+ * prefer inline for the validation phase and a toast only for the async result.
+ */
 export type ErrorType = 'network' | 'auth' | 'validation' | 'server' | 'timeout' | 'unknown'
 
 export interface AppError {

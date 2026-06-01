@@ -412,3 +412,69 @@ func TestNetworkContainerCount(t *testing.T) {
 	failing := fakeNetworkInspector{err: errors.New("inspect boom")}
 	assert.Equal(t, 7, networkContainerCount(ctx, failing, "net-x", 7))
 }
+
+// TestBuildStackStatuses locks in the FLAG 1 follow-up: live stack status +
+// per-stack containers are derived from a single ContainerList snapshot bucketed
+// by compose project, replacing the per-stack `docker compose ps` subprocess
+// fan-out in GET /stacks. Status mirrors the old Status(): all-running ->
+// "running", non-empty-but-not-all-running -> "partial". A project with no
+// containers is simply absent from the map (the caller maps that to stopped/error).
+func TestBuildStackStatuses(t *testing.T) {
+	snapshot := []models.DashboardContainerInfo{
+		{ProjectName: "web", ID: "a1", Name: "web-1", Image: "nginx", State: "running", Status: "Up 2 minutes", Health: "healthy", Ports: []models.PortBinding{{Host: "0.0.0.0:80", Container: "80/tcp", Protocol: "tcp"}}},
+		{ProjectName: "web", ID: "a2", Name: "web-2", Image: "nginx", State: "running", Status: "Up 2 minutes"},
+		{ProjectName: "api", ID: "b1", Name: "api-1", Image: "go", State: "running", Status: "Up 1 hour"},
+		{ProjectName: "api", ID: "b2", Name: "api-2", Image: "go", State: "exited", Status: "Exited (0)"},
+		{ProjectName: "idle", ID: "c1", Name: "idle-1", Image: "busybox", State: "exited", Status: "Exited (0)"},
+		{ProjectName: "", ID: "x1", Name: "orphan", State: "running"}, // no compose project -> ignored
+	}
+
+	got := BuildStackStatuses(snapshot)
+
+	// Only the three labelled projects are present; the unlabelled container is ignored.
+	assert.Len(t, got, 3)
+	_, hasOrphan := got[""]
+	assert.False(t, hasOrphan, "containers without a compose project are ignored")
+
+	// web: every container running -> "running".
+	require.Contains(t, got, "web")
+	assert.Equal(t, "running", got["web"].Status)
+	require.Len(t, got["web"].Containers, 2)
+
+	// api: one running, one exited -> "partial".
+	assert.Equal(t, "partial", got["api"].Status)
+	assert.Len(t, got["api"].Containers, 2)
+
+	// idle: only an exited container -> "partial" (mirrors Status(): non-empty,
+	// not all running; "stopped" is reserved for zero containers).
+	assert.Equal(t, "partial", got["idle"].Status)
+
+	// Field parity: every models.Container field is carried from the snapshot.
+	web1 := got["web"].Containers[0]
+	assert.Equal(t, "a1", web1.ID)
+	assert.Equal(t, "web-1", web1.Name)
+	assert.Equal(t, "nginx", web1.Image)
+	assert.Equal(t, "running", web1.State)
+	assert.Equal(t, "Up 2 minutes", web1.Status)
+	assert.Equal(t, "healthy", web1.Health)
+	require.Len(t, web1.Ports, 1)
+	assert.Equal(t, "0.0.0.0:80", web1.Ports[0].Host)
+}
+
+// TestBuildStackStatuses_SharedProject documents that multiple stacks sharing a
+// compose project name (a messy dev scan, e.g. several docker/ folders -> project
+// "docker") each resolve to that project's containers. This mirrors the current
+// /stacks double-count; in production project names are unique per stack.
+func TestBuildStackStatuses_SharedProject(t *testing.T) {
+	snapshot := []models.DashboardContainerInfo{
+		{ProjectName: "docker", ID: "d1", State: "running"},
+		{ProjectName: "docker", ID: "d2", State: "exited"},
+	}
+	got := BuildStackStatuses(snapshot)
+	assert.Equal(t, "partial", got["docker"].Status)
+	assert.Len(t, got["docker"].Containers, 2)
+}
+
+func TestBuildStackStatuses_Empty(t *testing.T) {
+	assert.Empty(t, BuildStackStatuses(nil))
+}

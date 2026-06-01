@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
+import { BackupStatusCard } from '@/components/dashboard/BackupStatusCard'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { EnvUnlockStatus } from '@/components/EnvUnlockStatus'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
@@ -225,8 +226,18 @@ export function BackupSettingsContent() {
 
   const isSaving = updateSettings.isPending
 
+  // Edits live only in `draft`/`password` until saved; compare against the last
+  // persisted server values to know whether anything is pending.
+  const pendingChanges = buildPayload(settings, draft, password)
+  const isDirty = Object.keys(pendingChanges).length > 0
+
+  const handleDiscard = () => {
+    setDraft(toDraft(settings))
+    setPassword('')
+  }
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-20">
       {/* Engine availability banner */}
       {(!settings.resticAvailable || !settings.rcloneAvailable) && (
         <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-4">
@@ -263,6 +274,9 @@ export function BackupSettingsContent() {
         }}
         onUnlocked={handleUnlocked}
       />
+
+      {/* ── Status ─────────────────────────────────────────────────────────── */}
+      <BackupStatusCard />
 
       {/* ── Repository ─────────────────────────────────────────────────────── */}
       <div className="space-y-4">
@@ -398,6 +412,9 @@ export function BackupSettingsContent() {
             </div>
           ))}
         </div>
+        <p className="text-xs text-muted-foreground">
+          Number of snapshots to keep at each interval. 0 = keep none for that interval.
+        </p>
 
         <div className="flex items-center gap-3">
           <Switch
@@ -516,18 +533,35 @@ export function BackupSettingsContent() {
         </Button>
       </div>
 
-      {/* ── Save ───────────────────────────────────────────────────────────── */}
-      <div className="pt-4 border-t">
-        <Button type="button" onClick={handleSave} disabled={isSaving}>
-          {isSaving ? (
+      {/* ── Sticky save bar ────────────────────────────────────────────────── */}
+      <div className="sticky bottom-0 -mx-1 mt-2 flex items-center justify-between gap-3 border-t bg-background/95 px-1 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          {isDirty ? (
             <>
-              <span className="mr-2"><LoadingSpinner size="small" /></span>
-              Saving…
+              <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" aria-hidden="true" />
+              Unsaved changes
             </>
           ) : (
-            'Save Backup Settings'
+            'All changes saved. Fields show the last saved value; edits apply only after you Save.'
           )}
-        </Button>
+        </p>
+        <div className="flex items-center gap-2">
+          {isDirty && (
+            <Button type="button" variant="ghost" onClick={handleDiscard} disabled={isSaving}>
+              Discard
+            </Button>
+          )}
+          <Button type="button" onClick={handleSave} disabled={isSaving || !isDirty}>
+            {isSaving ? (
+              <>
+                <span className="mr-2"><LoadingSpinner size="small" /></span>
+                Saving…
+              </>
+            ) : (
+              'Save Backup Settings'
+            )}
+          </Button>
+        </div>
       </div>
     </div>
   )

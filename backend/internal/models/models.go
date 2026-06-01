@@ -192,6 +192,8 @@ type DockerVolume struct {
 	Driver     string `json:"driver"`
 	Mountpoint string `json:"mountpoint"`
 	Size       int64  `json:"size"`
+	SizeKnown  bool   `json:"sizeKnown"`
+	InUse      bool   `json:"inUse"`
 	Created    string `json:"created"`
 	Stack      string `json:"stack"`
 }

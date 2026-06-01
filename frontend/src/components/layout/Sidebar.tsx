@@ -9,17 +9,13 @@ import { stacksApi, settingsApi } from "@/lib/api";
 import {
   Search,
   X,
-  Play,
-  Square,
-  AlertTriangle,
-  HelpCircle,
-  Minus,
   ChevronDown,
   ChevronRight,
   ArrowUpDown,
   Boxes,
   FolderOpen,
   PanelLeftOpen,
+  PanelLeftClose,
   LayoutDashboard,
   Settings,
 } from "lucide-react";
@@ -31,15 +27,14 @@ import {
 } from "@/lib/stack-tree";
 import type { Stack, StackStatus } from "@/types";
 
-const statusIcon: Record<
-  StackStatus,
-  { icon: React.ComponentType<{ className?: string }>; className: string }
-> = {
-  running: { icon: Play, className: "text-success" },
-  partial: { icon: Minus, className: "text-warning" },
-  stopped: { icon: Square, className: "text-muted-foreground" },
-  error: { icon: AlertTriangle, className: "text-destructive" },
-  unknown: { icon: HelpCircle, className: "text-muted-foreground" },
+// Filled status dot per stack status (a pip, not the old outlined Square icon which read as a
+// selection checkbox). Vocabulary matches the Running/Stopped/Error legend.
+const statusDotColor: Record<StackStatus, string> = {
+  running: "bg-success",
+  partial: "bg-warning",
+  stopped: "bg-muted-foreground",
+  error: "bg-destructive",
+  unknown: "bg-muted-foreground",
 };
 
 
@@ -245,8 +240,7 @@ export function Sidebar() {
 
   const renderStack = (stack: Stack) => {
     const isActive = location.pathname.startsWith(`/stacks/${stack.id}`);
-    const cfg = statusIcon[stack.status] || statusIcon.unknown;
-    const Icon = cfg.icon;
+    const dotColor = statusDotColor[stack.status] || statusDotColor.unknown;
     return (
       <Link
         key={stack.id}
@@ -258,14 +252,14 @@ export function Sidebar() {
         }`}
         aria-label={`${stack.projectName} - ${stack.status}`}
       >
-        <Icon className={`h-3.5 w-3.5 shrink-0 ${cfg.className}`} />
+        <span className={`h-2 w-2 rounded-full shrink-0 ${dotColor}`} aria-hidden="true" />
         <span className="flex-1 truncate">{stack.projectName}</span>
-        {stack.containerCount != null && stack.containerCount > 0 && (
+        {!!stack.containers?.length && (
           <Badge
             variant="secondary"
             className="h-4 min-w-5 px-1 text-[10px] leading-none"
           >
-            {stack.containerCount}
+            {stack.containers.length}
           </Badge>
         )}
         {stack.isGitRepo && stack.gitDirty && (
@@ -377,9 +371,10 @@ export function Sidebar() {
             size="icon"
             className="h-6 w-6"
             onClick={toggleSidebar}
-            aria-label="Close sidebar"
+            aria-label="Collapse sidebar"
+            title="Collapse sidebar"
           >
-            <X className="h-3.5 w-3.5" />
+            <PanelLeftClose className="h-3.5 w-3.5" />
           </Button>
         </div>
 

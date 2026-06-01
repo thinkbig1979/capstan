@@ -121,7 +121,6 @@ export interface Stack {
   envFile?: string
   projectName: string
   status: StackStatus
-  containerCount?: number
   isGitRepo: boolean
   gitBranch?: string
   gitCommit?: string
@@ -200,6 +199,8 @@ export interface DockerVolume {
   driver: string
   mountpoint: string
   size: number
+  sizeKnown: boolean
+  inUse: boolean
   created: string
   stack: string
 }

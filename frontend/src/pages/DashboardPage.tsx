@@ -28,7 +28,7 @@ import { useConfirm } from '@/components/ConfirmDialog'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 
 type SortOption = 'name' | 'status'
-type StatusFilter = 'all' | 'running' | 'stopped'
+type StatusFilter = 'all' | 'running' | 'stopped' | 'error'
 
 export function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -45,7 +45,7 @@ export function DashboardPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [isRefreshing, setIsRefreshing] = useState(false)
 
-  const { aggregates, latestMetrics, isConnected: metricsConnected } = useDashboardMetrics()
+  const { aggregates, latestMetrics, isConnected: metricsConnected, ws: metricsWs } = useDashboardMetrics()
 
   useEffect(() => {
     const savedSort = localStorage.getItem('dashboard-sort') as SortOption
@@ -111,7 +111,7 @@ export function DashboardPage() {
 
   const runningCount = stacks?.filter((s) => s.status === 'running').length || 0
   const stoppedCount = stacks?.filter((s) => s.status === 'stopped').length || 0
-  const containerCount = stacks?.reduce((sum, s) => sum + (s.containers?.length || s.containerCount || 0), 0) || 0
+  const containerCount = stacks?.reduce((sum, s) => sum + (s.containers?.length || 0), 0) || 0
 
   const isLoading = isLoadingDirectories || isLoadingStacks
 
@@ -136,11 +136,14 @@ export function DashboardPage() {
 
   const filterStacks = (stacksList: typeof stacks) => {
     if (!stacksList) return []
+    // Exact status match, mirroring the sidebar filter so the two surfaces agree.
     switch (statusFilter) {
       case 'running':
         return stacksList.filter((s) => s.status === 'running')
       case 'stopped':
-        return stacksList.filter((s) => s.status !== 'running')
+        return stacksList.filter((s) => s.status === 'stopped')
+      case 'error':
+        return stacksList.filter((s) => s.status === 'error')
       case 'all':
       default:
         return stacksList
@@ -263,6 +266,9 @@ export function DashboardPage() {
         onRefresh={handleRefresh}
         onCreateStack={() => setCreateDialogOpen(true)}
         isRefreshing={isRefreshing}
+        subtitle={stacks
+          ? `${stacks.length} ${stacks.length === 1 ? 'stack' : 'stacks'} · ${runningCount} running · ${containerCount} ${containerCount === 1 ? 'container' : 'containers'}`
+          : undefined}
       />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -327,7 +333,7 @@ export function DashboardPage() {
 
         <TabsContent value="containers" className="mt-4">
           <ErrorBoundary>
-            <ContainersOverviewTab stats={dashboardStats} latestMetrics={latestMetrics} />
+            <ContainersOverviewTab stats={dashboardStats} latestMetrics={latestMetrics} metricsStatus={metricsWs.status} />
           </ErrorBoundary>
         </TabsContent>
 
