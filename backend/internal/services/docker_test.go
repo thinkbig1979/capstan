@@ -478,3 +478,32 @@ func TestBuildStackStatuses_SharedProject(t *testing.T) {
 func TestBuildStackStatuses_Empty(t *testing.T) {
 	assert.Empty(t, BuildStackStatuses(nil))
 }
+
+// TestSelectUpdates pins the update-detection decision after the multi-arch fix.
+// The old code ran `docker manifest inspect --verbose`, which returns a JSON array
+// for multi-arch images, then unmarshalled it into a single struct — failing and
+// silently skipping every multi-arch image, so nothing was ever reported. The new
+// path compares the local RepoDigest against a remote index digest per ref.
+func TestSelectUpdates(t *testing.T) {
+	candidates := []updateCandidate{
+		// Remote differs from local -> a real update (the multi-arch case the old
+		// code never surfaced; mirrors postgres:16-alpine local 93d5 vs remote 16bc).
+		{info: models.ContainerUpdateInfo{ContainerName: "db", ImageRef: "postgres:16-alpine"}, localDigest: "sha256:93d5"},
+		// Remote equals local -> up to date, not reported.
+		{info: models.ContainerUpdateInfo{ContainerName: "web", ImageRef: "nginx:latest"}, localDigest: "sha256:aaaa"},
+		// Remote digest unavailable (fetch failed) -> must NOT be reported as an
+		// update, so a registry hiccup never produces a false positive.
+		{info: models.ContainerUpdateInfo{ContainerName: "cache", ImageRef: "redis:7"}, localDigest: "sha256:bbbb"},
+	}
+	remote := map[string]string{
+		"postgres:16-alpine": "sha256:16bc",
+		"nginx:latest":       "sha256:aaaa",
+		// redis:7 intentionally absent.
+	}
+
+	got := selectUpdates(candidates, remote)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "postgres:16-alpine", got[0].ImageRef)
+	assert.Equal(t, "db", got[0].ContainerName)
+}

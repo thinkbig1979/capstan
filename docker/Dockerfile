@@ -101,6 +101,7 @@ WORKDIR /app
 RUN apk add --no-cache \
     ca-certificates \
     docker-cli \
+    docker-cli-buildx \
     docker-cli-compose \
     git \
     openssh-client \

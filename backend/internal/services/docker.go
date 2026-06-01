@@ -1000,34 +1000,53 @@ func (s *DockerService) PruneBuildCache(ctx context.Context) (*types.BuildCacheP
 	return s.client.BuildCachePrune(ctx, types.BuildCachePruneOptions{All: true})
 }
 
+// updateCandidate pairs a container's pre-built update metadata with the local
+// image index digest (from RepoDigests) used to detect whether a newer image
+// exists at the registry.
+type updateCandidate struct {
+	info        models.ContainerUpdateInfo
+	localDigest string
+}
+
+// selectUpdates returns the candidates whose remote index digest differs from the
+// local one. A ref absent from remoteDigests (its fetch failed) is skipped rather
+// than reported, so a registry hiccup never produces a false "update available".
+func selectUpdates(candidates []updateCandidate, remoteDigests map[string]string) []models.ContainerUpdateInfo {
+	var result []models.ContainerUpdateInfo
+	for _, c := range candidates {
+		remote, ok := remoteDigests[c.info.ImageRef]
+		if !ok || remote == "" {
+			continue
+		}
+		if remote != c.localDigest {
+			result = append(result, c.info)
+		}
+	}
+	return result
+}
+
+// remoteIndexDigest fetches the registry's current index (manifest-list) digest
+// for a tag via buildx imagetools, which prints it directly — apples-to-apples
+// with the local RepoDigest. Replaces `docker manifest inspect --verbose`, whose
+// output is a per-platform JSON array for multi-arch images (so the previous
+// single-object parse silently dropped nearly every real image). Overridable in
+// tests.
+var remoteIndexDigest = func(ctx context.Context, ref string) (string, error) {
+	out, err := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", ref, "--format", "{{.Manifest.Digest}}").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]models.ContainerUpdateInfo, error) {
 	containers, err := s.client.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("listing containers: %w", err)
 	}
 
-	type imgInfo struct {
-		ref          string
-		localDigest  string
-		remoteDigest string
-		checked      bool
-	}
-
-	imageMap := make(map[string]*imgInfo)
-
-	type cInfo struct {
-		id          string
-		name        string
-		imageID     string
-		imageRef    string
-		localDigest string
-		state       string
-		stackID     string
-		project     string
-		service     string
-		isCompose   bool
-	}
-	var allContainers []cInfo
+	uniqueRefs := make(map[string]struct{})
+	var candidates []updateCandidate
 
 	for _, c := range containers {
 		name := ""
@@ -1062,12 +1081,7 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 			continue
 		}
 
-		if _, exists := imageMap[imageRef]; !exists {
-			imageMap[imageRef] = &imgInfo{
-				ref:         imageRef,
-				localDigest: localDigest,
-			}
-		}
+		uniqueRefs[imageRef] = struct{}{}
 
 		var stackID string
 		projectName := c.Labels["com.docker.compose.project"]
@@ -1079,84 +1093,53 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 			}
 		}
 
-		allContainers = append(allContainers, cInfo{
-			id:          c.ID,
-			name:        name,
-			imageID:     c.ImageID,
-			imageRef:    imageRef,
+		candidates = append(candidates, updateCandidate{
 			localDigest: localDigest,
-			state:       c.State,
-			stackID:     stackID,
-			project:     projectName,
-			service:     serviceName,
-			isCompose:   projectName != "",
+			info: models.ContainerUpdateInfo{
+				ContainerID:   c.ID,
+				ContainerName: name,
+				Image:         imageRef,
+				ImageRef:      imageRef,
+				State:         c.State,
+				StackID:       stackID,
+				ProjectName:   projectName,
+				ServiceName:   serviceName,
+				IsCompose:     projectName != "",
+			},
 		})
 	}
 
+	// Fetch each unique tag's remote index digest concurrently. A failed fetch
+	// just leaves the ref out of the map, so selectUpdates skips it.
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 5)
+	remoteDigests := make(map[string]string)
 
-	for ref, info := range imageMap {
+	for ref := range uniqueRefs {
 		wg.Add(1)
-		go func(ref string, info *imgInfo) {
+		go func(ref string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			manifestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
-			output, err := exec.CommandContext(manifestCtx, "docker", "manifest", "inspect", "--verbose", ref).Output()
-			if err != nil {
-				slog.Debug("Failed to inspect manifest", "image", ref, "error", err)
-				return
-			}
-
-			var manifest struct {
-				Descriptor struct {
-					Digest string `json:"digest"`
-				} `json:"Descriptor"`
-			}
-			if err := json.Unmarshal(output, &manifest); err != nil {
-				slog.Debug("Failed to parse manifest", "image", ref, "error", err)
-				return
-			}
-
-			if manifest.Descriptor.Digest == "" {
+			digest, err := remoteIndexDigest(fetchCtx, ref)
+			if err != nil || digest == "" {
+				slog.Debug("Failed to fetch remote image digest", "image", ref, "error", err)
 				return
 			}
 
 			mu.Lock()
-			info.remoteDigest = manifest.Descriptor.Digest
-			info.checked = true
+			remoteDigests[ref] = digest
 			mu.Unlock()
-		}(ref, info)
+		}(ref)
 	}
 	wg.Wait()
 
-	var result []models.ContainerUpdateInfo
-	for _, c := range allContainers {
-		info, ok := imageMap[c.imageRef]
-		if !ok || !info.checked {
-			continue
-		}
-		if info.remoteDigest != c.localDigest {
-			result = append(result, models.ContainerUpdateInfo{
-				ContainerID:   c.id,
-				ContainerName: c.name,
-				Image:         c.imageRef,
-				ImageRef:      c.imageRef,
-				State:         c.state,
-				StackID:       c.stackID,
-				ProjectName:   c.project,
-				ServiceName:   c.service,
-				IsCompose:     c.isCompose,
-			})
-		}
-	}
-
-	return result, nil
+	return selectUpdates(candidates, remoteDigests), nil
 }
 
 func (s *DockerService) UpdateContainer(ctx context.Context, containerID string, db DashboardDB) (models.UpdateResult, error) {
