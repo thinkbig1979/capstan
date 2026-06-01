@@ -161,6 +161,42 @@ func TestComposeUnreadable(t *testing.T) {
 	assert.True(t, composeUnreadable(missingDir), "unreadable/missing dir -> error")
 }
 
+// TestApplyLiveStatus_GetMatchesList pins the shared snapshot-resolution logic
+// that both List and Get use, so a stack's detail page agrees with its row in the
+// list. A project present in the snapshot takes the live status + containers; a
+// container-less project resolves to "stopped" (readable compose) or "error"
+// (unreadable compose) -- never the old `docker compose ps` "unknown".
+func TestApplyLiveStatus_GetMatchesList(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services: {}\n"), 0o644))
+
+	// Project present in snapshot -> live status + reconstructed containers.
+	live := map[string]services.LiveStatus{
+		"proj-default": {
+			Status:     "running",
+			Containers: []models.Container{{ID: "abc", Name: "web", Image: "nginx", State: "running", Status: "Up 2 hours", Health: "healthy"}},
+		},
+	}
+	present := models.Stack{Directory: dir, ComposeFile: "compose.yaml", ProjectName: "proj-default", Status: "stale"}
+	applyLiveStatus(&present, live)
+	assert.Equal(t, "running", present.Status)
+	require.Len(t, present.Containers, 1)
+	assert.Equal(t, "web", present.Containers[0].Name)
+	assert.Equal(t, "healthy", present.Containers[0].Health)
+
+	// No live containers, readable compose -> stopped.
+	stopped := models.Stack{Directory: dir, ComposeFile: "compose.yaml", ProjectName: "proj-default", Status: "running"}
+	applyLiveStatus(&stopped, map[string]services.LiveStatus{})
+	assert.Equal(t, "stopped", stopped.Status)
+	assert.Nil(t, stopped.Containers)
+
+	// No live containers, unreadable compose -> error (the old Get returned "unknown").
+	broken := models.Stack{Directory: dir, ComposeFile: "missing.yaml", ProjectName: "proj-default", Status: "running"}
+	applyLiveStatus(&broken, map[string]services.LiveStatus{})
+	assert.Equal(t, "error", broken.Status)
+	assert.Nil(t, broken.Containers)
+}
+
 func TestStacksHandler_Get_Success(t *testing.T) {
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)

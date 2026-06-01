@@ -342,20 +342,7 @@ func (h *StacksHandler) List(c *gin.Context) {
 			slog.Error("Failed to derive live stack statuses", "error", err)
 		} else {
 			for i := range stacks {
-				if ls, ok := statuses[stacks[i].ProjectName]; ok && stacks[i].ProjectName != "" {
-					stacks[i].Status = ls.Status
-					stacks[i].Containers = ls.Containers
-					continue
-				}
-				// No live containers for this project. Distinguish a stack that's
-				// simply down ("stopped") from one Capstan can't read ("error") —
-				// the latter is what the old `compose ps` surfaced as "unknown".
-				stacks[i].Containers = nil
-				if composeUnreadable(stacks[i]) {
-					stacks[i].Status = "error"
-				} else {
-					stacks[i].Status = "stopped"
-				}
+				applyLiveStatus(&stacks[i], statuses)
 			}
 		}
 	}
@@ -375,6 +362,25 @@ func composeUnreadable(s models.Stack) bool {
 	return err != nil
 }
 
+// applyLiveStatus resolves a single stack against the shared container snapshot so
+// List and Get agree. A project present in the snapshot takes its live status and
+// reconstructed container list; a container-less project is "error" when its
+// compose file is unreadable (what `docker compose ps` surfaced as "unknown") or
+// "stopped" otherwise.
+func applyLiveStatus(stack *models.Stack, statuses map[string]services.LiveStatus) {
+	if ls, ok := statuses[stack.ProjectName]; ok && stack.ProjectName != "" {
+		stack.Status = ls.Status
+		stack.Containers = ls.Containers
+		return
+	}
+	stack.Containers = nil
+	if composeUnreadable(*stack) {
+		stack.Status = "error"
+	} else {
+		stack.Status = "stopped"
+	}
+}
+
 func (h *StacksHandler) Get(c *gin.Context) {
 	id := c.Param("id")
 
@@ -389,10 +395,15 @@ func (h *StacksHandler) Get(c *gin.Context) {
 	}
 
 	if h.docker != nil {
-		status, containers, err := h.docker.Status(*stack)
-		if err == nil {
-			stack.Status = status
-			stack.Containers = containers
+		// Derive status from the same single-snapshot path List uses so a stack's
+		// detail page agrees with its list row, instead of the old per-stack
+		// `docker compose ps` subprocess (which returned "unknown" on error). On
+		// snapshot failure we leave the stored DB status untouched, as List does.
+		statuses, err := h.docker.GetStackStatuses(c.Request.Context(), h.db)
+		if err != nil {
+			slog.Error("Failed to derive live stack status", "error", err)
+		} else {
+			applyLiveStatus(stack, statuses)
 		}
 	}
 
