@@ -87,8 +87,24 @@ func (h *ResourcesHandler) deleteImage(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"deleted": resp})
 }
 
+// pruneUntilRegex bounds the `until` filter to a simple Go duration (e.g. "24h",
+// "30m", "168h") so an arbitrary, potentially malicious value never reaches the
+// Docker daemon. The frontend only ever sends hour-based presets.
+var pruneUntilRegex = regexp.MustCompile(`^[0-9]{1,6}(h|m|s)$`)
+
+// parsePruneOptions reads the optional all/until flags shared by every prune
+// endpoint. An invalid `until` is dropped (treated as absent) rather than erroring,
+// keeping prune forgiving — the worst case is a slightly broader prune.
+func parsePruneOptions(c *gin.Context) services.PruneOptions {
+	opts := services.PruneOptions{All: c.Query("all") == "true"}
+	if until := c.Query("until"); pruneUntilRegex.MatchString(until) {
+		opts.Until = until
+	}
+	return opts
+}
+
 func (h *ResourcesHandler) pruneImages(c *gin.Context) {
-	report, err := h.docker.PruneImages(c.Request.Context())
+	report, err := h.docker.PruneImages(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune images", "error", err)
 		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to prune images"))
@@ -162,7 +178,7 @@ func (h *ResourcesHandler) deleteContainer(c *gin.Context) {
 }
 
 func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
-	report, err := h.docker.PruneContainers(c.Request.Context())
+	report, err := h.docker.PruneContainers(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune containers", "error", err)
 		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to prune containers"))
@@ -222,7 +238,7 @@ func (h *ResourcesHandler) deleteVolume(c *gin.Context) {
 }
 
 func (h *ResourcesHandler) pruneVolumes(c *gin.Context) {
-	report, err := h.docker.PruneVolumes(c.Request.Context())
+	report, err := h.docker.PruneVolumes(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune volumes", "error", err)
 		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to prune volumes"))
@@ -301,7 +317,7 @@ func (h *ResourcesHandler) deleteNetwork(c *gin.Context) {
 }
 
 func (h *ResourcesHandler) pruneNetworks(c *gin.Context) {
-	report, err := h.docker.PruneNetworks(c.Request.Context())
+	report, err := h.docker.PruneNetworks(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune networks", "error", err)
 		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to prune networks"))
@@ -328,7 +344,7 @@ func (h *ResourcesHandler) listBuildCache(c *gin.Context) {
 }
 
 func (h *ResourcesHandler) pruneBuildCache(c *gin.Context) {
-	report, err := h.docker.PruneBuildCache(c.Request.Context())
+	report, err := h.docker.PruneBuildCache(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune build cache", "error", err)
 		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to prune build cache"))
@@ -415,9 +431,11 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 	}
 
 	if len(cachedUpdates) == 0 {
+		lastScanAt, _ := h.db.GetSetting("update_scan_last_run")
 		c.JSON(http.StatusOK, gin.H{
 			"updates":   []models.ContainerUpdateInfo{},
 			"fromCache": false,
+			"scannedAt": lastScanAt,
 			"scanning":  isScanning,
 		})
 		return

@@ -356,6 +356,22 @@ export const directoryConfigApi = {
   },
 }
 
+// Options shared by every prune endpoint. `all` widens prune beyond
+// dangling/anonymous (docker `-a`); `until` is an age filter like "24h".
+// Each endpoint only honours the flags Docker supports for that resource.
+export interface PruneOptions {
+  all?: boolean
+  until?: string
+}
+
+function pruneQuery(opts?: PruneOptions): string {
+  const params = new URLSearchParams()
+  if (opts?.all) params.set('all', 'true')
+  if (opts?.until) params.set('until', opts.until)
+  const qs = params.toString()
+  return qs ? `?${qs}` : ''
+}
+
 export const resourcesApi = {
   images: async () => {
     const response = await apiClient.get<{ images: DockerImage[] }>('/resources/images')
@@ -365,8 +381,8 @@ export const resourcesApi = {
     const response = await apiClient.delete<{ deleted: unknown[] }>(`/resources/images/${encodeURIComponent(id)}?force=${force}`)
     return response.data
   },
-  pruneImages: async () => {
-    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>('/resources/images/prune')
+  pruneImages: async (opts?: PruneOptions) => {
+    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>(`/resources/images/prune${pruneQuery(opts)}`)
     return response.data
   },
 
@@ -395,8 +411,8 @@ export const resourcesApi = {
     const response = await apiClient.post<{ message: string }>(`/resources/containers/${encodeURIComponent(id)}/restart`)
     return response.data
   },
-  pruneContainers: async () => {
-    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>('/resources/containers/prune')
+  pruneContainers: async (opts?: PruneOptions) => {
+    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>(`/resources/containers/prune${pruneQuery(opts)}`)
     return response.data
   },
 
@@ -440,8 +456,8 @@ export const resourcesApi = {
     const response = await apiClient.delete<{ deleted: string }>(`/resources/volumes/${encodeURIComponent(name)}?force=${force}`)
     return response.data
   },
-  pruneVolumes: async () => {
-    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>('/resources/volumes/prune')
+  pruneVolumes: async (opts?: PruneOptions) => {
+    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>(`/resources/volumes/prune${pruneQuery(opts)}`)
     return response.data
   },
 
@@ -457,8 +473,8 @@ export const resourcesApi = {
     const response = await apiClient.delete<{ deleted: string }>(`/resources/networks/${encodeURIComponent(id)}`)
     return response.data
   },
-  pruneNetworks: async () => {
-    const response = await apiClient.post<{ deleted: string[] }>('/resources/networks/prune')
+  pruneNetworks: async (opts?: PruneOptions) => {
+    const response = await apiClient.post<{ deleted: string[] }>(`/resources/networks/prune${pruneQuery(opts)}`)
     return response.data
   },
 
@@ -466,8 +482,8 @@ export const resourcesApi = {
     const response = await apiClient.get<{ entries: BuildCacheEntry[] }>('/resources/build-cache')
     return response.data.entries
   },
-  pruneBuildCache: async () => {
-    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>('/resources/build-cache/prune')
+  pruneBuildCache: async (opts?: PruneOptions) => {
+    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>(`/resources/build-cache/prune${pruneQuery(opts)}`)
     return response.data
   },
 }

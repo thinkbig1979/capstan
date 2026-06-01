@@ -936,24 +936,55 @@ func (s *DockerService) DeleteContainer(ctx context.Context, containerID string,
 	return s.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force})
 }
 
-func (s *DockerService) PruneContainers(ctx context.Context) (types.ContainersPruneReport, error) {
-	return s.client.ContainersPrune(ctx, filters.NewArgs())
+// PruneOptions carries the optional flags a prune action can apply. Not every
+// field is meaningful for every resource (e.g. Docker's volume prune has no
+// "until" filter, and container prune has no "all"); handlers only populate the
+// fields that apply and the methods below ignore the rest.
+type PruneOptions struct {
+	// All removes everything unused, not just dangling/anonymous (docker `-a`).
+	All bool
+	// Until restricts pruning to objects created before the given age, expressed
+	// as a Go duration string (e.g. "24h"). Empty means no age filter.
+	Until string
+}
+
+func (s *DockerService) PruneContainers(ctx context.Context, opts PruneOptions) (types.ContainersPruneReport, error) {
+	f := filters.NewArgs()
+	if opts.Until != "" {
+		f.Add("until", opts.Until)
+	}
+	return s.client.ContainersPrune(ctx, f)
 }
 
 func (s *DockerService) DeleteImage(ctx context.Context, imageID string, force bool) ([]image.DeleteResponse, error) {
 	return s.client.ImageRemove(ctx, imageID, image.RemoveOptions{Force: force})
 }
 
-func (s *DockerService) PruneImages(ctx context.Context) (types.ImagesPruneReport, error) {
-	return s.client.ImagesPrune(ctx, filters.NewArgs())
+func (s *DockerService) PruneImages(ctx context.Context, opts PruneOptions) (types.ImagesPruneReport, error) {
+	f := filters.NewArgs()
+	// Docker's default prune only removes dangling (untagged) images. dangling=false
+	// widens it to all unused images (the `docker image prune -a` behaviour).
+	if opts.All {
+		f.Add("dangling", "false")
+	}
+	if opts.Until != "" {
+		f.Add("until", opts.Until)
+	}
+	return s.client.ImagesPrune(ctx, f)
 }
 
 func (s *DockerService) DeleteVolume(ctx context.Context, volumeName string, force bool) error {
 	return s.client.VolumeRemove(ctx, volumeName, force)
 }
 
-func (s *DockerService) PruneVolumes(ctx context.Context) (types.VolumesPruneReport, error) {
-	return s.client.VolumesPrune(ctx, filters.NewArgs())
+func (s *DockerService) PruneVolumes(ctx context.Context, opts PruneOptions) (types.VolumesPruneReport, error) {
+	f := filters.NewArgs()
+	// Default prune only removes anonymous volumes. all=true widens it to every
+	// unused volume (the `docker volume prune -a` behaviour).
+	if opts.All {
+		f.Add("all", "true")
+	}
+	return s.client.VolumesPrune(ctx, f)
 }
 
 func (s *DockerService) DeleteNetwork(ctx context.Context, networkID string) error {
@@ -968,8 +999,12 @@ func (s *DockerService) CreateNetwork(ctx context.Context, name string, opts typ
 	return resp.ID, nil
 }
 
-func (s *DockerService) PruneNetworks(ctx context.Context) (types.NetworksPruneReport, error) {
-	return s.client.NetworksPrune(ctx, filters.NewArgs())
+func (s *DockerService) PruneNetworks(ctx context.Context, opts PruneOptions) (types.NetworksPruneReport, error) {
+	f := filters.NewArgs()
+	if opts.Until != "" {
+		f.Add("until", opts.Until)
+	}
+	return s.client.NetworksPrune(ctx, f)
 }
 
 func (s *DockerService) StartContainer(ctx context.Context, containerID string) error {
@@ -996,8 +1031,12 @@ func (s *DockerService) ListBuildCache(ctx context.Context) ([]*types.BuildCache
 	return du.BuildCache, nil
 }
 
-func (s *DockerService) PruneBuildCache(ctx context.Context) (*types.BuildCachePruneReport, error) {
-	return s.client.BuildCachePrune(ctx, types.BuildCachePruneOptions{All: true})
+func (s *DockerService) PruneBuildCache(ctx context.Context, opts PruneOptions) (*types.BuildCachePruneReport, error) {
+	f := filters.NewArgs()
+	if opts.Until != "" {
+		f.Add("until", opts.Until)
+	}
+	return s.client.BuildCachePrune(ctx, types.BuildCachePruneOptions{All: opts.All, Filters: f})
 }
 
 // updateCandidate pairs a container's pre-built update metadata with the local

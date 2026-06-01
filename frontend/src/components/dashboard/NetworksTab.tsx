@@ -133,7 +133,8 @@ export function NetworksTab() {
             </Button>
             <PruneButton
               resourceType="network"
-              pruneFn={() => resourcesApi.pruneNetworks()}
+              pruneFn={(opts) => resourcesApi.pruneNetworks(opts)}
+              options={{ until: true }}
               confirmMessage="Prune Unused Networks?"
               confirmDescription="All networks not referenced by any container will be permanently removed."
               invalidateKeys={[['resources', 'networks']]}

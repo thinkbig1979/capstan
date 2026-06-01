@@ -113,9 +113,10 @@ export function ImagesTab() {
         actions={
           <PruneButton
             resourceType="image"
-            pruneFn={() => resourcesApi.pruneImages()}
+            pruneFn={(opts) => resourcesApi.pruneImages(opts)}
+            options={{ all: { label: 'Remove all unused images, not just dangling' }, until: true }}
             confirmMessage="Prune Unused Images?"
-            confirmDescription="All images not referenced by any container will be permanently removed."
+            confirmDescription="By default only dangling (untagged) images are removed. Enable 'all unused' to remove every image not used by a container."
             invalidateKeys={[['resources', 'images'], ['dashboard-stats']]}
           />
         }

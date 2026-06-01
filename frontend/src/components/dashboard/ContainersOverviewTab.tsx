@@ -649,7 +649,8 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
         actions={
           <PruneButton
             resourceType="stopped container"
-            pruneFn={() => resourcesApi.pruneContainers()}
+            pruneFn={(opts) => resourcesApi.pruneContainers(opts)}
+            options={{ until: true }}
             confirmMessage="Prune Stopped Containers?"
             confirmDescription="All stopped containers will be permanently removed."
             invalidateKeys={[['dashboard-stats'], ['stacks']]}

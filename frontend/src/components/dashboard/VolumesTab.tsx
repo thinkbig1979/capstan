@@ -109,9 +109,10 @@ export function VolumesTab() {
         actions={
           <PruneButton
             resourceType="volume"
-            pruneFn={() => resourcesApi.pruneVolumes()}
+            pruneFn={(opts) => resourcesApi.pruneVolumes(opts)}
+            options={{ all: { label: 'Remove all unused volumes, not just anonymous' } }}
             confirmMessage="Prune Unused Volumes?"
-            confirmDescription="All volumes not referenced by any container will be permanently removed."
+            confirmDescription="By default only anonymous volumes are removed. Enable 'all unused' to remove every volume not used by a container."
             invalidateKeys={[['resources', 'volumes'], ['dashboard-stats']]}
           />
         }

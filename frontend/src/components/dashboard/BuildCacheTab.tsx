@@ -49,7 +49,7 @@ export function BuildCacheTab() {
 
   const totalSize = entries?.reduce((sum, e) => sum + e.Size, 0) || 0
 
-  const pruneDescription = `This will remove all unused build cache entries${totalSize > 0 ? ` (${formatBytes(totalSize)})` : ''}. This cannot be undone.`
+  const pruneDescription = `Removes unused build cache${totalSize > 0 ? ` (up to ${formatBytes(totalSize)})` : ''}. Enable 'all' to also remove cache that could still be reused. This cannot be undone.`
 
   if (isLoading) {
     return (
@@ -85,9 +85,9 @@ export function BuildCacheTab() {
         onSortChange={(key) => setSortBy(key as SortKey)}
         actions={
           <PruneButton
-            label="Prune All"
             resourceType="cache entry"
-            pruneFn={() => resourcesApi.pruneBuildCache()}
+            pruneFn={(opts) => resourcesApi.pruneBuildCache(opts)}
+            options={{ all: { label: 'Remove all build cache, not just unused' }, until: true }}
             confirmMessage="Prune Build Cache?"
             confirmDescription={pruneDescription}
             invalidateKeys={[['resources', 'build-cache'], ['dashboard-stats']]}

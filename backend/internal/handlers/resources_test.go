@@ -354,3 +354,32 @@ func TestResourcesHandler_RoutesRegistered(t *testing.T) {
 		assert.True(t, routePaths[route], "Expected route %s to be registered", route)
 	}
 }
+
+func TestParsePruneOptions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cases := []struct {
+		name      string
+		query     string
+		wantAll   bool
+		wantUntil string
+	}{
+		{"empty defaults to basic prune", "", false, ""},
+		{"all=true enables all", "all=true", true, ""},
+		{"all other values are false", "all=1", false, ""},
+		{"valid hour until", "until=24h", false, "24h"},
+		{"valid minute until", "until=30m", false, "30m"},
+		{"all and until together", "all=true&until=168h", true, "168h"},
+		{"invalid until is dropped", "until=24x", false, ""},
+		{"injection until is dropped", "until=24h;rm+-rf", false, ""},
+		{"non-numeric until is dropped", "until=lots", false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/prune?"+tc.query, nil)
+			opts := parsePruneOptions(c)
+			assert.Equal(t, tc.wantAll, opts.All)
+			assert.Equal(t, tc.wantUntil, opts.Until)
+		})
+	}
+}
