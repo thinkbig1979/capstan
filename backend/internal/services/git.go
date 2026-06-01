@@ -34,6 +34,12 @@ func NewGitService(cfg *config.Config, db *database.DB) *GitService {
 func (s *GitService) GetStatus(dirPath string) (*models.GitStatusResult, error) {
 	result, err := s.getStatusGoGit(dirPath)
 	if err != nil {
+		// A typed AppError (e.g. the not-a-git-repo 404 from openRepo) is
+		// definitive — returning it as-is keeps GET /git a clean 404 instead of
+		// masking it behind the CLI fallback, whose generic error becomes a 500.
+		if appErr, ok := err.(*models.AppError); ok {
+			return nil, appErr
+		}
 		slog.Debug("go-git failed, falling back to CLI", "path", dirPath, "error", err)
 		return s.getStatusCLI(dirPath)
 	}
@@ -110,7 +116,9 @@ func (s *GitService) getStatusGoGit(dirPath string) (result *models.GitStatusRes
 func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, error) {
 	branch, err := s.gitCommand(dirPath, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		return nil, fmt.Errorf("not a git repository: %w", err)
+		// Typed 404 (not generic) so the handler returns "not a git repo" rather
+		// than a 500 when go-git fell back to here for a non-repo directory.
+		return nil, models.NewAppError(404, models.ErrGitNotRepo, "Not a git repository")
 	}
 
 	commitHash, err := s.gitCommand(dirPath, "rev-parse", "HEAD")
