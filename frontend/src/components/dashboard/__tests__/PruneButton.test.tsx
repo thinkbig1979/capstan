@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { ReactNode } from 'react'
-import { PruneButton } from '../PruneButton'
+import type { ComponentProps, ReactNode } from 'react'
+import { PruneButton, type PruneOptionConfig } from '../PruneButton'
+
+type PruneFnProp = ComponentProps<typeof PruneButton>['pruneFn']
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -14,11 +16,11 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 }
 
-function renderButton(pruneFn: ReturnType<typeof vi.fn>, options?: object) {
+function renderButton(pruneFn: ReturnType<typeof vi.fn>, options?: PruneOptionConfig) {
   return render(
     <PruneButton
       resourceType="image"
-      pruneFn={pruneFn}
+      pruneFn={pruneFn as unknown as PruneFnProp}
       options={options}
       confirmMessage="Prune Unused Images?"
       confirmDescription="desc"
