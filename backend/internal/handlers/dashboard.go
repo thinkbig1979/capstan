@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/gin-gonic/gin"
 )
@@ -43,21 +44,16 @@ func (h *DashboardHandler) getDashboardStats() gin.HandlerFunc {
 			return
 		}
 
-		runningStacks := 0
-		stoppedStacks := 0
-		for _, s := range stacks {
-			if s.Status == "running" {
-				runningStacks++
-			} else {
-				stoppedStacks++
-			}
-		}
-
 		containers, err := h.docker.GetAllContainersWithDetails(ctx, h.db)
 		if err != nil {
 			slog.Error("Failed to get containers for dashboard", "error", err)
 			containers = nil
 		}
+
+		// Derive live stack status from the container snapshot we already fetched,
+		// matched by compose project, instead of a per-stack `docker compose ps`.
+		// This is the same liveness the Stacks view shows, at zero extra cost.
+		runningStacks, stoppedStacks := countLiveStackStatuses(stacks, containers)
 
 		runningContainers := 0
 		for _, ctr := range containers {
@@ -84,6 +80,31 @@ func (h *DashboardHandler) getDashboardStats() gin.HandlerFunc {
 			"containers":        containers,
 		})
 	}
+}
+
+// countLiveStackStatuses reports how many stacks have at least one running
+// container vs none, derived from a single already-fetched container snapshot
+// rather than per-stack `docker compose ps`. Stacks are matched to containers by
+// compose project name: because Docker namespaces compose projects by name,
+// multiple stacks that share a project are each counted against that project's
+// live state (mirroring the Stacks view). running + stopped always equals the
+// total stack count, so the dashboard summary is internally consistent.
+func countLiveStackStatuses(stacks []models.Stack, containers []models.DashboardContainerInfo) (running, stopped int) {
+	runningProjects := make(map[string]struct{}, len(containers))
+	for _, c := range containers {
+		if c.ProjectName != "" && c.State == "running" {
+			runningProjects[c.ProjectName] = struct{}{}
+		}
+	}
+
+	for _, s := range stacks {
+		if _, ok := runningProjects[s.ProjectName]; ok && s.ProjectName != "" {
+			running++
+		} else {
+			stopped++
+		}
+	}
+	return running, stopped
 }
 
 func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, authDisabled bool) gin.HandlerFunc {
