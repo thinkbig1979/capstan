@@ -154,7 +154,7 @@ func main() {
 	defer watcherService.Stop()
 
 	middleware.InitRateLimiters()
-	handlers.InitUpgrader(cfg.CORSOrigins)
+	handlers.InitUpgrader(cfg.CORSOrigins, cfg.AuthDisabled)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()

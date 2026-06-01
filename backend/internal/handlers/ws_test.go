@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -203,4 +205,41 @@ func generateJWTForTest(claims map[string]interface{}, secret string) (string, e
 		claims["jti"].(string),
 		secret,
 	)
+}
+
+func originReq(origin, host string) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/ws/events", nil)
+	r.Host = host
+	if origin != "" {
+		r.Header.Set("Origin", origin)
+	}
+	return r
+}
+
+func TestUpgraderCheckOrigin(t *testing.T) {
+	cases := []struct {
+		name         string
+		corsOrigins  string
+		authDisabled bool
+		origin       string
+		host         string
+		want         bool
+	}{
+		{"no origin header is allowed", "", false, "", "localhost:5001", true},
+		{"same-origin allowed when no allowlist", "", false, "http://localhost:5001", "localhost:5001", true},
+		{"cross-origin denied when auth on and no allowlist", "", false, "http://localhost:3001", "localhost:5001", false},
+		{"dev proxy origin allowed when auth disabled", "", true, "http://localhost:3001", "localhost:5001", true},
+		{"127.0.0.1 dev origin allowed when auth disabled", "", true, "http://127.0.0.1:3001", "localhost:5001", true},
+		{"non-loopback denied even when auth disabled", "", true, "http://evil.example.com", "localhost:5001", false},
+		{"allowlisted origin permitted", "https://capstan.ctsvps.work", false, "https://capstan.ctsvps.work", "capstan.ctsvps.work", true},
+		{"non-allowlisted origin denied", "https://capstan.ctsvps.work", false, "https://evil.example.com", "capstan.ctsvps.work", false},
+		{"allowlist plus auth disabled still allows loopback", "https://capstan.ctsvps.work", true, "http://localhost:3001", "localhost:5001", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			InitUpgrader(tc.corsOrigins, tc.authDisabled)
+			got := upgrader.CheckOrigin(originReq(tc.origin, tc.host))
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }

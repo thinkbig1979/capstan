@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -30,31 +31,54 @@ const (
 
 var upgrader websocket.Upgrader
 
-func InitUpgrader(corsOrigins string) {
+func InitUpgrader(corsOrigins string, authDisabled bool) {
 	upgrader = websocket.Upgrader{
 		ReadBufferSize:  DefaultReadBufferSize,
 		WriteBufferSize: DefaultWriteBufferSize,
 		CheckOrigin: func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
+			// Non-browser clients send no Origin; allow them.
 			if origin == "" {
 				return true
 			}
 
-			if corsOrigins == "" {
-				host := r.Host
-				return origin == "http://"+host || origin == "https://"+host
+			if corsOrigins != "" {
+				// Explicit allowlist (production behind a reverse proxy that sets
+				// CORS_ORIGINS) is authoritative.
+				for _, allowed := range strings.Split(corsOrigins, ",") {
+					if strings.TrimSpace(allowed) == origin {
+						return true
+					}
+				}
+			} else if origin == "http://"+r.Host || origin == "https://"+r.Host {
+				// No allowlist configured: only same-origin (frontend served by the
+				// backend itself) is accepted.
+				return true
 			}
 
-			for _, allowed := range strings.Split(corsOrigins, ",") {
-				allowed = strings.TrimSpace(allowed)
-				if allowed == origin {
-					return true
-				}
+			// Dev convenience: AUTH_DISABLED is the documented trusted-network/dev
+			// mode. The Vite dev server proxies /api to the backend with changeOrigin,
+			// so r.Host (localhost:5001) no longer matches the browser Origin
+			// (localhost:3001) and the same-origin check above fails. Accept loopback
+			// origins in that mode so the stack-events/metrics WebSockets connect.
+			if authDisabled && isLoopbackOrigin(origin) {
+				return true
 			}
 
 			return false
 		},
 	}
+}
+
+// isLoopbackOrigin reports whether an Origin header points at localhost, 127.0.0.1,
+// or [::1] (any port). Used only to relax the WS origin check when auth is disabled.
+func isLoopbackOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 type Connection struct {
