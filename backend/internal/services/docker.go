@@ -809,10 +809,9 @@ func (s *DockerService) ListNetworks(ctx context.Context) ([]models.DockerNetwor
 			}
 		}
 
-		containerCount := 0
-		if net.Containers != nil {
-			containerCount = len(net.Containers)
-		}
+		// NetworkList does not populate net.Containers, so inspect each network to
+		// get the real attachment count that the in-use delete guard relies on.
+		containerCount := networkContainerCount(ctx, s.client, net.ID, len(net.Containers))
 
 		result = append(result, models.DockerNetwork{
 			ID:         net.ID,
@@ -828,6 +827,23 @@ func (s *DockerService) ListNetworks(ctx context.Context) ([]models.DockerNetwor
 	}
 
 	return result, nil
+}
+
+// networkInspector is the subset of the Docker client used to resolve real
+// per-network container attachment counts (NetworkList leaves them empty).
+type networkInspector interface {
+	NetworkInspect(ctx context.Context, networkID string, options types.NetworkInspectOptions) (types.NetworkResource, error)
+}
+
+// networkContainerCount returns the number of containers attached to a network.
+// NetworkList does not populate the Containers map, so we inspect the network;
+// on inspect failure we fall back to whatever the list reported (typically 0).
+func networkContainerCount(ctx context.Context, inspector networkInspector, networkID string, listFallback int) int {
+	inspected, err := inspector.NetworkInspect(ctx, networkID, types.NetworkInspectOptions{})
+	if err != nil {
+		return listFallback
+	}
+	return len(inspected.Containers)
 }
 
 func (s *DockerService) DeleteContainer(ctx context.Context, containerID string, force bool) error {

@@ -1,6 +1,9 @@
 package services
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -374,4 +377,38 @@ func TestDockerService_Status_InvalidProject(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "unknown", status)
 	assert.Nil(t, containers)
+}
+
+// fakeNetworkInspector lets us exercise networkContainerCount without a daemon.
+type fakeNetworkInspector struct {
+	containers map[string]int // networkID -> attached container count
+	err        error
+}
+
+func (f fakeNetworkInspector) NetworkInspect(_ context.Context, networkID string, _ types.NetworkInspectOptions) (types.NetworkResource, error) {
+	if f.err != nil {
+		return types.NetworkResource{}, f.err
+	}
+	res := types.NetworkResource{ID: networkID, Containers: map[string]types.EndpointResource{}}
+	for i := 0; i < f.containers[networkID]; i++ {
+		res.Containers[fmt.Sprintf("c%d", i)] = types.EndpointResource{}
+	}
+	return res, nil
+}
+
+// TestNetworkContainerCount reproduces FLAG 2 (D-3): NetworkList never populates
+// the Containers map, so the list-reported count is always 0 and the in-use delete
+// guard is inert. networkContainerCount must inspect each network to get the real
+// attachment count, and fall back to the list value only when inspect fails.
+func TestNetworkContainerCount(t *testing.T) {
+	ctx := context.Background()
+
+	// Real attachments revealed by inspect, even though the list reported 0.
+	inspector := fakeNetworkInspector{containers: map[string]int{"net-busy": 3, "net-empty": 0}}
+	assert.Equal(t, 3, networkContainerCount(ctx, inspector, "net-busy", 0))
+	assert.Equal(t, 0, networkContainerCount(ctx, inspector, "net-empty", 0))
+
+	// Inspect failure: fall back to whatever the list reported.
+	failing := fakeNetworkInspector{err: errors.New("inspect boom")}
+	assert.Equal(t, 7, networkContainerCount(ctx, failing, "net-x", 7))
 }
