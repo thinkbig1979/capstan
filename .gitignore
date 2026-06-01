@@ -63,5 +63,11 @@ keys/*
 backend/frontend/assets/
 :memory:
 
+# Transient test/report artifacts (already excluded by .dockerignore).
+# Real, curated screenshots belong under Supporting-Docs/, not the repo root.
+/screenshots/
+/scorecard.png
+/reports/
+
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
