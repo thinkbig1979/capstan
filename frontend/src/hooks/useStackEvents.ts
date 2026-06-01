@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useWebSocketJSON } from './useWebSocket'
 import { queryClient } from '@/lib/query-client'
-import { useUpdateScanStore } from '@/stores/updateScanStore'
+import { resolveUpdateScanSuccess, resolveUpdateScanError } from './useResources'
 import type { Stack } from '@/types'
 
 export interface StackStatusEvent {
@@ -131,11 +131,22 @@ export function useStackEvents() {
     scheduleInvalidations(keys)
   }
 
+  // Fast path: the backend broadcasts these when a scan genuinely finishes. The
+  // shared resolvers are gated on an active scan (so a scheduled background scan
+  // doesn't pop a toast nobody asked for) and are idempotent with the watcher's
+  // poll-based completion — whichever fires first wins.
   const handleUpdateScanCompleteEvent = () => {
-    useUpdateScanStore.getState().finishScan()
+    resolveUpdateScanSuccess()
     scheduleInvalidations([
       ['resources', 'updates'],
       ['settings', 'updates'],
+    ])
+  }
+
+  const handleUpdateScanFailedEvent = () => {
+    resolveUpdateScanError()
+    scheduleInvalidations([
+      ['resources', 'updates'],
     ])
   }
 
@@ -176,10 +187,7 @@ export function useStackEvents() {
           handleUpdateScanCompleteEvent()
           break
         case 'update_scan_failed':
-          useUpdateScanStore.getState().finishScan()
-          scheduleInvalidations([
-            ['resources', 'updates'],
-          ])
+          handleUpdateScanFailedEvent()
           break
         case 'update_policy_changed':
           handleUpdatePolicyChangedEvent()

@@ -16,7 +16,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 vi.mock('sonner', () => ({
-  toast: { loading: vi.fn(), success: vi.fn() },
+  toast: { loading: vi.fn(), success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
 }))
 
 import { useCheckUpdates, useUpdateScanWatcher, UPDATE_SCAN_TOAST_ID } from '../useResources'
@@ -27,9 +27,10 @@ function createWrapper() {
       queries: { retry: false, staleTime: 0 },
     },
   })
-  return ({ children }: { children: ReactNode }) => (
+  const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   )
+  return { wrapper, queryClient }
 }
 
 beforeEach(() => {
@@ -45,7 +46,7 @@ describe('useCheckUpdates', () => {
       scanning: true,
     })
 
-    const wrapper = createWrapper()
+    const { wrapper } = createWrapper()
     renderHook(() => useCheckUpdates(), { wrapper })
 
     await waitFor(() => {
@@ -53,8 +54,10 @@ describe('useCheckUpdates', () => {
     })
   })
 
-  it('clears isScanning when response has scanning:false', async () => {
-    // Start with isScanning=true so the finishScan branch is exercised.
+  it('does NOT clear isScanning on a scanning:false poll (it only ever starts a scan)', async () => {
+    // useCheckUpdates surfaces the indicator (startScan) but must never finish a
+    // scan from a poll — completion is owned by useUpdateScanWatcher / the WS event.
+    // A bare scanning:false response must leave an in-flight scan running.
     useUpdateScanStore.setState({ isScanning: true })
 
     mockCheckUpdates.mockResolvedValue({
@@ -63,12 +66,18 @@ describe('useCheckUpdates', () => {
       scanning: false,
     })
 
-    const wrapper = createWrapper()
+    const finishScanSpy = vi.spyOn(useUpdateScanStore.getState(), 'finishScan')
+
+    const { wrapper } = createWrapper()
     renderHook(() => useCheckUpdates(), { wrapper })
 
-    await waitFor(() => {
-      expect(useUpdateScanStore.getState().isScanning).toBe(false)
-    })
+    await waitFor(() => expect(mockCheckUpdates).toHaveBeenCalled())
+    // Let the resolved scanning:false data propagate through the effect — the
+    // buggy code finishes the scan here; the fixed code leaves it running.
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+
+    expect(finishScanSpy).not.toHaveBeenCalled()
+    expect(useUpdateScanStore.getState().isScanning).toBe(true)
   })
 
   it('does not toggle when scanning value is unchanged', async () => {
@@ -85,7 +94,7 @@ describe('useCheckUpdates', () => {
       scanning: false,
     })
 
-    const wrapper = createWrapper()
+    const { wrapper } = createWrapper()
     renderHook(() => useCheckUpdates(), { wrapper })
 
     // Wait for the query to resolve and the effect to fire.
@@ -101,7 +110,7 @@ describe('useUpdateScanWatcher', () => {
   it('shows a global loading toast when a scan starts', async () => {
     mockCheckUpdates.mockResolvedValue({ updates: [], scanning: true })
 
-    const wrapper = createWrapper()
+    const { wrapper } = createWrapper()
     renderHook(() => useUpdateScanWatcher(), { wrapper })
 
     // Not scanning yet — no toast on mount.
@@ -114,12 +123,35 @@ describe('useUpdateScanWatcher', () => {
     })
   })
 
-  it('clears scanning and shows a success toast when the scan completes', async () => {
-    // Scan already in flight; the next poll reports completion.
+  it('does NOT finish on a stale poll carrying the pre-scan scannedAt baseline', async () => {
+    // Reproduces the premature-finish bug: when isScanning flips true the shared
+    // query can return a STALE cached scanning:false. Because that stale data still
+    // carries the pre-scan scannedAt (the baseline), it must not end the scan.
+    const baseline = '2026-01-01T00:00:00Z'
+    const { wrapper, queryClient } = createWrapper()
+    queryClient.setQueryData(['resources', 'updates'], { updates: [], scanning: false, scannedAt: baseline })
     useUpdateScanStore.setState({ isScanning: true })
-    mockCheckUpdates.mockResolvedValue({ updates: [], scanning: false })
+    mockCheckUpdates.mockResolvedValue({ updates: [], scanning: false, scannedAt: baseline })
 
-    const wrapper = createWrapper()
+    renderHook(() => useUpdateScanWatcher(), { wrapper })
+
+    await waitFor(() => expect(mockCheckUpdates).toHaveBeenCalled())
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+
+    expect(useUpdateScanStore.getState().isScanning).toBe(true)
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('finishes the scan and shows success when a poll reports a newer scannedAt', async () => {
+    // Reliable, WS-independent completion: the backend bumps scannedAt when a scan
+    // genuinely finishes, so a fresh scanning:false poll with a newer scannedAt ends
+    // the scan even if the WS completion event never arrives.
+    const baseline = '2026-01-01T00:00:00Z'
+    const { wrapper, queryClient } = createWrapper()
+    queryClient.setQueryData(['resources', 'updates'], { updates: [], scanning: false, scannedAt: baseline })
+    useUpdateScanStore.setState({ isScanning: true })
+    mockCheckUpdates.mockResolvedValue({ updates: [], scanning: false, scannedAt: '2026-01-01T00:05:00Z' })
+
     renderHook(() => useUpdateScanWatcher(), { wrapper })
 
     await waitFor(() => {

@@ -176,8 +176,12 @@ export function UpdatesTab() {
               No image updates available for any container
             </p>
             <Button variant="outline" onClick={handleCheck} disabled={isRefreshing}>
-              <Download className="mr-2 h-4 w-4" />
-              Check Again
+              {isRefreshing ? (
+                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="mr-2 h-4 w-4" />
+              )}
+              {isRefreshing ? 'Checking…' : 'Check Again'}
             </Button>
           </CardContent>
         </Card>
@@ -209,8 +213,12 @@ export function UpdatesTab() {
                 onClick={handleCheck}
                 disabled={isRefreshing}
               >
-                <Download className="mr-1 h-3 w-3" />
-                Check for Updates
+                {isRefreshing ? (
+                  <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
+                ) : (
+                  <Download className="mr-1 h-3 w-3" />
+                )}
+                {isRefreshing ? 'Checking…' : 'Check for Updates'}
               </Button>
             </div>
           }

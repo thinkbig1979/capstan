@@ -8,6 +8,24 @@ import type { UpdateHistoryFilters } from '@/types'
 // Shared sonner id so the loading toast is replaced (not stacked) on completion.
 export const UPDATE_SCAN_TOAST_ID = 'update-scan'
 
+// Completion is resolved from two independent signals: the fast update_scan_complete
+// WS event (useStackEvents) and the reliable scannedAt-changed poll (useUpdateScanWatcher).
+// Both funnel through these helpers, which are gated on isScanning so whichever fires
+// first wins and the other becomes a no-op — no double toast, no premature finish.
+export function resolveUpdateScanSuccess() {
+  const store = useUpdateScanStore.getState()
+  if (!store.isScanning) return
+  store.finishScan()
+  toast.success('Update check complete', { id: UPDATE_SCAN_TOAST_ID, duration: 3000 })
+}
+
+export function resolveUpdateScanError() {
+  const store = useUpdateScanStore.getState()
+  if (!store.isScanning) return
+  store.finishScan()
+  toast.error('Update check failed', { id: UPDATE_SCAN_TOAST_ID, duration: 4000 })
+}
+
 export function useImages() {
   return useQuery({
     queryKey: ['resources', 'images'],
@@ -43,7 +61,6 @@ export function useBuildCache() {
 export function useCheckUpdates() {
   const isScanning = useUpdateScanStore((s) => s.isScanning)
   const startScan = useUpdateScanStore((s) => s.startScan)
-  const finishScan = useUpdateScanStore((s) => s.finishScan)
 
   const query = useQuery({
     queryKey: ['resources', 'updates'],
@@ -53,10 +70,13 @@ export function useCheckUpdates() {
     staleTime: 60000,
   })
 
+  // Surface the indicator when a scan is already running (e.g. a scheduled
+  // background scan). This hook only ever STARTS a scan; it never ends one, because
+  // a bare scanning:false can be stale cache and would finish prematurely. Ending a
+  // scan is owned by useUpdateScanWatcher (scannedAt poll) and the WS event.
   useEffect(() => {
     if (query.data?.scanning && !isScanning) startScan()
-    else if (query.data && !query.data.scanning && isScanning) finishScan()
-  }, [query.data?.scanning, isScanning, startScan, finishScan])
+  }, [query.data?.scanning, isScanning, startScan])
 
   return query
 }
@@ -71,56 +91,73 @@ export function useUpdateScanWatcher() {
   const finishScan = useUpdateScanStore((s) => s.finishScan)
   const queryClient = useQueryClient()
   const wasScanning = useRef(false)
+  // The scannedAt value from BEFORE the scan started. A genuine completion bumps it
+  // to a newer timestamp (the backend writes update_scan_last_run, then broadcasts
+  // update_scan_complete). Stale cached polls carry this same baseline, so comparing
+  // against it is what eliminates the premature-finish race.
+  const baselineScannedAt = useRef<string | null>(null)
 
+  // Poll while a scan is in flight: staleTime 0 + refetchInterval guarantees fresh
+  // server data every few seconds so we observe the new scannedAt promptly.
   const { data } = useQuery({
     queryKey: ['resources', 'updates'],
     queryFn: () => resourcesApi.checkUpdates(false),
     enabled: isScanning,
     refetchInterval: isScanning ? 3000 : false,
-    staleTime: 60000,
+    staleTime: 0,
   })
 
-  // Toast only on the true<->false transitions so it doesn't re-fire on every poll.
+  // On scan start: record the pre-scan scannedAt baseline and show the loading toast.
   useEffect(() => {
     if (isScanning && !wasScanning.current) {
+      const cached = queryClient.getQueryData<{ scannedAt?: string }>(['resources', 'updates'])
+      baselineScannedAt.current = cached?.scannedAt ?? null
       toast.loading('Checking for updates…', { id: UPDATE_SCAN_TOAST_ID })
-    } else if (!isScanning && wasScanning.current) {
-      toast.success('Update check complete', { id: UPDATE_SCAN_TOAST_ID, duration: 3000 })
     }
     wasScanning.current = isScanning
-  }, [isScanning])
+  }, [isScanning, queryClient])
 
-  // A poll reporting scanning:false means the backend scan finished — clear the
-  // shared state and cache the fresh results even if the Updates tab is unmounted.
+  // Reliable, WS-independent completion: a fresh poll reporting scanning:false AND a
+  // scannedAt newer than the baseline means the scan genuinely finished. This is the
+  // primary completion path; the WS event (useStackEvents) just resolves it faster.
   useEffect(() => {
-    if (isScanning && data && !data.scanning) {
-      queryClient.setQueryData(['resources', 'updates'], data)
-      finishScan()
+    if (!isScanning || !data || data.scanning) return
+    if (data.scannedAt && data.scannedAt !== baselineScannedAt.current) {
+      resolveUpdateScanSuccess()
     }
-  }, [isScanning, data, finishScan, queryClient])
+  }, [isScanning, data])
+
+  // Safety net: if polling itself stalls (network errors) and no WS event arrives,
+  // don't strand the spinner forever. Matches the backend RunScan 10-minute cap.
+  useEffect(() => {
+    if (!isScanning) return
+    const timeout = setTimeout(() => {
+      toast.dismiss(UPDATE_SCAN_TOAST_ID)
+      finishScan()
+    }, 11 * 60 * 1000)
+    return () => clearTimeout(timeout)
+  }, [isScanning, finishScan])
 }
 
 export function useCheckUpdatesRefresh() {
   const queryClient = useQueryClient()
   const startScan = useUpdateScanStore((s) => s.startScan)
-  const finishScan = useUpdateScanStore((s) => s.finishScan)
   return useMutation({
     mutationFn: async () => {
       startScan()
-      const data = await resourcesApi.checkUpdates(true)
-      if (data.scanning) {
-        return data
-      }
-      finishScan()
-      return data
+      return resourcesApi.checkUpdates(true)
     },
     onSuccess: (data) => {
+      // scanning:true is the normal path — the scan runs in the background and the
+      // watcher poll / WS event resolves it. scanning:false only happens on the
+      // synchronous no-scheduler path, where the scan is already done.
       if (!data.scanning) {
         queryClient.setQueryData(['resources', 'updates'], data)
+        resolveUpdateScanSuccess()
       }
     },
     onError: () => {
-      finishScan()
+      resolveUpdateScanError()
     },
   })
 }

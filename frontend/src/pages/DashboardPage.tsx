@@ -10,6 +10,7 @@ import { StackCardSkeleton, MetricsSkeleton } from '@/components/LoadingSkeleton
 import { AlertCircle, RefreshCw, Plus } from 'lucide-react'
 import { CreateStackDialog } from '@/components/stack/CreateStackDialog'
 import { useStackStatusAnimation } from '@/hooks/useStackStatusAnimation'
+import { useUpdateScanStore } from '@/stores/updateScanStore'
 import { useDashboardMetrics } from '@/hooks/useDashboardMetrics'
 import { DashboardMetricsTab } from '@/components/dashboard/DashboardMetricsTab'
 import { ContainersOverviewTab } from '@/components/dashboard/ContainersOverviewTab'
@@ -38,6 +39,7 @@ export function DashboardPage() {
   }, [setSearchParams])
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const { isAnimating } = useStackStatusAnimation()
+  const isScanningUpdates = useUpdateScanStore((s) => s.isScanning)
   const queryClient = useQueryClient()
   const { confirm, ConfirmComponent } = useConfirm()
   const [deletingStackId, setDeletingStackId] = useState<string | null>(null)
@@ -281,7 +283,17 @@ export function DashboardPage() {
             { value: 'stacks', label: 'Stacks' },
             { value: 'containers', label: 'Containers' },
             { value: 'directories', label: 'Dirs' },
-            { value: 'updates', label: 'Updates' },
+            {
+              value: 'updates',
+              label: isScanningUpdates ? (
+                <span className="flex items-center gap-1.5">
+                  Updates
+                  <RefreshCw className="h-3 w-3 animate-spin" />
+                </span>
+              ) : (
+                'Updates'
+              ),
+            },
             { value: 'images', label: 'Images' },
             { value: 'volumes', label: 'Volumes' },
             { value: 'networks', label: 'Networks' },
