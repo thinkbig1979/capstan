@@ -1,8 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
+import { toast } from 'sonner'
 import { resourcesApi, settingsApi, autoUpdateApi } from '@/lib/api'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
 import type { UpdateHistoryFilters } from '@/types'
+
+// Shared sonner id so the loading toast is replaced (not stacked) on completion.
+export const UPDATE_SCAN_TOAST_ID = 'update-scan'
 
 export function useImages() {
   return useQuery({
@@ -55,6 +59,45 @@ export function useCheckUpdates() {
   }, [query.data?.scanning, isScanning, startScan, finishScan])
 
   return query
+}
+
+// useUpdateScanWatcher gives the update check an app-wide presence. The Updates
+// tab's own in-progress card disappears the moment you navigate away, so a scan
+// that's still running becomes invisible. Mounted once in the persistent layout,
+// this hook keeps polling while a scan is in flight (so the state clears even
+// when the tab is unmounted) and shows a global toast that survives navigation.
+export function useUpdateScanWatcher() {
+  const isScanning = useUpdateScanStore((s) => s.isScanning)
+  const finishScan = useUpdateScanStore((s) => s.finishScan)
+  const queryClient = useQueryClient()
+  const wasScanning = useRef(false)
+
+  const { data } = useQuery({
+    queryKey: ['resources', 'updates'],
+    queryFn: () => resourcesApi.checkUpdates(false),
+    enabled: isScanning,
+    refetchInterval: isScanning ? 3000 : false,
+    staleTime: 60000,
+  })
+
+  // Toast only on the true<->false transitions so it doesn't re-fire on every poll.
+  useEffect(() => {
+    if (isScanning && !wasScanning.current) {
+      toast.loading('Checking for updates…', { id: UPDATE_SCAN_TOAST_ID })
+    } else if (!isScanning && wasScanning.current) {
+      toast.success('Update check complete', { id: UPDATE_SCAN_TOAST_ID, duration: 3000 })
+    }
+    wasScanning.current = isScanning
+  }, [isScanning])
+
+  // A poll reporting scanning:false means the backend scan finished — clear the
+  // shared state and cache the fresh results even if the Updates tab is unmounted.
+  useEffect(() => {
+    if (isScanning && data && !data.scanning) {
+      queryClient.setQueryData(['resources', 'updates'], data)
+      finishScan()
+    }
+  }, [isScanning, data, finishScan, queryClient])
 }
 
 export function useCheckUpdatesRefresh() {

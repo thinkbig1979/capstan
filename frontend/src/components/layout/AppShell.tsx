@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 import { useStackEvents } from '@/hooks/useStackEvents'
+import { useUpdateScanWatcher } from '@/hooks/useResources'
 
 interface AppShellProps {
   children: ReactNode
@@ -9,6 +10,9 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   useStackEvents()
+  // App-wide watcher: keeps the update scan visible (toast) and self-clearing
+  // even after navigating away from the Updates tab.
+  useUpdateScanWatcher()
 
   return (
     <div className="flex min-h-screen bg-background">

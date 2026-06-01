@@ -6,6 +6,9 @@ export function useGitStatus(stackId: string) {
     queryKey: ['git', stackId],
     queryFn: () => gitApi.status(stackId),
     staleTime: 60000,
+    // A non-git stack returns a definitive 404 — retrying just repeats the error
+    // in the console/network tab. The panel hides on first failure either way.
+    retry: false,
   })
 }
 
