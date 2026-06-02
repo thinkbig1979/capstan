@@ -291,9 +291,12 @@ done:
 		"snapshot + channel lines must equal total emitted with no gaps or duplicates")
 }
 
-// TestUpdateJobManager_Subscribe_TerminalJob_SnapshotOnlyNoChannel tests that
-// subscribing to an already-finished job returns a snapshot and a closed channel.
-func TestUpdateJobManager_Subscribe_TerminalJob_SnapshotOnlyNoChannel(t *testing.T) {
+// TestUpdateJobManager_Subscribe_TerminalJob_SnapshotIsTerminal tests that
+// subscribing to an already-finished job returns a snapshot whose Status is
+// terminal and a live channel that never delivers further events. The WS handler
+// relies on snapshot.Status being terminal to emit a final "done" frame and close,
+// rather than blocking on the (non-delivering) channel — see update_jobs_ws.go.
+func TestUpdateJobManager_Subscribe_TerminalJob_SnapshotIsTerminal(t *testing.T) {
 	t.Parallel()
 
 	m := newTestManager(15 * time.Minute)
@@ -316,14 +319,18 @@ func TestUpdateJobManager_Subscribe_TerminalJob_SnapshotOnlyNoChannel(t *testing
 	require.NotNil(t, snapshot)
 	defer unsubscribe()
 
-	// Channel should be empty and not deliver new events (job is terminal).
-	// Give it a short window; we should not receive anything new.
+	// Contract the WS handler depends on: the snapshot carries the terminal status,
+	// so the handler can derive the "done" frame without waiting on the channel.
+	assert.Equal(t, StatusSuccess, snapshot.Status,
+		"terminal job snapshot must report its terminal status")
+
+	// The channel must not deliver any further events for a terminal job.
 	select {
 	case _, ok := <-ch:
 		if ok {
 			t.Error("expected no live events for a terminal job")
 		}
-		// closed channel is fine
+		// a closed channel would also be acceptable
 	case <-time.After(100 * time.Millisecond):
 		// no events — correct
 	}

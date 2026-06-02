@@ -108,6 +108,14 @@ func (h *UpdateJobsWSHandler) streamJob(c *gin.Context) {
 		return
 	}
 
+	// If the job already finished before this client connected, Subscribe does not
+	// register a live subscriber (eventCh never delivers), so emit the terminal
+	// frame from the snapshot and close out instead of blocking forever.
+	if snapshot.Status == services.StatusSuccess || snapshot.Status == services.StatusError {
+		_ = safeWriteJSON(conn, wsJobFrame{Type: "done", Status: string(snapshot.Status), Error: snapshot.Error})
+		return
+	}
+
 	// Stream live events until the job is done or the client disconnects.
 	for {
 		select {
