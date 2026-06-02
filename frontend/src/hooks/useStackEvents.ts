@@ -2,7 +2,9 @@ import { useEffect, useRef } from 'react'
 import { useWebSocketJSON } from './useWebSocket'
 import { queryClient } from '@/lib/query-client'
 import { resolveUpdateScanSuccess, resolveUpdateScanError } from './useResources'
+import { useUpdateJobStore } from '@/stores/updateJobStore'
 import type { Stack } from '@/types'
+import type { UpdateJobProgressEvent, UpdateJobCompleteEvent } from '@/stores/updateJobStore'
 
 export interface StackStatusEvent {
   type: 'stack_status'
@@ -38,6 +40,27 @@ export interface UpdateScanCompleteEvent {
   timestamp: string
 }
 
+export interface UpdateJobProgressStackEvent {
+  type: 'update_job_progress'
+  jobId: string
+  targetType: 'container' | 'stack'
+  targetId: string
+  stackId: string
+  name: string
+  status: 'queued' | 'pulling' | 'recreating' | 'success' | 'error'
+}
+
+export interface UpdateJobCompleteStackEvent {
+  type: 'update_job_complete'
+  jobId: string
+  targetType: 'container' | 'stack'
+  targetId: string
+  stackId: string
+  name: string
+  status: 'queued' | 'pulling' | 'recreating' | 'success' | 'error'
+  error?: string
+}
+
 export interface UpdatePolicyChangedEvent {
   type: 'update_policy_changed'
   timestamp: string
@@ -63,6 +86,8 @@ export type StackEvent =
   | UpdatePolicyChangedEvent
   | UpdateCompletedEvent
   | UpdateScanFailedEvent
+  | UpdateJobProgressStackEvent
+  | UpdateJobCompleteStackEvent
 
 export function useStackEvents() {
   const pendingRef = useRef<Set<string>>(new Set())
@@ -167,6 +192,39 @@ export function useStackEvents() {
     ])
   }
 
+  const handleUpdateJobProgressEvent = (event: UpdateJobProgressStackEvent) => {
+    const { applyProgress } = useUpdateJobStore.getState()
+    const payload: UpdateJobProgressEvent = {
+      jobId: event.jobId,
+      targetType: event.targetType,
+      targetId: event.targetId,
+      stackId: event.stackId,
+      name: event.name,
+      status: event.status,
+    }
+    applyProgress(payload)
+  }
+
+  const handleUpdateJobCompleteEvent = (event: UpdateJobCompleteStackEvent) => {
+    const { applyComplete } = useUpdateJobStore.getState()
+    const payload: UpdateJobCompleteEvent = {
+      jobId: event.jobId,
+      targetType: event.targetType,
+      targetId: event.targetId,
+      stackId: event.stackId,
+      name: event.name,
+      status: event.status,
+      error: event.error,
+    }
+    applyComplete(payload)
+    scheduleInvalidations([
+      ['update-history'],
+      ['resources', 'updates'],
+      ['dashboard-stats'],
+      ['stacks'],
+    ])
+  }
+
   useWebSocketJSON<StackEvent>(
     '/ws/events',
     (data) => {
@@ -194,6 +252,12 @@ export function useStackEvents() {
           break
         case 'update_completed':
           handleUpdateCompletedEvent()
+          break
+        case 'update_job_progress':
+          handleUpdateJobProgressEvent(data)
+          break
+        case 'update_job_complete':
+          handleUpdateJobCompleteEvent(data)
           break
       }
     }
