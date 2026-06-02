@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	dockertypes "github.com/docker/docker/api/types"
@@ -770,8 +771,17 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 	outdatedCopy := outdated
 
 	run := func(ctx context.Context, _ string, emit func(services.LogLine), setStatus func(services.Status)) error {
-		for _, svc := range outdatedCopy {
-			emit(services.LogLine{Ts: time.Now().UTC(), Text: "==> Updating service: " + svc.ServiceName, Stream: services.StreamStatus})
+		total := len(outdatedCopy)
+		serviceNames := make([]string, total)
+		for i, s := range outdatedCopy {
+			serviceNames[i] = s.ServiceName
+		}
+		emit(services.LogLine{Ts: time.Now().UTC(), Stream: services.StreamStatus,
+			Text: fmt.Sprintf("==> Updating %d outdated service(s) sequentially: %s", total, strings.Join(serviceNames, ", "))})
+
+		for i, svc := range outdatedCopy {
+			emit(services.LogLine{Ts: time.Now().UTC(), Stream: services.StreamStatus,
+				Text: fmt.Sprintf("==> [%d/%d] Updating service: %s", i+1, total, svc.ServiceName)})
 
 			// History row.
 			historyID := uuid.New().String()
@@ -803,7 +813,20 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 					"completed_at":  time.Now().Format(time.RFC3339),
 					"duration_ms":   time.Since(start).Milliseconds(),
 				})
-				return fmt.Errorf("service %s: %w", svc.ServiceName, svcErr)
+
+				// Fail-fast: surface exactly which services were left un-updated so the
+				// user understands the partial-update impact.
+				skipped := serviceNames[i+1:]
+				emit(services.LogLine{Ts: time.Now().UTC(), Stream: services.StreamStderr,
+					Text: fmt.Sprintf("✗ Service %q failed to update: %v", svc.ServiceName, svcErr)})
+				if len(skipped) > 0 {
+					emit(services.LogLine{Ts: time.Now().UTC(), Stream: services.StreamStderr,
+						Text: fmt.Sprintf("Stopped after the failure. %d service(s) were NOT updated and are still on their old image: %s",
+							len(skipped), strings.Join(skipped, ", "))})
+					return fmt.Errorf("service %q failed; stopped with %d of %d service(s) not updated (%s): %w",
+						svc.ServiceName, len(skipped), total, strings.Join(skipped, ", "), svcErr)
+				}
+				return fmt.Errorf("service %q failed (last of %d): %w", svc.ServiceName, total, svcErr)
 			}
 
 			db.UpdateUpdateHistory(historyID, map[string]interface{}{
@@ -812,8 +835,11 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 				"completed_at": time.Now().Format(time.RFC3339),
 				"duration_ms":  durMs,
 			})
-			emit(services.LogLine{Ts: time.Now().UTC(), Text: "Service " + svc.ServiceName + " updated successfully", Stream: services.StreamStatus})
+			emit(services.LogLine{Ts: time.Now().UTC(), Stream: services.StreamStatus,
+				Text: fmt.Sprintf("✓ [%d/%d] Service %s updated successfully", i+1, total, svc.ServiceName)})
 		}
+		emit(services.LogLine{Ts: time.Now().UTC(), Stream: services.StreamStatus,
+			Text: fmt.Sprintf("All %d service(s) updated and restarted successfully", total)})
 		return nil
 	}
 

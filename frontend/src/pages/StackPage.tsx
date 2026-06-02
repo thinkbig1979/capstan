@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { StackDetail } from '@/components/stack/StackDetail'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -72,6 +72,39 @@ export function StackPage() {
   const activeJob = stackJobs
     .filter((j) => j.status === 'queued' || j.status === 'pulling' || j.status === 'recreating')
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+
+  // Most recent stack job overall (active or finished), to report the outcome.
+  const latestStackJob = useMemo(
+    () => [...stackJobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0],
+    [stackJobs],
+  )
+
+  // Surface the terminal outcome once per job. On a fail-fast partial update the
+  // job error already names which services were left un-updated (see backend), so
+  // the user sees what happened and the impact without opening the Updates tab.
+  const reportedJobRef = useRef<string | null>(null)
+  const didInitJobRef = useRef(false)
+  useEffect(() => {
+    const isTerminal = (s?: string) => s === 'success' || s === 'error'
+    // On first run, treat a job that was already terminal when we arrived as
+    // already-reported, so we don't toast a stale outcome on mount/navigation.
+    if (!didInitJobRef.current) {
+      didInitJobRef.current = true
+      if (latestStackJob && isTerminal(latestStackJob.status)) {
+        reportedJobRef.current = latestStackJob.id
+        return
+      }
+    }
+    if (!latestStackJob || !isTerminal(latestStackJob.status)) return
+    const { id: jobId, status, error } = latestStackJob
+    if (reportedJobRef.current === jobId) return
+    reportedJobRef.current = jobId
+    if (status === 'success') {
+      toast.success('Stack updated and restarted')
+    } else {
+      toast.error(error || 'Stack update failed', { duration: 12000 })
+    }
+  }, [latestStackJob])
 
   const handleStackUpdate = () => {
     if (!id) return
