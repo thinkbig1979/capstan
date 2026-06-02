@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { StackDetail } from '@/components/stack/StackDetail'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,9 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useConfirm } from '@/components/ConfirmDialog'
 import { useStackStore } from '@/stores/stackStore'
+import { useCheckUpdates, useUpdateStack, useUpdateJobs } from '@/hooks/useResources'
+import { useUpdateJobStore } from '@/stores/updateJobStore'
+import { StackUpdateBadge } from '@/components/stack/StackUpdateBadge'
 
 export function StackPage() {
   const { id } = useParams<{ id: string }>()
@@ -51,6 +54,39 @@ export function StackPage() {
     },
   })
 
+  // Hydrate update jobs store so stack job status is available on mount
+  useUpdateJobs()
+
+  // Available updates for this stack
+  const { data: updateData } = useCheckUpdates()
+  const stackUpdatesCount = useMemo(() => {
+    if (!updateData?.updates || !id) return 0
+    return updateData.updates.filter((u) => u.stackId === id).length
+  }, [updateData?.updates, id])
+
+  // Stack job state
+  const updateStackMutation = useUpdateStack()
+  const jobsForStack = useUpdateJobStore((s) => s.jobsForStack)
+  const stackJobs = id ? jobsForStack(id) : []
+  // Use the most recently created active job for status display
+  const activeJob = stackJobs
+    .filter((j) => j.status === 'queued' || j.status === 'pulling' || j.status === 'recreating')
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+
+  const handleStackUpdate = () => {
+    if (!id) return
+    updateStackMutation.mutate(id, {
+      onSuccess: (data) => {
+        if (!data.jobId || data.noUpdates) {
+          toast.info('No updates available for this stack')
+        }
+      },
+      onError: (err) => {
+        toast.error(classifyError(err).message || 'Failed to start stack update')
+      },
+    })
+  }
+
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -67,7 +103,7 @@ export function StackPage() {
 
   if (error || !stack) {
     const appError = error ? classifyError(error) : null
-    
+
     return (
       <div className="space-y-6">
         <div>
@@ -76,7 +112,7 @@ export function StackPage() {
             {appError?.message || 'The requested stack could not be found.'}
           </p>
         </div>
-        
+
         {appError && (
           <Card className="border-destructive">
             <CardContent className="pt-6">
@@ -86,8 +122,8 @@ export function StackPage() {
                   <h3 className="font-semibold">Failed to load stack</h3>
                   <p className="text-sm text-muted-foreground">{appError.message}</p>
                   <div className="flex gap-2">
-                    <Button 
-                      onClick={() => refetch()} 
+                    <Button
+                      onClick={() => refetch()}
                       disabled={!appError.retryable}
                       variant="outline"
                       size="sm"
@@ -95,7 +131,7 @@ export function StackPage() {
                       <RefreshCw className="mr-2 h-4 w-4" />
                       Retry
                     </Button>
-                    <Button 
+                    <Button
                       onClick={() => navigate('/')}
                       variant="outline"
                       size="sm"
@@ -104,7 +140,7 @@ export function StackPage() {
                       Dashboard
                     </Button>
                     {appError.type === 'auth' && (
-                      <Button 
+                      <Button
                         onClick={() => navigate('/login')}
                         variant="outline"
                         size="sm"
@@ -118,7 +154,7 @@ export function StackPage() {
             </CardContent>
           </Card>
         )}
-        
+
         {!appError && (
           <Button onClick={() => navigate('/')} variant="outline">
             <Home className="mr-2 h-4 w-4" />
@@ -146,8 +182,16 @@ export function StackPage() {
     <>
       <div className="space-y-6">
         <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="text-3xl font-bold tracking-tight truncate">{stack.projectName}</h1>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-3xl font-bold tracking-tight truncate">{stack.projectName}</h1>
+              <StackUpdateBadge
+                count={stackUpdatesCount}
+                onUpdate={handleStackUpdate}
+                jobStatus={activeJob?.status}
+                updatePending={updateStackMutation.isPending}
+              />
+            </div>
             <p className="text-muted-foreground truncate">{stack.directory}</p>
           </div>
           <Button
