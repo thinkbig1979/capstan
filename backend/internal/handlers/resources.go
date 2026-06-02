@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -10,21 +12,26 @@ import (
 
 	dockertypes "github.com/docker/docker/api/types"
 
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 type ResourcesHandler struct {
-	docker    *services.DockerService
-	db        *database.DB
-	scheduler *services.SchedulerService
+	docker     *services.DockerService
+	db         *database.DB
+	scheduler  *services.SchedulerService
+	jobManager *services.UpdateJobManager
 }
 
 func NewResourcesHandler(docker *services.DockerService, db *database.DB, scheduler *services.SchedulerService) *ResourcesHandler {
 	return &ResourcesHandler{docker: docker, db: db, scheduler: scheduler}
+}
+
+func NewResourcesHandlerWithJobManager(docker *services.DockerService, db *database.DB, scheduler *services.SchedulerService, jobManager *services.UpdateJobManager) *ResourcesHandler {
+	return &ResourcesHandler{docker: docker, db: db, scheduler: scheduler, jobManager: jobManager}
 }
 
 func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
@@ -42,6 +49,10 @@ func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
 
 	r.GET("/resources/updates", h.checkUpdates)
 	r.POST("/resources/containers/:id/update", h.updateContainer)
+	r.POST("/resources/stacks/:id/update", h.updateStack)
+
+	r.GET("/resources/updates/jobs", h.listUpdateJobs)
+	r.GET("/resources/updates/jobs/:jobId", h.getUpdateJob)
 
 	r.GET("/resources/updates/history", h.getUpdateHistory)
 	r.DELETE("/resources/updates/history", h.clearUpdateHistory)
@@ -468,6 +479,115 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	id := c.Param("id")
 
+	// If no job manager is wired, fall back to the synchronous path.
+	if h.jobManager == nil {
+		h.updateContainerSync(c, id)
+		return
+	}
+
+	inspect, err := h.docker.InspectContainer(c.Request.Context(), id)
+	if err != nil {
+		slog.Error("Failed to inspect container before update", "id", id, "error", err)
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container"))
+		return
+	}
+
+	oldDigest := inspect.Image
+	imageRef := ""
+	if inspect.Config != nil {
+		imageRef = inspect.Config.Image
+	}
+	containerName := ""
+	if inspect.Name != "" {
+		containerName = inspect.Name[1:]
+	}
+	stackID := ""
+	stackName := ""
+	projectName := ""
+	if inspect.Config != nil && inspect.Config.Labels != nil {
+		projectName = inspect.Config.Labels["com.docker.compose.project"]
+	}
+	if projectName != "" {
+		stack, err := h.db.GetStackByProjectName(projectName)
+		if err == nil && stack != nil {
+			stackID = stack.ID
+			stackName = stack.ProjectName
+		}
+	}
+
+	historyID := uuid.New().String()
+	now := time.Now().Format(time.RFC3339)
+	historyEntry := &models.UpdateHistoryEntry{
+		ID:            historyID,
+		ContainerID:   id,
+		ContainerName: containerName,
+		Image:         imageRef,
+		OldDigest:     &oldDigest,
+		Status:        "pending",
+		Trigger:       "manual",
+		StartedAt:     now,
+	}
+	if stackID != "" {
+		historyEntry.StackID = &stackID
+		historyEntry.StackName = &stackName
+	}
+
+	if err := h.db.InsertUpdateHistory(historyEntry); err != nil {
+		slog.Error("Failed to insert update history", "error", err)
+	}
+
+	spec := services.JobSpec{
+		TargetType: "container",
+		TargetID:   id,
+		Name:       containerName,
+		StackID:    stackID,
+	}
+
+	// Capture locals for the closure.
+	docker := h.docker
+	db := h.db
+	containerIDCopy := id
+	historyIDCopy := historyID
+	stackIDCopy := stackID
+
+	run := func(ctx context.Context, emit func(services.LogLine), setStatus func(services.Status)) error {
+		result, runErr := docker.UpdateContainerStreaming(ctx, containerIDCopy, db, emit, setStatus)
+
+		if runErr != nil {
+			updates := map[string]interface{}{
+				"status":        "failed",
+				"error_message": runErr.Error(),
+				"completed_at":  time.Now().Format(time.RFC3339),
+				"duration_ms":   result.DurationMs,
+			}
+			if result.NewDigest != "" {
+				updates["new_digest"] = result.NewDigest
+			}
+			db.UpdateUpdateHistory(historyIDCopy, updates)
+			BroadcastEvent(models.StackEvent{Type: "update_completed", ContainerID: containerIDCopy, StackID: stackIDCopy, Timestamp: time.Now()})
+			return runErr
+		}
+
+		db.UpdateUpdateHistory(historyIDCopy, map[string]interface{}{
+			"status":       "success",
+			"new_digest":   result.NewDigest,
+			"completed_at": time.Now().Format(time.RFC3339),
+			"duration_ms":  result.DurationMs,
+		})
+		BroadcastEvent(models.StackEvent{Type: "update_completed", ContainerID: containerIDCopy, StackID: stackIDCopy, Timestamp: time.Now()})
+		return nil
+	}
+
+	job := h.enqueueJobWithBroadcasts(spec, run)
+	c.JSON(http.StatusAccepted, gin.H{
+		"jobId": job.ID,
+		"wsUrl": "/ws/updates/jobs/" + job.ID,
+	})
+}
+
+// updateContainerSync is the legacy synchronous update path, used when no job
+// manager is configured (e.g., in tests that use NewResourcesHandler directly).
+func (h *ResourcesHandler) updateContainerSync(c *gin.Context, id string) {
 	inspect, err := h.docker.InspectContainer(c.Request.Context(), id)
 	if err != nil {
 		slog.Error("Failed to inspect container before update", "id", id, "error", err)
@@ -554,6 +674,170 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 		"newDigest":  result.NewDigest,
 		"durationMs": result.DurationMs,
 	})
+}
+
+// enqueueJobWithBroadcasts enqueues a job and wraps its setStatus to emit
+// update_job_progress broadcasts, and a final update_job_complete on terminal.
+func (h *ResourcesHandler) enqueueJobWithBroadcasts(
+	spec services.JobSpec,
+	run func(ctx context.Context, emit func(services.LogLine), setStatus func(services.Status)) error,
+) *services.Job {
+	wrapped := func(ctx context.Context, emit func(services.LogLine), setStatus func(services.Status)) error {
+		wrappedSetStatus := func(s services.Status) {
+			setStatus(s)
+			BroadcastEvent(models.StackEvent{
+				Type:      "update_job_progress",
+				StackID:   spec.StackID,
+				Event:     string(s),
+				Status:    string(s),
+				Timestamp: time.Now(),
+			})
+		}
+		runErr := run(ctx, emit, wrappedSetStatus)
+		finalStatus := services.StatusSuccess
+		if runErr != nil {
+			finalStatus = services.StatusError
+		}
+		BroadcastEvent(models.StackEvent{
+			Type:      "update_job_complete",
+			StackID:   spec.StackID,
+			Event:     string(finalStatus),
+			Status:    string(finalStatus),
+			Timestamp: time.Now(),
+		})
+		return runErr
+	}
+
+	return h.jobManager.Enqueue(spec, wrapped)
+}
+
+// updateStack enqueues an outdated-only streaming stack update.
+func (h *ResourcesHandler) updateStack(c *gin.Context) {
+	if h.jobManager == nil {
+		models.HandleError(c, models.NewAppError(http.StatusServiceUnavailable, "INTERNAL_ERROR", "Job manager not available"))
+		return
+	}
+
+	stackID := c.Param("id")
+	stack, err := h.db.GetStack(stackID)
+	if err != nil || stack == nil {
+		models.HandleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
+		return
+	}
+
+	// Find outdated services for this stack from the cache.
+	cachedUpdates, err := h.db.GetCachedUpdates()
+	if err != nil {
+		slog.Error("Failed to get cached updates for stack", "stackId", stackID, "error", err)
+		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get cached updates"))
+		return
+	}
+
+	var outdated []models.CachedUpdate
+	for _, cu := range cachedUpdates {
+		if cu.StackID == stack.ID && cu.IsCompose && cu.ServiceName != "" {
+			outdated = append(outdated, cu)
+		}
+	}
+
+	if len(outdated) == 0 {
+		c.JSON(http.StatusOK, gin.H{"jobId": "", "noUpdates": true})
+		return
+	}
+
+	spec := services.JobSpec{
+		TargetType: "stack",
+		TargetID:   stack.ID,
+		Name:       stack.ProjectName,
+		StackID:    stack.ID,
+	}
+
+	docker := h.docker
+	db := h.db
+	stackCopy := *stack
+	outdatedCopy := outdated
+
+	run := func(ctx context.Context, emit func(services.LogLine), setStatus func(services.Status)) error {
+		for _, svc := range outdatedCopy {
+			emit(services.LogLine{Ts: time.Now().UTC(), Text: "==> Updating service: " + svc.ServiceName, Stream: services.StreamStatus})
+
+			// History row.
+			historyID := uuid.New().String()
+			nowStr := time.Now().Format(time.RFC3339)
+			stackIDStr := stackCopy.ID
+			stackNameStr := stackCopy.ProjectName
+			oldDigest := svc.LocalDigest
+			entry := &models.UpdateHistoryEntry{
+				ID:            historyID,
+				ContainerName: svc.ServiceName,
+				Image:         svc.Image,
+				OldDigest:     &oldDigest,
+				Status:        "pending",
+				Trigger:       "manual",
+				StartedAt:     nowStr,
+				StackID:       &stackIDStr,
+				StackName:     &stackNameStr,
+			}
+			_ = db.InsertUpdateHistory(entry)
+
+			start := time.Now()
+			oldD, newD, durMs, svcErr := docker.UpdateComposeServiceStreaming(ctx, stackCopy, svc.ServiceName, emit, setStatus)
+			_ = oldD
+
+			if svcErr != nil {
+				db.UpdateUpdateHistory(historyID, map[string]interface{}{
+					"status":        "failed",
+					"error_message": svcErr.Error(),
+					"completed_at":  time.Now().Format(time.RFC3339),
+					"duration_ms":   time.Since(start).Milliseconds(),
+				})
+				return fmt.Errorf("service %s: %w", svc.ServiceName, svcErr)
+			}
+
+			db.UpdateUpdateHistory(historyID, map[string]interface{}{
+				"status":       "success",
+				"new_digest":   newD,
+				"completed_at": time.Now().Format(time.RFC3339),
+				"duration_ms":  durMs,
+			})
+			emit(services.LogLine{Ts: time.Now().UTC(), Text: "Service " + svc.ServiceName + " updated successfully", Stream: services.StreamStatus})
+		}
+		return nil
+	}
+
+	job := h.enqueueJobWithBroadcasts(spec, run)
+	c.JSON(http.StatusAccepted, gin.H{
+		"jobId": job.ID,
+		"wsUrl": "/ws/updates/jobs/" + job.ID,
+	})
+}
+
+// listUpdateJobs returns all known jobs (active + recently finished).
+func (h *ResourcesHandler) listUpdateJobs(c *gin.Context) {
+	if h.jobManager == nil {
+		c.JSON(http.StatusOK, gin.H{"jobs": []*services.Job{}})
+		return
+	}
+	jobs := h.jobManager.List()
+	if jobs == nil {
+		jobs = []*services.Job{}
+	}
+	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
+}
+
+// getUpdateJob returns a single job by ID.
+func (h *ResourcesHandler) getUpdateJob(c *gin.Context) {
+	if h.jobManager == nil {
+		models.HandleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Job not found"))
+		return
+	}
+	jobID := c.Param("jobId")
+	job := h.jobManager.Get(jobID)
+	if job == nil {
+		models.HandleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Job not found"))
+		return
+	}
+	c.JSON(http.StatusOK, job)
 }
 
 func (h *ResourcesHandler) getUpdateHistory(c *gin.Context) {

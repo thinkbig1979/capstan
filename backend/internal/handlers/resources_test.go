@@ -1,16 +1,19 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
 func newTestResourcesHandler(t *testing.T) *ResourcesHandler {
@@ -334,6 +337,9 @@ func TestResourcesHandler_RoutesRegistered(t *testing.T) {
 		"POST:/api/resources/containers/prune",
 		"GET:/api/resources/updates",
 		"POST:/api/resources/containers/:id/update",
+		"POST:/api/resources/stacks/:id/update",
+		"GET:/api/resources/updates/jobs",
+		"GET:/api/resources/updates/jobs/:jobId",
 		"GET:/api/resources/updates/history",
 		"DELETE:/api/resources/updates/history",
 		"GET:/api/resources/auto-update/policies",
@@ -353,6 +359,80 @@ func TestResourcesHandler_RoutesRegistered(t *testing.T) {
 	for _, route := range expectedRoutes {
 		assert.True(t, routePaths[route], "Expected route %s to be registered", route)
 	}
+}
+
+func newTestResourcesHandlerWithJobManager(t *testing.T) *ResourcesHandler {
+	t.Helper()
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	jm := services.NewUpdateJobManager(15 * time.Minute)
+	t.Cleanup(func() { jm.Stop() })
+
+	return NewResourcesHandlerWithJobManager(nil, db, nil, jm)
+}
+
+func TestResourcesHandler_ListUpdateJobs_Empty(t *testing.T) {
+	handler := newTestResourcesHandlerWithJobManager(t)
+	router := setupResourcesRouter(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/resources/updates/jobs", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	jobs, ok := response["jobs"].([]interface{})
+	require.True(t, ok)
+	assert.Len(t, jobs, 0)
+}
+
+func TestResourcesHandler_GetUpdateJob_NotFound(t *testing.T) {
+	handler := newTestResourcesHandlerWithJobManager(t)
+	router := setupResourcesRouter(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/resources/updates/jobs/nonexistent-id", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestResourcesHandler_ListAndGetUpdateJobs_WithJob(t *testing.T) {
+	handler := newTestResourcesHandlerWithJobManager(t)
+	router := setupResourcesRouter(handler)
+
+	// Enqueue a job that blocks until we unblock it.
+	gate := make(chan struct{})
+	spec := services.JobSpec{TargetType: "container", TargetID: "ctr1", Name: "myapp", StackID: ""}
+	job := handler.jobManager.Enqueue(spec, func(ctx context.Context, emit func(services.LogLine), setStatus func(services.Status)) error {
+		<-gate
+		return nil
+	})
+	defer close(gate)
+
+	// List should return the job.
+	req := httptest.NewRequest(http.MethodGet, "/api/resources/updates/jobs", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	var listResp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listResp))
+	jobs := listResp["jobs"].([]interface{})
+	assert.Len(t, jobs, 1)
+
+	// Get by ID should return the same job.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/resources/updates/jobs/"+job.ID, nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusOK, w2.Code)
+	var jobResp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &jobResp))
+	assert.Equal(t, job.ID, jobResp["id"])
 }
 
 func TestParsePruneOptions(t *testing.T) {
