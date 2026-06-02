@@ -123,7 +123,7 @@ func (j *jobState) fanOutLocked(ev JobEvent) {
 // queuedItem is enqueued work for the sequential worker.
 type queuedItem struct {
 	id  string
-	run func(ctx context.Context, emit func(LogLine), setStatus func(Status)) error
+	run func(ctx context.Context, jobID string, emit func(LogLine), setStatus func(Status)) error
 }
 
 // UpdateJobManager manages in-memory update jobs with sequential execution.
@@ -160,7 +160,9 @@ func (m *UpdateJobManager) Stop() {
 
 // Enqueue creates a new job in queued state, schedules it for sequential execution,
 // and returns an immediate snapshot of the job (non-blocking).
-func (m *UpdateJobManager) Enqueue(spec JobSpec, run func(ctx context.Context, emit func(LogLine), setStatus func(Status)) error) *Job {
+// The run callback receives the job's own ID as jobID so callers can include it
+// in broadcasts or logs without a data race (the ID is stable from creation).
+func (m *UpdateJobManager) Enqueue(spec JobSpec, run func(ctx context.Context, jobID string, emit func(LogLine), setStatus func(Status)) error) *Job {
 	id := uuid.New().String()
 	now := time.Now().UTC()
 	js := &jobState{
@@ -310,7 +312,7 @@ func (m *UpdateJobManager) runJob(ctx context.Context, item queuedItem) {
 		js.mu.Unlock()
 	}
 
-	runErr := item.run(ctx, emit, setStatus)
+	runErr := item.run(ctx, item.id, emit, setStatus)
 
 	finishedAt := time.Now().UTC()
 	js.mu.Lock()

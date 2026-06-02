@@ -409,7 +409,7 @@ func TestResourcesHandler_ListAndGetUpdateJobs_WithJob(t *testing.T) {
 	// Enqueue a job that blocks until we unblock it.
 	gate := make(chan struct{})
 	spec := services.JobSpec{TargetType: "container", TargetID: "ctr1", Name: "myapp", StackID: ""}
-	job := handler.jobManager.Enqueue(spec, func(ctx context.Context, emit func(services.LogLine), setStatus func(services.Status)) error {
+	job := handler.jobManager.Enqueue(spec, func(ctx context.Context, _ string, emit func(services.LogLine), setStatus func(services.Status)) error {
 		<-gate
 		return nil
 	})

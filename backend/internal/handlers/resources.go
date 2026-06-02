@@ -550,7 +550,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	historyIDCopy := historyID
 	stackIDCopy := stackID
 
-	run := func(ctx context.Context, emit func(services.LogLine), setStatus func(services.Status)) error {
+	run := func(ctx context.Context, _ string, emit func(services.LogLine), setStatus func(services.Status)) error {
 		result, runErr := docker.UpdateContainerStreaming(ctx, containerIDCopy, db, emit, setStatus)
 
 		if runErr != nil {
@@ -678,32 +678,44 @@ func (h *ResourcesHandler) updateContainerSync(c *gin.Context, id string) {
 
 // enqueueJobWithBroadcasts enqueues a job and wraps its setStatus to emit
 // update_job_progress broadcasts, and a final update_job_complete on terminal.
+// The jobID is injected by the manager (race-free) via the run signature.
 func (h *ResourcesHandler) enqueueJobWithBroadcasts(
 	spec services.JobSpec,
-	run func(ctx context.Context, emit func(services.LogLine), setStatus func(services.Status)) error,
+	run func(ctx context.Context, jobID string, emit func(services.LogLine), setStatus func(services.Status)) error,
 ) *services.Job {
-	wrapped := func(ctx context.Context, emit func(services.LogLine), setStatus func(services.Status)) error {
+	wrapped := func(ctx context.Context, jobID string, emit func(services.LogLine), setStatus func(services.Status)) error {
 		wrappedSetStatus := func(s services.Status) {
 			setStatus(s)
 			BroadcastEvent(models.StackEvent{
-				Type:      "update_job_progress",
-				StackID:   spec.StackID,
-				Event:     string(s),
-				Status:    string(s),
-				Timestamp: time.Now(),
+				Type:       "update_job_progress",
+				JobID:      jobID,
+				TargetType: spec.TargetType,
+				TargetID:   spec.TargetID,
+				StackID:    spec.StackID,
+				Name:       spec.Name,
+				Event:      string(s),
+				Status:     string(s),
+				Timestamp:  time.Now(),
 			})
 		}
-		runErr := run(ctx, emit, wrappedSetStatus)
+		runErr := run(ctx, jobID, emit, wrappedSetStatus)
 		finalStatus := services.StatusSuccess
+		errMsg := ""
 		if runErr != nil {
 			finalStatus = services.StatusError
+			errMsg = runErr.Error()
 		}
 		BroadcastEvent(models.StackEvent{
-			Type:      "update_job_complete",
-			StackID:   spec.StackID,
-			Event:     string(finalStatus),
-			Status:    string(finalStatus),
-			Timestamp: time.Now(),
+			Type:       "update_job_complete",
+			JobID:      jobID,
+			TargetType: spec.TargetType,
+			TargetID:   spec.TargetID,
+			StackID:    spec.StackID,
+			Name:       spec.Name,
+			Event:      string(finalStatus),
+			Status:     string(finalStatus),
+			JobError:   errMsg,
+			Timestamp:  time.Now(),
 		})
 		return runErr
 	}
@@ -757,7 +769,7 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 	stackCopy := *stack
 	outdatedCopy := outdated
 
-	run := func(ctx context.Context, emit func(services.LogLine), setStatus func(services.Status)) error {
+	run := func(ctx context.Context, _ string, emit func(services.LogLine), setStatus func(services.Status)) error {
 		for _, svc := range outdatedCopy {
 			emit(services.LogLine{Ts: time.Now().UTC(), Text: "==> Updating service: " + svc.ServiceName, Stream: services.StreamStatus})
 

@@ -17,7 +17,7 @@ func newTestManager(ttl time.Duration) *UpdateJobManager {
 }
 
 // noopRun is a run func that succeeds immediately without emitting anything.
-func noopRun(_ context.Context, _ func(LogLine), _ func(Status)) error {
+func noopRun(_ context.Context, _ string, _ func(LogLine), _ func(Status)) error {
 	return nil
 }
 
@@ -31,7 +31,7 @@ func TestUpdateJobManager_Enqueue_ReturnsQueuedJob(t *testing.T) {
 
 	// Block the worker so the job stays queued long enough to assert.
 	gate := make(chan struct{})
-	run := func(_ context.Context, _ func(LogLine), _ func(Status)) error {
+	run := func(_ context.Context, _ string, _ func(LogLine), _ func(Status)) error {
 		<-gate
 		return nil
 	}
@@ -60,7 +60,7 @@ func TestUpdateJobManager_StatusTransitions_Success(t *testing.T) {
 	defer m.Stop()
 
 	done := make(chan struct{})
-	run := func(_ context.Context, emit func(LogLine), setStatus func(Status)) error {
+	run := func(_ context.Context, _ string, emit func(LogLine), setStatus func(Status)) error {
 		setStatus(StatusPulling)
 		emit(LogLine{Ts: time.Now().UTC(), Text: "pulling image", Stream: StreamStatus})
 		setStatus(StatusRecreating)
@@ -96,7 +96,7 @@ func TestUpdateJobManager_StatusTransitions_Error(t *testing.T) {
 	defer m.Stop()
 
 	sentinel := errors.New("pull failed: auth error")
-	run := func(_ context.Context, _ func(LogLine), setStatus func(Status)) error {
+	run := func(_ context.Context, _ string, _ func(LogLine), setStatus func(Status)) error {
 		setStatus(StatusPulling)
 		return sentinel
 	}
@@ -141,7 +141,7 @@ func TestUpdateJobManager_SequentialQueue_OneAtATime(t *testing.T) {
 	ids := make([]string, n)
 	for i := 0; i < n; i++ {
 		idx := i
-		run := func(_ context.Context, _ func(LogLine), _ func(Status)) error {
+		run := func(_ context.Context, _ string, _ func(LogLine), _ func(Status)) error {
 			close(started[idx])
 			<-gates[idx]
 			orderMu.Lock()
@@ -213,7 +213,7 @@ func TestUpdateJobManager_Subscribe_ReplayAndLive(t *testing.T) {
 	var jobID string
 	var jobIDMu sync.Mutex
 
-	run := func(_ context.Context, emit func(LogLine), _ func(Status)) error {
+	run := func(_ context.Context, _ string, emit func(LogLine), _ func(Status)) error {
 		for i := 0; i < earlyLines; i++ {
 			emit(LogLine{
 				Ts:     time.Now().UTC(),
@@ -304,7 +304,7 @@ func TestUpdateJobManager_Subscribe_TerminalJob_SnapshotOnlyNoChannel(t *testing
 	m := newTestManager(15 * time.Minute)
 	defer m.Stop()
 
-	run := func(_ context.Context, emit func(LogLine), _ func(Status)) error {
+	run := func(_ context.Context, _ string, emit func(LogLine), _ func(Status)) error {
 		emit(LogLine{Ts: time.Now().UTC(), Text: "done", Stream: StreamStdout})
 		return nil
 	}
@@ -346,7 +346,7 @@ func TestUpdateJobManager_ErrorPath_SubscriberGetsDoneEvent(t *testing.T) {
 	gate := make(chan struct{})
 	sentinel := errors.New("container exit 1")
 
-	run := func(_ context.Context, emit func(LogLine), setStatus func(Status)) error {
+	run := func(_ context.Context, _ string, _ func(LogLine), setStatus func(Status)) error {
 		setStatus(StatusPulling)
 		close(ready)
 		<-gate
@@ -404,7 +404,7 @@ func TestUpdateJobManager_TTL_Eviction(t *testing.T) {
 	m := newTestManager(ttl)
 	defer m.Stop()
 
-	run := func(_ context.Context, _ func(LogLine), _ func(Status)) error {
+	run := func(_ context.Context, _ string, _ func(LogLine), _ func(Status)) error {
 		return nil
 	}
 
@@ -433,7 +433,7 @@ func TestUpdateJobManager_TTL_RunningJobNotEvicted(t *testing.T) {
 	defer m.Stop()
 
 	gate := make(chan struct{})
-	run := func(_ context.Context, _ func(LogLine), _ func(Status)) error {
+	run := func(_ context.Context, _ string, _ func(LogLine), _ func(Status)) error {
 		<-gate
 		return nil
 	}
@@ -461,7 +461,7 @@ func TestUpdateJobManager_List_NewestFirst(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		wg.Add(1)
 		idx := i
-		run := func(_ context.Context, _ func(LogLine), _ func(Status)) error {
+		run := func(_ context.Context, _ string, _ func(LogLine), _ func(Status)) error {
 			defer wg.Done()
 			<-gate
 			return nil
@@ -500,7 +500,7 @@ func TestUpdateJobManager_RingBuffer(t *testing.T) {
 	defer m.Stop()
 
 	const emit = maxJobLines + 100
-	run := func(_ context.Context, emitFn func(LogLine), _ func(Status)) error {
+	run := func(_ context.Context, _ string, emitFn func(LogLine), _ func(Status)) error {
 		for i := 0; i < emit; i++ {
 			emitFn(LogLine{Ts: time.Now().UTC(), Text: "x", Stream: StreamStdout})
 		}
