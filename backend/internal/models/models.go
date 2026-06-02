@@ -229,6 +229,11 @@ type StackEvent struct {
 	Event       string    `json:"event,omitempty"`
 	Status      string    `json:"status,omitempty"`
 	Timestamp   time.Time `json:"timestamp"`
+	JobID       string    `json:"jobId,omitempty"`
+	TargetType  string    `json:"targetType,omitempty"`
+	TargetID    string    `json:"targetId,omitempty"`
+	Name        string    `json:"name,omitempty"`
+	JobError    string    `json:"error,omitempty"`
 }
 
 type CachedUpdate struct {

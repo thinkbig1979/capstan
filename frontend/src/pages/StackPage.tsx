@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { StackDetail } from '@/components/stack/StackDetail'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,17 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useConfirm } from '@/components/ConfirmDialog'
 import { useStackStore } from '@/stores/stackStore'
+import { useCheckUpdates, useUpdateStack, useUpdateJobs } from '@/hooks/useResources'
+import { useUpdateJobStore, type UpdateJob } from '@/stores/updateJobStore'
+import { StackUpdateBadge } from '@/components/stack/StackUpdateBadge'
+
+// Most recently created job (by createdAt) without copying/sorting the array.
+function latestByCreatedAt(jobs: UpdateJob[]): UpdateJob | undefined {
+  return jobs.reduce<UpdateJob | undefined>(
+    (latest, j) => (!latest || j.createdAt > latest.createdAt ? j : latest),
+    undefined,
+  )
+}
 
 export function StackPage() {
   const { id } = useParams<{ id: string }>()
@@ -51,6 +62,81 @@ export function StackPage() {
     },
   })
 
+  // Hydrate update jobs store so stack job status is available on mount
+  useUpdateJobs()
+
+  // Available updates for this stack
+  const { data: updateData } = useCheckUpdates()
+  const stackUpdatesCount = useMemo(() => {
+    if (!updateData?.updates || !id) return 0
+    return updateData.updates.filter((u) => u.stackId === id).length
+  }, [updateData?.updates, id])
+
+  // Stack job state. Derive from the raw jobs map so the memoized values keep a
+  // stable identity across renders (a selector returning a fresh array each call
+  // would make every dependent memo/effect re-run on every render).
+  const updateStackMutation = useUpdateStack()
+  const jobsMap = useUpdateJobStore((s) => s.jobs)
+  const stackJobs = useMemo(
+    () => (id ? Object.values(jobsMap).filter((j) => j.stackId === id) : []),
+    [jobsMap, id],
+  )
+
+  // Most recent active job, for the button's live phase label.
+  const activeJob = useMemo(
+    () =>
+      latestByCreatedAt(
+        stackJobs.filter(
+          (j) => j.status === 'queued' || j.status === 'pulling' || j.status === 'recreating',
+        ),
+      ),
+    [stackJobs],
+  )
+
+  // Most recent stack job overall (active or finished), to report the outcome.
+  const latestStackJob = useMemo(() => latestByCreatedAt(stackJobs), [stackJobs])
+
+  // Surface the terminal outcome once per job. On a fail-fast partial update the
+  // job error already names which services were left un-updated (see backend), so
+  // the user sees what happened and the impact without opening the Updates tab.
+  const reportedJobRef = useRef<string | null>(null)
+  const didInitJobRef = useRef(false)
+  useEffect(() => {
+    const isTerminal = (s?: string) => s === 'success' || s === 'error'
+    // On first run, treat a job that was already terminal when we arrived as
+    // already-reported, so we don't toast a stale outcome on mount/navigation.
+    if (!didInitJobRef.current) {
+      didInitJobRef.current = true
+      if (latestStackJob && isTerminal(latestStackJob.status)) {
+        reportedJobRef.current = latestStackJob.id
+        return
+      }
+    }
+    if (!latestStackJob || !isTerminal(latestStackJob.status)) return
+    const { id: jobId, status, error } = latestStackJob
+    if (reportedJobRef.current === jobId) return
+    reportedJobRef.current = jobId
+    if (status === 'success') {
+      toast.success('Stack updated and restarted')
+    } else {
+      toast.error(error || 'Stack update failed', { duration: 12000 })
+    }
+  }, [latestStackJob])
+
+  const handleStackUpdate = () => {
+    if (!id) return
+    updateStackMutation.mutate(id, {
+      onSuccess: (data) => {
+        if (!data.jobId || data.noUpdates) {
+          toast.info('No updates available for this stack')
+        }
+      },
+      onError: (err) => {
+        toast.error(classifyError(err).message || 'Failed to start stack update')
+      },
+    })
+  }
+
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -67,7 +153,7 @@ export function StackPage() {
 
   if (error || !stack) {
     const appError = error ? classifyError(error) : null
-    
+
     return (
       <div className="space-y-6">
         <div>
@@ -76,7 +162,7 @@ export function StackPage() {
             {appError?.message || 'The requested stack could not be found.'}
           </p>
         </div>
-        
+
         {appError && (
           <Card className="border-destructive">
             <CardContent className="pt-6">
@@ -86,8 +172,8 @@ export function StackPage() {
                   <h3 className="font-semibold">Failed to load stack</h3>
                   <p className="text-sm text-muted-foreground">{appError.message}</p>
                   <div className="flex gap-2">
-                    <Button 
-                      onClick={() => refetch()} 
+                    <Button
+                      onClick={() => refetch()}
                       disabled={!appError.retryable}
                       variant="outline"
                       size="sm"
@@ -95,7 +181,7 @@ export function StackPage() {
                       <RefreshCw className="mr-2 h-4 w-4" />
                       Retry
                     </Button>
-                    <Button 
+                    <Button
                       onClick={() => navigate('/')}
                       variant="outline"
                       size="sm"
@@ -104,7 +190,7 @@ export function StackPage() {
                       Dashboard
                     </Button>
                     {appError.type === 'auth' && (
-                      <Button 
+                      <Button
                         onClick={() => navigate('/login')}
                         variant="outline"
                         size="sm"
@@ -118,7 +204,7 @@ export function StackPage() {
             </CardContent>
           </Card>
         )}
-        
+
         {!appError && (
           <Button onClick={() => navigate('/')} variant="outline">
             <Home className="mr-2 h-4 w-4" />
@@ -146,8 +232,16 @@ export function StackPage() {
     <>
       <div className="space-y-6">
         <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="text-3xl font-bold tracking-tight truncate">{stack.projectName}</h1>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-3xl font-bold tracking-tight truncate">{stack.projectName}</h1>
+              <StackUpdateBadge
+                count={stackUpdatesCount}
+                onUpdate={handleStackUpdate}
+                jobStatus={activeJob?.status}
+                updatePending={updateStackMutation.isPending}
+              />
+            </div>
             <p className="text-muted-foreground truncate">{stack.directory}</p>
           </div>
           <Button

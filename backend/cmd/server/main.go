@@ -266,7 +266,9 @@ func main() {
 	dashboardHandler := handlers.NewDashboardHandler(monitorService, dockerService, db, connectionManager)
 	dashboardHandler.RegisterRoutes(protected, cfg.JWTSecret, cfg.AuthDisabled)
 
-	resourcesHandler := handlers.NewResourcesHandler(dockerService, db, schedulerService)
+	updateJobManager := services.NewUpdateJobManager(15 * time.Minute)
+
+	resourcesHandler := handlers.NewResourcesHandlerWithJobManager(dockerService, db, schedulerService, updateJobManager)
 	resourcesHandler.RegisterRoutes(protected)
 
 	if schedulerService != nil {
@@ -305,6 +307,9 @@ func main() {
 
 	operationsHandler := handlers.NewOperationsHandler(dockerService, db, opLock)
 	operationsHandler.RegisterRoutes(wsGroup, cfg.JWTSecret, cfg.AuthDisabled)
+
+	updateJobsWSHandler := handlers.NewUpdateJobsWSHandler(updateJobManager, db, cfg.JWTSecret, cfg.AuthDisabled, connectionManager)
+	updateJobsWSHandler.RegisterRoutes(wsGroup)
 
 	// ── Backup engine ──────────────────────────────────────────────────────────
 	//
@@ -383,6 +388,8 @@ func main() {
 	if schedulerService != nil {
 		schedulerService.Stop()
 	}
+
+	updateJobManager.Stop()
 
 	backupSvc.StopScheduler()
 

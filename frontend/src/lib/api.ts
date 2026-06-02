@@ -428,7 +428,22 @@ export const resourcesApi = {
   },
 
   updateContainer: async (id: string) => {
-    const response = await apiClient.post<{ message: string; historyId?: string; oldDigest?: string; newDigest?: string; durationMs?: number }>(`/resources/containers/${encodeURIComponent(id)}/update`)
+    const response = await apiClient.post<{ jobId: string; wsUrl: string }>(`/resources/containers/${encodeURIComponent(id)}/update`)
+    return response.data
+  },
+
+  updateStack: async (id: string) => {
+    const response = await apiClient.post<{ jobId: string; wsUrl: string; noUpdates?: boolean }>(`/resources/stacks/${encodeURIComponent(id)}/update`)
+    return response.data
+  },
+
+  getUpdateJobs: async () => {
+    const response = await apiClient.get<{ jobs: import('@/stores/updateJobStore').UpdateJob[] }>('/resources/updates/jobs')
+    return response.data
+  },
+
+  getUpdateJob: async (jobId: string) => {
+    const response = await apiClient.get<import('@/stores/updateJobStore').UpdateJob>(`/resources/updates/jobs/${encodeURIComponent(jobId)}`)
     return response.data
   },
 

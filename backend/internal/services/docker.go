@@ -1310,3 +1310,267 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect t
 
 	return nil
 }
+
+// streamComposeCmd runs a docker compose command and streams each output line via
+// emit. Both stdout and stderr are merged (same as CombinedOutput) so the caller
+// sees all output in order. Returns the combined output for error messages.
+func streamComposeCmd(ctx context.Context, args []string, dir string, stream LogLineStream, emit func(LogLine)) error {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Dir = dir
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start: %w", err)
+	}
+
+	var wg sync.WaitGroup
+	scanPipe := func(r io.Reader, s LogLineStream) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			scanner := bufio.NewScanner(r)
+			for scanner.Scan() {
+				text := scanner.Text()
+				emit(LogLine{Ts: time.Now().UTC(), Text: text, Stream: s})
+			}
+		}()
+	}
+	scanPipe(stdout, StreamStdout)
+	scanPipe(stderr, StreamStderr)
+	wg.Wait()
+
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("command failed: %w", err)
+	}
+	return nil
+}
+
+// UpdateContainerStreaming performs a streaming update of a single container,
+// calling emit for each output line and setStatus at each lifecycle phase.
+// It returns the old/new image digest and duration for history persistence.
+func (s *DockerService) UpdateContainerStreaming(
+	ctx context.Context,
+	containerID string,
+	db DashboardDB,
+	emit func(LogLine),
+	setStatus func(Status),
+) (models.UpdateResult, error) {
+	inspect, err := s.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return models.UpdateResult{}, fmt.Errorf("inspecting container: %w", err)
+	}
+
+	oldDigest := inspect.Image
+	start := time.Now()
+
+	wasRunning := inspect.State != nil && inspect.State.Running
+	projectName := ""
+	serviceName := ""
+	if inspect.Config != nil && inspect.Config.Labels != nil {
+		projectName = inspect.Config.Labels["com.docker.compose.project"]
+		serviceName = inspect.Config.Labels["com.docker.compose.service"]
+	}
+
+	var updateErr error
+	if projectName != "" && serviceName != "" && db != nil {
+		stack, sErr := db.GetStackByProjectName(projectName)
+		if sErr == nil && stack != nil {
+			updateErr = s.updateComposeContainerStreaming(ctx, *stack, serviceName, wasRunning, emit, setStatus)
+		} else {
+			updateErr = s.updateStandaloneContainerStreaming(ctx, inspect, wasRunning, emit, setStatus)
+		}
+	} else {
+		updateErr = s.updateStandaloneContainerStreaming(ctx, inspect, wasRunning, emit, setStatus)
+	}
+
+	durationMs := time.Since(start).Milliseconds()
+
+	if updateErr != nil {
+		return models.UpdateResult{OldDigest: oldDigest, DurationMs: durationMs}, updateErr
+	}
+
+	newDigest := oldDigest
+	if newInspect, inspectErr := s.client.ContainerInspect(ctx, containerID); inspectErr == nil {
+		newDigest = newInspect.Image
+	}
+
+	return models.UpdateResult{
+		OldDigest:  oldDigest,
+		NewDigest:  newDigest,
+		DurationMs: durationMs,
+	}, nil
+}
+
+func (s *DockerService) updateComposeContainerStreaming(
+	ctx context.Context,
+	stack models.Stack,
+	serviceName string,
+	wasRunning bool,
+	emit func(LogLine),
+	setStatus func(Status),
+) error {
+	imageRef := serviceName
+	if stack.ComposeFile != "" {
+		imageRef = serviceName
+	}
+
+	setStatus(StatusPulling)
+	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Pulling " + imageRef, Stream: StreamStatus})
+
+	pullArgs := s.buildComposeArgs(stack, "pull", []string{serviceName})
+	if err := streamComposeCmd(ctx, pullArgs, stack.Directory, StreamStdout, emit); err != nil {
+		return fmt.Errorf("compose pull failed: %w", err)
+	}
+
+	setStatus(StatusRecreating)
+	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + serviceName, Stream: StreamStatus})
+
+	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", serviceName})
+	if err := streamComposeCmd(ctx, upArgs, stack.Directory, StreamStdout, emit); err != nil {
+		return fmt.Errorf("compose up failed: %w", err)
+	}
+
+	if !wasRunning {
+		time.Sleep(3 * time.Second)
+		filterArgs := filters.NewArgs()
+		filterArgs.Add("label", "com.docker.compose.project="+stack.ProjectName)
+		filterArgs.Add("label", "com.docker.compose.service="+serviceName)
+		filterArgs.Add("status", "running")
+
+		containers, err := s.client.ContainerList(ctx, container.ListOptions{Filters: filterArgs})
+		if err != nil {
+			return fmt.Errorf("finding new container to stop: %w", err)
+		}
+		for _, c := range containers {
+			if err := s.client.ContainerStop(ctx, c.ID, container.StopOptions{}); err != nil {
+				slog.Error("Failed to stop recreated container", "id", c.ID, "error", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *DockerService) updateStandaloneContainerStreaming(
+	ctx context.Context,
+	inspect types.ContainerJSON,
+	wasRunning bool,
+	emit func(LogLine),
+	setStatus func(Status),
+) error {
+	imageRef := inspect.Config.Image
+
+	setStatus(StatusPulling)
+	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Pulling " + imageRef, Stream: StreamStatus})
+
+	reader, err := s.client.ImagePull(ctx, imageRef, image.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("pulling image: %w", err)
+	}
+	io.Copy(io.Discard, reader)
+	reader.Close()
+
+	emit(LogLine{Ts: time.Now().UTC(), Text: "Pull complete", Stream: StreamStdout})
+
+	setStatus(StatusRecreating)
+	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + strings.TrimPrefix(inspect.Name, "/"), Stream: StreamStatus})
+
+	if wasRunning {
+		if err := s.client.ContainerStop(ctx, inspect.ID, container.StopOptions{}); err != nil {
+			return fmt.Errorf("stopping container: %w", err)
+		}
+		emit(LogLine{Ts: time.Now().UTC(), Text: "Container stopped", Stream: StreamStdout})
+	}
+
+	if err := s.client.ContainerRemove(ctx, inspect.ID, container.RemoveOptions{}); err != nil {
+		return fmt.Errorf("removing container: %w", err)
+	}
+	emit(LogLine{Ts: time.Now().UTC(), Text: "Old container removed", Stream: StreamStdout})
+
+	name := strings.TrimPrefix(inspect.Name, "/")
+
+	var netConfig *network.NetworkingConfig
+	if inspect.NetworkSettings != nil {
+		netConfig = &network.NetworkingConfig{
+			EndpointsConfig: inspect.NetworkSettings.Networks,
+		}
+	}
+
+	newContainer, err := s.client.ContainerCreate(ctx, inspect.Config, inspect.HostConfig, netConfig, nil, name)
+	if err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+	emit(LogLine{Ts: time.Now().UTC(), Text: "New container created", Stream: StreamStdout})
+
+	if wasRunning {
+		if err := s.client.ContainerStart(ctx, newContainer.ID, container.StartOptions{}); err != nil {
+			return fmt.Errorf("starting container: %w", err)
+		}
+		emit(LogLine{Ts: time.Now().UTC(), Text: "Container started", Stream: StreamStdout})
+	}
+
+	return nil
+}
+
+// UpdateComposeServiceStreaming updates a single compose service for a stack,
+// streaming output via emit and advancing status via setStatus. It runs
+// docker compose pull <service> then up -d --force-recreate --no-deps <service>,
+// streaming combined stdout+stderr line-by-line. Returns old and new image IDs
+// and the elapsed duration for history persistence.
+func (s *DockerService) UpdateComposeServiceStreaming(
+	ctx context.Context,
+	stack models.Stack,
+	serviceName string,
+	emit func(LogLine),
+	setStatus func(Status),
+) (oldDigest, newDigest string, durationMs int64, err error) {
+	start := time.Now()
+
+	// Get old digest from the container before update.
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("label", "com.docker.compose.project="+stack.ProjectName)
+	filterArgs.Add("label", "com.docker.compose.service="+serviceName)
+	containers, listErr := s.client.ContainerList(ctx, container.ListOptions{All: true, Filters: filterArgs})
+	if listErr == nil && len(containers) > 0 {
+		oldDigest = containers[0].ImageID
+	}
+
+	setStatus(StatusPulling)
+	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Pulling " + serviceName, Stream: StreamStatus})
+
+	pullArgs := s.buildComposeArgs(stack, "pull", []string{serviceName})
+	if pullErr := streamComposeCmd(ctx, pullArgs, stack.Directory, StreamStdout, emit); pullErr != nil {
+		durationMs = time.Since(start).Milliseconds()
+		err = fmt.Errorf("compose pull failed: %w", pullErr)
+		return
+	}
+
+	setStatus(StatusRecreating)
+	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + serviceName, Stream: StreamStatus})
+
+	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", serviceName})
+	if upErr := streamComposeCmd(ctx, upArgs, stack.Directory, StreamStdout, emit); upErr != nil {
+		durationMs = time.Since(start).Milliseconds()
+		err = fmt.Errorf("compose up failed: %w", upErr)
+		return
+	}
+
+	// Get new digest after the update.
+	containers2, listErr2 := s.client.ContainerList(ctx, container.ListOptions{All: true, Filters: filterArgs})
+	if listErr2 == nil && len(containers2) > 0 {
+		newDigest = containers2[0].ImageID
+	} else {
+		newDigest = oldDigest
+	}
+
+	durationMs = time.Since(start).Milliseconds()
+	return
+}

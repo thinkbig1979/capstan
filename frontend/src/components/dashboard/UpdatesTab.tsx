@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
-import { useCheckUpdates, useCheckUpdatesRefresh, useUpdateContainer, useAutoUpdatePolicies } from '@/hooks/useResources'
+import { useCheckUpdates, useCheckUpdatesRefresh, useUpdateContainer, useAutoUpdatePolicies, useUpdateJobs } from '@/hooks/useResources'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
+import { useUpdateJobStore } from '@/stores/updateJobStore'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -17,6 +18,7 @@ import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { UpdateLogTab } from '@/components/dashboard/UpdateLogTab'
+import { UpdateJobStatusCell } from '@/components/dashboard/UpdateJobStatusCell'
 import type { ContainerUpdateInfo, CachedUpdate, AutoUpdatePolicy } from '@/types'
 import { formatRelativeTime } from '@/lib/format'
 
@@ -35,7 +37,13 @@ export function UpdatesTab() {
   const { data: policiesData } = useAutoUpdatePolicies()
   const { isScanning } = useUpdateScanStore()
   const [sortBy, setSortBy] = useState<SortKey>('name')
-  const [updatingId, setUpdatingId] = useState<string | null>(null)
+  // Expanded log state: set of containerIds with expanded log panels
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+
+  // Hydrate store on mount so returning to the tab reflects in-flight/recent jobs
+  useUpdateJobs()
+
+  const jobForContainer = useUpdateJobStore((s) => s.jobForContainer)
 
   const updates = useMemo(() => updateData?.updates ?? [], [updateData?.updates])
   const fromCache = updateData?.fromCache ?? false
@@ -56,17 +64,27 @@ export function UpdatesTab() {
   }
 
   const handleUpdate = (container: UpdateItem) => {
-    setUpdatingId(container.containerId)
     updateMutation.mutate(container.containerId, {
       onSuccess: () => {
-        const action = container.state === 'running' ? 'updated and restarted' : 'updated'
+        // The store drives UI; the toast just confirms the action was accepted
+        const action = container.state === 'running' ? 'queued for update and restart' : 'queued for update'
         toast.success(`${container.containerName} ${action}`)
-        setUpdatingId(null)
       },
       onError: (err) => {
         toast.error(classifyError(err).message || `Failed to update ${container.containerName}`)
-        setUpdatingId(null)
       },
+    })
+  }
+
+  const toggleExpand = (containerId: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(containerId)) {
+        next.delete(containerId)
+      } else {
+        next.add(containerId)
+      }
+      return next
     })
   }
 
@@ -244,6 +262,8 @@ export function UpdatesTab() {
                   ? policies.get(`stack:${container.stackId}`)
                   : undefined
                 const activePolicy = containerPolicy || stackPolicy
+                const job = jobForContainer(container.containerId)
+                const expanded = expandedIds.has(container.containerId)
 
                 return (
                   <TableRow key={container.containerId}>
@@ -307,25 +327,14 @@ export function UpdatesTab() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Button
-                        variant="default"
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={() => handleUpdate(container)}
-                        disabled={updatingId === container.containerId || updateMutation.isPending}
-                      >
-                        {updatingId === container.containerId ? (
-                          <>
-                            <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
-                            Updating...
-                          </>
-                        ) : (
-                          <>
-                            <Download className="mr-1 h-3 w-3" />
-                            {container.state === 'running' ? 'Update & Restart' : 'Update'}
-                          </>
-                        )}
-                      </Button>
+                      <UpdateJobStatusCell
+                        job={job}
+                        expanded={expanded}
+                        onToggleExpand={() => toggleExpand(container.containerId)}
+                        onUpdate={() => handleUpdate(container)}
+                        isRunning={container.state === 'running'}
+                        updatePending={updateMutation.isPending}
+                      />
                     </TableCell>
                   </TableRow>
                 )

@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { resourcesApi, settingsApi, autoUpdateApi } from '@/lib/api'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
+import { useUpdateJobStore } from '@/stores/updateJobStore'
 import type { UpdateHistoryFilters } from '@/types'
 
 // Shared sonner id so the loading toast is replaced (not stacked) on completion.
@@ -166,12 +167,58 @@ export function useUpdateContainer() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (containerId: string) => resourcesApi.updateContainer(containerId),
-    onSuccess: () => {
+    onSuccess: (data, containerId) => {
+      if (data.jobId) {
+        useUpdateJobStore.getState().upsertJob({
+          id: data.jobId,
+          targetType: 'container',
+          targetId: containerId,
+          name: containerId,
+          stackId: '',
+          status: 'queued',
+          lines: [],
+          createdAt: new Date().toISOString(),
+        })
+      }
       queryClient.invalidateQueries({ queryKey: ['resources', 'updates'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
       queryClient.invalidateQueries({ queryKey: ['stacks'] })
       queryClient.invalidateQueries({ queryKey: ['update-history'] })
     },
+  })
+}
+
+export function useUpdateStack() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (stackId: string) => resourcesApi.updateStack(stackId),
+    onSuccess: (data, stackId) => {
+      if (data.jobId) {
+        useUpdateJobStore.getState().upsertJob({
+          id: data.jobId,
+          targetType: 'stack',
+          targetId: stackId,
+          name: stackId,
+          stackId: stackId,
+          status: 'queued',
+          lines: [],
+          createdAt: new Date().toISOString(),
+        })
+      }
+      queryClient.invalidateQueries({ queryKey: ['resources', 'updates'] })
+    },
+  })
+}
+
+export function useUpdateJobs() {
+  return useQuery({
+    queryKey: ['resources', 'update-jobs'],
+    queryFn: async () => {
+      const data = await resourcesApi.getUpdateJobs()
+      useUpdateJobStore.getState().hydrate(data.jobs)
+      return data
+    },
+    retry: 1,
   })
 }
 
