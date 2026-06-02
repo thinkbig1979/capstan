@@ -16,11 +16,6 @@ func newTestManager(ttl time.Duration) *UpdateJobManager {
 	return NewUpdateJobManager(ttl)
 }
 
-// noopRun is a run func that succeeds immediately without emitting anything.
-func noopRun(_ context.Context, _ string, _ func(LogLine), _ func(Status)) error {
-	return nil
-}
-
 // TestUpdateJobManager_Enqueue_ReturnsQueuedJob checks that Enqueue returns a
 // job in queued state immediately.
 func TestUpdateJobManager_Enqueue_ReturnsQueuedJob(t *testing.T) {
