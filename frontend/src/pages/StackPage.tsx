@@ -12,8 +12,16 @@ import { toast } from 'sonner'
 import { useConfirm } from '@/components/ConfirmDialog'
 import { useStackStore } from '@/stores/stackStore'
 import { useCheckUpdates, useUpdateStack, useUpdateJobs } from '@/hooks/useResources'
-import { useUpdateJobStore } from '@/stores/updateJobStore'
+import { useUpdateJobStore, type UpdateJob } from '@/stores/updateJobStore'
 import { StackUpdateBadge } from '@/components/stack/StackUpdateBadge'
+
+// Most recently created job (by createdAt) without copying/sorting the array.
+function latestByCreatedAt(jobs: UpdateJob[]): UpdateJob | undefined {
+  return jobs.reduce<UpdateJob | undefined>(
+    (latest, j) => (!latest || j.createdAt > latest.createdAt ? j : latest),
+    undefined,
+  )
+}
 
 export function StackPage() {
   const { id } = useParams<{ id: string }>()
@@ -64,20 +72,29 @@ export function StackPage() {
     return updateData.updates.filter((u) => u.stackId === id).length
   }, [updateData?.updates, id])
 
-  // Stack job state
+  // Stack job state. Derive from the raw jobs map so the memoized values keep a
+  // stable identity across renders (a selector returning a fresh array each call
+  // would make every dependent memo/effect re-run on every render).
   const updateStackMutation = useUpdateStack()
-  const jobsForStack = useUpdateJobStore((s) => s.jobsForStack)
-  const stackJobs = id ? jobsForStack(id) : []
-  // Use the most recently created active job for status display
-  const activeJob = stackJobs
-    .filter((j) => j.status === 'queued' || j.status === 'pulling' || j.status === 'recreating')
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+  const jobsMap = useUpdateJobStore((s) => s.jobs)
+  const stackJobs = useMemo(
+    () => (id ? Object.values(jobsMap).filter((j) => j.stackId === id) : []),
+    [jobsMap, id],
+  )
 
-  // Most recent stack job overall (active or finished), to report the outcome.
-  const latestStackJob = useMemo(
-    () => [...stackJobs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0],
+  // Most recent active job, for the button's live phase label.
+  const activeJob = useMemo(
+    () =>
+      latestByCreatedAt(
+        stackJobs.filter(
+          (j) => j.status === 'queued' || j.status === 'pulling' || j.status === 'recreating',
+        ),
+      ),
     [stackJobs],
   )
+
+  // Most recent stack job overall (active or finished), to report the outcome.
+  const latestStackJob = useMemo(() => latestByCreatedAt(stackJobs), [stackJobs])
 
   // Surface the terminal outcome once per job. On a fail-fast partial update the
   // job error already names which services were left un-updated (see backend), so
