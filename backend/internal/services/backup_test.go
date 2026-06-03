@@ -205,10 +205,10 @@ func TestRunDRRestore_ConfinesDestinationToDataDir(t *testing.T) {
 	require.Equal(t, "rclone", call.Binary)
 
 	// The rclone destination (last positional arg) must be the server-derived
-	// path inside DataDir — not anything a client could supply.
+	// restic repository path — not anything a client could supply.
 	dest := call.Args[len(call.Args)-1]
-	want := filepath.Join(svc.cfg.DataDir, "dr-restore")
-	assert.Equal(t, want, dest, "DR restore destination must be server-derived inside DataDir")
+	want := filepath.Join(svc.cfg.DataDir, "restic-repo")
+	assert.Equal(t, want, dest, "DR restore destination must be the server-derived restic repo path")
 	assert.DirExists(t, want, "destination directory must be created before restore")
 }
 

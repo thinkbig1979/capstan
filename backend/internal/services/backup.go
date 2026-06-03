@@ -800,17 +800,11 @@ func (s *BackupService) RunRestore(
 
 // --- RunDRRestore ---
 
-// drRestoreSubdir is the fixed, server-controlled directory (under DataDir)
-// that a DR restore fetches the restic repository into. The destination is NOT
-// taken from client input: rclone sync mirrors the remote onto the destination
-// and deletes files not present in the source, so an attacker-supplied path
-// would be an arbitrary host-path overwrite primitive (C1).
-const drRestoreSubdir = "dr-restore"
-
 // RunDRRestore performs a Stage-3 DR restore: it fetches the restic repository
-// from the configured rclone remote into a fixed directory under DataDir. This
-// is a destructive, long-running operation that requires the caller to have
-// obtained explicit confirmation before invoking.
+// from the configured rclone remote back into the configured local restic
+// repository so the snapshots can then be restored. This is a destructive,
+// long-running operation that requires the caller to have obtained explicit
+// confirmation before invoking.
 func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine) error {
 	if !s.tryAcquireGlobal() {
 		return ErrBackupBusy
@@ -826,11 +820,17 @@ func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine)
 		return fmt.Errorf("rclone remote is not configured")
 	}
 
-	// Destination is derived server-side and confined to DataDir; it is never
-	// influenced by client input.
-	localRepoPath := filepath.Join(s.cfg.DataDir, drRestoreSubdir)
+	// Destination is the configured local restic repository (server-derived from
+	// config/DB, default <DataDir>/restic-repo) — never taken from client input.
+	// rclone sync mirrors the remote onto this path and deletes files not in the
+	// source, so a client-supplied path would be an arbitrary host-path overwrite
+	// primitive (C1).
+	localRepoPath := bc.ResticRepository
+	if localRepoPath == "" {
+		localRepoPath = filepath.Join(s.cfg.DataDir, "restic-repo")
+	}
 	if err := os.MkdirAll(localRepoPath, 0o700); err != nil {
-		return fmt.Errorf("create dr-restore directory: %w", err)
+		return fmt.Errorf("create restic repository directory: %w", err)
 	}
 
 	rclone := s.newRcloneMgr(bc)
