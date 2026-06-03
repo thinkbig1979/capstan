@@ -22,7 +22,7 @@ func newTestDB(t *testing.T) *database.DB {
 // newTestDBWithEncryptor creates an in-memory SQLite DB with an encryptor.
 func newTestDBWithEncryptor(t *testing.T) *database.DB {
 	t.Helper()
-	enc := NewTokenEncryptorOrDefault("test-secret-key-for-unit-tests-32c")
+	enc := NewTokenEncryptorOrDefault("", "test-secret-key-for-unit-tests-32c")
 	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
 	if err != nil {
 		t.Fatalf("newTestDBWithEncryptor: %v", err)
@@ -378,7 +378,7 @@ func TestRepoSettingSources_MixedSources(t *testing.T) {
 // encryption behaviour is intact after generalising the sensitive-key set.
 func TestGitHTTPSTokenEncryptionUnchanged(t *testing.T) {
 	t.Parallel()
-	enc := NewTokenEncryptorOrDefault("test-secret-key-for-unit-tests-32c")
+	enc := NewTokenEncryptorOrDefault("", "test-secret-key-for-unit-tests-32c")
 	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
 	if err != nil {
 		t.Fatalf("NewWithMigrationsAndEncryptor: %v", err)

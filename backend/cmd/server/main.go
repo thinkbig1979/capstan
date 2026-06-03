@@ -68,7 +68,7 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 
-	db, err := database.NewWithMigrationsAndEncryptor(cfg.DataDir, services.NewTokenEncryptorOrDefault(cfg.JWTSecret))
+	db, err := database.NewWithMigrationsAndEncryptor(cfg.DataDir, services.NewTokenEncryptorOrDefault(cfg.StorageKey, cfg.JWTSecret))
 	if err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
