@@ -5,9 +5,13 @@ FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-build
 
 WORKDIR /app/frontend
 
-RUN npm install -g pnpm
+# Pin pnpm for reproducible builds. A floating "npm install -g pnpm" silently
+# tracks the latest pnpm, whose behavior changes (e.g. overrides moved to
+# pnpm-workspace.yaml, default minimumReleaseAge supply-chain checks).
+RUN npm install -g pnpm@11.5.1
 
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+# pnpm-workspace.yaml carries the dependency overrides for pnpm 10.16+/11.
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 
 RUN pnpm install --frozen-lockfile --ignore-scripts && \
     pnpm rebuild esbuild
