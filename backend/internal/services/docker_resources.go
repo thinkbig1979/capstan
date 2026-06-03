@@ -10,6 +10,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -56,7 +57,7 @@ func (s *DockerService) DeleteImage(ctx context.Context, imageID string, force b
 	return s.client.ImageRemove(ctx, imageID, image.RemoveOptions{Force: force})
 }
 
-func (s *DockerService) PruneImages(ctx context.Context, opts PruneOptions) (dockertypes.ImagesPruneReport, error) {
+func (s *DockerService) PruneImages(ctx context.Context, opts PruneOptions) (image.PruneReport, error) {
 	f := filters.NewArgs()
 	// Docker's default prune only removes dangling (untagged) images. dangling=false
 	// widens it to all unused images (the `docker image prune -a` behaviour).
@@ -128,7 +129,7 @@ func (s *DockerService) DeleteVolume(ctx context.Context, volumeName string, for
 	return s.client.VolumeRemove(ctx, volumeName, force)
 }
 
-func (s *DockerService) PruneVolumes(ctx context.Context, opts PruneOptions) (dockertypes.VolumesPruneReport, error) {
+func (s *DockerService) PruneVolumes(ctx context.Context, opts PruneOptions) (volume.PruneReport, error) {
 	f := filters.NewArgs()
 	// Default prune only removes anonymous volumes. all=true widens it to every
 	// unused volume (the `docker volume prune -a` behaviour).
@@ -139,7 +140,7 @@ func (s *DockerService) PruneVolumes(ctx context.Context, opts PruneOptions) (do
 }
 
 func (s *DockerService) ListNetworks(ctx context.Context) ([]models.DockerNetwork, error) {
-	networks, err := s.client.NetworkList(ctx, dockertypes.NetworkListOptions{})
+	networks, err := s.client.NetworkList(ctx, network.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing networks: %w", err)
 	}
@@ -178,14 +179,14 @@ func (s *DockerService) ListNetworks(ctx context.Context) ([]models.DockerNetwor
 // networkInspector is the subset of the Docker client used to resolve real
 // per-network container attachment counts (NetworkList leaves them empty).
 type networkInspector interface {
-	NetworkInspect(ctx context.Context, networkID string, options dockertypes.NetworkInspectOptions) (dockertypes.NetworkResource, error)
+	NetworkInspect(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error)
 }
 
 // networkContainerCount returns the number of containers attached to a network.
 // NetworkList does not populate the Containers map, so we inspect the network;
 // on inspect failure we fall back to whatever the list reported (typically 0).
 func networkContainerCount(ctx context.Context, inspector networkInspector, networkID string, listFallback int) int {
-	inspected, err := inspector.NetworkInspect(ctx, networkID, dockertypes.NetworkInspectOptions{})
+	inspected, err := inspector.NetworkInspect(ctx, networkID, network.InspectOptions{})
 	if err != nil {
 		return listFallback
 	}
@@ -196,7 +197,7 @@ func (s *DockerService) DeleteNetwork(ctx context.Context, networkID string) err
 	return s.client.NetworkRemove(ctx, networkID)
 }
 
-func (s *DockerService) CreateNetwork(ctx context.Context, name string, opts dockertypes.NetworkCreate) (string, error) {
+func (s *DockerService) CreateNetwork(ctx context.Context, name string, opts network.CreateOptions) (string, error) {
 	resp, err := s.client.NetworkCreate(ctx, name, opts)
 	if err != nil {
 		return "", fmt.Errorf("creating network: %w", err)
@@ -204,7 +205,7 @@ func (s *DockerService) CreateNetwork(ctx context.Context, name string, opts doc
 	return resp.ID, nil
 }
 
-func (s *DockerService) PruneNetworks(ctx context.Context, opts PruneOptions) (dockertypes.NetworksPruneReport, error) {
+func (s *DockerService) PruneNetworks(ctx context.Context, opts PruneOptions) (network.PruneReport, error) {
 	f := filters.NewArgs()
 	if opts.Until != "" {
 		f.Add("until", opts.Until)
@@ -216,7 +217,7 @@ func (s *DockerService) DeleteContainer(ctx context.Context, containerID string,
 	return s.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force})
 }
 
-func (s *DockerService) PruneContainers(ctx context.Context, opts PruneOptions) (dockertypes.ContainersPruneReport, error) {
+func (s *DockerService) PruneContainers(ctx context.Context, opts PruneOptions) (container.PruneReport, error) {
 	f := filters.NewArgs()
 	if opts.Until != "" {
 		f.Add("until", opts.Until)

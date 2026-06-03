@@ -19,6 +19,7 @@ type Config struct {
 	DataDir         string
 	Port            string
 	JWTSecret       string
+	StorageKey      string
 	LogLevel        string
 	GitSSHKey       string
 	GitHTTPSToken   string
@@ -73,6 +74,11 @@ func Load() (*Config, error) {
 	}
 
 	cfg.JWTSecret = os.Getenv("JWT_SECRET")
+
+	// STORAGE_KEY derives the at-rest encryption key independently of JWT_SECRET
+	// (H2). Optional: when unset the encryptor falls back to JWT_SECRET so
+	// existing deployments keep working.
+	cfg.StorageKey = os.Getenv("STORAGE_KEY")
 
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
 		cfg.LogLevel = logLevel

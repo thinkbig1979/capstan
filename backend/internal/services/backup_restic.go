@@ -548,7 +548,9 @@ func (m *ResticManager) RestorePreview(ctx context.Context, snapshotID string, o
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	return m.runner.Run(ctx, "restic", []string{"ls", snapshotID}, m.resticEnv(pwFile), out)
+	// "--" stops flag parsing so a snapshot ID beginning with "-" cannot be
+	// interpreted as a restic flag (M5; the handler also validates the format).
+	return m.runner.Run(ctx, "restic", []string{"ls", "--", snapshotID}, m.resticEnv(pwFile), out)
 }
 
 // resticStatsOutput is the JSON shape returned by `restic stats --json`.

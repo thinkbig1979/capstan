@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
 )
 
 // TestSecurityHeadersCSP guards the Content-Security-Policy emitted by
@@ -20,7 +21,7 @@ func TestSecurityHeadersCSP(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest("GET", "/", nil)
 
-	SecurityHeaders()(c)
+	SecurityHeaders(&config.Config{})(c)
 
 	csp := w.Header().Get("Content-Security-Policy")
 	if csp == "" {
@@ -32,10 +33,38 @@ func TestSecurityHeadersCSP(t *testing.T) {
 		"'strict-dynamic'",
 		"'unsafe-eval'",
 		"frame-ancestors 'none'",
+		"connect-src 'self'",
 	} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP missing %q\n  got: %s", want, csp)
 		}
+	}
+}
+
+// TestSecurityHeadersCSP_ConnectSrcFromConfig verifies the connect-src directive
+// includes configured CORS origins (and their ws/wss variants) so a cross-origin
+// reverse-proxy deployment is not blocked by a localhost-only policy (M6).
+func TestSecurityHeadersCSP_ConnectSrcFromConfig(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/", nil)
+
+	cfg := &config.Config{CORSOrigins: "https://capstan.example.com"}
+	SecurityHeaders(cfg)(c)
+
+	csp := w.Header().Get("Content-Security-Policy")
+	for _, want := range []string{
+		"https://capstan.example.com",
+		"wss://capstan.example.com",
+	} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("connect-src missing %q\n  got: %s", want, csp)
+		}
+	}
+	if strings.Contains(csp, "localhost") {
+		t.Errorf("production CSP must not include localhost\n  got: %s", csp)
 	}
 
 	// A unique nonce must be present in script-src for strict-dynamic to work.

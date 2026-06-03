@@ -4,7 +4,6 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -17,6 +16,27 @@ import (
 )
 
 var bearerPrefixRegex = regexp.MustCompile(`^Bearer\s+`)
+
+// jwtIssuer is set as the "iss" claim on issued tokens and required by the
+// validators, so tokens are bound to this application (L2). Must match
+// middleware.jwtIssuer.
+const jwtIssuer = "capstan"
+
+// dummyBcryptHash is compared against on the username-not-found login path so
+// that a bcrypt comparison is always performed regardless of whether the user
+// exists. This equalizes response timing between the user-exists and
+// user-missing branches and removes the username-enumeration oracle (H3).
+// It is a bcrypt hash (at the same DefaultCost as real password hashes) of a
+// random value computed once at startup; no real password can ever match it.
+var dummyBcryptHash = func() []byte {
+	h, err := bcrypt.GenerateFromPassword([]byte("capstan-login-timing-equalizer-"+uuid.NewString()), bcrypt.DefaultCost)
+	if err != nil {
+		// bcrypt.GenerateFromPassword only fails on an invalid cost, which is a
+		// compile-time constant here; panic so the misconfiguration is loud.
+		panic("failed to generate dummy bcrypt hash: " + err.Error())
+	}
+	return h
+}()
 
 type AuthHandler struct {
 	db           *database.DB
@@ -185,28 +205,29 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	user, err := h.db.GetUserByUsername(req.Username)
-	if err != nil || user == nil {
-		slog.Warn("Failed authentication attempt",
-			"ip", c.ClientIP(),
-			"username", req.Username,
-			"timestamp", time.Now(),
-			"reason", "user_not_found")
-		c.JSON(http.StatusUnauthorized, models.NewAppError(
-			http.StatusUnauthorized,
-			models.ErrUnauthorized,
-			"Invalid credentials",
-		))
-		return
-	}
+	user, lookupErr := h.db.GetUserByUsername(req.Username)
 
-	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password))
-	if err != nil {
+	// Always perform a bcrypt comparison, even when the user does not exist, so
+	// the user-exists and user-missing paths take comparable time. This removes
+	// the username-enumeration timing oracle (H3). On the missing-user path we
+	// compare against a dummy hash so the result is still a mismatch.
+	hashToCompare := dummyBcryptHash
+	userExists := lookupErr == nil && user != nil
+	if userExists {
+		hashToCompare = []byte(user.Password)
+	}
+	cmpErr := bcrypt.CompareHashAndPassword(hashToCompare, []byte(req.Password))
+
+	if !userExists || cmpErr != nil {
+		reason := "invalid_password"
+		if !userExists {
+			reason = "user_not_found"
+		}
 		slog.Warn("Failed authentication attempt",
 			"ip", c.ClientIP(),
 			"username", req.Username,
 			"timestamp", time.Now(),
-			"reason", "invalid_password")
+			"reason", reason)
 		c.JSON(http.StatusUnauthorized, models.NewAppError(
 			http.StatusUnauthorized,
 			models.ErrUnauthorized,
@@ -385,6 +406,7 @@ func validatePassword(password string) *models.AppError {
 
 func generateJWT(userID, username, sessionID, secret string) (string, error) {
 	claims := jwtv5.MapClaims{
+		"iss":      jwtIssuer,
 		"sub":      userID,
 		"username": username,
 		"jti":      sessionID,
@@ -402,7 +424,7 @@ func parseJWT(token, secret string) (jwtv5.MapClaims, error) {
 			return nil, jwtv5.ErrSignatureInvalid
 		}
 		return []byte(secret), nil
-	})
+	}, jwtv5.WithIssuer(jwtIssuer))
 
 	if err != nil {
 		return nil, err
@@ -416,7 +438,7 @@ func parseJWT(token, secret string) (jwtv5.MapClaims, error) {
 }
 
 func setAuthCookies(c *gin.Context, token string, csrfToken string) {
-	secure := !strings.Contains(c.Request.Host, "localhost") && !strings.Contains(c.Request.Host, "127.0.0.1")
+	secure := middleware.IsSecureRequest(c)
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     "capstan_token",
 		Value:    token,

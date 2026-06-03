@@ -26,7 +26,11 @@ import (
 
 func newBackupHandlerDB(t *testing.T) *database.DB {
 	t.Helper()
-	db, err := database.NewWithMigrations(":memory:")
+	// Use an encryptor-backed DB so sensitive settings (restic_password,
+	// git_https_token) can be stored — the DB now refuses to persist secrets in
+	// plaintext (L1).
+	enc := services.NewTokenEncryptorOrDefault("", "test-secret-32-chars-padding-here")
+	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	return db
@@ -451,6 +455,28 @@ func TestListPolicies_EmptyList(t *testing.T) {
 	policies, ok := body["policies"].([]interface{})
 	require.True(t, ok, "policies must be an array")
 	assert.Empty(t, policies)
+}
+
+// TestPreviewSnapshot_RejectsMalformedID is the regression test for M5: the
+// snapshot ID from the URL must be validated before it reaches `restic ls`, so
+// a flag-like or path-like value cannot be interpreted as a restic flag.
+func TestPreviewSnapshot_RejectsMalformedID(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	for _, badID := range []string{"--no-lock", "deadbeefZZ", "nothex", "abc"} {
+		req := jsonReq(t, http.MethodGet, "/api/backups/snapshots/"+badID+"/preview", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusBadRequest, w.Code, "id %q must be rejected", badID)
+		body := decodeBody(t, w)
+		assert.Equal(t, models.ErrValidation, body["code"])
+	}
 }
 
 func TestUpsertPolicy_StackNotFound_Returns404(t *testing.T) {
@@ -892,6 +918,8 @@ func TestRunDRRestore_Kickoff_Returns202(t *testing.T) {
 	h := NewBackupHandler(svc, db, slog.Default())
 	r := newBackupRouter(h)
 
+	// localRepoPath is a removed/ignored field: the destination is derived
+	// server-side (C1). Sending it must not be honoured or cause an error.
 	req := jsonReq(t, http.MethodPost, "/api/backups/dr-restore", map[string]interface{}{
 		"confirm":       true,
 		"localRepoPath": "/tmp/restored",

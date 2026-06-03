@@ -1,5 +1,5 @@
 # Multi-stage build for Capstan Backend
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25.11-alpine AS builder
 
 WORKDIR /build
 
@@ -19,7 +19,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o server ./cmd/server
 
 # Final stage
-FROM alpine:latest
+FROM alpine:3.21
 
 WORKDIR /app
 

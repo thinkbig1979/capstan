@@ -538,7 +538,13 @@ func (d *DB) GetSetting(key string) (string, error) {
 }
 
 func (d *DB) SetSetting(key, value string) error {
-	if d.encryptor != nil && sensitiveSettingKeys[key] && value != "" {
+	if sensitiveSettingKeys[key] && value != "" {
+		// Fail closed: never persist a secret in plaintext. If no encryptor is
+		// configured (no STORAGE_KEY/JWT_SECRET), refuse rather than silently
+		// storing cleartext (L1).
+		if d.encryptor == nil {
+			return fmt.Errorf("cannot store sensitive setting %q without an encryption key (set STORAGE_KEY or JWT_SECRET)", key)
+		}
 		encrypted, err := d.encryptor.Encrypt(value)
 		if err != nil {
 			return fmt.Errorf("failed to encrypt setting: %w", err)

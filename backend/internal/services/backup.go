@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 )
 
 // ErrBackupBusy is returned by RunBackup/RunSync/RunRestore when another
@@ -727,8 +729,10 @@ func (s *BackupService) RunRestore(
 				fmt.Sprintf("restore target %q contains path traversal", targetDir),
 			)
 		}
-		// After cleaning, the path must be exactly the stack dir or sit beneath it.
-		if cleaned != stackDir && !strings.HasPrefix(cleaned, stackDir+string(filepath.Separator)) {
+		// Symlink-aware containment: a symlink inside the stack dir pointing
+		// elsewhere must not let `restic restore --target` write outside it (H1).
+		contained, err := pathutil.IsContained(stackDir, cleaned)
+		if err != nil || !contained {
 			return models.NewAppError(
 				http.StatusBadRequest,
 				models.ErrPathTraversal,
@@ -797,10 +801,11 @@ func (s *BackupService) RunRestore(
 // --- RunDRRestore ---
 
 // RunDRRestore performs a Stage-3 DR restore: it fetches the restic repository
-// from the configured rclone remote to localRepoPath. This is a destructive,
+// from the configured rclone remote back into the configured local restic
+// repository so the snapshots can then be restored. This is a destructive,
 // long-running operation that requires the caller to have obtained explicit
 // confirmation before invoking.
-func (s *BackupService) RunDRRestore(ctx context.Context, localRepoPath string, out chan<- StreamLine) error {
+func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine) error {
 	if !s.tryAcquireGlobal() {
 		return ErrBackupBusy
 	}
@@ -813,6 +818,19 @@ func (s *BackupService) RunDRRestore(ctx context.Context, localRepoPath string, 
 	bc := resolveBackupConfig(s.db, s.cfg)
 	if bc.RcloneRemote == "" {
 		return fmt.Errorf("rclone remote is not configured")
+	}
+
+	// Destination is the configured local restic repository (server-derived from
+	// config/DB, default <DataDir>/restic-repo) — never taken from client input.
+	// rclone sync mirrors the remote onto this path and deletes files not in the
+	// source, so a client-supplied path would be an arbitrary host-path overwrite
+	// primitive (C1).
+	localRepoPath := bc.ResticRepository
+	if localRepoPath == "" {
+		localRepoPath = filepath.Join(s.cfg.DataDir, "restic-repo")
+	}
+	if err := os.MkdirAll(localRepoPath, 0o700); err != nil {
+		return fmt.Errorf("create restic repository directory: %w", err)
 	}
 
 	rclone := s.newRcloneMgr(bc)

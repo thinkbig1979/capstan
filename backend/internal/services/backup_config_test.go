@@ -22,7 +22,7 @@ func newTestDB(t *testing.T) *database.DB {
 // newTestDBWithEncryptor creates an in-memory SQLite DB with an encryptor.
 func newTestDBWithEncryptor(t *testing.T) *database.DB {
 	t.Helper()
-	enc := NewTokenEncryptorOrDefault("test-secret-key-for-unit-tests-32c")
+	enc := NewTokenEncryptorOrDefault("", "test-secret-key-for-unit-tests-32c")
 	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
 	if err != nil {
 		t.Fatalf("newTestDBWithEncryptor: %v", err)
@@ -276,7 +276,7 @@ func TestRepoSettingSources_AllDefault(t *testing.T) {
 // TestRepoSettingSources_DBSources verifies "db" when DB has values.
 func TestRepoSettingSources_DBSources(t *testing.T) {
 	t.Parallel()
-	db := newTestDB(t)
+	db := newTestDBWithEncryptor(t)
 	cfg := baseCfg("/data")
 
 	if err := db.SetSetting("restic_repository", "/db/repo"); err != nil {
@@ -323,7 +323,7 @@ func TestRepoSettingSources_EnvSources(t *testing.T) {
 // TestRepoSettingSources_DBWinsOverEnv verifies DB takes precedence over env.
 func TestRepoSettingSources_DBWinsOverEnv(t *testing.T) {
 	t.Parallel()
-	db := newTestDB(t)
+	db := newTestDBWithEncryptor(t)
 	cfg := baseCfg("/data")
 	// Env fallbacks are set but DB values should win.
 	cfg.ResticRepository = "/env/repo"
@@ -378,7 +378,7 @@ func TestRepoSettingSources_MixedSources(t *testing.T) {
 // encryption behaviour is intact after generalising the sensitive-key set.
 func TestGitHTTPSTokenEncryptionUnchanged(t *testing.T) {
 	t.Parallel()
-	enc := NewTokenEncryptorOrDefault("test-secret-key-for-unit-tests-32c")
+	enc := NewTokenEncryptorOrDefault("", "test-secret-key-for-unit-tests-32c")
 	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
 	if err != nil {
 		t.Fatalf("NewWithMigrationsAndEncryptor: %v", err)

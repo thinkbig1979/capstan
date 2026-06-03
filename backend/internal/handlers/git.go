@@ -7,11 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 	"github.com/gin-gonic/gin"
@@ -89,11 +89,13 @@ func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error
 
 	valid := false
 	for _, stacksDir := range h.config.GetAllStacksDirs() {
-		normalizedStacks, err := filepath.Abs(stacksDir)
+		// Symlink-aware containment with a trailing-separator guard: rejects both
+		// sibling-prefix paths (/stacks-evil vs /stacks) and symlink escapes (M1).
+		ok, err := pathutil.IsContained(stacksDir, normalizedAbs)
 		if err != nil {
 			continue
 		}
-		if strings.HasPrefix(normalizedAbs, normalizedStacks) {
+		if ok {
 			valid = true
 			break
 		}

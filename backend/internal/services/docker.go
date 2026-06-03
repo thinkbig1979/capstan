@@ -13,6 +13,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
@@ -128,7 +129,7 @@ func (s *DockerService) GetContainerStats(ctx context.Context, containerID strin
 		decoder := json.NewDecoder(stats.Body)
 
 		for {
-			var statsJSON types.StatsJSON
+			var statsJSON container.StatsResponse
 			if err := decoder.Decode(&statsJSON); err != nil {
 				break
 			}
@@ -177,7 +178,7 @@ func (s *DockerService) GetContainerStats(ctx context.Context, containerID strin
 func (s *DockerService) ListenEvents(ctx context.Context) (<-chan models.DockerEvent, error) {
 	eventChan := make(chan models.DockerEvent, 100)
 
-	dockerEvents, errChan := s.client.Events(ctx, types.EventsOptions{})
+	dockerEvents, errChan := s.client.Events(ctx, events.ListOptions{})
 
 	go func() {
 		defer close(eventChan)
@@ -242,7 +243,7 @@ func (s *DockerService) ValidateName(name string) error {
 	return nil
 }
 
-func calculateCPUPercent(stats *types.StatsJSON) float64 {
+func calculateCPUPercent(stats *container.StatsResponse) float64 {
 	cpuPercent := 0.0
 	cpuDelta := float64(stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage)
 	systemDelta := float64(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage)
@@ -262,7 +263,7 @@ func calculateCPUPercent(stats *types.StatsJSON) float64 {
 	return cpuPercent
 }
 
-func calculateMemPercent(stats *types.StatsJSON) (float64, float64, float64) {
+func calculateMemPercent(stats *container.StatsResponse) (float64, float64, float64) {
 	memPercent := 0.0
 	var cache uint64
 	if stats.MemoryStats.Stats != nil {
@@ -278,7 +279,7 @@ func calculateMemPercent(stats *types.StatsJSON) (float64, float64, float64) {
 	return memPercent, memUsage, memLimit
 }
 
-func calculateMemSwap(stats *types.StatsJSON) float64 {
+func calculateMemSwap(stats *container.StatsResponse) float64 {
 	if stats.MemoryStats.Stats == nil {
 		return 0
 	}
@@ -289,11 +290,11 @@ func calculateMemSwap(stats *types.StatsJSON) float64 {
 	return float64(swapUsage)
 }
 
-func getPids(stats *types.StatsJSON) uint64 {
+func getPids(stats *container.StatsResponse) uint64 {
 	return stats.PidsStats.Current
 }
 
-func calculateNetwork(stats *types.StatsJSON) (float64, float64) {
+func calculateNetwork(stats *container.StatsResponse) (float64, float64) {
 	var netRx, netTx uint64
 
 	for _, network := range stats.Networks {
@@ -304,7 +305,7 @@ func calculateNetwork(stats *types.StatsJSON) (float64, float64) {
 	return float64(netRx), float64(netTx)
 }
 
-func calculateBlockIO(stats *types.StatsJSON) (float64, float64) {
+func calculateBlockIO(stats *container.StatsResponse) (float64, float64) {
 	var read, write uint64
 
 	for _, stat := range stats.BlkioStats.IoServiceBytesRecursive {

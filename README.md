@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="Supporting-Docs/Branding/capstan-mark-dark.svg">
-    <img alt="Capstan" src="Supporting-Docs/Branding/capstan-mark-light.svg" width="96" height="96">
-  </picture>
+  <img alt="Capstan" src="frontend/public/capstan.svg" width="96" height="96">
 </p>
 
 <h1 align="center">Capstan</h1>
@@ -15,7 +12,9 @@
   <a href="https://claude.com/claude-code"><img alt="Built with AI assistance" src="https://img.shields.io/badge/built%20with-AI%20assistance-8A2BE2"></a>
 </p>
 
-A web-based Docker Compose stack manager with Git integration.
+A web-based Docker Compose stack manager with Git integration, backups, and a
+built-in terminal. Capstan ships as a single multi-arch container that serves both
+the API and the web UI on one port.
 
 ## Quick Start
 
@@ -29,32 +28,47 @@ docker pull ghcr.io/thinkbig1979/capstan:latest
 ```
 
 The fastest way to run it is with `docker-compose.prod.yaml`, which already
-points at the published image:
+points at the published image. Create a `.env` first (see
+[Production Deployment](#production-deployment)), then:
 
 ```bash
 docker compose -f docker-compose.prod.yaml up -d
 ```
 
-Pin a version tag (e.g. `ghcr.io/thinkbig1979/capstan:0.7.0`) for reproducible
+Pin a version tag (e.g. `ghcr.io/thinkbig1979/capstan:0.11.0`) for reproducible
 deployments; `:latest` tracks the most recent release.
 
 ### Run from source (local development)
 
+`start-local.sh` builds the same all-in-one image and runs it via
+`docker-compose.yaml`, serving the whole app on port 5001:
+
 ```bash
-# Start everything (backend + frontend)
 ./start-local.sh
 ```
 
-Then open http://localhost:3001
+Then open http://localhost:5001. Authentication is disabled in this local mode
+(`backend/.env` is created from `backend/.env.example`). Set `STACKS_DIR` in
+`docker-compose.yaml` to the directory that holds your compose projects.
+
+For frontend hot-reload, run the backend and the Vite dev server separately:
+
+```bash
+cd backend  && ./run-local.sh    # API on :5001
+cd frontend && ./run-dev.sh      # Vite dev server on :5173 (proxies /api to :5001)
+```
 
 ## Features
 
-- **Docker Compose Management**: Create, start, stop, restart, and delete stacks
-- **Compose Editor**: Edit docker-compose.yaml files with live linting
-- **Environment Files**: Manage .env files with comment preservation
-- **Git Integration**: Status, pull, log, and diff for git-managed stacks
-- **Real-time Updates**: File watching for automatic stack detection
-- **Action Logging**: Audit trail of all operations
+- **Docker Compose Management**: create, start, stop, restart, and delete stacks
+- **Compose Editor**: edit `docker-compose.yaml` files with live linting
+- **Environment Files**: manage `.env` files with comment preservation
+- **Git Integration**: status, pull, log, and diff for git-managed stacks
+- **Image Updates**: detect and apply image updates per service
+- **Backups**: built-in restic snapshots with optional rclone cloud sync
+- **Web Terminal**: an in-browser shell into running containers
+- **Real-time Updates**: file watching for automatic stack detection
+- **Action Logging**: an audit trail of all operations
 
 ## Backups
 
@@ -106,7 +120,7 @@ Never replace this with a Docker named volume. The `docker-compose.prod.yaml` an
 ```bash
 # Via the UI: Settings → Backup → Run Backup Now
 # Via the API:
-curl -X POST http://localhost:5001/api/v1/backup/run
+curl -X POST http://localhost:5001/api/v1/backups/run
 ```
 
 ### Cloud sync (optional)
@@ -125,11 +139,11 @@ volumes:
 
 ```bash
 # List snapshots for a stack:
-curl http://localhost:5001/api/v1/backup/snapshots?stackId=<id>
+curl http://localhost:5001/api/v1/backups/snapshots?stackId=<id>
 
 # Restore a snapshot via UI: Settings → Backup → Snapshots → Restore
 # Or via API:
-curl -X POST http://localhost:5001/api/v1/backup/restore \
+curl -X POST http://localhost:5001/api/v1/backups/restore \
   -H 'Content-Type: application/json' \
   -d '{"stackId":"<id>","snapshotId":"<short-id>"}'
 ```
@@ -139,8 +153,8 @@ curl -X POST http://localhost:5001/api/v1/backup/restore \
 If the host is lost, recover from an rclone remote:
 
 1. Deploy a fresh Capstan instance with the same `./data` bind mount path.
-2. Trigger a DR restore (Settings, Backup, DR Restore) pointing at your rclone remote.
-   This syncs the full restic repository back to `/app/data/restic-repo`.
+2. Trigger a DR restore (Settings, Backup, DR Restore). This syncs the full
+   restic repository from the configured remote back to `/app/data/restic-repo`.
 3. Restore individual stacks via the Snapshots panel.
 
 The restic repository password is required for DR recovery. Store it separately
@@ -148,11 +162,12 @@ from the server (e.g. a password manager).
 
 ## Volume Path Identity
 
-**Important:** Capstan requires that the `STACKS_DIR` path inside the container must match the path on the host system for Docker Compose operations to work correctly.
+**Important:** the `STACKS_DIR` path inside the container must match the path on
+the host for Docker Compose operations to work correctly. Compose records the
+project's directory, and the host's Docker daemon must be able to find that same
+path when Capstan runs commands against it.
 
-### Quick Setup
-
-Add both environment variables to your `docker-compose.yaml`:
+Set both variables to the same value:
 
 ```yaml
 environment:
@@ -160,21 +175,12 @@ environment:
   - HOST_STACKS_DIR=/opt/stacks
 ```
 
-### Verification
-
-On startup, Capstan validates path identity and logs warnings if paths don't match:
+On startup, Capstan validates path identity and logs a warning if the paths
+don't match:
 
 ```bash
-docker-compose logs backend | grep "Volume path identity"
+docker compose logs | grep "Volume path identity"
 ```
-
-### Detailed Documentation
-
-See [Volume Path Identity](Supporting-Docs/Security/Volume-Path-Identity.md) for:
-- Why this requirement exists
-- Correct vs incorrect examples
-- Troubleshooting steps
-- Migration guide from Dockge
 
 ## Docker Socket & Security
 
@@ -247,189 +253,226 @@ itself. Two consequences:
       networks: [capstan-network]
 
     capstan:
-      image: capstan:latest
+      image: ghcr.io/thinkbig1979/capstan:latest
       environment:
         - DOCKER_HOST=tcp://docker-proxy:2375
       # no socket mount on Capstan itself
       networks: [capstan-network]
   ```
 
+## Application Security
+
+Capstan holds credentials, runs commands against your host's Docker daemon, and
+serves an in-browser terminal, so the application is hardened by default rather
+than left to the operator to secure. The codebase has been through a security
+audit; the measures below are in place and covered by tests.
+
+**Authentication and sessions**
+- Authentication is on by default. Passwords are hashed with bcrypt and must meet
+  a strength policy (length, character classes, common-password blocklist).
+- Login is rate-limited and runs a constant-time comparison whether or not the
+  username exists, so it does not leak which accounts are valid.
+- Sessions are tracked server-side and revoked on logout and on password change.
+  The session cookie is `HttpOnly`, `SameSite=Lax`, and marked `Secure` when the
+  request arrives over HTTPS. JWTs are bound to an issuer claim.
+
+**Secrets at rest**
+- Stored secrets (git HTTPS tokens, the restic repository password) are encrypted
+  with AES-256-GCM. The key is derived with HKDF from a dedicated `STORAGE_KEY`,
+  independent of the JWT signing secret, so leaking one does not expose the other.
+- The restic password is passed to restic via a private file, never on the
+  command line or in logs. Secrets are never returned in API responses.
+
+**Command execution and file access**
+- Every call to `docker`, `docker compose`, and `git` is made with an explicit
+  argument vector, not a shell string, so stack names, container names, and file
+  paths cannot inject commands.
+- Reads and writes to compose files, `.env` files, and backup targets are
+  confined to the configured stacks and data directories. Containment is
+  symlink-aware, so a symlink inside a stack directory cannot redirect a write
+  onto a host file outside it.
+
+**Web layer**
+- State-changing requests require a CSRF token (double-submit cookie + header).
+- CORS uses an exact-match allowlist; credentialed requests are never paired with
+  a wildcard origin.
+- WebSocket endpoints (including the terminal) validate the request `Origin`, so
+  the shell cannot be driven from another site (cross-site WebSocket hijacking).
+- Responses carry a Content-Security-Policy with `frame-ancestors 'none'`, plus
+  `X-Frame-Options`, `X-Content-Type-Options`, and `Referrer-Policy`. Generic
+  error responses avoid leaking stack traces or internals.
+
+**Dependencies and build**
+- Go and npm dependencies are scanned (`govulncheck`, `pnpm audit`) and kept
+  current; the binary is built with a patched Go toolchain and base images are
+  pinned.
+
+**The honest boundary.** None of this changes the fact that access to the Docker
+socket is root-equivalent control of the host (see
+[Docker Socket & Security](#docker-socket--security) above). Treat a Capstan
+login as administrative access, run it on a trusted network behind TLS, and use a
+socket proxy if you need least-privilege. The application hardening above reduces
+the ways that trust can be abused; it is not a substitute for protecting access
+to Capstan itself.
+
 ## Project Structure
 
 ```
 capstan/
-├── backend/          # Go backend API
-│   ├── cmd/         # Main application
-│   ├── internal/    # Internal packages
-│   └── services/    # Service layer
-├── frontend/        # React frontend
-│   └── src/        # Source code
-└── .agent-os/       # Agent OS configuration
+├── backend/                  # Go backend (Gin API, SQLite, Docker/Git services)
+│   ├── cmd/server/           # main entrypoint
+│   └── internal/             # handlers, services, middleware, models
+├── frontend/                 # React + Vite + Tailwind SPA
+│   └── src/                  # components, hooks, stores, lib
+├── docker/                   # production Dockerfile + compose
+├── docker-compose.yaml       # local dev (builds the all-in-one image)
+└── docker-compose.prod.yaml  # runs the published image
 ```
-
-## Documentation
-
-### Core Documentation
-- **[TESTING.md](TESTING.md)** - Local testing and development guide
-- **[CLAUDE.md](CLAUDE.md)** - Agent OS framework instructions
-
-### Deployment & Operations
-- **[Deployment Guide](Supporting-Docs/Deployment.md)** - Production deployment, SSL/TLS configuration, environment variables, reverse proxy setup
-- **[Migration from Dockge](Supporting-Docs/Migration-From-Dockge.md)** - Step-by-step migration guide from Dockge
-- **[Troubleshooting Guide](Supporting-Docs/Troubleshooting.md)** - Common issues and solutions
-
-### Security & Configuration
-- **[Volume Path Identity](Supporting-Docs/Security/Volume-Path-Identity.md)** - Critical configuration requirement for Docker Compose operations
 
 ## Quick Commands
 
-### Docker Compose (Full Stack)
 ```bash
-./start-local.sh          # Start all services
-docker-compose logs -f     # View logs
-docker-compose down        # Stop all services
-```
+# Full stack (Docker)
+./start-local.sh           # build + start
+docker compose logs -f     # view logs
+docker compose down        # stop
 
-### Backend Only
-```bash
+# Backend only
 cd backend
-./run-local.sh           # Quick start
-make run                # Make target
-make test               # Run tests
-```
+./run-local.sh             # quick start
+make run                   # run the server
+make test                  # run tests
 
-### Frontend Only
-```bash
+# Frontend only
 cd frontend
-./run-dev.sh            # Quick start (dev server)
-npm run build           # Build for production
+./run-dev.sh               # Vite dev server (:5173)
+npm run build              # production build
 ```
 
 ## API Endpoints
 
-### Health
-- `GET /health` - Health check
+All routes are under `/api/v1` and require authentication (unless
+`AUTH_DISABLED=true`), except `/health`. The web UI is the primary interface;
+these are the main REST routes.
 
-### Authentication (if enabled)
-- `POST /api/v1/auth/login` - Login
-- `POST /api/v1/auth/logout` - Logout
+### Health
+- `GET /health` — health check (restricted to localhost)
+
+### Authentication
+- `POST /api/v1/auth/setup` — create the first admin (only when no user exists)
+- `POST /api/v1/auth/login` — log in
+- `POST /api/v1/auth/logout` — log out
+- `GET  /api/v1/auth/me` — current user
 
 ### Stacks
-- `GET /api/v1/stacks` - List all stacks
-- `GET /api/v1/stacks/:id` - Get stack details
-- `POST /api/v1/stacks` - Create new stack
-- `POST /api/v1/stacks/:id/start` - Start stack
-- `POST /api/v1/stacks/:id/stop` - Stop stack
-- `POST /api/v1/stacks/:id/restart` - Restart stack
-- `DELETE /api/v1/stacks/:id` - Delete stack
+- `GET    /api/v1/stacks` — list stacks
+- `POST   /api/v1/stacks` — create a stack
+- `GET    /api/v1/stacks/:id` — stack details
+- `POST   /api/v1/stacks/:id/start` · `/stop` · `/restart` · `/pull` — lifecycle actions
+- `DELETE /api/v1/stacks/:id` — delete a stack
 
-### Compose Files
-- `GET /api/v1/stacks/:id/compose` - Get compose file
-- `PUT /api/v1/stacks/:id/compose` - Save compose file
-- `POST /api/v1/stacks/:id/compose/lint` - Lint compose file
-
-### Environment Files
-- `GET /api/v1/stacks/:id/env` - Get env file
-- `PUT /api/v1/stacks/:id/env` - Save env file
+### Compose & environment files
+- `GET` / `PUT /api/v1/stacks/:id/compose` — read/write compose file
+- `POST /api/v1/stacks/:id/compose/lint` — lint compose file
+- `GET` / `PUT /api/v1/stacks/:id/env` — read/write `.env` file
 
 ### Git
-- `GET /api/v1/directories/:path/git` - Get git status
-- `POST /api/v1/directories/:path/git/pull` - Pull changes
-- `GET /api/v1/directories/:path/git/log` - Get commit log
-- `GET /api/v1/directories/:path/git/diff/:hash` - Get commit diff
+- `GET  /api/v1/git?stackId=<id>` — status
+- `POST /api/v1/git/pull` — pull changes
+- `GET  /api/v1/git/log` — commit log
+- `GET  /api/v1/git/diff/:hash` — commit diff
+
+### Backups
+- `POST /api/v1/backups/run` · `/sync` · `/restore` · `/dr-restore` · `/prune`
+- `GET  /api/v1/backups/status` · `/history` · `/snapshots`
 
 ## Migration from Dockge
 
-Migrating from Dockge? See the comprehensive [Migration from Dockge guide](Supporting-Docs/Migration-From-Dockge.md) for:
-- Prerequisites and backup procedures
-- Side-by-side setup (both apps running)
-- Port differences (Dockge 5001 → Capstan 5001)
-- Account migration (manual: create new admin)
-- Complete feature comparison table
-- Troubleshooting common migration issues
+Capstan reads the same on-disk stack layout as Dockge, so migration is mostly a
+matter of pointing it at your existing stacks directory.
 
-### Quick Migration
-
-For a quick overview:
-
-1. **Backup existing stacks:**
+1. **Back up existing stacks:**
    ```bash
    cp -r /opt/stacks /opt/stacks.backup
    ```
 
-2. **Update environment variables** (Dockge uses `DOCKGE_STACKS_DIR`, Capstan uses `STACKS_DIR`):
+2. **Map the stacks directory** (Dockge uses `DOCKGE_STACKS_DIR`; Capstan uses
+   `STACKS_DIR`, and requires `HOST_STACKS_DIR` to match — see
+   [Volume Path Identity](#volume-path-identity)):
    ```yaml
    environment:
      - STACKS_DIR=/opt/stacks
      - HOST_STACKS_DIR=/opt/stacks
    ```
 
-3. **Restart** service:
-   ```bash
-   docker-compose down
-   docker-compose up -d
-   ```
+3. **Start Capstan** and create an admin account on first run (`/auth/setup`).
+   Accounts are not migrated from Dockge.
 
 4. **Verify path validation:**
    ```bash
-   docker-compose logs backend | grep "Volume path identity"
+   docker compose logs | grep "Volume path identity"
    ```
 
-5. **Test with a simple stack** before migrating production data
+5. **Test with a single stack** before relying on it for production.
 
-For detailed migration steps, see the [Migration from Dockge guide](Supporting-Docs/Migration-From-Dockge.md).
+You can run Dockge and Capstan side by side during migration as long as only one
+manages a given stack at a time.
 
 ## Production Deployment
 
-For production deployment, see the comprehensive [Deployment Guide](Supporting-Docs/Deployment.md) which covers:
-
-- **Quick Start**: Basic deployment steps
-- **Production Checklist**: Security, SSL, monitoring, backups
-- **Environment Variables**: Complete list with descriptions
-- **Reverse Proxy**: nginx, Traefik, Caddy examples
-- **SSL/TLS**: Certbot examples
-- **Docker Socket Security**: Permissions and best practices
-
-### Production Configuration
-
 ```bash
-# Generate secure JWT secret
+# Generate secrets (use two distinct values)
 JWT_SECRET=$(openssl rand -hex 32)
+STORAGE_KEY=$(openssl rand -hex 32)
 
 # Create production .env file
 cat > .env << EOF
 PORT=5001
 LOG_LEVEL=info
 JWT_SECRET=$JWT_SECRET
+STORAGE_KEY=$STORAGE_KEY
 AUTH_DISABLED=false
 STACKS_DIR=/opt/stacks
 HOST_STACKS_DIR=/opt/stacks
 DATA_DIR=/app/data
 TRUSTED_NETWORKS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.1
 EOF
+
+docker compose -f docker-compose.prod.yaml up -d
 ```
 
-### Security Considerations
+`STORAGE_KEY` encrypts stored secrets (git tokens, restic password) at rest with
+a key independent of `JWT_SECRET`; if unset it falls back to `JWT_SECRET`. Using a
+separate value means rotating `JWT_SECRET` doesn't require re-encryption and a
+leaked `JWT_SECRET` alone can't decrypt stored secrets.
 
-- **Always set a strong JWT secret** (min 32 characters)
-- **Enable authentication** in production (`AUTH_DISABLED=false`)
-- **Use SSL/TLS** for all connections
-- **Mount Docker socket as read-only** (`/var/run/docker.sock:/var/run/docker.sock:ro`)
-- **Configure trusted networks** for access control
-- **Set up regular backups** of stack configurations
-- **Monitor resource usage** and set appropriate limits
-- **Use a reverse proxy** (nginx, Traefik, Caddy) with SSL termination
+### Security checklist
 
-For detailed production deployment instructions, see the [Deployment Guide](Supporting-Docs/Deployment.md).
+- **Set a strong `JWT_SECRET`** (min 32 characters) and a separate `STORAGE_KEY`.
+- **Keep `AUTH_DISABLED=false`** for anything reachable off localhost.
+- **Terminate TLS** at a reverse proxy (nginx, Traefik, Caddy) and forward
+  `X-Forwarded-Proto: https` — Capstan uses it to set `Secure` cookies and HSTS.
+- **Configure `TRUSTED_NETWORKS`** for access control.
+- **Set up and test backups** (Settings → Backup).
+- For least-privilege Docker access, front the socket with a proxy (see
+  [Docker Socket & Security](#docker-socket--security)).
+
+> **Upgrading:** this release binds JWTs to an issuer claim, so existing sessions
+> are invalidated on upgrade — log in again once. Previously stored secrets stay
+> readable and are re-encrypted under the new key scheme on next save.
 
 ## Development
 
+See [TESTING.md](TESTING.md) for local testing and development workflow. Example
+environment files: [`.env.example`](.env.example) (production) and
+[`backend/.env.example`](backend/.env.example) (local dev).
+
 ### Backend
-- Language: Go 1.24
+- Language: Go 1.25
 - Database: SQLite
 - Framework: Gin
-- Docker SDK: go-docker
-- Git Library: go-git
+- Docker SDK: docker/docker (Moby) client
+- Git library: go-git
 
 ### Frontend
 - Language: TypeScript
@@ -451,15 +494,15 @@ standard SemVer rules apply (`MAJOR` for breaking changes).
 
 Each release tag publishes the matching container image tags:
 
-| Git tag      | Image tags                                |
-| ------------ | ----------------------------------------- |
-| `v0.7.0`     | `:0.7.0`, `:0.7`, `:latest`               |
-| `v0.8.0-rc.1`| `:0.8.0-rc.1` (pre-release; **not** `:latest`) |
+| Git tag       | Image tags                                     |
+| ------------- | ---------------------------------------------- |
+| `v0.11.0`     | `:0.11.0`, `:0.11`, `:latest`                  |
+| `v0.12.0-rc.1`| `:0.12.0-rc.1` (pre-release; **not** `:latest`) |
 
-Pin a specific version (e.g. `ghcr.io/thinkbig1979/capstan:0.7.0`) for
+Pin a specific version (e.g. `ghcr.io/thinkbig1979/capstan:0.11.0`) for
 reproducible deployments; `:latest` always tracks the most recent stable
 release.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

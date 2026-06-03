@@ -480,6 +480,15 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	h.GetUpdateSettings(c)
 }
 
+// looksLikePrivateKey reports whether s appears to be private-key material
+// rather than a filesystem path. SSH key file paths are single-line and never
+// contain a PEM/OpenSSH key header.
+func looksLikePrivateKey(s string) bool {
+	return strings.Contains(s, "-----BEGIN") ||
+		strings.Contains(s, "PRIVATE KEY") ||
+		strings.ContainsAny(s, "\n\r")
+}
+
 func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
 	sshKey, _ := h.db.GetSetting("git_ssh_key")
 	if sshKey == "" {
@@ -520,6 +529,17 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 	}
 
 	if req.SSHKey != "" {
+		// git_ssh_key is a path to a key file, not key material. Reject pasted
+		// private keys so private-key bytes are never stored in (or echoed back
+		// from) the settings store (M4).
+		if looksLikePrivateKey(req.SSHKey) {
+			c.JSON(http.StatusBadRequest, models.NewAppError(
+				http.StatusBadRequest,
+				"VALIDATION_ERROR",
+				"git SSH key must be a path to a key file, not the key contents",
+			))
+			return
+		}
 		if err := h.db.SetSetting("git_ssh_key", req.SSHKey); err != nil {
 			slog.Error("Failed to update git SSH key setting", "error", err)
 			c.JSON(http.StatusInternalServerError, models.NewAppError(

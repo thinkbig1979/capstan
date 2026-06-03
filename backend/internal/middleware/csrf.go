@@ -89,8 +89,20 @@ func CSRFMiddleware() gin.HandlerFunc {
 	}
 }
 
+// IsSecureRequest reports whether the request reached the server over HTTPS,
+// either directly (TLS) or via a TLS-terminating reverse proxy that sets
+// X-Forwarded-Proto. It is the basis for the Secure cookie flag and HSTS, and
+// replaces the previous fragile Host-substring heuristic which could be tricked
+// by a Host like "localhost.evil.com" into dropping Secure (M3).
+func IsSecureRequest(c *gin.Context) bool {
+	if c.Request.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+}
+
 func setCSRFCookie(c *gin.Context, token string) {
-	secure := !strings.Contains(c.Request.Host, "localhost") && !strings.Contains(c.Request.Host, "127.0.0.1")
+	secure := IsSecureRequest(c)
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     csrfCookieName,
 		Value:    token,

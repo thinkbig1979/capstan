@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 
@@ -84,7 +84,7 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 				)
 
 				for {
-					var statsJSON types.StatsJSON
+					var statsJSON container.StatsResponse
 					if err := decoder.Decode(&statsJSON); err != nil {
 						break
 					}
@@ -199,7 +199,7 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 func (s *MonitorService) ListenEvents(ctx context.Context) (<-chan models.StackEvent, error) {
 	eventChan := make(chan models.StackEvent, 100)
 
-	dockerEvents, errChan := s.client.Events(ctx, types.EventsOptions{
+	dockerEvents, errChan := s.client.Events(ctx, events.ListOptions{
 		Filters: filters.NewArgs(
 			filters.KeyValuePair{
 				Key:   "type",
