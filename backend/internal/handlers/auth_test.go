@@ -261,6 +261,50 @@ func TestAuthHandler_Login_UnknownUserPerformsBcrypt(t *testing.T) {
 		"unknown-username login must still perform a bcrypt comparison (constant-time defense, H3)")
 }
 
+// TestAuthHandler_Login_SecureCookieFromForwardedProto is the regression test
+// for M3: the Secure cookie flag must follow the real request scheme
+// (X-Forwarded-Proto from a TLS-terminating proxy), not a Host substring.
+func TestAuthHandler_Login_SecureCookieFromForwardedProto(t *testing.T) {
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	createTestUser(t, db, "testuser", "password123")
+	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
+	router := setupTestRouter(handler)
+
+	body := `{"username": "testuser", "password": "password123"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var sawToken, secure bool
+	for _, ck := range w.Result().Cookies() {
+		if ck.Name == "capstan_token" {
+			sawToken = true
+			secure = ck.Secure
+		}
+	}
+	require.True(t, sawToken, "expected capstan_token cookie")
+	assert.True(t, secure, "Secure flag must be set when X-Forwarded-Proto is https")
+}
+
+func TestLooksLikePrivateKey(t *testing.T) {
+	keyMaterial := []string{
+		"-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----",
+		"-----BEGIN RSA PRIVATE KEY-----",
+		"line1\nline2",
+	}
+	for _, s := range keyMaterial {
+		assert.True(t, looksLikePrivateKey(s), "should detect key material: %q", s)
+	}
+	paths := []string{"/root/.ssh/id_rsa", "/home/user/.ssh/id_ed25519", "~/.ssh/key"}
+	for _, p := range paths {
+		assert.False(t, looksLikePrivateKey(p), "path must be allowed: %q", p)
+	}
+}
+
 func TestAuthHandler_Logout_Success(t *testing.T) {
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)

@@ -25,7 +25,25 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
-func SecurityHeaders() gin.HandlerFunc {
+// buildConnectSrc constructs the CSP connect-src directive from the configured
+// CORS origins so a cross-origin (reverse-proxy) deployment is not silently
+// blocked by a localhost-only policy (M6). localhost ws/wss variants are only
+// added in dev (AUTH_DISABLED) rather than baked into production.
+func buildConnectSrc(cfg *config.Config) string {
+	parts := []string{"'self'"}
+	for _, o := range config.NormalizeOrigins(cfg.CORSOrigins) {
+		ws := strings.Replace(o, "https://", "wss://", 1)
+		ws = strings.Replace(ws, "http://", "ws://", 1)
+		parts = append(parts, o, ws)
+	}
+	if cfg.AuthDisabled {
+		parts = append(parts, "ws://localhost:*", "wss://localhost:*")
+	}
+	return strings.Join(parts, " ")
+}
+
+func SecurityHeaders(cfg *config.Config) gin.HandlerFunc {
+	connectSrc := buildConnectSrc(cfg)
 	return func(c *gin.Context) {
 		nonceBytes := make([]byte, 16)
 		if _, err := rand.Read(nonceBytes); err != nil {
@@ -37,16 +55,23 @@ func SecurityHeaders() gin.HandlerFunc {
 
 		c.Header("X-Frame-Options", "DENY")
 		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("X-XSS-Protection", "1; mode=block")
-		c.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		// X-XSS-Protection is deprecated and "1; mode=block" can introduce
+		// cross-site leaks; with a strong CSP present, 0 is the recommended value (L5).
+		c.Header("X-XSS-Protection", "0")
+		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+		// Only assert HSTS over HTTPS — sending it (esp. with includeSubDomains)
+		// on plaintext/dev access can pin sibling services to HTTPS (L4).
+		if middleware.IsSecureRequest(c) {
+			c.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		c.Header("Content-Security-Policy", fmt.Sprintf(
 			// 'unsafe-eval' is required by the charting bundle (recharts) on the
 			// dashboard. With 'strict-dynamic' + a per-request nonce, only
 			// nonce-authorized scripts run, so this only permits eval *within*
 			// already-trusted scripts — an acceptable trade-off for a first-party,
 			// single-origin app. Tighten by replacing the eval-using lib if needed.
-			"default-src 'self'; script-src 'self' 'nonce-%s' 'strict-dynamic' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://localhost:* wss://localhost:*; frame-ancestors 'none';",
-			nonce,
+			"default-src 'self'; script-src 'self' 'nonce-%s' 'strict-dynamic' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src %s; frame-ancestors 'none';",
+			nonce, connectSrc,
 		))
 		c.Next()
 	}
@@ -180,7 +205,7 @@ func main() {
 	r.Use(middleware.BodySizeLimit())
 	r.Use(middleware.CORSMiddleware(cfg.CORSOrigins))
 	r.Use(middleware.ValidateInput())
-	r.Use(SecurityHeaders())
+	r.Use(SecurityHeaders(cfg))
 
 	r.GET("/health", func(c *gin.Context) {
 		if !isLocalhost(c) {

@@ -4,7 +4,6 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -433,7 +432,7 @@ func parseJWT(token, secret string) (jwtv5.MapClaims, error) {
 }
 
 func setAuthCookies(c *gin.Context, token string, csrfToken string) {
-	secure := !strings.Contains(c.Request.Host, "localhost") && !strings.Contains(c.Request.Host, "127.0.0.1")
+	secure := middleware.IsSecureRequest(c)
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     "capstan_token",
 		Value:    token,
