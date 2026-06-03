@@ -16,11 +16,15 @@ services:
       - ./data:/app/data
     environment:
       # JWT_SECRET: REQUIRED for production (generate with: openssl rand -hex 32)
+      # STORAGE_KEY: recommended — encrypts stored secrets at rest independently
+      #   of JWT_SECRET (generate with: openssl rand -hex 32). Falls back to
+      #   JWT_SECRET if unset.
       # Setting AUTH_DISABLED=true bypasses authentication (development only)
       - STACKS_DIR=/opt/stacks
       - DATA_DIR=/app/data
       - PORT=5001
       - JWT_SECRET=${JWT_SECRET}
+      - STORAGE_KEY=${STORAGE_KEY:-}
       - LOG_LEVEL=info
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       # Match the host user that owns your stacks/data (default 1000).

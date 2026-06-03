@@ -20,6 +20,10 @@ services:
       # Match the host user that owns your stacks/data (default 1000).
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
+      # JWT_SECRET (required) and STORAGE_KEY (recommended) are read from .env
+      # below — generate each with `openssl rand -hex 32`. See README / Deployment
+      # Guide. STORAGE_KEY encrypts stored secrets at rest independently of
+      # JWT_SECRET; it falls back to JWT_SECRET if unset.
       # Backup — optional env-var fallbacks; DB settings (Settings → Backup) take
       # precedence at runtime. Set these if you prefer environment-level config
       # over the UI, or for scripted/headless deployments.

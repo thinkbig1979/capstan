@@ -918,6 +918,8 @@ func TestRunDRRestore_Kickoff_Returns202(t *testing.T) {
 	h := NewBackupHandler(svc, db, slog.Default())
 	r := newBackupRouter(h)
 
+	// localRepoPath is a removed/ignored field: the destination is derived
+	// server-side (C1). Sending it must not be honoured or cause an error.
 	req := jsonReq(t, http.MethodPost, "/api/backups/dr-restore", map[string]interface{}{
 		"confirm":       true,
 		"localRepoPath": "/tmp/restored",

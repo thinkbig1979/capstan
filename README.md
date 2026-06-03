@@ -393,14 +393,16 @@ For production deployment, see the comprehensive [Deployment Guide](Supporting-D
 ### Production Configuration
 
 ```bash
-# Generate secure JWT secret
+# Generate secrets (use two distinct values)
 JWT_SECRET=$(openssl rand -hex 32)
+STORAGE_KEY=$(openssl rand -hex 32)
 
 # Create production .env file
 cat > .env << EOF
 PORT=5001
 LOG_LEVEL=info
 JWT_SECRET=$JWT_SECRET
+STORAGE_KEY=$STORAGE_KEY
 AUTH_DISABLED=false
 STACKS_DIR=/opt/stacks
 HOST_STACKS_DIR=/opt/stacks
@@ -409,23 +411,34 @@ TRUSTED_NETWORKS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.1
 EOF
 ```
 
+`STORAGE_KEY` encrypts stored secrets (git tokens, restic password) at rest with
+a key independent of `JWT_SECRET`; if unset it falls back to `JWT_SECRET`. Using a
+separate value means rotating `JWT_SECRET` doesn't require re-encryption and a
+leaked `JWT_SECRET` alone can't decrypt stored secrets.
+
 ### Security Considerations
 
 - **Always set a strong JWT secret** (min 32 characters)
+- **Set a separate `STORAGE_KEY`** so stored secrets are encrypted independently of `JWT_SECRET`
 - **Enable authentication** in production (`AUTH_DISABLED=false`)
 - **Use SSL/TLS** for all connections
+- **Forward `X-Forwarded-Proto: https`** from your reverse proxy — Capstan uses it to set `Secure` cookies and HSTS (all proxy examples in the Deployment Guide do this)
 - **Mount Docker socket as read-only** (`/var/run/docker.sock:/var/run/docker.sock:ro`)
 - **Configure trusted networks** for access control
 - **Set up regular backups** of stack configurations
 - **Monitor resource usage** and set appropriate limits
 - **Use a reverse proxy** (nginx, Traefik, Caddy) with SSL termination
 
+> **Upgrading:** this release binds JWTs to an issuer claim, so existing sessions
+> are invalidated on upgrade — log in again once. Previously stored secrets stay
+> readable and are re-encrypted under the new key scheme on next save.
+
 For detailed production deployment instructions, see the [Deployment Guide](Supporting-Docs/Deployment.md).
 
 ## Development
 
 ### Backend
-- Language: Go 1.24
+- Language: Go 1.25
 - Database: SQLite
 - Framework: Gin
 - Docker SDK: go-docker
