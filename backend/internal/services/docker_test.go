@@ -8,11 +8,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/thinkbig1979/capstan/backend/internal/config"
-	"github.com/thinkbig1979/capstan/backend/internal/models"
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 func TestDockerService_buildComposeArgs(t *testing.T) {
@@ -138,7 +139,7 @@ func TestDockerService_ValidateName(t *testing.T) {
 }
 
 func TestCalculateCPUPercent(t *testing.T) {
-	stats := &types.StatsJSON{}
+	stats := &container.StatsResponse{}
 	stats.CPUStats.CPUUsage.TotalUsage = 10000000
 	stats.CPUStats.CPUUsage.PercpuUsage = []uint64{5000000, 5000000}
 	stats.PreCPUStats.CPUUsage.TotalUsage = 5000000
@@ -153,7 +154,7 @@ func TestCalculateCPUPercent(t *testing.T) {
 }
 
 func TestCalculateCPUPercent_ZeroDelta(t *testing.T) {
-	stats := &types.StatsJSON{}
+	stats := &container.StatsResponse{}
 	stats.CPUStats.CPUUsage.TotalUsage = 1000000
 	stats.PreCPUStats.CPUUsage.TotalUsage = 1000000
 	stats.CPUStats.SystemUsage = 10000000
@@ -167,7 +168,7 @@ func TestCalculateCPUPercent_ZeroDelta(t *testing.T) {
 func TestCalculateCPUPercent_CgroupV2(t *testing.T) {
 	// cgroup v2 reports OnlineCPUs but leaves PercpuUsage empty. The previous
 	// implementation multiplied by len(PercpuUsage)==0 and always returned 0%.
-	stats := &types.StatsJSON{}
+	stats := &container.StatsResponse{}
 	stats.CPUStats.CPUUsage.TotalUsage = 6000000000
 	stats.PreCPUStats.CPUUsage.TotalUsage = 0
 	stats.CPUStats.SystemUsage = 8000000000
@@ -181,7 +182,7 @@ func TestCalculateCPUPercent_CgroupV2(t *testing.T) {
 }
 
 func TestCalculateMemPercent(t *testing.T) {
-	stats := &types.StatsJSON{}
+	stats := &container.StatsResponse{}
 	stats.MemoryStats.Usage = 100000000
 	stats.MemoryStats.Limit = 1000000000
 	stats.MemoryStats.Stats = map[string]uint64{
@@ -197,7 +198,7 @@ func TestCalculateMemPercent(t *testing.T) {
 }
 
 func TestCalculateMemPercent_ZeroLimit(t *testing.T) {
-	stats := &types.StatsJSON{}
+	stats := &container.StatsResponse{}
 	stats.MemoryStats.Usage = 100000000
 	stats.MemoryStats.Limit = 0
 	stats.MemoryStats.Stats = map[string]uint64{
@@ -209,8 +210,8 @@ func TestCalculateMemPercent_ZeroLimit(t *testing.T) {
 }
 
 func TestCalculateNetwork(t *testing.T) {
-	stats := &types.StatsJSON{}
-	stats.Networks = map[string]types.NetworkStats{
+	stats := &container.StatsResponse{}
+	stats.Networks = map[string]container.NetworkStats{
 		"eth0": {
 			RxBytes: 1000000,
 			TxBytes: 500000,
@@ -228,8 +229,8 @@ func TestCalculateNetwork(t *testing.T) {
 }
 
 func TestCalculateNetwork_Empty(t *testing.T) {
-	stats := &types.StatsJSON{}
-	stats.Networks = map[string]types.NetworkStats{}
+	stats := &container.StatsResponse{}
+	stats.Networks = map[string]container.NetworkStats{}
 
 	rx, tx := calculateNetwork(stats)
 
@@ -238,8 +239,8 @@ func TestCalculateNetwork_Empty(t *testing.T) {
 }
 
 func TestCalculateBlockIO(t *testing.T) {
-	stats := &types.StatsJSON{}
-	stats.BlkioStats.IoServiceBytesRecursive = []types.BlkioStatEntry{
+	stats := &container.StatsResponse{}
+	stats.BlkioStats.IoServiceBytesRecursive = []container.BlkioStatEntry{
 		{Op: "read", Value: 1000000},
 		{Op: "Read", Value: 2000000},
 		{Op: "write", Value: 500000},
@@ -365,13 +366,13 @@ type fakeNetworkInspector struct {
 	err        error
 }
 
-func (f fakeNetworkInspector) NetworkInspect(_ context.Context, networkID string, _ types.NetworkInspectOptions) (types.NetworkResource, error) {
+func (f fakeNetworkInspector) NetworkInspect(_ context.Context, networkID string, _ network.InspectOptions) (network.Inspect, error) {
 	if f.err != nil {
-		return types.NetworkResource{}, f.err
+		return network.Inspect{}, f.err
 	}
-	res := types.NetworkResource{ID: networkID, Containers: map[string]types.EndpointResource{}}
+	res := network.Inspect{ID: networkID, Containers: map[string]network.EndpointResource{}}
 	for i := 0; i < f.containers[networkID]; i++ {
-		res.Containers[fmt.Sprintf("c%d", i)] = types.EndpointResource{}
+		res.Containers[fmt.Sprintf("c%d", i)] = network.EndpointResource{}
 	}
 	return res, nil
 }

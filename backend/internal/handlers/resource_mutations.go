@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"time"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -250,7 +250,7 @@ func (h *ResourcesHandler) createNetwork(c *gin.Context) {
 		driver = "bridge"
 	}
 
-	opts := dockertypes.NetworkCreate{
+	opts := network.CreateOptions{
 		Driver:     driver,
 		Internal:   req.Internal,
 		Attachable: req.Attachable,
