@@ -7,6 +7,7 @@ import { EnvEditor } from './EnvEditor'
 import { TerminalComponent } from './Terminal'
 import { LogViewer } from './LogViewer'
 import { MetricsPanel } from './MetricsPanel'
+import { StackUpdatesTab } from './StackUpdatesTab'
 import { BackupsTab } from './BackupsTab'
 import { OperationProgress } from './OperationProgress'
 import { GitStatus as GitStatusComponent } from '../git/GitStatus'
@@ -179,6 +180,7 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
             { value: 'logs', label: 'Logs' },
             { value: 'terminal', label: 'Terminal' },
             { value: 'metrics', label: 'Metrics' },
+            { value: 'updates', label: 'Updates' },
             { value: 'backups', label: 'Backups' },
           ]}
         />
@@ -226,6 +228,12 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
         <TabsContent value="metrics" className="mt-4">
           <TabErrorBoundary>
             <MetricsPanel stackId={stack.id} />
+          </TabErrorBoundary>
+        </TabsContent>
+
+        <TabsContent value="updates" className="mt-4">
+          <TabErrorBoundary>
+            <StackUpdatesTab stackId={stack.id} />
           </TabErrorBoundary>
         </TabsContent>
 
