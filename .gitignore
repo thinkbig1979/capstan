@@ -71,3 +71,15 @@ backend/frontend/assets/
 
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
+
+# ── Private dev tooling & internal docs (kept local, not tracked in this public repo) ──
+# These remain on disk and keep working locally; they're just not published.
+.agent-os/
+.claude/
+.drift/
+.opencode/
+.beads/
+Supporting-Docs/
+AGENTS.md
+PLAN.md
+Dockge_Replacement_App_Plan
