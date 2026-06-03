@@ -164,6 +164,22 @@ func TestCalculateCPUPercent_ZeroDelta(t *testing.T) {
 	assert.Equal(t, 0.0, percent)
 }
 
+func TestCalculateCPUPercent_CgroupV2(t *testing.T) {
+	// cgroup v2 reports OnlineCPUs but leaves PercpuUsage empty. The previous
+	// implementation multiplied by len(PercpuUsage)==0 and always returned 0%.
+	stats := &types.StatsJSON{}
+	stats.CPUStats.CPUUsage.TotalUsage = 6000000000
+	stats.PreCPUStats.CPUUsage.TotalUsage = 0
+	stats.CPUStats.SystemUsage = 8000000000
+	stats.PreCPUStats.SystemUsage = 0
+	stats.CPUStats.OnlineCPUs = 8
+	// PercpuUsage intentionally left empty (cgroup v2 behaviour).
+
+	percent := calculateCPUPercent(stats)
+	// (6e9 / 8e9) * 8 * 100 = 600%
+	assert.InDelta(t, 600.0, percent, 0.001)
+}
+
 func TestCalculateMemPercent(t *testing.T) {
 	stats := &types.StatsJSON{}
 	stats.MemoryStats.Usage = 100000000

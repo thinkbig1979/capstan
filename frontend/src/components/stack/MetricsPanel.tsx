@@ -1,23 +1,24 @@
-import { useMemo, useState, useCallback, useSyncExternalStore } from 'react'
-import { AreaChart, Area, XAxis, YAxis } from 'recharts'
-import { Cpu, HardDrive, Network, Activity, Database } from 'lucide-react'
+import { useMemo, useSyncExternalStore } from 'react'
+import { AreaChart, Area, YAxis, ResponsiveContainer } from 'recharts'
+import { Cpu, MemoryStick, Network, HardDrive, Activity, ArrowDown, ArrowUp } from 'lucide-react'
 import { useMetricsBase, type ContainerMetricHistory } from '@/hooks/useMetricsBase'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatBytes } from '@/lib/format'
-
-type TimeRange = '1m' | '5m' | '15m' | '1h'
 
 interface MetricsPanelProps {
   stackId: string
 }
 
+// Shared column template so the table header and every row line up.
+const GRID_COLS =
+  'minmax(140px,1.6fr) minmax(120px,1fr) minmax(170px,1.6fr) minmax(110px,1fr) minmax(110px,1fr) 56px'
+
 function formatRate(bytesPerSecond: number): string {
   return `${formatBytes(bytesPerSecond)}/s`
 }
 
-function getColorForThreshold(percent: number): string {
+function thresholdBarClass(percent: number): string {
   if (percent >= 80) return 'bg-destructive'
   if (percent >= 60) return 'bg-warning'
   return 'bg-success'
@@ -48,231 +49,274 @@ function useThresholdChartColor(percent: number): string {
   }, [percent, isDark])
 }
 
-function AggregateRow({ aggregates, timeRangeLabel }: { aggregates: { totalCpuPercent: number; totalMemUsage: number; totalMemLimit: number; totalMemPercent: number }; timeRangeLabel: string }) {
-  const cpuColor = getColorForThreshold(aggregates.totalCpuPercent)
-  const memColor = getColorForThreshold(aggregates.totalMemPercent)
-
+function Sparkline({ data, color }: { data: Array<{ i: number; cpu: number }>; color: string }) {
   return (
-    <Card className="mb-6">
-      <CardHeader>
-        <CardTitle className="text-base">Aggregate Totals ({timeRangeLabel})</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-medium">Total CPU</span>
-              <span>{aggregates.totalCpuPercent.toFixed(1)}%</span>
-            </div>
-            <div className="h-2 w-full rounded-full bg-muted">
-              <div
-                className={`h-full rounded-full transition-all ${cpuColor}`}
-                style={{ width: `${Math.min(aggregates.totalCpuPercent, 100)}%` }}
-              />
-            </div>
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-medium">Total Memory</span>
-              <span>
-                {formatBytes(aggregates.totalMemUsage)} / {formatBytes(aggregates.totalMemLimit)} ({aggregates.totalMemPercent.toFixed(0)}%)
-              </span>
-            </div>
-            <div className="h-2 w-full rounded-full bg-muted">
-              <div
-                className={`h-full rounded-full transition-all ${memColor}`}
-                style={{ width: `${Math.min(aggregates.totalMemPercent, 100)}%` }}
-              />
-            </div>
-          </div>
+    <ResponsiveContainer width="100%" height="100%">
+      <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>
+        <YAxis domain={[0, 'auto']} hide />
+        <Area
+          type="monotone"
+          dataKey="cpu"
+          stroke={color}
+          fill={color}
+          fillOpacity={0.2}
+          strokeWidth={1.5}
+          dot={false}
+          isAnimationActive={false}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  )
+}
+
+function ThinBar({ percent }: { percent: number }) {
+  return (
+    <div className="h-1.5 w-full rounded-full bg-muted">
+      <div
+        className={`h-full rounded-full transition-all ${thresholdBarClass(percent)}`}
+        style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }}
+      />
+    </div>
+  )
+}
+
+function StatTile({
+  icon: Icon,
+  label,
+  children,
+}: {
+  icon: typeof Cpu
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <Card>
+      <CardContent className="space-y-1.5 p-4">
+        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <Icon className="h-3.5 w-3.5" />
+          {label}
         </div>
+        {children}
       </CardContent>
     </Card>
   )
 }
 
-function ContainerCard({
-  container,
-  timeRange,
+function RateStack({ down, up }: { down: number; up: number }) {
+  return (
+    <div className="flex flex-col gap-0.5 text-xs tabular-nums text-muted-foreground">
+      <span className="flex items-center gap-1">
+        <ArrowDown className="h-3 w-3 text-muted-foreground/70" />
+        {formatRate(down)}
+      </span>
+      <span className="flex items-center gap-1">
+        <ArrowUp className="h-3 w-3 text-muted-foreground/70" />
+        {formatRate(up)}
+      </span>
+    </div>
+  )
+}
+
+function SummaryBar({
+  aggregates,
+  totals,
+  cpuSeries,
 }: {
-  container: ContainerMetricHistory
-  timeRange: TimeRange
+  aggregates: { totalCpuPercent: number; totalMemUsage: number; totalMemLimit: number; totalMemPercent: number }
+  totals: { netRx: number; netTx: number; blockRead: number; blockWrite: number }
+  cpuSeries: Array<{ i: number; cpu: number }>
 }) {
-  const rangeSeconds = {
-    '1m': 60,
-    '5m': 5 * 60,
-    '15m': 15 * 60,
-    '1h': 60 * 60,
-  }[timeRange]
-
-  const filteredMetrics = useMemo(() => {
-    const metricsCount = container.metrics.length
-    
-    return container.metrics.filter((_, index) => {
-      const secondsAgo = metricsCount - 1 - index
-      return secondsAgo >= 0 && secondsAgo * 1000 <= rangeSeconds * 1000
-    })
-  }, [container.metrics, rangeSeconds])
-
-  const latestMetric = filteredMetrics[filteredMetrics.length - 1]
-  const cpuColor = useThresholdChartColor(latestMetric?.cpuPercent || 0)
-  const memColor = getColorForThreshold(latestMetric?.memPercent || 0)
-
-  const chartData = useMemo(() => {
-    return filteredMetrics.map((metric, index) => ({
-      index,
-      cpu: metric.cpuPercent,
-    }))
-  }, [filteredMetrics])
+  const cpuColor = useThresholdChartColor(aggregates.totalCpuPercent)
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-sm">{container.name}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {container.metrics.length > 0 && latestMetric ? (
-          <>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Cpu className="h-3 w-3" />
-                <span>CPU History (1 min)</span>
-              </div>
-              <div className="h-16 w-full" style={{ minWidth: 0 }}>
-                <AreaChart width={300} height={64} data={chartData}>
-                  <XAxis dataKey="index" hide />
-                  <YAxis domain={[0, 100]} hide />
-                  <Area
-                    type="monotone"
-                    dataKey="cpu"
-                    stroke={cpuColor}
-                    fill={cpuColor}
-                    fillOpacity={0.3}
-                  />
-                </AreaChart>
-              </div>
-            </div>
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatTile icon={Cpu} label="CPU">
+        <div className="text-2xl font-semibold tabular-nums">{aggregates.totalCpuPercent.toFixed(1)}%</div>
+        <div className="h-9 w-full">
+          <Sparkline data={cpuSeries} color={cpuColor} />
+        </div>
+      </StatTile>
 
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">Memory</span>
-                <span>
-                  {formatBytes(latestMetric.memUsage)} / {formatBytes(latestMetric.memLimit)} ({latestMetric.memPercent.toFixed(0)}%)
-                </span>
-              </div>
-              <div className="h-2 w-full rounded-full bg-muted">
-                <div
-                  className={`h-full rounded-full transition-all ${memColor}`}
-                  style={{ width: `${Math.min(latestMetric.memPercent, 100)}%` }}
-                />
-              </div>
-            </div>
+      <StatTile icon={MemoryStick} label="Memory">
+        <div className="text-2xl font-semibold tabular-nums">{formatBytes(aggregates.totalMemUsage)}</div>
+        <div className="text-xs text-muted-foreground">
+          of {formatBytes(aggregates.totalMemLimit)} · {aggregates.totalMemPercent.toFixed(0)}%
+        </div>
+        <ThinBar percent={aggregates.totalMemPercent} />
+      </StatTile>
 
-            <div className="grid grid-cols-3 gap-2">
-              <div className="space-y-1">
-                <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <Network className="h-3 w-3" />
-                  <span>Network</span>
-                </div>
-                <div className="space-y-0.5 text-xs">
-                  <div>
-                    <span className="text-muted-foreground">rx:</span>{' '}
-                    {formatRate(latestMetric.netRx)}
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">tx:</span>{' '}
-                    {formatRate(latestMetric.netTx)}
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <HardDrive className="h-3 w-3" />
-                  <span>Block I/O</span>
-                </div>
-                <div className="space-y-0.5 text-xs">
-                  <div>
-                    <span className="text-muted-foreground">read:</span>{' '}
-                    {formatRate(latestMetric.blockRead)}
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">write:</span>{' '}
-                    {formatRate(latestMetric.blockWrite)}
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <Database className="h-3 w-3" />
-                  <span>Swap</span>
-                </div>
-                <div className="text-xs">
-                  {formatBytes(latestMetric.memSwap)}
-                </div>
-                <div className="text-xs">
-                  <span className="text-muted-foreground">PIDs:</span> {latestMetric.pids}
-                </div>
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="py-4 text-center text-sm text-muted-foreground">
-            Waiting for metrics...
+      <StatTile icon={Network} label="Network">
+        <div className="space-y-1 pt-0.5 text-base font-medium tabular-nums">
+          <div className="flex items-center gap-1.5">
+            <ArrowDown className="h-3.5 w-3.5 text-muted-foreground" />
+            {formatRate(totals.netRx)}
           </div>
-        )}
-      </CardContent>
+          <div className="flex items-center gap-1.5">
+            <ArrowUp className="h-3.5 w-3.5 text-muted-foreground" />
+            {formatRate(totals.netTx)}
+          </div>
+        </div>
+      </StatTile>
+
+      <StatTile icon={HardDrive} label="Disk I/O">
+        <div className="space-y-1 pt-0.5 text-base font-medium tabular-nums">
+          <div className="flex items-center gap-1.5">
+            <ArrowDown className="h-3.5 w-3.5 text-muted-foreground" />
+            {formatRate(totals.blockRead)}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <ArrowUp className="h-3.5 w-3.5 text-muted-foreground" />
+            {formatRate(totals.blockWrite)}
+          </div>
+        </div>
+      </StatTile>
+    </div>
+  )
+}
+
+function ContainerRow({ container }: { container: ContainerMetricHistory }) {
+  const latest = container.metrics[container.metrics.length - 1]
+  const cpuColor = useThresholdChartColor(latest?.cpuPercent ?? 0)
+
+  const sparkData = useMemo(
+    () => container.metrics.map((m, i) => ({ i, cpu: m.cpuPercent })),
+    [container.metrics],
+  )
+
+  if (!latest) {
+    return (
+      <div
+        className="grid items-center gap-4 border-t border-border/50 px-3 py-2.5 text-sm"
+        style={{ gridTemplateColumns: GRID_COLS }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-muted-foreground/40" />
+          <span className="truncate font-medium">{container.name}</span>
+        </div>
+        <div className="col-span-5 text-xs text-muted-foreground">Waiting for metrics…</div>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className="grid items-center gap-4 border-t border-border/50 px-3 py-2.5 text-sm transition-colors hover:bg-muted/40"
+      style={{ gridTemplateColumns: GRID_COLS }}
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="h-2 w-2 shrink-0 rounded-full bg-success" />
+        <span className="truncate font-medium">{container.name}</span>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <div className="h-7 w-16 shrink-0">
+          <Sparkline data={sparkData} color={cpuColor} />
+        </div>
+        <span className="tabular-nums text-muted-foreground">{latest.cpuPercent.toFixed(1)}%</span>
+      </div>
+
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="w-16 shrink-0">
+          <ThinBar percent={latest.memPercent} />
+        </div>
+        <span className="truncate text-xs tabular-nums text-muted-foreground">
+          {formatBytes(latest.memUsage)} / {formatBytes(latest.memLimit)}
+          {latest.memSwap > 0 && (
+            <span className="text-muted-foreground/70"> · swap {formatBytes(latest.memSwap)}</span>
+          )}
+        </span>
+      </div>
+
+      <RateStack down={latest.netRx} up={latest.netTx} />
+      <RateStack down={latest.blockRead} up={latest.blockWrite} />
+
+      <div className="text-right tabular-nums text-muted-foreground">{latest.pids}</div>
+    </div>
+  )
+}
+
+function ContainerTable({ containers }: { containers: ContainerMetricHistory[] }) {
+  return (
+    <Card>
+      <div className="overflow-x-auto">
+        <div className="min-w-[700px]">
+          <div
+            className="grid items-center gap-4 px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+            style={{ gridTemplateColumns: GRID_COLS }}
+          >
+            <span>Container</span>
+            <span>CPU</span>
+            <span>Memory</span>
+            <span>Network</span>
+            <span>Disk I/O</span>
+            <span className="text-right">PIDs</span>
+          </div>
+          {containers.map((container) => (
+            <ContainerRow key={container.containerId} container={container} />
+          ))}
+        </div>
+      </div>
     </Card>
   )
 }
 
 export function MetricsPanel({ stackId }: MetricsPanelProps) {
-  const [timeRange, setTimeRange] = useState<TimeRange>('1m')
   const { containers, baseAggregates: aggregates, isConnected, ws } = useMetricsBase(`/ws/metrics/${stackId}`)
 
-  const handleTimeRangeChange = useCallback((value: string) => {
-    setTimeRange(value as TimeRange)
-  }, [])
-
-  const timeRangeLabel = useMemo(() => {
-    const labels = {
-      '1m': '1 min',
-      '5m': '5 min',
-      '15m': '15 min',
-      '1h': '1 hour',
+  // Stack-wide throughput totals (rates are per-container, sum the latest sample).
+  const totals = useMemo(() => {
+    let netRx = 0,
+      netTx = 0,
+      blockRead = 0,
+      blockWrite = 0
+    for (const c of containers) {
+      const m = c.metrics[c.metrics.length - 1]
+      if (!m) continue
+      netRx += m.netRx
+      netTx += m.netTx
+      blockRead += m.blockRead
+      blockWrite += m.blockWrite
     }
-    return labels[timeRange]
-  }, [timeRange])
+    return { netRx, netTx, blockRead, blockWrite }
+  }, [containers])
+
+  // Aggregate CPU series for the summary sparkline: sum each container's
+  // sample at the same age (counting back from the most recent frame).
+  const cpuSeries = useMemo(() => {
+    const maxLen = containers.reduce((n, c) => Math.max(n, c.metrics.length), 0)
+    const series: Array<{ i: number; cpu: number }> = []
+    for (let pos = maxLen - 1; pos >= 0; pos--) {
+      let sum = 0
+      for (const c of containers) {
+        const idx = c.metrics.length - 1 - pos
+        if (idx >= 0) sum += c.metrics[idx].cpuPercent
+      }
+      series.push({ i: maxLen - 1 - pos, cpu: sum })
+    }
+    return series
+  }, [containers])
 
   if (!isConnected && ws.status === 'connecting') {
     return (
       <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <Skeleton className="h-6 w-32" />
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 gap-4">
-              <Skeleton className="h-8" />
-              <Skeleton className="h-8" />
-            </div>
-          </CardContent>
-        </Card>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {[1, 2, 3].map((i) => (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[1, 2, 3, 4].map((i) => (
             <Card key={i}>
-              <CardHeader>
-                <Skeleton className="h-5 w-24" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="mb-4 h-16 w-full" />
-                <Skeleton className="mb-2 h-2 w-full" />
-                <Skeleton className="h-2 w-3/4" />
+              <CardContent className="space-y-2 p-4">
+                <Skeleton className="h-3 w-16" />
+                <Skeleton className="h-7 w-20" />
+                <Skeleton className="h-2 w-full" />
               </CardContent>
             </Card>
           ))}
         </div>
+        <Card>
+          <CardContent className="space-y-3 p-4">
+            {[1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-8 w-full" />
+            ))}
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -313,25 +357,11 @@ export function MetricsPanel({ stackId }: MetricsPanelProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Metrics</h3>
-        <Select value={timeRange} onValueChange={handleTimeRangeChange}>
-          <SelectTrigger className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="1m">1 min</SelectItem>
-            <SelectItem value="5m">5 min</SelectItem>
-            <SelectItem value="15m">15 min</SelectItem>
-            <SelectItem value="1h">1 hour</SelectItem>
-          </SelectContent>
-        </Select>
+        <h3 className="text-lg font-semibold">Live Metrics</h3>
+        <span className="text-xs text-muted-foreground">Live since page opened, not stored</span>
       </div>
-      <AggregateRow aggregates={aggregates} timeRangeLabel={timeRangeLabel} />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {containers.map((container) => (
-          <ContainerCard key={container.containerId} container={container} timeRange={timeRange} />
-        ))}
-      </div>
+      <SummaryBar aggregates={aggregates} totals={totals} cpuSeries={cpuSeries} />
+      <ContainerTable containers={containers} />
     </div>
   )
 }

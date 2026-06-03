@@ -74,6 +74,15 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 
 				decoder := json.NewDecoder(stats.Body)
 
+				// Network and block I/O counters are cumulative; we convert them
+				// to per-second rates using the delta against the previous sample.
+				var (
+					prevNetRx, prevNetTx      float64
+					prevBlkRead, prevBlkWrite float64
+					prevSampleTime            time.Time
+					havePrevSample            bool
+				)
+
 				for {
 					var statsJSON types.StatsJSON
 					if err := decoder.Decode(&statsJSON); err != nil {
@@ -82,10 +91,29 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 
 					cpuPercent := calculateCPUPercent(&statsJSON)
 					memPercent, memUsage, memLimit := calculateMemPercent(&statsJSON)
-					netRx, netTx := calculateNetwork(&statsJSON)
-					blockRead, blockWrite := calculateBlockIO(&statsJSON)
+					cumNetRx, cumNetTx := calculateNetwork(&statsJSON)
+					cumBlkRead, cumBlkWrite := calculateBlockIO(&statsJSON)
 					memSwap := calculateMemSwap(&statsJSON)
 					pids := getPids(&statsJSON)
+
+					// Derive per-second throughput from the cumulative counters.
+					sampleTime := statsJSON.Read
+					if sampleTime.IsZero() {
+						sampleTime = time.Now()
+					}
+					var netRx, netTx, blockRead, blockWrite float64
+					if havePrevSample {
+						if dt := sampleTime.Sub(prevSampleTime).Seconds(); dt > 0 {
+							netRx = perSecondRate(cumNetRx-prevNetRx, dt)
+							netTx = perSecondRate(cumNetTx-prevNetTx, dt)
+							blockRead = perSecondRate(cumBlkRead-prevBlkRead, dt)
+							blockWrite = perSecondRate(cumBlkWrite-prevBlkWrite, dt)
+						}
+					}
+					prevNetRx, prevNetTx = cumNetRx, cumNetTx
+					prevBlkRead, prevBlkWrite = cumBlkRead, cumBlkWrite
+					prevSampleTime = sampleTime
+					havePrevSample = true
 
 					containerName := containerID
 					if len(containerID) > 12 {

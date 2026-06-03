@@ -247,8 +247,16 @@ func calculateCPUPercent(stats *types.StatsJSON) float64 {
 	cpuDelta := float64(stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage)
 	systemDelta := float64(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage)
 
+	// OnlineCPUs is populated on cgroup v2, where PercpuUsage is empty; fall back
+	// to the per-CPU slice length for older daemons / cgroup v1. Without this the
+	// multiplier is 0 on cgroup v2 hosts and CPU usage always reports 0%.
+	cpuCount := float64(stats.CPUStats.OnlineCPUs)
+	if cpuCount == 0 {
+		cpuCount = float64(len(stats.CPUStats.CPUUsage.PercpuUsage))
+	}
+
 	if systemDelta > 0.0 && cpuDelta > 0.0 {
-		cpuPercent = (cpuDelta / systemDelta) * float64(len(stats.CPUStats.CPUUsage.PercpuUsage)) * 100.0
+		cpuPercent = (cpuDelta / systemDelta) * cpuCount * 100.0
 	}
 
 	return cpuPercent
@@ -308,6 +316,16 @@ func calculateBlockIO(stats *types.StatsJSON) (float64, float64) {
 	}
 
 	return float64(read), float64(write)
+}
+
+// perSecondRate converts a cumulative-counter delta over the given duration into
+// a per-second rate. Negative deltas (counter resets on container restart) and
+// non-positive durations clamp to zero.
+func perSecondRate(delta, seconds float64) float64 {
+	if delta <= 0 || seconds <= 0 {
+		return 0
+	}
+	return delta / seconds
 }
 
 func parsePorts(portsStr string) []models.PortBinding {
