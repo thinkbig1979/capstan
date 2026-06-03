@@ -43,12 +43,16 @@ func (h *UpdateJobsWSHandler) RegisterRoutes(group *gin.RouterGroup) {
 }
 
 // wsJobFrame is the envelope for all frames sent to the client.
+// The "done" frame carries outcome and reason in addition to status/error so
+// the frontend can derive the correct toast/badge without a separate GET.
 type wsJobFrame struct {
-	Type   string            `json:"type"`
-	Job    *services.Job     `json:"job,omitempty"`
-	Line   *services.LogLine `json:"line,omitempty"`
-	Status string            `json:"status,omitempty"`
-	Error  string            `json:"error,omitempty"`
+	Type    string            `json:"type"`
+	Job     *services.Job     `json:"job,omitempty"`
+	Line    *services.LogLine `json:"line,omitempty"`
+	Status  string            `json:"status,omitempty"`
+	Error   string            `json:"error,omitempty"`
+	Outcome string            `json:"outcome,omitempty"`
+	Reason  string            `json:"reason,omitempty"`
 }
 
 func (h *UpdateJobsWSHandler) streamJob(c *gin.Context) {
@@ -112,7 +116,13 @@ func (h *UpdateJobsWSHandler) streamJob(c *gin.Context) {
 	// register a live subscriber (eventCh never delivers), so emit the terminal
 	// frame from the snapshot and close out instead of blocking forever.
 	if snapshot.Status == services.StatusSuccess || snapshot.Status == services.StatusError {
-		_ = safeWriteJSON(conn, wsJobFrame{Type: "done", Status: string(snapshot.Status), Error: snapshot.Error})
+		_ = safeWriteJSON(conn, wsJobFrame{
+			Type:    "done",
+			Status:  string(snapshot.Status),
+			Error:   snapshot.Error,
+			Outcome: snapshot.Outcome,
+			Reason:  snapshot.Reason,
+		})
 		return
 	}
 
@@ -133,7 +143,13 @@ func (h *UpdateJobsWSHandler) streamJob(c *gin.Context) {
 			case services.EventKindStatus:
 				frame = wsJobFrame{Type: "status", Status: string(ev.Status)}
 			case services.EventKindDone:
-				frame = wsJobFrame{Type: "done", Status: string(ev.Status), Error: ev.Error}
+				frame = wsJobFrame{
+					Type:    "done",
+					Status:  string(ev.Status),
+					Error:   ev.Error,
+					Outcome: ev.Outcome,
+					Reason:  ev.Reason,
+				}
 				if writeErr := safeWriteJSON(conn, frame); writeErr != nil {
 					slog.Debug("Failed to write done frame", "jobId", jobID, "error", writeErr)
 				}

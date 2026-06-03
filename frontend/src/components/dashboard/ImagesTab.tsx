@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useImages } from '@/hooks/useResources'
+import { useImages, useDeleteImage } from '@/hooks/useResources'
 import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -10,8 +9,6 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { ImageIcon, Trash2 } from 'lucide-react'
-import { toast } from 'sonner'
-import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { TablePagination, usePagination } from '@/components/dashboard/TablePagination'
@@ -24,25 +21,12 @@ const PAGE_SIZE = 50
 type SortKey = 'name' | 'size' | 'created' | 'containers'
 
 export function ImagesTab() {
-  const queryClient = useQueryClient()
   const { confirm, ConfirmComponent } = useConfirm()
   const { data: images, isLoading } = useImages()
   const [sortBy, setSortBy] = useState<SortKey>('size')
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
-  const deleteMutation = useMutation({
-    mutationFn: ({ id, force }: { id: string; force: boolean }) => resourcesApi.deleteImage(id, force),
-    onSuccess: () => {
-      toast.success('Image removed')
-      setDeletingId(null)
-      queryClient.invalidateQueries({ queryKey: ['resources', 'images'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-    },
-    onError: (err) => {
-      toast.error(classifyError(err).message || 'Failed to remove image')
-      setDeletingId(null)
-    },
-  })
+  const deleteMutation = useDeleteImage()
 
   const handleDelete = async (image: DockerImage) => {
     const tag = image.repoTags[0] || image.id.substring(0, 19)
@@ -56,7 +40,10 @@ export function ImagesTab() {
     )
     if (confirmed) {
       setDeletingId(image.id)
-      deleteMutation.mutate({ id: image.id, force: hasContainers })
+      deleteMutation.mutate(
+        { id: image.id, force: hasContainers },
+        { onSettled: () => setDeletingId(null) },
+      )
     }
   }
 

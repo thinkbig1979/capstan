@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useVolumes } from '@/hooks/useResources'
+import { useVolumes, useDeleteVolume } from '@/hooks/useResources'
 import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -11,8 +10,6 @@ import {
 } from '@/components/ui/table'
 import { HardDrive, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { toast } from 'sonner'
-import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { TablePagination, usePagination } from '@/components/dashboard/TablePagination'
@@ -25,24 +22,12 @@ const PAGE_SIZE = 50
 type SortKey = 'name' | 'driver' | 'size' | 'stack'
 
 export function VolumesTab() {
-  const queryClient = useQueryClient()
   const { confirm, ConfirmComponent } = useConfirm()
   const { data: volumes, isLoading } = useVolumes()
   const [sortBy, setSortBy] = useState<SortKey>('name')
   const [deletingName, setDeletingName] = useState<string | null>(null)
 
-  const deleteMutation = useMutation({
-    mutationFn: ({ name, force }: { name: string; force: boolean }) => resourcesApi.deleteVolume(name, force),
-    onSuccess: () => {
-      toast.success('Volume removed')
-      setDeletingName(null)
-      queryClient.invalidateQueries({ queryKey: ['resources', 'volumes'] })
-    },
-    onError: (err) => {
-      toast.error(classifyError(err).message || 'Failed to remove volume')
-      setDeletingName(null)
-    },
-  })
+  const deleteMutation = useDeleteVolume()
 
   const handleDelete = async (vol: DockerVolume) => {
     const confirmed = await confirm(
@@ -52,7 +37,10 @@ export function VolumesTab() {
     )
     if (confirmed) {
       setDeletingName(vol.name)
-      deleteMutation.mutate({ name: vol.name, force: false })
+      deleteMutation.mutate(
+        { name: vol.name, force: false },
+        { onSettled: () => setDeletingName(null) },
+      )
     }
   }
 

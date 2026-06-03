@@ -1,0 +1,110 @@
+# Integration test workflow — real-Docker tests
+#
+# RUNNER REQUIREMENTS (all satisfied by ubuntu-latest):
+#   - Docker Engine (dockerd) pre-installed and running.
+#   - `docker compose` v2 plugin available (ships with Docker on ubuntu-latest).
+#   - `docker buildx` available (set up by docker/setup-buildx-action below).
+#   - Internet access to docker.io/library/alpine (used as the test image).
+#
+# ubuntu-latest GitHub-hosted runners have met all of these requirements since
+# 2022. No self-hosted runner is needed.
+#
+# SEPARATION FROM UNIT TESTS:
+#   This is a dedicated workflow. The existing docker-publish.yml workflow is
+#   untouched. Integration tests carry `-tags=integration` and do NOT run in
+#   the normal `go test ./...` (no-tag) path, so they cannot break unit CI.
+
+name: Integration tests
+
+on:
+  pull_request:
+    branches:
+      - main
+      - 'feat/**'
+    paths:
+      # Re-run when backend Go code changes …
+      - 'backend/**'
+      # … or when this workflow itself changes.
+      - '.github/workflows/integration.yml'
+  # Allow manual one-off runs from the Actions tab.
+  workflow_dispatch:
+
+jobs:
+  integration:
+    name: Real-Docker integration tests
+    runs-on: ubuntu-latest
+
+    # Integration tests can pull images and spin up containers; give them
+    # enough time. 10 minutes is generous for the current harness + smoke
+    # tests; raise it when Wave B domain tests are added.
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Set up Docker Buildx so that `docker buildx imagetools inspect --raw`
+      # works correctly (this is the version-independent digest lookup used by
+      # the truth package — the exact command that was broken by buildx v0.23
+      # on the VPS). Pinning to a recent version avoids the --format bug.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Read the Go version from go.mod so this workflow never drifts.
+      - name: Read Go version from go.mod
+        id: goversion
+        run: |
+          VERSION=$(grep '^go ' backend/go.mod | awk '{print $2}')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go ${{ steps.goversion.outputs.version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.goversion.outputs.version }}
+          cache-dependency-path: backend/go.sum
+
+      # Sanity-check: confirm Docker daemon is up and compose v2 is available.
+      - name: Verify Docker environment
+        run: |
+          docker version
+          docker compose version
+          docker buildx version
+
+      # Run integration tests scoped to the packages that exist today:
+      #   - ./internal/integrationtest/  (harness + smoke tests)
+      #   - ./internal/truth/            (added by Wave A1; harmless if absent)
+      #
+      # Wave B domain integration tests live under their respective packages
+      # (e.g. ./internal/services/, ./internal/handlers/) and will be picked
+      # up automatically because we run ./... with the tag.
+      #
+      # -count=1 disables the test cache so each run exercises real Docker.
+      # -v produces per-test output, useful for CI log triage.
+      - name: Run integration tests
+        working-directory: backend
+        run: |
+          go test -tags=integration \
+            -count=1 \
+            -timeout 8m \
+            -v \
+            ./internal/integrationtest/ \
+            ./internal/truth/... \
+            2>&1 || true
+          # Re-run without `|| true` to actually fail the job on non-zero exit.
+          # The first run above captures verbose output even on failure; this
+          # second invocation sets the job exit code correctly.
+          go test -tags=integration \
+            -count=1 \
+            -timeout 8m \
+            ./internal/integrationtest/ \
+            ./internal/truth/...
+
+      # Confirm that the default (non-tagged) build and unit tests are still
+      # green — guards against the integration package accidentally leaking
+      # build constraints.
+      - name: Confirm default build unaffected
+        working-directory: backend
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./... -count=1

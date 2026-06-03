@@ -230,7 +230,7 @@ func main() {
 	directoriesGroup := protected.Group("/directories")
 	directoriesHandler.RegisterRoutes(directoriesGroup)
 
-	stacksHandler := handlers.NewStacksHandler(dockerService, scannerService, services.NewLinterService(), db, cfg, opLock)
+	stacksHandler := handlers.NewStacksHandler(dockerService, scannerService, services.NewLinterService(), db, cfg, services.NewActionLogger(db), opLock)
 	stacksGroup := protected.Group("/stacks")
 	stacksHandler.RegisterRoutes(stacksGroup)
 

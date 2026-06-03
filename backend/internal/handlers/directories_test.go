@@ -32,7 +32,6 @@ func TestDirectoriesHandler_List_Success(t *testing.T) {
 	err = db.UpsertDirectory(dir)
 	require.NoError(t, err)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/directories", handler.List)
 
@@ -59,7 +58,6 @@ func TestDirectoriesHandler_Scan_Success(t *testing.T) {
 	scanner := services.NewScannerService(cfg, db)
 	handler := NewDirectoriesHandler(scanner, db)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/directories/scan", handler.Scan)
 
@@ -106,7 +104,6 @@ func TestDirectoriesHandler_Get_Success(t *testing.T) {
 	err = db.UpsertStack(stack)
 	require.NoError(t, err)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/directories/:path", handler.Get)
 
@@ -133,7 +130,6 @@ func TestDirectoriesHandler_Get_NotFound(t *testing.T) {
 	scanner := services.NewScannerService(cfg, db)
 	handler := NewDirectoriesHandler(scanner, db)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/directories/:path", handler.Get)
 

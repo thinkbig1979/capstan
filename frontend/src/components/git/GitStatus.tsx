@@ -2,7 +2,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Download, GitBranch, ArrowUp, ArrowDown, FileWarning } from 'lucide-react'
 import { useGitStatus, useGitPull } from '@/hooks/useGit'
-import { toast } from 'sonner'
 import { useState } from 'react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import type { Stack } from '@/types'
@@ -72,30 +71,9 @@ export function GitStatus({ stack }: GitStatusProps) {
   }
 
   const executePull = (redeploy: boolean) => {
-    pullMutation.mutate(
-      { stackId: stack.id, redeploy },
-      {
-        onSuccess: (data) => {
-          if (redeploy && data.redeployedStacks) {
-            toast.success(
-              `Pulled and redeployed ${data.redeployedStacks.length} stack(s): ${data.redeployedStacks.join(', ')}`,
-            )
-          } else {
-            toast.success('Git pull completed successfully')
-          }
-        },
-        onError: (error) => {
-          const errorData = (error as any).response?.data
-          if (errorData?.dirty) {
-            toast.error('Cannot pull: working directory has uncommitted changes')
-          } else if (errorData?.conflict) {
-            toast.error('Pull failed: merge conflict detected')
-          } else {
-            toast.error('Failed to pull from remote')
-          }
-        },
-      },
-    )
+    // toastForResult is called by useActionMutation — no inline onSuccess toast needed.
+    // The mutation's onResult handler in useGitPull handles partial/failed redeploy details.
+    pullMutation.mutate({ stackId: stack.id, redeploy })
   }
 
   return (

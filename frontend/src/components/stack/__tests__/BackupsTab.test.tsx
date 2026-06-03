@@ -41,7 +41,7 @@ vi.mock('sonner', () => ({
 const mockStreamConnect = vi.fn()
 const mockStreamReset = vi.fn()
 const mockStreamState = {
-  status: 'idle' as 'idle' | 'running' | 'success' | 'error',
+  status: 'idle' as 'idle' | 'running' | 'success' | 'partial' | 'error',
   lines: [] as string[],
   error: null as string | null,
   connect: mockStreamConnect,
@@ -443,6 +443,17 @@ describe('BackupsTab — restore progress panel', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Restore failed')).toBeInTheDocument()
+    })
+  })
+
+  it('renders "Restore partially completed" header when stream status is partial', async () => {
+    mockStreamState.status = 'partial'
+    mockStreamState.lines = ['Backup partially completed.']
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText('Restore partially completed')).toBeInTheDocument()
     })
   })
 })

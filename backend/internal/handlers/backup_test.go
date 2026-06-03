@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -80,7 +81,6 @@ func (n *noopDocker) Status(stack models.Stack) (string, []models.Container, err
 // newBackupRouter wires a BackupHandler onto a gin.Engine with all REST routes
 // registered. It mirrors the pattern used in stacks_test.go.
 func newBackupRouter(h *BackupHandler) *gin.Engine {
-	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	group := r.Group("/api")
 	h.RegisterRoutes(group)
@@ -663,7 +663,7 @@ func TestRunBackup_Kickoff_Returns202WithRunIdAndWsUrl(t *testing.T) {
 	assert.True(t, strings.HasPrefix(wsURL, "/ws/backups/run/"), "wsUrl must start with /ws/backups/run/")
 }
 
-func TestRunBackup_Kickoff_StashesOp(t *testing.T) {
+func TestRunBackup_Kickoff_PersistsDurableRunRecord(t *testing.T) {
 	t.Parallel()
 
 	db := newBackupHandlerDB(t)
@@ -681,13 +681,16 @@ func TestRunBackup_Kickoff_StashesOp(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, w.Code)
 	body := decodeBody(t, w)
 	runID := body["runId"].(string)
+	require.NotEmpty(t, runID)
 
-	// Pop the op from the registry and assert it has the right kind.
-	op := popOp(runID)
-	require.NotNil(t, op, "op must be stashed under runId")
-	assert.Equal(t, opKindRun, op.kind)
-	assert.Equal(t, []string{"stack-a"}, op.stackIDs)
-	assert.True(t, op.dryRun)
+	// The durable run record must exist in the DB immediately after the 202
+	// response (before any WS connection). This is the Finding #7 guard.
+	run, err := db.GetBackupRunByID(runID)
+	require.NoError(t, err, "BackupRun row must be persisted at kickoff time")
+	assert.Equal(t, "backup", run.Kind)
+	assert.Equal(t, "manual", run.Trigger)
+	// Status is "running" at kickoff (the goroutine updates it on completion).
+	assert.NotEmpty(t, run.Status)
 }
 
 func TestRunBackup_EngineUnavailable_Returns409(t *testing.T) {
@@ -752,9 +755,10 @@ func TestRunSync_Kickoff_Returns202(t *testing.T) {
 	wsURL := body["wsUrl"].(string)
 	assert.True(t, strings.HasPrefix(wsURL, "/ws/backups/sync/"))
 
-	op := popOp(runID)
-	require.NotNil(t, op)
-	assert.Equal(t, opKindSync, op.kind)
+	// Durable record must exist at kickoff time.
+	run, err := db.GetBackupRunByID(runID)
+	require.NoError(t, err, "sync run record must be persisted at kickoff")
+	assert.Equal(t, "sync", run.Kind)
 }
 
 // ─────────────────────────────────────────────
@@ -787,12 +791,11 @@ func TestRunRestore_Kickoff_Returns202(t *testing.T) {
 	wsURL := body["wsUrl"].(string)
 	assert.True(t, strings.HasPrefix(wsURL, "/ws/backups/restore/"))
 
-	op := popOp(runID)
-	require.NotNil(t, op)
-	assert.Equal(t, opKindRestore, op.kind)
-	assert.Equal(t, "myapp", op.stackID)
-	assert.Equal(t, "abc123", op.snapshotID)
-	assert.Equal(t, "/opt/stacks/myapp", op.target)
+	// Durable record must exist at kickoff time (before any WS connection).
+	run, err := db.GetBackupRunByID(runID)
+	require.NoError(t, err, "restore run record must be persisted at kickoff")
+	assert.Equal(t, "restore", run.Kind)
+	assert.Equal(t, "running", run.Status)
 }
 
 func TestRunRestore_StackNotFound_Returns404(t *testing.T) {
@@ -904,10 +907,10 @@ func TestRunDRRestore_Kickoff_Returns202(t *testing.T) {
 	wsURL := body["wsUrl"].(string)
 	assert.True(t, strings.HasPrefix(wsURL, "/ws/backups/dr-restore/"))
 
-	op := popOp(runID)
-	require.NotNil(t, op)
-	assert.Equal(t, opKindDRRestore, op.kind)
-	assert.Equal(t, "/tmp/restored", op.localRepoPath)
+	// Durable record must exist at kickoff time.
+	run, err := db.GetBackupRunByID(runID)
+	require.NoError(t, err, "dr_restore run record must be persisted at kickoff")
+	assert.Equal(t, "dr_restore", run.Kind)
 }
 
 func TestRunDRRestore_Busy_Returns409(t *testing.T) {
@@ -977,10 +980,10 @@ func TestRunPrune_WithConfirm_Returns202(t *testing.T) {
 	runID, ok := body["runId"].(string)
 	require.True(t, ok && runID != "")
 
-	op := popOp(runID)
-	require.NotNil(t, op)
-	assert.Equal(t, opKindPrune, op.kind)
-	assert.False(t, op.dryRun)
+	// Durable record must exist at kickoff time.
+	run, err := db.GetBackupRunByID(runID)
+	require.NoError(t, err, "prune run record must be persisted at kickoff")
+	assert.Equal(t, "prune", run.Kind)
 }
 
 func TestRunPrune_WithDryRunOnly_Returns202(t *testing.T) {
@@ -1002,10 +1005,12 @@ func TestRunPrune_WithDryRunOnly_Returns202(t *testing.T) {
 	body := decodeBody(t, w)
 
 	runID := body["runId"].(string)
-	op := popOp(runID)
-	require.NotNil(t, op)
-	assert.Equal(t, opKindPrune, op.kind)
-	assert.True(t, op.dryRun)
+	require.NotEmpty(t, runID)
+
+	// Durable record must exist at kickoff time.
+	run, err := db.GetBackupRunByID(runID)
+	require.NoError(t, err, "prune (dry-run) run record must be persisted at kickoff")
+	assert.Equal(t, "prune", run.Kind)
 }
 
 func TestRunPrune_EngineUnavailable_Returns409(t *testing.T) {
@@ -1026,58 +1031,163 @@ func TestRunPrune_EngineUnavailable_Returns409(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────
-// WS registry: stashOp / popOp round-trips
+// BackupRunnerRegistry — durable registry tests
 // ─────────────────────────────────────────────
 
-func TestRegistry_StashPopRoundTrip(t *testing.T) {
+// TestRegistry_AttachUnknownRunID verifies that Attach returns an error for a
+// completely unknown runID (not in registry, not in DB).
+func TestRegistry_AttachUnknownRunID(t *testing.T) {
 	t.Parallel()
 
-	op := &pendingOp{
-		kind:     opKindRun,
-		stackIDs: []string{"stack-x"},
-		dryRun:   true,
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	reg := services.NewBackupRunnerRegistry(db, svc, slog.Default())
+	t.Cleanup(reg.Stop)
+
+	_, err := reg.Attach("completely-unknown-run-id", nil)
+	require.Error(t, err, "Attach must return an error for an unknown runID")
+}
+
+// TestRegistry_LaunchBackup_PersistsDurableRecord verifies that LaunchBackup
+// persists a BackupRun row synchronously before the goroutine starts, so the
+// run is durable whether or not any WS client ever connects.
+func TestRegistry_LaunchBackup_PersistsDurableRecord(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	reg := services.NewBackupRunnerRegistry(db, svc, slog.Default())
+	t.Cleanup(reg.Stop)
+
+	runID, err := reg.LaunchBackup(nil, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, runID)
+
+	// The DB record must exist before any WS connects.
+	run, dbErr := db.GetBackupRunByID(runID)
+	require.NoError(t, dbErr, "BackupRun row must exist at kickoff time")
+	assert.Equal(t, "backup", run.Kind)
+	assert.Equal(t, "manual", run.Trigger)
+}
+
+// TestRegistry_AttachFinishedRun verifies that Attach on a finished run returns
+// Done=true with the terminal outcome — used by the WS handler to replay the
+// final status to late-joining clients.
+func TestRegistry_AttachFinishedRun(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	reg := services.NewBackupRunnerRegistry(db, svc, slog.Default())
+	t.Cleanup(reg.Stop)
+
+	runID, err := reg.LaunchBackup(nil, false)
+	require.NoError(t, err)
+
+	// Wait for the goroutine to finish (it will fail — no real restic).
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ar, aErr := reg.Attach(runID, nil)
+		if aErr != nil {
+			t.Fatalf("Attach error: %v", aErr)
+		}
+		if ar.Done {
+			// Goroutine finished; outcome must be set.
+			assert.NotEmpty(t, ar.Outcome)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	stashOp("test-id-roundtrip", op)
-
-	got := popOp("test-id-roundtrip")
-	require.NotNil(t, got)
-	assert.Equal(t, opKindRun, got.kind)
-	assert.Equal(t, []string{"stack-x"}, got.stackIDs)
-	assert.True(t, got.dryRun)
+	t.Fatal("durable run never reached Done=true within 5 s")
 }
 
-func TestRegistry_PopUnknownRunIdReturnsNil(t *testing.T) {
-	t.Parallel()
+// panicRcloneRunner is a fake CommandRunner that panics on Run.
+// It is used to verify that recoverExec catches a panic inside an exec goroutine
+// and finalises the run as "failed" rather than crashing the process.
+type panicRcloneRunner struct{}
 
-	got := popOp("completely-unknown-run-id-xyz")
-	assert.Nil(t, got)
+func (r *panicRcloneRunner) Run(
+	_ context.Context,
+	_ string,
+	_ []string,
+	_ []string,
+	_ chan<- services.StreamLine,
+) error {
+	panic("injected panic for recoverExec test")
 }
 
-func TestRegistry_PopConsumesSoSecondPopReturnsNil(t *testing.T) {
-	t.Parallel()
-
-	stashOp("one-shot-id", &pendingOp{kind: opKindSync})
-
-	first := popOp("one-shot-id")
-	require.NotNil(t, first)
-
-	second := popOp("one-shot-id")
-	assert.Nil(t, second, "popOp must be destructive — second pop must return nil")
+func (r *panicRcloneRunner) Output(
+	_ context.Context,
+	_ string,
+	_ []string,
+	_ []string,
+) ([]byte, error) {
+	return []byte(`{}`), nil
 }
 
-func TestRegistry_ExpiredEntryReturnsNil(t *testing.T) {
-	t.Parallel()
+// TestRegistry_PanicInExec_RunTerminatesAsFailed verifies that a panic inside
+// an exec goroutine (e.g. inside a service method) is caught by recoverExec,
+// the DB record reaches status="failed", and Attach reports Done with
+// outcome="failed" — proving the process does not crash and the run does not
+// remain stuck at "running".
+//
+// Load-bearing: if defer reg.recoverExec(dr) were removed from execSync, the
+// goroutine panic would propagate out of the goroutine and crash the test
+// binary (Go panics that escape a goroutine are fatal). The test would never
+// reach the assertions.
+func TestRegistry_PanicInExec_RunTerminatesAsFailed(t *testing.T) {
+	// Not parallel — injects a panicking runner; must not interfere with other tests.
 
-	op := &pendingOp{
-		kind: opKindPrune,
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, false, true) // rcloneBin set → sync is "available"
+
+	// Inject a rclone manager factory whose runner panics on every Run call.
+	svc.SetRcloneMgrFactory(func(bc services.BackupConfig) *services.RcloneManager {
+		return services.NewRcloneManagerForTest(bc, &panicRcloneRunner{}, slog.Default())
+	})
+
+	// Provide the minimum rclone config so RunSync does not return early with
+	// ErrBackupUnavailable or "remote not configured" before reaching the runner.
+	require.NoError(t, db.SetSetting("rclone_remote", "fakeprovider"))
+	require.NoError(t, db.SetSetting("restic_repository", "/tmp/test-repo"))
+
+	reg := services.NewBackupRunnerRegistry(db, svc, slog.Default())
+	t.Cleanup(reg.Stop)
+
+	runID, err := reg.LaunchSync()
+	require.NoError(t, err)
+	require.NotEmpty(t, runID)
+
+	// The DB record must exist synchronously after LaunchSync.
+	initialRun, dbErr := db.GetBackupRunByID(runID)
+	require.NoError(t, dbErr)
+	assert.Equal(t, "sync", initialRun.Kind)
+
+	// Wait for the exec goroutine to exit.  recoverExec must:
+	//   (a) catch the panic without crashing the binary,
+	//   (b) write outcome="failed" to the durableRun, and
+	//   (c) update the DB record to status="failed".
+	deadline := time.Now().Add(5 * time.Second)
+	var finalAR *services.AttachResult
+	for time.Now().Before(deadline) {
+		ar, aErr := reg.Attach(runID, nil)
+		require.NoError(t, aErr)
+		if ar.Done {
+			finalAR = ar
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
-	// Bypass stashOp to set an already-expired expiresAt.
-	op.expiresAt = time.Now().Add(-1 * time.Hour) // one hour in the past
+	require.NotNil(t, finalAR, "run must reach Done=true within 5 s after panic")
 
-	pendingOpsMu.Lock()
-	pendingOps["expired-id-test"] = op
-	pendingOpsMu.Unlock()
+	assert.Equal(t, "failed", finalAR.Outcome,
+		"outcome must be 'failed' when the exec goroutine panics")
 
-	got := popOp("expired-id-test")
-	assert.Nil(t, got, "expired op must not be returned by popOp")
+	// Confirm the DB record was also updated.
+	dbRun, dbErr := db.GetBackupRunByID(runID)
+	require.NoError(t, dbErr)
+	assert.Equal(t, "failed", dbRun.Status,
+		"DB status must be 'failed', not 'running', after a panic in the exec goroutine")
+	assert.NotNil(t, dbRun.FinishedAt,
+		"FinishedAt must be set after recoverExec finalises the run")
 }

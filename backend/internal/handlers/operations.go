@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
-	"github.com/gin-gonic/gin"
 )
 
 type OperationsHandler struct {
@@ -95,15 +95,21 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 		})
 
 		if action == "restart" {
+			// Two-phase restart: stream the down phase first, then the up phase.
+			// Only the up-phase terminal done frame is the definitive result
+			// (finding #18 fix: down-phase done is consumed and not forwarded as terminal).
 			stopCh := h.docker.RunStreaming(ctx, *stack, "down", nil)
 			for line := range stopCh {
 				if line.Type == "done" {
 					if !line.Success {
+						// The stop phase failed — emit the failure done frame and return.
 						if err := safeWriteJSON(conn, line); err != nil {
-							slog.Debug("Failed to write stop output", "error", err)
+							slog.Debug("Failed to write stop failure frame", "error", err)
 						}
 						return
 					}
+					// Stop succeeded — do not forward the intermediate done frame;
+					// the client will see the phase announcement instead.
 					continue
 				}
 				if err := safeWriteJSON(conn, line); err != nil {
@@ -120,6 +126,8 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			extraArgs = []string{"-d"}
 		}
 
+		// Stream the main (or up-phase) command. The terminal done frame now
+		// carries outcome+reason from the verified end state (finding #5 + #18 fix).
 		lineCh := h.docker.RunStreaming(ctx, *stack, subcommand, extraArgs)
 		for line := range lineCh {
 			if ctx.Err() != nil {

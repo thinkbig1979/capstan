@@ -32,6 +32,19 @@ type commandRunner interface {
 	Output(ctx context.Context, name string, args []string, env []string) ([]byte, error)
 }
 
+// CommandRunner is the exported version of commandRunner, providing the same
+// interface for use by external test packages (e.g. integrationtest).
+// Production code uses the unexported alias; the exported alias lets external
+// tests implement fake runners without importing internal test helpers.
+type CommandRunner = commandRunner
+
+// NewResticManagerForTest creates a ResticManager with an injected runner.
+// It is intended for use in external test packages (e.g. integrationtest)
+// where the unexported newResticManagerWithRunner constructor is inaccessible.
+func NewResticManagerForTest(cfg BackupConfig, runner CommandRunner, logger *slog.Logger) *ResticManager {
+	return newResticManagerWithRunner(cfg, runner, logger)
+}
+
 // execRunner is the real commandRunner backed by os/exec.
 type execRunner struct{}
 

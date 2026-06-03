@@ -24,7 +24,6 @@ func newTestMonitoringHandler(t *testing.T) *MonitoringHandler {
 }
 
 func setupMonitoringRouter(handler *MonitoringHandler) *gin.Engine {
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	group := router.Group("/api")
 	handler.RegisterRoutes(group, "test-secret-key-32-chars-long!!!", false)
@@ -68,7 +67,6 @@ func TestMonitoringHandler_GetStackContainers_WithStack_NoDocker(t *testing.T) {
 	cm := NewConnectionManager(10)
 	handler := NewMonitoringHandler(nil, nil, db, cm, NewEventBus())
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	group := router.Group("/api")
 	handler.RegisterRoutes(group, "test-secret-key-32-chars-long!!!", false)
@@ -106,7 +104,6 @@ func TestMonitoringHandler_EventsWS_RejectsNonWS(t *testing.T) {
 func TestMonitoringHandler_RoutesRegistered(t *testing.T) {
 	handler := newTestMonitoringHandler(t)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	group := router.Group("/api")
 	handler.RegisterRoutes(group, "secret", false)

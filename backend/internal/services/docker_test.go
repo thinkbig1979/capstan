@@ -304,42 +304,6 @@ func TestDockerService_Stop_FailsWithoutDocker(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestDockerService_Restart_FailsWithoutDocker(t *testing.T) {
-	tempDir := t.TempDir()
-	cfg := &config.Config{StacksDir: tempDir}
-
-	service := &DockerService{config: cfg}
-
-	stack := models.Stack{
-		ID:          filepath.Base(tempDir) + "~test-stack:default",
-		Directory:   tempDir,
-		ComposeFile: "compose.yaml",
-		EnvFile:     ".env",
-		ProjectName: "test-stack-default",
-	}
-
-	_, err := service.Restart(stack)
-	assert.Error(t, err)
-}
-
-func TestDockerService_Pull_FailsWithoutDocker(t *testing.T) {
-	tempDir := t.TempDir()
-	cfg := &config.Config{StacksDir: tempDir}
-
-	service := &DockerService{config: cfg}
-
-	stack := models.Stack{
-		ID:          filepath.Base(tempDir) + "~test-stack:default",
-		Directory:   tempDir,
-		ComposeFile: "compose.yaml",
-		EnvFile:     ".env",
-		ProjectName: "test-stack-default",
-	}
-
-	_, err := service.Pull(stack)
-	assert.Error(t, err)
-}
-
 func TestDockerService_Delete_FailsWithoutDocker(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{StacksDir: tempDir}

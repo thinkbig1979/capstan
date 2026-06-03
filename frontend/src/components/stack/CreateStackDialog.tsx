@@ -19,7 +19,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { toast } from 'sonner'
-import { useCreateStack } from '@/hooks/useCreateStack'
+import { useCreateStack, extractStack } from '@/hooks/useCreateStack'
 import { useQuery } from '@tanstack/react-query'
 import { settingsApi, stacksApi } from '@/lib/api'
 import { convertDockerRun, isDockerRunCommand } from '@/lib/docker-run-parser'
@@ -146,22 +146,36 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
       { name, directory: selectedDir || undefined, composeContent, envContent: showEnv ? envContent : undefined, deploy },
       {
         onSuccess: (data) => {
-          toast.success(
-            `Stack "${name}" created successfully${deploy ? ' and deployed' : ''}`,
-          )
-          onOpenChange(false)
-          navigate(`/stacks/${data.stack.id}`)
-          resetForm()
+          // The hook's onSuccess has already fired the appropriate toast
+          // (success/warning based on outcome). We handle UI navigation here.
+          //
+          // For partial outcome (created-not-deployed): close the dialog and
+          // navigate to the stack so the user can see/fix it. The warning toast
+          // from the hook is already visible.
+          const stackObj = extractStack(data)
+          if (stackObj?.id) {
+            onOpenChange(false)
+            navigate(`/stacks/${stackObj.id}`)
+            resetForm()
+          }
         },
         onError: (error: unknown) => {
+          // If the hook detected a created-but-not-deployed partial outcome, it
+          // already showed the warning toast and invalidated queries. Navigate
+          // to the stack so the user can see it.
+          const partial = error as { outcome?: string; details?: { stack?: { id: string } } }
+          if (partial?.outcome === 'partial' && partial?.details?.stack?.id) {
+            onOpenChange(false)
+            navigate(`/stacks/${partial.details.stack.id}`)
+            resetForm()
+            return
+          }
+
+          // Genuine create failure: show inline lint errors if present.
+          // The hook's onError already fired the appropriate error toast.
           const err = error as { error?: string; lintResults?: LintResult[] }
           if (err.lintResults && err.lintResults.length > 0) {
             setLintResults(err.lintResults)
-            toast.error('Lint errors detected')
-          } else if (err.error?.includes('already exists')) {
-            toast.error('Stack name already exists')
-          } else {
-            toast.error(err.error || 'Failed to create stack')
           }
         },
       },

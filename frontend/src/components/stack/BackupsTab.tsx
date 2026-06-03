@@ -111,7 +111,7 @@ function RestoreProgress({
   error,
   onDismiss,
 }: {
-  status: 'idle' | 'running' | 'success' | 'error'
+  status: 'idle' | 'running' | 'success' | 'partial' | 'error'
   lines: string[]
   error: string | null
   onDismiss: () => void
@@ -119,28 +119,36 @@ function RestoreProgress({
   if (status === 'idle') return null
 
   const isRunning = status === 'running'
-  const isDone = status === 'success' || status === 'error'
+  const isDone = status === 'success' || status === 'partial' || status === 'error'
+
+  function headerLabel() {
+    if (isRunning) return 'Restoring…'
+    if (status === 'success') return 'Restore completed'
+    if (status === 'partial') return 'Restore partially completed'
+    return 'Restore failed'
+  }
 
   return (
     <div className={cn(
       'mt-4 rounded-lg border overflow-hidden',
-      isDone && status === 'success' && 'border-green-500/30',
-      isDone && status === 'error' && 'border-destructive/30',
+      status === 'success' && 'border-green-500/30',
+      status === 'partial' && 'border-yellow-500/30',
+      status === 'error' && 'border-destructive/30',
       isRunning && 'border-blue-500/30',
     )}>
       <div className={cn(
         'flex items-center justify-between px-4 py-2 text-sm font-medium',
         isRunning && 'bg-blue-500/10 text-blue-700 dark:text-blue-400',
         status === 'success' && 'bg-green-500/10 text-green-700 dark:text-green-400',
+        status === 'partial' && 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400',
         status === 'error' && 'bg-destructive/10 text-destructive',
       )}>
         <div className="flex items-center gap-2">
           {isRunning && <Loader2 className="h-4 w-4 animate-spin" />}
           {status === 'success' && <CheckCircle2 className="h-4 w-4" />}
+          {status === 'partial' && <AlertCircle className="h-4 w-4" />}
           {status === 'error' && <XCircle className="h-4 w-4" />}
-          <span>
-            {isRunning ? 'Restoring…' : status === 'success' ? 'Restore completed' : 'Restore failed'}
-          </span>
+          <span>{headerLabel()}</span>
           {isRunning && lines.length > 0 && (
             <span className="text-xs opacity-60">({lines.length} lines)</span>
           )}
@@ -309,12 +317,20 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
             ? data.wsUrl.slice('/api/v1'.length)
             : data.wsUrl
 
-          stream.connect(wsPath, () => {
+          stream.connect(wsPath, (finalStatus) => {
             queryClient.invalidateQueries({ queryKey: backupKeys.snapshots(stackId) })
             queryClient.invalidateQueries({ queryKey: backupKeys.status() })
             queryClient.invalidateQueries({ queryKey: backupKeys.history() })
             queryClient.invalidateQueries({ queryKey: ['stack', stackId] })
-            toast.success('Restore completed')
+            // Derive the toast from the real terminal outcome — a failed or
+            // partial restore must not be reported as a green success.
+            if (finalStatus === 'success') {
+              toast.success('Restore completed')
+            } else if (finalStatus === 'partial') {
+              toast.warning('Restore partially completed — check the log')
+            } else {
+              toast.error('Restore failed — check the log for details')
+            }
           })
         },
         onError: (err) => {

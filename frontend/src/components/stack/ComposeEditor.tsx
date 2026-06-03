@@ -14,9 +14,10 @@ import {
 } from '@/components/ui/dialog'
 import { Save, FileCheck, AlertCircle, Variable } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiClient } from '@/lib/api'
+import { apiClient, stacksApi } from '@/lib/api'
 import { classifyError } from '@/lib/error-handler'
 import { toast } from 'sonner'
+import { isActionResult } from '@/lib/action-result'
 import type { LintResult } from '@/types'
 import { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
 import { LintResultsPanel } from '@/components/stack/LintResultsPanel'
@@ -205,6 +206,16 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     setShowExtractDialog(true)
   }, [selectedText])
 
+  /**
+   * Atomic extract-to-env (audit finding #11).
+   *
+   * Preferred path: PUT /stacks/:id/compose-env writes compose + env in one
+   * transaction — no partial-write window where compose references a missing var.
+   *
+   * Fallback path: if the atomic endpoint returns 404 (backend not yet migrated),
+   * we fall back to the env-first sequential write. Writing env first means the
+   * compose reference is only persisted after the var exists in .env.
+   */
   const confirmExtract = useCallback(async () => {
     if (!viewRef.current || !selectedText || !extractVarName.trim()) return
 
@@ -214,28 +225,60 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
 
     setIsExtracting(true)
     try {
-      const newCompose = view.state.doc.toString()
-      const before = newCompose.slice(0, sel.from)
-      const after = newCompose.slice(sel.to)
+      const currentCompose = view.state.doc.toString()
+      const before = currentCompose.slice(0, sel.from)
+      const after = currentCompose.slice(sel.to)
       const updatedCompose = before + `\${${varName}}` + after
 
-      await apiClient.put(`/stacks/${stackId}/compose`, { content: updatedCompose })
-
+      // Build the updated .env content
       let currentEnv = ''
       try {
-        const envResponse = await apiClient.get(`/stacks/${stackId}/env`)
-        if (envResponse.data?.raw) {
-          currentEnv = envResponse.data.raw
+        const envData = await stacksApi.getEnv(stackId)
+        if (envData?.raw) {
+          currentEnv = envData.raw
         }
       } catch {
-        // no .env file yet, that's fine
+        // No .env file yet — the atomic endpoint will create it.
       }
 
       const newEnvLine = `${varName}=${selectedText}`
-      const updatedEnv = currentEnv ? `${currentEnv}\n${newEnvLine}` : newEnvLine
+      const updatedEnv = currentEnv ? `${currentEnv.trimEnd()}\n${newEnvLine}` : newEnvLine
 
-      await apiClient.put(`/stacks/${stackId}/env`, { raw: updatedEnv })
+      // Attempt atomic write — body: { composeContent, envRaw } per ComposeEnvRequest
+      let atomicSuccess = false
+      try {
+        const result = await stacksApi.updateComposeAndEnv(stackId, updatedCompose, updatedEnv)
+        if (isActionResult(result)) {
+          if (result.outcome === 'success' || result.outcome === 'no_change') {
+            atomicSuccess = true
+          } else {
+            toast.error(result.reason || 'Failed to extract variable to .env')
+            return
+          }
+        } else {
+          // The endpoint doesn't exist yet (pre-B4 backend) — fall through to sequential.
+          atomicSuccess = false
+        }
+      } catch (e: unknown) {
+        const err = e as { status?: number; response?: { status?: number } }
+        const status = err.status ?? err.response?.status
+        if (status === 404) {
+          // Backend not yet migrated; use env-first sequential fallback.
+          atomicSuccess = false
+        } else {
+          toast.error('Failed to extract variable to .env')
+          return
+        }
+      }
 
+      if (!atomicSuccess) {
+        // Sequential fallback — write env FIRST so the compose reference is
+        // never persisted without the variable being available.
+        await apiClient.put(`/stacks/${stackId}/env`, { raw: updatedEnv })
+        await apiClient.put(`/stacks/${stackId}/compose`, { content: updatedCompose })
+      }
+
+      // Update editor state
       view.dispatch({
         changes: { from: sel.from, to: sel.to, insert: `\${${varName}}` },
       })

@@ -220,6 +220,18 @@ type ContainerUpdateInfo struct {
 	ProjectName   string `json:"projectName"`
 	ServiceName   string `json:"serviceName"`
 	IsCompose     bool   `json:"isCompose"`
+	// LocalDigest is the repo-matched local digest resolved during detection,
+	// carried through so performScan can persist it in cached_updates (finding #7).
+	// It is set on the live-scan path (CheckForUpdates), so it appears in that
+	// /updates response; the cached-read projections rebuild the struct without it.
+	// omitempty only suppresses it where unset.
+	LocalDigest string `json:"localDigest,omitempty"`
+	// RemoteDigest is the remote index digest resolved during detection (the same
+	// value selectUpdates compared against LocalDigest to decide an update exists),
+	// carried through so performScan can persist it without a re-fetch. Like
+	// LocalDigest it is set on the live-scan path and appears in that /updates
+	// response; the cached-read projections omit it.
+	RemoteDigest string `json:"remoteDigest,omitempty"`
 }
 
 type StackEvent struct {
@@ -234,6 +246,8 @@ type StackEvent struct {
 	TargetID    string    `json:"targetId,omitempty"`
 	Name        string    `json:"name,omitempty"`
 	JobError    string    `json:"error,omitempty"`
+	Outcome     string    `json:"outcome,omitempty"`
+	Reason      string    `json:"reason,omitempty"`
 }
 
 type CachedUpdate struct {

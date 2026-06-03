@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -141,93 +141,30 @@ func (h *GitHandler) Pull(c *gin.Context) {
 		return
 	}
 
-	result, err := h.git.Pull(absPath)
-	if err != nil {
-		models.HandleError(c, err)
-		return
-	}
-
 	redeploy := c.Query("redeploy") == "true"
-	var redeployedStacks []string
-
-	if redeploy && h.docker != nil {
-		redeployedStacks = h.redeployAffectedStacks(absPath, result.ChangedFiles)
-	}
+	ar, pullResult := h.git.PullVerified(absPath, redeploy, h.docker)
 
 	userID, _ := c.Get("userID")
-	detail := h.formatPullDetail(result, redeployedStacks)
-	h.logGitAction(userID.(string), absPath, "pull", detail)
+	if pullResult != nil {
+		h.logGitAction(userID.(string), absPath, "pull", h.formatPullDetail(pullResult))
+	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success":          true,
-		"previousCommit":   result.PreviousCommit,
-		"currentCommit":    result.CurrentCommit,
-		"changedFiles":     result.ChangedFiles,
-		"redeployedStacks": redeployedStacks,
-	})
+	truth.Render(c, ar)
 }
 
-func (h *GitHandler) redeployAffectedStacks(dirPath string, changedFiles []string) []string {
-	if len(changedFiles) == 0 {
-		return []string{}
+func (h *GitHandler) formatPullDetail(result *models.PullResult) string {
+	if result.PreviousCommit == result.CurrentCommit {
+		return "Already up to date"
 	}
-
-	stacks, err := h.db.ListStacksByDirectory(dirPath)
-	if err != nil {
-		slog.Warn("Failed to list stacks for redeploy", "path", dirPath, "error", err)
-		return []string{}
+	prevShort := result.PreviousCommit
+	if len(prevShort) > 7 {
+		prevShort = prevShort[:7]
 	}
-
-	redeployed := []string{}
-
-	for _, stack := range stacks {
-		if h.stackFilesChanged(stack, changedFiles) {
-			slog.Info("Redeploying stack", "stackId", stack.ID, "changedFiles", changedFiles)
-
-			result, err := h.docker.Restart(stack)
-			if err != nil {
-				slog.Warn("Failed to redeploy stack", "stackId", stack.ID, "error", err)
-				continue
-			}
-
-			slog.Info("Stack redeployed", "stackId", stack.ID, "output", result.Stdout)
-			redeployed = append(redeployed, stack.ID)
-		}
+	currShort := result.CurrentCommit
+	if len(currShort) > 7 {
+		currShort = currShort[:7]
 	}
-
-	return redeployed
-}
-
-func (h *GitHandler) stackFilesChanged(stack models.Stack, changedFiles []string) bool {
-	for _, file := range changedFiles {
-		if file == stack.ComposeFile || file == stack.EnvFile {
-			return true
-		}
-	}
-	return false
-}
-
-func (h *GitHandler) formatPullDetail(result *models.PullResult, redeployedStacks []string) string {
-	detail := ""
-	if result.PreviousCommit != result.CurrentCommit {
-		prevShort := result.PreviousCommit
-		if len(prevShort) > 7 {
-			prevShort = prevShort[:7]
-		}
-		currShort := result.CurrentCommit
-		if len(currShort) > 7 {
-			currShort = currShort[:7]
-		}
-		detail = "Pulled " + prevShort + " -> " + currShort
-	} else {
-		detail = "Already up to date"
-	}
-
-	if len(redeployedStacks) > 0 {
-		detail += ", redeployed: " + strings.Join(redeployedStacks, ", ")
-	}
-
-	return detail
+	return "Pulled " + prevShort + " -> " + currShort
 }
 
 func (h *GitHandler) GetLog(c *gin.Context) {

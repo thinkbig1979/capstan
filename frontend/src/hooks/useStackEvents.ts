@@ -4,7 +4,7 @@ import { queryClient } from '@/lib/query-client'
 import { resolveUpdateScanSuccess, resolveUpdateScanError } from './useResources'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
 import type { Stack } from '@/types'
-import type { UpdateJobProgressEvent, UpdateJobCompleteEvent } from '@/stores/updateJobStore'
+import type { UpdateJobProgressEvent, UpdateJobCompleteEvent, UpdateJobOutcome } from '@/stores/updateJobStore'
 
 export interface StackStatusEvent {
   type: 'stack_status'
@@ -59,6 +59,14 @@ export interface UpdateJobCompleteStackEvent {
   name: string
   status: 'queued' | 'pulling' | 'recreating' | 'success' | 'error'
   error?: string
+  outcome?: UpdateJobOutcome
+  reason?: string
+}
+
+/** Emitted by the backend when the updates cache has changed (row evicted after apply). */
+export interface UpdatesChangedEvent {
+  type: 'updates_changed'
+  timestamp: string
 }
 
 export interface UpdatePolicyChangedEvent {
@@ -88,6 +96,7 @@ export type StackEvent =
   | UpdateScanFailedEvent
   | UpdateJobProgressStackEvent
   | UpdateJobCompleteStackEvent
+  | UpdatesChangedEvent
 
 export function useStackEvents() {
   const pendingRef = useRef<Set<string>>(new Set())
@@ -215,13 +224,33 @@ export function useStackEvents() {
       name: event.name,
       status: event.status,
       error: event.error,
+      outcome: event.outcome,
+      reason: event.reason,
     }
     applyComplete(payload)
-    scheduleInvalidations([
+    // Always invalidate history and stats.
+    const keys: string[][] = [
       ['update-history'],
-      ['resources', 'updates'],
       ['dashboard-stats'],
       ['stacks'],
+    ]
+    // On success or no_change, the backend evicts the row from cached_updates and
+    // broadcasts an updates-changed signal; we also force a refetch here so the
+    // UI converges and the row disappears even if the WS signal races/misses.
+    if (event.outcome === 'success' || event.outcome === 'no_change') {
+      keys.push(['resources', 'updates'])
+    } else {
+      // For failed/unknown outcomes still invalidate so the list stays fresh.
+      keys.push(['resources', 'updates'])
+    }
+    scheduleInvalidations(keys)
+  }
+
+  const handleUpdatesChangedEvent = () => {
+    // Backend evicted one or more rows from the updates cache (after a verified apply).
+    // Refetch the updates list immediately so the row disappears.
+    scheduleInvalidations([
+      ['resources', 'updates'],
     ])
   }
 
@@ -258,6 +287,9 @@ export function useStackEvents() {
           break
         case 'update_job_complete':
           handleUpdateJobCompleteEvent(data)
+          break
+        case 'updates_changed':
+          handleUpdatesChangedEvent()
           break
       }
     }

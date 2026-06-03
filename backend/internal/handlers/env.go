@@ -3,6 +3,7 @@ package handlers
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -56,6 +58,7 @@ func NewEnvHandler(db *database.DB, config *config.Config) *EnvHandler {
 func (h *EnvHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/:id/env", h.Get)
 	group.PUT("/:id/env", h.Put)
+	group.POST("/:id/env", h.Create)
 }
 
 func (h *EnvHandler) Get(c *gin.Context) {
@@ -162,11 +165,16 @@ func (h *EnvHandler) Put(c *gin.Context) {
 	}
 
 	var content string
-
 	if req.Raw != "" {
 		content = req.Raw
 	} else if len(req.Entries) > 0 {
-		content = h.serializeEnvFile(req.Entries)
+		// Validate before serialising: reject entries with a non-comment, non-blank
+		// key that is empty — they would produce a corrupt "=value" line (#15).
+		if err := validateEnvEntries(req.Entries); err != nil {
+			truth.Render(c, truth.Failed("env validation failed: "+err.Error(), err))
+			return
+		}
+		content = serializeEnvFile(req.Entries)
 	} else {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
@@ -177,21 +185,160 @@ func (h *EnvHandler) Put(c *gin.Context) {
 	}
 
 	if err := os.WriteFile(envPath, []byte(content), 0644); err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"WRITE_ERROR",
-			"Failed to write env file",
-		))
+		truth.Render(c, truth.Failed("failed to write env file", err))
+		return
+	}
+
+	// Round-trip verify: re-read the file and confirm the bytes were persisted
+	// faithfully (#15 file-save contract).
+	if ar := verifyEnvRoundTrip(envPath, content); ar != nil {
+		truth.Render(c, *ar)
 		return
 	}
 
 	userID, _ := c.Get("userID")
 	h.logAction(userID.(string), id, "update_env", "Updated env file: "+stack.EnvFile)
 
-	c.JSON(http.StatusOK, EnvSaveResponse{
-		Saved:    true,
-		Filename: stack.EnvFile,
-	})
+	truth.Render(c, truth.Success("env file saved",
+		truth.KV("filename", stack.EnvFile),
+	))
+}
+
+// Create handles POST /api/v1/stacks/:id/env — creates the stack's .env file.
+// Returns no_change (409) if the file already exists, success once the file is
+// verified to exist on disk (#16).
+func (h *EnvHandler) Create(c *gin.Context) {
+	id := c.Param("id")
+
+	stack, err := h.db.GetStack(id)
+	if err != nil || stack == nil {
+		c.JSON(http.StatusNotFound, models.NewAppError(
+			http.StatusNotFound,
+			models.ErrStackNotFound,
+			"Stack not found",
+		))
+		return
+	}
+
+	// Determine the env file path: use the configured one when set, otherwise
+	// default to ".env" in the stack directory.
+	envFileName := stack.EnvFile
+	if envFileName == "" {
+		envFileName = ".env"
+	}
+	envPath := filepath.Join(stack.Directory, envFileName)
+
+	if err := validateStackPath(envPath, h.config); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrPathTraversal,
+			"Invalid env file path",
+		))
+		return
+	}
+
+	// Refuse if the file already exists.
+	if _, statErr := os.Stat(envPath); statErr == nil {
+		c.JSON(http.StatusConflict, truth.NoChange("env file already exists",
+			truth.KV("filename", envFileName),
+		))
+		return
+	}
+
+	// Accept optional initial content from the request body.
+	var req struct {
+		Content string `json:"content"`
+		Raw     string `json:"raw"`
+	}
+	// Ignore bind error — an empty body is fine (creates an empty file).
+	_ = c.ShouldBindJSON(&req)
+
+	content := req.Content
+	if content == "" {
+		content = req.Raw
+	}
+
+	if err := os.WriteFile(envPath, []byte(content), 0600); err != nil {
+		truth.Render(c, truth.Failed("failed to create env file", err))
+		return
+	}
+
+	// Verify the file was actually created on disk.
+	if _, statErr := os.Stat(envPath); statErr != nil {
+		truth.Render(c, truth.Failed("env file was not created on disk", statErr,
+			truth.KV("filename", envFileName),
+		))
+		return
+	}
+
+	// Update the stack record if it had no env file configured.
+	if stack.EnvFile == "" {
+		stack.EnvFile = envFileName
+		if err := h.db.UpsertStack(*stack); err != nil {
+			// Non-fatal: file exists, DB update failed. Surface as partial.
+			truth.Render(c, truth.Partial("env file created but DB not updated",
+				truth.KV("filename", envFileName),
+				truth.KV("dbError", err.Error()),
+			))
+			return
+		}
+	}
+
+	userID, _ := c.Get("userID")
+	h.logAction(userID.(string), id, "create_env", "Created env file: "+envFileName)
+
+	c.JSON(http.StatusCreated, truth.Success("env file created",
+		truth.KV("filename", envFileName),
+	))
+}
+
+// validateEnvEntries returns an error when any non-comment, non-blank entry
+// has an empty key. Such entries would produce a corrupt "=value" line when
+// serialised (finding #15).
+func validateEnvEntries(entries []EnvEntry) error {
+	for i, e := range entries {
+		if e.Comment {
+			continue
+		}
+		// A blank entry (key=="", value=="") is a blank line — allowed.
+		if e.Key == "" && e.Value == "" {
+			continue
+		}
+		// A non-blank value with an empty key would produce "=value".
+		if e.Key == "" && e.Value != "" {
+			return fmt.Errorf("entry at index %d has an empty key and non-empty value %q; this would produce a corrupt env line", i, e.Value)
+		}
+		// A literal newline (or carriage return) in a key or value would split
+		// the entry across multiple lines on serialisation, silently corrupting
+		// the file. The round-trip check can't distinguish this from intent, so
+		// reject it up front (finding B4).
+		if strings.ContainsAny(e.Key, "\r\n") {
+			return fmt.Errorf("entry at index %d has a key containing a newline; this would corrupt the env file", i)
+		}
+		if strings.ContainsAny(e.Value, "\r\n") {
+			return fmt.Errorf("entry at index %d (key %q) has a value containing a newline; this would corrupt the env file", i, e.Key)
+		}
+	}
+	return nil
+}
+
+// verifyEnvRoundTrip re-reads envPath and confirms the persisted bytes equal
+// the intended content. Returns a Failed ActionResult on mismatch, nil on success.
+func verifyEnvRoundTrip(envPath, intended string) *truth.ActionResult {
+	persisted, err := os.ReadFile(envPath)
+	if err != nil {
+		ar := truth.Failed("could not re-read env file for round-trip verification", err)
+		return &ar
+	}
+	if string(persisted) != intended {
+		ar := truth.Failed("env file round-trip verification failed: persisted bytes differ from intended content",
+			nil,
+			truth.KV("expectedLen", len(intended)),
+			truth.KV("gotLen", len(persisted)),
+		)
+		return &ar
+	}
+	return nil
 }
 
 func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
@@ -272,7 +419,7 @@ func (h *EnvHandler) unquoteValue(value string) string {
 	return value
 }
 
-func (h *EnvHandler) serializeEnvFile(entries []EnvEntry) string {
+func serializeEnvFile(entries []EnvEntry) string {
 	var buf bytes.Buffer
 
 	for _, entry := range entries {

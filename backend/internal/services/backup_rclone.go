@@ -28,6 +28,13 @@ func NewRcloneManager(cfg BackupConfig, logger *slog.Logger) *RcloneManager {
 	}
 }
 
+// NewRcloneManagerForTest creates an RcloneManager with an injected runner.
+// It is intended for use in external test packages (e.g. integrationtest)
+// where the unexported newRcloneManagerWithRunner constructor is inaccessible.
+func NewRcloneManagerForTest(cfg BackupConfig, runner CommandRunner, logger *slog.Logger) *RcloneManager {
+	return newRcloneManagerWithRunner(cfg, runner, logger)
+}
+
 // newRcloneManagerWithRunner is used in tests to inject a fake runner.
 func newRcloneManagerWithRunner(cfg BackupConfig, runner commandRunner, logger *slog.Logger) *RcloneManager {
 	if logger == nil {

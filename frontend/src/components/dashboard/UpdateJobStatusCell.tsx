@@ -1,5 +1,5 @@
 import { useRef, useEffect } from 'react'
-import { RefreshCw, CheckCircle, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
+import { RefreshCw, CheckCircle, AlertCircle, Info, ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -85,6 +85,29 @@ export interface UpdateJobStatusCellProps {
 
 const TERMINAL_STATUSES = new Set(['success', 'error'])
 
+/**
+ * Derive the effective display outcome from the job's typed `outcome` field
+ * (truth-first) with a fallback to the legacy `status` field so the cell is
+ * backward-compatible while the backend deploys the new contract.
+ *
+ * Important distinction:
+ *   outcome='success'   → image digest genuinely advanced  → show green "Updated"
+ *   outcome='no_change' → image already up to date, no-op  → show blue "Already up to date"
+ *   outcome='failed'    → update failed                    → show red "Failed"
+ *   outcome=undefined   → backend not yet migrated; fall back to status
+ */
+function resolveDisplayOutcome(job: UpdateJob): 'success' | 'no_change' | 'failed' | null {
+  if (!TERMINAL_STATUSES.has(job.status)) return null
+  // Prefer the explicit outcome when it has arrived.
+  if (job.outcome === 'success') return 'success'
+  if (job.outcome === 'no_change') return 'no_change'
+  if (job.outcome === 'failed') return 'failed'
+  // Fallback for backends that have not yet shipped the outcome field.
+  if (job.status === 'success') return 'success'
+  if (job.status === 'error') return 'failed'
+  return null
+}
+
 export function UpdateJobStatusCell({
   job,
   expanded,
@@ -98,9 +121,10 @@ export function UpdateJobStatusCell({
 
   const statusCell = () => {
     if (!job || (TERMINAL_STATUSES.has(job.status) && !expanded)) {
-      // No job or terminal but collapsed: show the action button
-      if (job?.status === 'error') {
-        // Error state: show red indicator + retry button
+      const displayOutcome = job ? resolveDisplayOutcome(job) : null
+
+      if (displayOutcome === 'failed') {
+        const errorMsg = job?.reason || job?.error
         return (
           <TooltipProvider>
             <Tooltip>
@@ -110,9 +134,9 @@ export function UpdateJobStatusCell({
                   <span className="text-xs text-destructive">Failed</span>
                 </div>
               </TooltipTrigger>
-              {job.error && (
+              {errorMsg && (
                 <TooltipContent>
-                  <p className="max-w-xs">{job.error}</p>
+                  <p className="max-w-xs">{errorMsg}</p>
                 </TooltipContent>
               )}
             </Tooltip>
@@ -120,12 +144,43 @@ export function UpdateJobStatusCell({
         )
       }
 
-      if (job?.status === 'success') {
+      if (displayOutcome === 'no_change') {
         return (
-          <div className="flex items-center gap-1">
-            <CheckCircle className="h-3.5 w-3.5 text-success" />
-            <span className="text-xs text-success">Updated</span>
-          </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-1">
+                  <Info className="h-3.5 w-3.5 text-info" />
+                  <span className="text-xs text-info">Already up to date</span>
+                </div>
+              </TooltipTrigger>
+              {job?.reason && (
+                <TooltipContent>
+                  <p className="max-w-xs">{job.reason}</p>
+                </TooltipContent>
+              )}
+            </Tooltip>
+          </TooltipProvider>
+        )
+      }
+
+      if (displayOutcome === 'success') {
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-1">
+                  <CheckCircle className="h-3.5 w-3.5 text-success" />
+                  <span className="text-xs text-success">Updated</span>
+                </div>
+              </TooltipTrigger>
+              {job?.reason && (
+                <TooltipContent>
+                  <p className="max-w-xs">{job.reason}</p>
+                </TooltipContent>
+              )}
+            </Tooltip>
+          </TooltipProvider>
         )
       }
 
@@ -170,7 +225,11 @@ export function UpdateJobStatusCell({
       )
     }
 
-    if (job.status === 'error') {
+    // Terminal states (expanded) — derive from outcome for truthfulness.
+    const displayOutcome = resolveDisplayOutcome(job)
+
+    if (displayOutcome === 'failed') {
+      const errorMsg = job.reason || job.error
       return (
         <TooltipProvider>
           <Tooltip>
@@ -180,9 +239,9 @@ export function UpdateJobStatusCell({
                 <span className="text-xs text-destructive">Failed</span>
               </div>
             </TooltipTrigger>
-            {job.error && (
+            {errorMsg && (
               <TooltipContent>
-                <p className="max-w-xs">{job.error}</p>
+                <p className="max-w-xs">{errorMsg}</p>
               </TooltipContent>
             )}
           </Tooltip>
@@ -190,17 +249,50 @@ export function UpdateJobStatusCell({
       )
     }
 
-    if (job.status === 'success') {
+    if (displayOutcome === 'no_change') {
       return (
-        <div className="flex items-center gap-1">
-          <CheckCircle className="h-3.5 w-3.5 text-success" />
-          <span className="text-xs text-success">Updated</span>
-        </div>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-1">
+                <Info className="h-3.5 w-3.5 text-info" />
+                <span className="text-xs text-info">Already up to date</span>
+              </div>
+            </TooltipTrigger>
+            {job.reason && (
+              <TooltipContent>
+                <p className="max-w-xs">{job.reason}</p>
+              </TooltipContent>
+            )}
+          </Tooltip>
+        </TooltipProvider>
+      )
+    }
+
+    if (displayOutcome === 'success') {
+      return (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-1">
+                <CheckCircle className="h-3.5 w-3.5 text-success" />
+                <span className="text-xs text-success">Updated</span>
+              </div>
+            </TooltipTrigger>
+            {job.reason && (
+              <TooltipContent>
+                <p className="max-w-xs">{job.reason}</p>
+              </TooltipContent>
+            )}
+          </Tooltip>
+        </TooltipProvider>
       )
     }
 
     return null
   }
+
+  const displayOutcome = job ? resolveDisplayOutcome(job) : null
 
   return (
     <div className="space-y-1">
@@ -220,8 +312,8 @@ export function UpdateJobStatusCell({
           </button>
         )}
         {statusCell()}
-        {/* After error, also offer a retry button next to the indicator */}
-        {job?.status === 'error' && (
+        {/* After a failed outcome, also offer a retry button next to the indicator */}
+        {displayOutcome === 'failed' && (
           <Button
             variant="outline"
             size="sm"

@@ -1,7 +1,9 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useWebSocketJSON } from './useWebSocket'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
-import type { UpdateJob, JobLine, UpdateJobStatus } from '@/stores/updateJobStore'
+import { reconcileOnClose } from '@/lib/ws-reconcile'
+import type { UpdateJob, JobLine, UpdateJobStatus, UpdateJobOutcome } from '@/stores/updateJobStore'
 
 // ── WS frame shapes (per api-contract.md) ────────────────────────────────────
 
@@ -24,6 +26,8 @@ interface StatusFrame {
 interface DoneFrame {
   type: 'done'
   status: 'success' | 'error'
+  outcome?: UpdateJobOutcome
+  reason?: string
   error?: string
 }
 
@@ -44,7 +48,12 @@ export function useUpdateJobStream(
 ): UseUpdateJobStreamReturn {
   const skip = !jobId || opts?.enabled === false
 
-  const { upsertJob, appendLine, setStatus } = useUpdateJobStore.getState()
+  const { upsertJob, appendLine, setStatus, setOutcome } = useUpdateJobStore.getState()
+  const queryClient = useQueryClient()
+
+  // Track whether a terminal 'done' frame was received so reconcileOnClose can
+  // refetch instead of asserting failure on a clean close without a done frame.
+  const receivedDoneRef = useRef(false)
 
   const handleFrame = useCallback(
     (frame: JobStreamFrame) => {
@@ -60,7 +69,12 @@ export function useUpdateJobStream(
           setStatus(jobId, frame.status, frame.error)
           break
         case 'done':
+          receivedDoneRef.current = true
           setStatus(jobId, frame.status, frame.error)
+          // Store the typed outcome so the cell can render truthfully.
+          if (frame.outcome !== undefined) {
+            setOutcome(jobId, frame.outcome, frame.reason)
+          }
           break
         case 'error':
           // Server-side error (e.g. job not found / evicted); mark as error in store
@@ -73,10 +87,22 @@ export function useUpdateJobStream(
     [jobId],
   )
 
+  const handleClose = useCallback(() => {
+    reconcileOnClose({
+      completed: receivedDoneRef.current,
+      refetch: () => {
+        // Refetch both the job detail and the updates list so the UI converges
+        // to server truth on an unexpected close (finding 17 / reconcileOnClose pattern).
+        queryClient.invalidateQueries({ queryKey: ['resources', 'update-jobs'] })
+        queryClient.invalidateQueries({ queryKey: ['resources', 'updates'] })
+      },
+    })
+  }, [queryClient])
+
   const { status } = useWebSocketJSON<JobStreamFrame>(
     jobId ? `/ws/updates/jobs/${jobId}` : '/ws/updates/jobs/_noop',
     handleFrame,
-    { skip },
+    { skip, onClose: handleClose },
   )
 
   return { connected: status === 'connected' }

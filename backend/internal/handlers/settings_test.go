@@ -15,7 +15,6 @@ import (
 )
 
 func setupSettingsRouter(handler *SettingsHandler) *gin.Engine {
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/settings/log-retention", handler.GetLogRetention)
 	router.PUT("/settings/log-retention", handler.UpdateLogRetention)

@@ -7,9 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
-	"github.com/google/uuid"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 type EventBroadcaster func(event models.StackEvent)
@@ -17,7 +18,7 @@ type EventBroadcaster func(event models.StackEvent)
 // updateChecker is the narrow interface scheduler needs from DockerService.
 type updateChecker interface {
 	CheckForUpdates(ctx context.Context, db DashboardDB) ([]models.ContainerUpdateInfo, error)
-	UpdateContainer(ctx context.Context, containerID string, db DashboardDB) (models.UpdateResult, error)
+	UpdateContainer(ctx context.Context, containerID string, db DashboardDB) (models.UpdateResult, truth.ActionResult)
 }
 
 type SchedulerService struct {
@@ -141,6 +142,7 @@ func (s *SchedulerService) IsRunning() bool {
 
 // performScan executes the update scan body. It does not touch s.mu or s.scanning.
 // On success it broadcasts update_scan_complete; on failure it broadcasts update_scan_failed.
+// Finding #7: local/remote digests are persisted when available.
 func (s *SchedulerService) performScan(ctx context.Context) ([]models.CachedUpdate, error) {
 	results, err := s.docker.CheckForUpdates(ctx, s.db)
 	if err != nil {
@@ -157,6 +159,9 @@ func (s *SchedulerService) performScan(ctx context.Context) ([]models.CachedUpda
 	var cachedUpdates []models.CachedUpdate
 	now := time.Now().Format(time.RFC3339)
 	for _, r := range results {
+		// Finding #7: persist both digests we already computed during detection.
+		// selectUpdates resolved the remote index digest to decide local != remote,
+		// so it travels through on the result — no re-fetch needed.
 		cachedUpdates = append(cachedUpdates, models.CachedUpdate{
 			ID:            uuid.New().String(),
 			ContainerID:   r.ContainerID,
@@ -168,8 +173,8 @@ func (s *SchedulerService) performScan(ctx context.Context) ([]models.CachedUpda
 			ProjectName:   r.ProjectName,
 			ServiceName:   r.ServiceName,
 			IsCompose:     r.IsCompose,
-			LocalDigest:   "",
-			RemoteDigest:  "",
+			LocalDigest:   r.LocalDigest,
+			RemoteDigest:  r.RemoteDigest,
 			ScannedAt:     now,
 		})
 	}
@@ -265,6 +270,16 @@ func (s *SchedulerService) runCycle(ctx context.Context) {
 	s.RunAutoUpdates(ctx, updates)
 }
 
+// RunAutoUpdates applies auto-update policies to the given update candidates.
+//
+// Finding #8 fix: uses typed truth.ActionResult so that:
+//   - success (image advanced) → reset consecutive failure counter
+//   - no_change (confirmed up-to-date) → do NOT reset counter; log and skip
+//     to avoid infinite churn re-applying an image that will never advance
+//   - failed → increment counter toward pause (unchanged behavior)
+//
+// Eviction (finding #4): on success or no_change, the cached_updates row is
+// deleted so the frontend list converges without waiting for the next scan.
 func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.CachedUpdate) {
 	autoEnabledStr, err := s.db.GetSetting("auto_update_enabled")
 	if err != nil || autoEnabledStr != "true" {
@@ -327,12 +342,66 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 			continue
 		}
 
-		result, err := s.docker.UpdateContainer(ctx, update.ContainerID, s.db)
-		if err != nil {
+		result, ar := s.docker.UpdateContainer(ctx, update.ContainerID, s.db)
+
+		switch ar.Outcome {
+		case truth.OutcomeSuccess:
+			// Image actually advanced — record success, reset failure counter.
+			succeeded++
+			if err := s.db.UpdateUpdateHistory(historyID, map[string]interface{}{
+				"status":       "success",
+				"old_digest":   result.OldDigest,
+				"new_digest":   result.NewDigest,
+				"completed_at": time.Now().Format(time.RFC3339),
+				"duration_ms":  result.DurationMs,
+			}); err != nil {
+				s.logger.Error("Failed to update success history", "error", err)
+			}
+			// Convergence: evict from cache.
+			if evictErr := s.db.DeleteCachedUpdate(update.ContainerID); evictErr != nil {
+				s.logger.Warn("Failed to evict cached update entry after auto-update",
+					"containerID", update.ContainerID, "error", evictErr)
+			}
+			policy.ConsecutiveFailures = 0
+			policy.UpdatedAt = time.Now().Format(time.RFC3339)
+			if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
+				s.logger.Error("Failed to reset policy failures", "error", err)
+			}
+
+		case truth.OutcomeNoChange:
+			// Pull succeeded but image did not advance — it was already current.
+			// Finding #8: do NOT reset consecutive failure counter; log and move on.
+			// The item is evicted so it leaves the pending list without triggering
+			// an infinite re-apply churn.
+			s.logger.Info("Auto-update: image already up to date (no_change), skipping reset",
+				"container", update.ContainerName,
+				"reason", ar.Reason)
+			if err := s.db.UpdateUpdateHistory(historyID, map[string]interface{}{
+				"status":       "success",
+				"old_digest":   result.OldDigest,
+				"new_digest":   result.NewDigest,
+				"completed_at": time.Now().Format(time.RFC3339),
+				"duration_ms":  result.DurationMs,
+			}); err != nil {
+				s.logger.Error("Failed to update no-change history", "error", err)
+			}
+			// Convergence: evict from cache so this item leaves the list.
+			if evictErr := s.db.DeleteCachedUpdate(update.ContainerID); evictErr != nil {
+				s.logger.Warn("Failed to evict cached update entry after no_change",
+					"containerID", update.ContainerID, "error", evictErr)
+			}
+			// Do NOT increment succeeded (no real update) and do NOT touch
+			// consecutive failure counter.
+
+		default: // OutcomeFailed
 			failed++
+			errMsg := ar.Reason
+			if ar.Err != nil {
+				errMsg = ar.Err.Error()
+			}
 			if err := s.db.UpdateUpdateHistory(historyID, map[string]interface{}{
 				"status":        "failed",
-				"error_message": err.Error(),
+				"error_message": errMsg,
 				"completed_at":  time.Now().Format(time.RFC3339),
 				"duration_ms":   result.DurationMs,
 			}); err != nil {
@@ -373,24 +442,6 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 					s.logger.Error("Failed to update policy", "error", err)
 				}
 			}
-			continue
-		}
-
-		succeeded++
-		if err := s.db.UpdateUpdateHistory(historyID, map[string]interface{}{
-			"status":       "success",
-			"old_digest":   result.OldDigest,
-			"new_digest":   result.NewDigest,
-			"completed_at": time.Now().Format(time.RFC3339),
-			"duration_ms":  result.DurationMs,
-		}); err != nil {
-			s.logger.Error("Failed to update success history", "error", err)
-		}
-
-		policy.ConsecutiveFailures = 0
-		policy.UpdatedAt = time.Now().Format(time.RFC3339)
-		if err := s.db.UpsertAutoUpdatePolicy(policy); err != nil {
-			s.logger.Error("Failed to reset policy failures", "error", err)
 		}
 	}
 

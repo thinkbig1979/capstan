@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { CheckCircle, XCircle, Loader2, X } from 'lucide-react'
+import { CheckCircle, XCircle, Loader2, X, Info, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { OperationStatus } from '@/hooks/useStreamingOperation'
@@ -19,6 +19,18 @@ const actionLabels: Record<string, string> = {
   restart: 'Restarting stack',
 }
 
+/**
+ * Header label shown when the operation has reached a terminal state.
+ * Each outcome must be visually distinct — no_change must NOT look like a
+ * green success (audit finding #5, #10, #18).
+ */
+const terminalLabel: Record<Exclude<OperationStatus, 'idle' | 'running'>, string> = {
+  success:   'Operation completed',
+  no_change: 'No change — already in desired state',
+  partial:   'Operation partially completed',
+  error:     'Operation failed',
+}
+
 export function OperationProgress({ status, lines, action, error, onDismiss }: OperationProgressProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -31,26 +43,34 @@ export function OperationProgress({ status, lines, action, error, onDismiss }: O
   if (status === 'idle') return null
 
   const isRunning = status === 'running'
-  const isDone = status === 'success' || status === 'error'
+  const isDone = !isRunning
 
   return (
     <div className={cn(
       'rounded-lg border overflow-hidden',
-      isDone && status === 'success' && 'border-success/30',
-      isDone && status === 'error' && 'border-destructive/30',
-      isRunning && 'border-info/30',
+      status === 'success'   && 'border-success/30',
+      status === 'no_change' && 'border-info/30',
+      status === 'partial'   && 'border-warning/30',
+      status === 'error'     && 'border-destructive/30',
+      isRunning              && 'border-info/30',
     )}>
       <div className={cn(
         'flex items-center justify-between px-4 py-2 text-sm font-medium',
-        isRunning && 'bg-info/10 text-info',
-        status === 'success' && 'bg-success/10 text-success',
-        status === 'error' && 'bg-destructive/10 text-destructive',
+        isRunning              && 'bg-info/10 text-info',
+        status === 'success'   && 'bg-success/10 text-success',
+        status === 'no_change' && 'bg-info/10 text-info',
+        status === 'partial'   && 'bg-warning/10 text-warning',
+        status === 'error'     && 'bg-destructive/10 text-destructive',
       )}>
         <div className="flex items-center gap-2">
-          {isRunning && <Loader2 className="h-4 w-4 animate-spin" />}
-          {status === 'success' && <CheckCircle className="h-4 w-4" />}
-          {status === 'error' && <XCircle className="h-4 w-4" />}
-          <span>{isRunning ? actionLabels[action] || action : status === 'success' ? 'Operation completed' : 'Operation failed'}</span>
+          {isRunning              && <Loader2 className="h-4 w-4 animate-spin" />}
+          {status === 'success'   && <CheckCircle className="h-4 w-4" />}
+          {status === 'no_change' && <Info className="h-4 w-4" />}
+          {status === 'partial'   && <AlertTriangle className="h-4 w-4" />}
+          {status === 'error'     && <XCircle className="h-4 w-4" />}
+          <span>
+            {isRunning ? (actionLabels[action] || action) : terminalLabel[status as Exclude<OperationStatus, 'idle' | 'running'>]}
+          </span>
           {isRunning && lines.length > 0 && (
             <span className="text-xs opacity-60">({lines.length} lines)</span>
           )}
@@ -69,7 +89,7 @@ export function OperationProgress({ status, lines, action, error, onDismiss }: O
           <div key={`${i}-${line.slice(0, 20)}`} className={cn(
             'whitespace-pre-wrap break-all',
             line.startsWith('Error:') && 'text-destructive',
-            line.startsWith('---') && 'text-info',
+            line.startsWith('---')    && 'text-info',
             !line.startsWith('Error:') && !line.startsWith('---') && 'text-terminal-foreground',
           )}>
             {line}

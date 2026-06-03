@@ -1,5 +1,8 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { gitApi } from '@/lib/api'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { gitApi, type GitPullResult } from '@/lib/api'
+import { isActionResult, type ActionResult } from '@/lib/action-result'
+import { useActionMutation } from '@/hooks/useActionMutation'
 
 export function useGitStatus(stackId: string) {
   return useQuery({
@@ -29,15 +32,119 @@ export function useGitDiff(stackId: string, hash: string) {
   })
 }
 
+/**
+ * Normalise a git pull response to an ActionResult.
+ *
+ * The backend is being migrated to the Action Truth Contract (B4). During the
+ * migration window callers may receive either:
+ *   - Legacy: { success: boolean, previousCommit, currentCommit, ... }
+ *   - New:    { outcome, reason, details: { previousCommit, currentCommit, failedRedeploys } }
+ *
+ * Rules:
+ *   - success==true AND previousCommit==currentCommit → no_change
+ *   - success==true AND commits differ              → success
+ *   - success==false                                → failed
+ *   - ActionResult (new backend) → pass through
+ *
+ * Detail fields use `previousCommit`/`currentCommit` (matching both legacy wire
+ * names and the new backend ActionResult details shape).
+ */
+export function normalisePullResult(raw: GitPullResult): ActionResult<{
+  previousCommit?: string
+  currentCommit?: string
+  failedRedeploys?: Array<{ stack: string; reason: string }>
+  changedFiles?: string[]
+  redeployedStacks?: string[]
+}> {
+  if (isActionResult(raw)) {
+    return raw as ActionResult<{
+      previousCommit?: string
+      currentCommit?: string
+      failedRedeploys?: Array<{ stack: string; reason: string }>
+      changedFiles?: string[]
+      redeployedStacks?: string[]
+    }>
+  }
+
+  // Legacy shape
+  const legacy = raw as {
+    success: boolean
+    previousCommit: string
+    currentCommit: string
+    changedFiles: string[]
+    redeployedStacks: string[]
+  }
+
+  if (!legacy.success) {
+    return { outcome: 'failed', reason: 'Git pull failed', details: {} }
+  }
+
+  if (legacy.previousCommit === legacy.currentCommit) {
+    return {
+      outcome: 'no_change',
+      reason: 'Already up to date',
+      details: {
+        previousCommit: legacy.previousCommit,
+        currentCommit: legacy.currentCommit,
+        changedFiles: legacy.changedFiles,
+        redeployedStacks: legacy.redeployedStacks,
+      },
+    }
+  }
+
+  return {
+    outcome: 'success',
+    reason: `Pulled ${legacy.previousCommit.slice(0, 7)} → ${legacy.currentCommit.slice(0, 7)}`,
+    details: {
+      previousCommit: legacy.previousCommit,
+      currentCommit: legacy.currentCommit,
+      changedFiles: legacy.changedFiles,
+      redeployedStacks: legacy.redeployedStacks,
+    },
+  }
+}
+
+/**
+ * Hook for git pull with proper Action Truth Contract handling.
+ *
+ * Accepts `stackId` and optional `redeploy` at mutation call time so callers
+ * don't need to pass them to the hook itself.
+ *
+ * - success   → toast.success
+ * - no_change → toast.info (already up to date)
+ * - partial   → toast.warning with failed-redeploy list (audit finding #9)
+ * - failed    → toast.error
+ *
+ * Always invalidates ['git', stackId] and ['stacks'].
+ */
 export function useGitPull() {
   const queryClient = useQueryClient()
 
-  return useMutation({
-    mutationFn: ({ stackId, redeploy = false }: { stackId: string; redeploy?: boolean }) =>
-      gitApi.pull(stackId, redeploy),
-    onSuccess: (_, { stackId }) => {
-      queryClient.invalidateQueries({ queryKey: ['git', stackId] })
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
+  return useActionMutation({
+    mutationFn: async ({ stackId, redeploy = false }: { stackId: string; redeploy?: boolean }) => {
+      const raw = await gitApi.pull(stackId, redeploy)
+      const normalised = normalisePullResult(raw)
+      // Attach stackId so onResult can invalidate the per-stack git query
+      return { ...normalised, _stackId: stackId }
+    },
+    invalidate: [['stacks']],
+    onResult: (result) => {
+      const stackId = (result as ActionResult & { _stackId?: string })._stackId
+      if (stackId) {
+        queryClient.invalidateQueries({ queryKey: ['git', stackId] })
+      }
+
+      // On partial outcome, toastForResult already fired a warning.
+      // Append the failed-redeploy details if available for more context.
+      if (result.outcome === 'partial') {
+        const failedRedeploys = (result.details as {
+          failedRedeploys?: Array<{ stack: string; reason: string }>
+        } | undefined)?.failedRedeploys ?? []
+        if (failedRedeploys.length > 0) {
+          const names = failedRedeploys.map((f) => f.stack).join(', ')
+          toast.warning(`Failed to redeploy: ${names}`)
+        }
+      }
     },
   })
 }

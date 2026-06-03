@@ -1,4 +1,5 @@
 import axios, { AxiosError, type AxiosInstance } from 'axios'
+import type { ActionResult } from '@/lib/action-result'
 import type {
   User,
   AuthResponse,
@@ -28,6 +29,18 @@ import type {
   BackupStatus,
   BackupOperationResult,
 } from '@/types'
+
+/**
+ * LifecycleResult is the wire type for stack start/stop/restart/pull responses.
+ *
+ * Today the backend returns {status, output, duration} (CommandResult shape).
+ * Once the backend is migrated to the Action Truth Contract it will return
+ * {outcome, reason, details?} (ActionResult shape) with HTTP 200/207/500.
+ *
+ * Both shapes are surfaced here so callers can use isActionResult() to branch
+ * during the migration window.
+ */
+export type LifecycleResult = ActionResult & Pick<CommandResult, 'status' | 'output' | 'duration'>
 
 const API_BASE_URL = '/api/v1'
 
@@ -221,6 +234,53 @@ export const autoUpdateApi = {
   },
 }
 
+/**
+ * GitPullResult — wire type for POST /git/pull.
+ *
+ * Legacy shape (current backend):
+ *   { success: boolean, previousCommit, currentCommit, changedFiles, redeployedStacks }
+ *
+ * Action Truth Contract shape (post-B4 backend migration):
+ *   ActionResult with outcome 'success'|'no_change'|'partial'|'failed'
+ *   details: { previousCommit, currentCommit, failedRedeploys: [{stack, reason}] }
+ *
+ * Use isActionResult() to branch during the migration window.
+ */
+export type GitPullResult = ActionResult<{
+  previousCommit?: string
+  currentCommit?: string
+  failedRedeploys?: Array<{ stack: string; reason: string }>
+  changedFiles?: string[]
+  redeployedStacks?: string[]
+}> | {
+  success: boolean
+  previousCommit: string
+  currentCommit: string
+  changedFiles: string[]
+  redeployedStacks: string[]
+}
+
+/**
+ * EnvSaveResult — wire type for PUT /stacks/:id/env.
+ *
+ * Legacy shape: { saved: boolean, filename }
+ * Action Truth Contract shape: ActionResult
+ */
+export type EnvSaveResult = ActionResult | { saved: boolean; filename: string }
+
+/**
+ * ComposeEnvResult — wire type for PUT /stacks/:id/compose-env (atomic).
+ *
+ * Introduced in B4. Writes compose + env in a single transaction.
+ * Backend ComposeEnvRequest: { composeContent (required), envRaw?, envEntries? }
+ * Returns ActionResult with details: { compose, env?, lintResults? }
+ */
+export type ComposeEnvResult = ActionResult<{
+  compose?: string
+  env?: string
+  lintResults?: unknown[]
+}>
+
 export const gitApi = {
   status: async (stackId: string) => {
     const response = await apiClient.get<GitStatus>(`/git?stackId=${encodeURIComponent(stackId)}`)
@@ -228,7 +288,7 @@ export const gitApi = {
   },
 
   pull: async (stackId: string, redeploy = false) => {
-    const response = await apiClient.post<{ success: boolean; previousCommit: string; currentCommit: string; changedFiles: string[]; redeployedStacks: string[] }>(`/git/pull?stackId=${encodeURIComponent(stackId)}&redeploy=${redeploy}`)
+    const response = await apiClient.post<GitPullResult>(`/git/pull?stackId=${encodeURIComponent(stackId)}&redeploy=${redeploy}`)
     return response.data
   },
 
@@ -255,27 +315,27 @@ export const stacksApi = {
   },
 
   start: async (id: string) => {
-    const response = await apiClient.post<CommandResult>(`/stacks/${encodeURIComponent(id)}/start`)
+    const response = await apiClient.post<LifecycleResult>(`/stacks/${encodeURIComponent(id)}/start`)
     return response.data
   },
 
   stop: async (id: string) => {
-    const response = await apiClient.post<CommandResult>(`/stacks/${encodeURIComponent(id)}/stop`)
+    const response = await apiClient.post<LifecycleResult>(`/stacks/${encodeURIComponent(id)}/stop`)
     return response.data
   },
 
   restart: async (id: string) => {
-    const response = await apiClient.post<CommandResult>(`/stacks/${encodeURIComponent(id)}/restart`)
+    const response = await apiClient.post<LifecycleResult>(`/stacks/${encodeURIComponent(id)}/restart`)
     return response.data
   },
 
   pull: async (id: string) => {
-    const response = await apiClient.post<CommandResult>(`/stacks/${encodeURIComponent(id)}/pull`)
+    const response = await apiClient.post<LifecycleResult>(`/stacks/${encodeURIComponent(id)}/pull`)
     return response.data
   },
 
   delete: async (id: string) => {
-    const response = await apiClient.delete<void>(`/stacks/${encodeURIComponent(id)}`)
+    const response = await apiClient.delete<StackDeleteResult>(`/stacks/${encodeURIComponent(id)}`)
     return response.data
   },
 
@@ -299,13 +359,42 @@ export const stacksApi = {
     return response.data
   },
 
-  updateEnv: async (id: string, content: string) => {
-    const response = await apiClient.put<void>(`/stacks/${encodeURIComponent(id)}/env`, { content })
+  updateEnv: async (id: string, body: { entries?: Array<{ key: string; value: string; sensitive?: boolean; comment?: boolean }>; raw?: string }) => {
+    const response = await apiClient.put<EnvSaveResult>(`/stacks/${encodeURIComponent(id)}/env`, body)
+    return response.data
+  },
+
+  /** Create a new .env file for a stack that doesn't have one yet. POST /stacks/:id/env */
+  createEnv: async (id: string, content = '') => {
+    const response = await apiClient.post<ActionResult<{ filename: string }>>(`/stacks/${encodeURIComponent(id)}/env`, { raw: content })
+    return response.data
+  },
+
+  /**
+   * Atomically write compose + env in one request.
+   * PUT /stacks/:id/compose-env
+   *
+   * Wire body (matches backend ComposeEnvRequest):
+   *   { composeContent: string (required), envRaw?: string, envEntries?: EnvEntry[] }
+   *
+   * Introduced in B4 to replace the two-request extract-to-env flow (#11).
+   * If the backend hasn't migrated yet this will 404 — callers should
+   * fall back to sequential writes.
+   */
+  updateComposeAndEnv: async (
+    id: string,
+    composeContent: string,
+    envRaw: string,
+  ) => {
+    const response = await apiClient.put<ComposeEnvResult>(
+      `/stacks/${encodeURIComponent(id)}/compose-env`,
+      { composeContent, envRaw },
+    )
     return response.data
   },
 
   create: async (input: { name: string; directory?: string; composeContent: string; envContent?: string; deploy: boolean }) => {
-    const response = await apiClient.post<{ stack: Stack; stackId: string; lintResults?: LintResult[]; deployed?: boolean; deployOutput?: string }>('/stacks', input)
+    const response = await apiClient.post<CreateStackResult>('/stacks', input)
     return response.data
   },
 
@@ -372,17 +461,79 @@ function pruneQuery(opts?: PruneOptions): string {
   return qs ? `?${qs}` : ''
 }
 
+/**
+ * DeleteResult is the wire type for resource delete responses.
+ *
+ * Legacy shape (current backend): { deleted: unknown[] | string }
+ * Action Truth Contract shape (post-B3 backend migration):
+ *   { outcome, reason, details?: { untagged?, deleted? } }
+ *
+ * Use isActionResult() to branch during the migration window.
+ */
+export type DeleteResult = ActionResult<{
+  untagged?: string[]
+  deleted?: string[]
+}> | { deleted: unknown[] | string }
+
+/**
+ * PruneResult is the wire type for resource prune responses.
+ *
+ * Legacy shape (current backend): { deleted: string[]; spaceReclaimed: number }
+ * Action Truth Contract shape (post-B3 backend migration):
+ *   { outcome, reason, details }
+ *
+ * Image prune details: { imagesDeleted, tagsRemoved, spaceReclaimed }
+ * Volume/container/build-cache prune details: { deleted, spaceReclaimed }
+ * Network prune details: { deleted }
+ */
+export type PruneResult = ActionResult<{
+  // Image prune fields (classifyImagePruneReport)
+  imagesDeleted?: number
+  tagsRemoved?: number
+  // Generic list field (volume/network/build-cache prune)
+  deleted?: string[]
+  // Shared space field
+  spaceReclaimed?: number
+}> | { deleted?: string[] | null; spaceReclaimed?: number | null }
+
+/**
+ * CreateStackResult is the wire type for stack create responses.
+ *
+ * Migrated backend (stack_crud.go):
+ *   HTTP 201 success: { outcome:'success', reason, details:{stack, lintResults, deployed:true, deployOutput} }
+ *   HTTP 207 partial: { outcome:'partial', reason, details:{stack, lintResults, deployed:false, deployError} }
+ *   HTTP 4xx/5xx errors: AppError (no stack)
+ *
+ * All fields live inside `details`. Use isActionResult() to branch.
+ * A 207 partial = stack created but not deployed (deploy failed).
+ */
+export type CreateStackResult = ActionResult<{
+  stack: Stack
+  lintResults?: LintResult[]
+  deployed?: boolean
+  deployOutput?: string
+  deployError?: string
+}>
+
+/**
+ * StackDeleteResult is the wire type for DELETE /stacks/:id.
+ *
+ * The backend (StacksHandler.Delete) renders truth.Success("stack deleted")
+ * with details { id, output } — an ActionResult body, not a void 204.
+ */
+export type StackDeleteResult = ActionResult<{ id?: string; output?: string }>
+
 export const resourcesApi = {
   images: async () => {
     const response = await apiClient.get<{ images: DockerImage[] }>('/resources/images')
     return response.data.images
   },
   deleteImage: async (id: string, force = false) => {
-    const response = await apiClient.delete<{ deleted: unknown[] }>(`/resources/images/${encodeURIComponent(id)}?force=${force}`)
+    const response = await apiClient.delete<DeleteResult>(`/resources/images/${encodeURIComponent(id)}?force=${force}`)
     return response.data
   },
   pruneImages: async (opts?: PruneOptions) => {
-    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>(`/resources/images/prune${pruneQuery(opts)}`)
+    const response = await apiClient.post<PruneResult>(`/resources/images/prune${pruneQuery(opts)}`)
     return response.data
   },
 
@@ -396,7 +547,7 @@ export const resourcesApi = {
     return response.data.containers
   },
   deleteContainer: async (id: string, force = false) => {
-    const response = await apiClient.delete<{ deleted: string }>(`/resources/containers/${encodeURIComponent(id)}?force=${force}`)
+    const response = await apiClient.delete<DeleteResult>(`/resources/containers/${encodeURIComponent(id)}?force=${force}`)
     return response.data
   },
   startContainer: async (id: string) => {
@@ -412,7 +563,7 @@ export const resourcesApi = {
     return response.data
   },
   pruneContainers: async (opts?: PruneOptions) => {
-    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>(`/resources/containers/prune${pruneQuery(opts)}`)
+    const response = await apiClient.post<PruneResult>(`/resources/containers/prune${pruneQuery(opts)}`)
     return response.data
   },
 
@@ -468,11 +619,11 @@ export const resourcesApi = {
     return response.data.volumes
   },
   deleteVolume: async (name: string, force = false) => {
-    const response = await apiClient.delete<{ deleted: string }>(`/resources/volumes/${encodeURIComponent(name)}?force=${force}`)
+    const response = await apiClient.delete<DeleteResult>(`/resources/volumes/${encodeURIComponent(name)}?force=${force}`)
     return response.data
   },
   pruneVolumes: async (opts?: PruneOptions) => {
-    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>(`/resources/volumes/prune${pruneQuery(opts)}`)
+    const response = await apiClient.post<PruneResult>(`/resources/volumes/prune${pruneQuery(opts)}`)
     return response.data
   },
 
@@ -481,15 +632,15 @@ export const resourcesApi = {
     return response.data.networks
   },
   createNetwork: async (input: { name: string; driver?: string; internal?: boolean; attachable?: boolean }) => {
-    const response = await apiClient.post<{ id: string; name: string }>('/resources/networks', input)
+    const response = await apiClient.post<ActionResult | { id: string; name: string }>('/resources/networks', input)
     return response.data
   },
   deleteNetwork: async (id: string) => {
-    const response = await apiClient.delete<{ deleted: string }>(`/resources/networks/${encodeURIComponent(id)}`)
+    const response = await apiClient.delete<DeleteResult>(`/resources/networks/${encodeURIComponent(id)}`)
     return response.data
   },
   pruneNetworks: async (opts?: PruneOptions) => {
-    const response = await apiClient.post<{ deleted: string[] }>(`/resources/networks/prune${pruneQuery(opts)}`)
+    const response = await apiClient.post<PruneResult>(`/resources/networks/prune${pruneQuery(opts)}`)
     return response.data
   },
 
@@ -498,7 +649,7 @@ export const resourcesApi = {
     return response.data.entries
   },
   pruneBuildCache: async (opts?: PruneOptions) => {
-    const response = await apiClient.post<{ deleted: string[]; spaceReclaimed: number }>(`/resources/build-cache/prune${pruneQuery(opts)}`)
+    const response = await apiClient.post<PruneResult>(`/resources/build-cache/prune${pruneQuery(opts)}`)
     return response.data
   },
 }

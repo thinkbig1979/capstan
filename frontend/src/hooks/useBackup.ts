@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { backupApi } from '@/lib/api'
 import { WSClient } from '@/lib/ws'
+import { reconcileOnClose } from '@/lib/ws-reconcile'
 import type { BackupPolicy, BackupOperationResult } from '@/types'
 
 // ─── Query keys ─────────────────────────────────────────────────────────────
@@ -295,22 +296,62 @@ export function useStackBackupRuns(stackId: string, limit = 20) {
 
 // ─── Backup streaming ────────────────────────────────────────────────────────
 
-export type BackupStreamStatus = 'idle' | 'running' | 'success' | 'error'
+/**
+ * BackupStreamStatus mirrors the Action Truth Contract outcomes.
+ * - idle      : no operation in progress
+ * - running   : operation in progress
+ * - success   : completed successfully
+ * - partial   : completed with partial success (render as warning)
+ * - error     : failed (maps from outcome:'failed', legacy success:false,
+ *               or a genuine WS connection error — NOT a bare disconnect)
+ */
+export type BackupStreamStatus = 'idle' | 'running' | 'success' | 'partial' | 'error'
 
 export interface BackupStreamState {
   status: BackupStreamStatus
   lines: string[]
   error: string | null
-  connect: (wsPath: string, onDone?: () => void) => void
+  // onDone receives the terminal status so callers can derive an honest toast
+  // (success/partial/error) instead of unconditionally reporting success.
+  connect: (wsPath: string, onDone?: (status: BackupStreamStatus) => void) => void
   reset: () => void
 }
 
 /**
- * Streams live output for a backup operation over WebSocket.
+ * Map a done-frame's typed outcome (Action Truth Contract) or legacy success
+ * flag to a BackupStreamStatus. Backend 'failed' → 'error' so callers only
+ * deal with frontend-level status names.
+ */
+function doneFrameToStatus(msg: {
+  outcome?: 'success' | 'no_change' | 'partial' | 'failed'
+  success?: boolean
+}): BackupStreamStatus {
+  if (msg.outcome) {
+    switch (msg.outcome) {
+      case 'success':   return 'success'
+      case 'no_change': return 'success'  // treat no_change as success for backup ops
+      case 'partial':   return 'partial'
+      case 'failed':    return 'error'
+    }
+  }
+  // Legacy fallback: key off success boolean.
+  return msg.success ? 'success' : 'error'
+}
+
+/**
+ * Streams live output for a backup/restore operation over WebSocket.
+ *
+ * Finding #17 fix: on a WS close WITHOUT a terminal 'done' frame, the hook
+ * does NOT assert failure. It calls reconcileOnClose() which refetches the
+ * backup history query so the UI reconciles to server truth. The backend op
+ * runs on a detached context and persists a durable run record — the server
+ * state is the source of truth, not the connection.
+ *
  * wsPath is the path component from BackupOperationResult.wsUrl
- * (e.g. '/ws/backups/runs/abc123').
+ * (e.g. '/ws/backups/restore/abc123').
  */
 export function useBackupStreaming(): BackupStreamState {
+  const queryClient = useQueryClient()
   const [status, setStatus] = useState<BackupStreamStatus>('idle')
   const [lines, setLines] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -333,7 +374,7 @@ export function useBackupStreaming(): BackupStreamState {
     completedRef.current = false
   }, [])
 
-  const connect = useCallback((wsPath: string, onDone?: () => void) => {
+  const connect = useCallback((wsPath: string, onDone?: (status: BackupStreamStatus) => void) => {
     clientRef.current?.close()
     setLines([])
     setError(null)
@@ -342,6 +383,13 @@ export function useBackupStreaming(): BackupStreamState {
 
     const client = new WSClient()
     clientRef.current = client
+
+    // Refetch helper: invalidate backup history + status so the UI reflects
+    // the persisted server run record rather than the transient WS state.
+    const refetchHistory = () => {
+      queryClient.invalidateQueries({ queryKey: backupKeys.history() })
+      queryClient.invalidateQueries({ queryKey: backupKeys.status() })
+    }
 
     client.connect(
       wsPath,
@@ -352,27 +400,50 @@ export function useBackupStreaming(): BackupStreamState {
             type: string
             line?: string
             message?: string
+            // Action Truth Contract fields (B5 backend, migrated backends)
+            outcome?: 'success' | 'no_change' | 'partial' | 'failed'
+            reason?: string
+            // Legacy fields (pre-migration backends)
             success?: boolean
             error?: string
           }
+
           if (msg.type === 'data' && msg.line) {
             setLines((prev) => [...prev, msg.line!])
           } else if (msg.type === 'phase' && msg.message) {
             setLines((prev) => [...prev, `--- ${msg.message} ---`])
           } else if (msg.type === 'done') {
+            const finalStatus = doneFrameToStatus(msg)
+
+            // Set completedRef BEFORE calling client.close() so the onClose
+            // callback (which fires synchronously on close() in some runtimes)
+            // sees completed=true and does NOT overwrite the real outcome.
+            // Mirrors the B2 race fix in useStreamingOperation.ts.
             completedRef.current = true
-            if (msg.success) {
+
+            if (finalStatus === 'success') {
               setStatus('success')
-              setLines((prev) => [...prev, 'Backup completed successfully.'])
+              const label = msg.reason || 'Backup completed successfully.'
+              setLines((prev) => [...prev, label])
+            } else if (finalStatus === 'partial') {
+              setStatus('partial')
+              const label = msg.reason || 'Backup partially completed.'
+              setLines((prev) => [...prev, label])
             } else {
-              const errMsg = msg.error || 'Backup failed'
+              // error / failed
+              const errMsg = msg.error || msg.reason || 'Backup failed'
               setStatus('error')
               setError(errMsg)
               setLines((prev) => [...prev, `Error: ${errMsg}`])
             }
+
+            // Always invalidate history/status so the run list reflects the
+            // persisted record, regardless of the outcome.
+            refetchHistory()
+
             client.close()
             clientRef.current = null
-            onDone?.()
+            onDone?.(finalStatus)
           } else if (msg.type === 'error') {
             const errMsg = msg.error || 'Unknown error'
             setStatus('error')
@@ -385,13 +456,23 @@ export function useBackupStreaming(): BackupStreamState {
       },
       {
         onClose: () => {
+          // Finding #17: if a terminal done frame was received, completedRef is
+          // true and we must NOT overwrite the real outcome. If the socket closed
+          // without a done frame we cannot safely assert failure — the backend op
+          // runs on a detached context and may have succeeded. Reconcile by
+          // refetching the source-of-truth history query instead of lying.
+          reconcileOnClose({
+            completed: completedRef.current,
+            refetch: refetchHistory,
+          })
           if (!completedRef.current) {
-            setStatus('error')
-            setLines((prev) => [...prev, 'Connection closed unexpectedly.'])
+            // Append a note so the log isn't empty, but do NOT set status='error'.
+            setLines((prev) => [...prev, 'Connection closed — refreshing run history…'])
           }
           clientRef.current = null
         },
         onError: () => {
+          // A genuine connection error (not just a close) warrants error status.
           if (!completedRef.current) {
             setStatus('error')
             setError('WebSocket connection failed')
@@ -407,7 +488,7 @@ export function useBackupStreaming(): BackupStreamState {
         },
       },
     )
-  }, [])
+  }, [queryClient])
 
   return { status, lines, error, connect, reset }
 }

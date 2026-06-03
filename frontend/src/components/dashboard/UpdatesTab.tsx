@@ -66,9 +66,11 @@ export function UpdatesTab() {
   const handleUpdate = (container: UpdateItem) => {
     updateMutation.mutate(container.containerId, {
       onSuccess: () => {
-        // The store drives UI; the toast just confirms the action was accepted
+        // The job WS drives the outcome UI (the cell shows queued/pulling/success/no_change/failed).
+        // A neutral info toast confirms the request was accepted — it is NOT a success claim
+        // (finding #4 / pattern P-6: no unconditional toast.success on 2xx/enqueue).
         const action = container.state === 'running' ? 'queued for update and restart' : 'queued for update'
-        toast.success(`${container.containerName} ${action}`)
+        toast.info(`${container.containerName} ${action}`)
       },
       onError: (err) => {
         toast.error(classifyError(err).message || `Failed to update ${container.containerName}`)

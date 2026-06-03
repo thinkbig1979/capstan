@@ -12,12 +12,22 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/filesystem"
 )
+
+// RedeployFailure records a stack redeploy that did not reach verified-running.
+type RedeployFailure struct {
+	StackID string `json:"stack"`
+	Reason  string `json:"reason"`
+}
+
+// PullResult is the raw outcome of a git pull (no redeploy logic).
+// The Redeploy path is handled separately via PullVerified on the DockerService.
 
 type GitService struct {
 	config *config.Config
@@ -233,6 +243,95 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		CurrentCommit:  currentCommit,
 		ChangedFiles:   changedFiles,
 	}, nil
+}
+
+// PullVerified performs a git pull and, if redeploy is requested, redeploys every
+// affected stack using the verified lifecycle (RestartVerified / StartVerified).
+// It returns a truth.ActionResult that never reports success when a redeploy failed:
+//   - no new commits (HEAD unchanged) → no_change
+//   - HEAD advanced, all redeploys verified-success → success
+//   - HEAD advanced, ≥1 redeploy failed → partial (details.failedRedeploys)
+//   - pull itself failed → failed
+//
+// docker may be nil; in that case redeploy is skipped even when requested.
+func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerService) (truth.ActionResult, *models.PullResult) {
+	pullResult, err := s.pullCLI(dirPath)
+	if err != nil {
+		return truth.Failed("git pull failed", err), nil
+	}
+
+	headAdvanced := pullResult.PreviousCommit != pullResult.CurrentCommit
+
+	if !headAdvanced {
+		return truth.NoChange("already up to date",
+			truth.KV("commit", pullResult.CurrentCommit),
+		), pullResult
+	}
+
+	// HEAD advanced; skip redeploy if not requested or docker unavailable.
+	if !redeploy || docker == nil || len(pullResult.ChangedFiles) == 0 {
+		return truth.Success("pulled new commits",
+			truth.KV("previousCommit", pullResult.PreviousCommit),
+			truth.KV("currentCommit", pullResult.CurrentCommit),
+			truth.KV("changedFiles", pullResult.ChangedFiles),
+		), pullResult
+	}
+
+	// Determine which stacks are affected by the changed files.
+	stacks, err := s.db.ListStacksByDirectory(dirPath)
+	if err != nil {
+		// Can list stacks — treat as partial: pull succeeded but redeploy untried.
+		return truth.Partial("pulled new commits but could not list stacks for redeploy",
+			truth.KV("previousCommit", pullResult.PreviousCommit),
+			truth.KV("currentCommit", pullResult.CurrentCommit),
+			truth.KV("listError", err.Error()),
+		), pullResult
+	}
+
+	var failures []RedeployFailure
+	var redeployed []string
+
+	for _, stack := range stacks {
+		if !stackFilesChanged(stack, pullResult.ChangedFiles) {
+			continue
+		}
+		slog.Info("Redeploying stack after git pull", "stackID", stack.ID)
+		ar, _ := docker.RestartVerified(stack)
+		if ar.Outcome == truth.OutcomeSuccess || ar.Outcome == truth.OutcomeNoChange {
+			redeployed = append(redeployed, stack.ID)
+		} else {
+			failures = append(failures, RedeployFailure{
+				StackID: stack.ID,
+				Reason:  ar.Reason,
+			})
+		}
+	}
+
+	if len(failures) > 0 {
+		return truth.Partial("pulled new commits but some stacks failed to redeploy",
+			truth.KV("previousCommit", pullResult.PreviousCommit),
+			truth.KV("currentCommit", pullResult.CurrentCommit),
+			truth.KV("redeployedStacks", redeployed),
+			truth.KV("failedRedeploys", failures),
+		), pullResult
+	}
+
+	return truth.Success("pulled and redeployed",
+		truth.KV("previousCommit", pullResult.PreviousCommit),
+		truth.KV("currentCommit", pullResult.CurrentCommit),
+		truth.KV("changedFiles", pullResult.ChangedFiles),
+		truth.KV("redeployedStacks", redeployed),
+	), pullResult
+}
+
+// stackFilesChanged reports whether any changed file matches the stack's compose or env file.
+func stackFilesChanged(stack models.Stack, changedFiles []string) bool {
+	for _, f := range changedFiles {
+		if f == stack.ComposeFile || f == stack.EnvFile {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *GitService) GetLog(dirPath string, limit, offset int) (*models.LogResult, error) {

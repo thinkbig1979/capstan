@@ -14,7 +14,6 @@ import (
 )
 
 func setupTestRouter(handler *AuthHandler) *gin.Engine {
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/auth/status", handler.Status)
 	router.POST("/auth/setup", handler.Setup)
@@ -65,7 +64,6 @@ func authContextMiddleware(userID string) gin.HandlerFunc {
 }
 
 func setupTestRouterWithAuth(handler *AuthHandler, jwtSecret string) *gin.Engine {
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 
 	jwtAuth := func(c *gin.Context) {

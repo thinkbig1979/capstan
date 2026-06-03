@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,9 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { toast } from 'sonner'
-import { resourcesApi } from '@/lib/api'
-import { classifyError } from '@/lib/error-handler'
+import { useCreateNetwork } from '@/hooks/useResources'
 
 interface CreateNetworkDialogProps {
   open: boolean
@@ -33,7 +30,6 @@ const DRIVERS = [
 ]
 
 export function CreateNetworkDialog({ open, onOpenChange }: CreateNetworkDialogProps) {
-  const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [driver, setDriver] = useState('bridge')
   const [internal, setInternal] = useState(false)
@@ -59,23 +55,20 @@ export function CreateNetworkDialog({ open, onOpenChange }: CreateNetworkDialogP
     }
   }
 
-  const createMutation = useMutation({
-    mutationFn: () => resourcesApi.createNetwork({ name, driver, internal, attachable }),
-    onSuccess: (data) => {
-      toast.success(`Network "${data.name}" created`)
-      queryClient.invalidateQueries({ queryKey: ['resources', 'networks'] })
-      resetForm()
-      onOpenChange(false)
-    },
-    onError: (err) => {
-      toast.error(classifyError(err).message || 'Failed to create network')
-    },
-  })
+  const createMutation = useCreateNetwork()
 
   const handleSubmit = () => {
     handleNameChange(name)
     if (!name.trim() || !NAME_PATTERN.test(name)) return
-    createMutation.mutate()
+    createMutation.mutate(
+      { name, driver, internal, attachable },
+      {
+        onSuccess: () => {
+          resetForm()
+          onOpenChange(false)
+        },
+      },
+    )
   }
 
   const isSubmitDisabled = !name.trim() || !!nameError || createMutation.isPending

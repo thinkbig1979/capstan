@@ -99,6 +99,12 @@ export function StackPage() {
   // Surface the terminal outcome once per job. On a fail-fast partial update the
   // job error already names which services were left un-updated (see backend), so
   // the user sees what happened and the impact without opening the Updates tab.
+  //
+  // Toast derives from the typed `outcome` field (truth-first) so that:
+  //   outcome='success'   → green "Stack updated and restarted"
+  //   outcome='no_change' → info  "Stack already up to date" (NOT a green success)
+  //   outcome='failed'    → error message with reason
+  // Falls back to status for backends that have not yet shipped the outcome field.
   const reportedJobRef = useRef<string | null>(null)
   const didInitJobRef = useRef(false)
   useEffect(() => {
@@ -113,13 +119,20 @@ export function StackPage() {
       }
     }
     if (!latestStackJob || !isTerminal(latestStackJob.status)) return
-    const { id: jobId, status, error } = latestStackJob
+    const { id: jobId, error, outcome, reason } = latestStackJob
     if (reportedJobRef.current === jobId) return
     reportedJobRef.current = jobId
-    if (status === 'success') {
-      toast.success('Stack updated and restarted')
+
+    // Derive strictly from the typed outcome — the backend always sends it now.
+    // A missing or non-success outcome must NOT be reported as success, even if
+    // the coarse job status happens to be 'success' (B1 frontend tightening).
+    if (outcome === 'success') {
+      toast.success(reason || 'Stack updated and restarted')
+    } else if (outcome === 'no_change') {
+      toast.info(reason || 'Stack already up to date')
     } else {
-      toast.error(error || 'Stack update failed', { duration: 12000 })
+      // outcome='failed', an unknown/missing outcome, or status='error'.
+      toast.error(reason || error || 'Stack update failed', { duration: 12000 })
     }
   }, [latestStackJob])
 

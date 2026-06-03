@@ -26,7 +26,6 @@ func newTestResourcesHandler(t *testing.T) *ResourcesHandler {
 }
 
 func setupResourcesRouter(handler *ResourcesHandler) *gin.Engine {
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	handler.RegisterRoutes(router.Group("/api"))
 	return router
@@ -314,7 +313,6 @@ func TestResourcesHandler_DeleteAutoUpdatePolicy_Success(t *testing.T) {
 func TestResourcesHandler_RoutesRegistered(t *testing.T) {
 	handler := newTestResourcesHandler(t)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	group := router.Group("/api")
 	handler.RegisterRoutes(group)
@@ -436,7 +434,6 @@ func TestResourcesHandler_ListAndGetUpdateJobs_WithJob(t *testing.T) {
 }
 
 func TestParsePruneOptions(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	cases := []struct {
 		name      string
 		query     string

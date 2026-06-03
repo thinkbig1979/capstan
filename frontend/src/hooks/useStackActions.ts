@@ -1,6 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { stacksApi } from '@/lib/api'
+import { stacksApi, type LifecycleResult, type StackDeleteResult } from '@/lib/api'
 import { toast } from 'sonner'
+import { toastForResult, isActionResult } from '@/lib/action-result'
+import { classifyError } from '@/lib/error-handler'
 
 const INVALIDATE_KEYS = [
   ['stacks'],
@@ -10,47 +12,81 @@ const INVALIDATE_KEYS = [
 
 type StackAction = 'start' | 'stop' | 'restart' | 'delete'
 
-const SUCCESS_MESSAGES: Record<StackAction, string> = {
-  start: 'Stack started successfully',
-  stop: 'Stack stopped successfully',
-  restart: 'Stack restarted successfully',
-  delete: 'Stack deleted successfully',
-}
-
-const ERROR_MESSAGES: Record<StackAction, string> = {
-  start: 'Failed to start stack',
-  stop: 'Failed to stop stack',
-  restart: 'Failed to restart stack',
-  delete: 'Failed to delete stack',
-}
-
-const ACTION_FNS: Record<StackAction, (id: string) => Promise<unknown>> = {
-  start: stacksApi.start,
-  stop: stacksApi.stop,
-  restart: stacksApi.restart,
-  delete: stacksApi.delete,
+/**
+ * Success title passed to toastForResult as the toast heading.
+ * The reason from the ActionResult body becomes the description.
+ */
+const ACTION_SUCCESS_TITLES: Record<StackAction, string> = {
+  start: 'Stack started',
+  stop: 'Stack stopped',
+  restart: 'Stack restarted',
+  delete: 'Stack deleted',
 }
 
 interface UseStackActionsOptions {
   onSuccess?: (action: StackAction, id: string) => void
   onError?: (action: StackAction, id: string) => void
+  /** Called after toastForResult when the backend returns a typed ActionResult. */
+  onResult?: (action: StackAction, id: string) => void
+}
+
+/** Union of all possible return types from the lifecycle + delete mutations. */
+type AnyLifecycleResult = LifecycleResult | StackDeleteResult
+
+/**
+ * Extract the best error message from a rejected mutation value.
+ *
+ * The axios interceptor in api.ts rejects with `error.response?.data` directly
+ * (the parsed response body), so for a 500 ActionResult the rejected value IS
+ * {outcome:'failed', reason:'...'} — no unwrapping needed.
+ *
+ * Priority:
+ *  1. ActionResult body with a reason  → use reason (server-authored, specific)
+ *  2. Anything else                    → classifyError for a human-readable fallback
+ */
+function errorMessage(action: StackAction, err: unknown): string {
+  if (isActionResult(err)) {
+    return err.reason || `Failed to ${action} stack`
+  }
+  return classifyError(err).message || `Failed to ${action} stack`
 }
 
 export function useStackActions(options?: UseStackActionsOptions) {
   const queryClient = useQueryClient()
 
+  function invalidateAll() {
+    for (const key of INVALIDATE_KEYS) {
+      queryClient.invalidateQueries({ queryKey: [...key] })
+    }
+  }
+
   function createMutation(action: StackAction) {
-    return useMutation({
-      mutationFn: ACTION_FNS[action],
-      onSuccess: (_data, id) => {
-        toast.success(SUCCESS_MESSAGES[action])
-        for (const key of INVALIDATE_KEYS) {
-          queryClient.invalidateQueries({ queryKey: [...key] })
-        }
-        options?.onSuccess?.(action, id)
+    return useMutation<AnyLifecycleResult, unknown, string>({
+      mutationFn: (id: string): Promise<AnyLifecycleResult> => {
+        if (action === 'delete') return stacksApi.delete(id)
+        return stacksApi[action](id)
       },
-      onError: (_error, id) => {
-        toast.error(ERROR_MESSAGES[action])
+      onSuccess: (data, id) => {
+        // All four actions (start/stop/restart/delete) return a typed
+        // ActionResult body: derive the toast level from outcome.
+        // success→toast.success, no_change→toast.info,
+        // partial→toast.warning, failed→toast.error.
+        // A crash-loop or no-op start will NEVER show as green success.
+        if (isActionResult(data)) {
+          toastForResult(data, { successTitle: ACTION_SUCCESS_TITLES[action] })
+        }
+        invalidateAll()
+        options?.onSuccess?.(action, id)
+        if (isActionResult(data)) {
+          options?.onResult?.(action, id)
+        }
+      },
+      onError: (err, id) => {
+        // A 500 `failed` ActionResult body is the rejected value directly
+        // (the axios interceptor strips the AxiosError wrapper). Surface the
+        // server-authored reason when available so the user sees a specific
+        // message rather than the generic fallback.
+        toast.error(errorMessage(action, err))
         options?.onError?.(action, id)
       },
     })

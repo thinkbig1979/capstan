@@ -45,7 +45,6 @@ func TestEnvHandler_Get_Success(t *testing.T) {
 	cfg := &config.Config{StacksDir: tempDir}
 	handler := NewEnvHandler(db, cfg)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/stacks/:id/env", handler.Get)
 
@@ -87,7 +86,6 @@ func TestEnvHandler_Get_NoEnvFile(t *testing.T) {
 	cfg := &config.Config{StacksDir: tempDir}
 	handler := NewEnvHandler(db, cfg)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/stacks/:id/env", handler.Get)
 
@@ -136,7 +134,6 @@ func TestEnvHandler_Put_Success(t *testing.T) {
 	reqBody := map[string]string{"raw": newContent}
 	reqBytes, _ := json.Marshal(reqBody)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.PUT("/stacks/:id/env", authContextMiddleware("test-user-id"), handler.Put)
 
@@ -151,8 +148,11 @@ func TestEnvHandler_Put_Success(t *testing.T) {
 	err = json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 
-	assert.True(t, response["saved"].(bool))
-	assert.Equal(t, ".env", response["filename"])
+	// Response is now truth.ActionResult.
+	assert.Equal(t, "success", response["outcome"])
+	details, _ := response["details"].(map[string]interface{})
+	require.NotNil(t, details)
+	assert.Equal(t, ".env", details["filename"])
 
 	savedContent, err := os.ReadFile(envPath)
 	require.NoError(t, err)
@@ -194,7 +194,6 @@ func TestEnvHandler_Put_WithEntries(t *testing.T) {
 	reqBody := map[string]interface{}{"entries": entries}
 	reqBytes, _ := json.Marshal(reqBody)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.PUT("/stacks/:id/env", authContextMiddleware("test-user-id"), handler.Put)
 

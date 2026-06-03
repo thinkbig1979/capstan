@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNetworks } from '@/hooks/useResources'
+import { useNetworks, useDeleteNetwork } from '@/hooks/useResources'
 import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/EmptyState'
@@ -11,8 +10,6 @@ import {
 } from '@/components/ui/table'
 import { Network, Plus, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { toast } from 'sonner'
-import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { CreateNetworkDialog } from '@/components/dashboard/CreateNetworkDialog'
@@ -33,25 +30,13 @@ function networkDeleteBlock(net: DockerNetwork): string | null {
 }
 
 export function NetworksTab() {
-  const queryClient = useQueryClient()
   const { confirm, ConfirmComponent } = useConfirm()
   const { data: networks, isLoading } = useNetworks()
   const [sortBy, setSortBy] = useState<SortKey>('name')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => resourcesApi.deleteNetwork(id),
-    onSuccess: () => {
-      toast.success('Network removed')
-      setDeletingId(null)
-      queryClient.invalidateQueries({ queryKey: ['resources', 'networks'] })
-    },
-    onError: (err) => {
-      toast.error(classifyError(err).message || 'Failed to remove network')
-      setDeletingId(null)
-    },
-  })
+  const deleteMutation = useDeleteNetwork()
 
   const handleDelete = async (net: DockerNetwork) => {
     const confirmed = await confirm(
@@ -61,7 +46,7 @@ export function NetworksTab() {
     )
     if (confirmed) {
       setDeletingId(net.id)
-      deleteMutation.mutate(net.id)
+      deleteMutation.mutate(net.id, { onSettled: () => setDeletingId(null) })
     }
   }
 

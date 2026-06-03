@@ -107,8 +107,6 @@ DB_PORT='5432'
 }
 
 func TestSerializeEnvFile(t *testing.T) {
-	handler := &EnvHandler{}
-
 	tests := []struct {
 		name     string
 		entries  []EnvEntry
@@ -143,7 +141,7 @@ func TestSerializeEnvFile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := handler.serializeEnvFile(tt.entries)
+			result := serializeEnvFile(tt.entries)
 
 			if result != tt.expected {
 				t.Errorf("Expected:\n%s\n\nGot:\n%s", tt.expected, result)
@@ -199,7 +197,7 @@ export NODE_ENV=production
 `
 
 	entries := handler.parseEnvFile(content)
-	result := handler.serializeEnvFile(entries)
+	result := serializeEnvFile(entries)
 
 	expectedLines := strings.Split(content, "\n")
 	resultLines := strings.Split(result, "\n")

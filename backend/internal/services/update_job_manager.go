@@ -57,6 +57,11 @@ type Job struct {
 	Status     Status    `json:"status"`
 	Lines      []LogLine `json:"lines"`
 	Error      string    `json:"error,omitempty"`
+	// Outcome and Reason are set when the job reaches a terminal state.
+	// outcome ∈ {"success","no_change","failed"} — matches truth.Outcome.
+	// omitempty so they are absent from JSON until the job is terminal.
+	Outcome    string    `json:"outcome,omitempty"`
+	Reason     string    `json:"reason,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 	StartedAt  time.Time `json:"startedAt,omitzero"`
 	FinishedAt time.Time `json:"finishedAt,omitzero"`
@@ -73,10 +78,12 @@ const (
 
 // JobEvent is delivered to per-job subscribers after the replay snapshot.
 type JobEvent struct {
-	Kind   JobEventKind
-	Line   *LogLine
-	Status Status
-	Error  string
+	Kind    JobEventKind
+	Line    *LogLine
+	Status  Status
+	Error   string
+	Outcome string
+	Reason  string
 }
 
 // maxJobLines is the ring-buffer cap per job.
@@ -325,9 +332,11 @@ func (m *UpdateJobManager) runJob(ctx context.Context, item queuedItem) {
 		js.job.Status = StatusSuccess
 	}
 	doneEv := JobEvent{
-		Kind:   EventKindDone,
-		Status: js.job.Status,
-		Error:  js.job.Error,
+		Kind:    EventKindDone,
+		Status:  js.job.Status,
+		Error:   js.job.Error,
+		Outcome: js.job.Outcome,
+		Reason:  js.job.Reason,
 	}
 	js.fanOutLocked(doneEv)
 	// Close and drain subscriber list — they get the done event and should stop reading.
@@ -354,6 +363,23 @@ func (m *UpdateJobManager) janitor(ctx context.Context) {
 			m.evictExpired(t)
 		}
 	}
+}
+
+// SetOutcome records the typed outcome and human-readable reason on a job.
+// It must be called before the job's run closure returns so that the done
+// event and the terminal Job snapshot both carry the correct values.
+// Calling it on an unknown jobID is a no-op.
+func (m *UpdateJobManager) SetOutcome(jobID, outcome, reason string) {
+	m.mu.Lock()
+	js, ok := m.jobs[jobID]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	js.mu.Lock()
+	js.job.Outcome = outcome
+	js.job.Reason = reason
+	js.mu.Unlock()
 }
 
 // evictExpired removes finished jobs whose finishedAt is before now-ttl.

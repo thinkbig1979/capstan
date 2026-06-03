@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/database"
-	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // fakeUpdateChecker implements updateChecker for tests.
@@ -25,8 +26,8 @@ func (f *fakeUpdateChecker) CheckForUpdates(ctx context.Context, db DashboardDB)
 	return nil, nil
 }
 
-func (f *fakeUpdateChecker) UpdateContainer(ctx context.Context, containerID string, db DashboardDB) (models.UpdateResult, error) {
-	return models.UpdateResult{}, nil
+func (f *fakeUpdateChecker) UpdateContainer(ctx context.Context, containerID string, db DashboardDB) (models.UpdateResult, truth.ActionResult) {
+	return models.UpdateResult{}, truth.NoChange("stub: no update")
 }
 
 // newTestScheduler creates a SchedulerService wired to an in-memory DB and the

@@ -2,6 +2,9 @@ import { create } from 'zustand'
 
 export type UpdateJobStatus = 'queued' | 'pulling' | 'recreating' | 'success' | 'error'
 
+/** Typed outcome from the backend job — present once the job reaches a terminal state. */
+export type UpdateJobOutcome = 'success' | 'no_change' | 'failed'
+
 export interface JobLine {
   ts: string
   text: string
@@ -17,6 +20,10 @@ export interface UpdateJob {
   status: UpdateJobStatus
   lines: JobLine[]
   error?: string
+  /** Typed outcome: 'success' (image advanced), 'no_change' (already up to date), 'failed'. Present only when terminal. */
+  outcome?: UpdateJobOutcome
+  /** Human-readable reason accompanying the outcome. */
+  reason?: string
   createdAt: string
   startedAt?: string
   finishedAt?: string
@@ -40,6 +47,8 @@ export interface UpdateJobCompleteEvent {
   name: string
   status: UpdateJobStatus
   error?: string
+  outcome?: UpdateJobOutcome
+  reason?: string
 }
 
 interface UpdateJobState {
@@ -59,6 +68,9 @@ interface UpdateJobState {
 
   // Update job status (and optional error) without replacing the whole job
   setStatus: (jobId: string, status: UpdateJobStatus, error?: string) => void
+
+  // Set the typed outcome and reason on a terminal job (called from WS 'done' frame)
+  setOutcome: (jobId: string, outcome: UpdateJobOutcome, reason?: string) => void
 
   // Replace store contents with a fresh list (called on mount hydration)
   hydrate: (jobs: UpdateJob[]) => void
@@ -134,16 +146,19 @@ export const useUpdateJobStore = create<UpdateJobState>()((set, get) => ({
         lines: [],
         createdAt: new Date().toISOString(),
       }
+      const updated: UpdateJob = {
+        ...base,
+        status: evt.status,
+        name: evt.name,
+        error: evt.error,
+        finishedAt: new Date().toISOString(),
+      }
+      if (evt.outcome !== undefined) updated.outcome = evt.outcome
+      if (evt.reason !== undefined) updated.reason = evt.reason
       return {
         jobs: {
           ...state.jobs,
-          [evt.jobId]: {
-            ...base,
-            status: evt.status,
-            name: evt.name,
-            error: evt.error,
-            finishedAt: new Date().toISOString(),
-          },
+          [evt.jobId]: updated,
         },
       }
     })
@@ -174,6 +189,21 @@ export const useUpdateJobStore = create<UpdateJobState>()((set, get) => ({
       if (status === 'success' || status === 'error') {
         updated.finishedAt = updated.finishedAt ?? new Date().toISOString()
       }
+      return {
+        jobs: {
+          ...state.jobs,
+          [jobId]: updated,
+        },
+      }
+    })
+  },
+
+  setOutcome: (jobId, outcome, reason) => {
+    set((state) => {
+      const job = state.jobs[jobId]
+      if (!job) return state
+      const updated: UpdateJob = { ...job, outcome }
+      if (reason !== undefined) updated.reason = reason
       return {
         jobs: {
           ...state.jobs,

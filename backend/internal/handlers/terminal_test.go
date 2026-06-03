@@ -22,7 +22,6 @@ func newTestTerminalHandler(t *testing.T) *TerminalHandler {
 }
 
 func setupTerminalRouter(handler *TerminalHandler) *gin.Engine {
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	group := router.Group("/api")
 	handler.RegisterRoutes(group, "test-secret-key-32-chars-long!!!", false)
@@ -47,7 +46,6 @@ func TestTerminalHandler_WS_StackNotFound(t *testing.T) {
 func TestTerminalHandler_WS_MissingParams(t *testing.T) {
 	handler := newTestTerminalHandler(t)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	group := router.Group("/api")
 	handler.RegisterRoutes(group, "secret", false)
@@ -62,7 +60,6 @@ func TestTerminalHandler_WS_MissingParams(t *testing.T) {
 func TestTerminalHandler_RoutesRegistered(t *testing.T) {
 	handler := newTestTerminalHandler(t)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	group := router.Group("/api")
 	handler.RegisterRoutes(group, "secret", false)
@@ -96,7 +93,6 @@ func TestTerminalHandler_WS_RejectsNonWS(t *testing.T) {
 
 	handler := NewTerminalHandler(nil, db)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	group := router.Group("/api")
 	handler.RegisterRoutes(group, "test-secret-key-32-chars-long!!!", false)

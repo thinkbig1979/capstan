@@ -153,6 +153,20 @@ func (s *BackupService) SetBins(resticBin, rcloneBin string) {
 	s.rcloneBin = rcloneBin
 }
 
+// SetResticMgrFactory overrides the factory used to create ResticManager
+// instances. Used by external test packages that need to inject fake runners.
+// Passing nil restores the default (real exec-based) factory.
+func (s *BackupService) SetResticMgrFactory(f func(bc BackupConfig) *ResticManager) {
+	s.resticMgrFactory = f
+}
+
+// SetRcloneMgrFactory overrides the factory used to create RcloneManager
+// instances. Used by external test packages that need to inject fake runners.
+// Passing nil restores the default (real exec-based) factory.
+func (s *BackupService) SetRcloneMgrFactory(f func(bc BackupConfig) *RcloneManager) {
+	s.rcloneMgrFactory = f
+}
+
 // ForceSetBusy sets the busy flag to 1 (true) or 0 (false). It is used only
 // by tests that need to simulate an in-progress operation.
 func (s *BackupService) ForceSetBusy(busy bool) {
@@ -415,6 +429,101 @@ func (s *BackupService) RunBackup(
 	})
 
 	// Optionally sync after backup.
+	if !dryRun && bc.SyncAfter && s.rcloneBin != "" {
+		stream(out, "info", "Starting post-backup rclone sync")
+		if syncErr := s.runSyncInternal(ctx, bc, out); syncErr != nil {
+			stream(out, "error", fmt.Sprintf("post-backup sync failed: %v", syncErr))
+		}
+	}
+
+	return run, nil
+}
+
+// RunBackupWithRunID is identical to RunBackup but uses a caller-supplied
+// runID (which the caller has already inserted as a "running" BackupRun row).
+// This is used by the durable runner registry so the HTTP handler can return
+// the runID in the 202 response before the goroutine starts executing.
+//
+// Callers must insert the BackupRun row with status="running" before calling
+// this method. The method will update (not insert) the row on completion.
+func (s *BackupService) RunBackupWithRunID(
+	ctx context.Context,
+	runID string,
+	stackIDs []string,
+	dryRun bool,
+	trigger string,
+	out chan<- StreamLine,
+) (*models.BackupRun, error) {
+	if !s.tryAcquireGlobal() {
+		return nil, ErrBackupBusy
+	}
+	defer s.releaseGlobal()
+
+	if s.resticBin == "" {
+		return nil, ErrBackupUnavailable
+	}
+
+	bc := resolveBackupConfig(s.db, s.cfg)
+	restic := s.newResticMgr(bc)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	run := &models.BackupRun{
+		ID:        runID,
+		Kind:      "backup",
+		Trigger:   trigger,
+		Status:    "running",
+		StartedAt: now,
+	}
+
+	// Row was pre-created by the caller; skip CreateBackupRun.
+	stream(out, "info", fmt.Sprintf("Backup run %s started (dryRun=%v)", run.ID, dryRun))
+
+	policies, err := s.resolveTargetPolicies(stackIDs)
+	if err != nil {
+		run.Status = "failed"
+		run.ErrorMessage = err.Error()
+		s.finaliseRun(run)
+		return run, fmt.Errorf("resolve policies: %w", err)
+	}
+
+	run.StacksTotal = len(policies)
+
+	var totalBytesAdded int64
+	for _, policy := range policies {
+		stackID := policy.TargetID
+		itemBytes, itemErr := s.backupStack(ctx, restic, stackID, policy.StopPolicy, dryRun, run.ID, out)
+		if itemErr != nil {
+			run.StacksFailed++
+			stream(out, "error", fmt.Sprintf("stack %s failed: %v", stackID, itemErr))
+		} else {
+			run.StacksOK++
+			totalBytesAdded += itemBytes
+		}
+	}
+
+	if run.StacksOK > 0 {
+		run.BytesAdded = &totalBytesAdded
+	}
+
+	switch {
+	case run.StacksFailed == 0:
+		run.Status = "success"
+	case run.StacksOK == 0:
+		run.Status = "failed"
+	default:
+		run.Status = "partial"
+	}
+
+	s.finaliseRun(run)
+	stream(out, "info", fmt.Sprintf("Backup run finished: status=%s ok=%d failed=%d",
+		run.Status, run.StacksOK, run.StacksFailed))
+
+	s.actions.Log("system", nil, ActionBackup, map[string]interface{}{
+		"run_id":  run.ID,
+		"status":  run.Status,
+		"dry_run": dryRun,
+	})
+
 	if !dryRun && bc.SyncAfter && s.rcloneBin != "" {
 		stream(out, "info", "Starting post-backup rclone sync")
 		if syncErr := s.runSyncInternal(ctx, bc, out); syncErr != nil {

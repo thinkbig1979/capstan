@@ -1,40 +1,64 @@
 package handlers
 
 import (
-	"fmt"
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
-	"regexp"
-	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
-	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
-	"github.com/gin-gonic/gin"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
+// stackDocker is the subset of *services.DockerService that StacksHandler needs.
+// It is declared consumer-side (here, not in services) so the handler depends on
+// an abstraction it owns and can be exercised with a fake in unit tests, mirroring
+// the dockerStopper pattern BackupService already uses. *services.DockerService
+// satisfies it in production.
+type stackDocker interface {
+	GetStackStatuses(ctx context.Context, db services.DashboardDB) (map[string]services.LiveStatus, error)
+	StartVerified(stack models.Stack) (truth.ActionResult, string)
+	StopVerified(stack models.Stack) (truth.ActionResult, string)
+	RestartVerified(stack models.Stack) (truth.ActionResult, string)
+	PullVerified(stack models.Stack) (truth.ActionResult, string)
+	Delete(stack models.Stack) (*models.CommandResult, error)
+}
+
+// stackStore is the subset of *database.DB that StacksHandler needs for stack
+// persistence. GetStackByProjectName is included so a stackStore also satisfies
+// services.DashboardDB, which GetStackStatuses requires. *database.DB satisfies it
+// in production.
+type stackStore interface {
+	ListStacks() ([]models.Stack, error)
+	GetStack(id string) (*models.Stack, error)
+	GetStackByProjectName(projectName string) (*models.Stack, error)
+	UpsertStack(stack models.Stack) error
+	UpdateStackStatus(id, status string) error
+	DeleteStack(id string) error
+}
+
 type StacksHandler struct {
-	docker    *services.DockerService
+	docker    stackDocker
 	scanner   *services.ScannerService
 	linter    *services.LinterService
-	db        *database.DB
+	db        stackStore
 	config    *config.Config
 	actionLog *services.ActionLogger
 	opLock    *services.OperationLock
 }
 
-func NewStacksHandler(docker *services.DockerService, scanner *services.ScannerService, linter *services.LinterService, db *database.DB, cfg *config.Config, opLock *services.OperationLock) *StacksHandler {
+func NewStacksHandler(docker stackDocker, scanner *services.ScannerService, linter *services.LinterService, db stackStore, cfg *config.Config, actionLog *services.ActionLogger, opLock *services.OperationLock) *StacksHandler {
 	return &StacksHandler{
 		docker:    docker,
 		scanner:   scanner,
 		linter:    linter,
 		db:        db,
 		config:    cfg,
-		actionLog: services.NewActionLogger(db),
+		actionLog: actionLog,
 		opLock:    opLock,
 	}
 }
@@ -50,240 +74,8 @@ func (h *StacksHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.DELETE("/:id", h.Delete)
 }
 
-type CreateStackRequest struct {
-	Name           string `json:"name" binding:"required"`
-	Directory      string `json:"directory"`
-	ComposeContent string `json:"composeContent" binding:"required"`
-	EnvContent     string `json:"envContent"`
-	Deploy         bool   `json:"deploy"`
-}
-
 type LintRequest struct {
 	Compose string `json:"compose" binding:"required"`
-}
-
-func (h *StacksHandler) Create(c *gin.Context) {
-	var req CreateStackRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.NewAppError(
-			http.StatusBadRequest,
-			models.ErrValidation,
-			"Invalid request body",
-		))
-		return
-	}
-
-	if len(req.Name) < 1 || len(req.Name) > 50 {
-		c.JSON(http.StatusBadRequest, models.NewAppError(
-			http.StatusBadRequest,
-			models.ErrValidation,
-			"Stack name must be between 1 and 50 characters",
-		))
-		return
-	}
-
-	matched, _ := regexp.MatchString(`^[a-zA-Z0-9._-]+$`, req.Name)
-	if !matched {
-		c.JSON(http.StatusBadRequest, models.NewAppError(
-			http.StatusBadRequest,
-			models.ErrValidation,
-			"Stack name must contain only alphanumeric characters, dots, underscores, and hyphens",
-		))
-		return
-	}
-
-	targetDir := h.config.StacksDir
-	if req.Directory != "" {
-		if !h.isValidStacksDir(req.Directory) {
-			c.JSON(http.StatusBadRequest, models.NewAppError(
-				http.StatusBadRequest,
-				models.ErrValidation,
-				"Invalid target directory",
-			))
-			return
-		}
-		targetDir = req.Directory
-	}
-
-	stackDir := filepath.Join(targetDir, req.Name)
-
-	if _, err := os.Stat(stackDir); err == nil {
-		c.JSON(http.StatusConflict, models.NewAppError(
-			http.StatusConflict,
-			models.ErrDuplicateStack,
-			fmt.Sprintf("Stack directory '%s' already exists", req.Name),
-		))
-		return
-	}
-
-	absTargetDir, err := filepath.Abs(targetDir)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to resolve target directory",
-		))
-		return
-	}
-
-	absStackDir, err := filepath.Abs(stackDir)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to resolve stack directory",
-		))
-		return
-	}
-
-	rel, err := filepath.Rel(absTargetDir, absStackDir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		c.JSON(http.StatusBadRequest, models.NewAppError(
-			http.StatusBadRequest,
-			models.ErrPathTraversal,
-			"Invalid stack directory path",
-		))
-		return
-	}
-
-	lintResults, err := h.linter.Lint(req.ComposeContent)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"LINT_ERROR",
-			"Failed to lint compose file",
-		))
-		return
-	}
-
-	hasErrors := false
-	for _, result := range lintResults {
-		if result.Level == "error" {
-			hasErrors = true
-			break
-		}
-	}
-
-	if hasErrors {
-		c.JSON(http.StatusUnprocessableEntity, models.NewAppErrorWithDetails(
-			http.StatusUnprocessableEntity,
-			models.ErrComposeValidation,
-			"Compose file validation failed",
-			gin.H{
-				"lintResults": lintResults,
-			},
-		))
-		return
-	}
-
-	if err := os.MkdirAll(stackDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"MKDIR_ERROR",
-			"Failed to create stack directory",
-		))
-		return
-	}
-
-	composePath := filepath.Join(stackDir, "compose.yaml")
-	if err := os.WriteFile(composePath, []byte(req.ComposeContent), 0644); err != nil {
-		os.RemoveAll(stackDir)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"WRITE_ERROR",
-			"Failed to write compose file",
-		))
-		return
-	}
-
-	envFile := ""
-	if req.EnvContent != "" {
-		envPath := filepath.Join(stackDir, ".env")
-		if err := os.WriteFile(envPath, []byte(req.EnvContent), 0600); err != nil {
-			os.RemoveAll(stackDir)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
-				http.StatusInternalServerError,
-				"WRITE_ERROR",
-				"Failed to write env file",
-			))
-			return
-		}
-		envFile = ".env"
-	}
-
-	rootPrefix := filepath.Base(targetDir)
-	stackID := fmt.Sprintf("%s~%s:default", rootPrefix, req.Name)
-	projectName := fmt.Sprintf("%s-default", req.Name)
-
-	stack := models.Stack{
-		ID:          stackID,
-		Directory:   stackDir,
-		ComposeFile: "compose.yaml",
-		EnvFile:     envFile,
-		ProjectName: projectName,
-		Status:      "stopped",
-	}
-
-	if err := h.db.UpsertStack(stack); err != nil {
-		os.RemoveAll(stackDir)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"DB_ERROR",
-			"Failed to register stack in database",
-		))
-		return
-	}
-
-	if err := h.scanner.ScanDirectoryWithRoot(stackDir, targetDir); err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"SCANNER_ERROR",
-			"Failed to scan new stack directory",
-		))
-		return
-	}
-
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), stackID, "create", fmt.Sprintf("Created new stack: %s", req.Name))
-
-	deployed := false
-	var deployOutput string
-
-	if req.Deploy && h.docker != nil {
-		result, err := h.docker.Start(stack)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.NewAppErrorWithDetails(
-				http.StatusInternalServerError,
-				models.ErrDockerOperation,
-				"Stack created but deployment failed",
-				gin.H{
-					"stack":       stack,
-					"lintResults": lintResults,
-					"deployed":    false,
-					"deployError": err.Error(),
-				},
-			))
-			return
-		}
-		deployed = true
-		deployOutput = result.Stdout
-
-		status, containers, err := h.docker.Status(stack)
-		if err == nil {
-			stack.Status = status
-			stack.Containers = containers
-		}
-
-		h.db.UpdateStackStatus(stackID, stack.Status)
-		h.logAction(userID.(string), stackID, "start", deployOutput)
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"stack":        stack,
-		"lintResults":  lintResults,
-		"deployed":     deployed,
-		"deployOutput": deployOutput,
-	})
 }
 
 func (h *StacksHandler) Lint(c *gin.Context) {
@@ -408,256 +200,6 @@ func (h *StacksHandler) Get(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, stack)
-}
-
-func (h *StacksHandler) Start(c *gin.Context) {
-	id := c.Param("id")
-
-	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
-		return
-	}
-
-	if _, err := h.opLock.Acquire(id); err != nil {
-		c.JSON(http.StatusConflict, models.NewAppError(
-			http.StatusConflict,
-			"OPERATION_IN_PROGRESS",
-			err.Error(),
-		))
-		return
-	}
-	defer h.opLock.Release(id)
-
-	startTime := time.Now()
-	result, err := h.docker.Start(*stack)
-	duration := time.Since(startTime)
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, err)
-		return
-	}
-
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "start", result.Stdout)
-
-	actualStatus := "running"
-	if status, _, sErr := h.docker.Status(*stack); sErr == nil {
-		actualStatus = status
-	}
-	h.db.UpdateStackStatus(id, actualStatus)
-
-	c.JSON(http.StatusOK, gin.H{
-		"status":   actualStatus,
-		"output":   result.Stdout,
-		"duration": duration.Milliseconds(),
-	})
-}
-
-func (h *StacksHandler) Stop(c *gin.Context) {
-	id := c.Param("id")
-
-	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
-		return
-	}
-
-	if _, err := h.opLock.Acquire(id); err != nil {
-		c.JSON(http.StatusConflict, models.NewAppError(
-			http.StatusConflict,
-			"OPERATION_IN_PROGRESS",
-			err.Error(),
-		))
-		return
-	}
-	defer h.opLock.Release(id)
-
-	startTime := time.Now()
-	result, err := h.docker.Stop(*stack)
-	duration := time.Since(startTime)
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, err)
-		return
-	}
-
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "stop", result.Stdout)
-
-	actualStatus := "stopped"
-	if status, _, sErr := h.docker.Status(*stack); sErr == nil {
-		actualStatus = status
-	}
-	h.db.UpdateStackStatus(id, actualStatus)
-
-	c.JSON(http.StatusOK, gin.H{
-		"status":   actualStatus,
-		"output":   result.Stdout,
-		"duration": duration.Milliseconds(),
-	})
-}
-
-func (h *StacksHandler) Restart(c *gin.Context) {
-	id := c.Param("id")
-
-	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
-		return
-	}
-
-	if _, err := h.opLock.Acquire(id); err != nil {
-		c.JSON(http.StatusConflict, models.NewAppError(
-			http.StatusConflict,
-			"OPERATION_IN_PROGRESS",
-			err.Error(),
-		))
-		return
-	}
-	defer h.opLock.Release(id)
-
-	startTime := time.Now()
-	result, err := h.docker.Restart(*stack)
-	duration := time.Since(startTime)
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, err)
-		return
-	}
-
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "restart", result.Stdout)
-
-	actualStatus := "running"
-	if status, _, sErr := h.docker.Status(*stack); sErr == nil {
-		actualStatus = status
-	}
-	h.db.UpdateStackStatus(id, actualStatus)
-
-	c.JSON(http.StatusOK, gin.H{
-		"status":   actualStatus,
-		"output":   result.Stdout,
-		"duration": duration.Milliseconds(),
-	})
-}
-
-func (h *StacksHandler) Pull(c *gin.Context) {
-	id := c.Param("id")
-
-	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
-		return
-	}
-
-	if _, err := h.opLock.Acquire(id); err != nil {
-		c.JSON(http.StatusConflict, models.NewAppError(
-			http.StatusConflict,
-			"OPERATION_IN_PROGRESS",
-			err.Error(),
-		))
-		return
-	}
-	defer h.opLock.Release(id)
-
-	startTime := time.Now()
-	result, err := h.docker.Pull(*stack)
-	duration := time.Since(startTime)
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, err)
-		return
-	}
-
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "pull", result.Stdout)
-
-	restartAfterPull := c.Query("restart") == "true"
-
-	if restartAfterPull {
-		_, err = h.docker.Restart(*stack)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, err)
-			return
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"status":    "pulled",
-		"output":    result.Stdout,
-		"restarted": restartAfterPull,
-		"duration":  duration.Milliseconds(),
-	})
-}
-
-func (h *StacksHandler) Delete(c *gin.Context) {
-	id := c.Param("id")
-
-	if c.Query("confirm") != "true" {
-		c.JSON(http.StatusBadRequest, models.NewAppError(
-			http.StatusBadRequest,
-			models.ErrValidation,
-			"Confirmation required: add ?confirm=true to delete the stack",
-		))
-		return
-	}
-
-	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
-		return
-	}
-
-	if _, err := h.opLock.Acquire(id); err != nil {
-		c.JSON(http.StatusConflict, models.NewAppError(
-			http.StatusConflict,
-			"OPERATION_IN_PROGRESS",
-			err.Error(),
-		))
-		return
-	}
-	defer h.opLock.Release(id)
-
-	startTime := time.Now()
-	result, err := h.docker.Delete(*stack)
-	duration := time.Since(startTime)
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, err)
-		return
-	}
-
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "delete", result.Stdout)
-
-	h.db.DeleteStack(id)
-
-	c.JSON(http.StatusOK, gin.H{
-		"status":   "deleted",
-		"output":   result.Stdout,
-		"duration": duration.Milliseconds(),
-	})
 }
 
 func (h *StacksHandler) logAction(userID, stackID, action, detail string) {

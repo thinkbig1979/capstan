@@ -42,10 +42,18 @@ func NewWithEncryptor(dataDir string, encryptor TokenEncryptor) (*DB, error) {
 		return nil, err
 	}
 
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
-	db.SetConnMaxIdleTime(1 * time.Minute)
+	if dataDir == ":memory:" {
+		// In-memory SQLite has a per-connection database: each new connection gets
+		// an independent empty DB. Force a single connection so that all callers
+		// (including goroutines in background) share the same database.
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+	} else {
+		db.SetMaxOpenConns(25)
+		db.SetMaxIdleConns(5)
+		db.SetConnMaxLifetime(5 * time.Minute)
+		db.SetConnMaxIdleTime(1 * time.Minute)
+	}
 
 	_, err = db.Exec("PRAGMA journal_mode=WAL")
 	if err != nil {
@@ -702,6 +710,14 @@ func (d *DB) ClearCachedUpdates() error {
 	return err
 }
 
+// DeleteCachedUpdate removes a single row from cached_updates by containerID.
+// Used by the update apply paths to converge the list immediately after a
+// verified update or confirmed no-change (finding #4).
+func (d *DB) DeleteCachedUpdate(containerID string) error {
+	_, err := d.db.Exec("DELETE FROM cached_updates WHERE container_id = ?", containerID)
+	return err
+}
+
 func (d *DB) GetAutoUpdatePolicies() ([]models.AutoUpdatePolicy, error) {
 	query := `SELECT id, target_type, target_id, enabled, consecutive_failures, paused, created_at, updated_at
 	          FROM auto_update_policies ORDER BY target_type, target_id`
@@ -1077,6 +1093,22 @@ func (d *DB) GetBackupRuns(limit int) ([]models.BackupRun, error) {
 		runs = append(runs, r)
 	}
 	return runs, nil
+}
+
+// GetBackupRunByID fetches a single BackupRun by its primary key.
+// Returns sql.ErrNoRows (wrapped) when the row does not exist.
+func (d *DB) GetBackupRunByID(id string) (*models.BackupRun, error) {
+	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message
+	          FROM backup_runs WHERE id = ?`
+	var r models.BackupRun
+	err := d.db.QueryRow(query, id).Scan(
+		&r.ID, &r.Kind, &r.Trigger, &r.Status, &r.StartedAt, &r.FinishedAt,
+		&r.StacksTotal, &r.StacksOK, &r.StacksFailed, &r.BytesAdded, &r.ErrorMessage,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
 // --- Backup Run Items ---

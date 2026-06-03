@@ -47,7 +47,6 @@ func TestComposeHandler_Get_Success(t *testing.T) {
 	linter := services.NewLinterService()
 	handler := NewComposeHandler(linter, db, cfg)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/stacks/:id/compose", handler.Get)
 
@@ -75,7 +74,6 @@ func TestComposeHandler_Get_NotFound(t *testing.T) {
 	linter := services.NewLinterService()
 	handler := NewComposeHandler(linter, db, cfg)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/stacks/:id/compose", handler.Get)
 
@@ -125,7 +123,6 @@ func TestComposeHandler_Put_Success(t *testing.T) {
 	reqBody := map[string]string{"content": newContent}
 	reqBytes, _ := json.Marshal(reqBody)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), handler.Put)
 
@@ -180,7 +177,6 @@ func TestComposeHandler_Put_ValidationError(t *testing.T) {
 	reqBody := map[string]string{"content": invalidContent}
 	reqBytes, _ := json.Marshal(reqBody)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), handler.Put)
 
@@ -208,7 +204,6 @@ func TestComposeHandler_Lint_Valid(t *testing.T) {
 	reqBody := map[string]string{"content": content}
 	reqBytes, _ := json.Marshal(reqBody)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/stacks/:id/compose/lint", handler.Lint)
 
@@ -343,7 +338,6 @@ func TestComposeHandler_Lint_Invalid(t *testing.T) {
 	reqBody := map[string]string{"content": content}
 	reqBytes, _ := json.Marshal(reqBody)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/stacks/:id/compose/lint", handler.Lint)
 

@@ -16,7 +16,6 @@ import (
 )
 
 func setupSettingsFullRouter(handler *SettingsHandler) *gin.Engine {
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.PUT("/auth/password", authContextMiddleware("test-user-id"), handler.ChangePassword)
 	router.GET("/settings/config", handler.GetConfig)
@@ -57,7 +56,6 @@ func TestSettingsHandler_ChangePassword_AuthDisabled(t *testing.T) {
 	defer db.Close()
 
 	handler := NewSettingsHandler(db, "", "test-secret", true, nil, nil)
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.PUT("/auth/password", handler.ChangePassword)
 
@@ -77,7 +75,6 @@ func TestSettingsHandler_ChangePassword_Success(t *testing.T) {
 	user := createTestUser(t, db, "testuser", "OldPassword123!")
 	handler := NewSettingsHandler(db, "", "test-secret-key-32-chars-long!!!", false, nil, nil)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.PUT("/auth/password", authContextMiddleware(user.ID), handler.ChangePassword)
 
@@ -98,7 +95,6 @@ func TestSettingsHandler_ChangePassword_WrongCurrentPassword(t *testing.T) {
 	user := createTestUser(t, db, "testuser", "OldPassword123!")
 	handler := NewSettingsHandler(db, "", "test-secret-key-32-chars-long!!!", false, nil, nil)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.PUT("/auth/password", authContextMiddleware(user.ID), handler.ChangePassword)
 
@@ -119,7 +115,6 @@ func TestSettingsHandler_ChangePassword_InvalidBody(t *testing.T) {
 	user := createTestUser(t, db, "testuser", "OldPassword123!")
 	handler := NewSettingsHandler(db, "", "test-secret-key-32-chars-long!!!", false, nil, nil)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.PUT("/auth/password", authContextMiddleware(user.ID), handler.ChangePassword)
 
@@ -138,7 +133,6 @@ func TestSettingsHandler_ChangePassword_NoAuth(t *testing.T) {
 
 	handler := NewSettingsHandler(db, "", "test-secret-key-32-chars-long!!!", false, nil, nil)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.PUT("/auth/password", handler.ChangePassword)
 

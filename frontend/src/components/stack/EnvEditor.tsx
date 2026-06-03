@@ -6,14 +6,15 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Eye, EyeOff, Plus, Trash2, Save, Undo, Redo } from 'lucide-react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiClient } from '@/lib/api'
-import { toast } from 'sonner'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { stacksApi } from '@/lib/api'
+import { isActionResult } from '@/lib/action-result'
 import type { EnvEntry } from '@/types'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { EnvUnlockStatus } from '@/components/EnvUnlockStatus'
 import { useAuth } from '@/hooks/useAuth'
+import { useActionMutation } from '@/hooks/useActionMutation'
 
 interface EnvEditorProps {
   stackId: string
@@ -96,11 +97,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     queryKey: ['stack', stackId, 'env'],
     queryFn: async () => {
       try {
-        const response = await apiClient.get(`/stacks/${stackId}/env`)
-        return response.data as { entries: EnvEntry[]; raw: string } | undefined
+        const data = await stacksApi.getEnv(stackId)
+        return data as { filename: string; entries: EnvEntry[]; raw: string } | undefined
       } catch (error: unknown) {
-        const err = error as { response?: { status?: number } }
-        if (err.response?.status === 404) {
+        const err = error as { response?: { status?: number }; status?: number }
+        if (err.response?.status === 404 || err.status === 404) {
           return null
         }
         throw error
@@ -110,41 +111,81 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
 
   useEffect(() => {
     if (envData) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+       
       setEntries(envData.entries)
-       
+
       setRawContent(envData.raw)
-       
+
       setHasUnsavedChanges(false)
-       
+
       setShowEnvSection(true)
-       
+
       setHistory([{ entries: envData.entries, raw: envData.raw }])
-       
+
       setHistoryIndex(0)
     } else {
-       
+
       setShowEnvSection(false)
     }
   }, [envData])
 
-  const saveMutation = useMutation({
-    mutationFn: async ({ entries, raw }: { entries?: EnvEntry[]; raw?: string }) => {
-      const response = await apiClient.put(`/stacks/${stackId}/env`, {
-        ...(entries !== undefined && { entries }),
-        ...(raw !== undefined && { raw }),
-      })
-      return response.data
+  /**
+   * Save mutation — consumes ActionResult to surface real outcomes.
+   * Audit finding #15: backend may return failed/partial for invalid entries;
+   * we must not show a false "Saved" toast in those cases.
+   */
+  const saveMutation = useActionMutation({
+    mutationFn: async (body: { entries?: EnvEntry[]; raw?: string }) => {
+      const raw = await stacksApi.updateEnv(stackId, body)
+      // Migration bridge: legacy backend returns {saved, filename}; new backend
+      // returns ActionResult. Map the legacy shape so toastForResult works either way.
+      if (isActionResult(raw)) {
+        return raw
+      }
+      const legacy = raw as { saved: boolean; filename?: string }
+      if (legacy.saved) {
+        return { outcome: 'success' as const, reason: 'Environment variables saved' }
+      }
+      return { outcome: 'failed' as const, reason: 'Failed to save environment variables' }
     },
-    onSuccess: (_, variables) => {
-      setHasUnsavedChanges(false)
-      toast.success('Environment variables saved successfully')
-      queryClient.invalidateQueries({ queryKey: ['stack', stackId] })
-      setHistory([{ entries: variables.entries || entries, raw: variables.raw || rawContent }])
-      setHistoryIndex(0)
+    invalidate: [['stack', stackId]],
+    successTitle: 'Environment variables saved',
+    onResult: (result) => {
+      if (result.outcome === 'success' || result.outcome === 'no_change') {
+        setHasUnsavedChanges(false)
+        const body = saveMutation.variables
+        if (body) {
+          setHistory([{ entries: body.entries || entries, raw: body.raw || rawContent }])
+          setHistoryIndex(0)
+        }
+      }
     },
-    onError: () => {
-      toast.error('Failed to save environment variables')
+  })
+
+  /**
+   * Create env file mutation — wires the "Create Environment File" button.
+   * Audit finding #16: the button was dead (flipped a flag that a higher render
+   * guard ignored). The backend now exposes POST /stacks/:id/env.
+   */
+  const createEnvMutation = useActionMutation<void>({
+    mutationFn: async (_vars: void) => {
+      const raw = await stacksApi.createEnv(stackId)
+      if (isActionResult(raw)) return raw
+      return { outcome: 'success' as const, reason: 'Environment file created' }
+    },
+    invalidate: [['stack', stackId, 'env'], ['stack', stackId]],
+    successTitle: 'Environment file created',
+    onResult: (result) => {
+      if (result.outcome === 'success' || result.outcome === 'no_change') {
+        // Reveal the editor immediately — the query invalidation above will
+        // re-fetch and populate entries/raw.
+        setShowEnvSection(true)
+        setEntries([])
+        setRawContent('')
+        setHistory([{ entries: [], raw: '' }])
+        setHistoryIndex(0)
+        setHasUnsavedChanges(false)
+      }
     },
   })
 
@@ -215,7 +256,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // sensitive-by-name entries the user had revealed during the session.
   useEffect(() => {
     if (unlockedUntil !== null) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+     
     setEntries((prev) => {
       let changed = false
       const next = prev.map((e) => {
@@ -238,23 +279,36 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     return <div className="flex items-center justify-center py-8">Loading...</div>
   }
 
-  if (isError || !envData) {
+  if (isError) {
     return (
       <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-        <p>No environment file found for this stack</p>
-        <Button variant="outline" onClick={() => setShowEnvSection(true)} className="mt-4">
-          Create Environment File
+        <p>Failed to load environment file</p>
+        <Button
+          variant="outline"
+          onClick={() => {
+            queryClient.invalidateQueries({ queryKey: ['stack', stackId, 'env'] })
+          }}
+          className="mt-4"
+        >
+          Retry
         </Button>
       </div>
     )
   }
 
+  // envData === null means the backend returned 404 (no env file).
+  // showEnvSection is set to true either after a successful create or when data loads.
   if (!showEnvSection) {
     return (
       <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
         <p>No environment file found for this stack</p>
-        <Button variant="outline" onClick={() => setShowEnvSection(true)} className="mt-4">
-          Create Environment File
+        <Button
+          variant="outline"
+          onClick={() => createEnvMutation.mutate()}
+          disabled={createEnvMutation.isPending}
+          className="mt-4"
+        >
+          {createEnvMutation.isPending ? 'Creating...' : 'Create Environment File'}
         </Button>
       </div>
     )

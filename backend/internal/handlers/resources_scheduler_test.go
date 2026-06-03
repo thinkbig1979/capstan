@@ -7,11 +7,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // handlerTestChecker is a fake updateChecker for handler-level tests.
@@ -27,8 +28,8 @@ func (h *handlerTestChecker) CheckForUpdates(_ context.Context, _ services.Dashb
 	return nil, nil
 }
 
-func (h *handlerTestChecker) UpdateContainer(_ context.Context, _ string, _ services.DashboardDB) (models.UpdateResult, error) {
-	return models.UpdateResult{}, nil
+func (h *handlerTestChecker) UpdateContainer(_ context.Context, _ string, _ services.DashboardDB) (models.UpdateResult, truth.ActionResult) {
+	return models.UpdateResult{}, truth.NoChange("stub: no update")
 }
 
 func newTestResourcesHandlerWithScheduler(t *testing.T) (*ResourcesHandler, *services.SchedulerService, *handlerTestChecker) {
