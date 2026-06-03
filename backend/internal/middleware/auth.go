@@ -148,13 +148,17 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 	}
 }
 
+// jwtIssuer must match handlers.jwtIssuer; tokens are required to carry this
+// "iss" claim (L2).
+const jwtIssuer = "capstan"
+
 func ValidateJWT(token, secret string) (jwt.MapClaims, error) {
 	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, jwt.ErrSignatureInvalid
 		}
 		return []byte(secret), nil
-	})
+	}, jwt.WithIssuer(jwtIssuer))
 
 	if err != nil {
 		return nil, err

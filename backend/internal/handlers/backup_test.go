@@ -26,7 +26,11 @@ import (
 
 func newBackupHandlerDB(t *testing.T) *database.DB {
 	t.Helper()
-	db, err := database.NewWithMigrations(":memory:")
+	// Use an encryptor-backed DB so sensitive settings (restic_password,
+	// git_https_token) can be stored — the DB now refuses to persist secrets in
+	// plaintext (L1).
+	enc := services.NewTokenEncryptorOrDefault("", "test-secret-32-chars-padding-here")
+	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	return db

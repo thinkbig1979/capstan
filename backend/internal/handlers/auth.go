@@ -17,6 +17,11 @@ import (
 
 var bearerPrefixRegex = regexp.MustCompile(`^Bearer\s+`)
 
+// jwtIssuer is set as the "iss" claim on issued tokens and required by the
+// validators, so tokens are bound to this application (L2). Must match
+// middleware.jwtIssuer.
+const jwtIssuer = "capstan"
+
 // dummyBcryptHash is compared against on the username-not-found login path so
 // that a bcrypt comparison is always performed regardless of whether the user
 // exists. This equalizes response timing between the user-exists and
@@ -401,6 +406,7 @@ func validatePassword(password string) *models.AppError {
 
 func generateJWT(userID, username, sessionID, secret string) (string, error) {
 	claims := jwtv5.MapClaims{
+		"iss":      jwtIssuer,
 		"sub":      userID,
 		"username": username,
 		"jti":      sessionID,
@@ -418,7 +424,7 @@ func parseJWT(token, secret string) (jwtv5.MapClaims, error) {
 			return nil, jwtv5.ErrSignatureInvalid
 		}
 		return []byte(secret), nil
-	})
+	}, jwtv5.WithIssuer(jwtIssuer))
 
 	if err != nil {
 		return nil, err

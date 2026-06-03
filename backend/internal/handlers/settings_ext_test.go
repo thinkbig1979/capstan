@@ -10,6 +10,7 @@ import (
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,7 +35,8 @@ func setupSettingsFullRouter(handler *SettingsHandler) *gin.Engine {
 
 func newTestSettingsHandler(t *testing.T) (*SettingsHandler, *gin.Engine) {
 	t.Helper()
-	db, err := database.NewWithMigrations(":memory:")
+	enc := services.NewTokenEncryptorOrDefault("", "test-secret-key-32-chars-long!!!")
+	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 

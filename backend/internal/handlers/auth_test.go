@@ -372,6 +372,7 @@ func TestAuthHandler_Me_Unauthenticated(t *testing.T) {
 
 func generateTestToken(userID, username, sessionID, secret string) string {
 	claims := jwt.MapClaims{
+		"iss":      jwtIssuer,
 		"sub":      userID,
 		"username": username,
 		"jti":      sessionID,
