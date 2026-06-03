@@ -47,7 +47,7 @@ export function DashboardPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [isRefreshing, setIsRefreshing] = useState(false)
 
-  const { aggregates, latestMetrics, isConnected: metricsConnected, ws: metricsWs } = useDashboardMetrics()
+  const { containers: metricsContainers, aggregates, latestMetrics, isConnected: metricsConnected, ws: metricsWs } = useDashboardMetrics()
 
   useEffect(() => {
     const savedSort = localStorage.getItem('dashboard-sort') as SortOption
@@ -313,6 +313,7 @@ export function DashboardPage() {
               totalContainers={containerCount}
               runningContainers={dashboardStats?.runningContainers || 0}
               directoryCount={directories?.length || 0}
+              containers={metricsContainers}
             />
           </ErrorBoundary>
         </TabsContent>

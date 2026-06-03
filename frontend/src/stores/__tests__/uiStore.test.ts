@@ -93,3 +93,65 @@ describe('uiStore setSidebarWidth', () => {
     expect(useUIStore.getState().sidebarWidth).toBe(480)
   })
 })
+
+describe('uiStore logPrefs', () => {
+  beforeEach(() => {
+    useUIStore.setState({
+      logPrefs: {
+        showTimestamps: true,
+        autoScroll: true,
+        wrap: true,
+        timeRange: 'all',
+        errorsOnly: false,
+      },
+    })
+  })
+
+  it('defaults to sensible log prefs', () => {
+    const { logPrefs } = useUIStore.getState()
+    expect(logPrefs.showTimestamps).toBe(true)
+    expect(logPrefs.autoScroll).toBe(true)
+    expect(logPrefs.wrap).toBe(true)
+    expect(logPrefs.timeRange).toBe('all')
+    expect(logPrefs.errorsOnly).toBe(false)
+  })
+
+  it('patches a single pref without clobbering the others', () => {
+    useUIStore.getState().setLogPrefs({ wrap: false })
+    const { logPrefs } = useUIStore.getState()
+    expect(logPrefs.wrap).toBe(false)
+    expect(logPrefs.showTimestamps).toBe(true)
+    expect(logPrefs.autoScroll).toBe(true)
+  })
+
+  it('updates the time range', () => {
+    useUIStore.getState().setLogPrefs({ timeRange: '15m' })
+    expect(useUIStore.getState().logPrefs.timeRange).toBe('15m')
+  })
+})
+
+describe('uiStore pinnedStacks', () => {
+  beforeEach(() => {
+    useUIStore.setState({ pinnedStacks: [] })
+  })
+
+  it('pins a stack', () => {
+    useUIStore.getState().togglePinnedStack('a')
+    expect(useUIStore.getState().pinnedStacks).toEqual(['a'])
+    expect(useUIStore.getState().isPinned('a')).toBe(true)
+  })
+
+  it('unpins a previously pinned stack', () => {
+    useUIStore.getState().togglePinnedStack('a')
+    useUIStore.getState().togglePinnedStack('a')
+    expect(useUIStore.getState().pinnedStacks).toEqual([])
+    expect(useUIStore.getState().isPinned('a')).toBe(false)
+  })
+
+  it('keeps multiple pins independent', () => {
+    useUIStore.getState().togglePinnedStack('a')
+    useUIStore.getState().togglePinnedStack('b')
+    useUIStore.getState().togglePinnedStack('a')
+    expect(useUIStore.getState().pinnedStacks).toEqual(['b'])
+  })
+})

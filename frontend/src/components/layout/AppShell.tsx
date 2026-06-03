@@ -3,6 +3,7 @@ import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 import { useStackEvents } from '@/hooks/useStackEvents'
 import { useUpdateScanWatcher } from '@/hooks/useResources'
+import { CommandPalette } from '@/components/CommandPalette'
 
 interface AppShellProps {
   children: ReactNode
@@ -21,6 +22,7 @@ export function AppShell({ children }: AppShellProps) {
         <Header />
         <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-6">{children}</main>
       </div>
+      <CommandPalette />
     </div>
   )
 }

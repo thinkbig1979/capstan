@@ -61,11 +61,16 @@ cd frontend && ./run-dev.sh      # Vite dev server on :5173 (proxies /api to :50
 ## Features
 
 - **Docker Compose Management**: create, start, stop, restart, and delete stacks
+- **Bulk Actions**: select multiple stacks and start, stop, restart, or pull them together
+- **Pinned Stacks**: keep frequently-used stacks at the top of the sidebar
+- **Command Palette**: press `⌘K` / `Ctrl-K` to jump to any stack, action, or settings page
+- **Log Viewer**: ANSI-colored output, per-container colors, container and level filters, search, and preferences that persist across sessions
 - **Compose Editor**: edit `docker-compose.yaml` files with live linting
 - **Environment Files**: manage `.env` files with comment preservation
 - **Git Integration**: status, pull, log, and diff for git-managed stacks
-- **Image Updates**: detect and apply image updates per service
-- **Backups**: built-in restic snapshots with optional rclone cloud sync
+- **Image Updates**: detect and apply image updates per service, with an at-a-glance count in the sidebar
+- **Dashboard Metrics**: sortable CPU and memory view with per-container sparklines
+- **Backups**: built-in restic snapshots with optional rclone cloud sync, with last-run and next-run shown in the sidebar
 - **Web Terminal**: an in-browser shell into running containers
 - **Real-time Updates**: file watching for automatic stack detection
 - **Action Logging**: an audit trail of all operations
