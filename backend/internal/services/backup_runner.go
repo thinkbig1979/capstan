@@ -322,7 +322,9 @@ func (reg *BackupRunnerRegistry) execSync(dr *durableRun) {
 }
 
 // LaunchDRRestore pre-creates a running BackupRun row and starts the DR restore.
-func (reg *BackupRunnerRegistry) LaunchDRRestore(localRepoPath string) (string, error) {
+// The restore destination is derived server-side (under DataDir) by the service
+// and is intentionally not a parameter — see RunDRRestore / finding C1.
+func (reg *BackupRunnerRegistry) LaunchDRRestore() (string, error) {
 	runID := uuid.New().String()
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -339,11 +341,11 @@ func (reg *BackupRunnerRegistry) LaunchDRRestore(localRepoPath string) (string, 
 
 	dr := &durableRun{runID: runID, kind: RunKindDRRestore, done: make(chan struct{})}
 	reg.register(dr)
-	go reg.execDRRestore(dr, localRepoPath)
+	go reg.execDRRestore(dr)
 	return runID, nil
 }
 
-func (reg *BackupRunnerRegistry) execDRRestore(dr *durableRun, localRepoPath string) {
+func (reg *BackupRunnerRegistry) execDRRestore(dr *durableRun) {
 	defer close(dr.done)
 	defer reg.recoverExec(dr)
 
@@ -351,7 +353,7 @@ func (reg *BackupRunnerRegistry) execDRRestore(dr *durableRun, localRepoPath str
 	defer finish()
 	ctx := context.Background()
 
-	err := reg.svc.RunDRRestore(ctx, localRepoPath, out)
+	err := reg.svc.RunDRRestore(ctx, out)
 	finish()
 
 	if err != nil {

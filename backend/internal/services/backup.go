@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -796,11 +797,18 @@ func (s *BackupService) RunRestore(
 
 // --- RunDRRestore ---
 
+// drRestoreSubdir is the fixed, server-controlled directory (under DataDir)
+// that a DR restore fetches the restic repository into. The destination is NOT
+// taken from client input: rclone sync mirrors the remote onto the destination
+// and deletes files not present in the source, so an attacker-supplied path
+// would be an arbitrary host-path overwrite primitive (C1).
+const drRestoreSubdir = "dr-restore"
+
 // RunDRRestore performs a Stage-3 DR restore: it fetches the restic repository
-// from the configured rclone remote to localRepoPath. This is a destructive,
-// long-running operation that requires the caller to have obtained explicit
-// confirmation before invoking.
-func (s *BackupService) RunDRRestore(ctx context.Context, localRepoPath string, out chan<- StreamLine) error {
+// from the configured rclone remote into a fixed directory under DataDir. This
+// is a destructive, long-running operation that requires the caller to have
+// obtained explicit confirmation before invoking.
+func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine) error {
 	if !s.tryAcquireGlobal() {
 		return ErrBackupBusy
 	}
@@ -813,6 +821,13 @@ func (s *BackupService) RunDRRestore(ctx context.Context, localRepoPath string, 
 	bc := resolveBackupConfig(s.db, s.cfg)
 	if bc.RcloneRemote == "" {
 		return fmt.Errorf("rclone remote is not configured")
+	}
+
+	// Destination is derived server-side and confined to DataDir; it is never
+	// influenced by client input.
+	localRepoPath := filepath.Join(s.cfg.DataDir, drRestoreSubdir)
+	if err := os.MkdirAll(localRepoPath, 0o700); err != nil {
+		return fmt.Errorf("create dr-restore directory: %w", err)
 	}
 
 	rclone := s.newRcloneMgr(bc)

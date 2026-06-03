@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -176,6 +177,39 @@ func buildSvc(
 	}
 
 	return svc
+}
+
+// TestRunDRRestore_ConfinesDestinationToDataDir is the regression test for the
+// C1 finding: a client-supplied localRepoPath previously flowed straight into
+// `rclone sync <remote> <localRepoPath>`, letting an authenticated user
+// overwrite arbitrary host paths (e.g. /etc) as root. The destination must be
+// derived server-side inside DataDir and never influenced by client input.
+func TestRunDRRestore_ConfinesDestinationToDataDir(t *testing.T) {
+	db := newBackupTestDB(t)
+	rcloneRunner := &fakeRunner{}
+	svc := buildSvc(t, db, &fakeDocker{}, &fakeRunner{}, rcloneRunner)
+	// resolveBackupConfig falls back to cfg.RcloneRemote when the DB has none,
+	// so this makes RunDRRestore's "remote configured" precondition pass.
+	svc.cfg.RcloneRemote = "myremote"
+
+	out := make(chan StreamLine, 64)
+	go func() {
+		for range out { //nolint:revive // drain
+		}
+	}()
+	err := svc.RunDRRestore(context.Background(), out)
+	require.NoError(t, err)
+	close(out)
+
+	call := rcloneRunner.lastCall()
+	require.Equal(t, "rclone", call.Binary)
+
+	// The rclone destination (last positional arg) must be the server-derived
+	// path inside DataDir — not anything a client could supply.
+	dest := call.Args[len(call.Args)-1]
+	want := filepath.Join(svc.cfg.DataDir, "dr-restore")
+	assert.Equal(t, want, dest, "DR restore destination must be server-derived inside DataDir")
+	assert.DirExists(t, want, "destination directory must be created before restore")
 }
 
 // drainChannel reads all pending lines from out into a slice (non-blocking).
@@ -965,7 +999,7 @@ func TestRunDRRestore_Success(t *testing.T) {
 	svc := buildSvc(t, db, docker, runner, runner)
 
 	out := make(chan StreamLine, 128)
-	err := svc.RunDRRestore(context.Background(), "/tmp/restored-repo", out)
+	err := svc.RunDRRestore(context.Background(), out)
 	require.NoError(t, err)
 
 	// rclone sync must have been called.
@@ -984,7 +1018,7 @@ func TestRunDRRestore_UnavailableWhenNoRclone(t *testing.T) {
 	svc.rcloneBin = ""
 
 	out := make(chan StreamLine, 64)
-	err := svc.RunDRRestore(context.Background(), "/tmp/repo", out)
+	err := svc.RunDRRestore(context.Background(), out)
 	assert.ErrorIs(t, err, ErrBackupUnavailable)
 }
 
@@ -998,7 +1032,7 @@ func TestRunDRRestore_BusyReturns409Sentinel(t *testing.T) {
 	svc.busy.Store(1)
 
 	out := make(chan StreamLine, 64)
-	err := svc.RunDRRestore(context.Background(), "/tmp/repo", out)
+	err := svc.RunDRRestore(context.Background(), out)
 	assert.ErrorIs(t, err, ErrBackupBusy)
 }
 

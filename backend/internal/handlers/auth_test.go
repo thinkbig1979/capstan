@@ -220,6 +220,47 @@ func TestAuthHandler_Login_InvalidCredentials(t *testing.T) {
 	assert.Equal(t, "UNAUTHORIZED", response["code"])
 }
 
+// TestAuthHandler_Login_UnknownUserPerformsBcrypt is the regression test for
+// H3: the login handler must perform a bcrypt comparison even when the username
+// does not exist, so an attacker cannot enumerate valid usernames by response
+// latency. A bcrypt comparison at the default cost takes tens of milliseconds;
+// the pre-fix no-user path returned in microseconds. We assert the fastest
+// unknown-user attempt still spends a bcrypt-sized amount of time — a huge,
+// stable gap, not a flaky micro-threshold.
+func TestAuthHandler_Login_UnknownUserPerformsBcrypt(t *testing.T) {
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+
+	createTestUser(t, db, "realuser", "password123")
+
+	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
+	router := setupTestRouter(handler)
+
+	measure := func(username string) time.Duration {
+		body := `{"username": "` + username + `", "password": "somewrongpassword"}`
+		req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		start := time.Now()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnauthorized, w.Code)
+		return time.Since(start)
+	}
+
+	// Take the minimum across several attempts: if even the fastest unknown-user
+	// login took longer than 1ms, a bcrypt comparison definitely ran. bcrypt at
+	// DefaultCost is well over 1ms on any hardware; the pre-fix path was sub-100µs.
+	unknownMin := time.Hour
+	for i := 0; i < 5; i++ {
+		if d := measure("nonexistent-user-xyz"); d < unknownMin {
+			unknownMin = d
+		}
+	}
+
+	assert.Greater(t, unknownMin, time.Millisecond,
+		"unknown-username login must still perform a bcrypt comparison (constant-time defense, H3)")
+}
+
 func TestAuthHandler_Logout_Success(t *testing.T) {
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)

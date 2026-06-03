@@ -648,9 +648,13 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 }
 
 // runDRRestoreRequest is the POST /backups/dr-restore request body.
+//
+// The restore destination is intentionally NOT accepted from the client: it is
+// derived server-side under DataDir by the backup service. A client-supplied
+// path previously flowed into `rclone sync`, allowing arbitrary host-path
+// overwrite (finding C1). Any localRepoPath field a client sends is ignored.
 type runDRRestoreRequest struct {
-	Confirm       bool   `json:"confirm"`
-	LocalRepoPath string `json:"localRepoPath"`
+	Confirm bool `json:"confirm"`
 }
 
 func (h *BackupHandler) runDRRestore(c *gin.Context) {
@@ -692,7 +696,7 @@ func (h *BackupHandler) runDRRestore(c *gin.Context) {
 		return
 	}
 
-	runID, err := h.registry.LaunchDRRestore(req.LocalRepoPath)
+	runID, err := h.registry.LaunchDRRestore()
 	if err != nil {
 		h.internalError(c, "Failed to start DR restore", err)
 		return
