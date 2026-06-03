@@ -254,6 +254,61 @@ itself. Two consequences:
       networks: [capstan-network]
   ```
 
+## Application Security
+
+Capstan holds credentials, runs commands against your host's Docker daemon, and
+serves an in-browser terminal, so the application is hardened by default rather
+than left to the operator to secure. The codebase has been through a security
+audit; the measures below are in place and covered by tests.
+
+**Authentication and sessions**
+- Authentication is on by default. Passwords are hashed with bcrypt and must meet
+  a strength policy (length, character classes, common-password blocklist).
+- Login is rate-limited and runs a constant-time comparison whether or not the
+  username exists, so it does not leak which accounts are valid.
+- Sessions are tracked server-side and revoked on logout and on password change.
+  The session cookie is `HttpOnly`, `SameSite=Lax`, and marked `Secure` when the
+  request arrives over HTTPS. JWTs are bound to an issuer claim.
+
+**Secrets at rest**
+- Stored secrets (git HTTPS tokens, the restic repository password) are encrypted
+  with AES-256-GCM. The key is derived with HKDF from a dedicated `STORAGE_KEY`,
+  independent of the JWT signing secret, so leaking one does not expose the other.
+- The restic password is passed to restic via a private file, never on the
+  command line or in logs. Secrets are never returned in API responses.
+
+**Command execution and file access**
+- Every call to `docker`, `docker compose`, and `git` is made with an explicit
+  argument vector, not a shell string, so stack names, container names, and file
+  paths cannot inject commands.
+- Reads and writes to compose files, `.env` files, and backup targets are
+  confined to the configured stacks and data directories. Containment is
+  symlink-aware, so a symlink inside a stack directory cannot redirect a write
+  onto a host file outside it.
+
+**Web layer**
+- State-changing requests require a CSRF token (double-submit cookie + header).
+- CORS uses an exact-match allowlist; credentialed requests are never paired with
+  a wildcard origin.
+- WebSocket endpoints (including the terminal) validate the request `Origin`, so
+  the shell cannot be driven from another site (cross-site WebSocket hijacking).
+- Responses carry a Content-Security-Policy with `frame-ancestors 'none'`, plus
+  `X-Frame-Options`, `X-Content-Type-Options`, and `Referrer-Policy`. Generic
+  error responses avoid leaking stack traces or internals.
+
+**Dependencies and build**
+- Go and npm dependencies are scanned (`govulncheck`, `pnpm audit`) and kept
+  current; the binary is built with a patched Go toolchain and base images are
+  pinned.
+
+**The honest boundary.** None of this changes the fact that access to the Docker
+socket is root-equivalent control of the host (see
+[Docker Socket & Security](#docker-socket--security) above). Treat a Capstan
+login as administrative access, run it on a trusted network behind TLS, and use a
+socket proxy if you need least-privilege. The application hardening above reduces
+the ways that trust can be abused; it is not a substitute for protecting access
+to Capstan itself.
+
 ## Project Structure
 
 ```
