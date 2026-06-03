@@ -3,7 +3,7 @@ import { StackDetail } from '@/components/stack/StackDetail'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { AlertCircle, RefreshCw, Home, Trash2 } from 'lucide-react'
+import { AlertCircle, RefreshCw, Home, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { classifyError } from '@/lib/error-handler'
@@ -14,6 +14,7 @@ import { useStackStore } from '@/stores/stackStore'
 import { useCheckUpdates, useUpdateStack, useUpdateJobs } from '@/hooks/useResources'
 import { useUpdateJobStore, type UpdateJob } from '@/stores/updateJobStore'
 import { StackUpdateBadge } from '@/components/stack/StackUpdateBadge'
+import { UpdateJobLog } from '@/components/updates/UpdateJobLog'
 
 // Most recently created job (by createdAt) without copying/sorting the array.
 function latestByCreatedAt(jobs: UpdateJob[]): UpdateJob | undefined {
@@ -95,6 +96,12 @@ export function StackPage() {
 
   // Most recent stack job overall (active or finished), to report the outcome.
   const latestStackJob = useMemo(() => latestByCreatedAt(stackJobs), [stackJobs])
+
+  // Collapsible live-output terminal for the stack update. Shown automatically
+  // while an update is running (derived, not synced) and manually toggleable so
+  // it stays available after the job finishes.
+  const [updateLogOpen, setUpdateLogOpen] = useState(false)
+  const updateLogVisible = updateLogOpen || activeJob != null
 
   // Surface the terminal outcome once per job. On a fail-fast partial update the
   // job error already names which services were left un-updated (see backend), so
@@ -268,6 +275,20 @@ export function StackPage() {
             <span className="hidden sm:inline">Delete Stack</span>
           </Button>
         </div>
+
+        {latestStackJob && (
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setUpdateLogOpen((o) => !o)}
+              className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {updateLogVisible ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              Update output
+            </button>
+            {updateLogVisible && <UpdateJobLog job={latestStackJob} enabled={updateLogVisible} />}
+          </div>
+        )}
 
         <StackDetail
           key={stack.id}

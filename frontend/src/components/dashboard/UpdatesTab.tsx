@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { Fragment, useState, useMemo } from 'react'
 import { useCheckUpdates, useCheckUpdatesRefresh, useUpdateContainer, useAutoUpdatePolicies, useUpdateJobs } from '@/hooks/useResources'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
@@ -20,6 +20,7 @@ import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { UpdateLogTab } from '@/components/dashboard/UpdateLogTab'
 import { UpdateJobStatusCell } from '@/components/dashboard/UpdateJobStatusCell'
+import { UpdateJobLog } from '@/components/updates/UpdateJobLog'
 import type { ContainerUpdateInfo, CachedUpdate, AutoUpdatePolicy } from '@/types'
 import { formatRelativeTime } from '@/lib/format'
 
@@ -284,7 +285,8 @@ export function UpdatesTab() {
                 const expanded = expandedIds.has(container.containerId)
 
                 return (
-                  <TableRow key={container.containerId}>
+                  <Fragment key={container.containerId}>
+                  <TableRow>
                     <TableCell>
                       <div className="flex flex-col">
                         <span className="font-medium text-sm">{container.containerName}</span>
@@ -355,6 +357,14 @@ export function UpdatesTab() {
                       />
                     </TableCell>
                   </TableRow>
+                  {expanded && job && (
+                    <TableRow>
+                      <TableCell colSpan={6} className="bg-muted/30 p-3">
+                        <UpdateJobLog job={job} enabled={expanded} />
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  </Fragment>
                 )
               })}
             </TableBody>

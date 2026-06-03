@@ -1,70 +1,7 @@
-import { useRef, useEffect } from 'react'
 import { RefreshCw, CheckCircle, AlertCircle, Info, ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
-import { cn } from '@/lib/utils'
-import { useUpdateJobStream } from '@/hooks/useUpdateJobStream'
-import type { UpdateJob, JobLine } from '@/stores/updateJobStore'
-
-// ── Log panel ────────────────────────────────────────────────────────────────
-
-interface JobLogPanelProps {
-  job: UpdateJob
-  expanded: boolean
-}
-
-function JobLogPanel({ job, expanded }: JobLogPanelProps) {
-  const scrollRef = useRef<HTMLDivElement>(null)
-
-  // Only open the socket while expanded
-  useUpdateJobStream(job.id, { enabled: expanded })
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [job.lines])
-
-  if (!expanded) return null
-
-  const isRunning = job.status === 'queued' || job.status === 'pulling' || job.status === 'recreating'
-
-  return (
-    <div className="mt-2 rounded-lg border overflow-hidden">
-      <div
-        ref={scrollRef}
-        className="max-h-48 overflow-y-auto bg-terminal-background text-terminal-foreground p-3 font-mono text-xs leading-relaxed"
-      >
-        {job.lines.length === 0 && isRunning && (
-          <span className="text-terminal-foreground/60 italic">Waiting for output…</span>
-        )}
-        {job.lines.map((line: JobLine, i: number) => (
-          <div
-            key={`${i}-${line.ts}`}
-            className={cn(
-              'whitespace-pre-wrap break-all',
-              line.stream === 'stderr' && 'text-destructive',
-              line.stream === 'status' && 'text-info',
-              line.stream === 'stdout' && 'text-terminal-foreground',
-            )}
-          >
-            {line.text}
-          </div>
-        ))}
-        {isRunning && (
-          <div className="flex items-center gap-1 text-terminal-foreground/60">
-            <span className="animate-pulse">_</span>
-          </div>
-        )}
-      </div>
-      {job.error && (
-        <div className="px-4 py-2 text-xs text-destructive bg-destructive/5 border-t border-destructive/20">
-          {job.error}
-        </div>
-      )}
-    </div>
-  )
-}
+import type { UpdateJob } from '@/stores/updateJobStore'
 
 // ── Main cell component ───────────────────────────────────────────────────────
 
@@ -325,7 +262,6 @@ export function UpdateJobStatusCell({
           </Button>
         )}
       </div>
-      {job && <JobLogPanel job={job} expanded={expanded} />}
     </div>
   )
 }
