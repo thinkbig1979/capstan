@@ -1,15 +1,142 @@
-import { Activity, Cpu, HardDrive, MemoryStick, Network, Database, Layers, Archive, Box, Hash, Folder, Server } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { Activity, Cpu, HardDrive, MemoryStick, Network, Database, Layers, Archive, Box, Hash, Folder, Server, ArrowUpDown } from 'lucide-react'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Button } from '@/components/ui/button'
 import type { DashboardStats } from '@/types'
 import type { DashboardAggregateMetrics } from '@/hooks/useDashboardMetrics'
+import type { ContainerMetricHistory } from '@/hooks/useMetricsBase'
 import { formatBytes } from '@/lib/format'
+import { Sparkline } from '@/components/dashboard/Sparkline'
 
 function getColorForThreshold(percent: number): string {
   if (percent >= 80) return 'text-destructive'
   if (percent >= 60) return 'text-warning'
   return 'text-success'
+}
+
+type ContainerSortKey = 'cpu' | 'mem'
+type SortDir = 'desc' | 'asc'
+
+interface ContainerSparklineListProps {
+  containers: ContainerMetricHistory[]
+}
+
+function ContainerSparklineList({ containers }: ContainerSparklineListProps) {
+  const [sortKey, setSortKey] = useState<ContainerSortKey>('cpu')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
+
+  function handleSort(key: ContainerSortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))
+    } else {
+      setSortKey(key)
+      setSortDir('desc')
+    }
+  }
+
+  const sorted = useMemo(() => {
+    if (containers.length === 0) return []
+    return [...containers].sort((a, b) => {
+      const latest = (c: ContainerMetricHistory) => c.metrics[c.metrics.length - 1]
+      const la = latest(a)
+      const lb = latest(b)
+      const va = sortKey === 'cpu' ? (la?.cpuPercent ?? 0) : (la?.memPercent ?? 0)
+      const vb = sortKey === 'cpu' ? (lb?.cpuPercent ?? 0) : (lb?.memPercent ?? 0)
+      return sortDir === 'desc' ? vb - va : va - vb
+    })
+  }, [containers, sortKey, sortDir])
+
+  if (containers.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground py-4 text-center">
+        No live container metrics yet. Waiting for data...
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Sort controls */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <ArrowUpDown className="h-4 w-4 text-muted-foreground shrink-0" />
+        <span className="text-sm text-muted-foreground shrink-0">Sort:</span>
+        <div className="flex gap-1">
+          {(['cpu', 'mem'] as ContainerSortKey[]).map((key) => (
+            <Button
+              key={key}
+              variant={sortKey === key ? 'default' : 'ghost'}
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => handleSort(key)}
+              aria-pressed={sortKey === key}
+            >
+              {key === 'cpu' ? 'CPU%' : 'Mem%'}
+              {sortKey === key && (
+                <span className="ml-1 text-[10px]">{sortDir === 'desc' ? '↓' : '↑'}</span>
+              )}
+            </Button>
+          ))}
+        </div>
+        <span className="text-sm text-muted-foreground ml-auto">{containers.length} container{containers.length !== 1 ? 's' : ''}</span>
+      </div>
+
+      {/* Container rows */}
+      <div className="divide-y divide-border rounded-md border">
+        {sorted.map((container) => {
+          const latest = container.metrics[container.metrics.length - 1]
+          const cpuSeries = container.metrics.map((m) => m.cpuPercent)
+          const memSeries = container.metrics.map((m) => m.memPercent)
+          const cpuPct = latest?.cpuPercent ?? 0
+          const memPct = latest?.memPercent ?? 0
+          const memUsage = latest?.memUsage ?? 0
+
+          return (
+            <div
+              key={container.containerId}
+              className="flex items-center gap-3 px-3 py-2 text-sm"
+              data-testid="container-sparkline-row"
+            >
+              {/* Name */}
+              <span
+                className="truncate font-medium min-w-0 flex-1"
+                title={container.name}
+              >
+                {container.name}
+              </span>
+
+              {/* CPU sparkline + value */}
+              <div className="flex items-center gap-1.5 shrink-0 w-28">
+                <Sparkline
+                  series={cpuSeries}
+                  thresholdPercent={cpuPct}
+                  width={60}
+                  height={24}
+                />
+                <span className={`text-xs tabular-nums w-12 text-right ${getColorForThreshold(cpuPct)}`}>
+                  {cpuPct.toFixed(1)}%
+                </span>
+              </div>
+
+              {/* Mem sparkline + value */}
+              <div className="flex items-center gap-1.5 shrink-0 w-36">
+                <Sparkline
+                  series={memSeries}
+                  thresholdPercent={memPct}
+                  width={60}
+                  height={24}
+                />
+                <span className={`text-xs tabular-nums text-right ${getColorForThreshold(memPct)}`}>
+                  {formatBytes(memUsage)}
+                </span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 interface DashboardMetricsTabProps {
@@ -22,6 +149,7 @@ interface DashboardMetricsTabProps {
   totalContainers: number
   runningContainers: number
   directoryCount: number
+  containers: ContainerMetricHistory[]
 }
 
 export function DashboardMetricsTab({
@@ -34,6 +162,7 @@ export function DashboardMetricsTab({
   totalContainers,
   runningContainers,
   directoryCount,
+  containers,
 }: DashboardMetricsTabProps) {
   if (!stats) {
     return (
@@ -234,6 +363,17 @@ export function DashboardMetricsTab({
           </CardContent>
         </Card>
       </div>
+
+      {/* Per-container sparklines */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium">Container Metrics</CardTitle>
+          <Cpu className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          <ContainerSparklineList containers={containers} />
+        </CardContent>
+      </Card>
     </div>
   )
 }
