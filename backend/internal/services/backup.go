@@ -18,6 +18,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 )
 
 // ErrBackupBusy is returned by RunBackup/RunSync/RunRestore when another
@@ -728,8 +729,10 @@ func (s *BackupService) RunRestore(
 				fmt.Sprintf("restore target %q contains path traversal", targetDir),
 			)
 		}
-		// After cleaning, the path must be exactly the stack dir or sit beneath it.
-		if cleaned != stackDir && !strings.HasPrefix(cleaned, stackDir+string(filepath.Separator)) {
+		// Symlink-aware containment: a symlink inside the stack dir pointing
+		// elsewhere must not let `restic restore --target` write outside it (H1).
+		contained, err := pathutil.IsContained(stackDir, cleaned)
+		if err != nil || !contained {
 			return models.NewAppError(
 				http.StatusBadRequest,
 				models.ErrPathTraversal,

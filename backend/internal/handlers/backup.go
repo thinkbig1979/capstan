@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -13,6 +14,11 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
+
+// validSnapshotIDRegex matches restic snapshot identifiers: a short or full hex
+// ID, or the literal "latest". Used to reject malformed/flag-like values before
+// they reach `restic ls` (M5).
+var validSnapshotIDRegex = regexp.MustCompile(`^([0-9a-fA-F]{8,64}|latest)$`)
 
 // BackupHandler serves all /api/settings/backup and /api/backups/* REST
 // endpoints. WebSocket streaming routes (/ws/backups/*) are wired separately
@@ -487,6 +493,15 @@ func (h *BackupHandler) listSnapshots(c *gin.Context) {
 
 func (h *BackupHandler) previewSnapshot(c *gin.Context) {
 	snapshotID := c.Param("snapshotId")
+
+	if !validSnapshotIDRegex.MatchString(snapshotID) {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid snapshot ID",
+		))
+		return
+	}
 
 	av := h.svc.Available()
 	if !av.ResticPresent {
