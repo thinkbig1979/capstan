@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { settingsApi, directoryConfigApi } from '@/lib/api'
+import { TableSearch } from '@/components/ui/table-search'
+import { useTextFilter } from '@/hooks/useTextFilter'
 import { toast } from 'sonner'
 import {
   Select,
@@ -13,6 +15,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+
+// Directories are plain strings; match against the full path and the basename.
+const DIR_SEARCH_FIELDS = [
+  (dir: string) => dir,
+  (dir: string) => dir.split('/').filter(Boolean).pop() ?? dir,
+]
 
 export function DirectoriesSettingsContent() {
   const { data: config, isLoading } = useQuery({
@@ -52,11 +60,13 @@ export function DirectoriesSettingsContent() {
     }
   }, [scanDepthData, depthInitialized])
 
+  const allDirs = useMemo(() => config?.stacksDirectories ?? [], [config])
+  const { query, setQuery, filtered: filteredDirs } = useTextFilter(allDirs, DIR_SEARCH_FIELDS)
+
   if (isLoading || isLoadingDepth) {
     return <div className="py-4"><LoadingSpinner /></div>
   }
 
-  const allDirs = config?.stacksDirectories || []
   const effectiveDefault = initialized ? defaultDir : (config?.stacksDir || '')
   const effectiveDepth = depthInitialized ? scanDepth : String(scanDepthData?.scanDepth || 1)
 
@@ -72,23 +82,40 @@ export function DirectoriesSettingsContent() {
   return (
     <div className="space-y-6">
       <div className="space-y-4">
-        <h3 className="text-lg font-medium">Monitored Directories</h3>
+        <div className="flex items-center gap-3">
+          <h3 className="text-lg font-medium">Monitored Directories</h3>
+          {allDirs.length > 1 && (
+            <TableSearch
+              value={query}
+              onChange={setQuery}
+              placeholder="Filter directories…"
+              className="w-full sm:w-56"
+            />
+          )}
+        </div>
         {allDirs.length > 0 ? (
-          <div className="space-y-2">
-            {allDirs.map((dir: string, index: number) => (
-              <div key={dir} className="flex items-center gap-3 p-3 rounded-md border bg-muted/30">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium truncate">{dir.split('/').filter(Boolean).pop() || dir}</span>
-                    {index === 0 && (
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Default</Badge>
-                    )}
+          filteredDirs.length > 0 ? (
+            <div className="space-y-2">
+              {filteredDirs.map((dir: string) => {
+                const isDefault = dir === allDirs[0]
+                return (
+                  <div key={dir} className="flex items-center gap-3 p-3 rounded-md border bg-muted/30">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium truncate">{dir.split('/').filter(Boolean).pop() || dir}</span>
+                        {isDefault && (
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Default</Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground truncate">{dir}</p>
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground truncate">{dir}</p>
-                </div>
-              </div>
-            ))}
-          </div>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No directories match &quot;{query}&quot;.</p>
+          )
         ) : (
           <p className="text-sm text-muted-foreground">No directories configured</p>
         )}

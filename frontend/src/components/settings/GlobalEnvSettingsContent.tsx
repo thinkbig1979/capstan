@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { TableSearch } from '@/components/ui/table-search'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useTextFilter } from '@/hooks/useTextFilter'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { Badge } from '@/components/ui/badge'
 import { Eye, EyeOff, Plus, Save, Trash2 } from 'lucide-react'
@@ -14,6 +16,15 @@ import { useAuth } from '@/hooks/useAuth'
 import { toast } from 'sonner'
 
 type EnvVar = { key: string; value: string }
+
+// Indexed wrapper so the text-filter result can carry the original vars[] index,
+// ensuring handleChange / handleDelete / toggleVisible always target the right entry.
+type IndexedEnvVar = EnvVar & { _originalIndex: number }
+
+const ENV_SEARCH_FIELDS = [
+  (e: IndexedEnvVar) => e.key,
+  (e: IndexedEnvVar) => e.value,
+]
 
 const SENSITIVE_PATTERNS = ['_KEY', '_SECRET', '_PASSWORD', '_TOKEN', '_API_']
 
@@ -52,6 +63,13 @@ export function GlobalEnvSettingsContent() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setVisible({})
   }, [unlockedUntil])
+
+  // Wrap vars with their original index so filtered results can route edits correctly.
+  const indexedVars = useMemo<IndexedEnvVar[]>(
+    () => vars.map((v, i) => ({ ...v, _originalIndex: i })),
+    [vars],
+  )
+  const { query, setQuery, filtered } = useTextFilter(indexedVars, ENV_SEARCH_FIELDS)
 
   const handleChange = (index: number, field: keyof EnvVar, value: string) => {
     setVars((prev) => {
@@ -151,6 +169,15 @@ export function GlobalEnvSettingsContent() {
         onUnlocked={handleUnlocked}
       />
 
+      {vars.length > 0 && (
+        <TableSearch
+          value={query}
+          onChange={setQuery}
+          placeholder="Filter by key or value…"
+          className="w-full sm:w-64"
+        />
+      )}
+
       <div className="hidden md:block rounded-md border">
         <Table>
           <TableHeader>
@@ -167,8 +194,15 @@ export function GlobalEnvSettingsContent() {
                   No global variables yet. Add one to get started.
                 </TableCell>
               </TableRow>
+            ) : filtered.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={3} className="text-center text-sm text-muted-foreground py-6">
+                  No variables match &quot;{query}&quot;.
+                </TableCell>
+              </TableRow>
             ) : (
-              vars.map((entry, index) => {
+              filtered.map((entry) => {
+                const index = entry._originalIndex
                 const sensitive = isSensitiveKey(entry.key)
                 const reveal = !!visible[index]
                 return (
@@ -229,8 +263,13 @@ export function GlobalEnvSettingsContent() {
           <div className="rounded-md border p-4 text-center text-sm text-muted-foreground">
             No global variables yet. Add one to get started.
           </div>
+        ) : filtered.length === 0 ? (
+          <div className="rounded-md border p-4 text-center text-sm text-muted-foreground">
+            No variables match &quot;{query}&quot;.
+          </div>
         ) : (
-          vars.map((entry, index) => {
+          filtered.map((entry) => {
+            const index = entry._originalIndex
             const sensitive = isSensitiveKey(entry.key)
             const reveal = !!visible[index]
             return (

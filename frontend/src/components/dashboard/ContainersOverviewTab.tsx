@@ -40,7 +40,14 @@ import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/components/ConfirmDialog'
 import { useAutoUpdatePolicies } from '@/hooks/useResources'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
+import { useTextFilter } from '@/hooks/useTextFilter'
 import { formatBytes } from '@/lib/format'
+
+const CONTAINER_SEARCH_FIELDS = [
+  (c: DashboardContainerInfo) => c.name,
+  (c: DashboardContainerInfo) => c.projectName,
+  (c: DashboardContainerInfo) => c.image,
+]
 
 function getMetricColor(percent: number): string {
   if (percent >= 80) return 'bg-destructive'
@@ -609,11 +616,13 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
     if (confirmed) deleteContainerMutation.mutate({ id: containerId, isRunning })
   }
 
+  const allContainers = stats?.containers ?? []
+  const { query, setQuery, filtered } = useTextFilter(allContainers, CONTAINER_SEARCH_FIELDS)
+
   const { stackContainers, otherContainers } = useMemo(() => {
-    if (!stats?.containers) return { stackContainers: [], otherContainers: [] }
     const stackContainers: DashboardContainerInfo[] = []
     const otherContainers: DashboardContainerInfo[] = []
-    for (const c of stats.containers) {
+    for (const c of filtered) {
       if (isStandaloneContainer(c)) {
         otherContainers.push(c)
       } else {
@@ -621,7 +630,7 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
       }
     }
     return { stackContainers, otherContainers }
-  }, [stats])
+  }, [filtered])
 
   if (!stats) {
     return (
@@ -633,7 +642,8 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
     )
   }
 
-  const totalCount = (stats.containers?.length || 0)
+  const totalCount = stats.containers?.length || 0
+  const filteredCount = filtered.length
 
   return (
     <div className="space-y-4">
@@ -646,6 +656,9 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
         ]}
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
+        searchValue={query}
+        onSearchChange={setQuery}
+        searchPlaceholder="Filter containers…"
         actions={
           <PruneButton
             resourceType="stopped container"
@@ -656,7 +669,11 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
             invalidateKeys={[['dashboard-stats'], ['stacks']]}
           />
         }
-        countDisplay={`${totalCount} container${totalCount !== 1 ? 's' : ''}`}
+        countDisplay={
+          query
+            ? `${filteredCount} of ${totalCount} container${totalCount !== 1 ? 's' : ''}`
+            : `${totalCount} container${totalCount !== 1 ? 's' : ''}`
+        }
       />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>

@@ -14,6 +14,12 @@ import {
   type TreeNode,
 } from '@/lib/stack-tree'
 import type { Stack } from '@/types'
+import { useTextFilter } from '@/hooks/useTextFilter'
+
+const STACK_SEARCH_FIELDS = [
+  (s: Stack) => s.projectName,
+  (s: Stack) => s.status,
+]
 
 type SortOption = 'name' | 'status'
 type StatusFilter = 'all' | 'running' | 'stopped' | 'error'
@@ -63,9 +69,11 @@ export function StacksTab({
 }: StacksTabProps) {
   const navigate = useNavigate()
 
+  const { query, setQuery, filtered: textFilteredStacks } = useTextFilter(filteredStacks, STACK_SEARCH_FIELDS)
+
   const tree = useMemo(
-    () => buildDirectoryTree(filteredStacks, configuredDirs),
-    [filteredStacks, configuredDirs],
+    () => buildDirectoryTree(textFilteredStacks, configuredDirs),
+    [textFilteredStacks, configuredDirs],
   )
 
   const renderTreeNodes = (nodes: TreeNode[], depth: number): React.ReactNode[] => {
@@ -165,13 +173,20 @@ export function StacksTab({
         ]}
         filterValue={statusFilter}
         onFilterChange={(key) => onFilterChange(key as StatusFilter)}
+        searchValue={query}
+        onSearchChange={setQuery}
+        searchPlaceholder="Filter stacks…"
         countDisplay={
-          <>
-            <span className="font-medium">{filteredStacks.length}</span> of <span className="font-medium">{stacks.length}</span>
-          </>
+          query
+            ? `${textFilteredStacks.length} of ${stacks.length} stacks`
+            : (
+              <>
+                <span className="font-medium">{filteredStacks.length}</span> of <span className="font-medium">{stacks.length}</span>
+              </>
+            )
         }
       />
-      {filteredStacks.length > 0 ? (
+      {textFilteredStacks.length > 0 ? (
         <div className="rounded-md border">
           <Table>
             <TableHeader>
@@ -187,7 +202,7 @@ export function StacksTab({
               {hasGroups ? (
                 renderTreeNodes(tree, 0)
               ) : (
-                filteredStacks.map((stack) => (
+                textFilteredStacks.map((stack) => (
                   <TableRow
                     key={stack.id}
                     className="cursor-pointer"
@@ -262,9 +277,13 @@ export function StacksTab({
           <CardContent className="pt-6">
             <div className="text-center space-y-4">
               <p className="text-muted-foreground">
-                {statusFilter === 'all' ? 'No stacks configured yet' : `No ${statusFilter} stacks found`}
+                {query
+                  ? `No stacks match "${query}"`
+                  : statusFilter === 'all'
+                    ? 'No stacks configured yet'
+                    : `No ${statusFilter} stacks found`}
               </p>
-              {statusFilter === 'all' && (
+              {statusFilter === 'all' && !query && (
                 <Button onClick={onCreateStack}>
                   <Plus className="mr-2 h-4 w-4" />
                   Create Your First Stack

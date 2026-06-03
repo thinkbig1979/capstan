@@ -1,5 +1,6 @@
 import { ArrowUpDown, ChevronsUpDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { TableSearch } from '@/components/ui/table-search'
 
 export interface SortOption {
   key: string
@@ -20,6 +21,10 @@ interface SortFilterBarProps {
   onFilterChange?: (key: string) => void
   actions?: React.ReactNode
   countDisplay: React.ReactNode
+  /** When provided, renders a leading text-filter input. */
+  searchValue?: string
+  onSearchChange?: (value: string) => void
+  searchPlaceholder?: string
 }
 
 export function SortFilterBar({
@@ -31,9 +36,20 @@ export function SortFilterBar({
   onFilterChange,
   actions,
   countDisplay,
+  searchValue,
+  onSearchChange,
+  searchPlaceholder,
 }: SortFilterBarProps) {
   return (
     <div className="flex items-center gap-2 flex-wrap">
+      {onSearchChange && (
+        <TableSearch
+          value={searchValue ?? ''}
+          onChange={onSearchChange}
+          placeholder={searchPlaceholder ?? 'Filter…'}
+          className="w-full sm:w-56"
+        />
+      )}
       <ArrowUpDown className="h-4 w-4 text-muted-foreground shrink-0" />
       <span className="text-sm text-muted-foreground shrink-0">Sort:</span>
       <div className="flex gap-1">

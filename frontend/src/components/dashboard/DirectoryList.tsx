@@ -3,6 +3,14 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { NoDirectories } from '@/components/EmptyState'
 import { StackCardSkeleton } from '@/components/LoadingSkeleton'
+import { useTextFilter } from '@/hooks/useTextFilter'
+import { TableSearch } from '@/components/ui/table-search'
+import type { ConfiguredDir } from '@/types'
+
+const DIRECTORY_SEARCH_FIELDS = [
+  (d: ConfiguredDir) => d.name,
+  (d: ConfiguredDir) => d.path,
+]
 
 export function DirectoryList() {
   const { data: directories = [], isLoading, refetch } = useQuery({
@@ -14,7 +22,9 @@ export function DirectoryList() {
     staleTime: 30_000,
   })
 
-  const directoriesList = Array.isArray(directories) ? directories : []
+  const directoriesList: ConfiguredDir[] = Array.isArray(directories) ? directories : []
+
+  const { query, setQuery, filtered } = useTextFilter(directoriesList, DIRECTORY_SEARCH_FIELDS)
 
   if (isLoading) {
     return (
@@ -31,8 +41,20 @@ export function DirectoryList() {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-4">
-      {directoriesList.map((dir) => (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <TableSearch
+          value={query}
+          onChange={setQuery}
+          placeholder="Filter directories…"
+          className="w-full sm:w-56"
+        />
+        {query && filtered.length === 0 && (
+          <span className="text-sm text-muted-foreground">No directories match.</span>
+        )}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-4">
+      {filtered.map((dir) => (
         <Card key={dir.path} className="hover:shadow-md transition-shadow">
           <CardContent className="p-4">
             <div className="flex items-start justify-between mb-3">
@@ -93,6 +115,7 @@ export function DirectoryList() {
           </CardContent>
         </Card>
       ))}
+      </div>
     </div>
   )
 }

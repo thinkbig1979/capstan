@@ -29,6 +29,24 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { BackupSnapshot, BackupRun } from '@/types'
+import { useTextFilter } from '@/hooks/useTextFilter'
+import { TableSearch } from '@/components/ui/table-search'
+
+const SNAPSHOT_SEARCH_FIELDS = [
+  (s: BackupSnapshot) => s.shortId,
+  (s: BackupSnapshot) => s.id,
+  (s: BackupSnapshot) => s.time,
+  (s: BackupSnapshot) => s.tags.join(' '),
+  (s: BackupSnapshot) => s.paths.join(' '),
+]
+
+const RUN_SEARCH_FIELDS = [
+  (r: BackupRun) => r.id,
+  (r: BackupRun) => r.startedAt,
+  (r: BackupRun) => r.kind,
+  (r: BackupRun) => r.trigger,
+  (r: BackupRun) => r.status,
+]
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -294,6 +312,12 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
   // Streaming output for restore progress
   const stream = useBackupStreaming()
 
+  // Text filters
+  const { query: snapshotQuery, setQuery: setSnapshotQuery, filtered: filteredSnapshots } =
+    useTextFilter(snapshots ?? [], SNAPSHOT_SEARCH_FIELDS)
+  const { query: runQuery, setQuery: setRunQuery, filtered: filteredRuns } =
+    useTextFilter(runs, RUN_SEARCH_FIELDS)
+
   // Confirm dialog state
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pendingSnapshot, setPendingSnapshot] = useState<BackupSnapshot | null>(null)
@@ -400,29 +424,42 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
         )}
 
         {snapshots && snapshots.length > 0 && (
-          <div className="rounded-lg border overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50">
-                  <th className="py-2 px-4 text-left font-medium text-muted-foreground">ID</th>
-                  <th className="py-2 px-4 text-left font-medium text-muted-foreground">Time</th>
-                  <th className="py-2 px-4 text-left font-medium text-muted-foreground">Tags</th>
-                  <th className="py-2 px-4 text-left font-medium text-muted-foreground">Size</th>
-                  <th className="py-2 px-4 text-right font-medium text-muted-foreground">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {snapshots.map((snapshot) => (
-                  <SnapshotRow
-                    key={snapshot.id}
-                    snapshot={snapshot}
-                    onRestore={handleRestoreRequest}
-                    isRestoring={isRestoring}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="mb-3 flex items-center gap-3">
+              <TableSearch
+                value={snapshotQuery}
+                onChange={setSnapshotQuery}
+                placeholder="Filter snapshots…"
+                className="w-full sm:w-56"
+              />
+              {snapshotQuery && filteredSnapshots.length === 0 && (
+                <span className="text-sm text-muted-foreground">No snapshots match.</span>
+              )}
+            </div>
+            <div className="rounded-lg border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">ID</th>
+                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">Time</th>
+                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">Tags</th>
+                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">Size</th>
+                    <th className="py-2 px-4 text-right font-medium text-muted-foreground">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSnapshots.map((snapshot) => (
+                    <SnapshotRow
+                      key={snapshot.id}
+                      snapshot={snapshot}
+                      onRestore={handleRestoreRequest}
+                      isRestoring={isRestoring}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
 
         {/* Restore streaming output */}
@@ -456,42 +493,55 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
         )}
 
         {runs.length > 0 && (
-          <div className="rounded-lg border overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50">
-                  <th className="py-2 px-4 text-left font-medium text-muted-foreground">Started</th>
-                  <th className="py-2 px-4 text-left font-medium text-muted-foreground">Kind</th>
-                  <th className="py-2 px-4 text-left font-medium text-muted-foreground">Trigger</th>
-                  <th className="py-2 px-4 text-left font-medium text-muted-foreground">Status</th>
-                  <th className="py-2 px-4 text-left font-medium text-muted-foreground">
-                    <span title="New data written to the repository. restic deduplicates, so an unchanged backup adds little or nothing.">New data</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((run) => (
-                  <tr key={run.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                    <td className="py-3 px-4 text-muted-foreground">{formatDate(run.startedAt)}</td>
-                    <td className="py-3 px-4 capitalize">{run.kind}</td>
-                    <td className="py-3 px-4 capitalize text-muted-foreground">{run.trigger}</td>
-                    <td className="py-3 px-4">
-                      <RunStatusBadge status={run.status} />
-                    </td>
-                    <td className="py-3 px-4 text-muted-foreground">
-                      {run.bytesAdded == null ? (
-                        <span title="Not recorded">—</span>
-                      ) : run.bytesAdded === 0 ? (
-                        'No change'
-                      ) : (
-                        formatBytes(run.bytesAdded)
-                      )}
-                    </td>
+          <>
+            <div className="mb-3 flex items-center gap-3">
+              <TableSearch
+                value={runQuery}
+                onChange={setRunQuery}
+                placeholder="Filter runs…"
+                className="w-full sm:w-56"
+              />
+              {runQuery && filteredRuns.length === 0 && (
+                <span className="text-sm text-muted-foreground">No runs match.</span>
+              )}
+            </div>
+            <div className="rounded-lg border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">Started</th>
+                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">Kind</th>
+                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">Trigger</th>
+                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">Status</th>
+                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">
+                      <span title="New data written to the repository. restic deduplicates, so an unchanged backup adds little or nothing.">New data</span>
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {filteredRuns.map((run) => (
+                    <tr key={run.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                      <td className="py-3 px-4 text-muted-foreground">{formatDate(run.startedAt)}</td>
+                      <td className="py-3 px-4 capitalize">{run.kind}</td>
+                      <td className="py-3 px-4 capitalize text-muted-foreground">{run.trigger}</td>
+                      <td className="py-3 px-4">
+                        <RunStatusBadge status={run.status} />
+                      </td>
+                      <td className="py-3 px-4 text-muted-foreground">
+                        {run.bytesAdded == null ? (
+                          <span title="Not recorded">—</span>
+                        ) : run.bytesAdded === 0 ? (
+                          'No change'
+                        ) : (
+                          formatBytes(run.bytesAdded)
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
 

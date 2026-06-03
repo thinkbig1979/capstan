@@ -14,12 +14,19 @@ import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { TablePagination, usePagination } from '@/components/dashboard/TablePagination'
 import { useConfirm } from '@/components/ConfirmDialog'
+import { useTextFilter } from '@/hooks/useTextFilter'
 import type { DockerVolume } from '@/types'
 import { formatBytes } from '@/lib/format'
 
 const PAGE_SIZE = 50
 
 type SortKey = 'name' | 'driver' | 'size' | 'stack'
+
+const VOL_SEARCH_FIELDS = [
+  (v: DockerVolume) => v.name,
+  (v: DockerVolume) => v.driver,
+  (v: DockerVolume) => v.stack,
+]
 
 export function VolumesTab() {
   const { confirm, ConfirmComponent } = useConfirm()
@@ -28,6 +35,8 @@ export function VolumesTab() {
   const [deletingName, setDeletingName] = useState<string | null>(null)
 
   const deleteMutation = useDeleteVolume()
+
+  const { query, setQuery, filtered } = useTextFilter(volumes ?? [], VOL_SEARCH_FIELDS)
 
   const handleDelete = async (vol: DockerVolume) => {
     const confirmed = await confirm(
@@ -45,8 +54,7 @@ export function VolumesTab() {
   }
 
   const sortedVolumes = useMemo(() => {
-    if (!volumes) return []
-    const sorted = [...volumes]
+    const sorted = [...filtered]
     switch (sortBy) {
       case 'name':
         return sorted.sort((a, b) => a.name.localeCompare(b.name))
@@ -59,7 +67,7 @@ export function VolumesTab() {
       default:
         return sorted
     }
-  }, [volumes, sortBy])
+  }, [filtered, sortBy])
 
   const { page, setPage, totalPages, pageItems } = usePagination(sortedVolumes, PAGE_SIZE)
 
@@ -94,6 +102,9 @@ export function VolumesTab() {
         ]}
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
+        searchValue={query}
+        onSearchChange={setQuery}
+        searchPlaceholder="Filter volumes…"
         actions={
           <PruneButton
             resourceType="volume"
@@ -104,7 +115,11 @@ export function VolumesTab() {
             invalidateKeys={[['resources', 'volumes'], ['dashboard-stats']]}
           />
         }
-        countDisplay={`${volumes.length} volumes`}
+        countDisplay={
+          query
+            ? `${sortedVolumes.length} of ${volumes.length} volumes`
+            : `${volumes.length} volumes`
+        }
       />
 
       <div className="rounded-md border">

@@ -14,6 +14,7 @@ import { RefreshCw, Download, ArrowUpDown, Settings } from 'lucide-react'
 import { toast } from 'sonner'
 import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { useTextFilter } from '@/hooks/useTextFilter'
 import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
@@ -29,6 +30,12 @@ type UpdateItem = ContainerUpdateInfo | CachedUpdate
 function isCachedUpdate(item: UpdateItem): item is CachedUpdate {
   return 'localDigest' in item && 'remoteDigest' in item
 }
+
+const UPDATE_SEARCH_FIELDS = [
+  (u: UpdateItem) => u.containerName,
+  (u: UpdateItem) => u.imageRef,
+  (u: UpdateItem) => u.projectName,
+]
 
 export function UpdatesTab() {
   const { data: updateData, isLoading, isError } = useCheckUpdates()
@@ -48,6 +55,8 @@ export function UpdatesTab() {
   const updates = useMemo(() => updateData?.updates ?? [], [updateData?.updates])
   const fromCache = updateData?.fromCache ?? false
   const scannedAt = updateData?.scannedAt
+
+  const { query, setQuery, filtered: filteredUpdates } = useTextFilter(updates, UPDATE_SEARCH_FIELDS)
 
   const policies = useMemo(() => {
     const map = new Map<string, AutoUpdatePolicy>()
@@ -91,8 +100,8 @@ export function UpdatesTab() {
   }
 
   const sortedUpdates = useMemo(() => {
-    if (!updates.length) return updates
-    const sorted = [...updates]
+    if (!filteredUpdates.length) return filteredUpdates
+    const sorted = [...filteredUpdates]
     switch (sortBy) {
       case 'name':
         return sorted.sort((a, b) => a.containerName.localeCompare(b.containerName))
@@ -105,7 +114,7 @@ export function UpdatesTab() {
       default:
         return sorted
     }
-  }, [updates, sortBy])
+  }, [filteredUpdates, sortBy])
 
   const hasData = updates.length > 0
   const isRefreshing = isScanning
@@ -219,6 +228,9 @@ export function UpdatesTab() {
           ]}
           sortValue={sortBy}
           onSortChange={(key) => setSortBy(key as SortKey)}
+          searchValue={query}
+          onSearchChange={setQuery}
+          searchPlaceholder="Filter updates…"
           actions={
             <div className="flex items-center gap-2">
               {scannedAt && (
@@ -242,7 +254,11 @@ export function UpdatesTab() {
               </Button>
             </div>
           }
-          countDisplay={`${updates!.length} update${updates!.length !== 1 ? 's' : ''} available`}
+          countDisplay={
+            query
+              ? `${sortedUpdates.length} of ${updates.length} update${updates.length !== 1 ? 's' : ''} available`
+              : `${updates.length} update${updates.length !== 1 ? 's' : ''} available`
+          }
         />
 
         <div className="rounded-md border">

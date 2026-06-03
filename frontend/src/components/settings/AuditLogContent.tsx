@@ -4,6 +4,7 @@ import { settingsApi } from '@/lib/api'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { TableSearch } from '@/components/ui/table-search'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
@@ -119,13 +120,11 @@ export function AuditLogContent() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex-1 min-w-[180px] space-y-1">
-          <label htmlFor="audit-search" className="text-xs text-muted-foreground">Search</label>
-          <Input
-            id="audit-search"
-            type="search"
-            placeholder="Search detail or action"
+          <label className="text-xs text-muted-foreground">Search</label>
+          <TableSearch
             value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
+            onChange={setSearchInput}
+            placeholder="Search detail or action"
             className="h-9"
           />
         </div>

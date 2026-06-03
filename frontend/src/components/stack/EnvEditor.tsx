@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
@@ -15,6 +15,18 @@ import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { EnvUnlockStatus } from '@/components/EnvUnlockStatus'
 import { useAuth } from '@/hooks/useAuth'
 import { useActionMutation } from '@/hooks/useActionMutation'
+import { useTextFilter } from '@/hooks/useTextFilter'
+import { TableSearch } from '@/components/ui/table-search'
+
+/** Entries tagged with their original index so filter never shifts edit targets. */
+interface IndexedEnvEntry extends EnvEntry {
+  _originalIndex: number
+}
+
+const ENV_SEARCH_FIELDS = [
+  (e: IndexedEnvEntry) => e.key,
+  (e: IndexedEnvEntry) => e.value,
+]
 
 interface EnvEditorProps {
   stackId: string
@@ -35,6 +47,19 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const [unlockDialogOpen, setUnlockDialogOpen] = useState(false)
   const [pendingRevealIndex, setPendingRevealIndex] = useState<number | null>(null)
   const MAX_HISTORY = 50
+
+  // ── Search filter (table view only) ────────────────────────────────────────
+  // Entries are tagged with their original index so that all edit/delete/toggle
+  // handlers still target `entries[originalIndex]` regardless of filter order.
+  const indexedEntries = useMemo<IndexedEnvEntry[]>(
+    () => entries.map((e, i) => ({ ...e, _originalIndex: i })),
+    [entries],
+  )
+  const {
+    query: envQuery,
+    setQuery: setEnvQuery,
+    filtered: filteredIndexed,
+  } = useTextFilter(indexedEntries, ENV_SEARCH_FIELDS)
 
   const pushToHistory = useCallback(
     (newEntries: EnvEntry[], newRaw: string) => {
@@ -366,6 +391,17 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
 
       {view === 'table' && (
         <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <TableSearch
+              value={envQuery}
+              onChange={setEnvQuery}
+              placeholder="Filter env vars…"
+              className="w-full sm:w-56"
+            />
+            {envQuery && filteredIndexed.length === 0 && (
+              <span className="text-sm text-muted-foreground">No matches.</span>
+            )}
+          </div>
           <div className="hidden md:block rounded-md border">
             <Table>
               <TableHeader>
@@ -377,15 +413,17 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {entries.map((entry, index) => (
-                  <TableRow key={entry.key || `entry-${index}`}>
+                {filteredIndexed.map((entry) => {
+                  const i = entry._originalIndex
+                  return (
+                  <TableRow key={entry.key || `entry-${i}`}>
                     <TableCell>
                       <Input
                         value={entry.key}
-                        onChange={(e) => handleEntryChange(index, 'key', e.target.value)}
+                        onChange={(e) => handleEntryChange(i, 'key', e.target.value)}
                         placeholder="KEY"
                         disabled={entry.comment}
-                        aria-label={`Environment variable key ${index + 1}`}
+                        aria-label={`Environment variable key ${i + 1}`}
                       />
                     </TableCell>
                     <TableCell>
@@ -396,15 +434,15 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
                           <Input
                             type={entry.sensitive ? 'password' : 'text'}
                             value={entry.value}
-                            onChange={(e) => handleEntryChange(index, 'value', e.target.value)}
+                            onChange={(e) => handleEntryChange(i, 'value', e.target.value)}
                             placeholder="value"
-                            aria-label={`Environment variable value ${index + 1}`}
+                            aria-label={`Environment variable value ${i + 1}`}
                           />
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => toggleVisibility(index)}
-                            aria-label={`Toggle visibility for entry ${index + 1}`}
+                            onClick={() => toggleVisibility(i)}
+                            aria-label={`Toggle visibility for entry ${i + 1}`}
                           >
                             {entry.sensitive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                           </Button>
@@ -412,9 +450,9 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
                       ) : (
                         <Input
                           value={entry.value}
-                          onChange={(e) => handleEntryChange(index, 'value', e.target.value)}
+                          onChange={(e) => handleEntryChange(i, 'value', e.target.value)}
                           placeholder="value"
-                          aria-label={`Environment variable value ${index + 1}`}
+                          aria-label={`Environment variable value ${i + 1}`}
                         />
                       )}
                     </TableCell>
@@ -425,10 +463,10 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
                         <input
                           type="checkbox"
                           checked={!entry.sensitive}
-                          onChange={(e) => handleEntryChange(index, 'sensitive', !e.target.checked)}
+                          onChange={(e) => handleEntryChange(i, 'sensitive', !e.target.checked)}
                           disabled={isSensitiveKey(entry.key)}
                           className="h-4 w-4"
-                          aria-label={`Toggle visibility for entry ${index + 1}`}
+                          aria-label={`Toggle visibility for entry ${i + 1}`}
                         />
                       )}
                     </TableCell>
@@ -436,28 +474,31 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => handleDeleteEntry(index)}
-                        aria-label={`Delete entry ${index + 1}`}
+                        onClick={() => handleDeleteEntry(i)}
+                        aria-label={`Delete entry ${i + 1}`}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
               </TableBody>
             </Table>
           </div>
 
           <div className="md:hidden space-y-3">
-            {entries.map((entry, index) => (
-              <div key={entry.key || `entry-${index}`} className="rounded-lg border p-4 space-y-3">
+            {filteredIndexed.map((entry) => {
+              const i = entry._originalIndex
+              return (
+              <div key={entry.key || `entry-${i}`} className="rounded-lg border p-4 space-y-3">
                 <div>
                   <Input
                     value={entry.key}
-                    onChange={(e) => handleEntryChange(index, 'key', e.target.value)}
+                    onChange={(e) => handleEntryChange(i, 'key', e.target.value)}
                     placeholder="KEY"
                     disabled={entry.comment}
-                    aria-label={`Environment variable key ${index + 1}`}
+                    aria-label={`Environment variable key ${i + 1}`}
                   />
                 </div>
                 <div>
@@ -468,17 +509,17 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
                       <Input
                         type={entry.sensitive ? 'password' : 'text'}
                         value={entry.value}
-                        onChange={(e) => handleEntryChange(index, 'value', e.target.value)}
+                        onChange={(e) => handleEntryChange(i, 'value', e.target.value)}
                         placeholder="value"
                         className="flex-1"
-                        aria-label={`Environment variable value ${index + 1}`}
+                        aria-label={`Environment variable value ${i + 1}`}
                       />
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => toggleVisibility(index)}
+                        onClick={() => toggleVisibility(i)}
                         className="min-h-[44px] min-w-[44px]"
-                        aria-label={`Toggle visibility for entry ${index + 1}`}
+                        aria-label={`Toggle visibility for entry ${i + 1}`}
                       >
                         {entry.sensitive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </Button>
@@ -486,9 +527,9 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
                   ) : (
                     <Input
                       value={entry.value}
-                      onChange={(e) => handleEntryChange(index, 'value', e.target.value)}
+                      onChange={(e) => handleEntryChange(i, 'value', e.target.value)}
                       placeholder="value"
-                      aria-label={`Environment variable value ${index + 1}`}
+                      aria-label={`Environment variable value ${i + 1}`}
                     />
                   )}
                 </div>
@@ -498,26 +539,27 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
                       <input
                         type="checkbox"
                         checked={!entry.sensitive}
-                        onChange={(e) => handleEntryChange(index, 'sensitive', !e.target.checked)}
+                        onChange={(e) => handleEntryChange(i, 'sensitive', !e.target.checked)}
                         disabled={isSensitiveKey(entry.key)}
                         className="h-4 w-4"
-                        aria-label={`Toggle visibility for entry ${index + 1}`}
+                        aria-label={`Toggle visibility for entry ${i + 1}`}
                       />
                       <span className="text-sm">Visible</span>
                     </div>
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => handleDeleteEntry(index)}
+                      onClick={() => handleDeleteEntry(i)}
                       className="min-h-[44px] min-w-[44px]"
-                      aria-label={`Delete entry ${index + 1}`}
+                      aria-label={`Delete entry ${i + 1}`}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
                 )}
               </div>
-            ))}
+              )
+            })}
           </div>
 
           <div className="flex justify-between">

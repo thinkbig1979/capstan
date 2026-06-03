@@ -14,9 +14,17 @@ import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { CreateNetworkDialog } from '@/components/dashboard/CreateNetworkDialog'
 import { useConfirm } from '@/components/ConfirmDialog'
+import { useTextFilter } from '@/hooks/useTextFilter'
 import type { DockerNetwork } from '@/types'
 
 type SortKey = 'name' | 'driver' | 'scope' | 'stack' | 'containers'
+
+const NET_SEARCH_FIELDS = [
+  (n: DockerNetwork) => n.name,
+  (n: DockerNetwork) => n.driver,
+  (n: DockerNetwork) => n.scope,
+  (n: DockerNetwork) => n.stack,
+]
 
 // Docker's predefined networks cannot be removed, and a network with attached endpoints fails
 // removal until those containers are gone. Returns the reason delete is unavailable, or null.
@@ -38,6 +46,8 @@ export function NetworksTab() {
 
   const deleteMutation = useDeleteNetwork()
 
+  const { query, setQuery, filtered } = useTextFilter(networks ?? [], NET_SEARCH_FIELDS)
+
   const handleDelete = async (net: DockerNetwork) => {
     const confirmed = await confirm(
       `Remove Network "${net.name}"?`,
@@ -51,8 +61,7 @@ export function NetworksTab() {
   }
 
   const sortedNetworks = useMemo(() => {
-    if (!networks) return []
-    const sorted = [...networks]
+    const sorted = [...filtered]
     switch (sortBy) {
       case 'name':
         return sorted.sort((a, b) => a.name.localeCompare(b.name))
@@ -67,7 +76,7 @@ export function NetworksTab() {
       default:
         return sorted
     }
-  }, [networks, sortBy])
+  }, [filtered, sortBy])
 
   if (isLoading) {
     return (
@@ -110,6 +119,9 @@ export function NetworksTab() {
         ]}
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
+        searchValue={query}
+        onSearchChange={setQuery}
+        searchPlaceholder="Filter networks…"
         actions={
           <>
             <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -126,7 +138,11 @@ export function NetworksTab() {
             />
           </>
         }
-        countDisplay={`${networks.length} networks`}
+        countDisplay={
+          query
+            ? `${sortedNetworks.length} of ${networks.length} networks`
+            : `${networks.length} networks`
+        }
       />
 
       <div className="rounded-md border">

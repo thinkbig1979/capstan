@@ -11,6 +11,7 @@ import {
   GitPullRequest,
 } from 'lucide-react'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { TableSearch } from '@/components/ui/table-search'
 import type { ConfiguredDir } from '@/types'
 
 interface Stack {
@@ -192,6 +193,41 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
       }))
   }, [directories, configuredDirs])
 
+  // ── Text filter ─────────────────────────────────────────────────────────────
+  const [dirQuery, setDirQuery] = useState('')
+
+  // Recursively prune nodes that have no match in their subtree.
+  // A node matches if its name matches, or any stack within it (by path prefix) matches.
+  const filterNode = useCallback(
+    (node: DirTreeNode, q: string): DirTreeNode | null => {
+      const nameMatches = node.name.toLowerCase().includes(q)
+      const stackMatches = stacks.some(
+        (s) => s.directory.startsWith(node.fullPath) && s.directory.toLowerCase().includes(q),
+      )
+      const filteredChildren = node.children
+        .map((c) => filterNode(c, q))
+        .filter((c): c is DirTreeNode => c !== null)
+      if (nameMatches || stackMatches || filteredChildren.length > 0) {
+        return { ...node, children: filteredChildren }
+      }
+      return null
+    },
+    [stacks],
+  )
+
+  const visibleRootGroups = useMemo(() => {
+    const q = dirQuery.trim().toLowerCase()
+    if (!q) return rootGroups
+    return rootGroups
+      .map((group) => ({
+        ...group,
+        tree: group.tree
+          .map((node) => filterNode(node, q))
+          .filter((n): n is DirTreeNode => n !== null),
+      }))
+      .filter((group) => group.tree.length > 0)
+  }, [rootGroups, dirQuery, filterNode])
+
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(
     () => loadSavedCollapsed() ?? new Set(),
   )
@@ -317,17 +353,27 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
 
   return (
     <div className="space-y-4">
-      <SortFilterBar
-        sortOptions={[{ key: 'name', label: 'Name' }]}
-        sortValue="name"
-        onSortChange={() => {}}
-        countDisplay={`${directories.length} directories`}
-      />
+      <div className="flex items-center gap-3">
+        <SortFilterBar
+          sortOptions={[{ key: 'name', label: 'Name' }]}
+          sortValue="name"
+          onSortChange={() => {}}
+          countDisplay={`${directories.length} directories`}
+        />
+        <TableSearch
+          value={dirQuery}
+          onChange={setDirQuery}
+          placeholder="Filter…"
+          className="w-full sm:w-56"
+        />
+      </div>
       {directories.length === 0 ? (
         <EmptyDirectories message="No directories found" />
+      ) : visibleRootGroups.length === 0 ? (
+        <EmptyDirectories message="No directories match your filter." />
       ) : (
         <div className="space-y-4">
-          {rootGroups.map((group) => {
+          {visibleRootGroups.map((group) => {
             const isRootCollapsed = collapsedNodes.has(group.rootPath)
             const rootTotalStacks = group.tree.reduce(
               (sum, n) => sum + countSubtreeStacks(n),

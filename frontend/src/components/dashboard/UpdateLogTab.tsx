@@ -1,5 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useUpdateHistory } from '@/hooks/useResources'
+import { useTextFilter } from '@/hooks/useTextFilter'
+import { TableSearch } from '@/components/ui/table-search'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Status, type StatusTone } from '@/components/ui/status'
@@ -18,6 +20,14 @@ import {
 import { RefreshCw, ChevronLeft, ChevronRight, History } from 'lucide-react'
 import type { UpdateHistoryEntry } from '@/types'
 import { formatRelativeTime, formatDurationShort } from '@/lib/format'
+
+const UPDATE_SEARCH_FIELDS = [
+  (e: UpdateHistoryEntry) => e.containerName,
+  (e: UpdateHistoryEntry) => e.stackName ?? '',
+  (e: UpdateHistoryEntry) => e.image,
+  (e: UpdateHistoryEntry) => e.status,
+  (e: UpdateHistoryEntry) => e.trigger,
+]
 
 function truncateDigest(digest?: string): string {
   if (!digest) return '-'
@@ -83,6 +93,9 @@ export function UpdateLogTab() {
 
   const { data, isLoading, isError, refetch } = useUpdateHistory(filters)
 
+  const entries = useMemo(() => data?.entries ?? [], [data])
+  const { query, setQuery, filtered } = useTextFilter(entries, UPDATE_SEARCH_FIELDS)
+
   const handleFilterChange = (setter: (v: string) => void) => (value: string) => {
     setter(value)
     setPage(1)
@@ -120,7 +133,6 @@ export function UpdateLogTab() {
     )
   }
 
-  const entries = data?.entries ?? []
   const total = data?.total ?? 0
   const totalPages = data?.totalPages ?? 1
 
@@ -141,6 +153,13 @@ export function UpdateLogTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
+        <TableSearch
+          value={query}
+          onChange={setQuery}
+          placeholder="Filter events…"
+          className="w-full sm:w-56"
+        />
+
         <Select value={statusFilter} onValueChange={handleFilterChange(setStatusFilter)}>
           <SelectTrigger className="w-[130px] h-8 text-xs">
             <SelectValue placeholder="Status" />
@@ -178,7 +197,7 @@ export function UpdateLogTab() {
         </Select>
 
         <span className="text-xs text-muted-foreground ml-auto">
-          {total} record{total !== 1 ? 's' : ''}
+          {query ? `${filtered.length} of ${total} record${total !== 1 ? 's' : ''}` : `${total} record${total !== 1 ? 's' : ''}`}
         </span>
       </div>
 
@@ -197,7 +216,7 @@ export function UpdateLogTab() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {entries.map((entry: UpdateHistoryEntry) => (
+            {filtered.map((entry: UpdateHistoryEntry) => (
               <TableRow key={entry.id}>
                 <TableCell className="text-xs text-muted-foreground">
                   {formatRelativeTime(entry.startedAt)}
@@ -236,6 +255,13 @@ export function UpdateLogTab() {
                 </TableCell>
               </TableRow>
             ))}
+            {query && filtered.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                  No events match &quot;{query}&quot;.
+                </TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </div>

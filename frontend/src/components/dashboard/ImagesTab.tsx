@@ -13,12 +13,18 @@ import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { TablePagination, usePagination } from '@/components/dashboard/TablePagination'
 import { useConfirm } from '@/components/ConfirmDialog'
+import { useTextFilter } from '@/hooks/useTextFilter'
 import type { DockerImage } from '@/types'
 import { formatBytes, formatDate } from '@/lib/format'
 
 const PAGE_SIZE = 50
 
 type SortKey = 'name' | 'size' | 'created' | 'containers'
+
+const IMAGE_SEARCH_FIELDS = [
+  (img: DockerImage) => img.repoTags.join(' '),
+  (img: DockerImage) => img.id,
+]
 
 export function ImagesTab() {
   const { confirm, ConfirmComponent } = useConfirm()
@@ -47,9 +53,10 @@ export function ImagesTab() {
     }
   }
 
+  const { query, setQuery, filtered } = useTextFilter(images ?? [], IMAGE_SEARCH_FIELDS)
+
   const sortedImages = useMemo(() => {
-    if (!images) return []
-    const sorted = [...images]
+    const sorted = [...filtered]
     switch (sortBy) {
       case 'name':
         return sorted.sort((a, b) => (a.repoTags[0] || '').localeCompare(b.repoTags[0] || ''))
@@ -62,7 +69,7 @@ export function ImagesTab() {
       default:
         return sorted
     }
-  }, [images, sortBy])
+  }, [filtered, sortBy])
 
   const { page, setPage, totalPages, pageItems } = usePagination(sortedImages, PAGE_SIZE)
 
@@ -97,6 +104,9 @@ export function ImagesTab() {
         ]}
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
+        searchValue={query}
+        onSearchChange={setQuery}
+        searchPlaceholder="Filter images…"
         actions={
           <PruneButton
             resourceType="image"
@@ -107,7 +117,11 @@ export function ImagesTab() {
             invalidateKeys={[['resources', 'images'], ['dashboard-stats']]}
           />
         }
-        countDisplay={`${images.length} images, ${formatBytes(images.reduce((sum, img) => sum + img.size, 0))} total`}
+        countDisplay={
+          query
+            ? `${sortedImages.length} of ${images.length} images`
+            : `${images.length} images, ${formatBytes(images.reduce((sum, img) => sum + img.size, 0))} total`
+        }
       />
 
       <div className="rounded-md border">

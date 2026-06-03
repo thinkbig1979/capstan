@@ -11,6 +11,7 @@ import { Database } from 'lucide-react'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { TablePagination, usePagination } from '@/components/dashboard/TablePagination'
+import { useTextFilter } from '@/hooks/useTextFilter'
 import type { BuildCacheEntry } from '@/types'
 import { formatBytes, formatDate, formatRelativeTime } from '@/lib/format'
 
@@ -18,13 +19,20 @@ const PAGE_SIZE = 50
 
 type SortKey = 'id' | 'type' | 'size' | 'lastUsed' | 'usageCount'
 
+const CACHE_SEARCH_FIELDS = [
+  (e: BuildCacheEntry) => e.ID,
+  (e: BuildCacheEntry) => e.Type,
+  (e: BuildCacheEntry) => e.Description,
+]
+
 export function BuildCacheTab() {
   const { data: entries, isLoading } = useBuildCache()
   const [sortBy, setSortBy] = useState<SortKey>('size')
 
+  const { query, setQuery, filtered } = useTextFilter(entries ?? [], CACHE_SEARCH_FIELDS)
+
   const sortedEntries = useMemo(() => {
-    if (!entries) return []
-    const sorted = [...entries]
+    const sorted = [...filtered]
     switch (sortBy) {
       case 'id':
         return sorted.sort((a, b) => (a.Description || a.ID).localeCompare(b.Description || b.ID))
@@ -43,7 +51,7 @@ export function BuildCacheTab() {
       default:
         return sorted
     }
-  }, [entries, sortBy])
+  }, [filtered, sortBy])
 
   const { page, setPage, totalPages, pageItems } = usePagination(sortedEntries, PAGE_SIZE)
 
@@ -93,7 +101,14 @@ export function BuildCacheTab() {
             invalidateKeys={[['resources', 'build-cache'], ['dashboard-stats']]}
           />
         }
-        countDisplay={`${entries.length} entries · ${formatBytes(totalSize)}`}
+        searchValue={query}
+        onSearchChange={setQuery}
+        searchPlaceholder="Filter cache…"
+        countDisplay={
+          query
+            ? `${sortedEntries.length} of ${entries.length} entries`
+            : `${entries.length} entries · ${formatBytes(totalSize)}`
+        }
       />
 
       <div className="rounded-md border">
