@@ -335,7 +335,9 @@ export const stacksApi = {
   },
 
   delete: async (id: string) => {
-    const response = await apiClient.delete<StackDeleteResult>(`/stacks/${encodeURIComponent(id)}`)
+    // The backend requires ?confirm=true (it 400s otherwise). The UI already
+    // gates this behind its own confirmation dialog, so the intent is confirmed.
+    const response = await apiClient.delete<StackDeleteResult>(`/stacks/${encodeURIComponent(id)}?confirm=true`)
     return response.data
   },
 
