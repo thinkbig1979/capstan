@@ -35,6 +35,14 @@ vi.mock('sonner', () => ({
 
 import { Sidebar } from '../Sidebar'
 import { useUIStore } from '@/stores/uiStore'
+import { resourcesApi } from '@/lib/api'
+
+const checkUpdatesMock = vi.mocked(resourcesApi.checkUpdates)
+
+// The badge only reads `.updates.length`, so a list of n placeholder rows is enough.
+function updatesResult(n: number) {
+  return { updates: Array.from({ length: n }, (_, i) => ({ id: `u${i}` })) } as never
+}
 
 beforeAll(() => {
   Object.defineProperty(window, 'matchMedia', {
@@ -55,18 +63,21 @@ beforeAll(() => {
 beforeEach(() => {
   startMock.mockClear()
   stopMock.mockClear()
+  checkUpdatesMock.mockReset()
+  checkUpdatesMock.mockResolvedValue(updatesResult(3))
   useUIStore.setState({ sidebarOpen: true, pinnedStacks: [] })
 })
 
 function renderSidebar() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
-  return render(
+  const rendered = render(
     <MemoryRouter>
       <QueryClientProvider client={queryClient}>
         <Sidebar />
       </QueryClientProvider>
     </MemoryRouter>,
   )
+  return { ...rendered, queryClient }
 }
 
 describe('Sidebar', () => {
@@ -83,6 +94,28 @@ describe('Sidebar', () => {
     )
     const link = screen.getAllByTitle(/updates available/)[0].closest('a')
     expect(link).toHaveAttribute('href', '/?tab=updates')
+  })
+
+  // Regression: after an update runs or a fresh scan completes, the update hooks
+  // invalidate the canonical ['resources','updates'] query. The sidebar badge must
+  // share that key so it re-reads the new count instead of staying stale until refresh.
+  it('refreshes the badge count when the updates query is invalidated', async () => {
+    const { queryClient } = renderSidebar()
+    await waitFor(() =>
+      expect(screen.getAllByTitle('3 updates available').length).toBeGreaterThan(0),
+    )
+
+    // Simulate the post-update state: one fewer update remains, then invalidate the
+    // same query key the update mutations use.
+    checkUpdatesMock.mockResolvedValue(updatesResult(1))
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['resources', 'updates'] })
+    })
+
+    await waitFor(() =>
+      expect(screen.getAllByTitle('1 update available').length).toBeGreaterThan(0),
+    )
+    expect(screen.queryByTitle('3 updates available')).not.toBeInTheDocument()
   })
 
   it('shows the backup status footer with a next-run countdown', async () => {
