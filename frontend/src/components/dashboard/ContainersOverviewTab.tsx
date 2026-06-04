@@ -430,7 +430,6 @@ function ContainerTable({
           <TableRow>
             <TableHead className="w-10" />
             <TableHead>Name</TableHead>
-            <TableHead>Stack</TableHead>
             <TableHead>CPU</TableHead>
             <TableHead>Memory</TableHead>
             <TableHead className="hidden lg:table-cell">Network</TableHead>
@@ -463,31 +462,27 @@ function ContainerTable({
                     <div className="flex flex-col min-w-0">
                       <span className="font-medium text-sm truncate">{container.name}</span>
                       <span className="text-xs text-muted-foreground truncate max-w-[200px]">{container.image}</span>
+                      {container.stackId ? (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <a
+                                href={`/stacks/${container.stackId}`}
+                                className="text-xs text-info hover:underline truncate max-w-[200px]"
+                              >
+                                {container.projectName}
+                              </a>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-md">
+                              <p className="font-mono text-xs break-all">{stackDirMap.get(container.stackId) || container.stackId}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      ) : container.projectName ? (
+                        <span className="text-xs text-muted-foreground truncate max-w-[200px]">{container.projectName}</span>
+                      ) : null}
                     </div>
                   </div>
-                </TableCell>
-                <TableCell>
-                  {container.stackId ? (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <a
-                            href={`/stacks/${container.stackId}`}
-                            className="text-sm text-info hover:underline"
-                          >
-                            {container.projectName}
-                          </a>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-md">
-                          <p className="font-mono text-xs break-all">{stackDirMap.get(container.stackId) || container.stackId}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  ) : container.projectName ? (
-                    <span className="text-sm text-muted-foreground">{container.projectName}</span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground italic">standalone</span>
-                  )}
                 </TableCell>
                 <TableCell>
                   {m ? (
@@ -521,7 +516,7 @@ function ContainerTable({
                 </TableCell>
                 <TableCell className="hidden lg:table-cell">
                   {m ? (
-                    <div className="text-xs space-y-0.5">
+                    <div className="text-xs space-y-0.5 whitespace-nowrap tabular-nums">
                       <div>↓ {formatBytes(m.netRx)}</div>
                       <div>↑ {formatBytes(m.netTx)}</div>
                     </div>
