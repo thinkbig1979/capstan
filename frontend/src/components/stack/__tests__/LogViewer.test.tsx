@@ -97,6 +97,32 @@ describe('LogViewer', () => {
     expect(screen.queryByText(/just an info line/)).not.toBeInTheDocument()
   })
 
+  it('tracks every container across the batch and colors them distinctly', async () => {
+    // Regression: the flush used to read the mutable batch ref inside the
+    // state updaters, which raced with the buffer reset and dropped containers
+    // from uniqueContainers — leaving every bracket the fallback color and the
+    // container filter empty. Two distinct containers must get distinct colors.
+    const { container } = render(<LogViewer stackId="s1" />)
+    await feed([line('first', 'api'), line('second', 'worker')])
+
+    const brackets = Array.from(
+      container.querySelectorAll('[role="log"] span.font-medium'),
+    )
+    const colorByName: Record<string, string> = {}
+    for (const b of brackets) {
+      const name = (b.textContent || '').trim()
+      const cls = b.getAttribute('class') || ''
+      const m = cls.match(/text-\w+-\d+/)
+      if (m && !colorByName[name]) colorByName[name] = m[0]
+    }
+    expect(colorByName['[api]']).toBeTruthy()
+    expect(colorByName['[worker]']).toBeTruthy()
+    // First-appearance round-robin: api -> red (index 0), worker -> orange (1).
+    expect(colorByName['[api]']).not.toBe(colorByName['[worker]'])
+    expect(colorByName['[api]']).toBe('text-red-600')
+    expect(colorByName['[worker]']).toBe('text-orange-600')
+  })
+
   it('persists the errors-only preference to the store', async () => {
     render(<LogViewer stackId="s1" />)
     await act(async () => {

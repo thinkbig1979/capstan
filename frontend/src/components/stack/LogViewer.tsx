@@ -231,8 +231,16 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
 
     if (!flushTimeoutRef.current) {
       flushTimeoutRef.current = setTimeout(() => {
+        // Snapshot and reset the buffer up front. React invokes these state
+        // updaters lazily (at render), so referencing the mutable batchRef
+        // inside them would race with the reset and could observe an emptied
+        // buffer — which silently dropped every container from uniqueContainers.
+        const batch = batchRef.current
+        batchRef.current = []
+        flushTimeoutRef.current = null
+
         setLogs((prevLogs) => {
-          const newLogs = [...prevLogs, ...batchRef.current]
+          const newLogs = [...prevLogs, ...batch]
           if (newLogs.length > MAX_LOG_BUFFER) {
             return newLogs.slice(-MAX_LOG_BUFFER)
           }
@@ -240,13 +248,16 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
         })
 
         setUniqueContainers((prev) => {
+          let changed = false
           const newSet = new Set(prev)
-          batchRef.current.forEach((log) => newSet.add(log.container))
-          return newSet
+          for (const log of batch) {
+            if (!newSet.has(log.container)) {
+              newSet.add(log.container)
+              changed = true
+            }
+          }
+          return changed ? newSet : prev
         })
-
-        batchRef.current = []
-        flushTimeoutRef.current = null
       }, 50)
     }
   }, [])
