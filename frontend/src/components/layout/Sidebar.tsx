@@ -159,8 +159,11 @@ export function Sidebar() {
 
   // Cached update scan — drives the aggregate "N updates" badge. refresh=false
   // never kicks off a heavy scan, it just reads whatever the backend has.
+  // Shares the canonical ['resources','updates'] key so update mutations and the
+  // scan watcher (useResources) invalidate this badge too — otherwise it stays
+  // stale until a full page refresh.
   const { data: updateData } = useQuery({
-    queryKey: ["updates", "cached"],
+    queryKey: ["resources", "updates"],
     queryFn: () => resourcesApi.checkUpdates(false),
     staleTime: 60_000,
     retry: false,
