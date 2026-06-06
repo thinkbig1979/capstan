@@ -9,6 +9,7 @@ import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { BackupStatusCard } from '@/components/dashboard/BackupStatusCard'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { EnvUnlockStatus } from '@/components/EnvUnlockStatus'
+import { HelpHint } from '@/components/ui/help-hint'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { useAuth } from '@/hooks/useAuth'
 import {
@@ -280,7 +281,19 @@ export function BackupSettingsContent() {
 
       {/* ── Repository ─────────────────────────────────────────────────────── */}
       <div className="space-y-4">
-        <h3 className="text-lg font-medium">Repository</h3>
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-lg font-medium">Repository</h3>
+          <HelpHint label="restic repository" title="restic repository" side="right">
+            <p>
+              Backups run through restic, which stores them deduplicated and encrypted in a
+              repository.
+            </p>
+            <p>
+              Give it a path inside the container and a password, then initialize it once before
+              the first backup.
+            </p>
+          </HelpHint>
+        </div>
 
         <div className="space-y-2">
           <div className="flex items-center gap-2">
@@ -388,7 +401,16 @@ export function BackupSettingsContent() {
 
       {/* ── Retention ──────────────────────────────────────────────────────── */}
       <div className="space-y-4 pt-4 border-t">
-        <h3 className="text-lg font-medium">Retention</h3>
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-lg font-medium">Retention</h3>
+          <HelpHint label="Retention" title="Retention" side="right">
+            <p>
+              After a backup, restic can thin out old snapshots, keeping a set number per day,
+              week, month, and year. Set a level to 0 to keep none there.
+            </p>
+            <p>Snapshots are only removed when auto-prune is on or you prune by hand.</p>
+          </HelpHint>
+        </div>
 
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 max-w-xl">
           {(
@@ -469,7 +491,16 @@ export function BackupSettingsContent() {
 
       {/* ── Cloud (rclone) ─────────────────────────────────────────────────── */}
       <div className="space-y-4 pt-4 border-t">
-        <h3 className="text-lg font-medium">Cloud (rclone)</h3>
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-lg font-medium">Cloud (rclone)</h3>
+          <HelpHint label="Cloud sync" title="Cloud sync" side="right">
+            <p>rclone copies the restic repository to off-site storage like S3 or Backblaze.</p>
+            <p>
+              &apos;Remote&apos; is the name you gave that storage in your rclone config, and
+              &apos;path&apos; is the folder inside it. Test connectivity before you depend on it.
+            </p>
+          </HelpHint>
+        </div>
 
         <div className="space-y-2">
           <Label htmlFor="backup-rclone-remote">Remote</Label>

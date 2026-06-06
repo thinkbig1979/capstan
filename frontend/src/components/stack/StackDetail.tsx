@@ -14,6 +14,7 @@ import { GitStatus as GitStatusComponent } from '../git/GitStatus'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { HelpHint } from '@/components/ui/help-hint'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { TabErrorBoundary } from '@/components/TabErrorBoundary'
@@ -96,20 +97,36 @@ function OverviewTabContent({
           <RefreshCw className={`mr-2 h-4 w-4 ${isRestarting ? 'animate-spin' : ''}`} />
           {isRestarting ? 'Restarting...' : 'Restart'}
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onPull}
-          disabled={anyRunning}
-        >
-          <Download className={`mr-2 h-4 w-4 ${isPulling ? 'animate-spin' : ''}`} />
-          {isPulling ? 'Pulling...' : 'Pull Images'}
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onPull}
+            disabled={anyRunning}
+          >
+            <Download className={`mr-2 h-4 w-4 ${isPulling ? 'animate-spin' : ''}`} />
+            {isPulling ? 'Pulling...' : 'Pull Images'}
+          </Button>
+          <HelpHint label="Pull images" title="Pull images">
+            <p>Downloads the latest image for each service without restarting anything.</p>
+            <p>
+              Running containers keep using the old image until you restart or recreate them,
+              so this just stages the update.
+            </p>
+          </HelpHint>
+        </div>
 
         <Separator orientation="vertical" className="h-6 mx-1" />
 
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">Auto-Update</span>
+          <HelpHint label="Auto-update" title="Auto-update">
+            <p>Updates this stack on its own whenever a scan finds a newer image.</p>
+            <p>
+              The global auto-update switch in Settings has to be on first. Updating recreates
+              containers, so expect a brief interruption.
+            </p>
+          </HelpHint>
           <AutoUpdateToggle
             targetType="stack"
             targetId={stack.id}
@@ -134,6 +151,10 @@ function OverviewTabContent({
 
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">Backup</span>
+          <HelpHint label="Backup" title="Backup">
+            <p>Adds this stack to scheduled backups, covering its volumes and compose files.</p>
+            <p>Set up the repository and schedule under Settings, Backup.</p>
+          </HelpHint>
           <BackupToggle stackId={stack.id} />
         </div>
       </div>

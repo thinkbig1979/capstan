@@ -20,6 +20,8 @@ interface SortFilterBarProps {
   filterValue?: string
   onFilterChange?: (key: string) => void
   actions?: React.ReactNode
+  /** Optional leading help affordance (e.g. a <HelpHint/>) explaining the tab. */
+  help?: React.ReactNode
   countDisplay: React.ReactNode
   /** When provided, renders a leading text-filter input. */
   searchValue?: string
@@ -35,6 +37,7 @@ export function SortFilterBar({
   filterValue,
   onFilterChange,
   actions,
+  help,
   countDisplay,
   searchValue,
   onSearchChange,
@@ -42,6 +45,7 @@ export function SortFilterBar({
 }: SortFilterBarProps) {
   return (
     <div className="flex items-center gap-2 flex-wrap">
+      {help}
       {onSearchChange && (
         <TableSearch
           value={searchValue ?? ''}

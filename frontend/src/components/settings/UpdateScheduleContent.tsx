@@ -4,6 +4,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { useUpdateSettings, useUpdateUpdateSettings } from '@/hooks/useResources'
+import { HelpHint } from '@/components/ui/help-hint'
 import { formatDateFull } from '@/lib/format'
 import { AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
@@ -92,7 +93,16 @@ export function UpdateScheduleContent() {
   return (
     <div className="space-y-6">
       <div className="space-y-4">
-        <h3 className="text-lg font-medium">Scan for Image Updates</h3>
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-lg font-medium">Scan for Image Updates</h3>
+          <HelpHint label="Update scans" title="Update scans" side="right">
+            <p>
+              A scan checks each running container&apos;s image against its registry and lists
+              anything newer on the Updates tab.
+            </p>
+            <p>It only looks. Nothing updates unless you trigger it or turn on auto-update.</p>
+          </HelpHint>
+        </div>
         <div className="space-y-2">
           <Label htmlFor="scan-interval">Scan Interval</Label>
           <Select value={effectivePreset} onValueChange={handlePresetChange}>

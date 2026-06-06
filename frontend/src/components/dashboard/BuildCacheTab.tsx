@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/table'
 import { Database } from 'lucide-react'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { HelpHint } from '@/components/ui/help-hint'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { TablePagination, usePagination } from '@/components/dashboard/TablePagination'
 import { useTextFilter } from '@/hooks/useTextFilter'
@@ -91,6 +92,15 @@ export function BuildCacheTab() {
         ]}
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
+        help={
+          <HelpHint label="Build cache" title="Build cache" side="bottom" align="start">
+            <p>
+              Docker saves image layers here while building, so repeat builds run faster.
+              Clearing it is safe; Docker rebuilds whatever it needs next time.
+            </p>
+            <p>The &apos;all&apos; option also drops cache that could still be reused.</p>
+          </HelpHint>
+        }
         actions={
           <PruneButton
             resourceType="cache entry"
