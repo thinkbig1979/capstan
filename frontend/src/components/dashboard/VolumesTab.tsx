@@ -11,6 +11,7 @@ import {
 import { HardDrive, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { HelpHint } from '@/components/ui/help-hint'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { TablePagination, usePagination } from '@/components/dashboard/TablePagination'
 import { useConfirm } from '@/components/ConfirmDialog'
@@ -102,6 +103,15 @@ export function VolumesTab() {
         ]}
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
+        help={
+          <HelpHint label="Volumes" title="Volumes" side="bottom" align="start">
+            <p>Where containers store data meant to outlive them, like databases.</p>
+            <p>
+              A volume listed with no container attached is unused. Removing one deletes
+              its data, and that can&apos;t be undone.
+            </p>
+          </HelpHint>
+        }
         searchValue={query}
         onSearchChange={setQuery}
         searchPlaceholder="Filter volumes…"

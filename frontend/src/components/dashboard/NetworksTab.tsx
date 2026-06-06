@@ -11,6 +11,7 @@ import {
 import { Network, Plus, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { HelpHint } from '@/components/ui/help-hint'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { CreateNetworkDialog } from '@/components/dashboard/CreateNetworkDialog'
 import { useConfirm } from '@/components/ConfirmDialog'
@@ -119,6 +120,15 @@ export function NetworksTab() {
         ]}
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
+        help={
+          <HelpHint label="Networks" title="Networks" side="bottom" align="start">
+            <p>Private networks that let the containers in a stack reach each other. Each stack gets its own.</p>
+            <p>
+              The built-in bridge, host, and none networks can&apos;t be removed, and a network
+              won&apos;t delete while containers are still attached.
+            </p>
+          </HelpHint>
+        }
         searchValue={query}
         onSearchChange={setQuery}
         searchPlaceholder="Filter networks…"

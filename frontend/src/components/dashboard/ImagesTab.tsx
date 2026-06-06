@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/table'
 import { ImageIcon, Trash2 } from 'lucide-react'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { HelpHint } from '@/components/ui/help-hint'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { TablePagination, usePagination } from '@/components/dashboard/TablePagination'
 import { useConfirm } from '@/components/ConfirmDialog'
@@ -104,6 +105,15 @@ export function ImagesTab() {
         ]}
         sortValue={sortBy}
         onSortChange={(key) => setSortBy(key as SortKey)}
+        help={
+          <HelpHint label="Images" title="Images" side="bottom" align="start">
+            <p>The read-only templates your containers run from.</p>
+            <p>
+              Untagged &apos;dangling&apos; images are leftovers from rebuilds and safe to remove.
+              The &apos;all unused&apos; prune option also clears any image no container is using.
+            </p>
+          </HelpHint>
+        }
         searchValue={query}
         onSearchChange={setQuery}
         searchPlaceholder="Filter images…"

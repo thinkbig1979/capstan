@@ -14,6 +14,7 @@ import { RefreshCw, Download, ArrowUpDown, Settings } from 'lucide-react'
 import { toast } from 'sonner'
 import { classifyError } from '@/lib/error-handler'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
+import { HelpHint } from '@/components/ui/help-hint'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
@@ -229,6 +230,18 @@ export function UpdatesTab() {
           ]}
           sortValue={sortBy}
           onSortChange={(key) => setSortBy(key as SortKey)}
+          help={
+            <HelpHint label="Updates" title="Updates" side="bottom" align="start">
+              <p>
+                Each container&apos;s current image is compared against its registry. A row here
+                means a newer image was published for that tag.
+              </p>
+              <p>
+                Updating pulls it and recreates the container. Auto-update does the same on a
+                schedule for the containers and stacks you opt in.
+              </p>
+            </HelpHint>
+          }
           searchValue={query}
           onSearchChange={setQuery}
           searchPlaceholder="Filter updates…"

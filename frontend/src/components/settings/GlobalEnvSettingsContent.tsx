@@ -11,6 +11,7 @@ import { useGlobalEnv, useUpdateGlobalEnv } from '@/hooks/useResources'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { EnvUnlockStatus } from '@/components/EnvUnlockStatus'
+import { HelpHint } from '@/components/ui/help-hint'
 import { classifyError } from '@/lib/error-handler'
 import { useAuth } from '@/hooks/useAuth'
 import { toast } from 'sonner'
@@ -152,6 +153,15 @@ export function GlobalEnvSettingsContent() {
           Changes take effect on the next stack restart.
         </p>
         <div className="flex items-center gap-2 shrink-0">
+          <HelpHint label="Hidden values" title="Hidden values" align="end">
+            <p>
+              Keys that look like secrets (passwords, tokens, API keys) stay masked in the table.
+            </p>
+            <p>
+              Revealing one starts a short unlock session protected by your password, and values
+              re-hide when it ends.
+            </p>
+          </HelpHint>
           <EnvUnlockStatus />
           {dirty && (
             <Badge variant="secondary" className="text-xs whitespace-nowrap">
