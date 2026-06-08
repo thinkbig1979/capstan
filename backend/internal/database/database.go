@@ -465,9 +465,16 @@ func (d *DB) GetStackByProjectName(projectName string) (*models.Stack, error) {
 }
 
 func (d *DB) LogAction(log models.ActionLog) error {
+	// stack_id has a foreign key to stacks(id); an empty string is not a valid
+	// reference and (with foreign_keys=ON) would reject the insert. Store NULL
+	// for non-stack actions (settings, auth, resource mutations) so they persist.
+	var stackID interface{}
+	if log.StackID != "" {
+		stackID = log.StackID
+	}
 	query := `INSERT INTO action_log (id, user_id, stack_id, action, detail, created_at)
 	          VALUES (?, ?, ?, ?, ?, ?)`
-	_, err := d.db.Exec(query, log.ID, log.UserID, log.StackID, log.Action, log.Detail, log.CreatedAt)
+	_, err := d.db.Exec(query, log.ID, log.UserID, stackID, log.Action, log.Detail, log.CreatedAt)
 	return err
 }
 
@@ -483,10 +490,12 @@ func (d *DB) GetActionsByStack(stackID string, limit int) ([]models.ActionLog, e
 	actions := make([]models.ActionLog, 0)
 	for rows.Next() {
 		var action models.ActionLog
-		err := rows.Scan(&action.ID, &action.UserID, &action.StackID, &action.Action, &action.Detail, &action.CreatedAt)
+		var stackID sql.NullString
+		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &action.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
+		action.StackID = stackID.String
 		actions = append(actions, action)
 	}
 	return actions, nil
@@ -504,10 +513,12 @@ func (d *DB) GetRecentActions(limit int) ([]models.ActionLog, error) {
 	actions := make([]models.ActionLog, 0)
 	for rows.Next() {
 		var action models.ActionLog
-		err := rows.Scan(&action.ID, &action.UserID, &action.StackID, &action.Action, &action.Detail, &action.CreatedAt)
+		var stackID sql.NullString
+		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &action.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
+		action.StackID = stackID.String
 		actions = append(actions, action)
 	}
 	return actions, nil
@@ -620,10 +631,12 @@ func (d *DB) ListActionLogsFiltered(limit, offset int, f ActionLogFilter) ([]mod
 	actions := make([]models.ActionLog, 0)
 	for rows.Next() {
 		var action models.ActionLog
-		err := rows.Scan(&action.ID, &action.UserID, &action.StackID, &action.Action, &action.Detail, &action.CreatedAt)
+		var stackID sql.NullString
+		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &action.CreatedAt)
 		if err != nil {
 			return nil, 0, err
 		}
+		action.StackID = stackID.String
 		actions = append(actions, action)
 	}
 	return actions, total, nil

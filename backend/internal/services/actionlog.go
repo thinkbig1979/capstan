@@ -21,11 +21,29 @@ const (
 	ActionEditEnv     = "edit_env"
 	ActionGitPull     = "git_pull"
 	ActionLogin       = "login"
+	ActionLoginFailed = "login_failed"
 	ActionLogout      = "logout"
 	ActionSetup       = "setup"
 	ActionScan        = "scan"
 	ActionBackup      = "backup"
 	ActionRestore     = "restore"
+
+	// Settings changes (see SettingsHandler). Values never carry secrets — only
+	// which setting changed and non-sensitive metadata.
+	ActionChangePassword    = "change_password"
+	ActionUpdateGlobalEnv   = "update_global_env"
+	ActionUpdateGitSettings = "update_git_settings"
+	ActionUpdateSettings    = "update_settings"
+
+	// Docker resource mutations (see ResourcesHandler).
+	ActionDeleteContainer = "delete_container"
+	ActionDeleteImage     = "delete_image"
+	ActionDeleteVolume    = "delete_volume"
+	ActionDeleteNetwork   = "delete_network"
+	ActionCreateNetwork   = "create_network"
+	ActionPrune           = "prune"
+	ActionUpdateContainer = "update_container"
+	ActionUpdateStack     = "update_stack"
 )
 
 type ActionLogger struct {

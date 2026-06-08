@@ -9,6 +9,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/gin-gonic/gin"
 	jwtv5 "github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -42,6 +43,7 @@ type AuthHandler struct {
 	db           *database.DB
 	jwtSecret    string
 	authDisabled bool
+	actionLog    *services.ActionLogger
 }
 
 func NewAuthHandler(db *database.DB, jwtSecret string, authDisabled bool) *AuthHandler {
@@ -49,6 +51,7 @@ func NewAuthHandler(db *database.DB, jwtSecret string, authDisabled bool) *AuthH
 		db:           db,
 		jwtSecret:    jwtSecret,
 		authDisabled: authDisabled,
+		actionLog:    services.NewActionLogger(db),
 	}
 }
 
@@ -181,6 +184,8 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 	csrfToken := middleware.GenerateCSRFToken()
 	setAuthCookies(c, token, csrfToken)
 
+	h.actionLog.Log(userID, nil, services.ActionSetup, gin.H{"username": req.Username})
+
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
@@ -228,6 +233,17 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			"username", req.Username,
 			"timestamp", time.Now(),
 			"reason", reason)
+		// The action_log.user_id FK requires a real user, so only failed attempts
+		// against an existing account are persisted to the audit trail (the
+		// high-value "someone is attacking this account" signal). Attempts on
+		// unknown usernames are still recorded via slog above.
+		if userExists {
+			h.actionLog.Log(user.ID, nil, services.ActionLoginFailed, gin.H{
+				"username": req.Username,
+				"reason":   reason,
+				"ip":       c.ClientIP(),
+			})
+		}
 		c.JSON(http.StatusUnauthorized, models.NewAppError(
 			http.StatusUnauthorized,
 			models.ErrUnauthorized,
@@ -269,6 +285,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	csrfToken := middleware.GenerateCSRFToken()
 	setAuthCookies(c, token, csrfToken)
 
+	h.actionLog.Log(user.ID, nil, services.ActionLogin, gin.H{
+		"username": user.Username,
+		"ip":       c.ClientIP(),
+	})
+
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
@@ -300,6 +321,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 
 	slog.Info("User logged out", "userID", userID)
+	h.actionLog.LogFromContext(c, nil, services.ActionLogout, gin.H{})
 
 	clearAuthCookies(c)
 

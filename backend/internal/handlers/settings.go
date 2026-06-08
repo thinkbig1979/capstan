@@ -27,6 +27,7 @@ type SettingsHandler struct {
 	authDisabled bool
 	scheduler    *services.SchedulerService
 	cfg          *config.Config
+	actionLog    *services.ActionLogger
 }
 
 func NewSettingsHandler(db *database.DB, stacksDir string, jwtSecret string, authDisabled bool, scheduler *services.SchedulerService, cfg *config.Config) *SettingsHandler {
@@ -37,6 +38,7 @@ func NewSettingsHandler(db *database.DB, stacksDir string, jwtSecret string, aut
 		authDisabled: authDisabled,
 		scheduler:    scheduler,
 		cfg:          cfg,
+		actionLog:    services.NewActionLogger(db),
 	}
 }
 
@@ -175,6 +177,7 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 	}
 
 	slog.Info("Password changed", "userID", userID)
+	h.actionLog.LogFromContext(c, nil, services.ActionChangePassword, gin.H{})
 
 	currentSessionID := ""
 	authToken := c.GetHeader("Authorization")
@@ -281,6 +284,9 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 	}
 
 	slog.Info("Global environment updated")
+	// Audit the change but never the values themselves — global env routinely
+	// holds secrets. Record only how many variables are now defined.
+	h.actionLog.LogFromContext(c, nil, services.ActionUpdateGlobalEnv, gin.H{"count": len(req.Vars)})
 	c.Status(http.StatusNoContent)
 }
 
@@ -362,6 +368,10 @@ func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {
 	}
 
 	slog.Info("Log retention updated", "retention_days", req.RetentionDays)
+	h.actionLog.LogFromContext(c, nil, services.ActionUpdateSettings, gin.H{
+		"setting":        "log_retention",
+		"retention_days": req.RetentionDays,
+	})
 	c.Status(http.StatusNoContent)
 }
 
@@ -476,6 +486,11 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	slog.Info("Update settings changed",
 		"scan_interval", req.ScanIntervalMinutes,
 		"auto_update", req.GlobalAutoUpdate)
+	h.actionLog.LogFromContext(c, nil, services.ActionUpdateSettings, gin.H{
+		"setting":       "update_schedule",
+		"scan_interval": req.ScanIntervalMinutes,
+		"auto_update":   req.GlobalAutoUpdate,
+	})
 
 	h.GetUpdateSettings(c)
 }
@@ -576,6 +591,12 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 	}
 
 	slog.Info("Git settings updated")
+	// Record which credential fields were changed, never their values.
+	h.actionLog.LogFromContext(c, nil, services.ActionUpdateGitSettings, gin.H{
+		"ssh_key":     req.SSHKey != "",
+		"https_user":  req.HTTPSUser != "",
+		"https_token": req.HTTPSToken != "",
+	})
 	h.GetGitSettings(c)
 }
 
@@ -662,6 +683,10 @@ func (h *SettingsHandler) UpdateConfiguredDirectories(c *gin.Context) {
 		h.stacksDir = absDir
 		h.cfg.StacksDir = absDir
 		slog.Info("Default stacks directory updated", "path", absDir)
+		h.actionLog.LogFromContext(c, nil, services.ActionUpdateSettings, gin.H{
+			"setting": "default_directory",
+			"path":    absDir,
+		})
 	}
 
 	h.GetConfiguredDirectories(c)
@@ -774,5 +799,9 @@ func (h *SettingsHandler) UpdateScanDepth(c *gin.Context) {
 	}
 
 	slog.Info("Scan depth updated", "scan_depth", req.ScanDepth)
+	h.actionLog.LogFromContext(c, nil, services.ActionUpdateSettings, gin.H{
+		"setting":    "scan_depth",
+		"scan_depth": req.ScanDepth,
+	})
 	h.GetScanDepth(c)
 }
