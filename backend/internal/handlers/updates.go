@@ -27,6 +27,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 				models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to start update scan"))
 				return
 			}
+			h.actionLog.LogFromContext(c, nil, services.ActionScan, gin.H{"trigger": "manual"})
 
 			cachedUpdates, err := h.db.GetCachedUpdates()
 			if err != nil {
@@ -122,6 +123,9 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 
 func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	id := c.Param("id")
+	// Audit who initiated the update; this covers both the async job path below
+	// and the synchronous fallback (updateContainerSync) it delegates to.
+	h.actionLog.LogFromContext(c, nil, services.ActionUpdateContainer, gin.H{"container_id": id})
 
 	// If no job manager is wired, fall back to the synchronous path.
 	if h.jobManager == nil {
@@ -476,6 +480,12 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"jobId": "", "noUpdates": true})
 		return
 	}
+
+	stackIDForLog := stack.ID
+	h.actionLog.LogFromContext(c, &stackIDForLog, services.ActionUpdateStack, gin.H{
+		"stack":    stack.ProjectName,
+		"services": len(outdated),
+	})
 
 	spec := services.JobSpec{
 		TargetType: "stack",

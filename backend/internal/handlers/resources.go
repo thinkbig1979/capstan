@@ -17,14 +17,15 @@ type ResourcesHandler struct {
 	db         *database.DB
 	scheduler  *services.SchedulerService
 	jobManager *services.UpdateJobManager
+	actionLog  *services.ActionLogger
 }
 
 func NewResourcesHandler(docker *services.DockerService, db *database.DB, scheduler *services.SchedulerService) *ResourcesHandler {
-	return &ResourcesHandler{docker: docker, db: db, scheduler: scheduler}
+	return &ResourcesHandler{docker: docker, db: db, scheduler: scheduler, actionLog: services.NewActionLogger(db)}
 }
 
 func NewResourcesHandlerWithJobManager(docker *services.DockerService, db *database.DB, scheduler *services.SchedulerService, jobManager *services.UpdateJobManager) *ResourcesHandler {
-	return &ResourcesHandler{docker: docker, db: db, scheduler: scheduler, jobManager: jobManager}
+	return &ResourcesHandler{docker: docker, db: db, scheduler: scheduler, jobManager: jobManager, actionLog: services.NewActionLogger(db)}
 }
 
 func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {

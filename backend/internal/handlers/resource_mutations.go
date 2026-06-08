@@ -82,6 +82,7 @@ func (h *ResourcesHandler) deleteImage(c *gin.Context) {
 		return
 	}
 
+	h.actionLog.LogFromContext(c, nil, services.ActionDeleteImage, gin.H{"id": id, "force": force})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Timestamp: time.Now()})
 	truth.Render(c, classifyImageDeleteResponse(resp))
 }
@@ -126,6 +127,7 @@ func (h *ResourcesHandler) pruneImages(c *gin.Context) {
 		return
 	}
 
+	h.actionLog.LogFromContext(c, nil, services.ActionPrune, gin.H{"resource": "images", "space_reclaimed": report.SpaceReclaimed})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Timestamp: time.Now()})
 	truth.Render(c, classifyImagePruneReport(report.ImagesDeleted, report.SpaceReclaimed))
 }
@@ -143,6 +145,7 @@ func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
 		deleted = []string{}
 	}
 
+	h.actionLog.LogFromContext(c, nil, services.ActionPrune, gin.H{"resource": "containers", "count": len(deleted), "space_reclaimed": report.SpaceReclaimed})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_prune", Timestamp: time.Now()})
 
 	if len(deleted) == 0 && report.SpaceReclaimed == 0 {
@@ -172,6 +175,7 @@ func (h *ResourcesHandler) deleteContainer(c *gin.Context) {
 		return
 	}
 
+	h.actionLog.LogFromContext(c, nil, services.ActionDeleteContainer, gin.H{"id": id, "force": force})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_delete", ContainerID: id, Timestamp: time.Now()})
 	truth.Render(c, truth.Success("container deleted",
 		truth.KV("id", id),
@@ -190,6 +194,7 @@ func (h *ResourcesHandler) deleteVolume(c *gin.Context) {
 		return
 	}
 
+	h.actionLog.LogFromContext(c, nil, services.ActionDeleteVolume, gin.H{"name": name, "force": force})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "volume_delete", Timestamp: time.Now()})
 	truth.Render(c, truth.Success("volume deleted",
 		truth.KV("name", name),
@@ -209,6 +214,7 @@ func (h *ResourcesHandler) pruneVolumes(c *gin.Context) {
 		deleted = []string{}
 	}
 
+	h.actionLog.LogFromContext(c, nil, services.ActionPrune, gin.H{"resource": "volumes", "count": len(deleted), "space_reclaimed": report.SpaceReclaimed})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "volume_prune", Timestamp: time.Now()})
 
 	if len(deleted) == 0 && report.SpaceReclaimed == 0 {
@@ -264,6 +270,7 @@ func (h *ResourcesHandler) createNetwork(c *gin.Context) {
 		return
 	}
 
+	h.actionLog.LogFromContext(c, nil, services.ActionCreateNetwork, gin.H{"name": req.Name, "driver": driver})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "network_create", Timestamp: time.Now()})
 	c.JSON(http.StatusCreated, truth.ActionResult{
 		Outcome: truth.OutcomeSuccess,
@@ -286,6 +293,7 @@ func (h *ResourcesHandler) deleteNetwork(c *gin.Context) {
 		return
 	}
 
+	h.actionLog.LogFromContext(c, nil, services.ActionDeleteNetwork, gin.H{"id": id})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "network_delete", Timestamp: time.Now()})
 	truth.Render(c, truth.Success("network deleted",
 		truth.KV("id", id),
@@ -305,6 +313,7 @@ func (h *ResourcesHandler) pruneNetworks(c *gin.Context) {
 		deleted = []string{}
 	}
 
+	h.actionLog.LogFromContext(c, nil, services.ActionPrune, gin.H{"resource": "networks", "count": len(deleted)})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "network_prune", Timestamp: time.Now()})
 
 	if len(deleted) == 0 {
@@ -333,6 +342,7 @@ func (h *ResourcesHandler) pruneBuildCache(c *gin.Context) {
 		deleted = []string{}
 	}
 
+	h.actionLog.LogFromContext(c, nil, services.ActionPrune, gin.H{"resource": "build_cache", "count": len(deleted), "space_reclaimed": report.SpaceReclaimed})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "build_cache_prune", Timestamp: time.Now()})
 
 	if len(deleted) == 0 && report.SpaceReclaimed == 0 {

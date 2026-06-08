@@ -9,6 +9,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
+import { HelpHint } from '@/components/ui/help-hint'
 import { ChevronLeft, ChevronRight, ChevronDown, ScrollText, X } from 'lucide-react'
 
 const ALL_ACTIONS = '__all__'
@@ -39,6 +40,28 @@ function humanizeDetail(detail: string): { summary: string; raw: string | null }
     // not JSON — show as-is
   }
   return { summary: detail, raw: null }
+}
+
+/** Documents exactly which actions land in the audit log, surfaced via a help
+ *  icon next to the log so the scope is discoverable without reading the docs. */
+function AuditedEventsNote() {
+  return (
+    <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+      <span>Records security-relevant actions: who did what, and when.</span>
+      <HelpHint label="Audited events" title="What gets recorded" side="bottom" align="start">
+        <p>Each entry captures the user, action, timestamp, and non-sensitive details:</p>
+        <ul className="list-disc space-y-0.5 pl-4">
+          <li><strong>Authentication</strong> — login, failed login (on existing accounts), logout, first-run setup</li>
+          <li><strong>Stacks</strong> — start, stop, restart, pull, create, delete, compose and env edits, git pull</li>
+          <li><strong>Updates</strong> — manual update scans, container and stack image updates</li>
+          <li><strong>Docker resources</strong> — deleting containers, images, volumes and networks; creating networks; prune operations</li>
+          <li><strong>Settings</strong> — global env, git credentials, update schedule, log retention, scan depth, default directory, password change</li>
+          <li><strong>Backups</strong> — backup and restore</li>
+        </ul>
+        <p className="text-xs">Secrets (passwords, tokens, env values) are never written to the log.</p>
+      </HelpHint>
+    </div>
+  )
 }
 
 export function AuditLogContent() {
@@ -106,9 +129,12 @@ export function AuditLogContent() {
   // Truly empty log (no entries and no filter applied) — skip the filter bar
   if (!data || (data.entries.length === 0 && !hasActiveFilters)) {
     return (
-      <div className="text-center py-8 text-muted-foreground">
-        <ScrollText className="h-8 w-8 mx-auto mb-2 opacity-50" />
-        No audit log entries yet.
+      <div className="space-y-4">
+        <AuditedEventsNote />
+        <div className="text-center py-8 text-muted-foreground">
+          <ScrollText className="h-8 w-8 mx-auto mb-2 opacity-50" />
+          No audit log entries yet.
+        </div>
       </div>
     )
   }
@@ -118,6 +144,7 @@ export function AuditLogContent() {
 
   return (
     <div className="space-y-4">
+      <AuditedEventsNote />
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex-1 min-w-[180px] space-y-1">
           <label className="text-xs text-muted-foreground">Search</label>
