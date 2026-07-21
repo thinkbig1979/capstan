@@ -48,8 +48,10 @@ deployments; `:latest` tracks the most recent release.
 ```
 
 Then open http://localhost:5001. Authentication is disabled in this local mode
-(`backend/.env` is created from `backend/.env.example`). Set `STACKS_DIR` in
-`docker-compose.yaml` to the directory that holds your compose projects.
+(`backend/.env` is created from `backend/.env.example`). `docker-compose.yaml`
+reads `STACKS_DIR` (default `/opt/stacks`) from a root `.env` file or your
+shell environment — set it to the directory that holds your compose projects,
+e.g. `STACKS_DIR=/opt/stacks docker compose up -d --build`.
 
 For frontend hot-reload, run the backend and the Vite dev server separately:
 
@@ -319,6 +321,37 @@ login as administrative access, run it on a trusted network behind TLS, and use 
 socket proxy if you need least-privilege. The application hardening above reduces
 the ways that trust can be abused; it is not a substitute for protecting access
 to Capstan itself.
+
+## Deployment Security
+
+Three configuration-dependent risks to understand before exposing Capstan
+beyond localhost:
+
+**TLS is not optional off localhost.** The session cookie's `Secure` flag is
+set based on whether the request arrived over TLS, directly or via
+`X-Forwarded-Proto: https` from a reverse proxy (`backend/internal/middleware/csrf.go`,
+`backend/internal/handlers/auth.go`). Serve Capstan over plain HTTP on any
+network you don't fully control, and the session token and CSRF cookie travel
+in cleartext. Terminate TLS at a reverse proxy and forward
+`X-Forwarded-Proto: https` (see [Production Deployment](#production-deployment)).
+
+**`AUTH_DISABLED` trusts whoever `TRUSTED_NETWORKS` says is trusted, based on
+a client IP that a reverse proxy can control.** With `AUTH_DISABLED=true`,
+any request from a trusted IP is admitted without a login. That IP comes from
+`X-Forwarded-For`, honored under Gin's trusted-proxy list, which defaults to
+the same `TRUSTED_NETWORKS` value (`backend/internal/middleware/auth.go`,
+`backend/cmd/server/main.go:187-201`). If a reverse proxy in front of Capstan
+forwards a client-supplied `X-Forwarded-For` instead of overwriting it with
+the real client IP, every request can appear to originate from a trusted
+address and skip authentication entirely. Don't run `AUTH_DISABLED=true`
+behind a reverse proxy unless you've confirmed it always overwrites
+`X-Forwarded-For`.
+
+**There is one role: authenticated.** Any account that can log in has full
+control of the Docker socket, which is root-equivalent control of the host
+(see [Docker Socket & Security](#docker-socket--security)). Capstan has no
+read-only or scoped-permission user; treat every login as administrative
+access, and don't expose an instance to anyone you wouldn't hand host root.
 
 ## Project Structure
 
