@@ -243,37 +243,32 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 		return
 	}
 
-	for _, v := range req.Vars {
-		if v.Key == "" {
-			c.JSON(http.StatusBadRequest, models.NewAppError(
-				http.StatusBadRequest,
-				"VALIDATION_ERROR",
-				"Environment variable keys cannot be empty",
-			))
-			return
-		}
-		if strings.Contains(v.Key, "\n") || strings.Contains(v.Value, "\n") {
-			c.JSON(http.StatusBadRequest, models.NewAppError(
-				http.StatusBadRequest,
-				"VALIDATION_ERROR",
-				"Environment variables cannot contain newlines",
-			))
-			return
-		}
+	entries := make([]EnvEntry, len(req.Vars))
+	for i, v := range req.Vars {
+		entries[i] = EnvEntry{Key: v.Key, Value: v.Value}
+	}
+
+	// Reuse the stack-env validation rules: reject an empty key paired with a
+	// non-empty value (would serialise as a corrupt "=value" line) and reject
+	// newlines/CRs in keys or values (finding #15 / B4). An entry with both an
+	// empty key and empty value is treated as a no-op blank line, matching
+	// serializeEnvFile below, rather than rejected outright.
+	if err := validateEnvEntries(entries); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			"VALIDATION_ERROR",
+			err.Error(),
+		))
+		return
 	}
 
 	globalEnvPath := h.cfg.DataDir + "/global.env"
-	var sb strings.Builder
-	for _, v := range req.Vars {
-		if v.Key != "" && v.Value != "" {
-			sb.WriteString(v.Key)
-			sb.WriteByte('=')
-			sb.WriteString(v.Value)
-			sb.WriteByte('\n')
-		}
-	}
+	// serializeEnvFile only skips an entry when BOTH key and value are empty,
+	// so a deliberately empty value (KEY=) round-trips instead of being
+	// silently dropped.
+	content := serializeEnvFile(entries)
 
-	if err := os.WriteFile(globalEnvPath, []byte(sb.String()), 0600); err != nil {
+	if err := writeEnvFileAtomic(globalEnvPath, content); err != nil {
 		slog.Error("Failed to write global environment file", "error", err)
 		c.JSON(http.StatusInternalServerError, models.NewAppError(
 			http.StatusInternalServerError,

@@ -234,6 +234,39 @@ CREATE INDEX IF NOT EXISTS idx_backup_run_items_run_id ON backup_run_items(run_i
 CREATE INDEX IF NOT EXISTS idx_backup_run_items_stack_id ON backup_run_items(stack_id);
 `,
 	},
+	{
+		Version: 9,
+		Name:    "action_log_denormalized",
+		SQL: `
+-- action_log becomes a denormalized, append-only audit record: user_id and
+-- stack_id are no longer foreign keys to users/stacks. Both FKs were
+-- ON DELETE CASCADE, so deleting a user or a stack silently erased the
+-- history of what they did -- the opposite of what an audit log is for.
+-- Sentinel actor labels such as "anonymous" (AUTH_DISABLED mode) or "system"
+-- (background jobs) are legitimate values here, not placeholders that need
+-- to resolve to a real row, so existing data is copied verbatim.
+ALTER TABLE action_log RENAME TO action_log_v8;
+
+CREATE TABLE action_log (
+	id TEXT PRIMARY KEY,
+	user_id TEXT NOT NULL,
+	stack_id TEXT,
+	action TEXT NOT NULL,
+	detail TEXT,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO action_log (id, user_id, stack_id, action, detail, created_at)
+SELECT id, user_id, stack_id, action, detail, created_at
+FROM action_log_v8;
+
+DROP TABLE action_log_v8;
+
+CREATE INDEX IF NOT EXISTS idx_action_log_user_id ON action_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_action_log_stack_id ON action_log(stack_id);
+CREATE INDEX IF NOT EXISTS idx_action_log_created_at ON action_log(created_at);
+`,
+	},
 }
 
 func RunMigrations(db *DB) error {

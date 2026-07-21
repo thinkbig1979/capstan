@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -224,6 +225,62 @@ func TestSettingsHandler_UpdateGlobalEnv_Newlines(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestSettingsHandler_UpdateGlobalEnv_EmptyValuePreserved guards against the
+// silent-data-loss bug where a var with a deliberately empty value (KEY=)
+// was dropped entirely on write instead of round-tripping.
+func TestSettingsHandler_UpdateGlobalEnv_EmptyValuePreserved(t *testing.T) {
+	handler, router := newTestSettingsHandler(t)
+
+	body := `{"vars":[{"key":"FOO","value":""},{"key":"BAR","value":"baz"}]}`
+	req := httptest.NewRequest(http.MethodPut, "/settings/global-env", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNoContent, w.Code)
+
+	raw, err := os.ReadFile(filepath.Join(handler.cfg.DataDir, "global.env"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "FOO=\n")
+	assert.Contains(t, string(raw), "BAR=baz\n")
+
+	req = httptest.NewRequest(http.MethodGet, "/settings/global-env", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	vars := response["vars"].([]interface{})
+	require.Len(t, vars, 2)
+	first := vars[0].(map[string]interface{})
+	assert.Equal(t, "FOO", first["key"])
+	assert.Equal(t, "", first["value"])
+}
+
+// TestSettingsHandler_UpdateGlobalEnv_FixesLooseFileMode guards the atomic
+// write path: a pre-existing global.env left at a looser mode (e.g. 0644 by
+// older code) must end up at 0600 after an update, with no window where the
+// freshly written secrets are exposed at the looser mode.
+func TestSettingsHandler_UpdateGlobalEnv_FixesLooseFileMode(t *testing.T) {
+	handler, router := newTestSettingsHandler(t)
+
+	envPath := filepath.Join(handler.cfg.DataDir, "global.env")
+	require.NoError(t, os.WriteFile(envPath, []byte("OLD=value\n"), 0644))
+
+	body := `{"vars":[{"key":"NEW","value":"value"}]}`
+	req := httptest.NewRequest(http.MethodPut, "/settings/global-env", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNoContent, w.Code)
+
+	info, err := os.Stat(envPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
 }
 
 func TestSettingsHandler_GetUpdateSettings_Default(t *testing.T) {

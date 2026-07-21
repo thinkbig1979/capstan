@@ -37,7 +37,18 @@ func NewWithEncryptor(dataDir string, encryptor TokenEncryptor) (*DB, error) {
 		dbPath = dataDir + "/capstan.db"
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	// foreign_keys and busy_timeout are connection-scoped SQLite pragmas: a
+	// PRAGMA run via db.Exec only applies to whichever single connection
+	// happens to service that call, not to every connection the pool later
+	// opens. Putting them in the DSN's _pragma query parameter makes the
+	// driver (modernc.org/sqlite) re-apply them on every new connection it
+	// opens, so enforcement holds across the whole pool rather than just the
+	// first connection. This works the same way for the ":memory:" DSN (the
+	// driver strips the "?..." suffix before opening and applies the pragmas
+	// afterward), so no separate "file::memory:" form is needed here.
+	dsn := dbPath + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -55,17 +66,10 @@ func NewWithEncryptor(dataDir string, encryptor TokenEncryptor) (*DB, error) {
 		db.SetConnMaxIdleTime(1 * time.Minute)
 	}
 
+	// journal_mode is database-scoped, not connection-scoped (it's persisted
+	// in the database file/shared-memory region), so a single Exec on any one
+	// pooled connection is sufficient here.
 	_, err = db.Exec("PRAGMA journal_mode=WAL")
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec("PRAGMA foreign_keys=ON")
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = db.Exec("PRAGMA busy_timeout=5000")
 	if err != nil {
 		return nil, err
 	}
@@ -465,9 +469,13 @@ func (d *DB) GetStackByProjectName(projectName string) (*models.Stack, error) {
 }
 
 func (d *DB) LogAction(log models.ActionLog) error {
-	// stack_id has a foreign key to stacks(id); an empty string is not a valid
-	// reference and (with foreign_keys=ON) would reject the insert. Store NULL
-	// for non-stack actions (settings, auth, resource mutations) so they persist.
+	// action_log is a denormalized, append-only audit record: user_id and
+	// stack_id are plain columns with no foreign keys (see migration v9), so
+	// that deleting a user or a stack never erases the history of what they
+	// did. Sentinel actor labels like "anonymous" or "system" are legitimate
+	// values here and are stored verbatim. stack_id is still normalized to
+	// NULL for actions with no associated stack, so it stays meaningful
+	// ("no stack" vs. an empty string) even without a constraint enforcing it.
 	var stackID interface{}
 	if log.StackID != "" {
 		stackID = log.StackID

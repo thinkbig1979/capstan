@@ -523,13 +523,10 @@ func TestFKCascade_DeleteRunRemovesItems(t *testing.T) {
 
 func seedActionLogs(t *testing.T, db *DB) {
 	t.Helper()
-	// Global actions (e.g. backup) are logged with an empty user/stack id and no
-	// matching users/stacks row. Production pools connections so its per-connection
-	// foreign_keys pragma doesn't enforce these; the single-connection in-memory
-	// test DB does, so relax it here to seed the same shape production stores.
-	_, err := db.db.Exec("PRAGMA foreign_keys=OFF")
-	require.NoError(t, err)
-
+	// Global actions (e.g. backup) are logged with a placeholder actor label
+	// ("system") that has no matching users row. action_log.user_id is a
+	// plain column with no foreign key (migration v9), so these insert
+	// cleanly regardless of foreign_keys enforcement.
 	entries := []models.ActionLog{
 		{ID: "al-1", UserID: "system", Action: "backup", Detail: `{"status":"success"}`, CreatedAt: mustTime(t, "2026-05-29T10:00:00Z")},
 		{ID: "al-2", UserID: "admin", Action: "stack_start", Detail: `{"stack":"web"}`, CreatedAt: mustTime(t, "2026-05-30T11:00:00Z")},
