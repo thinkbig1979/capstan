@@ -37,6 +37,15 @@ interface LogMessage {
   message: string
 }
 
+// LogMessage as received over the socket carries no per-line identity, but the
+// buffer is filtered live (search, container, time range, errors-only), so the
+// position of a line within the rendered list is not stable across renders.
+// Each line gets a synthetic, monotonically increasing id at ingestion time so
+// it keeps a stable React key regardless of which filtered subset it lands in.
+interface DisplayLogMessage extends LogMessage {
+  id: number
+}
+
 interface TimeRangeConfig {
   label: string
   value: LogTimeRange
@@ -166,7 +175,7 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
   const setLogPrefs = useUIStore((s) => s.setLogPrefs)
   const { showTimestamps, autoScroll, wrap, errorsOnly, timeRange } = logPrefs
 
-  const [logs, setLogs] = useState<LogMessage[]>([])
+  const [logs, setLogs] = useState<DisplayLogMessage[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedContainers, setSelectedContainers] = useState<string[]>(
     initialContainer ? [initialContainer] : []
@@ -177,8 +186,9 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
   const [customStartTime, setCustomStartTime] = useState<Date | null>(null)
   const [customEndTime, setCustomEndTime] = useState<Date | null>(null)
 
-  const logsRef = useRef<LogMessage[]>([])
-  const batchRef = useRef<LogMessage[]>([])
+  const logsRef = useRef<DisplayLogMessage[]>([])
+  const batchRef = useRef<DisplayLogMessage[]>([])
+  const nextLogIdRef = useRef(0)
   const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const logContainerRef = useRef<HTMLDivElement>(null)
   const isAutoScrollingRef = useRef(false)
@@ -227,7 +237,7 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
   }, [uniqueContainers])
 
   const handleLogMessage = useCallback((data: LogMessage) => {
-    batchRef.current.push(data)
+    batchRef.current.push({ ...data, id: nextLogIdRef.current++ })
 
     if (!flushTimeoutRef.current) {
       flushTimeoutRef.current = setTimeout(() => {
@@ -573,13 +583,13 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
                'No logs match current filters'}
             </div>
           ) : (
-            filteredLogs.map((log, index) => {
+            filteredLogs.map((log) => {
               const containerColor = containerColors.get(log.container) ?? CONTAINER_COLORS[0]
               const logLevelColor = hasAnsi(log.message) ? '' : getLogLevelColor(log.message)
 
               return (
                 <div
-                  key={`${log.container}-${log.timestamp}-${index}`}
+                  key={log.id}
                   className={cn(
                     'flex gap-2 py-0.5',
                     wrap ? 'whitespace-pre-wrap wrap-break-word' : 'whitespace-pre'
@@ -605,6 +615,7 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
 
         {scrolledUp && (
           <button
+            type="button"
             onClick={handleJumpToLatest}
             className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-md hover:bg-primary/90 transition-colors"
           >

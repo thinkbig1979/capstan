@@ -406,8 +406,8 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
               <div className="text-sm font-medium">Errors found:</div>
               {lintResults
                 .filter((r) => r.level === 'error')
-                .map((result, index) => (
-                  <div key={`err-${result.line || index}-${result.message}`} className="flex items-start gap-2 text-sm">
+                .map((result) => (
+                  <div key={`${result.rule}-${result.line ?? 'no-line'}-${result.message}`} className="flex items-start gap-2 text-sm">
                     <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div className="font-medium">{result.message}</div>

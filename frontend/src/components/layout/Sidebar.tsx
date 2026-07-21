@@ -329,6 +329,7 @@ export function Sidebar() {
     return (
       <div key={node.fullPath} className={isTopLevel && !isFirst ? 'border-t border-sidebar-border mt-1' : ''}>
         <button
+          type="button"
           onClick={() => toggleGroup(node.fullPath)}
           className={`flex items-center gap-1.5 w-full transition-colors rounded ${
             isTopLevel
@@ -593,6 +594,7 @@ export function Sidebar() {
           />
           {searchQuery && (
             <button
+              type="button"
               onClick={() => setSearchQuery("")}
               className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-sidebar-foreground"
             >
@@ -605,6 +607,7 @@ export function Sidebar() {
           {(["all", "running", "stopped", "error"] as const).map((key) => (
             <button
               key={key}
+              type="button"
               onClick={() => setStatusFilter(key)}
               className={`inline-flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-medium transition-colors ${
                 statusFilter === key
@@ -635,6 +638,7 @@ export function Sidebar() {
           ))}
           <div className="flex-1" />
           <button
+            type="button"
             onClick={() => setSortBy(sortBy === "name" ? "status" : "name")}
             className="inline-flex items-center gap-0.5 h-5 px-1.5 rounded text-[10px] text-muted-foreground hover:bg-muted transition-colors"
             title={`Sort by ${sortBy === "name" ? "name" : "status"}. Click to toggle.`}
@@ -652,6 +656,7 @@ export function Sidebar() {
               {selectedIds.size} selected
             </span>
             <button
+              type="button"
               onClick={selectAllVisible}
               className="text-primary hover:underline"
             >
@@ -709,6 +714,7 @@ export function Sidebar() {
         <div className="px-3 py-1 border-b text-[10px] text-muted-foreground">
           {filteredStacks.length} of {stacks.length} stacks
           <button
+            type="button"
             onClick={() => {
               setSearchQuery("");
               setStatusFilter("all");
@@ -751,6 +757,7 @@ export function Sidebar() {
                 return (
                   <div key={rootGroup.rootPath}>
                     <button
+                      type="button"
                       onClick={() => toggleGroup(rootGroup.rootPath)}
                       className="flex items-center gap-1.5 w-full px-2 pt-2 pb-0.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-sidebar-foreground transition-colors"
                       title={rootGroup.rootPath}

@@ -113,8 +113,8 @@ function PreviewPanel({ snapshotId, onClose }: { snapshotId: string; onClose: ()
         {data && data.entries.length === 0 && (
           <span className="text-muted-foreground">No entries found in snapshot.</span>
         )}
-        {data && data.entries.map((entry, i) => (
-          <div key={i} className="whitespace-pre-wrap break-all text-foreground/80">{entry}</div>
+        {data && data.entries.map((entry) => (
+          <div key={entry} className="whitespace-pre-wrap break-all text-foreground/80">{entry}</div>
         ))}
       </div>
     </div>
