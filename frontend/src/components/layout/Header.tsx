@@ -244,7 +244,7 @@ export function Header() {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              <button onClick={handleLogout} aria-label="Log out of account">
+              <button type="button" onClick={handleLogout} aria-label="Log out of account">
                 Logout
               </button>
             </DropdownMenuItem>

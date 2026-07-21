@@ -316,6 +316,7 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
         >
           {hasChildren ? (
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation()
                 toggleNode(node.fullPath)
@@ -390,6 +391,7 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
             return (
               <div key={group.rootPath} className="rounded-md border">
                 <button
+                  type="button"
                   onClick={() => toggleNode(group.rootPath)}
                   className="flex items-center gap-2 w-full px-4 py-3 bg-muted/40 hover:bg-muted/60 transition-colors rounded-t-md"
                 >

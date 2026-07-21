@@ -325,6 +325,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
 
             <div className="inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground w-full">
               <button
+                type="button"
                 onClick={() => setComposeTab('editor')}
                 className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-all flex-1 ${
                   composeTab === 'editor'
@@ -335,6 +336,7 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
                 Compose Editor
               </button>
               <button
+                type="button"
                 onClick={() => setComposeTab('docker-run')}
                 className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-all flex-1 ${
                   composeTab === 'docker-run'

@@ -76,6 +76,7 @@ export function GitHistory({ stackId }: GitHistoryProps) {
           />
           {searchQuery && (
             <button
+              type="button"
               onClick={() => {
                 setSearchQuery('')
                 setSearchScope('all')

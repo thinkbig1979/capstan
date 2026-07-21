@@ -30,9 +30,9 @@ export function LintResultsPanel({ results, maxHeight }: LintResultsPanelProps) 
         className="divide-y"
         style={maxHeight ? { maxHeight, overflowY: 'auto' } : undefined}
       >
-        {results.map((result, index) => (
+        {results.map((result) => (
           <div
-            key={`${result.level}-${result.line || index}-${result.message}`}
+            key={`${result.rule}-${result.level}-${result.line ?? 'no-line'}-${result.message}`}
             className="p-3 flex items-start gap-3 hover:bg-muted/50"
           >
             {getLintIcon(result.level)}
