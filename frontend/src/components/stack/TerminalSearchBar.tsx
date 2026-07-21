@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useEffectEvent, useRef, useState, useCallback } from 'react'
 import { SearchAddon } from '@xterm/addon-search'
 import { Button } from '@/components/ui/button'
 import { Search, ChevronUp, ChevronDown, X } from 'lucide-react'
@@ -60,14 +60,22 @@ export function TerminalSearchBar({ searchAddon, onClose }: TerminalSearchBarPro
     searchAddon?.clearActiveDecoration()
   }, [searchAddon])
 
+  // `doSearch` is only read inside the setTimeout sub-handler below, so
+  // wrapping it in an Effect Event keeps this effect from re-running the
+  // debounce timer on every render that changes doSearch's own deps — see
+  // https://react.dev/reference/react/useEffectEvent
+  const onSearchTimeout = useEffectEvent(() => {
+    doSearch()
+  })
+
   useEffect(() => {
     if (!query) {
       clearSearch()
       return
     }
-    const timer = setTimeout(() => doSearch(), 150)
+    const timer = setTimeout(() => onSearchTimeout(), 150)
     return () => clearTimeout(timer)
-  }, [query, doSearch, searchAddon, clearSearch])
+  }, [query, searchAddon, clearSearch])
 
   return (
     <div className="flex items-center gap-2 rounded-lg border bg-background px-3 py-1.5">

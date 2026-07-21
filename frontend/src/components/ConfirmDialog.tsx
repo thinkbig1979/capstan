@@ -27,10 +27,15 @@ export const ConfirmDialog = React.memo(function ConfirmDialog({
 }: ConfirmDialogProps) {
   const [typed, setTyped] = React.useState('')
 
-  // Reset the typed value each time the dialog opens
-  React.useEffect(() => {
+  // Reset the typed value each time the dialog opens. Adjusted during render
+  // (rather than in an effect) by comparing against the previous render's
+  // `open` value, so there is no stale first-render flicker of a leftover
+  // typed value — see https://react.dev/learn/you-might-not-need-an-effect.
+  const [prevOpen, setPrevOpen] = React.useState(open)
+  if (open !== prevOpen) {
+    setPrevOpen(open)
     if (open) setTyped('')
-  }, [open])
+  }
 
   const typedMatches = !requireConfirmationText || typed === requireConfirmationText
 

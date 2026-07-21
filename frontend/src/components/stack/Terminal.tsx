@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useEffectEvent, useRef, useState, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { FitAddon } from '@xterm/addon-fit'
@@ -392,9 +392,17 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleTerminalData, isConnected, send, clearInactivityTimers, reconnectKeyRef])
 
+  // `fitTerminal` is only ever read inside the resize sub-handler below, so
+  // wrapping it in an Effect Event keeps this effect from re-subscribing the
+  // resize/keydown listeners on every render that changes `isConnected`/`send`
+  // (fitTerminal's own deps) — see https://react.dev/reference/react/useEffectEvent
+  const onWindowResize = useEffectEvent(() => {
+    fitTerminal()
+  })
+
   useEffect(() => {
     const handleWindowResize = () => {
-      fitTerminal()
+      onWindowResize()
     }
 
     window.addEventListener('resize', handleWindowResize)
@@ -403,7 +411,7 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
       window.removeEventListener('resize', handleWindowResize)
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [fitTerminal, handleKeyDown])
+  }, [handleKeyDown])
 
   // The terminal attaches to a running container; with none, show an explanatory empty state
   // instead of a black void (matching the Logs and Metrics tabs). The xterm box stays mounted

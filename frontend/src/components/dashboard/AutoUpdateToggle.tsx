@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { AlertTriangle, Lock } from 'lucide-react'
@@ -26,9 +26,17 @@ export function AutoUpdateToggle({
   const [optimisticEnabled, setOptimisticEnabled] = useState(enabled)
   const toggleMutation = useToggleAutoUpdate()
 
-  useEffect(() => {
+  // Re-sync the optimistic local copy whenever the `enabled` prop changes
+  // (e.g. another tab toggled it, or a query refetch confirmed/reverted an
+  // in-flight change). Adjusted during render (rather than in an effect) by
+  // comparing against the previous render's `enabled` value, so there is no
+  // stale first-render flicker — see
+  // https://react.dev/learn/you-might-not-need-an-effect.
+  const [prevEnabledProp, setPrevEnabledProp] = useState(enabled)
+  if (enabled !== prevEnabledProp) {
+    setPrevEnabledProp(enabled)
     setOptimisticEnabled(enabled)
-  }, [enabled])
+  }
 
   const handleToggle = (checked: boolean) => {
     setOptimisticEnabled(checked)

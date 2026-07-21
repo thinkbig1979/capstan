@@ -35,6 +35,7 @@ import {
   hasTreeNesting,
   type TreeNode,
 } from "@/lib/stack-tree";
+import { loadCollapsedSet, saveCollapsedSet } from "@/lib/collapsed-set-storage";
 import type { Stack, StackStatus } from "@/types";
 
 // Filled status dot per stack status (a pip, not the old outlined Square icon which read as a
@@ -77,18 +78,17 @@ function untilTime(iso: string): string {
   return `${hrs}h ${mins % 60}m`;
 }
 
+const SIDEBAR_COLLAPSED_KEY = "sidebar-collapsed:v1";
+// Pre-versioning key. Read once as a migration so existing users don't lose
+// their collapsed-group state; never written to again.
+const SIDEBAR_COLLAPSED_LEGACY_KEY = "sidebar-collapsed";
+
 function loadCollapsed(): Set<string> {
-  try {
-    const raw = localStorage.getItem("sidebar-collapsed");
-    if (raw) return new Set(JSON.parse(raw));
-  } catch {
-    /* ignore */
-  }
-  return new Set();
+  return loadCollapsedSet(SIDEBAR_COLLAPSED_KEY, SIDEBAR_COLLAPSED_LEGACY_KEY) ?? new Set();
 }
 
 function saveCollapsed(set: Set<string>) {
-  localStorage.setItem("sidebar-collapsed", JSON.stringify([...set]));
+  saveCollapsedSet(SIDEBAR_COLLAPSED_KEY, set);
 }
 
 export function Sidebar() {
@@ -274,23 +274,26 @@ export function Sidebar() {
       const ids = [...selectedIds];
       if (ids.length === 0) return;
       setBulkPending(true);
-      const results = await Promise.allSettled(
-        ids.map((id) => stacksApi[action](id)),
-      );
-      const ok = results.filter((r) => r.status === "fulfilled").length;
-      const failed = results.length - ok;
-      const verb = BULK_LABELS[action];
-      if (failed === 0) {
-        toast.success(`${verb} ${ok} stack${ok === 1 ? "" : "s"}`);
-      } else if (ok === 0) {
-        toast.error(`Failed to ${action} ${failed} stack${failed === 1 ? "" : "s"}`);
-      } else {
-        toast.warning(`${verb} ${ok}, ${failed} failed`);
+      try {
+        const results = await Promise.allSettled(
+          ids.map((id) => stacksApi[action](id)),
+        );
+        const ok = results.filter((r) => r.status === "fulfilled").length;
+        const failed = results.length - ok;
+        const verb = BULK_LABELS[action];
+        if (failed === 0) {
+          toast.success(`${verb} ${ok} stack${ok === 1 ? "" : "s"}`);
+        } else if (ok === 0) {
+          toast.error(`Failed to ${action} ${failed} stack${failed === 1 ? "" : "s"}`);
+        } else {
+          toast.warning(`${verb} ${ok}, ${failed} failed`);
+        }
+        queryClient.invalidateQueries({ queryKey: ["stacks"] });
+        queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+        exitSelectMode();
+      } finally {
+        setBulkPending(false);
       }
-      queryClient.invalidateQueries({ queryKey: ["stacks"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
-      setBulkPending(false);
-      exitSelectMode();
     },
     [selectedIds, queryClient, exitSelectMode],
   );
