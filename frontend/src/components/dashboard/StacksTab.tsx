@@ -218,19 +218,16 @@ export function StacksTab({
                   >
                     <TableCell className="font-medium">{stack.projectName}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      <span
+                      <button
+                        type="button"
                         className="inline-flex items-center gap-1.5 cursor-pointer hover:text-foreground hover:underline"
-                        role="button"
-                        tabIndex={0}
                         onClick={(e) => {
                           e.stopPropagation()
                           onNavigateToDirectories()
                         }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault()
                             e.stopPropagation()
-                            onNavigateToDirectories()
                           }
                         }}
                       >
@@ -238,7 +235,7 @@ export function StacksTab({
                         {stack.isGitRepo && (
                           <GitBranch className="h-3 w-3 text-muted-foreground" />
                         )}
-                      </span>
+                      </button>
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'error' | 'unknown'} pulse={isAnimating(stack.id)} />

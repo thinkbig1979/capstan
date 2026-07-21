@@ -418,9 +418,8 @@ export function Sidebar() {
             title="Uncommitted changes"
           />
         )}
-        <span
-          role="button"
-          tabIndex={0}
+        <button
+          type="button"
           aria-label={pinned ? `Unpin ${stack.projectName}` : `Pin ${stack.projectName}`}
           title={pinned ? "Unpin" : "Pin to top"}
           onClick={(e) => {
@@ -442,7 +441,7 @@ export function Sidebar() {
           }`}
         >
           <Star className={`h-3 w-3 ${pinned ? "fill-current" : ""}`} />
-        </span>
+        </button>
       </Link>
     );
   };
@@ -584,8 +583,10 @@ export function Sidebar() {
         </div>
 
         <div className="relative">
+          <label htmlFor="sidebar-stack-search" className="sr-only">Search stacks</label>
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
+            id="sidebar-stack-search"
             type="text"
             placeholder="Search stacks..."
             value={searchQuery}
@@ -596,6 +597,7 @@ export function Sidebar() {
             <button
               type="button"
               onClick={() => setSearchQuery("")}
+              aria-label="Clear search"
               className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-sidebar-foreground"
             >
               <X className="h-3 w-3" />
