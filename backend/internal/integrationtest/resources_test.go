@@ -284,15 +284,16 @@ func Test_Resource_StackDelete_RemovesDirAndDBRow(t *testing.T) {
 
 	svc := newDockerServiceForResources(t, stacksRoot)
 
-	// compose down (stack was never started; must not error).
-	result, dockerErr := svc.Delete(models.Stack{
+	// compose down -v, verified (stack was never started; must succeed and
+	// verify as removed).
+	deleteAR, deleteOutput := svc.DeleteVerified(models.Stack{
 		ID:          stackID,
 		Directory:   stackDir,
 		ComposeFile: "compose.yaml",
 		ProjectName: "test-delete-stack-default",
 	})
-	require.NoError(t, dockerErr, "compose down must succeed for a never-started stack")
-	t.Logf("compose down output: %s", strings.TrimSpace(result.Stdout))
+	require.NotEqual(t, truth.OutcomeFailed, deleteAR.Outcome, "compose down must verify as removed for a never-started stack: %s", deleteAR.Reason)
+	t.Logf("compose down output: %s", strings.TrimSpace(deleteOutput))
 
 	// Resolve abs path (mirroring the fixed handler).
 	absStackDir, absErr := filepath.Abs(stackDir)

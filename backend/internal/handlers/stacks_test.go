@@ -11,14 +11,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
-	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestStacksHandler_Create_Success(t *testing.T) {
@@ -264,7 +264,7 @@ func TestStacksHandler_Get_NotFound(t *testing.T) {
 // Delete fires at the HANDLER level: a stack whose Directory points outside the
 // configured stacks root must be refused with a "failed" outcome BEFORE any
 // removal, and the directory must be left untouched. docker is nil here because
-// the guard returns before h.docker.Delete is ever reached — this is exactly the
+// the guard returns before h.docker.DeleteVerified is ever reached — this is exactly the
 // property under test (a regression reordering the guard would panic or delete).
 func TestStacksHandler_Delete_OutsideRootRefused(t *testing.T) {
 	tempRoot := t.TempDir() // configured stacks root
@@ -308,11 +308,11 @@ func TestStacksHandler_Delete_OutsideRootRefused(t *testing.T) {
 }
 
 // fakeStackDocker is a stackDocker test double. The zero value reports docker as
-// present and lets Delete succeed, so a Delete request proceeds past the real
-// compose-down to the directory removal and DB delete.
+// present and lets DeleteVerified succeed, so a Delete request proceeds past the
+// real compose-down to the directory removal and DB delete.
 type fakeStackDocker struct {
-	deleteResult *models.CommandResult
-	deleteErr    error
+	deleteAR     truth.ActionResult
+	deleteOutput string
 }
 
 func (f *fakeStackDocker) GetStackStatuses(context.Context, services.DashboardDB) (map[string]services.LiveStatus, error) {
@@ -330,8 +330,11 @@ func (f *fakeStackDocker) RestartVerified(models.Stack) (truth.ActionResult, str
 func (f *fakeStackDocker) PullVerified(models.Stack) (truth.ActionResult, string) {
 	return truth.ActionResult{}, ""
 }
-func (f *fakeStackDocker) Delete(models.Stack) (*models.CommandResult, error) {
-	return f.deleteResult, f.deleteErr
+func (f *fakeStackDocker) DeleteVerified(models.Stack) (truth.ActionResult, string) {
+	if f.deleteAR.Outcome == "" {
+		return truth.Success("stack and volumes removed"), f.deleteOutput
+	}
+	return f.deleteAR, f.deleteOutput
 }
 
 // fakeStackStore is a stackStore test double: GetStack returns a preconfigured
@@ -343,11 +346,11 @@ type fakeStackStore struct {
 	deleteCalled bool
 }
 
-func (f *fakeStackStore) ListStacks() ([]models.Stack, error)                  { return nil, nil }
-func (f *fakeStackStore) GetStack(string) (*models.Stack, error)               { return f.stack, nil }
-func (f *fakeStackStore) GetStackByProjectName(string) (*models.Stack, error)  { return nil, nil }
-func (f *fakeStackStore) UpsertStack(models.Stack) error                       { return nil }
-func (f *fakeStackStore) UpdateStackStatus(string, string) error               { return nil }
+func (f *fakeStackStore) ListStacks() ([]models.Stack, error)                 { return nil, nil }
+func (f *fakeStackStore) GetStack(string) (*models.Stack, error)              { return f.stack, nil }
+func (f *fakeStackStore) GetStackByProjectName(string) (*models.Stack, error) { return nil, nil }
+func (f *fakeStackStore) UpsertStack(models.Stack) error                      { return nil }
+func (f *fakeStackStore) UpdateStackStatus(string, string) error              { return nil }
 func (f *fakeStackStore) DeleteStack(string) error {
 	f.deleteCalled = true
 	return f.deleteErr
@@ -369,7 +372,7 @@ func TestStacksHandler_Delete_DBDeleteErrorSurfaced(t *testing.T) {
 		stack:     &models.Stack{ID: id, Directory: stackDir, ComposeFile: "compose.yaml", ProjectName: "mystack-default"},
 		deleteErr: errors.New("database is locked"),
 	}
-	docker := &fakeStackDocker{deleteResult: &models.CommandResult{Stdout: "Removing network mystack_default"}}
+	docker := &fakeStackDocker{deleteOutput: "Removing network mystack_default"}
 
 	// A real ActionLogger over an in-memory DB: logAction writes there and swallows
 	// errors, so it never interferes with the persistence path under test.
@@ -394,4 +397,49 @@ func TestStacksHandler_Delete_DBDeleteErrorSurfaced(t *testing.T) {
 	// The handler progressed through the real os.RemoveAll before the DB delete
 	// failed: the directory is gone even though the row deletion errored.
 	assert.NoDirExists(t, stackDir)
+}
+
+// TestStacksHandler_Delete_VerificationFailureLeavesDirAndDBIntact proves the
+// accepted behavior change: when DeleteVerified reports a Failed outcome (e.g.
+// compose down exited 0 but a container survived), the handler must NOT touch
+// the filesystem or the DB row — this is what prevents orphaning a surviving
+// container by deleting its stack directory out from under it.
+func TestStacksHandler_Delete_VerificationFailureLeavesDirAndDBIntact(t *testing.T) {
+	tempRoot := t.TempDir()
+	stackDir := filepath.Join(tempRoot, "mystack") // inside the configured root -> guard passes
+	require.NoError(t, os.MkdirAll(stackDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "compose.yaml"), []byte("services: {}\n"), 0o644))
+
+	id := "root~mystack:default"
+	store := &fakeStackStore{
+		stack: &models.Stack{ID: id, Directory: stackDir, ComposeFile: "compose.yaml", ProjectName: "mystack-default"},
+	}
+	docker := &fakeStackDocker{
+		deleteAR:     truth.Failed("stack not fully removed: 1 container(s) still present (paused:1)", nil),
+		deleteOutput: "Removing network mystack_default",
+	}
+
+	logDB, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	cfg := &config.Config{StacksDir: tempRoot}
+	handler := NewStacksHandler(docker, nil, nil, store, cfg, services.NewActionLogger(logDB), services.NewOperationLock())
+
+	router := gin.New()
+	router.DELETE("/stacks/:id", authContextMiddleware("test-user-id"), handler.Delete)
+
+	req := httptest.NewRequest(http.MethodDelete, "/stacks/"+id+"?confirm=true", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "failed", resp["outcome"])
+	assert.Contains(t, resp["reason"], "compose down did not verify as removed")
+	assert.Contains(t, resp["reason"], "still present")
+
+	// The handler must have returned before os.RemoveAll and before DeleteStack.
+	assert.DirExists(t, stackDir, "verification failure must leave the stack directory on disk")
+	assert.False(t, store.deleteCalled, "verification failure must NOT reach db.DeleteStack")
 }

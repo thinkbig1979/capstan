@@ -184,7 +184,7 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		return
 	}
 
-	if err := os.WriteFile(envPath, []byte(content), 0644); err != nil {
+	if err := writeEnvFileAtomic(envPath, content); err != nil {
 		truth.Render(c, truth.Failed("failed to write env file", err))
 		return
 	}
@@ -318,6 +318,44 @@ func validateEnvEntries(entries []EnvEntry) error {
 		if strings.ContainsAny(e.Value, "\r\n") {
 			return fmt.Errorf("entry at index %d (key %q) has a value containing a newline; this would corrupt the env file", i, e.Key)
 		}
+	}
+	return nil
+}
+
+// writeEnvFileAtomic writes content to envPath via a temp-file-plus-rename so
+// the update is atomic and never exposes the file at a looser mode than 0600.
+// Writing in place (os.WriteFile then os.Chmod) leaves a window, between the
+// truncating write and the chmod, where a pre-existing looser-mode file (e.g.
+// 0644 left by older code) holds the freshly written secrets at that looser
+// mode. The temp file is created directly at 0600 in envPath's own directory,
+// so os.Rename lands the final file at 0600 in one atomic step and stays on
+// a single filesystem.
+func writeEnvFileAtomic(envPath, content string) error {
+	dir := filepath.Dir(envPath)
+	base := filepath.Base(envPath)
+
+	tmp, err := os.CreateTemp(dir, "."+base+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+
+	// os.CreateTemp already opens the file at 0600, but set the mode
+	// explicitly on the fd rather than relying on that documented default.
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if _, err := tmp.Write([]byte(content)); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, envPath); err != nil {
+		return fmt.Errorf("rename temp file into place: %w", err)
 	}
 	return nil
 }

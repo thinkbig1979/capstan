@@ -1,0 +1,56 @@
+import { ComposeEditor } from './ComposeEditor'
+import { EnvEditor } from './EnvEditor'
+import { TabErrorBoundary } from '@/components/TabErrorBoundary'
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from '@/components/ui/resizable'
+import { useMediaQuery } from '@/hooks/useMediaQuery'
+
+interface ComposeEnvSplitProps {
+  stackId: string
+}
+
+/**
+ * Side-by-side Compose + Environment editors with a draggable divider.
+ *
+ * Both editors are self-contained (they each own their state, save/lint logic,
+ * undo/redo, and validation keyed only off stackId), so rendering them in two
+ * panes preserves every feature of the standalone tabs with no extra wiring.
+ *
+ * Layout: horizontal panes on md+ screens, stacked vertically below that so each
+ * editor stays usable on narrow viewports. The split ratio is persisted per
+ * orientation via autoSaveId.
+ */
+export function ComposeEnvSplit({ stackId }: ComposeEnvSplitProps) {
+  const isWide = useMediaQuery('(min-width: 768px)')
+  const direction = isWide ? 'horizontal' : 'vertical'
+
+  return (
+    <ResizablePanelGroup
+      // Key by direction so the panels remount cleanly when orientation flips,
+      // and persist each orientation's ratio independently.
+      key={direction}
+      direction={direction}
+      autoSaveId={`compose-env-split-${direction}`}
+      className="min-h-[600px] rounded-lg"
+    >
+      <ResizablePanel defaultSize={50} minSize={25} className="pr-0 md:pr-3">
+        <div className="h-full overflow-auto">
+          <TabErrorBoundary>
+            <ComposeEditor stackId={stackId} />
+          </TabErrorBoundary>
+        </div>
+      </ResizablePanel>
+      <ResizableHandle withHandle className="my-3 md:my-0 md:mx-1" />
+      <ResizablePanel defaultSize={50} minSize={25} className="pl-0 md:pl-3">
+        <div className="h-full overflow-auto">
+          <TabErrorBoundary>
+            <EnvEditor stackId={stackId} />
+          </TabErrorBoundary>
+        </div>
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  )
+}

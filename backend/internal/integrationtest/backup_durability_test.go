@@ -32,6 +32,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -79,11 +80,11 @@ func seedBackupStack(t *testing.T, db *database.DB, stackID, stopPolicy string) 
 // interactions do not affect the durability assertion.
 type fakeDockerStopper struct{}
 
-func (f *fakeDockerStopper) Stop(stack models.Stack) (*models.CommandResult, error) {
-	return &models.CommandResult{ExitCode: 0}, nil
+func (f *fakeDockerStopper) StopVerified(stack models.Stack) (truth.ActionResult, string) {
+	return truth.Success("stack stopped"), ""
 }
-func (f *fakeDockerStopper) Start(stack models.Stack) (*models.CommandResult, error) {
-	return &models.CommandResult{ExitCode: 0}, nil
+func (f *fakeDockerStopper) StartVerified(stack models.Stack) (truth.ActionResult, string) {
+	return truth.Success("stack running"), ""
 }
 func (f *fakeDockerStopper) Status(stack models.Stack) (string, []models.Container, error) {
 	return "stopped", nil, nil

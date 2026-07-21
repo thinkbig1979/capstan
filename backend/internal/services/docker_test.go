@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 func TestDockerService_buildComposeArgs(t *testing.T) {
@@ -285,7 +286,7 @@ func TestParsePorts(t *testing.T) {
 	}
 }
 
-func TestDockerService_Start_FailsWithoutDocker(t *testing.T) {
+func TestDockerService_StartVerified_FailsWithoutDocker(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{StacksDir: tempDir}
 
@@ -299,11 +300,12 @@ func TestDockerService_Start_FailsWithoutDocker(t *testing.T) {
 		ProjectName: "test-stack-default",
 	}
 
-	_, err := service.Start(stack)
-	assert.Error(t, err)
+	ar, _ := service.StartVerified(stack)
+	assert.Equal(t, truth.OutcomeFailed, ar.Outcome)
+	assert.Error(t, ar.Err)
 }
 
-func TestDockerService_Stop_FailsWithoutDocker(t *testing.T) {
+func TestDockerService_StopVerified_FailsWithoutDocker(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{StacksDir: tempDir}
 
@@ -317,11 +319,12 @@ func TestDockerService_Stop_FailsWithoutDocker(t *testing.T) {
 		ProjectName: "test-stack-default",
 	}
 
-	_, err := service.Stop(stack)
-	assert.Error(t, err)
+	ar, _ := service.StopVerified(stack)
+	assert.Equal(t, truth.OutcomeFailed, ar.Outcome)
+	assert.Error(t, ar.Err)
 }
 
-func TestDockerService_Delete_FailsWithoutDocker(t *testing.T) {
+func TestDockerService_DeleteVerified_FailsWithoutDocker(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{StacksDir: tempDir}
 
@@ -335,8 +338,9 @@ func TestDockerService_Delete_FailsWithoutDocker(t *testing.T) {
 		ProjectName: "test-stack-default",
 	}
 
-	_, err := service.Delete(stack)
-	assert.Error(t, err)
+	ar, _ := service.DeleteVerified(stack)
+	assert.Equal(t, truth.OutcomeFailed, ar.Outcome)
+	assert.Error(t, ar.Err)
 }
 
 func TestDockerService_Status_InvalidProject(t *testing.T) {
@@ -353,10 +357,13 @@ func TestDockerService_Status_InvalidProject(t *testing.T) {
 		ProjectName: "test-stack-default",
 	}
 
+	// Status now propagates the real docker compose ps error instead of
+	// swallowing it into the ("unknown", nil, nil) sentinel (finding #10 fix,
+	// applied here as the single exported Status path).
 	status, containers, err := service.Status(stack)
 
-	assert.NoError(t, err)
-	assert.Equal(t, "unknown", status)
+	assert.Error(t, err)
+	assert.Equal(t, "", status)
 	assert.Nil(t, containers)
 }
 

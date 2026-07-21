@@ -5,6 +5,9 @@ allowBuilds:
   msw: false
 ignoredBuiltDependencies:
   - msw
+# Security: delay installs until releases have had time to be vetted, and
+# refuse to silently accept packages whose trust signals weaken on update.
+minimumReleaseAge: 10080
 overrides:
   # Security: pull fast-uri past the path-traversal / host-confusion fix.
   # Lives here (not package.json "pnpm.overrides") because pnpm 10.16+/11 reads

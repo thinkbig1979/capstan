@@ -19,6 +19,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // ErrBackupBusy is returned by RunBackup/RunSync/RunRestore when another
@@ -50,10 +51,12 @@ type BackupAvailability struct {
 
 // dockerStopper is the narrow interface BackupService needs from DockerService.
 // Defining it here (consumer side) keeps BackupService testable without the
-// full DockerService.
+// full DockerService. Stop/Start use the verified lifecycle variants so a
+// stop-before-backup (or restart-after) is proven, not just exit-code-trusted —
+// this matters for backup consistency in particular.
 type dockerStopper interface {
-	Stop(stack models.Stack) (*models.CommandResult, error)
-	Start(stack models.Stack) (*models.CommandResult, error)
+	StopVerified(stack models.Stack) (truth.ActionResult, string)
+	StartVerified(stack models.Stack) (truth.ActionResult, string)
 	Status(stack models.Stack) (string, []models.Container, error)
 }
 
@@ -409,7 +412,13 @@ func (s *BackupService) RunBackup(
 		run.BytesAdded = &totalBytesAdded
 	}
 
-	// Determine final run status.
+	// Determine final run status. This is a BackupRun job status
+	// ("running"/"success"/"partial"/"failed"), intentionally separate from
+	// truth.Outcome action results used elsewhere in the codebase — it tracks
+	// the aggregate of many per-stack backup attempts over the run's lifetime,
+	// not a single verified action's effect. "partial" here does carry the
+	// same domain meaning as truth.OutcomePartial (some targets succeeded,
+	// some failed), but the two are not coupled and must not be conflated.
 	switch {
 	case run.StacksFailed == 0:
 		run.Status = "success"
@@ -507,6 +516,8 @@ func (s *BackupService) RunBackupWithRunID(
 		run.BytesAdded = &totalBytesAdded
 	}
 
+	// BackupRun job status — see the equivalent switch in RunBackup for why
+	// this is intentionally distinct from truth.Outcome.
 	switch {
 	case run.StacksFailed == 0:
 		run.Status = "success"
@@ -580,9 +591,17 @@ func (s *BackupService) backupStack(
 	defer func() {
 		if stopApplied && wasRunning {
 			stream(out, "info", fmt.Sprintf("[%s] restarting stack (defensive)", stackID))
-			if _, startErr := s.docker.Start(stack); startErr != nil {
+			ar, _ := s.docker.StartVerified(stack)
+			switch ar.Outcome {
+			case truth.OutcomeFailed:
+				startErr := ar.Err
+				if startErr == nil {
+					startErr = errors.New(ar.Reason)
+				}
 				s.logger.Error("defensive restart failed", "stack", stackID, "error", startErr)
 				stream(out, "error", fmt.Sprintf("[%s] restart failed: %v", stackID, startErr))
+			case truth.OutcomePartial:
+				s.logger.Warn("defensive restart partially succeeded", "stack", stackID, "reason", ar.Reason)
 			}
 		}
 	}()
@@ -590,7 +609,11 @@ func (s *BackupService) backupStack(
 	// Apply stop policy.
 	if stopPolicy == "stop" && !dryRun {
 		stream(out, "info", fmt.Sprintf("[%s] stopping stack", stackID))
-		if _, stopErr := s.docker.Stop(stack); stopErr != nil {
+		if ar, _ := s.docker.StopVerified(stack); ar.Outcome == truth.OutcomeFailed {
+			stopErr := ar.Err
+			if stopErr == nil {
+				stopErr = errors.New(ar.Reason)
+			}
 			return 0, fmt.Errorf("stop stack: %w", stopErr)
 		}
 		stopApplied = true
@@ -767,15 +790,27 @@ func (s *BackupService) RunRestore(
 	defer func() {
 		if stopApplied && wasRunning {
 			stream(out, "info", fmt.Sprintf("[%s] restarting stack after restore", stackID))
-			if _, startErr := s.docker.Start(stack); startErr != nil {
+			ar, _ := s.docker.StartVerified(stack)
+			switch ar.Outcome {
+			case truth.OutcomeFailed:
+				startErr := ar.Err
+				if startErr == nil {
+					startErr = errors.New(ar.Reason)
+				}
 				stream(out, "error", fmt.Sprintf("[%s] restart failed: %v", stackID, startErr))
+			case truth.OutcomePartial:
+				s.logger.Warn("restart after restore partially succeeded", "stack", stackID, "reason", ar.Reason)
 			}
 		}
 	}()
 
 	if stopPolicy == "stop" {
 		stream(out, "info", fmt.Sprintf("[%s] stopping stack before restore", stackID))
-		if _, stopErr := s.docker.Stop(stack); stopErr != nil {
+		if ar, _ := s.docker.StopVerified(stack); ar.Outcome == truth.OutcomeFailed {
+			stopErr := ar.Err
+			if stopErr == nil {
+				stopErr = errors.New(ar.Reason)
+			}
 			return fmt.Errorf("stop stack: %w", stopErr)
 		}
 		stopApplied = true

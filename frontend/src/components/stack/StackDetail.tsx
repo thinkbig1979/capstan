@@ -4,6 +4,7 @@ import { ResponsiveTabsList } from '@/components/ui/responsive-tabs-list'
 import { ContainerList } from './ContainerList'
 import { ComposeEditor } from './ComposeEditor'
 import { EnvEditor } from './EnvEditor'
+import { ComposeEnvSplit } from './ComposeEnvSplit'
 import { TerminalComponent } from './Terminal'
 import { LogViewer } from './LogViewer'
 import { MetricsPanel } from './MetricsPanel'
@@ -198,6 +199,7 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
             { value: 'overview', label: 'Overview' },
             { value: 'compose', label: 'Compose' },
             { value: 'environment', label: 'Environment' },
+            { value: 'split', label: 'Compose + Env' },
             { value: 'logs', label: 'Logs' },
             { value: 'terminal', label: 'Terminal' },
             { value: 'metrics', label: 'Metrics' },
@@ -232,6 +234,10 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
           <TabErrorBoundary>
             <EnvEditor stackId={stack.id} />
           </TabErrorBoundary>
+        </TabsContent>
+
+        <TabsContent value="split" className="mt-4">
+          <ComposeEnvSplit stackId={stack.id} />
         </TabsContent>
 
         <TabsContent value="logs" className="mt-4">

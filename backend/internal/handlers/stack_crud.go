@@ -355,17 +355,27 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		}
 	}
 
-	// Bring the stack down (compose down -v).
-	result, err := h.docker.Delete(*stack)
-	if err != nil {
-		truth.Render(c, truth.Failed("failed to run compose down", err,
-			truth.KV("id", id),
-		))
-		return
-	}
+	// Bring the stack down (compose down -v) and verify the containers are
+	// actually gone before touching the filesystem or DB — a compose exit code
+	// of 0 does not guarantee the containers stopped (same reasoning as
+	// Start/Stop/Restart's verified lifecycle).
+	deleteAR, deleteOutput := h.docker.DeleteVerified(*stack)
 
 	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "delete", result.Stdout)
+	h.logAction(userID.(string), id, "delete", deleteOutput)
+
+	if deleteAR.Outcome != truth.OutcomeSuccess && deleteAR.Outcome != truth.OutcomeNoChange {
+		truth.Render(c, truth.ActionResult{
+			Outcome: deleteAR.Outcome,
+			Reason:  "compose down did not verify as removed: " + deleteAR.Reason,
+			Details: mergeDetails(deleteAR.Details, map[string]any{
+				"id":     id,
+				"output": deleteOutput,
+			}),
+			Err: deleteAR.Err,
+		})
+		return
+	}
 
 	// Remove the stack directory from disk.
 	if rmErr := os.RemoveAll(absStackDir); rmErr != nil {
@@ -386,6 +396,6 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 
 	truth.Render(c, truth.Success("stack deleted",
 		truth.KV("id", id),
-		truth.KV("output", result.Stdout),
+		truth.KV("output", deleteOutput),
 	))
 }
