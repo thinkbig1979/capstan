@@ -39,10 +39,13 @@ import (
 // Test helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// newTestDB opens an in-memory SQLite DB with all migrations applied.
+// newTestDB opens an in-memory SQLite DB with all migrations applied. Uses an
+// encryptor-backed DB so sensitive settings (restic_password) can be stored —
+// the DB refuses to persist secrets in plaintext (L1).
 func newTestDB(t *testing.T) *database.DB {
 	t.Helper()
-	db, err := database.NewWithMigrations(":memory:")
+	enc := services.NewTokenEncryptorOrDefault("", "test-secret-32-chars-padding-here")
+	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
 	require.NoError(t, err, "open in-memory DB")
 	t.Cleanup(func() { db.Close() })
 	return db
