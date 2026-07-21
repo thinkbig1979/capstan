@@ -16,7 +16,7 @@ export function AppShell({ children }: AppShellProps) {
   useUpdateScanWatcher()
 
   return (
-    <div className="flex min-h-screen bg-background">
+    <div className="flex min-h-dvh bg-background">
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         <Header />

@@ -23,42 +23,42 @@ import { useAuth } from '@/hooks/useAuth'
 import { toast } from 'sonner'
 import { HelpCircle, Settings, Sun, Moon, Laptop, ChevronLeft } from 'lucide-react'
 
+const KEYBOARD_SHORTCUTS = [
+  {
+    category: 'General',
+    shortcuts: [
+      { key: 'Ctrl+K', description: 'Open search' },
+      { key: 'Ctrl+/', description: 'Keyboard shortcuts help' },
+    ],
+  },
+  {
+    category: 'Stack Management',
+    shortcuts: [
+      { key: 'Ctrl+S', description: 'Save changes (Compose/Env)' },
+      { key: 'Ctrl+L', description: 'Lint compose file' },
+    ],
+  },
+  {
+    category: 'Editor',
+    shortcuts: [
+      { key: 'Ctrl+Z', description: 'Undo (Env editor)' },
+      { key: 'Ctrl+Y', description: 'Redo (Env editor)' },
+      { key: 'Ctrl+F', description: 'Find in editor' },
+    ],
+  },
+  {
+    category: 'Navigation',
+    shortcuts: [
+      { key: 'Escape', description: 'Close dialogs/modals' },
+    ],
+  },
+]
+
 export function Header() {
   const location = useLocation()
   const { theme, setTheme, toggleSidebar } = useUIStore()
   const { user, logout } = useAuth()
   const [showShortcuts, setShowShortcuts] = useState(false)
-
-  const shortcuts = [
-    {
-      category: 'General',
-      shortcuts: [
-        { key: 'Ctrl+K', description: 'Open search' },
-        { key: 'Ctrl+/', description: 'Keyboard shortcuts help' },
-      ],
-    },
-    {
-      category: 'Stack Management',
-      shortcuts: [
-        { key: 'Ctrl+S', description: 'Save changes (Compose/Env)' },
-        { key: 'Ctrl+L', description: 'Lint compose file' },
-      ],
-    },
-    {
-      category: 'Editor',
-      shortcuts: [
-        { key: 'Ctrl+Z', description: 'Undo (Env editor)' },
-        { key: 'Ctrl+Y', description: 'Redo (Env editor)' },
-        { key: 'Ctrl+F', description: 'Find in editor' },
-      ],
-    },
-    {
-      category: 'Navigation',
-      shortcuts: [
-        { key: 'Escape', description: 'Close dialogs/modals' },
-      ],
-    },
-  ]
 
   const getCurrentCategory = () => {
     const path = location.pathname
@@ -262,7 +262,7 @@ export function Header() {
           </DialogHeader>
           <ScrollArea className="max-h-[400px] pr-4">
             <div className="space-y-4">
-              {shortcuts.map((group) => (
+              {KEYBOARD_SHORTCUTS.map((group) => (
                 <div key={group.category}>
                   <h4 className="text-sm font-semibold mb-2">{group.category}</h4>
                   <div className="space-y-2">

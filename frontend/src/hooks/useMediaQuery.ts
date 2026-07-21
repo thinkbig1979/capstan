@@ -10,6 +10,11 @@ import { useCallback, useSyncExternalStore } from 'react'
  * Backed by useSyncExternalStore so the matchMedia subscription is tear-free and
  * needs no setState-in-effect.
  */
+// No matchMedia during SSR; default to "not matching".
+function getServerSnapshot() {
+  return false
+}
+
 export function useMediaQuery(query: string): boolean {
   const subscribe = useCallback(
     (onChange: () => void) => {
@@ -21,8 +26,6 @@ export function useMediaQuery(query: string): boolean {
   )
 
   const getSnapshot = useCallback(() => window.matchMedia(query).matches, [query])
-  // No matchMedia during SSR; default to "not matching".
-  const getServerSnapshot = () => false
 
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
 }

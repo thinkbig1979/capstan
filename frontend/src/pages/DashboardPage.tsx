@@ -27,9 +27,16 @@ import { useStackActions } from '@/hooks/useStackActions'
 import { toast } from 'sonner'
 import { useConfirm } from '@/hooks/useConfirm'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import type { ConfiguredDir } from '@/types'
 
 type SortOption = 'name' | 'status'
 type StatusFilter = 'all' | 'running' | 'stopped' | 'error'
+
+function sortDirectories(items: ConfiguredDir[] | undefined) {
+  if (!items) return []
+  const sorted = [...items]
+  return sorted.sort((a, b) => a.name.localeCompare(b.name))
+}
 
 export function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -128,12 +135,6 @@ export function DashboardPage() {
       default:
         return sorted
     }
-  }
-
-  const sortDirectories = (items: typeof directories) => {
-    if (!items) return []
-    const sorted = [...items]
-    return sorted.sort((a, b) => a.name.localeCompare(b.name))
   }
 
   const filterStacks = (stacksList: typeof stacks) => {

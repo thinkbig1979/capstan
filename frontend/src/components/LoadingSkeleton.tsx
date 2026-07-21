@@ -126,12 +126,14 @@ export function MetricsSkeleton() {
   )
 }
 
-export function LoadingSpinner({ size = 'default' }: { size?: 'small' | 'default' | 'large' }) {
-  const sizeClasses = {
-    small: 'w-4 h-4',
-    default: 'w-6 h-6',
-    large: 'w-8 h-8',
-  }
+const SPINNER_SIZE_CLASSES = {
+  small: 'w-4 h-4',
+  default: 'w-6 h-6',
+  large: 'w-8 h-8',
+}
 
-  return <SpinnerIcon className={cn('animate-spin text-muted-foreground', sizeClasses[size])} />
+export function LoadingSpinner({ size = 'default' }: { size?: 'small' | 'default' | 'large' }) {
+  return (
+    <SpinnerIcon className={cn('animate-spin text-muted-foreground', SPINNER_SIZE_CLASSES[size])} />
+  )
 }

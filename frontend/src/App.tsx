@@ -22,7 +22,7 @@ const SettingsPage = lazy(() =>
 )
 
 const suspendedFallback = (
-  <div className="flex items-center justify-center min-h-screen">
+  <div className="flex items-center justify-center min-h-dvh">
     <LoadingSpinner size="large" />
   </div>
 )
@@ -74,7 +74,7 @@ function App() {
 
   if (!statusChecked) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center min-h-dvh">
         <div className="flex flex-col items-center gap-4">
           <LoadingSpinner size="large" />
           <div className="text-lg">Loading...</div>

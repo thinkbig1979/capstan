@@ -32,6 +32,12 @@ interface EnvEditorProps {
   stackId: string
 }
 
+const SENSITIVE_KEY_PATTERNS = ['_KEY', '_SECRET', '_PASSWORD', '_TOKEN', '_API_']
+
+function isSensitiveKey(key: string) {
+  return SENSITIVE_KEY_PATTERNS.some((pattern) => key.toUpperCase().includes(pattern))
+}
+
 export function EnvEditor({ stackId }: EnvEditorProps) {
   const queryClient = useQueryClient()
   const { authDisabled } = useAuth()
@@ -274,11 +280,6 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       applyVisibilityToggle(pendingRevealIndex)
     }
     setPendingRevealIndex(null)
-  }
-
-  const isSensitiveKey = (key: string) => {
-    const sensitivePatterns = ['_KEY', '_SECRET', '_PASSWORD', '_TOKEN', '_API_']
-    return sensitivePatterns.some((pattern) => key.toUpperCase().includes(pattern))
   }
 
   // When the unlock session ends (manual lock or auto-expiry), re-mask any
