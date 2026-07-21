@@ -321,6 +321,7 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
                 e.stopPropagation()
                 toggleNode(node.fullPath)
               }}
+              aria-label={isCollapsed ? 'Expand folder' : 'Collapse folder'}
               className="p-0.5 hover:bg-muted rounded shrink-0"
             >
               {isCollapsed ? (

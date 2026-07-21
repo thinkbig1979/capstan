@@ -71,8 +71,10 @@ export function TerminalSearchBar({ searchAddon, onClose }: TerminalSearchBarPro
 
   return (
     <div className="flex items-center gap-2 rounded-lg border bg-background px-3 py-1.5">
+      <label htmlFor="terminal-search-input" className="sr-only">Find in terminal</label>
       <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
       <input
+        id="terminal-search-input"
         ref={inputRef}
         type="text"
         value={query}

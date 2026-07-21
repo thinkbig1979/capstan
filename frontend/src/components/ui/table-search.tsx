@@ -8,6 +8,8 @@ interface TableSearchProps {
   className?: string
   /** Accessible label for the input (defaults to the placeholder). */
   ariaLabel?: string
+  /** Id for the underlying input, so a page-level <label htmlFor> can target it. */
+  id?: string
 }
 
 /**
@@ -20,11 +22,13 @@ export function TableSearch({
   placeholder = 'Filter…',
   className,
   ariaLabel,
+  id,
 }: TableSearchProps) {
   return (
     <div className={cn('relative', className)}>
       <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
       <input
+        id={id}
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}

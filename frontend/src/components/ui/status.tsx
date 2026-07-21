@@ -23,52 +23,12 @@ const statusBadgeVariants = cva(
   },
 )
 
-const toneText: Record<StatusTone, string> = {
-  success: "text-success",
-  warning: "text-warning",
-  error: "text-destructive",
-  info: "text-info",
-  neutral: "text-muted-foreground",
-}
-
 const toneBg: Record<StatusTone, string> = {
   success: "bg-success",
   warning: "bg-warning",
   error: "bg-destructive",
   info: "bg-info",
   neutral: "bg-muted",
-}
-
-const toneBorder: Record<StatusTone, string> = {
-  success: "border-success/30",
-  warning: "border-warning/30",
-  error: "border-destructive/30",
-  info: "border-info/30",
-  neutral: "border-border",
-}
-
-const toneBgSubtle: Record<StatusTone, string> = {
-  success: "bg-success/10",
-  warning: "bg-warning/10",
-  error: "bg-destructive/10",
-  info: "bg-info/10",
-  neutral: "bg-muted/50",
-}
-
-export function statusTextClass(tone: StatusTone): string {
-  return toneText[tone]
-}
-
-export function statusBgClass(tone: StatusTone): string {
-  return toneBg[tone]
-}
-
-export function statusBorderClass(tone: StatusTone): string {
-  return toneBorder[tone]
-}
-
-export function statusBgSubtleClass(tone: StatusTone): string {
-  return toneBgSubtle[tone]
 }
 
 export interface StatusProps
