@@ -197,6 +197,151 @@ func TestEnv_Put_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestEnv_Put_NewlineInKey_Rejected(t *testing.T) {
+	// An entry whose key contains a literal newline must be rejected, not
+	// silently split across lines on serialisation (finding B4).
+	stacksDir := t.TempDir()
+	stackDir := filepath.Join(stacksDir, "newlinekey")
+	if err := os.MkdirAll(stackDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	envPath := filepath.Join(stackDir, ".env")
+	if err := os.WriteFile(envPath, []byte("GOOD=ok\n"), 0644); err != nil {
+		t.Fatalf("writeFile: %v", err)
+	}
+
+	db, err := database.NewWithMigrations(":memory:")
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+
+	stack := insertTestStack(t, db, stackDir, stacksDir, ".env")
+	router, _ := setupEnvHandlerRouter(t, stacksDir, db)
+
+	reqBody := map[string]interface{}{
+		"entries": []map[string]interface{}{
+			{"key": "GOOD", "value": "ok", "line": 1, "comment": false},
+			{"key": "BAD\nKEY", "value": "bad-value", "line": 2, "comment": false},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/env", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code == http.StatusOK {
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["outcome"] == "success" {
+			t.Errorf("FAIL: entry with newline in key was silently accepted as success\nbody: %s", w.Body.String())
+		}
+	}
+
+	// Verify the file on disk was not corrupted with a split line.
+	persisted, _ := os.ReadFile(envPath)
+	if bytes.Contains(persisted, []byte("BAD\nKEY")) || bytes.Contains(persisted, []byte("KEY=bad-value")) {
+		t.Errorf("FAIL: corrupt split key line written to disk\ncontent: %s", string(persisted))
+	}
+}
+
+func TestEnv_Put_CarriageReturnInValue_Rejected(t *testing.T) {
+	// An entry whose value contains a literal carriage return must be
+	// rejected, not silently written and corrupting the file (finding B4).
+	stacksDir := t.TempDir()
+	stackDir := filepath.Join(stacksDir, "crvalue")
+	if err := os.MkdirAll(stackDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	envPath := filepath.Join(stackDir, ".env")
+	if err := os.WriteFile(envPath, []byte("GOOD=ok\n"), 0644); err != nil {
+		t.Fatalf("writeFile: %v", err)
+	}
+
+	db, err := database.NewWithMigrations(":memory:")
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+
+	stack := insertTestStack(t, db, stackDir, stacksDir, ".env")
+	router, _ := setupEnvHandlerRouter(t, stacksDir, db)
+
+	reqBody := map[string]interface{}{
+		"entries": []map[string]interface{}{
+			{"key": "GOOD", "value": "ok", "line": 1, "comment": false},
+			{"key": "BAD", "value": "bad\rvalue", "line": 2, "comment": false},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/env", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code == http.StatusOK {
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["outcome"] == "success" {
+			t.Errorf("FAIL: entry with carriage return in value was silently accepted as success\nbody: %s", w.Body.String())
+		}
+	}
+
+	// Verify the file on disk was not corrupted.
+	persisted, _ := os.ReadFile(envPath)
+	if bytes.Contains(persisted, []byte("bad\rvalue")) {
+		t.Errorf("FAIL: corrupt carriage-return value written to disk\ncontent: %s", string(persisted))
+	}
+}
+
+// ── agent-os-gfd: Put must write env files at 0600, not 0644 ───────────────
+
+func TestEnv_Put_SetsFileMode0600(t *testing.T) {
+	// Env files may contain secrets; Put must persist at 0600 regardless of
+	// the pre-existing file's mode (os.WriteFile alone would not tighten the
+	// mode of a file that already exists).
+	stacksDir := t.TempDir()
+	stackDir := filepath.Join(stacksDir, "permstest")
+	if err := os.MkdirAll(stackDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	envPath := filepath.Join(stackDir, ".env")
+	// Pre-existing file at the looser 0644 mode, as if written by older code.
+	if err := os.WriteFile(envPath, []byte("OLD=value\n"), 0644); err != nil {
+		t.Fatalf("writeFile: %v", err)
+	}
+
+	db, err := database.NewWithMigrations(":memory:")
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+
+	stack := insertTestStack(t, db, stackDir, stacksDir, ".env")
+	router, _ := setupEnvHandlerRouter(t, stacksDir, db)
+
+	reqBody := map[string]interface{}{
+		"entries": []map[string]interface{}{
+			{"key": "NEW", "value": "value", "line": 1, "comment": false},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/env", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	info, err := os.Stat(envPath)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Errorf("expected env file mode 0600 after Put, got %o", got)
+	}
+}
+
 // ── Finding #16: create env endpoint ────────────────────────────────────────
 
 func TestEnv_Create_WhenAbsent(t *testing.T) {

@@ -34,6 +34,7 @@ const (
 	actionStop    lifecycleAction = "stop"
 	actionRestart lifecycleAction = "restart"
 	actionPull    lifecycleAction = "pull"
+	actionDelete  lifecycleAction = "delete"
 )
 
 // classifyContainers is the pure classifier that maps a (status, containers,
@@ -67,6 +68,28 @@ func classifyContainers(
 			)
 		}
 		return truth.Success("stack stopped", truth.KV("status", status))
+
+	case actionDelete:
+		// Delete requires the containers to be gone entirely, not merely
+		// non-running. `compose down` removes containers rather than just
+		// stopping them, so unlike actionStop (where a present-but-exited
+		// container is an acceptable "stopped" end state), ANY container still
+		// listed by `compose ps` after a delete — running, paused, restarting,
+		// or otherwise — means the delete did not fully succeed and the caller
+		// must not proceed to remove the stack directory (see parseComposePSOutput:
+		// its "stopped" aggregate is only ever produced when len(containers)==0,
+		// so checking len(containers) here is equivalent to checking status but
+		// makes the real invariant explicit).
+		if len(containers) == 0 {
+			return truth.Success("stack and volumes removed", truth.KV("status", status))
+		}
+		return truth.Failed(
+			fmt.Sprintf("stack not fully removed: %d container(s) still present (%s)",
+				len(containers), summarizeContainerStates(containers)),
+			nil,
+			truth.KV("status", status),
+			truth.KV("containers", len(containers)),
+		)
 
 	case actionStart, actionRestart:
 		if len(containers) == 0 {
@@ -121,17 +144,17 @@ func (s *DockerService) verifyLifecycle(stack models.Stack, action lifecycleActi
 		return truth.Success("images pulled", truth.KV("output", trimOutput(output)))
 	}
 
-	// For start/stop/restart we prove end state via statusVerified().
-	// Finding #10 fix: statusVerified returns a real error on docker compose ps
-	// failure instead of the legacy sentinel ("unknown", nil, nil).
-	status, containers, statusErr := s.statusVerified(stack)
+	// For start/stop/restart/delete we prove end state via Status().
+	// Finding #10 fix: Status returns a real error on docker compose ps
+	// failure instead of a swallowed sentinel.
+	status, containers, statusErr := s.Status(stack)
 	if statusErr != nil {
 		return truth.Failed("could not verify stack state after "+string(action), statusErr)
 	}
 
-	if action == actionStop {
-		// Stop has no settling window — if compose down succeeded, containers
-		// should already be absent.
+	if action == actionStop || action == actionDelete {
+		// Stop/delete have no settling window — if compose down succeeded,
+		// containers should already be absent.
 		return classifyContainers(action, cmdErr, status, containers, nil)
 	}
 
@@ -165,6 +188,25 @@ func countUnhealthy(containers []models.Container) int {
 		}
 	}
 	return n
+}
+
+// summarizeContainerStates returns a compact "state:count" summary of the
+// given containers' State field, e.g. "running:1, paused:2", for use in
+// human-readable failure reasons. Order follows first occurrence.
+func summarizeContainerStates(containers []models.Container) string {
+	counts := make(map[string]int, len(containers))
+	order := make([]string, 0, len(containers))
+	for _, c := range containers {
+		if _, seen := counts[c.State]; !seen {
+			order = append(order, c.State)
+		}
+		counts[c.State]++
+	}
+	parts := make([]string, 0, len(order))
+	for _, state := range order {
+		parts = append(parts, fmt.Sprintf("%s:%d", state, counts[state]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // settleParams groups the tunable constants for pollUntilSettled so they can
@@ -202,7 +244,7 @@ var defaultSettleParams = settleParams{
 //     a slow healthcheck), return the latest snapshot and let classifyContainers
 //     decide — a healthy-but-slow-starting container is still success.
 //
-// The initial (status, containers) snapshot from the first statusVerified call
+// The initial (status, containers) snapshot from the first Status call
 // is included in the dwell accounting.
 func (s *DockerService) pollUntilSettled(
 	stack models.Stack,
@@ -214,13 +256,13 @@ func (s *DockerService) pollUntilSettled(
 }
 
 // settleStatus is the status provider used by the poll loop. Production uses
-// the real statusVerified; unit tests inject a scripted sequence via statusFn
-// so pollUntilSettled runs against the real settling code rather than a copy.
+// the real Status; unit tests inject a scripted sequence via statusFn so
+// pollUntilSettled runs against the real settling code rather than a copy.
 func (s *DockerService) settleStatus(stack models.Stack) (string, []models.Container, error) {
 	if s.statusFn != nil {
 		return s.statusFn(stack)
 	}
-	return s.statusVerified(stack)
+	return s.Status(stack)
 }
 
 func (s *DockerService) pollUntilSettledWithParams(
@@ -355,8 +397,8 @@ waitLoop:
 			break waitLoop
 		default:
 		}
-		// Use statusVerified so a real docker error breaks the loop (same as "stopped").
-		status, _, sErr := s.statusVerified(stack)
+		// Use Status so a real docker error breaks the loop (same as "stopped").
+		status, _, sErr := s.Status(stack)
 		if sErr != nil || status == "stopped" {
 			break waitLoop
 		}
@@ -383,70 +425,32 @@ func (s *DockerService) PullVerified(stack models.Stack) (truth.ActionResult, st
 	return s.verifyLifecycle(stack, actionPull, err, out), out
 }
 
-// ---- Legacy methods kept for callers outside this domain (stack_crud.go, git.go) ----
-// These retain the original (*models.CommandResult, error) signatures so other
-// domains (B3/B4) are not broken before they migrate.
-
-func (s *DockerService) Start(stack models.Stack) (*models.CommandResult, error) {
-	args := s.buildComposeArgs(stack, "up", []string{"-d"})
-
-	cmd := exec.Command("docker", args...)
-	cmd.Dir = stack.Directory
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, models.NewAppErrorWithDetails(500, models.ErrDockerOperation, "Failed to start stack", string(output))
-	}
-
-	return &models.CommandResult{
-		ExitCode: 0,
-		Stdout:   string(output),
-		Stderr:   "",
-	}, nil
-}
-
-func (s *DockerService) Stop(stack models.Stack) (*models.CommandResult, error) {
-	args := s.buildComposeArgs(stack, "down", nil)
-
-	cmd := exec.Command("docker", args...)
-	cmd.Dir = stack.Directory
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, models.NewAppErrorWithDetails(500, models.ErrDockerOperation, "Failed to stop stack", string(output))
-	}
-
-	return &models.CommandResult{
-		ExitCode: 0,
-		Stdout:   string(output),
-		Stderr:   "",
-	}, nil
-}
-
-func (s *DockerService) Delete(stack models.Stack) (*models.CommandResult, error) {
+// DeleteVerified runs `docker compose down -v` (removing named volumes, mirroring
+// the legacy Delete behavior) and returns a verified truth.ActionResult plus the
+// raw combined output. Success only when no containers remain running, proven via
+// the same Status/verifyLifecycle machinery StopVerified uses — a compose
+// exit code of 0 alone does not guarantee the containers actually stopped.
+func (s *DockerService) DeleteVerified(stack models.Stack) (truth.ActionResult, string) {
 	args := s.buildComposeArgs(stack, "down", []string{"-v"})
-
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory
 
 	output, err := cmd.CombinedOutput()
+	out := string(output)
 	if err != nil {
-		return nil, models.NewAppErrorWithDetails(500, models.ErrDockerOperation, "Failed to delete stack", string(output))
+		return truth.Failed("compose down failed", err,
+			truth.KV("output", trimOutput(out))), out
 	}
 
-	return &models.CommandResult{
-		ExitCode: 0,
-		Stdout:   string(output),
-		Stderr:   "",
-	}, nil
+	return s.verifyLifecycle(stack, actionDelete, nil, out), out
 }
 
-// statusVerified returns the aggregate status string, the per-container list,
-// and any error from `docker compose ps`. On failure it returns a real error
-// (finding #10 fix). This is the internal method used by verifyLifecycle and
-// pollUntilSettled; it is separate from Status() so the public API remains
-// backward-compatible with existing callers that expect the sentinel behavior.
-func (s *DockerService) statusVerified(stack models.Stack) (string, []models.Container, error) {
+// Status returns the aggregate status string, the per-container list, and any
+// error from `docker compose ps`. On failure it returns a real error (finding
+// #10 fix) rather than swallowing it — this is the single exported status path
+// used both internally by verifyLifecycle/pollUntilSettled and by callers
+// outside this domain (e.g. BackupService).
+func (s *DockerService) Status(stack models.Stack) (string, []models.Container, error) {
 	args := s.buildComposeArgs(stack, "ps", []string{"--format", "json"})
 
 	cmd := exec.Command("docker", args...)
@@ -458,28 +462,6 @@ func (s *DockerService) statusVerified(stack models.Stack) (string, []models.Con
 	}
 
 	return parseComposePSOutput(output)
-}
-
-// Status returns the aggregate status string and per-container list from
-// `docker compose ps`. On failure it returns ("unknown", nil, nil) for backward
-// compatibility with existing callers outside this domain. New code that needs
-// real error propagation should use statusVerified or verifyLifecycle.
-func (s *DockerService) Status(stack models.Stack) (string, []models.Container, error) {
-	args := s.buildComposeArgs(stack, "ps", []string{"--format", "json"})
-
-	cmd := exec.Command("docker", args...)
-	cmd.Dir = stack.Directory
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "unknown", nil, nil
-	}
-
-	status, containers, parseErr := parseComposePSOutput(output)
-	if parseErr != nil {
-		return "unknown", nil, nil
-	}
-	return status, containers, nil
 }
 
 // parseComposePSOutput parses NDJSON lines from `docker compose ps --format json`
@@ -606,7 +588,7 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 
 		// Verify end state before emitting the terminal done frame.
 		// For pull: classify from exit code.
-		// For start/stop/restart: call verifyLifecycle which runs statusVerified
+		// For start/stop/restart: call verifyLifecycle which runs Status
 		// and (for start/restart) pollUntilSettled to prove real end state.
 		var ar truth.ActionResult
 		if action != "" {

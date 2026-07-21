@@ -25,7 +25,7 @@ type stackDocker interface {
 	StopVerified(stack models.Stack) (truth.ActionResult, string)
 	RestartVerified(stack models.Stack) (truth.ActionResult, string)
 	PullVerified(stack models.Stack) (truth.ActionResult, string)
-	Delete(stack models.Stack) (*models.CommandResult, error)
+	DeleteVerified(stack models.Stack) (truth.ActionResult, string)
 }
 
 // stackStore is the subset of *database.DB that StacksHandler needs for stack

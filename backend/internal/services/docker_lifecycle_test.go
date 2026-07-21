@@ -243,6 +243,63 @@ func TestClassifyContainers_Stop(t *testing.T) {
 	}
 }
 
+func TestClassifyContainers_Delete(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		statusErr   error
+		status      string
+		containers  []models.Container
+		wantOutcome truth.Outcome
+	}{
+		{
+			name:        "fully removed => success",
+			status:      "stopped",
+			containers:  nil,
+			wantOutcome: truth.OutcomeSuccess,
+		},
+		{
+			name:        "containers still running => failed",
+			status:      "running",
+			containers:  []models.Container{{State: "running"}},
+			wantOutcome: truth.OutcomeFailed,
+		},
+		{
+			// Regression for the case where compose down leaves a container behind
+			// in a non-running state (e.g. paused, restarting, or stuck mid-removal).
+			// Unlike actionStop, actionDelete must NOT treat "present but not
+			// running" as success — the caller (stack_crud.go's Delete handler)
+			// removes the stack directory on success, which would orphan a
+			// surviving container.
+			name:        "containers present but not running (exited) => failed",
+			status:      "partial",
+			containers:  []models.Container{{State: "exited"}},
+			wantOutcome: truth.OutcomeFailed,
+		},
+		{
+			name:        "containers present but not running (paused) => failed",
+			status:      "partial",
+			containers:  []models.Container{{State: "paused"}},
+			wantOutcome: truth.OutcomeFailed,
+		},
+		{
+			name:        "statusErr => failed",
+			statusErr:   errors.New("compose ps failed"),
+			wantOutcome: truth.OutcomeFailed,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ar := classifyContainers(actionDelete, nil, tc.status, tc.containers, tc.statusErr)
+			assert.Equal(t, tc.wantOutcome, ar.Outcome, "outcome mismatch")
+		})
+	}
+}
+
 func TestClassifyContainers_Pull(t *testing.T) {
 	t.Parallel()
 

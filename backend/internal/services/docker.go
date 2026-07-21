@@ -25,9 +25,9 @@ import (
 type DockerService struct {
 	config *config.Config
 	client *client.Client
-	// statusFn, when non-nil, overrides statusVerified during lifecycle
-	// settling. Production leaves it nil; unit tests inject a scripted
-	// snapshot sequence so pollUntilSettled runs against real code.
+	// statusFn, when non-nil, overrides Status during lifecycle settling.
+	// Production leaves it nil; unit tests inject a scripted snapshot
+	// sequence so pollUntilSettled runs against real code.
 	statusFn func(models.Stack) (string, []models.Container, error)
 }
 

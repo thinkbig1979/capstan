@@ -16,6 +16,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // ============================================================
@@ -33,31 +34,35 @@ type fakeDocker struct {
 	stopErr   error
 	startErr  error
 	statusStr string // returned by Status; default "stopped"
+	statusErr error  // when set, Status returns this error instead of statusStr
 }
 
-func (f *fakeDocker) Stop(stack models.Stack) (*models.CommandResult, error) {
+func (f *fakeDocker) StopVerified(stack models.Stack) (truth.ActionResult, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopCalls = append(f.stopCalls, stack)
 	if f.stopErr != nil {
-		return nil, f.stopErr
+		return truth.Failed("stop failed", f.stopErr), ""
 	}
-	return &models.CommandResult{ExitCode: 0}, nil
+	return truth.Success("stack stopped"), ""
 }
 
-func (f *fakeDocker) Start(stack models.Stack) (*models.CommandResult, error) {
+func (f *fakeDocker) StartVerified(stack models.Stack) (truth.ActionResult, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.startCalls = append(f.startCalls, stack)
 	if f.startErr != nil {
-		return nil, f.startErr
+		return truth.Failed("start failed", f.startErr), ""
 	}
-	return &models.CommandResult{ExitCode: 0}, nil
+	return truth.Success("stack running"), ""
 }
 
 func (f *fakeDocker) Status(stack models.Stack) (string, []models.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.statusErr != nil {
+		return "", nil, f.statusErr
+	}
 	s := f.statusStr
 	if s == "" {
 		s = "stopped"
@@ -421,6 +426,36 @@ func TestRunBackup_StopPolicy_StopsAndRestartsRunningStack(t *testing.T) {
 	assert.Equal(t, "success", run.Status)
 	assert.Equal(t, 1, docker.stopped(), "Stop must be called once")
 	assert.Equal(t, 1, docker.started(), "Start must be called once (restart after backup)")
+}
+
+// TestRunBackup_StatusError_DefaultsToNoRestart pins the behavior of unifying
+// Status (docker_lifecycle.go) to always propagate a real docker compose ps
+// error instead of the old ("unknown", nil, nil) sentinel. backupStack already
+// gates wasRunning on `statusErr == nil`, defaulting to false — so a ps failure
+// now takes that same default-false branch instead of the previously swallowed
+// "unknown" status (which also evaluated to not-running). The stop policy still
+// applies (it does not depend on wasRunning), but the defensive restart after
+// backup must be skipped because the service could not prove the stack had
+// been running in the first place.
+func TestRunBackup_StatusError_DefaultsToNoRestart(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	docker := &fakeDocker{statusErr: errors.New("docker compose ps failed")}
+
+	runner := &fakeRunner{
+		outputData: snapshotJSON("abc123", "abc", "myapp"),
+	}
+	svc := buildSvc(t, db, docker, runner, runner)
+	seedStack(t, db, "myapp", "stop")
+
+	out := make(chan StreamLine, 256)
+	run, err := svc.RunBackup(context.Background(), nil, false, "manual", out)
+	require.NoError(t, err)
+
+	assert.Equal(t, "success", run.Status)
+	assert.Equal(t, 1, docker.stopped(), "stop policy still applies regardless of wasRunning")
+	assert.Equal(t, 0, docker.started(), "restart must be skipped: Status error means wasRunning could not be proven true")
 }
 
 func TestRunBackup_StopPolicy_DoesNotRestartIfWasStopped(t *testing.T) {

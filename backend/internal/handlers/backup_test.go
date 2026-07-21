@@ -18,6 +18,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // ─────────────────────────────────────────────
@@ -72,11 +73,11 @@ func buildBackupSvc(t *testing.T, db *database.DB, resticPresent, rclonePresent 
 // BackupService.
 type noopDocker struct{}
 
-func (n *noopDocker) Stop(stack models.Stack) (*models.CommandResult, error) {
-	return &models.CommandResult{ExitCode: 0}, nil
+func (n *noopDocker) StopVerified(stack models.Stack) (truth.ActionResult, string) {
+	return truth.Success("stack stopped"), ""
 }
-func (n *noopDocker) Start(stack models.Stack) (*models.CommandResult, error) {
-	return &models.CommandResult{ExitCode: 0}, nil
+func (n *noopDocker) StartVerified(stack models.Stack) (truth.ActionResult, string) {
+	return truth.Success("stack running"), ""
 }
 func (n *noopDocker) Status(stack models.Stack) (string, []models.Container, error) {
 	return "stopped", nil, nil
