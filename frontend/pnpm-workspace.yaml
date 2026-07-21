@@ -8,6 +8,16 @@ ignoredBuiltDependencies:
 # Security: delay installs until releases have had time to be vetted, and
 # refuse to silently accept packages whose trust signals weaken on update.
 minimumReleaseAge: 10080
+trustPolicy: no-downgrade
+# Security: these exact versions were traced and confirmed legitimate on
+# 2026-07-21 (publisher/provenance change, not a takeover) — excluded from
+# the no-downgrade check so installs aren't blocked on known-good releases.
+trustPolicyExclude:
+  - '@effect/platform-node-shared@4.0.0-beta.70'
+  - effect@4.0.0-beta.70
+  - react-redux@9.2.0
+  - reselect@5.1.1
+  - semver@6.3.1
 overrides:
   # Security: pull fast-uri past the path-traversal / host-confusion fix.
   # Lives here (not package.json "pnpm.overrides") because pnpm 10.16+/11 reads
