@@ -17,6 +17,26 @@ const CONTAINER_SEARCH_FIELDS = [
   (c: Container) => c.status,
 ]
 
+function getHealthBadge(health?: string) {
+  if (!health) return <Badge variant="outline">none</Badge>
+  if (health === 'healthy') return (
+    <Status tone="success" className="gap-1">
+      <Play className="h-3 w-3" aria-hidden="true" />Healthy
+    </Status>
+  )
+  if (health === 'unhealthy') return (
+    <Status tone="error" className="gap-1">
+      <AlertCircle className="h-3 w-3" aria-hidden="true" />Unhealthy
+    </Status>
+  )
+  return <Badge variant="outline">{health}</Badge>
+}
+
+function formatPort(p: { host: string; container: string; protocol: string }) {
+  const containerPart = p.container.replace(/\/(tcp|udp|sctp)$/i, '')
+  return `${p.host}:${containerPart}/${p.protocol}`
+}
+
 export function ContainerList({ containers }: ContainerListProps) {
   const { query, setQuery, filtered } = useTextFilter(containers ?? [], CONTAINER_SEARCH_FIELDS)
 
@@ -26,26 +46,6 @@ export function ContainerList({ containers }: ContainerListProps) {
         Stack is stopped. Start it to see containers.
       </div>
     )
-  }
-
-  const getHealthBadge = (health?: string) => {
-    if (!health) return <Badge variant="outline">none</Badge>
-    if (health === 'healthy') return (
-      <Status tone="success" className="gap-1">
-        <Play className="h-3 w-3" aria-hidden="true" />Healthy
-      </Status>
-    )
-    if (health === 'unhealthy') return (
-      <Status tone="error" className="gap-1">
-        <AlertCircle className="h-3 w-3" aria-hidden="true" />Unhealthy
-      </Status>
-    )
-    return <Badge variant="outline">{health}</Badge>
-  }
-
-  const formatPort = (p: { host: string; container: string; protocol: string }) => {
-    const containerPart = p.container.replace(/\/(tcp|udp|sctp)$/i, '')
-    return `${p.host}:${containerPart}/${p.protocol}`
   }
 
   return (

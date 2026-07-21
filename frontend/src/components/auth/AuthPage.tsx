@@ -51,7 +51,7 @@ export function AuthPage({ title, description, submitFn, successMessage, errorPr
   }
 
   return (
-    <div className="relative min-h-screen flex flex-col items-center justify-center p-4">
+    <div className="relative min-h-dvh flex flex-col items-center justify-center p-4">
       <div className="absolute top-4 right-4">
         <ThemeToggle />
       </div>

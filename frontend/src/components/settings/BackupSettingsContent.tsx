@@ -26,20 +26,22 @@ import type { BackupSettings } from '@/types'
 
 type Source = 'env' | 'db' | 'default'
 
+const SOURCE_BADGE_LABELS: Record<Source, string> = {
+  env: 'from environment',
+  db: 'saved',
+  default: 'default',
+}
+
+const SOURCE_BADGE_VARIANTS: Record<Source, 'default' | 'secondary' | 'outline'> = {
+  env: 'default',
+  db: 'secondary',
+  default: 'outline',
+}
+
 function SourceBadge({ source }: { source: Source }) {
-  const labels: Record<Source, string> = {
-    env: 'from environment',
-    db: 'saved',
-    default: 'default',
-  }
-  const variants: Record<Source, 'default' | 'secondary' | 'outline'> = {
-    env: 'default',
-    db: 'secondary',
-    default: 'outline',
-  }
   return (
-    <Badge variant={variants[source]} className="text-xs font-normal">
-      {labels[source]}
+    <Badge variant={SOURCE_BADGE_VARIANTS[source]} className="text-xs font-normal">
+      {SOURCE_BADGE_LABELS[source]}
     </Badge>
   )
 }

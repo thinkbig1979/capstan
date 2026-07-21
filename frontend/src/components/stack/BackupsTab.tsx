@@ -68,14 +68,15 @@ function formatDate(iso: string): string {
   }
 }
 
+const RUN_STATUS_VARIANTS: Record<BackupRun['status'], { label: string; className: string }> = {
+  success: { label: 'Success', className: 'bg-green-500/15 text-green-700 dark:text-green-400 border-green-500/30' },
+  partial: { label: 'Partial', className: 'bg-yellow-500/15 text-yellow-700 dark:text-yellow-400 border-yellow-500/30' },
+  failed: { label: 'Failed', className: 'bg-destructive/15 text-destructive border-destructive/30' },
+  running: { label: 'Running', className: 'bg-blue-500/15 text-blue-700 dark:text-blue-400 border-blue-500/30' },
+}
+
 function RunStatusBadge({ status }: { status: BackupRun['status'] }) {
-  const variants: Record<BackupRun['status'], { label: string; className: string }> = {
-    success: { label: 'Success', className: 'bg-green-500/15 text-green-700 dark:text-green-400 border-green-500/30' },
-    partial: { label: 'Partial', className: 'bg-yellow-500/15 text-yellow-700 dark:text-yellow-400 border-yellow-500/30' },
-    failed: { label: 'Failed', className: 'bg-destructive/15 text-destructive border-destructive/30' },
-    running: { label: 'Running', className: 'bg-blue-500/15 text-blue-700 dark:text-blue-400 border-blue-500/30' },
-  }
-  const v = variants[status]
+  const v = RUN_STATUS_VARIANTS[status]
   return (
     <span className={cn('inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium', v.className)}>
       {status === 'running' && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}

@@ -13,6 +13,11 @@ interface GitHistoryProps {
 
 type SearchScope = 'all' | 'files' | 'messages' | 'authors'
 
+function truncateMessage(message: string, maxLength = 60) {
+  if (message.length <= maxLength) return message
+  return message.substring(0, maxLength) + '...'
+}
+
 export function GitHistory({ stackId }: GitHistoryProps) {
   const [offset, setOffset] = useState(0)
   const [searchQuery, setSearchQuery] = useState('')
@@ -44,11 +49,6 @@ export function GitHistory({ stackId }: GitHistoryProps) {
 
   const handleLoadMore = () => {
     setOffset((prev) => prev + limit)
-  }
-
-  const truncateMessage = (message: string, maxLength = 60) => {
-    if (message.length <= maxLength) return message
-    return message.substring(0, maxLength) + '...'
   }
 
   if (isLoading && offset === 0) {

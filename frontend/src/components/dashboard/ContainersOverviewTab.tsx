@@ -178,16 +178,17 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
   )
 }
 
+const STATUS_ICON_CONFIG: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
+  running: { icon: <Play className="h-3.5 w-3.5" />, color: 'text-success', label: 'Running' },
+  exited: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-destructive', label: 'Stopped' },
+  dead: { icon: <AlertCircle className="h-3.5 w-3.5" />, color: 'text-destructive', label: 'Dead' },
+  restarting: { icon: <RefreshCw className="h-3.5 w-3.5" />, color: 'text-warning', label: 'Restarting' },
+  paused: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-warning', label: 'Paused' },
+  created: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-muted-foreground', label: 'Created' },
+}
+
 function StatusIcon({ state }: { state: string }) {
-  const config: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
-    running: { icon: <Play className="h-3.5 w-3.5" />, color: 'text-success', label: 'Running' },
-    exited: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-destructive', label: 'Stopped' },
-    dead: { icon: <AlertCircle className="h-3.5 w-3.5" />, color: 'text-destructive', label: 'Dead' },
-    restarting: { icon: <RefreshCw className="h-3.5 w-3.5" />, color: 'text-warning', label: 'Restarting' },
-    paused: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-warning', label: 'Paused' },
-    created: { icon: <Square className="h-3.5 w-3.5" />, color: 'text-muted-foreground', label: 'Created' },
-  }
-  const c = config[state] || { icon: <HelpCircle className="h-3.5 w-3.5" />, color: 'text-muted-foreground', label: state }
+  const c = STATUS_ICON_CONFIG[state] || { icon: <HelpCircle className="h-3.5 w-3.5" />, color: 'text-muted-foreground', label: state }
 
   return (
     <TooltipProvider>

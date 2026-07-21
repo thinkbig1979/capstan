@@ -105,6 +105,12 @@ function sectionById(id: string | undefined): SettingsSection {
   return ALL_SECTIONS.find((s) => s.id === id) ?? ALL_SECTIONS[0]
 }
 
+const THEME_OPTIONS = [
+  { value: 'light' as const, label: 'Light', icon: Sun },
+  { value: 'dark' as const, label: 'Dark', icon: Moon },
+  { value: 'system' as const, label: 'System', icon: Monitor },
+]
+
 export function SettingsPage() {
   const { section } = useParams<{ section?: string }>()
   const navigate = useNavigate()
@@ -137,14 +143,8 @@ export function SettingsPage() {
     })).filter((group) => group.sections.length > 0)
   }, [query])
 
-  const themeOptions = [
-    { value: 'light' as const, label: 'Light', icon: Sun },
-    { value: 'dark' as const, label: 'Dark', icon: Moon },
-    { value: 'system' as const, label: 'System', icon: Monitor },
-  ]
-
-  const currentThemeLabel = themeOptions.find((t) => t.value === theme)?.label || theme
-  const CurrentThemeIcon = themeOptions.find((t) => t.value === theme)?.icon || Monitor
+  const currentThemeLabel = THEME_OPTIONS.find((t) => t.value === theme)?.label || theme
+  const CurrentThemeIcon = THEME_OPTIONS.find((t) => t.value === theme)?.icon || Monitor
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -300,7 +300,7 @@ export function SettingsPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {themeOptions.map((option) => {
+                  {THEME_OPTIONS.map((option) => {
                     const Icon = option.icon
                     return (
                       <SelectItem key={option.value} value={option.value}>
