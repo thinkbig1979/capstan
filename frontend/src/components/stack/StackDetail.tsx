@@ -12,6 +12,7 @@ import { StackUpdatesTab } from './StackUpdatesTab'
 import { BackupsTab } from './BackupsTab'
 import { OperationProgress } from './OperationProgress'
 import { GitStatus as GitStatusComponent } from '../git/GitStatus'
+import { GitHistory } from '../git/GitHistory'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -197,6 +198,7 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
           variant="line"
           tabs={[
             { value: 'overview', label: 'Overview' },
+            { value: 'history', label: 'History' },
             { value: 'compose', label: 'Compose' },
             { value: 'environment', label: 'Environment' },
             { value: 'split', label: 'Compose + Env' },
@@ -221,6 +223,12 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
               isRestarting={isRestarting}
               isPulling={isPulling}
             />
+          </TabErrorBoundary>
+        </TabsContent>
+
+        <TabsContent value="history" className="mt-4">
+          <TabErrorBoundary>
+            <GitHistory stackId={stack.id} />
           </TabErrorBoundary>
         </TabsContent>
 
