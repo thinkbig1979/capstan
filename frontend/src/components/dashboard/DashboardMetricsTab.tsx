@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, Suspense, lazy } from 'react'
 import { Activity, Cpu, HardDrive, MemoryStick, Network, Database, Layers, Archive, Box, Hash, Folder, Server, ArrowUpDown } from 'lucide-react'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -8,7 +8,17 @@ import type { DashboardStats } from '@/types'
 import type { DashboardAggregateMetrics } from '@/hooks/useDashboardMetrics'
 import type { ContainerMetricHistory } from '@/hooks/useMetricsBase'
 import { formatBytes } from '@/lib/format'
-import { Sparkline } from '@/components/dashboard/Sparkline'
+
+// Lazy: recharts is only needed once the container rows actually render, so
+// keeping it off DashboardMetricsTab's static import graph lets the rest of
+// this (default) tab paint without waiting on recharts to parse.
+const Sparkline = lazy(() =>
+  import('@/components/dashboard/Sparkline').then((m) => ({ default: m.Sparkline })),
+)
+
+function SparklineFallback({ width, height }: { width: number; height: number }) {
+  return <Skeleton style={{ width, height }} />
+}
 
 function getColorForThreshold(percent: number): string {
   if (percent >= 80) return 'text-destructive'
@@ -108,12 +118,14 @@ function ContainerSparklineList({ containers }: ContainerSparklineListProps) {
 
               {/* CPU sparkline + value */}
               <div className="flex items-center gap-1.5 shrink-0 w-28">
-                <Sparkline
-                  series={cpuSeries}
-                  thresholdPercent={cpuPct}
-                  width={60}
-                  height={24}
-                />
+                <Suspense fallback={<SparklineFallback width={60} height={24} />}>
+                  <Sparkline
+                    series={cpuSeries}
+                    thresholdPercent={cpuPct}
+                    width={60}
+                    height={24}
+                  />
+                </Suspense>
                 <span className={`text-xs tabular-nums w-12 text-right ${getColorForThreshold(cpuPct)}`}>
                   {cpuPct.toFixed(1)}%
                 </span>
@@ -121,12 +133,14 @@ function ContainerSparklineList({ containers }: ContainerSparklineListProps) {
 
               {/* Mem sparkline + value */}
               <div className="flex items-center gap-1.5 shrink-0 w-36">
-                <Sparkline
-                  series={memSeries}
-                  thresholdPercent={memPct}
-                  width={60}
-                  height={24}
-                />
+                <Suspense fallback={<SparklineFallback width={60} height={24} />}>
+                  <Sparkline
+                    series={memSeries}
+                    thresholdPercent={memPct}
+                    width={60}
+                    height={24}
+                  />
+                </Suspense>
                 <span className={`text-xs tabular-nums text-right ${getColorForThreshold(memPct)}`}>
                   {formatBytes(memUsage)}
                 </span>

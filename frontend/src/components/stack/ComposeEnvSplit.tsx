@@ -1,4 +1,4 @@
-import { ComposeEditor } from './ComposeEditor'
+import { Suspense, lazy } from 'react'
 import { EnvEditor } from './EnvEditor'
 import { TabErrorBoundary } from '@/components/TabErrorBoundary'
 import {
@@ -7,6 +7,13 @@ import {
   ResizableHandle,
 } from '@/components/ui/resizable'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
+import { EditorSkeleton } from '@/components/LoadingSkeleton'
+
+// Lazy: codemirror only loads once a Compose or Compose+Env split tab is
+// actually opened, instead of shipping with every stack detail page visit.
+const ComposeEditor = lazy(() =>
+  import('./ComposeEditor').then((m) => ({ default: m.ComposeEditor })),
+)
 
 interface ComposeEnvSplitProps {
   stackId: string
@@ -39,7 +46,9 @@ export function ComposeEnvSplit({ stackId }: ComposeEnvSplitProps) {
       <ResizablePanel defaultSize={50} minSize={25} className="pr-0 md:pr-3">
         <div className="h-full overflow-auto">
           <TabErrorBoundary>
-            <ComposeEditor stackId={stackId} />
+            <Suspense fallback={<EditorSkeleton />}>
+              <ComposeEditor stackId={stackId} />
+            </Suspense>
           </TabErrorBoundary>
         </div>
       </ResizablePanel>
