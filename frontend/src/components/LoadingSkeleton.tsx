@@ -137,3 +137,17 @@ export function LoadingSpinner({ size = 'default' }: { size?: 'small' | 'default
     <SpinnerIcon className={cn('animate-spin text-muted-foreground', SPINNER_SIZE_CLASSES[size])} />
   )
 }
+
+/** Suspense fallback for lazy-loaded modal/dialog components — the dialog's own
+ *  chrome (backdrop, panel) isn't mounted yet, so this stands in briefly while
+ *  the chunk loads. */
+export function DialogLoadingFallback({ testId }: { testId?: string }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80"
+      data-testid={testId}
+    >
+      <LoadingSpinner size="large" />
+    </div>
+  )
+}

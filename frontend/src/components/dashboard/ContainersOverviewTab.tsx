@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, Suspense, lazy } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { stacksApi, resourcesApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -16,23 +16,12 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog'
-import {
   Play, Square, RefreshCw, Download, Trash2, HelpCircle, AlertCircle,
-  Info, Copy, Check,
+  Info,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { classifyError } from '@/lib/error-handler'
-import { EditorView, basicSetup } from 'codemirror'
-import { EditorState } from '@codemirror/state'
-import { json } from '@codemirror/lang-json'
-import { oneDark } from '@codemirror/theme-one-dark'
-import { useUIStore } from '@/stores/uiStore'
+import { DialogLoadingFallback } from '@/components/LoadingSkeleton'
 import type { DashboardStats, DashboardContainerInfo, CommandResult } from '@/types'
 import type { DashboardContainerMetric } from '@/hooks/useDashboardMetrics'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
@@ -42,6 +31,13 @@ import { useAutoUpdatePolicies } from '@/hooks/useResources'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { formatBytes, formatUptime } from '@/lib/format'
+
+// Lazy: the inspect dialog pulls in codemirror to render formatted JSON, but most
+// container-tab visits never open it. Keeping it out of this tab's static import
+// graph keeps codemirror off the Containers tab's initial load.
+const ContainerInspectDialog = lazy(() =>
+  import('./ContainerInspectDialog').then((m) => ({ default: m.ContainerInspectDialog })),
+)
 
 const CONTAINER_SEARCH_FIELDS = [
   (c: DashboardContainerInfo) => c.name,
@@ -213,153 +209,6 @@ function StatusIcon({ state }: { state: string }) {
 }
 
 type SortKey = 'name' | 'cpu' | 'memory' | 'stack'
-
-function ContainerInspectDialog({
-  containerId,
-  containerName,
-  open,
-  onOpenChange,
-}: {
-  containerId: string
-  containerName: string
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  const [inspectData, setInspectData] = useState<Record<string, unknown> | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
-  const editorRef = useRef<HTMLDivElement>(null)
-  const viewRef = useRef<EditorView | null>(null)
-  const { theme } = useUIStore()
-
-  const isDark = useMemo(
-    () =>
-      theme === 'dark' ||
-      (theme === 'system' &&
-        typeof window !== 'undefined' &&
-        window.matchMedia('(prefers-color-scheme: dark)').matches),
-    [theme],
-  )
-
-  useEffect(() => {
-    if (!open) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCopied(false)
-     
-    setLoading(true)
-     
-    setError(null)
-    resourcesApi
-      .inspectContainer(containerId)
-      .then((data) => setInspectData(data))
-      .catch(() => setError('Failed to inspect container'))
-      .finally(() => setLoading(false))
-  }, [containerId, open])
-
-  useEffect(() => {
-    if (!inspectData || !editorRef.current || loading) return
-
-    viewRef.current?.destroy()
-    viewRef.current = null
-
-    const formattedJson = JSON.stringify(inspectData, null, 2)
-
-    const extensions = [
-      basicSetup,
-      json(),
-      EditorState.readOnly.of(true),
-      EditorView.theme({
-        '&': {
-          fontSize: '13px',
-          height: '60vh',
-        },
-        '.cm-scroller': {
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-          overflow: 'auto',
-        },
-        '.cm-content': {
-          caretColor: 'transparent',
-        },
-        '.cm-cursor': {
-          display: 'none',
-        },
-        '.cm-gutters': {
-          backgroundColor: 'transparent',
-        },
-      }),
-    ]
-
-    if (isDark) {
-      extensions.push(oneDark)
-    }
-
-    const state = EditorState.create({
-      doc: formattedJson,
-      extensions,
-    })
-
-    viewRef.current = new EditorView({
-      state,
-      parent: editorRef.current,
-    })
-
-    return () => {
-      viewRef.current?.destroy()
-      viewRef.current = null
-    }
-  }, [inspectData, isDark, loading])
-
-  const handleCopy = async () => {
-    if (!inspectData) return
-    await navigator.clipboard.writeText(JSON.stringify(inspectData, null, 2))
-    setCopied(true)
-    toast.success('Copied to clipboard')
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col p-0">
-        <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
-          <DialogTitle className="flex items-center gap-2">
-            <Info className="h-5 w-5" />
-            Inspect: {containerName}
-          </DialogTitle>
-          <DialogDescription>
-            Container ID: {containerId.slice(0, 12)}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex-1 min-h-0 px-6 pb-2 flex items-center justify-end">
-          {inspectData && (
-            <Button variant="outline" size="sm" onClick={handleCopy} className="h-7 text-xs gap-1.5">
-              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-              {copied ? 'Copied' : 'Copy JSON'}
-            </Button>
-          )}
-        </div>
-        <div className="flex-1 min-h-0 px-6 pb-6">
-          {loading && (
-            <div className="space-y-2">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <Skeleton key={i} className="h-5 w-full" />
-              ))}
-            </div>
-          )}
-          {error && (
-            <div className="flex items-center justify-center py-12 text-destructive">
-              <AlertCircle className="h-5 w-5 mr-2" />
-              {error}
-            </div>
-          )}
-          {inspectData && !loading && (
-            <div ref={editorRef} className="rounded-md border overflow-hidden" />
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 function ContainerTable({
   containers,
@@ -732,12 +581,14 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
       </Tabs>
       <ConfirmComponent />
       {inspectTarget && (
-        <ContainerInspectDialog
-          containerId={inspectTarget.id}
-          containerName={inspectTarget.name}
-          open={!!inspectTarget}
-          onOpenChange={(open) => { if (!open) setInspectTarget(null) }}
-        />
+        <Suspense fallback={<DialogLoadingFallback testId="inspect-dialog-loading" />}>
+          <ContainerInspectDialog
+            containerId={inspectTarget.id}
+            containerName={inspectTarget.name}
+            open={!!inspectTarget}
+            onOpenChange={(open) => { if (!open) setInspectTarget(null) }}
+          />
+        </Suspense>
       )}
     </div>
   )

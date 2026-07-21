@@ -35,11 +35,14 @@ describe('ComposeEnvSplit', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders both editors with the stack id and a draggable handle', () => {
+  it('renders both editors with the stack id and a draggable handle', async () => {
     stubMatchMedia(true)
     renderWithProviders(<ComposeEnvSplit stackId="my-stack" />)
 
-    expect(screen.getByTestId('compose-editor')).toHaveTextContent('compose:my-stack')
+    // ComposeEditor is now behind a lazy() boundary (bundle-size fix), so its
+    // stub resolves asynchronously — the first render pass shows the Suspense
+    // fallback instead of the mocked component.
+    expect(await screen.findByTestId('compose-editor')).toHaveTextContent('compose:my-stack')
     expect(screen.getByTestId('env-editor')).toHaveTextContent('env:my-stack')
     expect(document.querySelector('[data-slot="resizable-handle"]')).toBeInTheDocument()
   })

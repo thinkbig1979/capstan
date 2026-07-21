@@ -1,13 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, Suspense, lazy } from 'react'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { ResponsiveTabsList } from '@/components/ui/responsive-tabs-list'
 import { ContainerList } from './ContainerList'
-import { ComposeEditor } from './ComposeEditor'
 import { EnvEditor } from './EnvEditor'
 import { ComposeEnvSplit } from './ComposeEnvSplit'
 import { TerminalComponent } from './Terminal'
 import { LogViewer } from './LogViewer'
-import { MetricsPanel } from './MetricsPanel'
 import { StackUpdatesTab } from './StackUpdatesTab'
 import { BackupsTab } from './BackupsTab'
 import { OperationProgress } from './OperationProgress'
@@ -25,7 +23,17 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useStreamingOperation } from '@/hooks/useStreamingOperation'
 import { useAutoUpdatePolicies } from '@/hooks/useResources'
 import { toast } from 'sonner'
+import { EditorSkeleton, MetricsSkeleton } from '@/components/LoadingSkeleton'
 import type { Stack, AutoUpdatePolicy } from '@/types'
+
+// Lazy: both pull in a heavy vendor bundle (codemirror / recharts) that most
+// stack detail visits don't need — only the Compose and Metrics tabs do.
+const ComposeEditor = lazy(() =>
+  import('./ComposeEditor').then((m) => ({ default: m.ComposeEditor })),
+)
+const MetricsPanel = lazy(() =>
+  import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })),
+)
 
 interface StackDetailProps {
   stack: Stack
@@ -234,7 +242,9 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
 
         <TabsContent value="compose" className="mt-4">
           <TabErrorBoundary>
-            <ComposeEditor stackId={stack.id} />
+            <Suspense fallback={<EditorSkeleton />}>
+              <ComposeEditor stackId={stack.id} />
+            </Suspense>
           </TabErrorBoundary>
         </TabsContent>
 
@@ -262,7 +272,9 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
 
         <TabsContent value="metrics" className="mt-4">
           <TabErrorBoundary>
-            <MetricsPanel stackId={stack.id} />
+            <Suspense fallback={<MetricsSkeleton />}>
+              <MetricsPanel stackId={stack.id} />
+            </Suspense>
           </TabErrorBoundary>
         </TabsContent>
 

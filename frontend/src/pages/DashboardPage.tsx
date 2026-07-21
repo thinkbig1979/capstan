@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, Suspense, lazy } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { directoriesApi, stacksApi, dashboardApi, settingsApi } from '@/lib/api'
@@ -6,9 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { ResponsiveTabsList } from '@/components/ui/responsive-tabs-list'
-import { StackCardSkeleton, MetricsSkeleton } from '@/components/LoadingSkeleton'
+import { StackCardSkeleton, MetricsSkeleton, DialogLoadingFallback } from '@/components/LoadingSkeleton'
 import { AlertCircle, RefreshCw, Plus } from 'lucide-react'
-import { CreateStackDialog } from '@/components/stack/CreateStackDialog'
 import { useStackStatusAnimation } from '@/hooks/useStackStatusAnimation'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
 import { useDashboardMetrics } from '@/hooks/useDashboardMetrics'
@@ -29,6 +28,13 @@ import { useConfirm } from '@/hooks/useConfirm'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import type { ConfiguredDir } from '@/types'
 
+// Lazy: CreateStackDialog pulls in codemirror (its inline compose editor) but was
+// previously mounted unconditionally on every Dashboard visit, keeping codemirror
+// in this route's eager bundle even for users who never open "New Stack".
+const CreateStackDialog = lazy(() =>
+  import('@/components/stack/CreateStackDialog').then((m) => ({ default: m.CreateStackDialog })),
+)
+
 type SortOption = 'name' | 'status'
 type StatusFilter = 'all' | 'running' | 'stopped' | 'error'
 
@@ -45,6 +51,14 @@ export function DashboardPage() {
     setSearchParams(tab === 'overview' ? {} : { tab }, { replace: true })
   }, [setSearchParams])
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  // Once opened, keep CreateStackDialog mounted for the rest of the session so
+  // its own close animation (Radix data-[state=closed]:animate-out) always has
+  // something to animate — unmounting it the instant createDialogOpen flips
+  // false would cut that animation off. Guarded setState-during-render (React's
+  // documented adjust-state-during-render pattern, not a ref mutation) so the
+  // lazy import starts in the same pass that sets createDialogOpen.
+  const [hasOpenedCreateDialog, setHasOpenedCreateDialog] = useState(false)
+  if (createDialogOpen && !hasOpenedCreateDialog) setHasOpenedCreateDialog(true)
   const { isAnimating } = useStackStatusAnimation()
   const isScanningUpdates = useUpdateScanStore((s) => s.isScanning)
   const queryClient = useQueryClient()
@@ -410,7 +424,11 @@ export function DashboardPage() {
         </Card>
       )}
 
-      <CreateStackDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} />
+      {hasOpenedCreateDialog && (
+        <Suspense fallback={<DialogLoadingFallback testId="create-stack-dialog-loading" />}>
+          <CreateStackDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} />
+        </Suspense>
+      )}
       <ConfirmComponent />
     </div>
   )
