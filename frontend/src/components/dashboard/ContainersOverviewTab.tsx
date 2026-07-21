@@ -37,11 +37,11 @@ import type { DashboardStats, DashboardContainerInfo, CommandResult } from '@/ty
 import type { DashboardContainerMetric } from '@/hooks/useDashboardMetrics'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
-import { useConfirm } from '@/components/ConfirmDialog'
+import { useConfirm } from '@/hooks/useConfirm'
 import { useAutoUpdatePolicies } from '@/hooks/useResources'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { useTextFilter } from '@/hooks/useTextFilter'
-import { formatBytes } from '@/lib/format'
+import { formatBytes, formatUptime } from '@/lib/format'
 
 const CONTAINER_SEARCH_FIELDS = [
   (c: DashboardContainerInfo) => c.name,
@@ -53,23 +53,6 @@ function getMetricColor(percent: number): string {
   if (percent >= 80) return 'bg-destructive'
   if (percent >= 60) return 'bg-warning'
   return 'bg-success'
-}
-
-export function formatUptime(startedAt: string): string {
-  if (!startedAt) return '—'
-  const start = new Date(startedAt)
-  // Guard unset/zero timestamps: a stopped or never-started container reports
-  // Go's zero time (0001-01-01T00:00:00Z), which would otherwise render as ~739766d.
-  if (isNaN(start.getTime()) || start.getUTCFullYear() < 2000) return '—'
-  const now = new Date()
-  const diffMs = now.getTime() - start.getTime()
-  if (diffMs < 0) return '—'
-  const diffMins = Math.floor(diffMs / 60000)
-  if (diffMins < 60) return `${diffMins}m`
-  const diffHours = Math.floor(diffMins / 60)
-  if (diffHours < 24) return `${diffHours}h ${diffMins % 60}m`
-  const diffDays = Math.floor(diffHours / 24)
-  return `${diffDays}d ${diffHours % 24}h`
 }
 
 type MetricsStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting'

@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
+import { useMemo, useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -198,19 +198,24 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
 
   // Recursively prune nodes that have no match in their subtree.
   // A node matches if its name matches, or any stack within it (by path prefix) matches.
+  // The recursion is a nested function declaration (not itself memoized) so the
+  // memoized `filterNode` never has to reference its own binding recursively.
   const filterNode = useCallback(
     (node: DirTreeNode, q: string): DirTreeNode | null => {
-      const nameMatches = node.name.toLowerCase().includes(q)
-      const stackMatches = stacks.some(
-        (s) => s.directory.startsWith(node.fullPath) && s.directory.toLowerCase().includes(q),
-      )
-      const filteredChildren = node.children
-        .map((c) => filterNode(c, q))
-        .filter((c): c is DirTreeNode => c !== null)
-      if (nameMatches || stackMatches || filteredChildren.length > 0) {
-        return { ...node, children: filteredChildren }
+      function recurse(n: DirTreeNode): DirTreeNode | null {
+        const nameMatches = n.name.toLowerCase().includes(q)
+        const stackMatches = stacks.some(
+          (s) => s.directory.startsWith(n.fullPath) && s.directory.toLowerCase().includes(q),
+        )
+        const filteredChildren = n.children
+          .map((c) => recurse(c))
+          .filter((c): c is DirTreeNode => c !== null)
+        if (nameMatches || stackMatches || filteredChildren.length > 0) {
+          return { ...n, children: filteredChildren }
+        }
+        return null
       }
-      return null
+      return recurse(node)
     },
     [stacks],
   )
@@ -231,16 +236,18 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(
     () => loadSavedCollapsed() ?? new Set(),
   )
-  const defaultsApplied = useRef(false)
 
-  useEffect(() => {
-    if (defaultsApplied.current) return
-    if (rootGroups.length === 0) return
-    defaultsApplied.current = true
-    if (loadSavedCollapsed() !== null) return
-    const defaults = computeDefaultCollapsed(rootGroups)
-    if (defaults.size > 0) setCollapsedNodes(defaults)
-  }, [rootGroups])
+  // Apply computed defaults once rootGroups first becomes available (and only
+  // when nothing was previously saved). Adjusted during render (rather than in
+  // an effect) via a one-shot state guard.
+  const [defaultsApplied, setDefaultsApplied] = useState(false)
+  if (!defaultsApplied && rootGroups.length > 0) {
+    setDefaultsApplied(true)
+    if (loadSavedCollapsed() === null) {
+      const defaults = computeDefaultCollapsed(rootGroups)
+      if (defaults.size > 0) setCollapsedNodes(defaults)
+    }
+  }
 
   useEffect(() => {
     saveCollapsed(collapsedNodes)

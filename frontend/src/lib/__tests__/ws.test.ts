@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { WSClient } from '@/lib/ws'
+import { WSClient, MAX_RECONNECT_DELAY_MS } from '@/lib/ws'
 import { useAuthStore } from '@/stores/authStore'
 
 class MockWebSocket {
@@ -28,6 +28,7 @@ class MockWebSocket {
 }
 
 let originalWebSocket: typeof WebSocket
+const originalVisibilityDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState')
 
 beforeEach(() => {
   originalWebSocket = globalThis.WebSocket
@@ -38,6 +39,9 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.WebSocket = originalWebSocket
+  if (originalVisibilityDescriptor) {
+    Object.defineProperty(document, 'visibilityState', originalVisibilityDescriptor)
+  }
 })
 
 describe('WSClient reconnect behavior', () => {
@@ -79,5 +83,116 @@ describe('WSClient reconnect behavior', () => {
     MockWebSocket.instance!.onclose!()
 
     expect(onReconnecting).toHaveBeenCalledWith(1)
+  })
+})
+
+describe('WSClient reconnect jitter', () => {
+  it('samples full jitter within [0, capped exponential base] across the reconnect ladder', () => {
+    vi.useFakeTimers()
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+      const client = new WSClient()
+      client.connect('/test', vi.fn())
+      MockWebSocket.instance!.onopen!()
+
+      // Attempt n's base is 2000 * 2^(n-1), capped at MAX_RECONNECT_DELAY_MS.
+      const expectedBases = [2000, 4000, 8000, 16000, MAX_RECONNECT_DELAY_MS]
+
+      for (const base of expectedBases) {
+        setTimeoutSpy.mockClear()
+        // The socket never reopens between attempts, so reconnectAttempts
+        // keeps climbing instead of resetting on a successful onopen.
+        MockWebSocket.instance!.onclose!()
+        const delay = setTimeoutSpy.mock.calls.at(-1)![1] as number
+        expect(delay).toBeGreaterThanOrEqual(0)
+        expect(delay).toBeLessThanOrEqual(base)
+        vi.advanceTimersByTime(delay)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('WSClient post-cap recovery', () => {
+  it('resumes on an online event after the reconnect cap is exhausted', () => {
+    vi.useFakeTimers()
+    try {
+      const onReconnectFailed = vi.fn()
+      const client = new WSClient()
+      client.connect('/test', vi.fn(), { onReconnectFailed })
+      MockWebSocket.instance!.onopen!()
+
+      // 5 failed attempts exhaust the cap; the 6th close is the one that
+      // finds the cap already reached and gives up.
+      for (let attempt = 0; attempt < 6; attempt++) {
+        MockWebSocket.instance!.onclose!()
+        if (attempt < 5) vi.advanceTimersByTime(MAX_RECONNECT_DELAY_MS)
+      }
+      expect(onReconnectFailed).toHaveBeenCalledTimes(1)
+
+      const staleInstance = MockWebSocket.instance
+      window.dispatchEvent(new Event('online'))
+
+      expect(MockWebSocket.instance).not.toBe(staleInstance)
+      expect(MockWebSocket.instance).not.toBeNull()
+
+      client.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resumes on a visibilitychange event after the reconnect cap is exhausted', () => {
+    vi.useFakeTimers()
+    try {
+      const onReconnectFailed = vi.fn()
+      const client = new WSClient()
+      client.connect('/test', vi.fn(), { onReconnectFailed })
+      MockWebSocket.instance!.onopen!()
+
+      for (let attempt = 0; attempt < 6; attempt++) {
+        MockWebSocket.instance!.onclose!()
+        if (attempt < 5) vi.advanceTimersByTime(MAX_RECONNECT_DELAY_MS)
+      }
+      expect(onReconnectFailed).toHaveBeenCalledTimes(1)
+
+      const staleInstance = MockWebSocket.instance
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      expect(MockWebSocket.instance).not.toBe(staleInstance)
+      expect(MockWebSocket.instance).not.toBeNull()
+
+      client.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not resume while the tab is hidden', () => {
+    vi.useFakeTimers()
+    try {
+      const onReconnectFailed = vi.fn()
+      const client = new WSClient()
+      client.connect('/test', vi.fn(), { onReconnectFailed })
+      MockWebSocket.instance!.onopen!()
+
+      for (let attempt = 0; attempt < 6; attempt++) {
+        MockWebSocket.instance!.onclose!()
+        if (attempt < 5) vi.advanceTimersByTime(MAX_RECONNECT_DELAY_MS)
+      }
+      expect(onReconnectFailed).toHaveBeenCalledTimes(1)
+
+      const staleInstance = MockWebSocket.instance
+      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      expect(MockWebSocket.instance).toBe(staleInstance)
+
+      client.close()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

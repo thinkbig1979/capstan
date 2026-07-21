@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -27,18 +27,19 @@ export function UpdateScheduleContent() {
   const [customMinutes, setCustomMinutes] = useState<number>(60)
   const [globalAutoUpdate, setGlobalAutoUpdate] = useState(false)
 
-  useEffect(() => {
-    if (settings && !initialized) {
-      if (PRESETS.includes(String(settings.scanIntervalMinutes))) {
-        setScanPreset(String(settings.scanIntervalMinutes))
-      } else {
-        setScanPreset('custom')
-        setCustomMinutes(settings.scanIntervalMinutes)
-      }
-      setGlobalAutoUpdate(settings.globalAutoUpdate)
-      setInitialized(true)
+  // Hydrate local editable state from the query result once it loads.
+  // Adjusted during render (rather than in an effect) — `initialized` makes
+  // this a one-shot assignment, not an unbounded render loop.
+  if (settings && !initialized) {
+    setInitialized(true)
+    if (PRESETS.includes(String(settings.scanIntervalMinutes))) {
+      setScanPreset(String(settings.scanIntervalMinutes))
+    } else {
+      setScanPreset('custom')
+      setCustomMinutes(settings.scanIntervalMinutes)
     }
-  }, [settings, initialized])
+    setGlobalAutoUpdate(settings.globalAutoUpdate)
+  }
 
   const scanInterval = settings?.scanIntervalMinutes ?? 0
   const effectivePreset = initialized ? scanPreset : (PRESETS.includes(String(scanInterval)) ? String(scanInterval) : 'custom')

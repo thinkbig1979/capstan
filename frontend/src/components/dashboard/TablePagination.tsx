@@ -1,28 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-
-/**
- * Client-side pagination for long resource lists. Resource endpoints return the
- * full set, so we slice locally and reset to page 1 whenever the list shrinks
- * past the current page (e.g. after a prune or a filter change upstream).
- */
-export function usePagination<T>(items: T[], pageSize: number) {
-  const [page, setPage] = useState(1)
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize))
-
-  // Clamp the page when the list size changes under us
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages)
-  }, [page, totalPages])
-
-  const pageItems = useMemo(
-    () => items.slice((page - 1) * pageSize, page * pageSize),
-    [items, page, pageSize],
-  )
-
-  return { page, setPage, totalPages, pageItems, pageSize, total: items.length }
-}
 
 interface TablePaginationProps {
   page: number

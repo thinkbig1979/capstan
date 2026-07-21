@@ -46,6 +46,23 @@ export function formatDateTimeLocal(date: Date): string {
   return `${year}-${month}-${day}T${hours}:${minutes}`
 }
 
+export function formatUptime(startedAt: string): string {
+  if (!startedAt) return '—'
+  const start = new Date(startedAt)
+  // Guard unset/zero timestamps: a stopped or never-started container reports
+  // Go's zero time (0001-01-01T00:00:00Z), which would otherwise render as ~739766d.
+  if (isNaN(start.getTime()) || start.getUTCFullYear() < 2000) return '—'
+  const now = new Date()
+  const diffMs = now.getTime() - start.getTime()
+  if (diffMs < 0) return '—'
+  const diffMins = Math.floor(diffMs / 60000)
+  if (diffMins < 60) return `${diffMins}m`
+  const diffHours = Math.floor(diffMins / 60)
+  if (diffHours < 24) return `${diffHours}h ${diffMins % 60}m`
+  const diffDays = Math.floor(diffHours / 24)
+  return `${diffDays}d ${diffHours % 24}h`
+}
+
 export function formatRelativeTime(dateString: string | null | undefined, fallback = '-'): string {
   if (!dateString) return fallback
   try {

@@ -87,13 +87,14 @@ export function useWebSocket(
       },
     }
 
-    setTimeout(() => {
+    const connectingTimeout = setTimeout(() => {
       setStatus('connecting')
       setWsState('CONNECTING')
     }, 0)
     client.connect(path, wrappedOnMessage, enhancedOptions)
 
     return () => {
+      clearTimeout(connectingTimeout)
       client.close()
       wsClientRef.current = null
       setStatus('disconnected')

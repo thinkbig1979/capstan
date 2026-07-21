@@ -134,25 +134,24 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     },
   })
 
-  useEffect(() => {
+  // Hydrate local editable state whenever a new envData query result arrives.
+  // Adjusted during render (rather than in an effect) by comparing against the
+  // envData reference from the previous render — see
+  // https://react.dev/learn/you-might-not-need-an-effect.
+  const [prevEnvData, setPrevEnvData] = useState(envData)
+  if (envData !== prevEnvData) {
+    setPrevEnvData(envData)
     if (envData) {
-       
       setEntries(envData.entries)
-
       setRawContent(envData.raw)
-
       setHasUnsavedChanges(false)
-
       setShowEnvSection(true)
-
       setHistory([{ entries: envData.entries, raw: envData.raw }])
-
       setHistoryIndex(0)
     } else {
-
       setShowEnvSection(false)
     }
-  }, [envData])
+  }
 
   /**
    * Save mutation — consumes ActionResult to surface real outcomes.
@@ -277,27 +276,31 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     setPendingRevealIndex(null)
   }
 
-  // When the unlock session ends (manual lock or auto-expiry), re-mask any
-  // sensitive-by-name entries the user had revealed during the session.
-  useEffect(() => {
-    if (unlockedUntil !== null) return
-     
-    setEntries((prev) => {
-      let changed = false
-      const next = prev.map((e) => {
-        if (!e.sensitive && isSensitiveKey(e.key)) {
-          changed = true
-          return { ...e, sensitive: true }
-        }
-        return e
-      })
-      return changed ? next : prev
-    })
-  }, [unlockedUntil])
-
   const isSensitiveKey = (key: string) => {
     const sensitivePatterns = ['_KEY', '_SECRET', '_PASSWORD', '_TOKEN', '_API_']
     return sensitivePatterns.some((pattern) => key.toUpperCase().includes(pattern))
+  }
+
+  // When the unlock session ends (manual lock or auto-expiry), re-mask any
+  // sensitive-by-name entries the user had revealed during the session.
+  // Adjusted during render (rather than in an effect) by comparing against
+  // the previous render's unlockedUntil.
+  const [prevUnlockedUntil, setPrevUnlockedUntil] = useState(unlockedUntil)
+  if (unlockedUntil !== prevUnlockedUntil) {
+    setPrevUnlockedUntil(unlockedUntil)
+    if (unlockedUntil === null) {
+      setEntries((prev) => {
+        let changed = false
+        const next = prev.map((e) => {
+          if (!e.sensitive && isSensitiveKey(e.key)) {
+            changed = true
+            return { ...e, sensitive: true }
+          }
+          return e
+        })
+        return changed ? next : prev
+      })
+    }
   }
 
   if (isLoading) {

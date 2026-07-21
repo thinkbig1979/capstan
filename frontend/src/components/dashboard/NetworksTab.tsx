@@ -14,7 +14,7 @@ import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { HelpHint } from '@/components/ui/help-hint'
 import { PruneButton } from '@/components/dashboard/PruneButton'
 import { CreateNetworkDialog } from '@/components/dashboard/CreateNetworkDialog'
-import { useConfirm } from '@/components/ConfirmDialog'
+import { useConfirm } from '@/hooks/useConfirm'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import type { DockerNetwork } from '@/types'
 
