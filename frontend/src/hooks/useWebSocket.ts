@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useAuthStore } from '@/stores/authStore'
 import { WSClient, type WSClientOptions, type WSState } from '@/lib/ws'
 
@@ -174,7 +174,11 @@ export function useWebSocketJSON<T>(
     }
   }, [])
 
-  const ws = useWebSocket(path, wrappedOnMessage, { ...options, binary: false })
+  const wsOptions = useMemo<UseWebSocketOptions>(
+    () => ({ ...options, binary: false }),
+    [options],
+  )
+  const ws = useWebSocket(path, wrappedOnMessage, wsOptions)
 
   return {
     ...ws,
@@ -195,5 +199,9 @@ export function useWebSocketBinary(
     onMessage(data)
   }, [onMessage])
 
-  return useWebSocket(path, wrappedOnMessage, { ...options, binary: true })
+  const wsOptions = useMemo<UseWebSocketOptions>(
+    () => ({ ...options, binary: true }),
+    [options],
+  )
+  return useWebSocket(path, wrappedOnMessage, wsOptions)
 }

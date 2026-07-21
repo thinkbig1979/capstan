@@ -126,7 +126,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
         setIsLintingBeforeSave(false)
       }
     },
-    [saveMutation, stackId],
+    [saveMutation, stackId, viewRef],
   )
   handleSaveRef.current = handleSave
 
@@ -155,7 +155,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     if (!viewRef.current) return
     const currentContent = viewRef.current.state.doc.toString()
     lintMutation.mutate(currentContent)
-  }, [lintMutation])
+  }, [lintMutation, viewRef])
 
   const hasUnsavedChanges = content !== lastSaved
   const errorCount = lintResults.filter((r) => r.level === 'error').length
@@ -204,7 +204,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     const inferred = inferVarName(view.state.doc.toString(), sel.from)
     setExtractVarName(inferred)
     setShowExtractDialog(true)
-  }, [selectedText])
+  }, [selectedText, viewRef])
 
   /**
    * Atomic extract-to-env (audit finding #11).
@@ -294,7 +294,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     } finally {
       setIsExtracting(false)
     }
-  }, [selectedText, extractVarName, stackId, queryClient])
+  }, [selectedText, extractVarName, stackId, queryClient, viewRef])
 
   return (
     <div className="space-y-4">

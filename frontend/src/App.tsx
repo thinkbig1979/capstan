@@ -70,7 +70,7 @@ function App() {
       setStatusChecked(true)
     }
     init()
-  }, [])
+  }, [checkStatus, checkAuth])
 
   if (!statusChecked) {
     return (

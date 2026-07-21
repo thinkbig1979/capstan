@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useWebSocketJSON } from './useWebSocket'
 import { queryClient } from '@/lib/query-client'
 import { resolveUpdateScanSuccess, resolveUpdateScanError } from './useResources'
@@ -114,7 +114,9 @@ export function useStackEvents() {
     }
   }, [])
 
-  const scheduleInvalidations = (keys: string[][]) => {
+  // Only ever touches pendingRef/timerRef.current (stable refs) and the
+  // module-level queryClient, so it never needs to change identity.
+  const scheduleInvalidations = useCallback((keys: string[][]) => {
     keys.forEach((k) => pendingRef.current.add(JSON.stringify(k)))
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
@@ -124,9 +126,9 @@ export function useStackEvents() {
       pendingRef.current.clear()
       timerRef.current = null
     }, 750)
-  }
+  }, [])
 
-  const handleStackStatusEvent = (event: StackStatusEvent) => {
+  const handleStackStatusEvent = useCallback((event: StackStatusEvent) => {
     queryClient.setQueryData(['stacks'], (old: Stack[] | undefined) => {
       if (!old) return old
       return old.map((stack) =>
@@ -137,21 +139,21 @@ export function useStackEvents() {
       ['stack', event.stackId],
       ['dashboard-stats'],
     ])
-  }
+  }, [scheduleInvalidations])
 
-  const handleContainerEvent = (event: ContainerEvent) => {
+  const handleContainerEvent = useCallback((event: ContainerEvent) => {
     const keys: string[][] = [['dashboard-stats']]
     if (event.stackId) {
       keys.push(['stack', event.stackId], ['stacks'])
     }
     scheduleInvalidations(keys)
-  }
+  }, [scheduleInvalidations])
 
-  const handleScanCompleteEvent = () => {
+  const handleScanCompleteEvent = useCallback(() => {
     scheduleInvalidations([['stacks'], ['directories']])
-  }
+  }, [scheduleInvalidations])
 
-  const handleResourceChangedEvent = (event: ResourceChangedEvent) => {
+  const handleResourceChangedEvent = useCallback((event: ResourceChangedEvent) => {
     const keys: string[][] = [
       ['resources', 'images'],
       ['resources', 'volumes'],
@@ -163,45 +165,45 @@ export function useStackEvents() {
       keys.push(['stacks'])
     }
     scheduleInvalidations(keys)
-  }
+  }, [scheduleInvalidations])
 
   // Fast path: the backend broadcasts these when a scan genuinely finishes. The
   // shared resolvers are gated on an active scan (so a scheduled background scan
   // doesn't pop a toast nobody asked for) and are idempotent with the watcher's
   // poll-based completion — whichever fires first wins.
-  const handleUpdateScanCompleteEvent = () => {
+  const handleUpdateScanCompleteEvent = useCallback(() => {
     resolveUpdateScanSuccess()
     scheduleInvalidations([
       ['resources', 'updates'],
       ['settings', 'updates'],
     ])
-  }
+  }, [scheduleInvalidations])
 
-  const handleUpdateScanFailedEvent = () => {
+  const handleUpdateScanFailedEvent = useCallback(() => {
     resolveUpdateScanError()
     scheduleInvalidations([
       ['resources', 'updates'],
     ])
-  }
+  }, [scheduleInvalidations])
 
-  const handleUpdatePolicyChangedEvent = () => {
+  const handleUpdatePolicyChangedEvent = useCallback(() => {
     scheduleInvalidations([
       ['auto-update-policies'],
       ['settings', 'updates'],
       ['resources', 'updates'],
     ])
-  }
+  }, [scheduleInvalidations])
 
-  const handleUpdateCompletedEvent = () => {
+  const handleUpdateCompletedEvent = useCallback(() => {
     scheduleInvalidations([
       ['update-history'],
       ['resources', 'updates'],
       ['dashboard-stats'],
       ['stacks'],
     ])
-  }
+  }, [scheduleInvalidations])
 
-  const handleUpdateJobProgressEvent = (event: UpdateJobProgressStackEvent) => {
+  const handleUpdateJobProgressEvent = useCallback((event: UpdateJobProgressStackEvent) => {
     const { applyProgress } = useUpdateJobStore.getState()
     const payload: UpdateJobProgressEvent = {
       jobId: event.jobId,
@@ -212,9 +214,9 @@ export function useStackEvents() {
       status: event.status,
     }
     applyProgress(payload)
-  }
+  }, [])
 
-  const handleUpdateJobCompleteEvent = (event: UpdateJobCompleteStackEvent) => {
+  const handleUpdateJobCompleteEvent = useCallback((event: UpdateJobCompleteStackEvent) => {
     const { applyComplete } = useUpdateJobStore.getState()
     const payload: UpdateJobCompleteEvent = {
       jobId: event.jobId,
@@ -244,54 +246,65 @@ export function useStackEvents() {
       keys.push(['resources', 'updates'])
     }
     scheduleInvalidations(keys)
-  }
+  }, [scheduleInvalidations])
 
-  const handleUpdatesChangedEvent = () => {
+  const handleUpdatesChangedEvent = useCallback(() => {
     // Backend evicted one or more rows from the updates cache (after a verified apply).
     // Refetch the updates list immediately so the row disappears.
     scheduleInvalidations([
       ['resources', 'updates'],
     ])
-  }
+  }, [scheduleInvalidations])
 
-  useWebSocketJSON<StackEvent>(
-    '/ws/events',
-    (data) => {
-      switch (data.type) {
-        case 'stack_status':
-          handleStackStatusEvent(data)
-          break
-        case 'container_event':
-          handleContainerEvent(data)
-          break
-        case 'scan_complete':
-          handleScanCompleteEvent()
-          break
-        case 'resource_changed':
-          handleResourceChangedEvent(data)
-          break
-        case 'update_scan_complete':
-          handleUpdateScanCompleteEvent()
-          break
-        case 'update_scan_failed':
-          handleUpdateScanFailedEvent()
-          break
-        case 'update_policy_changed':
-          handleUpdatePolicyChangedEvent()
-          break
-        case 'update_completed':
-          handleUpdateCompletedEvent()
-          break
-        case 'update_job_progress':
-          handleUpdateJobProgressEvent(data)
-          break
-        case 'update_job_complete':
-          handleUpdateJobCompleteEvent(data)
-          break
-        case 'updates_changed':
-          handleUpdatesChangedEvent()
-          break
-      }
+  const handleMessage = useCallback((data: StackEvent) => {
+    switch (data.type) {
+      case 'stack_status':
+        handleStackStatusEvent(data)
+        break
+      case 'container_event':
+        handleContainerEvent(data)
+        break
+      case 'scan_complete':
+        handleScanCompleteEvent()
+        break
+      case 'resource_changed':
+        handleResourceChangedEvent(data)
+        break
+      case 'update_scan_complete':
+        handleUpdateScanCompleteEvent()
+        break
+      case 'update_scan_failed':
+        handleUpdateScanFailedEvent()
+        break
+      case 'update_policy_changed':
+        handleUpdatePolicyChangedEvent()
+        break
+      case 'update_completed':
+        handleUpdateCompletedEvent()
+        break
+      case 'update_job_progress':
+        handleUpdateJobProgressEvent(data)
+        break
+      case 'update_job_complete':
+        handleUpdateJobCompleteEvent(data)
+        break
+      case 'updates_changed':
+        handleUpdatesChangedEvent()
+        break
     }
-  )
+  }, [
+    handleStackStatusEvent,
+    handleContainerEvent,
+    handleScanCompleteEvent,
+    handleResourceChangedEvent,
+    handleUpdateScanCompleteEvent,
+    handleUpdateScanFailedEvent,
+    handleUpdatePolicyChangedEvent,
+    handleUpdateCompletedEvent,
+    handleUpdateJobProgressEvent,
+    handleUpdateJobCompleteEvent,
+    handleUpdatesChangedEvent,
+  ])
+
+  useWebSocketJSON<StackEvent>('/ws/events', handleMessage)
 }
