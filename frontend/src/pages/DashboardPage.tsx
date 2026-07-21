@@ -25,7 +25,7 @@ import { DirectoriesTab } from '@/components/dashboard/DirectoriesTab'
 import { classifyError } from '@/lib/error-handler'
 import { useStackActions } from '@/hooks/useStackActions'
 import { toast } from 'sonner'
-import { useConfirm } from '@/components/ConfirmDialog'
+import { useConfirm } from '@/hooks/useConfirm'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 
 type SortOption = 'name' | 'status'

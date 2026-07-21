@@ -34,10 +34,11 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
     localStorage.setItem('diff-view-preference', viewMode)
   }, [viewMode])
 
+  const diff = diffData?.diff
   const files = useMemo(() => {
-    if (!diffData?.diff) return []
-    return parseDiff(diffData.diff)
-  }, [diffData?.diff])
+    if (!diff) return []
+    return parseDiff(diff)
+  }, [diff])
 
   const toggleFile = (path: string) => {
     setCollapsedFiles((prev) => {

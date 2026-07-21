@@ -19,6 +19,14 @@ export default defineConfig([
       ecmaVersion: 2022,
       globals: globals.browser,
     },
+    rules: {
+      // Underscore-prefixed params/vars mark intentionally-unused bindings
+      // (e.g. mock function signatures that must match a call shape).
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
+    },
   },
   {
     files: ['src/components/ui/*.tsx'],

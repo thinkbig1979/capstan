@@ -2,7 +2,7 @@ import { Badge } from '@/components/ui/badge'
 import { AlertCircle, AlertTriangle, Info } from 'lucide-react'
 import type { LintResult } from '@/types'
 
-export function getLintIcon(level: string) {
+function getLintIcon(level: string) {
   switch (level) {
     case 'error':
       return <AlertCircle className="h-4 w-4 text-destructive" />

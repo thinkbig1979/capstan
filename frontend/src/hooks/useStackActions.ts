@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { stacksApi, type LifecycleResult, type StackDeleteResult } from '@/lib/api'
 import { toast } from 'sonner'
 import { toastForResult, isActionResult } from '@/lib/action-result'
@@ -51,51 +51,62 @@ function errorMessage(action: StackAction, err: unknown): string {
   return classifyError(err).message || `Failed to ${action} stack`
 }
 
+function invalidateAll(queryClient: QueryClient) {
+  for (const key of INVALIDATE_KEYS) {
+    queryClient.invalidateQueries({ queryKey: [...key] })
+  }
+}
+
+/**
+ * A single lifecycle-action mutation. Extracted as its own custom hook (rather
+ * than a plain factory function that calls `useMutation` internally) so each of
+ * the four mutations below is a direct, unconditional hook call at the top of
+ * `useStackActions` — the call order is a fixed sequence of statements, not
+ * indirection through a helper, so React can verify hook-call safety.
+ */
+function useStackActionMutation(
+  action: StackAction,
+  queryClient: QueryClient,
+  options?: UseStackActionsOptions,
+) {
+  return useMutation<AnyLifecycleResult, unknown, string>({
+    mutationFn: (id: string): Promise<AnyLifecycleResult> => {
+      if (action === 'delete') return stacksApi.delete(id)
+      return stacksApi[action](id)
+    },
+    onSuccess: (data, id) => {
+      // All four actions (start/stop/restart/delete) return a typed
+      // ActionResult body: derive the toast level from outcome.
+      // success→toast.success, no_change→toast.info,
+      // partial→toast.warning, failed→toast.error.
+      // A crash-loop or no-op start will NEVER show as green success.
+      if (isActionResult(data)) {
+        toastForResult(data, { successTitle: ACTION_SUCCESS_TITLES[action] })
+      }
+      invalidateAll(queryClient)
+      options?.onSuccess?.(action, id)
+      if (isActionResult(data)) {
+        options?.onResult?.(action, id)
+      }
+    },
+    onError: (err, id) => {
+      // A 500 `failed` ActionResult body is the rejected value directly
+      // (the axios interceptor strips the AxiosError wrapper). Surface the
+      // server-authored reason when available so the user sees a specific
+      // message rather than the generic fallback.
+      toast.error(errorMessage(action, err))
+      options?.onError?.(action, id)
+    },
+  })
+}
+
 export function useStackActions(options?: UseStackActionsOptions) {
   const queryClient = useQueryClient()
 
-  function invalidateAll() {
-    for (const key of INVALIDATE_KEYS) {
-      queryClient.invalidateQueries({ queryKey: [...key] })
-    }
-  }
-
-  function createMutation(action: StackAction) {
-    return useMutation<AnyLifecycleResult, unknown, string>({
-      mutationFn: (id: string): Promise<AnyLifecycleResult> => {
-        if (action === 'delete') return stacksApi.delete(id)
-        return stacksApi[action](id)
-      },
-      onSuccess: (data, id) => {
-        // All four actions (start/stop/restart/delete) return a typed
-        // ActionResult body: derive the toast level from outcome.
-        // success→toast.success, no_change→toast.info,
-        // partial→toast.warning, failed→toast.error.
-        // A crash-loop or no-op start will NEVER show as green success.
-        if (isActionResult(data)) {
-          toastForResult(data, { successTitle: ACTION_SUCCESS_TITLES[action] })
-        }
-        invalidateAll()
-        options?.onSuccess?.(action, id)
-        if (isActionResult(data)) {
-          options?.onResult?.(action, id)
-        }
-      },
-      onError: (err, id) => {
-        // A 500 `failed` ActionResult body is the rejected value directly
-        // (the axios interceptor strips the AxiosError wrapper). Surface the
-        // server-authored reason when available so the user sees a specific
-        // message rather than the generic fallback.
-        toast.error(errorMessage(action, err))
-        options?.onError?.(action, id)
-      },
-    })
-  }
-
-  const start = createMutation('start')
-  const stop = createMutation('stop')
-  const restart = createMutation('restart')
-  const deleteAction = createMutation('delete')
+  const start = useStackActionMutation('start', queryClient, options)
+  const stop = useStackActionMutation('stop', queryClient, options)
+  const restart = useStackActionMutation('restart', queryClient, options)
+  const deleteAction = useStackActionMutation('delete', queryClient, options)
 
   return { start, stop, restart, delete: deleteAction }
 }

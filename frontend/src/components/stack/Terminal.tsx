@@ -125,17 +125,21 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
         duration: 300000,
       })
       disconnectTimerRef.current = setTimeout(() => {
-        setDisconnectCountdown(60)
+        let remaining = 60
+        setDisconnectCountdown(remaining)
+        // A plain closure counter (rather than a functional setState updater)
+        // keeps the side effects below out of the updater — they run once,
+        // directly in this callback, not inside a function React may re-invoke.
         const countdownInterval = setInterval(() => {
-          setDisconnectCountdown((prev) => {
-            if (prev === null || prev <= 1) {
-              clearInterval(countdownInterval)
-              toast.error('Session disconnected due to inactivity (30 minutes)')
-              disconnect()
-              return null
-            }
-            return prev - 1
-          })
+          remaining -= 1
+          if (remaining <= 0) {
+            clearInterval(countdownInterval)
+            setDisconnectCountdown(null)
+            toast.error('Session disconnected due to inactivity (30 minutes)')
+            disconnect()
+            return
+          }
+          setDisconnectCountdown(remaining)
         }, 1000)
       }, 300000)
     }, SESSION_WARNING_MINUTES * 60 * 1000)
@@ -202,17 +206,17 @@ export function TerminalComponent({ stack, initialContainer }: TerminalProps) {
   }, [])
 
   const handleFontSizeChange = useCallback((delta: number) => {
-    setFontSize((prev) => {
-      const next = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, prev + delta))
-      const terminal = xtermRef.current
-      if (terminal) {
-        terminal.options.fontSize = next
-        fitAddonRef.current?.fit()
-      }
-      localStorage.setItem(FONT_SIZE_KEY, String(next))
-      return next
-    })
-  }, [])
+    const next = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, fontSize + delta))
+    setFontSize(next)
+    // Side effects run here, after the setState call, rather than inside a
+    // functional updater — updaters should stay pure since React may re-invoke them.
+    const terminal = xtermRef.current
+    if (terminal) {
+      terminal.options.fontSize = next
+      fitAddonRef.current?.fit()
+    }
+    localStorage.setItem(FONT_SIZE_KEY, String(next))
+  }, [fontSize])
 
   const toggleSearch = useCallback(() => {
     setShowSearch((prev) => {

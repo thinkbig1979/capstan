@@ -9,7 +9,7 @@ import { stacksApi } from '@/lib/api'
 import { classifyError } from '@/lib/error-handler'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { toast } from 'sonner'
-import { useConfirm } from '@/components/ConfirmDialog'
+import { useConfirm } from '@/hooks/useConfirm'
 import { useStackStore } from '@/stores/stackStore'
 import { useCheckUpdates, useUpdateStack, useUpdateJobs } from '@/hooks/useResources'
 import { useUpdateJobStore, type UpdateJob } from '@/stores/updateJobStore'
@@ -68,10 +68,11 @@ export function StackPage() {
 
   // Available updates for this stack
   const { data: updateData } = useCheckUpdates()
+  const updates = updateData?.updates
   const stackUpdatesCount = useMemo(() => {
-    if (!updateData?.updates || !id) return 0
-    return updateData.updates.filter((u) => u.stackId === id).length
-  }, [updateData?.updates, id])
+    if (!updates || !id) return 0
+    return updates.filter((u) => u.stackId === id).length
+  }, [updates, id])
 
   // Stack job state. Derive from the raw jobs map so the memoized values keep a
   // stable identity across renders (a selector returning a fresh array each call

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -46,19 +46,18 @@ export function DirectoriesSettingsContent() {
     onError: () => toast.error('Failed to update scan depth'),
   })
 
-  useEffect(() => {
-    if (config && !initialized) {
-      setDefaultDir(config.stacksDir || '')
-      setInitialized(true)
-    }
-  }, [config, initialized])
+  // Hydrate local editable state from the query results once they load.
+  // Adjusted during render (rather than in an effect) — the `initialized`
+  // guards make this a one-shot assignment, not an unbounded render loop.
+  if (config && !initialized) {
+    setInitialized(true)
+    setDefaultDir(config.stacksDir || '')
+  }
 
-  useEffect(() => {
-    if (scanDepthData && !depthInitialized) {
-      setScanDepth(String(scanDepthData.scanDepth))
-      setDepthInitialized(true)
-    }
-  }, [scanDepthData, depthInitialized])
+  if (scanDepthData && !depthInitialized) {
+    setDepthInitialized(true)
+    setScanDepth(String(scanDepthData.scanDepth))
+  }
 
   const allDirs = useMemo(() => config?.stacksDirectories ?? [], [config])
   const { query, setQuery, filtered: filteredDirs } = useTextFilter(allDirs, DIR_SEARCH_FIELDS)

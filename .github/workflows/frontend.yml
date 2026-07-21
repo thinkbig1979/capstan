@@ -1,0 +1,63 @@
+# Frontend CI — lint, unit tests, and build for the Vite/React app.
+#
+# Nothing previously ran the frontend test suite, lint, or build in CI;
+# integration.yml only covers backend/**. This workflow closes that gap.
+
+name: Frontend CI
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+
+jobs:
+  frontend:
+    name: Lint, test, and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Pin the exact pnpm version declared in frontend/package.json's
+      # "packageManager" field so CI never drifts from what contributors run
+      # locally. `corepack prepare --activate` is used instead of relying on
+      # packageManager auto-detection: the repo root has its own
+      # (packageManager-less) package.json, so corepack resolves the wrong
+      # (latest installed) pnpm version when invoked outside frontend/ —
+      # which is exactly where actions/setup-node's `cache: pnpm` step below
+      # runs pnpm from.
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.5.1 --activate
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        working-directory: frontend
+        run: pnpm lint
+
+      - name: Unit tests
+        working-directory: frontend
+        run: pnpm test -- --run
+
+      - name: Build
+        working-directory: frontend
+        run: pnpm build

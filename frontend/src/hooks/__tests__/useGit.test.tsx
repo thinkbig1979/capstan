@@ -3,6 +3,7 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import type { ActionResult } from '@/lib/action-result'
+import type { GitPullResult } from '@/lib/api'
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -91,7 +92,7 @@ describe('useGitDiff', () => {
 describe('normalisePullResult', () => {
   it('passes through ActionResult shape unchanged', () => {
     const ar: ActionResult = { outcome: 'success', reason: 'HEAD advanced' }
-    expect(normalisePullResult(ar as any)).toEqual(ar)
+    expect(normalisePullResult(ar as GitPullResult)).toEqual(ar)
   })
 
   it('maps legacy success with different commits → success', () => {
@@ -101,7 +102,7 @@ describe('normalisePullResult', () => {
       currentCommit: 'def5678',
       changedFiles: ['docker-compose.yml'],
       redeployedStacks: [],
-    } as any)
+    })
     expect(result.outcome).toBe('success')
     expect(result.reason).toContain('abc1234')
     expect(result.reason).toContain('def5678')
@@ -114,7 +115,7 @@ describe('normalisePullResult', () => {
       currentCommit: 'abc1234',
       changedFiles: [],
       redeployedStacks: [],
-    } as any)
+    })
     expect(result.outcome).toBe('no_change')
     expect(result.reason).toBe('Already up to date')
   })
@@ -126,7 +127,7 @@ describe('normalisePullResult', () => {
       currentCommit: '',
       changedFiles: [],
       redeployedStacks: [],
-    } as any)
+    })
     expect(result.outcome).toBe('failed')
   })
 })

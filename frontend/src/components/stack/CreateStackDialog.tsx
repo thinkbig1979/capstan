@@ -231,12 +231,13 @@ export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps
     return () => cancelAnimationFrame(id)
   }, [open])
 
-  useEffect(() => {
-    if (pendingCompose) {
-      setComposeContent(pendingCompose)
-      setPendingCompose(null)
-    }
-  }, [pendingCompose])
+  // Consume a pending compose conversion into the editable content. Adjusted
+  // during render (rather than in an effect) — clearing `pendingCompose` in
+  // the same pass makes this a one-shot assignment, not an unbounded loop.
+  if (pendingCompose) {
+    setComposeContent(pendingCompose)
+    setPendingCompose(null)
+  }
 
   const hasLintErrors = lintResults.some((r) => r.level === 'error')
 
