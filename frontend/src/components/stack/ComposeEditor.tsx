@@ -165,7 +165,9 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     },
     [saveMutation, stackId, viewRef],
   )
-  handleSaveRef.current = handleSave
+  useEffect(() => {
+    handleSaveRef.current = handleSave
+  }, [handleSave])
 
   const lintMutation = useMutation({
     mutationFn: async (content: string) => {
