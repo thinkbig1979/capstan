@@ -193,7 +193,6 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
   const logContainerRef = useRef<HTMLDivElement>(null)
   const isAutoScrollingRef = useRef(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const prevLenRef = useRef(0)
 
   const setTimeRange = useCallback(
     (range: LogTimeRange) => setLogPrefs({ timeRange: range }),
@@ -314,17 +313,22 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
 
   // Count lines that arrived while the user is scrolled up, so the jump pill can
   // show how far behind they are. Reset to zero whenever we're back at bottom.
-  useEffect(() => {
+  // Adjusted during render (rather than in an effect) by comparing against the
+  // previous render's length/scrolledUp — see
+  // https://react.dev/learn/you-might-not-need-an-effect.
+  const [prevLogTracker, setPrevLogTracker] = useState({ len: 0, scrolledUp: false })
+  if (filteredLogs.length !== prevLogTracker.len || scrolledUp !== prevLogTracker.scrolledUp) {
     const len = filteredLogs.length
+    const prevLen = prevLogTracker.len
+    setPrevLogTracker({ len, scrolledUp })
     if (scrolledUp) {
-      if (len > prevLenRef.current) {
-        setNewCount((c) => c + (len - prevLenRef.current))
+      if (len > prevLen) {
+        setNewCount((c) => c + (len - prevLen))
       }
-    } else if (newCount !== 0) {
+    } else {
       setNewCount(0)
     }
-    prevLenRef.current = len
-  }, [filteredLogs, scrolledUp, newCount])
+  }
 
   useEffect(() => {
     const container = logContainerRef.current
@@ -375,15 +379,13 @@ export function LogViewer({ stackId, initialContainer, hasRunningContainers = tr
 
   const toggleContainer = useCallback(
     (name: string) => {
-      setSelectedContainers((prev) => {
-        const next = prev.includes(name)
-          ? prev.filter((c) => c !== name)
-          : [...prev, name]
-        send(JSON.stringify({ type: 'filter', containers: next }))
-        return next
-      })
+      const next = selectedContainers.includes(name)
+        ? selectedContainers.filter((c) => c !== name)
+        : [...selectedContainers, name]
+      setSelectedContainers(next)
+      send(JSON.stringify({ type: 'filter', containers: next }))
     },
-    [send]
+    [selectedContainers, send]
   )
 
   const clearContainerFilter = useCallback(() => {

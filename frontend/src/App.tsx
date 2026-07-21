@@ -64,12 +64,16 @@ function App() {
   }, [])
 
   useEffect(() => {
+    let ignore = false
     const init = async () => {
       await checkStatus()
       await checkAuth()
-      setStatusChecked(true)
+      if (!ignore) setStatusChecked(true)
     }
     init()
+    return () => {
+      ignore = true
+    }
   }, [checkStatus, checkAuth])
 
   if (!statusChecked) {

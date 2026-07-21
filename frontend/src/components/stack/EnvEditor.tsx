@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useEffectEvent, useCallback, useMemo } from 'react'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
@@ -110,19 +110,30 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     }
   }, [history, historyIndex])
 
+  // `handleUndo`/`handleRedo` are only read inside the keydown sub-handler
+  // below, so wrapping them in Effect Events keeps this effect from
+  // re-subscribing the window listener on every history change — see
+  // https://react.dev/reference/react/useEffectEvent
+  const onUndoShortcut = useEffectEvent(() => {
+    handleUndo()
+  })
+  const onRedoShortcut = useEffectEvent(() => {
+    handleRedo()
+  })
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault()
-        handleUndo()
+        onUndoShortcut()
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
         e.preventDefault()
-        handleRedo()
+        onRedoShortcut()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleUndo, handleRedo])
+  }, [])
 
   const { data: envData, isLoading, isError } = useQuery({
     queryKey: ['stack', stackId, 'env'],

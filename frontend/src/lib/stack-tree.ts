@@ -49,8 +49,9 @@ export function buildDirectoryTree(
 ): TreeNode[] {
   const stacksByDir = new Map<string, Stack[]>()
   for (const stack of stacks) {
-    if (!stacksByDir.has(stack.directory)) stacksByDir.set(stack.directory, [])
-    stacksByDir.get(stack.directory)!.push(stack)
+    const dirStacks = stacksByDir.get(stack.directory) ?? []
+    dirStacks.push(stack)
+    stacksByDir.set(stack.directory, dirStacks)
   }
 
   interface DirInfo {

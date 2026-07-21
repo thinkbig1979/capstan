@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { TableSearch } from '@/components/ui/table-search'
+import { loadCollapsedSet, saveCollapsedSet } from '@/lib/collapsed-set-storage'
 import type { ConfiguredDir } from '@/types'
 
 interface Stack {
@@ -120,12 +121,13 @@ function buildDirTree(
   return topNodes.map(collapseNode)
 }
 
+const DIRS_TAB_COLLAPSED_KEY = 'dirs-tab-collapsed:v1'
+// Pre-versioning key. Read once as a migration so existing users don't lose
+// their collapsed-group state; never written to again.
+const DIRS_TAB_COLLAPSED_LEGACY_KEY = 'dirs-tab-collapsed'
+
 function loadSavedCollapsed(): Set<string> | null {
-  try {
-    const raw = localStorage.getItem('dirs-tab-collapsed')
-    if (raw) return new Set(JSON.parse(raw))
-  } catch { /* ignore */ }
-  return null
+  return loadCollapsedSet(DIRS_TAB_COLLAPSED_KEY, DIRS_TAB_COLLAPSED_LEGACY_KEY)
 }
 
 function computeDefaultCollapsed(
@@ -147,7 +149,7 @@ function computeDefaultCollapsed(
 }
 
 function saveCollapsed(set: Set<string>) {
-  localStorage.setItem('dirs-tab-collapsed', JSON.stringify([...set]))
+  saveCollapsedSet(DIRS_TAB_COLLAPSED_KEY, set)
 }
 
 function EmptyDirectories({ message }: { message: string }) {
