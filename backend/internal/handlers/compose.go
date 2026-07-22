@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
-	"github.com/gin-gonic/gin"
 )
 
 type ComposeHandler struct {
@@ -321,7 +321,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		hasEnvUpdate = true
 	} else if len(req.EnvEntries) > 0 {
 		if err := validateEnvEntries(req.EnvEntries); err != nil {
-			truth.Render(c, truth.Failed("env validation failed: "+err.Error(), err))
+			renderResult(c, truth.Failed("env validation failed: "+err.Error(), err))
 			return
 		}
 		envContent = serializeEnvFile(req.EnvEntries)
@@ -363,7 +363,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	// ── Snapshot current compose content for rollback ──────────────────────
 	originalCompose, readErr := os.ReadFile(composePath)
 	if readErr != nil && !os.IsNotExist(readErr) {
-		truth.Render(c, truth.Failed("failed to read existing compose file for rollback snapshot", readErr))
+		renderResult(c, truth.Failed("failed to read existing compose file for rollback snapshot", readErr))
 		return
 	}
 
@@ -388,19 +388,19 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		if snapshot, rerr := os.ReadFile(envPath); rerr == nil {
 			originalEnv = snapshot
 		} else if !os.IsNotExist(rerr) {
-			truth.Render(c, truth.Failed("failed to read existing env file for rollback snapshot", rerr))
+			renderResult(c, truth.Failed("failed to read existing env file for rollback snapshot", rerr))
 			return
 		}
 
 		tmpEnvPath := envPath + ".tmp"
 		if err := os.WriteFile(tmpEnvPath, []byte(envContent), 0644); err != nil {
-			truth.Render(c, truth.Failed("failed to write env to temp file; compose unchanged", err))
+			renderResult(c, truth.Failed("failed to write env to temp file; compose unchanged", err))
 			return
 		}
 		if err := os.Rename(tmpEnvPath, envPath); err != nil {
 			// Clean up temp file; compose was never written.
 			os.Remove(tmpEnvPath)
-			truth.Render(c, truth.Failed("failed to atomically replace env file; compose unchanged", err))
+			renderResult(c, truth.Failed("failed to atomically replace env file; compose unchanged", err))
 			return
 		}
 
@@ -408,7 +408,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		if ar := verifyEnvRoundTrip(envPath, envContent); ar != nil {
 			// .env written but verification failed — restore original bytes.
 			restoreEnv(envPath, originalEnv)
-			truth.Render(c, *ar)
+			renderResult(c, *ar)
 			return
 		}
 	}
@@ -419,7 +419,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		if hasEnvUpdate && envPath != "" {
 			restoreEnv(envPath, originalEnv)
 		}
-		truth.Render(c, truth.Failed("failed to write compose file; env rolled back", err))
+		renderResult(c, truth.Failed("failed to write compose file; env rolled back", err))
 		return
 	}
 
@@ -436,12 +436,12 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 			restoreEnv(envPath, originalEnv)
 		}
 		if rollbackErr != "" {
-			truth.Render(c, truth.Partial("compose write verification failed; rollback also failed",
+			renderResult(c, truth.Partial("compose write verification failed; rollback also failed",
 				truth.KV("rollbackError", rollbackErr),
 			))
 			return
 		}
-		truth.Render(c, truth.Failed("compose write verification failed; both files rolled back", nil))
+		renderResult(c, truth.Failed("compose write verification failed; both files rolled back", nil))
 		return
 	}
 

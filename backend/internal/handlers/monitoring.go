@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
-	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 )
 
 type MonitoringHandler struct {
@@ -50,14 +50,14 @@ func (h *MonitoringHandler) getStackContainers(jwtSecret string, authDisabled bo
 		stackID := c.Param("id")
 		stack, err := h.db.GetStack(stackID)
 		if err != nil {
-			models.HandleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
+			handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
 			return
 		}
 
 		containers, err := h.docker.GetContainerList(stack.ProjectName)
 		if err != nil {
 			slog.Error("Failed to get container list", "userId", userID, "stackId", stackID, "error", err)
-			models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve container list"))
+			handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve container list"))
 			return
 		}
 
@@ -73,13 +73,13 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 
 		stack, err := h.db.GetStack(stackID)
 		if err != nil {
-			models.HandleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
+			handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
 			return
 		}
 
 		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
 		if err != nil {
-			models.HandleError(c, err)
+			handleError(c, err)
 			return
 		}
 
@@ -189,7 +189,7 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 	return func(c *gin.Context) {
 		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
 		if err != nil {
-			models.HandleError(c, err)
+			handleError(c, err)
 			return
 		}
 

@@ -76,15 +76,15 @@ func (h *ResourcesHandler) deleteImage(c *gin.Context) {
 	resp, err := h.docker.DeleteImage(c.Request.Context(), id, force)
 	if err != nil {
 		slog.Error("Failed to delete image", "id", id, "error", err)
-		truth.Render(c, truth.Failed("failed to delete image", err,
+		renderResult(c, truth.Failed("failed to delete image", err,
 			truth.KV("id", id),
 		))
 		return
 	}
 
-	h.actionLog.LogFromContext(c, nil, services.ActionDeleteImage, gin.H{"id": id, "force": force})
+	logActionFromContext(h.actionLog, c, nil, services.ActionDeleteImage, gin.H{"id": id, "force": force})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Timestamp: time.Now()})
-	truth.Render(c, classifyImageDeleteResponse(resp))
+	renderResult(c, classifyImageDeleteResponse(resp))
 }
 
 // classifyImagePruneReport counts both Deleted and Untagged entries from the
@@ -123,20 +123,20 @@ func (h *ResourcesHandler) pruneImages(c *gin.Context) {
 	report, err := h.docker.PruneImages(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune images", "error", err)
-		truth.Render(c, truth.Failed("failed to prune images", err))
+		renderResult(c, truth.Failed("failed to prune images", err))
 		return
 	}
 
-	h.actionLog.LogFromContext(c, nil, services.ActionPrune, gin.H{"resource": "images", "space_reclaimed": report.SpaceReclaimed})
+	logActionFromContext(h.actionLog, c, nil, services.ActionPrune, gin.H{"resource": "images", "space_reclaimed": report.SpaceReclaimed})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Timestamp: time.Now()})
-	truth.Render(c, classifyImagePruneReport(report.ImagesDeleted, report.SpaceReclaimed))
+	renderResult(c, classifyImagePruneReport(report.ImagesDeleted, report.SpaceReclaimed))
 }
 
 func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
 	report, err := h.docker.PruneContainers(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune containers", "error", err)
-		truth.Render(c, truth.Failed("failed to prune containers", err))
+		renderResult(c, truth.Failed("failed to prune containers", err))
 		return
 	}
 
@@ -145,18 +145,18 @@ func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
 		deleted = []string{}
 	}
 
-	h.actionLog.LogFromContext(c, nil, services.ActionPrune, gin.H{"resource": "containers", "count": len(deleted), "space_reclaimed": report.SpaceReclaimed})
+	logActionFromContext(h.actionLog, c, nil, services.ActionPrune, gin.H{"resource": "containers", "count": len(deleted), "space_reclaimed": report.SpaceReclaimed})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_prune", Timestamp: time.Now()})
 
 	if len(deleted) == 0 && report.SpaceReclaimed == 0 {
-		truth.Render(c, truth.NoChange("nothing to prune",
+		renderResult(c, truth.NoChange("nothing to prune",
 			truth.KV("deleted", deleted),
 			truth.KV("spaceReclaimed", report.SpaceReclaimed),
 		))
 		return
 	}
 
-	truth.Render(c, truth.Success(
+	renderResult(c, truth.Success(
 		fmt.Sprintf("pruned %d container(s), reclaimed %d bytes", len(deleted), report.SpaceReclaimed),
 		truth.KV("deleted", deleted),
 		truth.KV("spaceReclaimed", report.SpaceReclaimed),
@@ -169,15 +169,15 @@ func (h *ResourcesHandler) deleteContainer(c *gin.Context) {
 
 	if err := h.docker.DeleteContainer(c.Request.Context(), id, force); err != nil {
 		slog.Error("Failed to delete container", "id", id, "error", err)
-		truth.Render(c, truth.Failed("failed to delete container", err,
+		renderResult(c, truth.Failed("failed to delete container", err,
 			truth.KV("id", id),
 		))
 		return
 	}
 
-	h.actionLog.LogFromContext(c, nil, services.ActionDeleteContainer, gin.H{"id": id, "force": force})
+	logActionFromContext(h.actionLog, c, nil, services.ActionDeleteContainer, gin.H{"id": id, "force": force})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_delete", ContainerID: id, Timestamp: time.Now()})
-	truth.Render(c, truth.Success("container deleted",
+	renderResult(c, truth.Success("container deleted",
 		truth.KV("id", id),
 	))
 }
@@ -188,15 +188,15 @@ func (h *ResourcesHandler) deleteVolume(c *gin.Context) {
 
 	if err := h.docker.DeleteVolume(c.Request.Context(), name, force); err != nil {
 		slog.Error("Failed to delete volume", "name", name, "error", err)
-		truth.Render(c, truth.Failed("failed to delete volume", err,
+		renderResult(c, truth.Failed("failed to delete volume", err,
 			truth.KV("name", name),
 		))
 		return
 	}
 
-	h.actionLog.LogFromContext(c, nil, services.ActionDeleteVolume, gin.H{"name": name, "force": force})
+	logActionFromContext(h.actionLog, c, nil, services.ActionDeleteVolume, gin.H{"name": name, "force": force})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "volume_delete", Timestamp: time.Now()})
-	truth.Render(c, truth.Success("volume deleted",
+	renderResult(c, truth.Success("volume deleted",
 		truth.KV("name", name),
 	))
 }
@@ -205,7 +205,7 @@ func (h *ResourcesHandler) pruneVolumes(c *gin.Context) {
 	report, err := h.docker.PruneVolumes(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune volumes", "error", err)
-		truth.Render(c, truth.Failed("failed to prune volumes", err))
+		renderResult(c, truth.Failed("failed to prune volumes", err))
 		return
 	}
 
@@ -214,18 +214,18 @@ func (h *ResourcesHandler) pruneVolumes(c *gin.Context) {
 		deleted = []string{}
 	}
 
-	h.actionLog.LogFromContext(c, nil, services.ActionPrune, gin.H{"resource": "volumes", "count": len(deleted), "space_reclaimed": report.SpaceReclaimed})
+	logActionFromContext(h.actionLog, c, nil, services.ActionPrune, gin.H{"resource": "volumes", "count": len(deleted), "space_reclaimed": report.SpaceReclaimed})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "volume_prune", Timestamp: time.Now()})
 
 	if len(deleted) == 0 && report.SpaceReclaimed == 0 {
-		truth.Render(c, truth.NoChange("nothing to prune",
+		renderResult(c, truth.NoChange("nothing to prune",
 			truth.KV("deleted", deleted),
 			truth.KV("spaceReclaimed", report.SpaceReclaimed),
 		))
 		return
 	}
 
-	truth.Render(c, truth.Success(
+	renderResult(c, truth.Success(
 		fmt.Sprintf("pruned %d volume(s), reclaimed %d bytes", len(deleted), report.SpaceReclaimed),
 		truth.KV("deleted", deleted),
 		truth.KV("spaceReclaimed", report.SpaceReclaimed),
@@ -244,11 +244,11 @@ var networkNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 func (h *ResourcesHandler) createNetwork(c *gin.Context) {
 	var req createNetworkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		models.HandleError(c, models.NewAppError(http.StatusBadRequest, "INVALID_INPUT", "Invalid request body"))
+		handleError(c, models.NewAppError(http.StatusBadRequest, "INVALID_INPUT", "Invalid request body"))
 		return
 	}
 	if !networkNameRegex.MatchString(req.Name) {
-		models.HandleError(c, models.NewAppError(http.StatusBadRequest, "INVALID_INPUT", "Network name must start with a letter or digit and contain only letters, digits, '_', '.', or '-' (max 63 chars)"))
+		handleError(c, models.NewAppError(http.StatusBadRequest, "INVALID_INPUT", "Network name must start with a letter or digit and contain only letters, digits, '_', '.', or '-' (max 63 chars)"))
 		return
 	}
 	driver := req.Driver
@@ -264,13 +264,13 @@ func (h *ResourcesHandler) createNetwork(c *gin.Context) {
 	id, err := h.docker.CreateNetwork(c.Request.Context(), req.Name, opts)
 	if err != nil {
 		slog.Error("Failed to create network", "name", req.Name, "error", err)
-		truth.Render(c, truth.Failed("failed to create network", err,
+		renderResult(c, truth.Failed("failed to create network", err,
 			truth.KV("name", req.Name),
 		))
 		return
 	}
 
-	h.actionLog.LogFromContext(c, nil, services.ActionCreateNetwork, gin.H{"name": req.Name, "driver": driver})
+	logActionFromContext(h.actionLog, c, nil, services.ActionCreateNetwork, gin.H{"name": req.Name, "driver": driver})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "network_create", Timestamp: time.Now()})
 	c.JSON(http.StatusCreated, truth.ActionResult{
 		Outcome: truth.OutcomeSuccess,
@@ -287,15 +287,15 @@ func (h *ResourcesHandler) deleteNetwork(c *gin.Context) {
 
 	if err := h.docker.DeleteNetwork(c.Request.Context(), id); err != nil {
 		slog.Error("Failed to delete network", "id", id, "error", err)
-		truth.Render(c, truth.Failed("failed to delete network", err,
+		renderResult(c, truth.Failed("failed to delete network", err,
 			truth.KV("id", id),
 		))
 		return
 	}
 
-	h.actionLog.LogFromContext(c, nil, services.ActionDeleteNetwork, gin.H{"id": id})
+	logActionFromContext(h.actionLog, c, nil, services.ActionDeleteNetwork, gin.H{"id": id})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "network_delete", Timestamp: time.Now()})
-	truth.Render(c, truth.Success("network deleted",
+	renderResult(c, truth.Success("network deleted",
 		truth.KV("id", id),
 	))
 }
@@ -304,7 +304,7 @@ func (h *ResourcesHandler) pruneNetworks(c *gin.Context) {
 	report, err := h.docker.PruneNetworks(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune networks", "error", err)
-		truth.Render(c, truth.Failed("failed to prune networks", err))
+		renderResult(c, truth.Failed("failed to prune networks", err))
 		return
 	}
 
@@ -313,17 +313,17 @@ func (h *ResourcesHandler) pruneNetworks(c *gin.Context) {
 		deleted = []string{}
 	}
 
-	h.actionLog.LogFromContext(c, nil, services.ActionPrune, gin.H{"resource": "networks", "count": len(deleted)})
+	logActionFromContext(h.actionLog, c, nil, services.ActionPrune, gin.H{"resource": "networks", "count": len(deleted)})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "network_prune", Timestamp: time.Now()})
 
 	if len(deleted) == 0 {
-		truth.Render(c, truth.NoChange("nothing to prune",
+		renderResult(c, truth.NoChange("nothing to prune",
 			truth.KV("deleted", deleted),
 		))
 		return
 	}
 
-	truth.Render(c, truth.Success(
+	renderResult(c, truth.Success(
 		fmt.Sprintf("pruned %d network(s)", len(deleted)),
 		truth.KV("deleted", deleted),
 	))
@@ -333,7 +333,7 @@ func (h *ResourcesHandler) pruneBuildCache(c *gin.Context) {
 	report, err := h.docker.PruneBuildCache(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune build cache", "error", err)
-		truth.Render(c, truth.Failed("failed to prune build cache", err))
+		renderResult(c, truth.Failed("failed to prune build cache", err))
 		return
 	}
 
@@ -342,18 +342,18 @@ func (h *ResourcesHandler) pruneBuildCache(c *gin.Context) {
 		deleted = []string{}
 	}
 
-	h.actionLog.LogFromContext(c, nil, services.ActionPrune, gin.H{"resource": "build_cache", "count": len(deleted), "space_reclaimed": report.SpaceReclaimed})
+	logActionFromContext(h.actionLog, c, nil, services.ActionPrune, gin.H{"resource": "build_cache", "count": len(deleted), "space_reclaimed": report.SpaceReclaimed})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "build_cache_prune", Timestamp: time.Now()})
 
 	if len(deleted) == 0 && report.SpaceReclaimed == 0 {
-		truth.Render(c, truth.NoChange("nothing to prune",
+		renderResult(c, truth.NoChange("nothing to prune",
 			truth.KV("deleted", deleted),
 			truth.KV("spaceReclaimed", report.SpaceReclaimed),
 		))
 		return
 	}
 
-	truth.Render(c, truth.Success(
+	renderResult(c, truth.Success(
 		fmt.Sprintf("pruned %d cache entry/entries, reclaimed %d bytes", len(deleted), report.SpaceReclaimed),
 		truth.KV("deleted", deleted),
 		truth.KV("spaceReclaimed", report.SpaceReclaimed),

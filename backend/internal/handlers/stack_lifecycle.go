@@ -45,7 +45,7 @@ func (h *StacksHandler) Start(c *gin.Context) {
 		slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
 	}
 
-	truth.Render(c, truth.ActionResult{
+	renderResult(c, truth.ActionResult{
 		Outcome: ar.Outcome,
 		Reason:  ar.Reason,
 		Details: mergeDetails(ar.Details, map[string]any{
@@ -92,7 +92,7 @@ func (h *StacksHandler) Stop(c *gin.Context) {
 		slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
 	}
 
-	truth.Render(c, truth.ActionResult{
+	renderResult(c, truth.ActionResult{
 		Outcome: ar.Outcome,
 		Reason:  ar.Reason,
 		Details: mergeDetails(ar.Details, map[string]any{
@@ -139,7 +139,7 @@ func (h *StacksHandler) Restart(c *gin.Context) {
 		slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
 	}
 
-	truth.Render(c, truth.ActionResult{
+	renderResult(c, truth.ActionResult{
 		Outcome: ar.Outcome,
 		Reason:  ar.Reason,
 		Details: mergeDetails(ar.Details, map[string]any{
@@ -184,7 +184,7 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 	restartAfterPull := c.Query("restart") == "true"
 
 	if pullAR.Outcome == truth.OutcomeFailed {
-		truth.Render(c, truth.ActionResult{
+		renderResult(c, truth.ActionResult{
 			Outcome: pullAR.Outcome,
 			Reason:  pullAR.Reason,
 			Details: mergeDetails(pullAR.Details, map[string]any{
@@ -204,7 +204,7 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 			slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
 		}
 
-		truth.Render(c, truth.ActionResult{
+		renderResult(c, truth.ActionResult{
 			Outcome: restartAR.Outcome,
 			Reason:  restartAR.Reason,
 			Details: mergeDetails(restartAR.Details, map[string]any{
@@ -218,7 +218,7 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 		return
 	}
 
-	truth.Render(c, truth.ActionResult{
+	renderResult(c, truth.ActionResult{
 		Outcome: pullAR.Outcome,
 		Reason:  pullAR.Reason,
 		Details: mergeDetails(pullAR.Details, map[string]any{

@@ -5,8 +5,6 @@ package truth
 
 import (
 	"net/http"
-
-	"github.com/gin-gonic/gin"
 )
 
 // Outcome is the canonical result class for every mutating action.
@@ -54,13 +52,6 @@ func (r ActionResult) HTTPStatus() int {
 	default:
 		return http.StatusInternalServerError
 	}
-}
-
-// Render writes the ActionResult as JSON to a gin context using the
-// appropriate HTTP status code. All action endpoints should use this
-// to ensure consistent wire format across domains.
-func Render(c *gin.Context, r ActionResult) {
-	c.JSON(r.HTTPStatus(), r)
 }
 
 // kv is a key-value pair used by the optional details variadic arguments.

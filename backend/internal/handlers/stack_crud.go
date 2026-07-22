@@ -319,7 +319,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	// directories.
 	absStackDir, pathErr := filepath.Abs(stack.Directory)
 	if pathErr != nil {
-		truth.Render(c, truth.Failed("failed to resolve stack directory path", pathErr,
+		renderResult(c, truth.Failed("failed to resolve stack directory path", pathErr,
 			truth.KV("id", id),
 		))
 		return
@@ -327,7 +327,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 
 	absStacksRoot, pathErr := filepath.Abs(h.config.StacksDir)
 	if pathErr != nil {
-		truth.Render(c, truth.Failed("failed to resolve stacks root path", pathErr,
+		renderResult(c, truth.Failed("failed to resolve stacks root path", pathErr,
 			truth.KV("id", id),
 		))
 		return
@@ -347,7 +347,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 			}
 		}
 		if !insideExtra {
-			truth.Render(c, truth.Failed("stack directory is outside the configured stacks root; refusing to delete", nil,
+			renderResult(c, truth.Failed("stack directory is outside the configured stacks root; refusing to delete", nil,
 				truth.KV("id", id),
 				truth.KV("directory", stack.Directory),
 			))
@@ -365,7 +365,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	h.logAction(userID.(string), id, "delete", deleteOutput)
 
 	if deleteAR.Outcome != truth.OutcomeSuccess && deleteAR.Outcome != truth.OutcomeNoChange {
-		truth.Render(c, truth.ActionResult{
+		renderResult(c, truth.ActionResult{
 			Outcome: deleteAR.Outcome,
 			Reason:  "compose down did not verify as removed: " + deleteAR.Reason,
 			Details: mergeDetails(deleteAR.Details, map[string]any{
@@ -379,7 +379,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 
 	// Remove the stack directory from disk.
 	if rmErr := os.RemoveAll(absStackDir); rmErr != nil {
-		truth.Render(c, truth.Failed("stack compose down succeeded but directory removal failed", rmErr,
+		renderResult(c, truth.Failed("stack compose down succeeded but directory removal failed", rmErr,
 			truth.KV("id", id),
 			truth.KV("directory", stack.Directory),
 		))
@@ -388,13 +388,13 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 
 	// Remove the DB row. Surface any error rather than silently dropping it.
 	if dbErr := h.db.DeleteStack(id); dbErr != nil {
-		truth.Render(c, truth.Failed("stack directory removed but DB delete failed", dbErr,
+		renderResult(c, truth.Failed("stack directory removed but DB delete failed", dbErr,
 			truth.KV("id", id),
 		))
 		return
 	}
 
-	truth.Render(c, truth.Success("stack deleted",
+	renderResult(c, truth.Success("stack deleted",
 		truth.KV("id", id),
 		truth.KV("output", deleteOutput),
 	))

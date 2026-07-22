@@ -6,11 +6,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/database"
-	"github.com/thinkbig1979/capstan/backend/internal/models"
-	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
 type TerminalHandler struct {
@@ -42,7 +41,7 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 
 		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
 		if err != nil {
-			models.HandleError(c, err)
+			handleError(c, err)
 			return
 		}
 		defer conn.Conn.Close()

@@ -1,11 +1,5 @@
 package models
 
-import (
-	"net/http"
-
-	"github.com/gin-gonic/gin"
-)
-
 const (
 	ErrUnauthorized      = "UNAUTHORIZED"
 	ErrForbidden         = "FORBIDDEN"
@@ -52,13 +46,4 @@ func NewAppErrorWithDetails(status int, code string, message string, details int
 		Details: details,
 		Status:  status,
 	}
-}
-
-func HandleError(c *gin.Context, err error) {
-	if appErr, ok := err.(*AppError); ok {
-		c.JSON(appErr.Status, appErr)
-		return
-	}
-
-	c.JSON(http.StatusInternalServerError, NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error"))
 }

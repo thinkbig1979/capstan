@@ -8,13 +8,12 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
-	"github.com/thinkbig1979/capstan/backend/internal/truth"
-	"github.com/gin-gonic/gin"
 )
 
 type GitHandler struct {
@@ -111,13 +110,13 @@ func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error
 func (h *GitHandler) GetStatus(c *gin.Context) {
 	absPath, _, err := h.resolvePathFromStack(c)
 	if err != nil {
-		models.HandleError(c, err)
+		handleError(c, err)
 		return
 	}
 
 	status, err := h.git.GetStatus(absPath)
 	if err != nil {
-		models.HandleError(c, err)
+		handleError(c, err)
 		return
 	}
 
@@ -139,7 +138,7 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 func (h *GitHandler) Pull(c *gin.Context) {
 	absPath, _, err := h.resolvePathFromStack(c)
 	if err != nil {
-		models.HandleError(c, err)
+		handleError(c, err)
 		return
 	}
 
@@ -151,7 +150,7 @@ func (h *GitHandler) Pull(c *gin.Context) {
 		h.logGitAction(userID.(string), absPath, "pull", h.formatPullDetail(pullResult))
 	}
 
-	truth.Render(c, ar)
+	renderResult(c, ar)
 }
 
 func (h *GitHandler) formatPullDetail(result *models.PullResult) string {
@@ -172,7 +171,7 @@ func (h *GitHandler) formatPullDetail(result *models.PullResult) string {
 func (h *GitHandler) GetLog(c *gin.Context) {
 	absPath, _, err := h.resolvePathFromStack(c)
 	if err != nil {
-		models.HandleError(c, err)
+		handleError(c, err)
 		return
 	}
 
@@ -201,7 +200,7 @@ func (h *GitHandler) GetLog(c *gin.Context) {
 	}
 
 	if err != nil {
-		models.HandleError(c, err)
+		handleError(c, err)
 		return
 	}
 
@@ -215,7 +214,7 @@ func (h *GitHandler) GetLog(c *gin.Context) {
 func (h *GitHandler) GetDiff(c *gin.Context) {
 	absPath, _, err := h.resolvePathFromStack(c)
 	if err != nil {
-		models.HandleError(c, err)
+		handleError(c, err)
 		return
 	}
 
@@ -232,7 +231,7 @@ func (h *GitHandler) GetDiff(c *gin.Context) {
 
 	result, err := h.git.GetDiff(absPath, hash)
 	if err != nil {
-		models.HandleError(c, err)
+		handleError(c, err)
 		return
 	}
 

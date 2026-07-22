@@ -24,10 +24,10 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 			err := h.scheduler.StartBackgroundScan()
 			if err != nil && err.Error() != "scan already in progress" {
 				slog.Error("Failed to start background scan", "error", err)
-				models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to start update scan"))
+				handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to start update scan"))
 				return
 			}
-			h.actionLog.LogFromContext(c, nil, services.ActionScan, gin.H{"trigger": "manual"})
+			logActionFromContext(h.actionLog, c, nil, services.ActionScan, gin.H{"trigger": "manual"})
 
 			cachedUpdates, err := h.db.GetCachedUpdates()
 			if err != nil {
@@ -64,7 +64,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 		updates, err := h.docker.CheckForUpdates(c.Request.Context(), h.db)
 		if err != nil {
 			slog.Error("Failed to check for updates", "error", err)
-			models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to check for updates"))
+			handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to check for updates"))
 			return
 		}
 		if updates == nil {
@@ -82,7 +82,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 	cachedUpdates, err := h.db.GetCachedUpdates()
 	if err != nil {
 		slog.Error("Failed to get cached updates", "error", err)
-		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get cached updates"))
+		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get cached updates"))
 		return
 	}
 
@@ -125,7 +125,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	id := c.Param("id")
 	// Audit who initiated the update; this covers both the async job path below
 	// and the synchronous fallback (updateContainerSync) it delegates to.
-	h.actionLog.LogFromContext(c, nil, services.ActionUpdateContainer, gin.H{"container_id": id})
+	logActionFromContext(h.actionLog, c, nil, services.ActionUpdateContainer, gin.H{"container_id": id})
 
 	// If no job manager is wired, fall back to the synchronous path.
 	if h.jobManager == nil {
@@ -136,7 +136,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	inspect, err := h.docker.InspectContainer(c.Request.Context(), id)
 	if err != nil {
 		slog.Error("Failed to inspect container before update", "id", id, "error", err)
-		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container"))
+		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container"))
 		return
 	}
 
@@ -282,7 +282,7 @@ func (h *ResourcesHandler) updateContainerSync(c *gin.Context, id string) {
 	inspect, err := h.docker.InspectContainer(c.Request.Context(), id)
 	if err != nil {
 		slog.Error("Failed to inspect container before update", "id", id, "error", err)
-		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container"))
+		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container"))
 		return
 	}
 
@@ -365,7 +365,7 @@ func (h *ResourcesHandler) updateContainerSync(c *gin.Context, id string) {
 		}); histErr != nil {
 			slog.Warn("Failed to update update history", "historyID", historyID, "error", histErr)
 		}
-		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to update container"))
+		handleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to update container"))
 		return
 	}
 
@@ -450,14 +450,14 @@ func (h *ResourcesHandler) enqueueJobWithBroadcasts(
 // updateStack enqueues an outdated-only streaming stack update.
 func (h *ResourcesHandler) updateStack(c *gin.Context) {
 	if h.jobManager == nil {
-		models.HandleError(c, models.NewAppError(http.StatusServiceUnavailable, "INTERNAL_ERROR", "Job manager not available"))
+		handleError(c, models.NewAppError(http.StatusServiceUnavailable, "INTERNAL_ERROR", "Job manager not available"))
 		return
 	}
 
 	stackID := c.Param("id")
 	stack, err := h.db.GetStack(stackID)
 	if err != nil || stack == nil {
-		models.HandleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
+		handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
 		return
 	}
 
@@ -465,7 +465,7 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 	cachedUpdates, err := h.db.GetCachedUpdates()
 	if err != nil {
 		slog.Error("Failed to get cached updates for stack", "stackId", stackID, "error", err)
-		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get cached updates"))
+		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get cached updates"))
 		return
 	}
 
@@ -482,7 +482,7 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 	}
 
 	stackIDForLog := stack.ID
-	h.actionLog.LogFromContext(c, &stackIDForLog, services.ActionUpdateStack, gin.H{
+	logActionFromContext(h.actionLog, c, &stackIDForLog, services.ActionUpdateStack, gin.H{
 		"stack":    stack.ProjectName,
 		"services": len(outdated),
 	})
@@ -647,13 +647,13 @@ func (h *ResourcesHandler) listUpdateJobs(c *gin.Context) {
 // getUpdateJob returns a single job by ID.
 func (h *ResourcesHandler) getUpdateJob(c *gin.Context) {
 	if h.jobManager == nil {
-		models.HandleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Job not found"))
+		handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Job not found"))
 		return
 	}
 	jobID := c.Param("jobId")
 	job := h.jobManager.Get(jobID)
 	if job == nil {
-		models.HandleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Job not found"))
+		handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Job not found"))
 		return
 	}
 	c.JSON(http.StatusOK, job)
@@ -693,7 +693,7 @@ func (h *ResourcesHandler) getUpdateHistory(c *gin.Context) {
 	entries, total, err := h.db.GetUpdateHistory(filters)
 	if err != nil {
 		slog.Error("Failed to get update history", "error", err)
-		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get update history"))
+		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get update history"))
 		return
 	}
 
@@ -718,20 +718,20 @@ func (h *ResourcesHandler) getUpdateHistory(c *gin.Context) {
 func (h *ResourcesHandler) clearUpdateHistory(c *gin.Context) {
 	olderThan := c.Query("olderThan")
 	if olderThan == "" {
-		models.HandleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "olderThan parameter is required"))
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "olderThan parameter is required"))
 		return
 	}
 
 	t, err := time.Parse(time.RFC3339, olderThan)
 	if err != nil {
-		models.HandleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid olderThan date format"))
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid olderThan date format"))
 		return
 	}
 
 	deleted, err := h.db.DeleteUpdateHistoryOlderThan(t)
 	if err != nil {
 		slog.Error("Failed to clear update history", "error", err)
-		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to clear update history"))
+		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to clear update history"))
 		return
 	}
 
@@ -742,7 +742,7 @@ func (h *ResourcesHandler) listAutoUpdatePolicies(c *gin.Context) {
 	policies, err := h.db.GetAutoUpdatePolicies()
 	if err != nil {
 		slog.Error("Failed to get auto-update policies", "error", err)
-		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get auto-update policies"))
+		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get auto-update policies"))
 		return
 	}
 
@@ -763,7 +763,7 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 	targetId := c.Param("targetId")
 
 	if targetType != "container" && targetType != "stack" {
-		models.HandleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "targetType must be 'container' or 'stack'"))
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "targetType must be 'container' or 'stack'"))
 		return
 	}
 
@@ -771,7 +771,7 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		models.HandleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid request body"))
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Invalid request body"))
 		return
 	}
 
@@ -806,7 +806,7 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 
 	if err := h.db.UpsertAutoUpdatePolicy(policy); err != nil {
 		slog.Error("Failed to upsert auto-update policy", "error", err)
-		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to save auto-update policy"))
+		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to save auto-update policy"))
 		return
 	}
 
@@ -819,13 +819,13 @@ func (h *ResourcesHandler) deleteAutoUpdatePolicy(c *gin.Context) {
 	targetId := c.Param("targetId")
 
 	if targetType != "container" && targetType != "stack" {
-		models.HandleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "targetType must be 'container' or 'stack'"))
+		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "targetType must be 'container' or 'stack'"))
 		return
 	}
 
 	if err := h.db.DeleteAutoUpdatePolicy(targetType, targetId); err != nil {
 		slog.Error("Failed to delete auto-update policy", "error", err)
-		models.HandleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to delete auto-update policy"))
+		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to delete auto-update policy"))
 		return
 	}
 

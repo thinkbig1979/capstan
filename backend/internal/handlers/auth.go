@@ -6,13 +6,13 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	jwtv5 "github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
-	"github.com/gin-gonic/gin"
-	jwtv5 "github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -321,7 +321,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 
 	slog.Info("User logged out", "userID", userID)
-	h.actionLog.LogFromContext(c, nil, services.ActionLogout, gin.H{})
+	logActionFromContext(h.actionLog, c, nil, services.ActionLogout, gin.H{})
 
 	clearAuthCookies(c)
 
