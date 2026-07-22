@@ -35,9 +35,11 @@ vi.mock('sonner', () => ({
 
 import { Sidebar } from '../Sidebar'
 import { useUIStore } from '@/stores/uiStore'
-import { resourcesApi } from '@/lib/api'
+import { resourcesApi, stacksApi, settingsApi } from '@/lib/api'
 
 const checkUpdatesMock = vi.mocked(resourcesApi.checkUpdates)
+const listMock = vi.mocked(stacksApi.list)
+const getConfigMock = vi.mocked(settingsApi.getConfig)
 
 // The badge only reads `.updates.length`, so a list of n placeholder rows is enough.
 function updatesResult(n: number) {
@@ -66,6 +68,9 @@ beforeEach(() => {
   checkUpdatesMock.mockReset()
   checkUpdatesMock.mockResolvedValue(updatesResult(3))
   useUIStore.setState({ sidebarOpen: true, pinnedStacks: [] })
+  // sidebar-search/-filter/-sort/-collapsed persist to localStorage; without
+  // clearing, state leaks between tests in this file (a pre-existing gap).
+  localStorage.clear()
 })
 
 function renderSidebar() {
@@ -159,5 +164,143 @@ describe('Sidebar', () => {
     await waitFor(() => expect(startMock).toHaveBeenCalledTimes(2))
     expect(startMock).toHaveBeenCalledWith('s1')
     expect(startMock).toHaveBeenCalledWith('s2')
+  })
+
+  it('filters the stack list by search query and clears via the Clear button', async () => {
+    renderSidebar()
+    await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
+
+    const search = screen.getByLabelText('Search stacks')
+    await act(async () => {
+      fireEvent.change(search, { target: { value: 'alp' } })
+    })
+
+    expect(screen.queryByText('bravo')).not.toBeInTheDocument()
+    expect(screen.getAllByText('alpha').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('1 of 2 stacks').length).toBeGreaterThan(0)
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByText('Clear')[0])
+    })
+
+    await waitFor(() => expect(screen.getAllByText('bravo').length).toBeGreaterThan(0))
+    expect(screen.queryByText(/of 2 stacks/)).not.toBeInTheDocument()
+  })
+
+  it('filters the stack list by status', async () => {
+    renderSidebar()
+    await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: /Stopped/ })[0])
+    })
+
+    expect(screen.queryByText('alpha')).not.toBeInTheDocument()
+    expect(screen.getAllByText('bravo').length).toBeGreaterThan(0)
+  })
+
+  it('shows an empty state message when filters exclude every stack', async () => {
+    renderSidebar()
+    await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
+
+    const search = screen.getByLabelText('Search stacks')
+    await act(async () => {
+      fireEvent.change(search, { target: { value: 'nonexistent' } })
+    })
+
+    expect(screen.getAllByText('No stacks match filters').length).toBeGreaterThan(0)
+  })
+
+  it('toggles sort order between name and status', async () => {
+    listMock.mockResolvedValueOnce([
+      { id: 's1', projectName: 'alpha', status: 'running', containers: [], directory: '/stacks', isGitRepo: false, gitDirty: false },
+      { id: 's2', projectName: 'bravo', status: 'stopped', containers: [], directory: '/stacks', isGitRepo: false, gitDirty: false },
+      { id: 's3', projectName: 'charlie', status: 'error', containers: [], directory: '/stacks', isGitRepo: false, gitDirty: false },
+    ] as never)
+    renderSidebar()
+    await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
+
+    // sidebarContent renders twice (mobile overlay + desktop aside), so the
+    // matches come in two identical, consecutive triplets; the first 3 are enough.
+    const nameOrder = screen
+      .getAllByText(/^(alpha|bravo|charlie)$/)
+      .slice(0, 3)
+      .map((el) => el.textContent)
+    expect(nameOrder).toEqual(['alpha', 'bravo', 'charlie'])
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByTitle(/Sort by name/)[0])
+    })
+
+    await waitFor(() => expect(screen.getAllByTitle(/Sort by status/).length).toBeGreaterThan(0))
+    const statusOrder = screen
+      .getAllByText(/^(alpha|bravo|charlie)$/)
+      .slice(0, 3)
+      .map((el) => el.textContent)
+    // error < running < stopped alphabetically -> charlie, alpha, bravo.
+    expect(statusOrder).toEqual(['charlie', 'alpha', 'bravo'])
+  })
+
+  it('persists the search query to localStorage and restores it on remount', async () => {
+    const { unmount } = renderSidebar()
+    await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
+
+    const search = screen.getByLabelText('Search stacks')
+    await act(async () => {
+      fireEvent.change(search, { target: { value: 'brav' } })
+    })
+
+    await waitFor(() => expect(localStorage.getItem('sidebar-search')).toBe('brav'))
+    unmount()
+
+    renderSidebar()
+    await waitFor(() => expect(screen.getAllByText('bravo').length).toBeGreaterThan(0))
+    expect(screen.queryByText('alpha')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Search stacks')).toHaveValue('brav')
+  })
+
+  it('collapses a tree group and persists collapsed state under the versioned storage key', async () => {
+    const groupedStacks = [
+      { id: 's1', projectName: 'alpha', status: 'running', containers: [], directory: '/stacks/groupA', isGitRepo: false, gitDirty: false },
+      { id: 's2', projectName: 'bravo', status: 'stopped', containers: [], directory: '/stacks/groupB', isGitRepo: false, gitDirty: false },
+    ] as never
+    getConfigMock.mockResolvedValueOnce({ stacksDir: '/stacks', stacksDirectories: ['/stacks'] } as never)
+    listMock.mockResolvedValueOnce(groupedStacks)
+    const { unmount } = renderSidebar()
+
+    await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
+    expect(screen.getAllByText('bravo').length).toBeGreaterThan(0)
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByTitle('/stacks/groupA')[0])
+    })
+
+    expect(screen.queryByText('alpha')).not.toBeInTheDocument()
+    expect(screen.getAllByText('bravo').length).toBeGreaterThan(0)
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('sidebar-collapsed:v1') || '[]')
+      expect(stored).toContain('/stacks/groupA')
+    })
+
+    unmount()
+
+    // Remount: the collapsed group stays collapsed because state was persisted.
+    getConfigMock.mockResolvedValueOnce({ stacksDir: '/stacks', stacksDirectories: ['/stacks'] } as never)
+    listMock.mockResolvedValueOnce(groupedStacks)
+    renderSidebar()
+
+    await waitFor(() => expect(screen.getAllByText('bravo').length).toBeGreaterThan(0))
+    expect(screen.queryByText('alpha')).not.toBeInTheDocument()
+  })
+
+  it('renders the collapsed navigation rail with stack count when the sidebar is closed', async () => {
+    useUIStore.setState({ sidebarOpen: false, pinnedStacks: [] })
+    renderSidebar()
+
+    await waitFor(() => expect(screen.getByLabelText('Expand sidebar')).toBeInTheDocument())
+    expect(screen.getByLabelText('Dashboard')).toBeInTheDocument()
+    expect(screen.getByLabelText('Settings')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('Stacks (2)')).toBeInTheDocument())
   })
 })
