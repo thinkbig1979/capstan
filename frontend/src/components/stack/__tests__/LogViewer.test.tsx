@@ -6,6 +6,11 @@ import { render, screen, act, fireEvent } from '@testing-library/react'
 let capturedHandler: ((d: { container: string; timestamp: string; message: string }) => void) | null =
   null
 const sendSpy = vi.fn()
+const reconnectSpy = vi.fn()
+// Mutable so individual tests can simulate a disconnected/reconnecting socket
+// without needing a separate vi.mock per describe block.
+let mockStatus: 'connected' | 'disconnected' | 'reconnecting' = 'connected'
+let mockReconnectAttempts = 0
 
 vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocketJSON: (
@@ -13,7 +18,12 @@ vi.mock('@/hooks/useWebSocket', () => ({
     handler: (d: { container: string; timestamp: string; message: string }) => void,
   ) => {
     capturedHandler = handler
-    return { status: 'connected', send: sendSpy, reconnect: vi.fn(), reconnectAttempts: 0 }
+    return {
+      status: mockStatus,
+      send: sendSpy,
+      reconnect: reconnectSpy,
+      reconnectAttempts: mockReconnectAttempts,
+    }
   },
 }))
 
@@ -39,6 +49,9 @@ beforeAll(() => {
 beforeEach(() => {
   capturedHandler = null
   sendSpy.mockClear()
+  reconnectSpy.mockClear()
+  mockStatus = 'connected'
+  mockReconnectAttempts = 0
   useUIStore.setState({
     logPrefs: {
       showTimestamps: true,
@@ -162,5 +175,174 @@ describe('LogViewer', () => {
       fireEvent.keyDown(window, { key: '/' })
     })
     expect(search).toHaveFocus()
+  })
+
+  it('clears the log buffer when the clear button is clicked', async () => {
+    render(<LogViewer stackId="s1" />)
+    await feed([line('alpha line')])
+    expect(screen.getByText(/alpha line/)).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('Clear logs'))
+    })
+
+    expect(screen.queryByText(/alpha line/)).not.toBeInTheDocument()
+    expect(screen.getByText('Waiting for logs...')).toBeInTheDocument()
+  })
+
+  it('toggles auto-scroll and records it in the store', async () => {
+    render(<LogViewer stackId="s1" />)
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('Auto-scroll enabled'))
+    })
+    expect(useUIStore.getState().logPrefs.autoScroll).toBe(false)
+  })
+
+  it('toggles timestamp visibility and hides the timestamp bracket when off', async () => {
+    render(<LogViewer stackId="s1" />)
+    await feed([line('alpha line')])
+    expect(screen.getByText('[2024-01-01T00:00:00Z]')).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('Timestamps shown'))
+    })
+
+    expect(useUIStore.getState().logPrefs.showTimestamps).toBe(false)
+    expect(screen.queryByText('[2024-01-01T00:00:00Z]')).not.toBeInTheDocument()
+    // The message itself is still there — only the timestamp bracket is gone.
+    expect(screen.getByText(/alpha line/)).toBeInTheDocument()
+  })
+
+  it('downloads the filtered logs as a text file with ANSI stripped', async () => {
+    const createObjectURL = vi.fn(() => 'blob:mock')
+    const revokeObjectURL = vi.fn()
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    URL.createObjectURL = createObjectURL as typeof URL.createObjectURL
+    URL.revokeObjectURL = revokeObjectURL
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    try {
+      render(<LogViewer stackId="s1" />)
+      await feed([line('alpha'), line(`${ESC}[31mboom${ESC}[0m`)])
+
+      await act(async () => {
+        fireEvent.click(screen.getByTitle('Download logs'))
+      })
+
+      expect(createObjectURL).toHaveBeenCalledTimes(1)
+      const blob = createObjectURL.mock.calls[0][0] as Blob
+      // jsdom's Blob has no .text()/.arrayBuffer(); FileReader is the
+      // environment's supported way to read its contents back out.
+      const text = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.onerror = reject
+        reader.readAsText(blob)
+      })
+      expect(text).toContain('[web] alpha')
+      expect(text).toContain('[web] boom')
+      expect(text).not.toContain(ESC)
+      expect(text).toMatch(/^\[2024-01-01T00:00:00Z\]/)
+      expect(clickSpy).toHaveBeenCalledTimes(1)
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock')
+    } finally {
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+      clickSpy.mockRestore()
+    }
+  })
+
+  it('pre-selects the initial container and sends it as the initial filter', async () => {
+    render(<LogViewer stackId="s1" initialContainer="worker" />)
+    expect(sendSpy).toHaveBeenCalledWith(JSON.stringify({ type: 'filter', containers: ['worker'] }))
+
+    await feed([line('from worker', 'worker'), line('from api', 'api')])
+    expect(screen.getByText(/from worker/)).toBeInTheDocument()
+    expect(screen.queryByText(/from api/)).not.toBeInTheDocument()
+  })
+
+  it(
+    'caps the buffer at MAX_LOG_BUFFER lines, dropping the oldest',
+    async () => {
+      const { container } = render(<LogViewer stackId="s1" />)
+      const many = Array.from({ length: 10005 }, (_, i) => line(`line ${i}`))
+      await feed(many)
+
+      // Direct DOM queries instead of RTL's getByText/queryByText: with 10,000
+      // rendered rows, RTL's full-tree text-matching walk is the dominant cost
+      // on top of the render itself. querySelector(All) + indexing is a single
+      // native query with no per-node regex/normalization pass.
+      const footer = container.querySelector('.justify-between.text-xs')
+      expect(footer?.textContent).toMatch(/Showing 10000 logs/)
+
+      const rows = container.querySelectorAll('[role="log"]')
+      expect(rows.length).toBe(10000)
+      // Oldest of the 10005 fed lines (0..4) were dropped, so the surviving
+      // range is 5..10004 — oldest-first, newest-last.
+      expect(rows[0].textContent).toMatch(/line 5$/)
+      expect(rows[rows.length - 1].textContent).toMatch(/line 10004$/)
+    },
+    45000
+  )
+
+  it('shows a jump-to-latest pill counting lines that arrived while scrolled up, and resets on click', async () => {
+    const { container } = render(<LogViewer stackId="s1" />)
+    // scrolledUp/newCount tracking is independent of the auto-scroll toggle in
+    // the component; turning it off here avoids racing this test's manual
+    // scroll-metric overrides against the effect's own scrollToBottom() calls.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('Auto-scroll enabled'))
+    })
+    await feed([line('first')])
+
+    const scrollEl = container.querySelector('.overflow-auto') as HTMLDivElement
+    Object.defineProperty(scrollEl, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(scrollEl, 'clientHeight', { value: 100, configurable: true })
+    Object.defineProperty(scrollEl, 'scrollTop', { value: 0, configurable: true, writable: true })
+
+    await act(async () => {
+      fireEvent.scroll(scrollEl)
+    })
+    expect(screen.getByText('Jump to latest')).toBeInTheDocument()
+
+    await feed([line('second'), line('third')])
+    expect(screen.getByText('2 new lines')).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('2 new lines'))
+    })
+    expect(screen.queryByText(/Jump to latest|new line/)).not.toBeInTheDocument()
+  })
+
+  it('shows the disconnected banner and reconnects on click', async () => {
+    mockStatus = 'reconnecting'
+    mockReconnectAttempts = 3
+    render(<LogViewer stackId="s1" />)
+
+    expect(screen.getByText(/Connection lost\. Reconnecting\.\.\. \(attempt 3\)/)).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Reconnect/ }))
+    })
+    expect(reconnectSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a distinct empty-state message when no containers are running', () => {
+    render(<LogViewer stackId="s1" hasRunningContainers={false} />)
+    expect(
+      screen.getByText('No containers are running. Start the stack to view logs.')
+    ).toBeInTheDocument()
+  })
+
+  it('shows a distinct empty-state message when the errors-only filter matches nothing', async () => {
+    render(<LogViewer stackId="s1" />)
+    await feed([line('just an info line')])
+
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('Show errors & warnings only'))
+    })
+
+    expect(screen.getByText('No errors or warnings match current filters')).toBeInTheDocument()
   })
 })
