@@ -73,13 +73,23 @@ describe('ContainerInspectDialog lazy boundary', () => {
     )
   })
 
-  it('shows the Suspense fallback on first click, then the real dialog, with no double-fetch', async () => {
+  // Generous timeouts throughout: this test exercises the real dynamic
+  // import(), and under full-suite worker contention the chunk (which pulls
+  // in the codemirror graph) can resolve well past testing-library's default
+  // 1000ms wait — that's scheduling noise, not a behavior regression, so the
+  // waits are widened rather than the assertions changed. This test also gets
+  // its own generous per-test timeout (vitest's suite-wide default is 5000ms,
+  // set in no config file, so it otherwise kills the test before any of the
+  // 10s findBy/waitFor widenings below get a chance to matter) — scoped to
+  // just this test, not raised globally, so a genuine hang elsewhere in the
+  // suite still fails fast.
+  it('shows the Suspense fallback on first click, then the real dialog, with no double-fetch', { timeout: 30_000 }, async () => {
     const { resourcesApi } = await import('@/lib/api')
     renderWithProviders(
       <ContainersOverviewTab stats={mockStats} latestMetrics={{}} metricsStatus="connected" />,
     )
 
-    const inspectButton = await screen.findByTitle('Inspect container')
+    const inspectButton = await screen.findByTitle('Inspect container', {}, { timeout: 10_000 })
     fireEvent.click(inspectButton)
 
     // Fallback renders synchronously on the same click — the dialog chunk
@@ -88,9 +98,10 @@ describe('ContainerInspectDialog lazy boundary', () => {
 
     // Once the lazy import resolves, the real dialog swaps in and the
     // fallback is gone.
-    expect(await screen.findByText('Inspect: web')).toBeInTheDocument()
-    await waitFor(() =>
-      expect(screen.queryByTestId('inspect-dialog-loading')).not.toBeInTheDocument(),
+    expect(await screen.findByText('Inspect: web', {}, { timeout: 10_000 })).toBeInTheDocument()
+    await waitFor(
+      () => expect(screen.queryByTestId('inspect-dialog-loading')).not.toBeInTheDocument(),
+      { timeout: 10_000 },
     )
 
     // The dialog's own data fetch (not the JS chunk fetch) should fire exactly
