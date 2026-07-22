@@ -41,6 +41,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       handleSaveRef.current()
       return true
     },
+    onChange: setContent,
     onSelect: (text) => {
       selectedTextRef.current = text
       setSelectedText(text)
