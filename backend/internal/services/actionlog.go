@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -79,12 +78,4 @@ func (l *ActionLogger) Log(userID string, stackID *string, action string, detail
 	if err != nil {
 		slog.Error("failed to log action", "action", action, "error", err)
 	}
-}
-
-func (l *ActionLogger) LogFromContext(c *gin.Context, stackID *string, action string, detail interface{}) {
-	userID := c.GetString("userID")
-	if userID == "" {
-		userID = "anonymous"
-	}
-	l.Log(userID, stackID, action, detail)
 }

@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
-	"github.com/gin-gonic/gin"
 )
 
 type EnvHandler struct {
@@ -171,7 +171,7 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		// Validate before serialising: reject entries with a non-comment, non-blank
 		// key that is empty — they would produce a corrupt "=value" line (#15).
 		if err := validateEnvEntries(req.Entries); err != nil {
-			truth.Render(c, truth.Failed("env validation failed: "+err.Error(), err))
+			renderResult(c, truth.Failed("env validation failed: "+err.Error(), err))
 			return
 		}
 		content = serializeEnvFile(req.Entries)
@@ -185,21 +185,21 @@ func (h *EnvHandler) Put(c *gin.Context) {
 	}
 
 	if err := writeEnvFileAtomic(envPath, content); err != nil {
-		truth.Render(c, truth.Failed("failed to write env file", err))
+		renderResult(c, truth.Failed("failed to write env file", err))
 		return
 	}
 
 	// Round-trip verify: re-read the file and confirm the bytes were persisted
 	// faithfully (#15 file-save contract).
 	if ar := verifyEnvRoundTrip(envPath, content); ar != nil {
-		truth.Render(c, *ar)
+		renderResult(c, *ar)
 		return
 	}
 
 	userID, _ := c.Get("userID")
 	h.logAction(userID.(string), id, "update_env", "Updated env file: "+stack.EnvFile)
 
-	truth.Render(c, truth.Success("env file saved",
+	renderResult(c, truth.Success("env file saved",
 		truth.KV("filename", stack.EnvFile),
 	))
 }
@@ -259,13 +259,13 @@ func (h *EnvHandler) Create(c *gin.Context) {
 	}
 
 	if err := os.WriteFile(envPath, []byte(content), 0600); err != nil {
-		truth.Render(c, truth.Failed("failed to create env file", err))
+		renderResult(c, truth.Failed("failed to create env file", err))
 		return
 	}
 
 	// Verify the file was actually created on disk.
 	if _, statErr := os.Stat(envPath); statErr != nil {
-		truth.Render(c, truth.Failed("env file was not created on disk", statErr,
+		renderResult(c, truth.Failed("env file was not created on disk", statErr,
 			truth.KV("filename", envFileName),
 		))
 		return
@@ -276,7 +276,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 		stack.EnvFile = envFileName
 		if err := h.db.UpsertStack(*stack); err != nil {
 			// Non-fatal: file exists, DB update failed. Surface as partial.
-			truth.Render(c, truth.Partial("env file created but DB not updated",
+			renderResult(c, truth.Partial("env file created but DB not updated",
 				truth.KV("filename", envFileName),
 				truth.KV("dbError", err.Error()),
 			))
