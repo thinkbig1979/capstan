@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useEffectEvent, useState, type Dispatch, type SetStateAction } from 'react'
-import type { EnvEntry } from '@/types'
+import type { EnvEntryRow } from './types'
 
 const MAX_HISTORY = 50
 
 interface UseEnvHistoryArgs {
-  setEntries: Dispatch<SetStateAction<EnvEntry[]>>
+  setEntries: Dispatch<SetStateAction<EnvEntryRow[]>>
   setRawContent: Dispatch<SetStateAction<string>>
   setHasUnsavedChanges: Dispatch<SetStateAction<boolean>>
 }
@@ -16,11 +16,11 @@ interface UseEnvHistoryArgs {
  * mutation paths call to collapse the stack back to a single entry.
  */
 export function useEnvHistory({ setEntries, setRawContent, setHasUnsavedChanges }: UseEnvHistoryArgs) {
-  const [history, setHistory] = useState<{ entries: EnvEntry[]; raw: string }[]>([])
+  const [history, setHistory] = useState<{ entries: EnvEntryRow[]; raw: string }[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
 
   const pushToHistory = useCallback(
-    (newEntries: EnvEntry[], newRaw: string) => {
+    (newEntries: EnvEntryRow[], newRaw: string) => {
       if (historyIndex >= 0) {
         const currentState = history[historyIndex]
         if (
@@ -42,7 +42,7 @@ export function useEnvHistory({ setEntries, setRawContent, setHasUnsavedChanges 
     [history, historyIndex],
   )
 
-  const resetHistory = useCallback((entries: EnvEntry[], raw: string) => {
+  const resetHistory = useCallback((entries: EnvEntryRow[], raw: string) => {
     setHistory([{ entries, raw }])
     setHistoryIndex(0)
   }, [])

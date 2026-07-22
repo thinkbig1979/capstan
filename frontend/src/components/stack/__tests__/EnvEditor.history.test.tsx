@@ -71,10 +71,10 @@ describe('EnvEditor undo/redo history', () => {
     renderWithProviders(<EnvEditor stackId="test-stack" />)
 
     const keyInput = (await screen.findAllByLabelText('Environment variable key 1'))[0]
-    // Single-commit change, not simulated typing: the row is keyed by the
-    // live entry.key (EnvEditor.tsx's `key={entry.key || `entry-${i}`}`), so
-    // per-keystroke typing remounts the row mid-edit. See the entries test
-    // file and the Phase 1 checkpoint report for detail.
+    // Single-commit change rather than simulated typing: this test only
+    // cares about one history entry existing, not about per-keystroke row
+    // stability (that's covered by EnvEditor.rowStability.test.tsx and the
+    // converted case in the entries test file).
     fireEvent.change(keyInput, { target: { value: 'PORT_2' } })
 
     await waitFor(() => expect(getUndoButton()).not.toBeDisabled())
