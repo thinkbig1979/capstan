@@ -214,7 +214,7 @@ describe('LogViewer', () => {
   })
 
   it('downloads the filtered logs as a text file with ANSI stripped', async () => {
-    const createObjectURL = vi.fn(() => 'blob:mock')
+    const createObjectURL = vi.fn((_blob: Blob | MediaSource) => 'blob:mock')
     const revokeObjectURL = vi.fn()
     const originalCreate = URL.createObjectURL
     const originalRevoke = URL.revokeObjectURL
@@ -264,6 +264,7 @@ describe('LogViewer', () => {
 
   it(
     'caps the buffer at MAX_LOG_BUFFER lines, dropping the oldest',
+    { timeout: 30_000 },
     async () => {
       const { container } = render(<LogViewer stackId="s1" />)
       const many = Array.from({ length: 10005 }, (_, i) => line(`line ${i}`))
@@ -282,8 +283,7 @@ describe('LogViewer', () => {
       // range is 5..10004 — oldest-first, newest-last.
       expect(rows[0].textContent).toMatch(/line 5$/)
       expect(rows[rows.length - 1].textContent).toMatch(/line 10004$/)
-    },
-    45000
+    }
   )
 
   it('shows a jump-to-latest pill counting lines that arrived while scrolled up, and resets on click', async () => {
