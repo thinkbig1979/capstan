@@ -1,18 +1,18 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { stacksApi } from '@/lib/api'
 import { isActionResult } from '@/lib/action-result'
-import type { EnvEntry } from '@/types'
 import { useActionMutation } from '@/hooks/useActionMutation'
+import type { EnvEntryRow } from './types'
 
 interface UseEnvMutationsArgs {
   stackId: string
-  entries: EnvEntry[]
+  entries: EnvEntryRow[]
   rawContent: string
-  setEntries: Dispatch<SetStateAction<EnvEntry[]>>
+  setEntries: Dispatch<SetStateAction<EnvEntryRow[]>>
   setRawContent: Dispatch<SetStateAction<string>>
   setHasUnsavedChanges: Dispatch<SetStateAction<boolean>>
   setShowEnvSection: Dispatch<SetStateAction<boolean>>
-  resetHistory: (entries: EnvEntry[], raw: string) => void
+  resetHistory: (entries: EnvEntryRow[], raw: string) => void
 }
 
 /**
@@ -33,8 +33,16 @@ export function useEnvMutations({
   resetHistory,
 }: UseEnvMutationsArgs) {
   const saveMutation = useActionMutation({
-    mutationFn: async (body: { entries?: EnvEntry[]; raw?: string }) => {
-      const raw = await stacksApi.updateEnv(stackId, body)
+    mutationFn: async (body: { entries?: EnvEntryRow[]; raw?: string }) => {
+      // _rowId is a client-only synthetic key for React row identity (see
+      // env-editor/types.ts) — strip it here, right before the network call,
+      // so it never reaches the saved env output. `body` itself (with
+      // _rowId intact) is what onResult's resetHistory snapshots below, so
+      // undo/redo after a save keeps stable row ids.
+      const wireBody = body.entries
+        ? { ...body, entries: body.entries.map(({ _rowId, ...rest }) => rest) }
+        : body
+      const raw = await stacksApi.updateEnv(stackId, wireBody)
       // Migration bridge: legacy backend returns {saved, filename}; new backend
       // returns ActionResult. Map the legacy shape so toastForResult works either way.
       if (isActionResult(raw)) {

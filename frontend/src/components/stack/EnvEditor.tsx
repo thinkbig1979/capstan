@@ -9,10 +9,12 @@ import { useEnvHistory } from './env-editor/useEnvHistory'
 import { useEnvUnlockRemask } from './env-editor/useEnvUnlockRemask'
 import { useEnvMutations } from './env-editor/useEnvMutations'
 import { useEnvEntryActions } from './env-editor/useEnvEntryActions'
+import { useNextRowId } from './env-editor/useRowId'
 import { EnvEditorToolbar } from './env-editor/EnvEditorToolbar'
 import { EnvLoadingState, EnvErrorState, EnvNoFileState } from './env-editor/EnvEditorEmptyStates'
 import { EnvTableView } from './env-editor/EnvTableView'
 import { EnvRawView } from './env-editor/EnvRawView'
+import type { EnvEntryRow } from './env-editor/types'
 
 interface EnvEditorProps {
   stackId: string
@@ -24,10 +26,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const isUnlocked = useEnvUnlockStore((s) => s.isUnlocked)
   const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
   const [view, setView] = useState<'table' | 'raw'>('table')
-  const [entries, setEntries] = useState<EnvEntry[]>([])
+  const [entries, setEntries] = useState<EnvEntryRow[]>([])
   const [rawContent, setRawContent] = useState('')
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [showEnvSection, setShowEnvSection] = useState(false)
+  const nextRowId = useNextRowId()
 
   const { historyIndex, historyLength, pushToHistory, handleUndo, handleRedo, resetHistory } =
     useEnvHistory({ setEntries, setRawContent, setHasUnsavedChanges })
@@ -54,6 +57,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     setHasUnsavedChanges,
     authDisabled,
     isUnlocked,
+    nextRowId,
   })
 
   const { data: envData, isLoading, isError } = useQuery({
@@ -80,11 +84,12 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   if (envData !== prevEnvData) {
     setPrevEnvData(envData)
     if (envData) {
-      setEntries(envData.entries)
+      const rows = envData.entries.map((e) => ({ ...e, _rowId: nextRowId() }))
+      setEntries(rows)
       setRawContent(envData.raw)
       setHasUnsavedChanges(false)
       setShowEnvSection(true)
-      resetHistory(envData.entries, envData.raw)
+      resetHistory(rows, envData.raw)
     } else {
       setShowEnvSection(false)
     }

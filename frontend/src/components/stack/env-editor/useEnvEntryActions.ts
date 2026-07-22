@@ -1,16 +1,19 @@
 import { useState, type Dispatch, type SetStateAction } from 'react'
 import type { EnvEntry } from '@/types'
 import { isSensitiveKey } from './sensitiveKey'
+import type { EnvEntryRow } from './types'
 
 interface UseEnvEntryActionsArgs {
-  entries: EnvEntry[]
-  setEntries: Dispatch<SetStateAction<EnvEntry[]>>
+  entries: EnvEntryRow[]
+  setEntries: Dispatch<SetStateAction<EnvEntryRow[]>>
   rawContent: string
   setRawContent: Dispatch<SetStateAction<string>>
-  pushToHistory: (entries: EnvEntry[], raw: string) => void
+  pushToHistory: (entries: EnvEntryRow[], raw: string) => void
   setHasUnsavedChanges: Dispatch<SetStateAction<boolean>>
   authDisabled: boolean
   isUnlocked: () => boolean
+  /** Assigns a fresh stable id to a newly-added row — see env-editor/useRowId.ts. */
+  nextRowId: () => number
 }
 
 /**
@@ -28,12 +31,13 @@ export function useEnvEntryActions({
   setHasUnsavedChanges,
   authDisabled,
   isUnlocked,
+  nextRowId,
 }: UseEnvEntryActionsArgs) {
   const [unlockDialogOpen, setUnlockDialogOpen] = useState(false)
   const [pendingRevealIndex, setPendingRevealIndex] = useState<number | null>(null)
 
   const handleAddEntry = () => {
-    const newEntries = [...entries, { key: '', value: '', sensitive: false }]
+    const newEntries = [...entries, { key: '', value: '', sensitive: false, _rowId: nextRowId() }]
     setEntries(newEntries)
     pushToHistory(newEntries, rawContent)
     setHasUnsavedChanges(true)

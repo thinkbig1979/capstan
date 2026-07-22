@@ -90,6 +90,7 @@ describe('EnvEditor entry editing', () => {
   })
 
   it('editing a key to match a sensitive pattern flips the row to masked rendering', async () => {
+    const user = userEvent.setup()
     mockGetEnv.mockResolvedValue({
       filename: '.env',
       entries: [{ key: 'FOO', value: 'bar', sensitive: false, comment: false, line: 1 }],
@@ -98,14 +99,13 @@ describe('EnvEditor entry editing', () => {
     renderWithProviders(<EnvEditor stackId="test-stack" />)
 
     const keyInput = (await screen.findAllByLabelText(/Environment variable key/))[0]
-    // fireEvent.change (single commit) rather than simulated per-keystroke
-    // typing: each entries.map(...) row is keyed by the live entry.key value
-    // (see EnvEditor.tsx's `key={entry.key || `entry-${i}`}`), so typing a new
-    // key character-by-character remounts the row — and loses the input focus
-    // that user-event's typed keystrokes rely on — after the very first
-    // keystroke. This is a pre-existing quirk of the component, not something
-    // introduced here; see the Phase 1 checkpoint report.
-    fireEvent.change(keyInput, { target: { value: 'FOO_SECRET' } })
+    // Simulated per-keystroke typing (rather than a single fireEvent.change
+    // commit): rows now key off a stable synthetic `_rowId` (env-editor/
+    // types.ts), not the live entry.key value, so the row survives every
+    // keystroke — see EnvEditor.rowStability.test.tsx for the regression
+    // coverage (agent-os-382).
+    await user.clear(keyInput)
+    await user.type(keyInput, 'FOO_SECRET')
 
     await waitFor(() => {
       const valueInputs = screen.getAllByDisplayValue('bar') as HTMLInputElement[]

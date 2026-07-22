@@ -7,7 +7,7 @@ import type { EnvEntry } from '@/types'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { TableSearch } from '@/components/ui/table-search'
 import { isSensitiveKey } from './sensitiveKey'
-import type { IndexedEnvEntry } from './types'
+import type { EnvEntryRow, IndexedEnvEntry } from './types'
 
 const ENV_SEARCH_FIELDS = [
   (e: IndexedEnvEntry) => e.key,
@@ -21,7 +21,7 @@ interface EnvTableViewProps {
    * would reset that query. `visible` just gates the rendered output.
    */
   visible: boolean
-  entries: EnvEntry[]
+  entries: EnvEntryRow[]
   onEntryChange: (index: number, field: keyof EnvEntry, value: string | boolean) => void
   onDeleteEntry: (index: number) => void
   onAddEntry: () => void
@@ -83,7 +83,7 @@ export function EnvTableView({
             {filteredIndexed.map((entry) => {
               const i = entry._originalIndex
               return (
-              <TableRow key={entry.key || `entry-${i}`}>
+              <TableRow key={entry._rowId}>
                 <TableCell>
                   <Input
                     value={entry.key}
@@ -158,7 +158,7 @@ export function EnvTableView({
         {filteredIndexed.map((entry) => {
           const i = entry._originalIndex
           return (
-          <div key={entry.key || `entry-${i}`} className="rounded-lg border p-4 space-y-3">
+          <div key={entry._rowId} className="rounded-lg border p-4 space-y-3">
             <div>
               <Input
                 value={entry.key}

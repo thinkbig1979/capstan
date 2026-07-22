@@ -1,6 +1,6 @@
 import { useState, type Dispatch, type SetStateAction } from 'react'
-import type { EnvEntry } from '@/types'
 import { isSensitiveKey } from './sensitiveKey'
+import type { EnvEntryRow } from './types'
 
 /**
  * When the unlock session ends (manual lock or auto-expiry), re-mask any
@@ -16,7 +16,7 @@ import { isSensitiveKey } from './sensitiveKey'
  */
 export function useEnvUnlockRemask(
   unlockedUntil: number | null,
-  setEntries: Dispatch<SetStateAction<EnvEntry[]>>,
+  setEntries: Dispatch<SetStateAction<EnvEntryRow[]>>,
 ) {
   const [prevUnlockedUntil, setPrevUnlockedUntil] = useState(unlockedUntil)
   if (unlockedUntil !== prevUnlockedUntil) {
