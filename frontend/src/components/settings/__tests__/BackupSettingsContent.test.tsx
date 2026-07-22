@@ -1,9 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { BackupSettingsContent } from '../BackupSettingsContent'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
+import { useAuthStore } from '@/stores/authStore'
+import { toast } from 'sonner'
 
 // ─── API mocks ───────────────────────────────────────────────────────────────
 
@@ -88,10 +90,18 @@ function createWrapper() {
 beforeEach(() => {
   vi.clearAllMocks()
   useEnvUnlockStore.getState().lock()
+  useAuthStore.setState({ authDisabled: false })
   mockGetSettings.mockResolvedValue(makeSettings())
   mockUpdateSettings.mockResolvedValue(makeSettings())
   mockInitRepo.mockResolvedValue({ initialized: true })
   mockTestCloud.mockResolvedValue({ ok: true })
+})
+
+afterEach(() => {
+  act(() => {
+    useEnvUnlockStore.getState().lock()
+  })
+  useAuthStore.setState({ authDisabled: false })
 })
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -346,5 +356,278 @@ describe('BackupSettingsContent — cloud connectivity test', () => {
 
     const testBtn = await screen.findByRole('button', { name: /test connectivity/i })
     expect(testBtn).toBeDisabled()
+  })
+})
+
+describe('BackupSettingsContent — password reveal / unlock flow', () => {
+  it('reveal on a locked, auth-enabled password opens the unlock dialog instead of revealing it', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    const revealBtn = await screen.findByRole('button', { name: 'Reveal backup password' })
+    fireEvent.click(revealBtn)
+
+    expect(await screen.findByText('Unlock environment variables')).toBeInTheDocument()
+    const passwordInput = screen.getByLabelText(/repository password/i) as HTMLInputElement
+    expect(passwordInput.type).toBe('password')
+  })
+
+  it('Cancel closes the dialog without revealing the password or unlocking the session', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal backup password' }))
+    await screen.findByText('Unlock environment variables')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('Unlock environment variables')).not.toBeInTheDocument()
+    })
+    const passwordInput = screen.getByLabelText(/repository password/i) as HTMLInputElement
+    expect(passwordInput.type).toBe('password')
+    expect(useEnvUnlockStore.getState().isUnlocked()).toBe(false)
+  })
+
+  it('a correct password unlocks the session and reveals the password', async () => {
+    mockVerifyPassword.mockResolvedValue(undefined)
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal backup password' }))
+    await screen.findByText('Unlock environment variables')
+
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }))
+
+    await waitFor(() => {
+      const passwordInput = screen.getByLabelText(/repository password/i) as HTMLInputElement
+      expect(passwordInput.type).toBe('text')
+    })
+    expect(mockVerifyPassword).toHaveBeenCalledWith('correct-password')
+    expect(useEnvUnlockStore.getState().isUnlocked()).toBe(true)
+  })
+
+  it('with auth disabled, reveal bypasses the dialog entirely', async () => {
+    useAuthStore.setState({ authDisabled: true })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal backup password' }))
+
+    await waitFor(() => {
+      const passwordInput = screen.getByLabelText(/repository password/i) as HTMLInputElement
+      expect(passwordInput.type).toBe('text')
+    })
+    expect(screen.queryByText('Unlock environment variables')).not.toBeInTheDocument()
+  })
+
+  it('toggling reveal off hides the password immediately regardless of lock state', async () => {
+    useAuthStore.setState({ authDisabled: true })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reveal backup password' }))
+    await waitFor(() => {
+      expect((screen.getByLabelText(/repository password/i) as HTMLInputElement).type).toBe('text')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide backup password' }))
+    expect((screen.getByLabelText(/repository password/i) as HTMLInputElement).type).toBe('password')
+  })
+
+  it('re-masks the revealed password when the unlock session expires (manual lock)', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    await screen.findByRole('button', { name: 'Reveal backup password' })
+    act(() => {
+      useEnvUnlockStore.getState().unlock()
+    })
+    // Unlocked: reveal proceeds directly without the dialog.
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal backup password' }))
+    await waitFor(() => {
+      expect((screen.getByLabelText(/repository password/i) as HTMLInputElement).type).toBe('text')
+    })
+
+    act(() => {
+      useEnvUnlockStore.getState().lock()
+    })
+
+    await waitFor(() => {
+      expect((screen.getByLabelText(/repository password/i) as HTMLInputElement).type).toBe('password')
+    })
+  })
+})
+
+describe('BackupSettingsContent — draft editing and discard', () => {
+  it('editing a retention field marks the form dirty, enables Save, and is included in the payload', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    const keepWeeklyInput = await screen.findByLabelText('Keep weekly')
+    fireEvent.change(keepWeeklyInput, { target: { value: '10' } })
+
+    const saveButton = screen.getByRole('button', { name: /save backup settings/i })
+    expect(saveButton).not.toBeDisabled()
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument()
+
+    fireEvent.click(saveButton)
+    await waitFor(() => {
+      expect(mockUpdateSettings).toHaveBeenCalledWith(expect.objectContaining({ keepWeekly: 10 }))
+    })
+  })
+
+  it('includes edited rclone, schedule, and sync-after-backup fields in the save payload', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.change(await screen.findByLabelText('Remote'), { target: { value: 'myremote' } })
+    fireEvent.change(screen.getByLabelText('Path on remote'), { target: { value: 'bucket/path' } })
+    fireEvent.change(screen.getByLabelText('Parallel transfers'), { target: { value: '8' } })
+    fireEvent.change(screen.getByLabelText('Interval (minutes)'), { target: { value: '30' } })
+    fireEvent.click(screen.getByRole('switch', { name: /sync to cloud after each backup/i }))
+
+    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rcloneRemote: 'myremote',
+          rclonePath: 'bucket/path',
+          rcloneTransfers: 8,
+          scheduleIntervalMinutes: 30,
+          syncAfterBackup: true,
+        }),
+      )
+    })
+  })
+
+  it('Discard reverts an edited field and re-hides the unsaved-changes indicator', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    const repoInput = (await screen.findByLabelText('Repository path')) as HTMLInputElement
+    fireEvent.change(repoInput, { target: { value: '/new/path' } })
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
+
+    expect(repoInput.value).toBe('/app/data/restic-repo')
+    expect(screen.getByText(/all changes saved/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save backup settings/i })).toBeDisabled()
+  })
+
+  it('Discard clears an in-progress password edit', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    const passwordInput = (await screen.findByLabelText(/repository password/i)) as HTMLInputElement
+    fireEvent.change(passwordInput, { target: { value: 'temp-pass' } })
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
+
+    expect(passwordInput.value).toBe('')
+    expect(screen.getByText(/all changes saved/i)).toBeInTheDocument()
+  })
+})
+
+describe('BackupSettingsContent — error handling', () => {
+  it('shows an error toast when saving settings fails', async () => {
+    mockUpdateSettings.mockRejectedValue(new Error('fail'))
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    const repoInput = await screen.findByLabelText('Repository path')
+    fireEvent.change(repoInput, { target: { value: '/new/path' } })
+    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Failed to save backup settings')
+    })
+  })
+
+  it('shows an error toast when the clear-password request fails', async () => {
+    mockGetSettings.mockResolvedValue(makeSettings({ hasPassword: true, passwordSource: 'db' }))
+    mockUpdateSettings.mockRejectedValue(new Error('fail'))
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByText('Clear saved password'))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Failed to clear password')
+    })
+  })
+
+  it('shows an error toast when the repository initialization request fails', async () => {
+    mockInitRepo.mockRejectedValue(new Error('fail'))
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /initialize repository/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Failed to initialize repository')
+    })
+  })
+
+  it('shows an error toast when initRepo succeeds but reports not-initialized', async () => {
+    mockInitRepo.mockResolvedValue({ initialized: false })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /initialize repository/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Repository initialization reported not-initialized')
+    })
+  })
+
+  it('shows an error toast when the cloud test request fails', async () => {
+    mockTestCloud.mockRejectedValue(new Error('fail'))
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /test connectivity/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Cloud connectivity test failed')
+    })
+  })
+
+  it('shows an error toast when testCloud succeeds but reports not ok', async () => {
+    mockTestCloud.mockResolvedValue({ ok: false })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /test connectivity/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Cloud connectivity test failed')
+    })
+  })
+})
+
+describe('BackupSettingsContent — source badges', () => {
+  it('shows "from environment" badge when repositorySource is env', async () => {
+    mockGetSettings.mockResolvedValue(makeSettings({ repositorySource: 'env' }))
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText('from environment')).toBeInTheDocument()
+    })
+  })
+
+  it('shows "saved" badge when passwordSource is db', async () => {
+    mockGetSettings.mockResolvedValue(makeSettings({ passwordSource: 'db' }))
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getAllByText('saved').length).toBeGreaterThan(0)
+    })
   })
 })
