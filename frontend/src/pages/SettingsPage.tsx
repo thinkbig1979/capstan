@@ -460,8 +460,10 @@ export function SettingsPage() {
           <DialogHeader>
             <DialogTitle>Confirm Password Change</DialogTitle>
             <DialogDescription className="space-y-2 pt-2">
-              <p>New password: {'•'.repeat(8)}</p>
-              <p className="text-destructive font-medium">This will log you out of all devices</p>
+              <span className="block">New password: {'•'.repeat(8)}</span>
+              <span className="block text-destructive font-medium">
+                This will log you out of all devices
+              </span>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
