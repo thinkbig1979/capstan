@@ -209,4 +209,29 @@ describe('SettingsPage', () => {
       expect((screen.getByLabelText('Confirm Password') as HTMLInputElement).value).toBe('newpassword')
     })
   })
+
+  describe('valid HTML: password confirm dialog', () => {
+    it('does not nest a <p> inside the DialogDescription (which itself renders a <p>)', async () => {
+      // Radix's DialogDescription renders a <p>. SettingsPage.tsx previously put
+      // literal <p> children inside it, which is invalid HTML and trips React's
+      // validateDOMNesting console warning ("In HTML, <p> cannot be a descendant
+      // of <p>.") every time this dialog renders.
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+      renderPage('/settings')
+
+      fireEvent.change(screen.getByLabelText('Current Password'), { target: { value: 'oldpass1' } })
+      fireEvent.change(screen.getByLabelText('New Password'), { target: { value: 'newpassword' } })
+      fireEvent.change(screen.getByLabelText('Confirm Password'), { target: { value: 'newpassword' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Change Password' }))
+
+      await waitFor(() => expect(screen.getByText('Confirm Password Change')).toBeInTheDocument())
+
+      const nestingWarning = consoleError.mock.calls.find((call) =>
+        call.some((arg) => typeof arg === 'string' && arg.includes('cannot be a descendant of')),
+      )
+      expect(nestingWarning).toBeUndefined()
+
+      consoleError.mockRestore()
+    })
+  })
 })
