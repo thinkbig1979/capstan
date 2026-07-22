@@ -92,14 +92,3 @@ func NewWithMigrationsAndEncryptor(dataDir string, encryptor TokenEncryptor) (*D
 func (d *DB) Close() error {
 	return d.db.Close()
 }
-
-func (d *DB) decryptToken(token string) string {
-	if d.encryptor != nil && token != "" {
-		decrypted, err := d.encryptor.Decrypt(token)
-		if err != nil {
-			return token
-		}
-		return decrypted
-	}
-	return token
-}
