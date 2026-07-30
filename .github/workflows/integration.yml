@@ -59,17 +59,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Read the Go version from go.mod so this workflow never drifts.
-      - name: Read Go version from go.mod
-        id: goversion
-        run: |
-          VERSION=$(grep '^go ' backend/go.mod | awk '{print $2}')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Go ${{ steps.goversion.outputs.version }}
+      # go-version-file reads backend/go.mod and prefers its `toolchain`
+      # directive over the `go` directive, so this workflow never drifts from
+      # the toolchain the code is pinned to. It replaces a `grep '^go '` step
+      # that matched the wrong line — see backend.yml for the full note.
+      - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ steps.goversion.outputs.version }}
+          go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
       # Sanity-check: confirm Docker daemon is up and compose v2 is available.
@@ -108,14 +105,25 @@ jobs:
             ./internal/integrationtest/ \
             ./internal/truth/...
 
-      # Confirm the default (non-tagged) build is still green — guards against
-      # the integration package accidentally leaking build constraints into
-      # the normal build.
+      # Confirm the default (non-tagged) build is still green.
+      #
+      # This catches a `//go:build integration` tag going missing in
+      # ./internal/integrationtest/, because that package's harness is a
+      # non-test file behind the same tag — drop the tag from any test there
+      # and vet reports `undefined: RequireDocker`.
+      #
+      # It does NOT catch a leak in ./internal/truth/, whose integration tests
+      # are self-contained (stdlib plus shelling out to `docker`). Those vet
+      # clean, and they pass here, on a runner that has a daemon. The thing
+      # that catches them is backend.yml's Docker-free `go test ./...`, where
+      # they fail for want of Docker.
       #
       # This used to also run `go test ./... -count=1`. It no longer needs to:
       # backend.yml runs the full unit suite unconditionally, on every PR that
       # touches backend/**, with no Docker dependency. Keeping the run here
-      # only meant the unit signal was hostage to the Docker steps above it.
+      # only meant the unit signal was hostage to the Docker steps above it —
+      # and, per the paragraph above, it would not have caught the truth/ leak
+      # anyway, since a daemon is present.
       - name: Confirm default build unaffected
         working-directory: backend
         run: |
