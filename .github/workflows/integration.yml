@@ -108,12 +108,16 @@ jobs:
             ./internal/integrationtest/ \
             ./internal/truth/...
 
-      # Confirm that the default (non-tagged) build and unit tests are still
-      # green — guards against the integration package accidentally leaking
-      # build constraints.
+      # Confirm the default (non-tagged) build is still green — guards against
+      # the integration package accidentally leaking build constraints into
+      # the normal build.
+      #
+      # This used to also run `go test ./... -count=1`. It no longer needs to:
+      # backend.yml runs the full unit suite unconditionally, on every PR that
+      # touches backend/**, with no Docker dependency. Keeping the run here
+      # only meant the unit signal was hostage to the Docker steps above it.
       - name: Confirm default build unaffected
         working-directory: backend
         run: |
           go build ./...
           go vet ./...
-          go test ./... -count=1
