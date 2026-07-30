@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
@@ -20,7 +20,16 @@ export default defineConfig({
     },
   },
   build: {
-    sourcemap: true,
+    // Off for production: source maps reconstruct the original TypeScript —
+    // component structure, comments, internal API call shapes — for anyone who
+    // can load the app, and they cost roughly 8MB in every image layer and
+    // registry pull for files no production user ever requests. A local
+    // `vite build --mode development` still gets them, and the dev server
+    // serves maps regardless of this setting, so nothing is lost while
+    // developing. Switch to 'hidden' if an error tracker is ever added — but
+    // then also narrow the dist COPY in docker/Dockerfile, or the maps ship
+    // anyway and this is undone.
+    sourcemap: mode !== 'production',
     rollupOptions: {
       output: {
         // Function form (not the array shorthand) because use-sync-external-store
@@ -60,4 +69,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))
