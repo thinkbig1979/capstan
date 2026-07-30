@@ -11,7 +11,11 @@
 #   failed unit tests can merge on a check that never executed.
 #
 #   This workflow needs no Docker daemon and no registry access, so it stays
-#   green (or goes honestly red) independently of integration.yml.
+#   green (or goes honestly red) independently of integration.yml. That also
+#   makes it the only place a self-contained `//go:build integration` test can
+#   be caught leaking into the default build: such a test compiles and vets
+#   cleanly, and passes on the Docker-equipped integration runner. It fails
+#   here, where there is no daemon.
 #
 # NO BASE-BRANCH FILTER:
 #   integration.yml filters `pull_request` on `branches: [main, 'feat/**']`,
@@ -26,16 +30,20 @@ on:
   pull_request:
     paths:
       - 'backend/**'
+      # The Go version is pinned in two places that must agree — go.mod's
+      # toolchain directive and the Dockerfile's base image. Without this
+      # entry a Dockerfile-only drift triggers no backend job at all, which
+      # is exactly the drift the lockstep requirement exists to prevent.
+      - 'docker/Dockerfile'
       - '.github/workflows/backend.yml'
   push:
     branches:
       - main
     paths:
       - 'backend/**'
+      - 'docker/Dockerfile'
       - '.github/workflows/backend.yml'
-  # Nightly run for the race-detector job below, plus manual one-off runs.
-  schedule:
-    - cron: '0 3 * * *'
+  # Allow manual one-off runs from the Actions tab.
   workflow_dispatch:
 
 jobs:
@@ -44,26 +52,36 @@ jobs:
     runs-on: ubuntu-latest
     # The suite takes well under a minute; this is a hang guard, not a budget.
     timeout-minutes: 10
-    # The nightly schedule exists for the `race` job only.
-    if: github.event_name != 'schedule'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Read the Go version from go.mod so this workflow never drifts from the
-      # toolchain the code is written against. Same step integration.yml uses.
-      - name: Read Go version from go.mod
-        id: goversion
-        run: |
-          VERSION=$(grep '^go ' backend/go.mod | awk '{print $2}')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Go ${{ steps.goversion.outputs.version }}
-        uses: actions/setup-go@v5
+      # go-version-file reads backend/go.mod, and from v6 setup-go prefers its
+      # `toolchain` directive over the `go` directive — so CI installs exactly
+      # the toolchain the code is pinned to. The v6 pin is load-bearing: v5
+      # reads only the `go` directive, and go.mod carries both `go 1.25.0` and
+      # `toolchain go1.25.12`.
+      #
+      # This replaces a `grep '^go ' backend/go.mod` step that matched that
+      # same wrong line. CI installed 1.25.0 and reached the pinned toolchain
+      # only because GOTOOLCHAIN defaults to `auto`, which makes the go command
+      # silently re-exec into the right version. That worked, but nothing
+      # expressed it and nothing enforced it — GOTOOLCHAIN=local anywhere would
+      # have reverted CI to the older stdlib with no failing check.
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          go-version: ${{ steps.goversion.outputs.version }}
+          go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+
+      # Record the toolchain that actually compiles. Keep this even though the
+      # setup step now resolves correctly: it is the only line in the log that
+      # states what compiled rather than what was requested, and it is what
+      # caught the v5 behaviour above.
+      - name: Report Go version
+        working-directory: backend
+        run: go version
 
       - name: Build
         working-directory: backend
@@ -79,40 +97,34 @@ jobs:
         working-directory: backend
         run: go test ./... -count=1
 
-  # DECISION — the race detector runs nightly, not per-PR.
-  #
-  # This codebase is exactly the profile the race detector is built for:
+  # This codebase is the profile the race detector is built for:
   # goroutine-per-connection WebSocket handlers, background tickers, a session
-  # map behind a mutex, a connection manager behind an RWMutex. But `-race`
-  # takes ~90s on a developer machine and roughly 4-6 minutes on a two-core
-  # GitHub runner, against ~20s without it. Putting that on every PR would
-  # forfeit the reason this workflow was split out — a fast, always-on check.
+  # map behind a mutex, a connection manager behind an RWMutex.
   #
-  # Races are nondeterministic, so repeated runs find things a single run
-  # misses. A nightly run against main gets that repetition and reports within
-  # a day, which is the right trade for a project of this size. Revisit if a
-  # race ever reaches main and costs more than a day to find.
+  # It runs on every PR, in its own job. Measured on this repo's runners the
+  # -race step takes ~100s against ~25s without, and the job as a whole ~2min
+  # against the unit job's ~40s. Because the two run concurrently, and because
+  # integration.yml takes ~4.5min on the same PR, that puts the race detector
+  # nowhere near the critical path — so there is no reason to defer it to a
+  # nightly and learn about a race up to a day after the commit that caused it.
   race:
-    name: Race detector (nightly)
+    name: Race detector
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read Go version from go.mod
-        id: goversion
-        run: |
-          VERSION=$(grep '^go ' backend/go.mod | awk '{print $2}')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Go ${{ steps.goversion.outputs.version }}
-        uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          go-version: ${{ steps.goversion.outputs.version }}
+          go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+
+      - name: Report Go version
+        working-directory: backend
+        run: go version
 
       - name: Unit tests with -race
         working-directory: backend

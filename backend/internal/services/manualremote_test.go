@@ -6,15 +6,32 @@
 //	go test -tags=manualremote -count=1 -v ./internal/services/ -run TestManualRemote
 //
 // Nothing in the 657-test unit suite exercises a real remote, so a green run
-// says nothing about whether the go-git bump broke stack git operations. This
-// drives GitService against github.com/thinkbig1979/capstan over BOTH an HTTPS
-// and an SSH remote.
+// says nothing about whether stack git operations still work. This drives
+// GitService against github.com/thinkbig1979/capstan over BOTH an HTTPS and
+// an SSH remote.
+//
+// READ THIS BEFORE TRUSTING IT AS EVIDENCE ABOUT go-git. It is mostly not.
+// agent-os-r1a — openRepo passes a nil cache to filesystem.NewStorage —
+// panics the go-git path on any repository containing packfiles, which is
+// every cloned repository. GetStatus recovers and falls back to the CLI, so
+// the go-git surface this harness actually reaches is exactly osfs.New,
+// filesystem.NewStorage, git.Open and repo.Head (step 2a). Everything from
+// step 2b down is served by the git CLI, and Pull is CLI by construction
+// (git.go: Pull -> pullCLI). repo.Worktree, worktree.Status, getDivergence,
+// findMergeBase, countCommits and mapCommit are never executed here.
+//
+// So: this is a real end-to-end check of what capstan serves over HTTPS and
+// SSH, and it is NOT a meaningful check of a go-git upgrade. Once r1a is
+// fixed, revisit — and cover a stacks directory containing symlinked
+// subdirectories, since go-git v5.19.x added a symlink-rejecting worktree
+// boundary and go-billy v5.9.x resolves the chroot base through EvalSymlinks.
 package services
 
 import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -56,17 +73,33 @@ func TestManualRemote(t *testing.T) {
 
 			s := &GitService{}
 
-			// 2a. Record which internal path GetStatus resolves to. On a real
-			// clone the go-git path panics inside filesystem.ObjectStorage
-			// because openRepo passes a nil cache to filesystem.NewStorage —
-			// PRE-EXISTING, reproduces identically on main @ go-git v5.17.1,
-			// tracked separately. Every object in a fresh clone lives in a
-			// packfile, and the packfile reader is the only thing that touches
-			// the cache, which is why locally-built test repos never hit it.
+			// 2a. The only genuine go-git assertions in this file. openRepo is
+			// osfs.New + filesystem.NewStorage + git.Open; repo.Head() is the
+			// reference lookup. Both must work against a real clone, and both
+			// are reached before agent-os-r1a's nil-cache panic fires further
+			// down in CommitObject.
+			repo, err := s.openRepo(local)
+			if err != nil {
+				t.Fatalf("openRepo (go-git) failed on a real clone: %v", err)
+			}
+			headRef, err := repo.Head()
+			if err != nil {
+				t.Fatalf("repo.Head (go-git) failed on a real clone: %v", err)
+			}
+			if want := runGit(t, local, "rev-parse", "HEAD"); headRef.Hash().String() != want {
+				t.Errorf("go-git Head = %s, git CLI says %s", headRef.Hash(), want)
+			}
+			if headRef.Name().Short() != "main" {
+				t.Errorf("go-git Head ref = %q, want main", headRef.Name().Short())
+			}
+			t.Logf("go-git reached: openRepo + Head OK at %s", headRef.Hash())
+
+			// Record where it stops. Every assertion below 2a is served by the
+			// git CLI because of this — see the file header.
 			if _, err := s.getStatusGoGit(local); err != nil {
-				t.Logf("NOTE: go-git path unavailable, GetStatus falls back to CLI: %v", err)
+				t.Logf("NOTE: go-git path dies here, GetStatus falls back to CLI: %v", err)
 			} else {
-				t.Logf("NOTE: go-git path succeeded")
+				t.Logf("NOTE: go-git path succeeded — r1a may be fixed; revisit this file")
 			}
 
 			// 2b. STATUS through the public API — what capstan actually serves.
@@ -96,7 +129,9 @@ func TestManualRemote(t *testing.T) {
 			t.Logf("status: branch=%s commit=%s author=%q remote=%s",
 				st.Branch, st.Commit.Short, st.Commit.Author, st.RemoteURL)
 
-			// 3. STATUS reports a dirty worktree (go-git worktree.Status).
+			// 3. STATUS reports a dirty worktree. Served by `git status
+			// --porcelain` in getStatusCLI, NOT by go-git's worktree.Status —
+			// see the note at 2a. go-git's worktree is never reached.
 			if err := os.WriteFile(filepath.Join(local, "vkr-scratch.txt"), []byte("dirty\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -125,11 +160,16 @@ func TestManualRemote(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetStatus after rewind failed: %v", err)
 			}
-			// Rewinding one first-parent step off a merge commit puts the
-			// clone >=1 commits behind (the merge plus what it merged), so
-			// assert the direction, not an exact count.
-			if behindSt.Behind < 1 || behindSt.Ahead != 0 {
-				t.Errorf("after rewind: ahead=%d behind=%d, want ahead=0 behind>=1", behindSt.Ahead, behindSt.Behind)
+			// Derive the expected count rather than hardcoding it. Rewinding
+			// one first-parent step off a merge commit leaves the clone more
+			// than one commit behind, and this clones a live moving remote, so
+			// the repo shape is not under the test's control.
+			wantBehind := runGit(t, local, "rev-list", "--count", "HEAD..origin/main")
+			if got := strconv.Itoa(behindSt.Behind); got != wantBehind {
+				t.Errorf("after rewind: behind=%s, git rev-list says %s", got, wantBehind)
+			}
+			if behindSt.Ahead != 0 {
+				t.Errorf("after rewind: ahead=%d, want 0", behindSt.Ahead)
 			}
 			t.Logf("status after rewind: ahead=%d behind=%d", behindSt.Ahead, behindSt.Behind)
 
