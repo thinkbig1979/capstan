@@ -17,6 +17,7 @@ import { CreateNetworkDialog } from '@/components/dashboard/CreateNetworkDialog'
 import { useConfirm } from '@/hooks/useConfirm'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import type { DockerNetwork } from '@/types'
+import { queryKeys } from '@/lib/query-keys'
 
 type SortKey = 'name' | 'driver' | 'scope' | 'stack' | 'containers'
 
@@ -144,7 +145,7 @@ export function NetworksTab() {
               options={{ until: true }}
               confirmMessage="Prune Unused Networks?"
               confirmDescription="All networks not referenced by any container will be permanently removed."
-              invalidateKeys={[['resources', 'networks']]}
+              invalidateKeys={[queryKeys.resources.networks()]}
             />
           </>
         }

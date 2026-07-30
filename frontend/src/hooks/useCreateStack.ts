@@ -3,6 +3,7 @@ import { stacksApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { isActionResult } from '@/lib/action-result'
 import type { LintResult, Stack } from '@/types'
+import { queryKeys } from '@/lib/query-keys'
 
 interface CreateStackInput {
   name: string
@@ -73,8 +74,8 @@ export function useCreateStack() {
     },
     onSuccess: (data) => {
       // Invalidate regardless of outcome whenever we have a result from the create endpoint.
-      queryClient.invalidateQueries({ queryKey: ['directories'] })
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.directories() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
 
       if (isActionResult(data)) {
         if (data.outcome === 'partial') {
@@ -104,8 +105,8 @@ export function useCreateStack() {
       // `outcome:'partial'` + `details.stack` and treat it as a warning, NOT
       // a failure. Always invalidate so the stack appears in the list.
       if (isCreatedButNotDeployed(error)) {
-        queryClient.invalidateQueries({ queryKey: ['directories'] })
-        queryClient.invalidateQueries({ queryKey: ['stacks'] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.directories() })
+        queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
         const lintResults = error.details.lintResults
         if (lintResults?.some((r) => r.level === 'error')) {
           toast.warning(`Stack created but not deployed — lint errors present: ${error.reason}`)

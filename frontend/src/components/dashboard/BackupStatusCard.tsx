@@ -13,7 +13,8 @@ import {
   HardDrive,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { useBackupStatus, useRunBackup, useBackupStreaming, backupKeys } from '@/hooks/useBackup'
+import { useBackupStatus, useRunBackup, useBackupStreaming } from '@/hooks/useBackup'
+import { queryKeys } from '@/lib/query-keys'
 import { useQueryClient } from '@tanstack/react-query'
 import { formatRelativeTime, formatBytes } from '@/lib/format'
 
@@ -90,12 +91,12 @@ export function BackupStatusCard() {
         if (result.wsUrl) {
           streaming.connect(result.wsUrl, () => {
             // Invalidate after stream completes so status card refreshes
-            queryClient.invalidateQueries({ queryKey: backupKeys.status() })
-            queryClient.invalidateQueries({ queryKey: backupKeys.history() })
+            queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+            queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
           })
         } else {
           toast.success('Backup started')
-          queryClient.invalidateQueries({ queryKey: backupKeys.status() })
+          queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
         }
       },
       onError: (err) => {

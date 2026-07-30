@@ -3,6 +3,7 @@ import { stacksApi } from '@/lib/api'
 import { isActionResult } from '@/lib/action-result'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import type { EnvEntryRow } from './types'
+import { queryKeys } from '@/lib/query-keys'
 
 interface UseEnvMutationsArgs {
   stackId: string
@@ -54,7 +55,7 @@ export function useEnvMutations({
       }
       return { outcome: 'failed' as const, reason: 'Failed to save environment variables' }
     },
-    invalidate: [['stack', stackId]],
+    invalidate: [queryKeys.stack.detail(stackId)],
     successTitle: 'Environment variables saved',
     onResult: (result) => {
       if (result.outcome === 'success' || result.outcome === 'no_change') {
@@ -73,7 +74,7 @@ export function useEnvMutations({
       if (isActionResult(raw)) return raw
       return { outcome: 'success' as const, reason: 'Environment file created' }
     },
-    invalidate: [['stack', stackId, 'env'], ['stack', stackId]],
+    invalidate: [queryKeys.stack.env(stackId), queryKeys.stack.detail(stackId)],
     successTitle: 'Environment file created',
     onResult: (result) => {
       if (result.outcome === 'success' || result.outcome === 'no_change') {

@@ -15,6 +15,7 @@ import { DirectorySelect } from './create-stack/DirectorySelect'
 import { ComposeTabsPanel } from './create-stack/ComposeTabsPanel'
 import { EnvFileSection } from './create-stack/EnvFileSection'
 import { CreateStackFooter } from './create-stack/CreateStackFooter'
+import { queryKeys } from '@/lib/query-keys'
 
 interface CreateStackDialogProps {
   open: boolean
@@ -23,7 +24,7 @@ interface CreateStackDialogProps {
 
 export function CreateStackDialog({ open, onOpenChange }: CreateStackDialogProps) {
   const { data: config } = useQuery({
-    queryKey: ['config'],
+    queryKey: queryKeys.config(),
     queryFn: settingsApi.getConfig,
     staleTime: Infinity,
   })

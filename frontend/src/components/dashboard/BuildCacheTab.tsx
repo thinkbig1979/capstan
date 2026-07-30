@@ -16,6 +16,7 @@ import { usePagination } from '@/hooks/usePagination'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import type { BuildCacheEntry } from '@/types'
 import { formatBytes, formatDate, formatRelativeTime } from '@/lib/format'
+import { queryKeys } from '@/lib/query-keys'
 
 const PAGE_SIZE = 50
 
@@ -109,7 +110,7 @@ export function BuildCacheTab() {
             options={{ all: { label: 'Remove all build cache, not just unused' }, until: true }}
             confirmMessage="Prune Build Cache?"
             confirmDescription={pruneDescription}
-            invalidateKeys={[['resources', 'build-cache'], ['dashboard-stats']]}
+            invalidateKeys={[queryKeys.resources.buildCache(), queryKeys.dashboardStats()]}
           />
         }
         searchValue={query}

@@ -6,6 +6,7 @@ import { classifyError } from '@/lib/error-handler'
 import { toast } from 'sonner'
 import type { LintResult } from '@/types'
 import type { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
+import { queryKeys } from '@/lib/query-keys'
 
 interface UseComposeSaveAndLintArgs {
   stackId: string
@@ -46,7 +47,7 @@ export function useComposeSaveAndLint({
       } else if (data.lintResults?.some((r: LintResult) => r.level === 'warning')) {
         toast.warning('Lint warnings detected')
       }
-      queryClient.invalidateQueries({ queryKey: ['stack', stackId] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(stackId) })
     },
     onError: (error: { response?: { data?: { lintResults?: LintResult[] } } }) => {
       const appError = classifyError(error)
@@ -107,7 +108,7 @@ export function useComposeSaveAndLint({
       } else {
         toast.success('No lint issues found')
       }
-      queryClient.invalidateQueries({ queryKey: ['stack', stackId, 'compose'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.stack.compose(stackId) })
     },
     onError: () => {
       toast.error('Failed to lint compose file')

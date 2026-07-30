@@ -31,6 +31,7 @@ import { useAutoUpdatePolicies } from '@/hooks/useResources'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { formatBytes, formatUptime } from '@/lib/format'
+import { queryKeys } from '@/lib/query-keys'
 
 // Lazy: the inspect dialog pulls in codemirror to render formatted JSON, but most
 // container-tab visits never open it. Keeping it out of this tab's static import
@@ -93,8 +94,8 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
     },
     onSuccess: () => {
       toast.success(`${label.charAt(0).toUpperCase() + label.slice(1)} started`)
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: ['stacks'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
+      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
     onError: (err) => toast.error(classifyError(err).message || `Failed to start ${label}`),
   })
@@ -107,8 +108,8 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
     },
     onSuccess: () => {
       toast.success(`${label.charAt(0).toUpperCase() + label.slice(1)} stopped`)
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: ['stacks'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
+      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
     onError: (err) => toast.error(classifyError(err).message || `Failed to stop ${label}`),
   })
@@ -121,8 +122,8 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
     },
     onSuccess: () => {
       toast.success(`${label.charAt(0).toUpperCase() + label.slice(1)} restarted`)
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: ['stacks'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
+      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
     onError: (err) => toast.error(classifyError(err).message || `Failed to restart ${label}`),
   })
@@ -134,7 +135,7 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
     onSuccess: () => {
       if (mode === 'stack') {
         toast.success('Images pulled')
-        queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       }
     },
     onError: (err) => {
@@ -412,7 +413,7 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
   const [inspectTarget, setInspectTarget] = useState<DashboardContainerInfo | null>(null)
 
   const { data: stacks = [] } = useQuery({
-    queryKey: ['stacks'],
+    queryKey: queryKeys.stacks(),
     queryFn: () => stacksApi.list(),
     staleTime: 30_000,
   })
@@ -427,8 +428,8 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
     mutationFn: ({ id, isRunning }: { id: string; isRunning: boolean }) => resourcesApi.deleteContainer(id, isRunning),
     onSuccess: () => {
       toast.success('Container removed')
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
     onError: (err) => toast.error(classifyError(err).message || 'Failed to remove container'),
   })
@@ -494,7 +495,7 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
             options={{ until: true }}
             confirmMessage="Prune Stopped Containers?"
             confirmDescription="All stopped containers will be permanently removed."
-            invalidateKeys={[['dashboard-stats'], ['stacks']]}
+            invalidateKeys={[queryKeys.dashboardStats(), queryKeys.stacks()]}
           />
         }
         countDisplay={

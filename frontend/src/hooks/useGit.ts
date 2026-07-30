@@ -3,10 +3,11 @@ import { toast } from 'sonner'
 import { gitApi, type GitPullResult } from '@/lib/api'
 import { isActionResult, type ActionResult } from '@/lib/action-result'
 import { useActionMutation } from '@/hooks/useActionMutation'
+import { queryKeys } from '@/lib/query-keys'
 
 export function useGitStatus(stackId: string) {
   return useQuery({
-    queryKey: ['git', stackId],
+    queryKey: queryKeys.git.all(stackId),
     queryFn: () => gitApi.status(stackId),
     staleTime: 60000,
     // A non-git stack returns a definitive 404 — retrying just repeats the error
@@ -17,7 +18,7 @@ export function useGitStatus(stackId: string) {
 
 export function useGitLog(stackId: string, limit = 50, offset = 0, file?: string) {
   return useQuery({
-    queryKey: ['git', stackId, 'log', limit, offset, file],
+    queryKey: queryKeys.git.log(stackId, limit, offset, file),
     queryFn: () => gitApi.log(stackId, limit, offset, file),
     staleTime: 60000,
   })
@@ -25,7 +26,7 @@ export function useGitLog(stackId: string, limit = 50, offset = 0, file?: string
 
 export function useGitDiff(stackId: string, hash: string) {
   return useQuery({
-    queryKey: ['git', stackId, 'diff', hash],
+    queryKey: queryKeys.git.diff(stackId, hash),
     queryFn: () => gitApi.diff(stackId, hash),
     enabled: !!hash,
     staleTime: 60000,
@@ -115,7 +116,7 @@ export function normalisePullResult(raw: GitPullResult): ActionResult<{
  * - partial   → toast.warning with failed-redeploy list (audit finding #9)
  * - failed    → toast.error
  *
- * Always invalidates ['git', stackId] and ['stacks'].
+ * Always invalidates queryKeys.git.all(stackId) and queryKeys.stacks().
  */
 export function useGitPull() {
   const queryClient = useQueryClient()
@@ -127,11 +128,11 @@ export function useGitPull() {
       // Attach stackId so onResult can invalidate the per-stack git query
       return { ...normalised, _stackId: stackId }
     },
-    invalidate: [['stacks']],
+    invalidate: [queryKeys.stacks()],
     onResult: (result) => {
       const stackId = (result as ActionResult & { _stackId?: string })._stackId
       if (stackId) {
-        queryClient.invalidateQueries({ queryKey: ['git', stackId] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.git.all(stackId) })
       }
 
       // On partial outcome, toastForResult already fired a warning.

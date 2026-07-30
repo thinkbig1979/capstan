@@ -20,6 +20,7 @@ vi.mock('sonner', () => ({
 }))
 
 import { useCheckUpdates, useUpdateScanWatcher, UPDATE_SCAN_TOAST_ID } from '../useResources'
+import { queryKeys } from '@/lib/query-keys'
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -129,7 +130,7 @@ describe('useUpdateScanWatcher', () => {
     // carries the pre-scan scannedAt (the baseline), it must not end the scan.
     const baseline = '2026-01-01T00:00:00Z'
     const { wrapper, queryClient } = createWrapper()
-    queryClient.setQueryData(['resources', 'updates'], { updates: [], scanning: false, scannedAt: baseline })
+    queryClient.setQueryData(queryKeys.resources.updates(), { updates: [], scanning: false, scannedAt: baseline })
     useUpdateScanStore.setState({ isScanning: true })
     mockCheckUpdates.mockResolvedValue({ updates: [], scanning: false, scannedAt: baseline })
 
@@ -148,7 +149,7 @@ describe('useUpdateScanWatcher', () => {
     // the scan even if the WS completion event never arrives.
     const baseline = '2026-01-01T00:00:00Z'
     const { wrapper, queryClient } = createWrapper()
-    queryClient.setQueryData(['resources', 'updates'], { updates: [], scanning: false, scannedAt: baseline })
+    queryClient.setQueryData(queryKeys.resources.updates(), { updates: [], scanning: false, scannedAt: baseline })
     useUpdateScanStore.setState({ isScanning: true })
     mockCheckUpdates.mockResolvedValue({ updates: [], scanning: false, scannedAt: '2026-01-01T00:05:00Z' })
 

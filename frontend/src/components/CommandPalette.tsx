@@ -12,13 +12,14 @@ import {
   CommandList,
   CommandSeparator,
 } from '@/components/ui/command'
+import { queryKeys } from '@/lib/query-keys'
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false)
   const navigate = useNavigate()
 
   const { data: stacks = [] } = useQuery({
-    queryKey: ['stacks'],
+    queryKey: queryKeys.stacks(),
     queryFn: stacksApi.list,
     staleTime: 30_000,
   })

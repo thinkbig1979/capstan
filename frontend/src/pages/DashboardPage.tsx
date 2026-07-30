@@ -27,6 +27,7 @@ import { toast } from 'sonner'
 import { useConfirm } from '@/hooks/useConfirm'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import type { ConfiguredDir } from '@/types'
+import { queryKeys } from '@/lib/query-keys'
 
 // Lazy: CreateStackDialog pulls in codemirror (its inline compose editor) but was
 // previously mounted unconditionally on every Dashboard visit, keeping codemirror
@@ -88,7 +89,7 @@ export function DashboardPage() {
     error: directoriesError,
     refetch: refetchDirectories,
   } = useQuery({
-    queryKey: ['directories'],
+    queryKey: queryKeys.directories(),
     queryFn: directoriesApi.list,
     retry: 1,
   })
@@ -99,7 +100,7 @@ export function DashboardPage() {
     error: stacksError,
     refetch: refetchStacks,
   } = useQuery({
-    queryKey: ['stacks'],
+    queryKey: queryKeys.stacks(),
     queryFn: () => stacksApi.list(),
     retry: 1,
   })
@@ -107,13 +108,13 @@ export function DashboardPage() {
   const {
     data: dashboardStats,
   } = useQuery({
-    queryKey: ['dashboard-stats'],
+    queryKey: queryKeys.dashboardStats(),
     queryFn: dashboardApi.stats,
     retry: 1,
   })
 
   const { data: config } = useQuery({
-    queryKey: ['config'],
+    queryKey: queryKeys.config(),
     queryFn: settingsApi.getConfig,
     staleTime: Infinity,
   })
@@ -176,7 +177,7 @@ export function DashboardPage() {
     try {
       await directoriesApi.scan()
       await Promise.all([refetchDirectories(), refetchStacks()])
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       toast.success('Dashboard refreshed')
     } catch (error) {
       const appError = classifyError(error)
