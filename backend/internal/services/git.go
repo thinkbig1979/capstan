@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/filesystem"
 )
@@ -59,7 +61,13 @@ func (s *GitService) GetStatus(dirPath string) (*models.GitStatusResult, error) 
 func (s *GitService) getStatusGoGit(dirPath string) (result *models.GitStatusResult, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Debug("go-git panicked", "path", dirPath, "panic", r)
+			// Warn, not Debug. A panic in go-git is a bug in this code or in
+			// the library, not a routine fallback condition — logging it at
+			// Debug is how agent-os-r1a stayed invisible in production for as
+			// long as it did. The CLI fallback still keeps the endpoint
+			// answering; it just no longer does so silently.
+			slog.Warn("go-git panicked, falling back to the git CLI",
+				"path", dirPath, "panic", r, "stack", string(debug.Stack()))
 			err = fmt.Errorf("go-git panic: %v", r)
 		}
 	}()
@@ -475,7 +483,12 @@ func (s *GitService) GetLogForFile(dirPath, filePath string, limit int) (*models
 
 func (s *GitService) openRepo(dirPath string) (*git.Repository, error) {
 	dotGit := osfs.New(filepath.Join(dirPath, ".git"))
-	stor := filesystem.NewStorage(dotGit, nil)
+	// The cache is NOT optional. filesystem.ObjectStorage dereferences it the
+	// moment an object has to be read out of a packfile, so passing nil here
+	// panicked on every repository produced by `git clone` — which is every
+	// real stack. Repositories built commit-by-commit store loose objects and
+	// never reach the packfile reader, which is why it went unnoticed.
+	stor := filesystem.NewStorage(dotGit, cache.NewObjectLRUDefault())
 	worktree := osfs.New(dirPath)
 	repo, err := git.Open(stor, worktree)
 	if err != nil {
@@ -584,16 +597,53 @@ func (s *GitService) collectAncestors(repo *git.Repository, commit *object.Commi
 	return ancestors
 }
 
+// countCommits returns the number of commits reachable from target but not from
+// base — the same quantity as `git rev-list --count base..target`, which is what
+// git's own ahead/behind reports.
+//
+// It walks ALL parents. The previous implementation followed first parents only
+// and stopped when it hit base, which undercounts any history containing merge
+// commits: a merge that brought in two commits counted as 1 instead of 3. That
+// was invisible while agent-os-r1a kept this whole path unreachable, and it
+// would have become a live regression the moment the path was switched back on,
+// because getStatusCLI (`git rev-list --left-right --count`) counts correctly.
+//
+// The old loop also had a termination hazard: base is found by BFS over all
+// parents, so it need not lie on target's first-parent chain. When it did not,
+// the walk ran to the root commit and returned the entire history length.
 func (s *GitService) countCommits(repo *git.Repository, base, target plumbing.Hash) int {
-	count := 0
-	current, err := repo.CommitObject(target)
+	baseCommit, err := repo.CommitObject(base)
+	if err != nil {
+		return 0
+	}
+	reachableFromBase := s.collectAncestors(repo, baseCommit)
+
+	targetCommit, err := repo.CommitObject(target)
 	if err != nil {
 		return 0
 	}
 
-	for current != nil && current.Hash != base {
+	count := 0
+	visited := map[plumbing.Hash]bool{targetCommit.Hash: true}
+	queue := []*object.Commit{targetCommit}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if reachableFromBase[current.Hash] {
+			// Everything above this commit is shared history; do not descend.
+			continue
+		}
 		count++
-		current = s.getParent(current)
+
+		current.Parents().ForEach(func(parent *object.Commit) error {
+			if !visited[parent.Hash] {
+				visited[parent.Hash] = true
+				queue = append(queue, parent)
+			}
+			return nil
+		})
 	}
 
 	return count
@@ -608,13 +658,4 @@ func (s *GitService) mapCommit(commit *object.Commit) *models.GitCommit {
 		Message: strings.Split(commit.Message, "\n")[0],
 		Date:    commit.Author.When.Format(time.RFC3339),
 	}
-}
-
-func (s *GitService) getParent(commit *object.Commit) *object.Commit {
-	parents := commit.Parents()
-	parent, err := parents.Next()
-	if err != nil {
-		return nil
-	}
-	return parent
 }
