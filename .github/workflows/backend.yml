@@ -1,0 +1,119 @@
+# Backend CI — build, vet, and unit tests. No Docker, no network beyond the
+# module proxy.
+#
+# WHY THIS EXISTS SEPARATELY FROM integration.yml:
+#   The backend unit suite used to run only as the last step of the
+#   real-Docker integration job. That made the fastest, most reliable signal
+#   in the pipeline depend on the slowest, most environment-sensitive one: a
+#   Docker Hub outage, a rate limit, or a runner image change failed the job
+#   before the unit tests ever ran. The result was an *absent* signal rather
+#   than a red one, which is the dangerous failure mode — a PR that would have
+#   failed unit tests can merge on a check that never executed.
+#
+#   This workflow needs no Docker daemon and no registry access, so it stays
+#   green (or goes honestly red) independently of integration.yml.
+#
+# NO BASE-BRANCH FILTER:
+#   integration.yml filters `pull_request` on `branches: [main, 'feat/**']`,
+#   which is a filter on the *base* branch. A stacked PR (feature onto
+#   feature) or any base outside that set silently skips the job. Unit tests
+#   must run on every PR that touches backend code, so this workflow filters
+#   on paths only.
+
+name: Backend CI
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+  # Nightly run for the race-detector job below, plus manual one-off runs.
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: Build, vet, and unit tests
+    runs-on: ubuntu-latest
+    # The suite takes well under a minute; this is a hang guard, not a budget.
+    timeout-minutes: 10
+    # The nightly schedule exists for the `race` job only.
+    if: github.event_name != 'schedule'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Read the Go version from go.mod so this workflow never drifts from the
+      # toolchain the code is written against. Same step integration.yml uses.
+      - name: Read Go version from go.mod
+        id: goversion
+        run: |
+          VERSION=$(grep '^go ' backend/go.mod | awk '{print $2}')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go ${{ steps.goversion.outputs.version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.goversion.outputs.version }}
+          cache-dependency-path: backend/go.sum
+
+      - name: Build
+        working-directory: backend
+        run: go build ./...
+
+      - name: Vet
+        working-directory: backend
+        run: go vet ./...
+
+      # -count=1 disables the test cache, so a green run always reflects this
+      # commit rather than a cached result from an earlier one.
+      - name: Unit tests
+        working-directory: backend
+        run: go test ./... -count=1
+
+  # DECISION — the race detector runs nightly, not per-PR.
+  #
+  # This codebase is exactly the profile the race detector is built for:
+  # goroutine-per-connection WebSocket handlers, background tickers, a session
+  # map behind a mutex, a connection manager behind an RWMutex. But `-race`
+  # takes ~90s on a developer machine and roughly 4-6 minutes on a two-core
+  # GitHub runner, against ~20s without it. Putting that on every PR would
+  # forfeit the reason this workflow was split out — a fast, always-on check.
+  #
+  # Races are nondeterministic, so repeated runs find things a single run
+  # misses. A nightly run against main gets that repetition and reports within
+  # a day, which is the right trade for a project of this size. Revisit if a
+  # race ever reaches main and costs more than a day to find.
+  race:
+    name: Race detector (nightly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read Go version from go.mod
+        id: goversion
+        run: |
+          VERSION=$(grep '^go ' backend/go.mod | awk '{print $2}')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go ${{ steps.goversion.outputs.version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.goversion.outputs.version }}
+          cache-dependency-path: backend/go.sum
+
+      - name: Unit tests with -race
+        working-directory: backend
+        run: go test ./... -count=1 -race
