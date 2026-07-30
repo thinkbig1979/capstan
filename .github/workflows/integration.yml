@@ -59,12 +59,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # go-version-file reads backend/go.mod and prefers its `toolchain`
-      # directive over the `go` directive, so this workflow never drifts from
-      # the toolchain the code is pinned to. It replaces a `grep '^go '` step
-      # that matched the wrong line — see backend.yml for the full note.
+      # go-version-file reads backend/go.mod and, from setup-go v6, prefers
+      # its `toolchain` directive over the `go` directive — so this workflow
+      # never drifts from the toolchain the code is pinned to. The v6 pin is
+      # load-bearing; v5 reads only the `go` directive. Replaces a
+      # `grep '^go '` step that matched that same wrong line. Full note in
+      # backend.yml.
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
