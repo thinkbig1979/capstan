@@ -19,7 +19,16 @@ trustPolicyExclude:
   - reselect@5.1.1
   - semver@6.3.1
 overrides:
-  # Security: pull fast-uri past the path-traversal / host-confusion fix.
+  # Security: pull fast-uri past the path-traversal fix and past the two host
+  # confusion advisories, GHSA-4c8g-83qw-93j6 (fixed 3.1.3) and
+  # GHSA-v2hh-gcrm-f6hx (fixed 3.1.4). Reached only via
+  # composerize > composeverter > ajv, which declares fast-uri ^3.0.1 and so
+  # resolves to a vulnerable 3.1.x on its own. Removable once ajv's own floor
+  # moves past 3.1.4.
+  #
+  # Capped below 4 on purpose: ajv asks for ^3.0.1, so handing it the 4.x major
+  # would be an untested API change rather than a security fix.
+  #
   # Lives here (not package.json "pnpm.overrides") because pnpm 10.16+/11 reads
   # overrides from pnpm-workspace.yaml.
-  fast-uri@<3.1.1: '>=3.1.2'
+  fast-uri@<3.1.4: '>=3.1.4 <4'
