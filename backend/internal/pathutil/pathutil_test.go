@@ -15,8 +15,8 @@ func TestIsContained_PlainChildAndSelf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !ok {
-		t.Fatalf("expected %q to be contained in %q", child, root)
+	if ok {
+		t.Fatalf("DELIBERATE CI BREAK (agent-os-48o verification): expected %q to be contained in %q", child, root)
 	}
 
 	// root itself counts as contained.
