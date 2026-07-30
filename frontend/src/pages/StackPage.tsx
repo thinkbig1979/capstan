@@ -15,6 +15,7 @@ import { useCheckUpdates, useUpdateStack, useUpdateJobs } from '@/hooks/useResou
 import { useUpdateJobStore, type UpdateJob } from '@/stores/updateJobStore'
 import { StackUpdateBadge } from '@/components/stack/StackUpdateBadge'
 import { UpdateJobLog } from '@/components/updates/UpdateJobLog'
+import { queryKeys } from '@/lib/query-keys'
 
 // Most recently created job (by createdAt) without copying/sorting the array.
 function latestByCreatedAt(jobs: UpdateJob[]): UpdateJob | undefined {
@@ -44,7 +45,10 @@ export function StackPage() {
   }
 
   const { data: stack, isLoading, error, refetch } = useQuery({
-    queryKey: ['stack', id],
+    // `id` is optional in the route params; the query is gated by `enabled`
+    // below, so the '' key is only ever registered for a disabled query. Matches
+    // the same coercion queryFn already applies.
+    queryKey: queryKeys.stack.detail(id ?? ''),
     queryFn: () => stacksApi.get(id || ''),
     enabled: !!id,
     retry: 1,
@@ -54,7 +58,7 @@ export function StackPage() {
     mutationFn: (stackId: string) => stacksApi.delete(stackId),
     onSuccess: () => {
       toast.success('Stack deleted successfully')
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
       navigate('/')
     },
     onError: () => {

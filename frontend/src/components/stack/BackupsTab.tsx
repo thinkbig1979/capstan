@@ -11,8 +11,8 @@ import {
   useStackBackupRuns,
   useBackupPolicies,
   useBackupStreaming,
-  backupKeys,
 } from '@/hooks/useBackup'
+import { queryKeys } from '@/lib/query-keys'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
@@ -343,10 +343,10 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
             : data.wsUrl
 
           stream.connect(wsPath, (finalStatus) => {
-            queryClient.invalidateQueries({ queryKey: backupKeys.snapshots(stackId) })
-            queryClient.invalidateQueries({ queryKey: backupKeys.status() })
-            queryClient.invalidateQueries({ queryKey: backupKeys.history() })
-            queryClient.invalidateQueries({ queryKey: ['stack', stackId] })
+            queryClient.invalidateQueries({ queryKey: queryKeys.backup.snapshots(stackId) })
+            queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+            queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
+            queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(stackId) })
             // Derive the toast from the real terminal outcome — a failed or
             // partial restore must not be reported as a green success.
             if (finalStatus === 'success') {

@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { isActionResult } from '@/lib/action-result'
 import type { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
 import { inferVarName } from './inferVarName'
+import { queryKeys } from '@/lib/query-keys'
 
 interface UseExtractToEnvArgs {
   stackId: string
@@ -124,7 +125,7 @@ export function useExtractToEnv({
 
       setContent(updatedCompose)
       setLastSaved(updatedCompose)
-      queryClient.invalidateQueries({ queryKey: ['stack', stackId] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(stackId) })
       toast.success(`Extracted ${varName} to .env`)
       setShowExtractDialog(false)
       setSelectedText('')

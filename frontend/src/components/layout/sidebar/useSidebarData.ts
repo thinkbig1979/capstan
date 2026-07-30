@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { backupApi, resourcesApi, settingsApi, stacksApi } from '@/lib/api'
 import { buildDirectoryTree, hasTreeNesting } from '@/lib/stack-tree'
 import type { StackStatus } from '@/types'
+import { queryKeys } from '@/lib/query-keys'
 
 interface UseSidebarDataParams {
   searchQuery: string
@@ -13,13 +14,13 @@ interface UseSidebarDataParams {
 
 export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks }: UseSidebarDataParams) {
   const { data: stacks = [], isLoading } = useQuery({
-    queryKey: ['stacks'],
+    queryKey: queryKeys.stacks(),
     queryFn: () => stacksApi.list(),
     staleTime: 30_000,
   })
 
   const { data: config } = useQuery({
-    queryKey: ['config'],
+    queryKey: queryKeys.config(),
     queryFn: settingsApi.getConfig,
     staleTime: Infinity,
   })
@@ -30,7 +31,7 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
   // scan watcher (useResources) invalidate this badge too — otherwise it stays
   // stale until a full page refresh.
   const { data: updateData } = useQuery({
-    queryKey: ['resources', 'updates'],
+    queryKey: queryKeys.resources.updates(),
     queryFn: () => resourcesApi.checkUpdates(false),
     staleTime: 60_000,
     retry: false,
@@ -39,7 +40,7 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
 
   // Global backup status for the footer (last run + next-run countdown).
   const { data: backupStatus } = useQuery({
-    queryKey: ['backup-status'],
+    queryKey: queryKeys.backup.status(),
     queryFn: backupApi.getStatus,
     staleTime: 60_000,
     refetchInterval: 60_000,

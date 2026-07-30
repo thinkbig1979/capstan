@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { stacksApi } from '@/lib/api'
 import type { Stack } from '@/types'
 import { BULK_LABELS, type BulkAction } from './constants'
+import { queryKeys } from '@/lib/query-keys'
 
 export function useSidebarSelection(filteredStacks: Stack[]) {
   const queryClient = useQueryClient()
@@ -52,8 +53,8 @@ export function useSidebarSelection(filteredStacks: Stack[]) {
         } else {
           toast.warning(`${verb} ${ok}, ${failed} failed`)
         }
-        queryClient.invalidateQueries({ queryKey: ['stacks'] })
-        queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
         exitSelectMode()
       } finally {
         setBulkPending(false)

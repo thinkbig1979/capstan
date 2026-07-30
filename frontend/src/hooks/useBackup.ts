@@ -3,25 +3,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { backupApi } from '@/lib/api'
 import { WSClient } from '@/lib/ws'
 import { reconcileOnClose } from '@/lib/ws-reconcile'
+import { queryKeys } from '@/lib/query-keys'
 import type { BackupPolicy, BackupOperationResult } from '@/types'
-
-// ─── Query keys ─────────────────────────────────────────────────────────────
-
-export const backupKeys = {
-  all: ['backup'] as const,
-  settings: () => [...backupKeys.all, 'settings'] as const,
-  policies: () => [...backupKeys.all, 'policies'] as const,
-  status: () => [...backupKeys.all, 'status'] as const,
-  history: (limit?: number) => [...backupKeys.all, 'history', { limit }] as const,
-  snapshots: (stackId: string) => [...backupKeys.all, 'snapshots', stackId] as const,
-  run: (runId: string) => [...backupKeys.all, 'runs', runId] as const,
-}
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 export function useBackupSettings() {
   return useQuery({
-    queryKey: backupKeys.settings(),
+    queryKey: queryKeys.backup.settings(),
     queryFn: () => backupApi.getSettings(),
     retry: 1,
   })
@@ -33,8 +22,8 @@ export function useUpdateBackupSettings() {
     mutationFn: (data: Parameters<typeof backupApi.updateSettings>[0]) =>
       backupApi.updateSettings(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: backupKeys.settings() })
-      queryClient.invalidateQueries({ queryKey: backupKeys.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.settings() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
     },
   })
 }
@@ -43,7 +32,7 @@ export function useUpdateBackupSettings() {
 
 export function useBackupPolicies() {
   return useQuery({
-    queryKey: backupKeys.policies(),
+    queryKey: queryKeys.backup.policies(),
     queryFn: () => backupApi.getPolicies(),
     retry: 1,
   })
@@ -69,16 +58,16 @@ export function useToggleBackup() {
 
     onMutate: async ({ stackId, enabled, stopPolicy }) => {
       // Cancel any in-flight refetches so they don't overwrite our optimistic update.
-      await queryClient.cancelQueries({ queryKey: backupKeys.policies() })
+      await queryClient.cancelQueries({ queryKey: queryKeys.backup.policies() })
 
       // Snapshot previous value for rollback.
       const previous = queryClient.getQueryData<{ policies: BackupPolicy[] }>(
-        backupKeys.policies(),
+        queryKeys.backup.policies(),
       )
 
       // Optimistically update the cache.
       queryClient.setQueryData<{ policies: BackupPolicy[] }>(
-        backupKeys.policies(),
+        queryKeys.backup.policies(),
         (old) => {
           if (!old) return old
           const existing = old.policies.find((p) => p.targetId === stackId)
@@ -115,13 +104,13 @@ export function useToggleBackup() {
     onError: (_err, _vars, context) => {
       // Roll back to the snapshot we captured in onMutate.
       if (context?.previous !== undefined) {
-        queryClient.setQueryData(backupKeys.policies(), context.previous)
+        queryClient.setQueryData(queryKeys.backup.policies(), context.previous)
       }
     },
 
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: backupKeys.policies() })
-      queryClient.invalidateQueries({ queryKey: backupKeys.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.policies() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
     },
   })
 }
@@ -130,7 +119,7 @@ export function useToggleBackup() {
 
 export function useBackupStatus() {
   return useQuery({
-    queryKey: backupKeys.status(),
+    queryKey: queryKeys.backup.status(),
     queryFn: () => backupApi.getStatus(),
     retry: 1,
   })
@@ -138,7 +127,7 @@ export function useBackupStatus() {
 
 export function useBackupHistory(limit = 50) {
   return useQuery({
-    queryKey: backupKeys.history(limit),
+    queryKey: queryKeys.backup.history(limit),
     queryFn: () => backupApi.getHistory(limit),
     retry: 1,
   })
@@ -146,7 +135,7 @@ export function useBackupHistory(limit = 50) {
 
 export function useBackupRun(runId: string) {
   return useQuery({
-    queryKey: backupKeys.run(runId),
+    queryKey: queryKeys.backup.run(runId),
     queryFn: () => backupApi.getRun(runId),
     enabled: !!runId,
     retry: 1,
@@ -157,7 +146,7 @@ export function useBackupRun(runId: string) {
 
 export function useBackupSnapshots(stackId: string) {
   return useQuery({
-    queryKey: backupKeys.snapshots(stackId),
+    queryKey: queryKeys.backup.snapshots(stackId),
     queryFn: () => backupApi.listSnapshots(stackId),
     enabled: !!stackId,
     retry: 1,
@@ -172,8 +161,8 @@ export function useRunBackup() {
     mutationFn: (data?: { stackIds?: string[] | null; dryRun?: boolean }) =>
       backupApi.runBackup(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: backupKeys.status() })
-      queryClient.invalidateQueries({ queryKey: backupKeys.history() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
     },
   })
 }
@@ -183,8 +172,8 @@ export function useRunSync() {
   return useMutation({
     mutationFn: () => backupApi.runSync(),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: backupKeys.status() })
-      queryClient.invalidateQueries({ queryKey: backupKeys.history() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
     },
   })
 }
@@ -197,10 +186,10 @@ export function useRestore() {
       // (the user has already confirmed via the ConfirmDialog before we get here).
       backupApi.restore({ ...data, confirm: true }),
     onSuccess: (_data: BackupOperationResult, variables) => {
-      queryClient.invalidateQueries({ queryKey: backupKeys.status() })
-      queryClient.invalidateQueries({ queryKey: backupKeys.history() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
       queryClient.invalidateQueries({
-        queryKey: backupKeys.snapshots(variables.stackId),
+        queryKey: queryKeys.backup.snapshots(variables.stackId),
       })
     },
   })
@@ -211,8 +200,8 @@ export function useDrRestore() {
   return useMutation({
     mutationFn: (data: { confirm: boolean }) => backupApi.drRestore(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: backupKeys.status() })
-      queryClient.invalidateQueries({ queryKey: backupKeys.history() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
     },
   })
 }
@@ -222,8 +211,8 @@ export function useInitRepo() {
   return useMutation({
     mutationFn: () => backupApi.initRepo(),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: backupKeys.settings() })
-      queryClient.invalidateQueries({ queryKey: backupKeys.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.settings() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
     },
   })
 }
@@ -239,9 +228,9 @@ export function usePrune() {
   return useMutation({
     mutationFn: (data?: { dryRun?: boolean }) => backupApi.prune(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: backupKeys.status() })
-      queryClient.invalidateQueries({ queryKey: backupKeys.history() })
-      queryClient.invalidateQueries({ queryKey: backupKeys.snapshots('') })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.snapshots('') })
     },
   })
 }
@@ -253,8 +242,8 @@ export function useDeleteBackupPolicy() {
   return useMutation({
     mutationFn: (stackId: string) => backupApi.deletePolicy(stackId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: backupKeys.policies() })
-      queryClient.invalidateQueries({ queryKey: backupKeys.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.policies() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
     },
   })
 }
@@ -263,7 +252,7 @@ export function useDeleteBackupPolicy() {
 
 export function usePreviewSnapshot(snapshotId: string) {
   return useQuery({
-    queryKey: [...backupKeys.all, 'snapshot-preview', snapshotId] as const,
+    queryKey: queryKeys.backup.snapshotPreview(snapshotId),
     queryFn: () => backupApi.previewSnapshot(snapshotId),
     enabled: !!snapshotId,
     retry: 1,
@@ -281,7 +270,7 @@ export function usePreviewSnapshot(snapshotId: string) {
  */
 export function useStackBackupRuns(stackId: string, limit = 20) {
   const result = useQuery({
-    queryKey: [...backupKeys.history(limit), 'stack', stackId] as const,
+    queryKey: queryKeys.backup.stackHistory(limit, stackId),
     queryFn: () => backupApi.getHistory(limit),
     enabled: !!stackId,
     retry: 1,
@@ -387,8 +376,8 @@ export function useBackupStreaming(): BackupStreamState {
     // Refetch helper: invalidate backup history + status so the UI reflects
     // the persisted server run record rather than the transient WS state.
     const refetchHistory = () => {
-      queryClient.invalidateQueries({ queryKey: backupKeys.history() })
-      queryClient.invalidateQueries({ queryKey: backupKeys.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
     }
 
     client.connect(

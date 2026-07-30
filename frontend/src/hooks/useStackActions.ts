@@ -3,11 +3,13 @@ import { stacksApi, type LifecycleResult, type StackDeleteResult } from '@/lib/a
 import { toast } from 'sonner'
 import { toastForResult, isActionResult } from '@/lib/action-result'
 import { classifyError } from '@/lib/error-handler'
+import { queryKeys } from '@/lib/query-keys'
 
 const INVALIDATE_KEYS = [
-  ['stacks'],
-  ['stack'],
-  ['dashboard-stats'],
+  queryKeys.stacks(),
+  // Broad prefix: reaches every ['stack', id, …] entry, not one stack.
+  queryKeys.stack.all(),
+  queryKeys.dashboardStats(),
 ] as const
 
 type StackAction = 'start' | 'stop' | 'restart' | 'delete'

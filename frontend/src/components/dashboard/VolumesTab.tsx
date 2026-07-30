@@ -19,6 +19,7 @@ import { useConfirm } from '@/hooks/useConfirm'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import type { DockerVolume } from '@/types'
 import { formatBytes } from '@/lib/format'
+import { queryKeys } from '@/lib/query-keys'
 
 const PAGE_SIZE = 50
 
@@ -123,7 +124,7 @@ export function VolumesTab() {
             options={{ all: { label: 'Remove all unused volumes, not just anonymous' } }}
             confirmMessage="Prune Unused Volumes?"
             confirmDescription="By default only anonymous volumes are removed. Enable 'all unused' to remove every volume not used by a container."
-            invalidateKeys={[['resources', 'volumes'], ['dashboard-stats']]}
+            invalidateKeys={[queryKeys.resources.volumes(), queryKeys.dashboardStats()]}
           />
         }
         countDisplay={

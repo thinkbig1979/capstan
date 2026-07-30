@@ -14,6 +14,7 @@ import {
 import { KeyRound, ChevronDown, ChevronRight } from 'lucide-react'
 import { directoriesApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { queryKeys } from '@/lib/query-keys'
 
 interface GitSettingsSectionProps {
   directoryPath: string
@@ -62,7 +63,7 @@ export function GitSettingsSection({
     }),
     onSuccess: () => {
       toast.success('Git credentials saved')
-      queryClient.invalidateQueries({ queryKey: ['directories'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.directories() })
       setLoaded(false)
     },
     onError: () => toast.error('Failed to save credentials'),

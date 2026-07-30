@@ -25,6 +25,7 @@ import { useAutoUpdatePolicies } from '@/hooks/useResources'
 import { toast } from 'sonner'
 import { EditorSkeleton, MetricsSkeleton } from '@/components/LoadingSkeleton'
 import type { Stack, AutoUpdatePolicy } from '@/types'
+import { queryKeys } from '@/lib/query-keys'
 
 // Lazy: both pull in a heavy vendor bundle (codemirror / recharts) that most
 // stack detail visits don't need — only the Compose and Metrics tabs do.
@@ -190,8 +191,8 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
 
   useEffect(() => {
     if (operation.status === 'success') {
-      queryClient.invalidateQueries({ queryKey: ['stack', stack.id] })
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(stack.id) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
       toast.success(`${operation.action.charAt(0).toUpperCase() + operation.action.slice(1)} completed`)
     }
   }, [operation.status, operation.action, stack.id, queryClient])

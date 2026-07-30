@@ -15,6 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { queryKeys } from '@/lib/query-keys'
 
 // Directories are plain strings; match against the full path and the basename.
 const DIR_SEARCH_FIELDS = [
@@ -24,11 +25,11 @@ const DIR_SEARCH_FIELDS = [
 
 export function DirectoriesSettingsContent() {
   const { data: config, isLoading } = useQuery({
-    queryKey: ['config'],
+    queryKey: queryKeys.config(),
     queryFn: () => settingsApi.getConfig(),
   })
   const { data: scanDepthData, isLoading: isLoadingDepth } = useQuery({
-    queryKey: ['scan-depth'],
+    queryKey: queryKeys.scanDepth(),
     queryFn: () => settingsApi.getScanDepth(),
   })
   const queryClient = useQueryClient()
@@ -41,7 +42,7 @@ export function DirectoriesSettingsContent() {
     mutationFn: (depth: number) => settingsApi.updateScanDepth(depth),
     onSuccess: () => {
       toast.success('Scan depth updated. Rescan directories to discover nested stacks.')
-      queryClient.invalidateQueries({ queryKey: ['scan-depth'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.scanDepth() })
     },
     onError: () => toast.error('Failed to update scan depth'),
   })
@@ -72,7 +73,7 @@ export function DirectoriesSettingsContent() {
   const handleSaveDefault = () => {
     directoryConfigApi.update({ defaultDir: effectiveDefault }).then(() => {
       toast.success('Default directory updated')
-      queryClient.invalidateQueries({ queryKey: ['config'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.config() })
     }).catch(() => {
       toast.error('Failed to update default directory')
     })

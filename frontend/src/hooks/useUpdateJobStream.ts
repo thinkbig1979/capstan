@@ -4,6 +4,7 @@ import { useWebSocketJSON } from './useWebSocket'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
 import { reconcileOnClose } from '@/lib/ws-reconcile'
 import type { UpdateJob, JobLine, UpdateJobStatus, UpdateJobOutcome } from '@/stores/updateJobStore'
+import { queryKeys } from '@/lib/query-keys'
 
 // ── WS frame shapes (per api-contract.md) ────────────────────────────────────
 
@@ -93,8 +94,8 @@ export function useUpdateJobStream(
       refetch: () => {
         // Refetch both the job detail and the updates list so the UI converges
         // to server truth on an unexpected close (finding 17 / reconcileOnClose pattern).
-        queryClient.invalidateQueries({ queryKey: ['resources', 'update-jobs'] })
-        queryClient.invalidateQueries({ queryKey: ['resources', 'updates'] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.resources.updateJobs() })
+        queryClient.invalidateQueries({ queryKey: queryKeys.resources.updates() })
       },
     })
   }, [queryClient])

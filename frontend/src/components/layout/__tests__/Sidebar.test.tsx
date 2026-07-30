@@ -36,6 +36,7 @@ vi.mock('sonner', () => ({
 import { Sidebar } from '../Sidebar'
 import { useUIStore } from '@/stores/uiStore'
 import { resourcesApi, stacksApi, settingsApi } from '@/lib/api'
+import { queryKeys } from '@/lib/query-keys'
 
 const checkUpdatesMock = vi.mocked(resourcesApi.checkUpdates)
 const listMock = vi.mocked(stacksApi.list)
@@ -114,7 +115,7 @@ describe('Sidebar', () => {
     // same query key the update mutations use.
     checkUpdatesMock.mockResolvedValue(updatesResult(1))
     await act(async () => {
-      await queryClient.invalidateQueries({ queryKey: ['resources', 'updates'] })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.resources.updates() })
     })
 
     await waitFor(() =>

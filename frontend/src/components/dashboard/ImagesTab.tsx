@@ -18,6 +18,7 @@ import { useConfirm } from '@/hooks/useConfirm'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import type { DockerImage } from '@/types'
 import { formatBytes, formatDate } from '@/lib/format'
+import { queryKeys } from '@/lib/query-keys'
 
 const PAGE_SIZE = 50
 
@@ -125,7 +126,7 @@ export function ImagesTab() {
             options={{ all: { label: 'Remove all unused images, not just dangling' }, until: true }}
             confirmMessage="Prune Unused Images?"
             confirmDescription="By default only dangling (untagged) images are removed. Enable 'all unused' to remove every image not used by a container."
-            invalidateKeys={[['resources', 'images'], ['dashboard-stats']]}
+            invalidateKeys={[queryKeys.resources.images(), queryKeys.dashboardStats()]}
           />
         }
         countDisplay={

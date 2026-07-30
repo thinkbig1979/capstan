@@ -15,6 +15,7 @@ import { EnvLoadingState, EnvErrorState, EnvNoFileState } from './env-editor/Env
 import { EnvTableView } from './env-editor/EnvTableView'
 import { EnvRawView } from './env-editor/EnvRawView'
 import type { EnvEntryRow } from './env-editor/types'
+import { queryKeys } from '@/lib/query-keys'
 
 interface EnvEditorProps {
   stackId: string
@@ -61,7 +62,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   })
 
   const { data: envData, isLoading, isError } = useQuery({
-    queryKey: ['stack', stackId, 'env'],
+    queryKey: queryKeys.stack.env(stackId),
     queryFn: async () => {
       try {
         const data = await stacksApi.getEnv(stackId)
@@ -113,7 +114,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   if (isError) {
     return (
       <EnvErrorState
-        onRetry={() => queryClient.invalidateQueries({ queryKey: ['stack', stackId, 'env'] })}
+        onRetry={() => queryClient.invalidateQueries({ queryKey: queryKeys.stack.env(stackId) })}
       />
     )
   }

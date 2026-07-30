@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient, type QueryKey } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
@@ -102,7 +102,8 @@ interface PruneButtonProps {
   pruneFn: (opts: PruneOptions) => Promise<PruneResult>
   confirmMessage: string
   confirmDescription: string
-  invalidateKeys: string[][]
+  /** Keys to invalidate once the prune settles — build these from `queryKeys`. */
+  invalidateKeys: QueryKey[]
   options?: PruneOptionConfig
   onPruneComplete?: () => void
 }

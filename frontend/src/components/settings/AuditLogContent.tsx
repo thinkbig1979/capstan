@@ -11,6 +11,7 @@ import {
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { HelpHint } from '@/components/ui/help-hint'
 import { ChevronLeft, ChevronRight, ChevronDown, ScrollText, X } from 'lucide-react'
+import { queryKeys } from '@/lib/query-keys'
 
 const ALL_ACTIONS = '__all__'
 
@@ -110,7 +111,7 @@ export function AuditLogContent() {
   }
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['audit-log', page, pageSize, action, search, dateFrom, dateTo],
+    queryKey: queryKeys.auditLog({ page, pageSize, action, search, dateFrom, dateTo }),
     queryFn: () => settingsApi.getAuditLog(page, pageSize, { action, search, dateFrom, dateTo }),
     placeholderData: keepPreviousData,
   })

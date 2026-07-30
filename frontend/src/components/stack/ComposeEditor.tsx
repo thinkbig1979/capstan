@@ -9,6 +9,7 @@ import { ExtractToEnvDialog } from './compose-editor/ExtractToEnvDialog'
 import { SaveConfirmDialog } from './compose-editor/SaveConfirmDialog'
 import { useComposeSaveAndLint } from './compose-editor/useComposeSaveAndLint'
 import { useExtractToEnv } from './compose-editor/useExtractToEnv'
+import { queryKeys } from '@/lib/query-keys'
 
 interface ComposeEditorProps {
   stackId: string
@@ -28,7 +29,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   const selectedTextRef = useRef('')
 
   const { isLoading, data } = useQuery({
-    queryKey: ['stack', stackId, 'compose'],
+    queryKey: queryKeys.stack.compose(stackId),
     queryFn: async () => {
       const response = await apiClient.get(`/stacks/${stackId}/compose`)
       return (response.data as { content: string }).content

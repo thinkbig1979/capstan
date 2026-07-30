@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Stack } from '@/types'
 import type { QueryCacheNotifyEvent } from '@tanstack/react-query'
+import { queryKeys } from '@/lib/query-keys'
 
 interface AnimatedStack {
   id: string
@@ -17,7 +18,7 @@ export function useStackStatusAnimation() {
     const unsubscribe = queryClient.getQueryCache().subscribe((event: QueryCacheNotifyEvent) => {
       if (event.type === 'updated') {
         const query = event.query
-        if (query.queryKey[0] === 'stacks' && Array.isArray(query.state.data)) {
+        if (query.queryKey[0] === queryKeys.stacks()[0] && Array.isArray(query.state.data)) {
           const stacks = query.state.data as Stack[]
           const newAnimatedStacks: AnimatedStack[] = []
 

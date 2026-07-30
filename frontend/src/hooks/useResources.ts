@@ -7,6 +7,7 @@ import { useUpdateJobStore } from '@/stores/updateJobStore'
 import { isActionResult, toastForResult, type ActionResult } from '@/lib/action-result'
 import { classifyError } from '@/lib/error-handler'
 import type { UpdateHistoryFilters } from '@/types'
+import { queryKeys } from '@/lib/query-keys'
 
 // Shared sonner id so the loading toast is replaced (not stacked) on completion.
 export const UPDATE_SCAN_TOAST_ID = 'update-scan'
@@ -31,7 +32,7 @@ export function resolveUpdateScanError() {
 
 export function useImages() {
   return useQuery({
-    queryKey: ['resources', 'images'],
+    queryKey: queryKeys.resources.images(),
     queryFn: resourcesApi.images,
     retry: 1,
   })
@@ -39,7 +40,7 @@ export function useImages() {
 
 export function useVolumes() {
   return useQuery({
-    queryKey: ['resources', 'volumes'],
+    queryKey: queryKeys.resources.volumes(),
     queryFn: resourcesApi.volumes,
     retry: 1,
   })
@@ -47,7 +48,7 @@ export function useVolumes() {
 
 export function useNetworks() {
   return useQuery({
-    queryKey: ['resources', 'networks'],
+    queryKey: queryKeys.resources.networks(),
     queryFn: resourcesApi.networks,
     retry: 1,
   })
@@ -55,7 +56,7 @@ export function useNetworks() {
 
 export function useBuildCache() {
   return useQuery({
-    queryKey: ['resources', 'build-cache'],
+    queryKey: queryKeys.resources.buildCache(),
     queryFn: resourcesApi.buildCache,
     retry: 1,
   })
@@ -80,8 +81,8 @@ export function useDeleteImage() {
         // success = fully deleted → success (green)
         toastForResult(data, { successTitle: 'Image removed' })
       }
-      queryClient.invalidateQueries({ queryKey: ['resources', 'images'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.images() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
     },
     onError: (err) => {
       if (isActionResult(err)) {
@@ -102,7 +103,7 @@ export function useDeleteVolume() {
       if (isActionResult(data)) {
         toastForResult(data, { successTitle: 'Volume removed' })
       }
-      queryClient.invalidateQueries({ queryKey: ['resources', 'volumes'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.volumes() })
     },
     onError: (err) => {
       if (isActionResult(err)) {
@@ -122,7 +123,7 @@ export function useDeleteNetwork() {
       if (isActionResult(data)) {
         toastForResult(data, { successTitle: 'Network removed' })
       }
-      queryClient.invalidateQueries({ queryKey: ['resources', 'networks'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.networks() })
     },
     onError: (err) => {
       if (isActionResult(err)) {
@@ -145,7 +146,7 @@ export function useCreateNetwork() {
         const networkName = (data.details as { name?: string } | undefined)?.name
         toast.success(`Network "${networkName ?? 'unknown'}" created`)
       }
-      queryClient.invalidateQueries({ queryKey: ['resources', 'networks'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.networks() })
     },
     onError: (err) => {
       if (isActionResult(err)) {
@@ -212,8 +213,8 @@ export function usePruneImages() {
           toastForResult(data, { successTitle: `Pruned ${summary}` })
         }
       }
-      queryClient.invalidateQueries({ queryKey: ['resources', 'images'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.images() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
     },
     onError: (err) => {
       if (isActionResult(err)) {
@@ -238,7 +239,7 @@ export function usePruneVolumes() {
           toastForResult(data, { successTitle: `Pruned ${summary}` })
         }
       }
-      queryClient.invalidateQueries({ queryKey: ['resources', 'volumes'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.volumes() })
     },
     onError: (err) => {
       if (isActionResult(err)) {
@@ -264,7 +265,7 @@ export function usePruneNetworks() {
           toastForResult(data, { successTitle: `Pruned ${count} network${count !== 1 ? 's' : ''}` })
         }
       }
-      queryClient.invalidateQueries({ queryKey: ['resources', 'networks'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.networks() })
     },
     onError: (err) => {
       if (isActionResult(err)) {
@@ -289,8 +290,8 @@ export function usePruneBuildCache() {
           toastForResult(data, { successTitle: `Pruned ${summary}` })
         }
       }
-      queryClient.invalidateQueries({ queryKey: ['resources', 'build-cache'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.buildCache() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
     },
     onError: (err) => {
       if (isActionResult(err)) {
@@ -307,7 +308,7 @@ export function useCheckUpdates() {
   const startScan = useUpdateScanStore((s) => s.startScan)
 
   const query = useQuery({
-    queryKey: ['resources', 'updates'],
+    queryKey: queryKeys.resources.updates(),
     queryFn: () => resourcesApi.checkUpdates(false),
     enabled: true,
     refetchInterval: isScanning ? 3000 : false,
@@ -344,7 +345,7 @@ export function useUpdateScanWatcher() {
   // Poll while a scan is in flight: staleTime 0 + refetchInterval guarantees fresh
   // server data every few seconds so we observe the new scannedAt promptly.
   const { data } = useQuery({
-    queryKey: ['resources', 'updates'],
+    queryKey: queryKeys.resources.updates(),
     queryFn: () => resourcesApi.checkUpdates(false),
     enabled: isScanning,
     refetchInterval: isScanning ? 3000 : false,
@@ -354,7 +355,7 @@ export function useUpdateScanWatcher() {
   // On scan start: record the pre-scan scannedAt baseline and show the loading toast.
   useEffect(() => {
     if (isScanning && !wasScanning.current) {
-      const cached = queryClient.getQueryData<{ scannedAt?: string }>(['resources', 'updates'])
+      const cached = queryClient.getQueryData<{ scannedAt?: string }>(queryKeys.resources.updates())
       baselineScannedAt.current = cached?.scannedAt ?? null
       toast.loading('Checking for updates…', { id: UPDATE_SCAN_TOAST_ID })
     }
@@ -396,7 +397,7 @@ export function useCheckUpdatesRefresh() {
       // watcher poll / WS event resolves it. scanning:false only happens on the
       // synchronous no-scheduler path, where the scan is already done.
       if (!data.scanning) {
-        queryClient.setQueryData(['resources', 'updates'], data)
+        queryClient.setQueryData(queryKeys.resources.updates(), data)
         resolveUpdateScanSuccess()
       }
     },
@@ -423,10 +424,10 @@ export function useUpdateContainer() {
           createdAt: new Date().toISOString(),
         })
       }
-      queryClient.invalidateQueries({ queryKey: ['resources', 'updates'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['stacks'] })
-      queryClient.invalidateQueries({ queryKey: ['update-history'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.updates() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.updateHistory.all() })
     },
   })
 }
@@ -448,14 +449,14 @@ export function useUpdateStack() {
           createdAt: new Date().toISOString(),
         })
       }
-      queryClient.invalidateQueries({ queryKey: ['resources', 'updates'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.updates() })
     },
   })
 }
 
 export function useUpdateJobs() {
   return useQuery({
-    queryKey: ['resources', 'update-jobs'],
+    queryKey: queryKeys.resources.updateJobs(),
     queryFn: async () => {
       const data = await resourcesApi.getUpdateJobs()
       useUpdateJobStore.getState().hydrate(data.jobs)
@@ -467,7 +468,7 @@ export function useUpdateJobs() {
 
 export function useUpdateHistory(filters: UpdateHistoryFilters) {
   return useQuery({
-    queryKey: ['update-history', filters],
+    queryKey: queryKeys.updateHistory.list(filters),
     queryFn: () => resourcesApi.getUpdateHistory(filters),
     retry: 1,
   })
@@ -475,7 +476,7 @@ export function useUpdateHistory(filters: UpdateHistoryFilters) {
 
 export function useAutoUpdatePolicies() {
   return useQuery({
-    queryKey: ['auto-update-policies'],
+    queryKey: queryKeys.autoUpdatePolicies(),
     queryFn: () => autoUpdateApi.getPolicies(),
     retry: 1,
   })
@@ -487,16 +488,16 @@ export function useToggleAutoUpdate() {
     mutationFn: ({ targetType, targetId, enabled }: { targetType: string; targetId: string; enabled: boolean }) =>
       autoUpdateApi.setPolicy(targetType, targetId, { enabled }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['auto-update-policies'] })
-      queryClient.invalidateQueries({ queryKey: ['resources', 'updates'] })
-      queryClient.invalidateQueries({ queryKey: ['settings', 'updates'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.autoUpdatePolicies() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.updates() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.settings.updates() })
     },
   })
 }
 
 export function useUpdateSettings() {
   return useQuery({
-    queryKey: ['settings', 'updates'],
+    queryKey: queryKeys.settings.updates(),
     queryFn: () => settingsApi.getUpdates(),
     retry: 1,
   })
@@ -508,14 +509,14 @@ export function useUpdateUpdateSettings() {
     mutationFn: (data: { scanIntervalMinutes: number; globalAutoUpdate: boolean }) =>
       settingsApi.updateUpdates(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['settings', 'updates'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.settings.updates() })
     },
   })
 }
 
 export function useGitSettings() {
   return useQuery({
-    queryKey: ['settings', 'git'],
+    queryKey: queryKeys.settings.git(),
     queryFn: () => settingsApi.getGit(),
     retry: 1,
   })
@@ -523,7 +524,7 @@ export function useGitSettings() {
 
 export function useGlobalEnv() {
   return useQuery({
-    queryKey: ['settings', 'global-env'],
+    queryKey: queryKeys.settings.globalEnv(),
     queryFn: () => settingsApi.getGlobalEnv(),
     retry: 1,
   })
@@ -535,7 +536,7 @@ export function useUpdateGlobalEnv() {
     mutationFn: (vars: Array<{ key: string; value: string }>) =>
       settingsApi.updateGlobalEnv(vars),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['settings', 'global-env'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.settings.globalEnv() })
     },
   })
 }
@@ -546,7 +547,7 @@ export function useUpdateGitSettings() {
     mutationFn: (data: { sshKey?: string; httpsUser?: string; httpsToken?: string }) =>
       settingsApi.updateGit(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['settings', 'git'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.settings.git() })
     },
   })
 }
