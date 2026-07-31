@@ -37,8 +37,7 @@ func (h *StacksHandler) Start(c *gin.Context) {
 	ar, output := h.docker.StartVerified(*stack)
 	duration := time.Since(startTime)
 
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "start", output)
+	h.logAction(c, id, "start", output)
 
 	verifiedStatus := lifecycleStatus(ar)
 	if statusErr := h.db.UpdateStackStatus(id, verifiedStatus); statusErr != nil {
@@ -84,8 +83,7 @@ func (h *StacksHandler) Stop(c *gin.Context) {
 	ar, output := h.docker.StopVerified(*stack)
 	duration := time.Since(startTime)
 
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "stop", output)
+	h.logAction(c, id, "stop", output)
 
 	verifiedStatus := lifecycleStatus(ar)
 	if statusErr := h.db.UpdateStackStatus(id, verifiedStatus); statusErr != nil {
@@ -131,8 +129,7 @@ func (h *StacksHandler) Restart(c *gin.Context) {
 	ar, output := h.docker.RestartVerified(*stack)
 	duration := time.Since(startTime)
 
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "restart", output)
+	h.logAction(c, id, "restart", output)
 
 	verifiedStatus := lifecycleStatus(ar)
 	if statusErr := h.db.UpdateStackStatus(id, verifiedStatus); statusErr != nil {
@@ -178,8 +175,7 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 	pullAR, pullOutput := h.docker.PullVerified(*stack)
 	duration := time.Since(startTime)
 
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "pull", pullOutput)
+	h.logAction(c, id, "pull", pullOutput)
 
 	restartAfterPull := c.Query("restart") == "true"
 

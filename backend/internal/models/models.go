@@ -107,6 +107,7 @@ type ActionLog struct {
 	StackID   string    `json:"stackId"`
 	Action    string    `json:"action"`
 	Detail    string    `json:"detail"`
+	RequestID string    `json:"requestId,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 

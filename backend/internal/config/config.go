@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/thinkbig1979/capstan/backend/internal/logging"
 )
 
 type StacksDirEntry struct {
@@ -21,6 +23,7 @@ type Config struct {
 	JWTSecret       string
 	StorageKey      string
 	LogLevel        string
+	LogFormat       string
 	GitSSHKey       string
 	GitHTTPSToken   string
 	GitHTTPSUser    string
@@ -48,7 +51,8 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		Port:            "5001",
-		LogLevel:        "info",
+		LogLevel:        logging.DefaultLevel,
+		LogFormat:       logging.FormatText,
 		GitSSHKey:       filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa"),
 		GitHTTPSUser:    "git",
 		AuthDisabled:    os.Getenv("AUTH_DISABLED") == "true",
@@ -82,6 +86,10 @@ func Load() (*Config, error) {
 
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
 		cfg.LogLevel = logLevel
+	}
+
+	if logFormat := os.Getenv("LOG_FORMAT"); logFormat != "" {
+		cfg.LogFormat = logFormat
 	}
 
 	if gitSSHKey := os.Getenv("GIT_SSH_KEY"); gitSSHKey != "" {
@@ -140,6 +148,7 @@ func Load() (*Config, error) {
 		"port", cfg.Port,
 		"jwt_secret", "[REDACTED]",
 		"log_level", cfg.LogLevel,
+		"log_format", cfg.LogFormat,
 		"auth_disabled", cfg.AuthDisabled,
 	)
 
@@ -165,6 +174,17 @@ func validate(cfg *Config) error {
 
 	if cfg.DataDir == "" {
 		return &ConfigError{Field: "DATA_DIR", Message: "required"}
+	}
+
+	// A typo here is caught at startup rather than silently defaulting to info.
+	// Silently falling back is how an operator turns logging up during an
+	// incident, sees no change, and concludes the problem is elsewhere.
+	if _, err := logging.ParseLevel(cfg.LogLevel); err != nil {
+		return &ConfigError{Field: "LOG_LEVEL", Message: err.Error()}
+	}
+
+	if _, err := logging.ParseFormat(cfg.LogFormat); err != nil {
+		return &ConfigError{Field: "LOG_FORMAT", Message: err.Error()}
 	}
 
 	return nil

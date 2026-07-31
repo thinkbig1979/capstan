@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
@@ -145,9 +146,8 @@ func (h *GitHandler) Pull(c *gin.Context) {
 	redeploy := c.Query("redeploy") == "true"
 	ar, pullResult := h.git.PullVerified(absPath, redeploy, h.docker)
 
-	userID, _ := c.Get("userID")
 	if pullResult != nil {
-		h.logGitAction(userID.(string), absPath, "pull", h.formatPullDetail(pullResult))
+		h.logGitAction(c, absPath, "pull", h.formatPullDetail(pullResult))
 	}
 
 	renderResult(c, ar)
@@ -241,8 +241,8 @@ func (h *GitHandler) GetDiff(c *gin.Context) {
 	})
 }
 
-func (h *GitHandler) logGitAction(userID, absPath, action, detail string) {
-	h.actionLog.Log(userID, nil, action, detail)
+func (h *GitHandler) logGitAction(c *gin.Context, absPath, action, detail string) {
+	h.actionLog.LogWithRequest(middleware.RequestIDFrom(c), userIDFrom(c), nil, action, detail)
 }
 
 func parseQueryParamInt(value string, min, max int) (int, error) {

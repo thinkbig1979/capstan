@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
@@ -192,8 +193,7 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 		return
 	}
 
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "update_compose", "Updated compose file: "+stack.ComposeFile)
+	h.logAction(c, id, "update_compose", "Updated compose file: "+stack.ComposeFile)
 
 	c.JSON(http.StatusOK, ComposeSaveResponse{
 		Saved:       true,
@@ -245,8 +245,8 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 	})
 }
 
-func (h *ComposeHandler) logAction(userID, stackID, action, detail string) {
-	h.actionLog.Log(userID, &stackID, action, detail)
+func (h *ComposeHandler) logAction(c *gin.Context, stackID, action, detail string) {
+	h.actionLog.LogWithRequest(middleware.RequestIDFrom(c), userIDFrom(c), &stackID, action, detail)
 }
 
 // restoreEnv restores envPath to its pre-update state. If originalBytes is nil
@@ -445,8 +445,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		return
 	}
 
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "update_compose_env", "Updated compose and env atomically")
+	h.logAction(c, id, "update_compose_env", "Updated compose and env atomically")
 
 	details := map[string]any{
 		"compose": stack.ComposeFile,

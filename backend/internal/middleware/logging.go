@@ -35,6 +35,7 @@ func LoggingMiddleware() gin.HandlerFunc {
 		}
 
 		slog.Log(c.Request.Context(), level, "HTTP request",
+			"request_id", RequestIDFrom(c),
 			"method", c.Request.Method,
 			"path", path,
 			"status", c.Writer.Status(),

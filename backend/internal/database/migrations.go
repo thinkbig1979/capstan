@@ -268,6 +268,19 @@ CREATE INDEX IF NOT EXISTS idx_action_log_stack_id ON action_log(stack_id);
 CREATE INDEX IF NOT EXISTS idx_action_log_created_at ON action_log(created_at);
 `,
 	},
+	{
+		Version: 10,
+		Name:    "action_log_request_id",
+		SQL: `
+-- Carries the per-request ID (see middleware.RequestID) onto the audit row, so
+-- a 500 in the HTTP log can be joined to the action it produced. Nullable: rows
+-- written before this migration, and by background jobs that serve no request,
+-- legitimately have none.
+ALTER TABLE action_log ADD COLUMN request_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_action_log_request_id ON action_log(request_id);
+`,
+	},
 }
 
 func RunMigrations(db *DB) error {
