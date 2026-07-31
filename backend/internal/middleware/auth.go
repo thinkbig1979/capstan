@@ -16,6 +16,10 @@ var PublicPaths = []string{
 	"/api/v1/auth/login",
 	"/api/v1/auth/setup",
 	"/api/v1/auth/status",
+	// Build identity is deliberately public: an uptime check or a support
+	// conversation needs to answer "what is running here?" without a session.
+	// This list is consulted by the CSRF middleware too, so keep the two in step.
+	"/api/v1/version",
 	"/health",
 }
 

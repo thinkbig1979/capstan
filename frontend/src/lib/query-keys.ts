@@ -85,6 +85,9 @@ export const queryKeys = {
     retention: () => ['settings', 'retention'] as const,
   },
 
+  /** Build identity of the running backend. Immutable for the process lifetime. */
+  version: () => ['version'] as const,
+
   /** Git state for a stack. `all` prefix-matches log and diff. */
   git: {
     all: (stackId: string) => ['git', stackId] as const,

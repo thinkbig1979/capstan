@@ -35,7 +35,30 @@ RUN go mod download
 COPY backend/ ./
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a -o server ./cmd/server
+
+# Build identity, stamped into internal/version at link time. The defaults keep
+# a plain `docker build` (no --build-arg) honest: it reports "dev", not an empty
+# string that reads as a bug. docker-publish.yml supplies the real values from
+# the same docker/metadata-action output that names the image tag.
+#
+# A typo in an -X symbol path is accepted silently by the linker and leaves the
+# default in place, so backend/internal/version/ldflags_test.go asserts these
+# paths against the symbols actually declared in that package. Keep them in step.
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+# The ${VAR:-default} rewrites cover the case the ARG defaults do not: an ARG
+# default only applies when the arg is *absent*, so a --build-arg carrying an
+# empty value (a CI expression that resolved to nothing) would stamp an empty
+# string — the exact silent failure this feature exists to prevent.
+RUN set -eu; \
+    VERSION="${VERSION:-dev}"; \
+    COMMIT="${COMMIT:-unknown}"; \
+    BUILD_DATE="${BUILD_DATE:-unknown}"; \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a \
+      -ldflags "-X github.com/thinkbig1979/capstan/backend/internal/version.Version=${VERSION} -X github.com/thinkbig1979/capstan/backend/internal/version.Commit=${COMMIT} -X github.com/thinkbig1979/capstan/backend/internal/version.BuildDate=${BUILD_DATE}" \
+      -o server ./cmd/server
 
 # Backup-tools fetch stage — downloads restic and rclone static binaries for the
 # target architecture on the build host. Pinned to exact versions for

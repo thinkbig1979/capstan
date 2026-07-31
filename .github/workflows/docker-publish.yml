@@ -65,5 +65,15 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Build identity stamped into the binary via -ldflags. These come from
+          # the same metadata-action step that names the image tag, so
+          # GET /api/v1/version matches the tag the image was published under:
+          # outputs.version is "1.2.3" for a v1.2.3 tag and "manual-<sha>" for a
+          # dispatch run. org.opencontainers.image.created is metadata-action's
+          # own build timestamp, reused so the label and the API agree.
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

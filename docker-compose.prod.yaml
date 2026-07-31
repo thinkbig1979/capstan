@@ -2,7 +2,12 @@ services:
   app:
     container_name: capstan
     # Published by .github/workflows/docker-publish.yml. Pin to a version tag
-    # (e.g. :0.7.0) in production; :latest tracks the most recent release.
+    # (e.g. :0.9.0) in production; :latest tracks the most recent release.
+    # The default stays :latest deliberately — a pinned tag in a template file
+    # goes stale on every release and nothing in the repo keeps it current. Since
+    # :latest is mutable and the watchtower label below lets an agent move it,
+    # identify what is actually running with `curl localhost:5001/api/v1/version`
+    # or Settings → About.
     image: ghcr.io/thinkbig1979/capstan:latest
     restart: unless-stopped
     ports:

@@ -414,3 +414,10 @@ export interface BackupOperationResult {
   runId: string
   wsUrl: string
 }
+
+/** Build identity of the running backend, from GET /api/v1/version. */
+export interface VersionInfo {
+  version: string
+  commit: string
+  buildDate: string
+}
