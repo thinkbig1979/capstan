@@ -150,6 +150,33 @@ func (s *BackupService) Config() *config.Config {
 	return s.cfg
 }
 
+// ResolveConfig merges DB settings over the live config.Config and returns the
+// effective backup configuration.
+//
+// Callers outside this package MUST use this rather than resolving on their own.
+// The previous exported helper took only a *database.DB and filled in an empty
+// config.Config, so cfg.DataDir was "" and the default repository resolved to
+// the RELATIVE path "restic-repo" instead of <DataDir>/restic-repo — see
+// agent-os-9au. Routing every caller through the service makes that class of
+// mistake unrepresentable: there is no longer a way to resolve without the live
+// config.
+func (s *BackupService) ResolveConfig() BackupConfig {
+	return resolveBackupConfig(s.db, s.cfg)
+}
+
+// NewResticManager builds a ResticManager from the effective backup config,
+// honouring the test factory seam. Handlers use this instead of constructing a
+// manager directly, which bypassed both the live config and the seam.
+func (s *BackupService) NewResticManager() *ResticManager {
+	return s.newResticMgr(s.ResolveConfig())
+}
+
+// NewRcloneManager builds an RcloneManager from the effective backup config,
+// honouring the test factory seam. See NewResticManager.
+func (s *BackupService) NewRcloneManager() *RcloneManager {
+	return s.newRcloneMgr(s.ResolveConfig())
+}
+
 // SetBins overrides the cached binary paths resolved at construction time.
 // This is used by tests (including tests in external packages) to control
 // availability without requiring real restic/rclone binaries on the host.

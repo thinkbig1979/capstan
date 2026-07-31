@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1219,4 +1222,183 @@ func TestRegistry_PanicInExec_RunTerminatesAsFailed(t *testing.T) {
 		"DB status must be 'failed', not 'running', after a panic in the exec goroutine")
 	assert.NotNil(t, dbRun.FinishedAt,
 		"FinishedAt must be set after recoverExec finalises the run")
+}
+
+// ─────────────────────────────────────────────
+// Repository path resolution (agent-os-9au)
+// ─────────────────────────────────────────────
+
+// recordingResticRunner is a fake CommandRunner that records every invocation
+// with the environment it was given, and fails `restic snapshots` so callers
+// treat the repository as not yet initialised and proceed to `restic init`.
+type recordingResticRunner struct {
+	mu    sync.Mutex
+	calls []recordedResticCall
+
+	// failRepoProbe makes `restic snapshots --quiet` fail, which is how
+	// BackupService.CheckRepository decides a repository is not reachable.
+	// Set it when the code under test should proceed to `restic init`; leave it
+	// false when the repository must look reachable (e.g. snapshot listing,
+	// which returns an empty list early if the probe fails).
+	failRepoProbe bool
+}
+
+type recordedResticCall struct {
+	args []string
+	env  []string
+}
+
+func (r *recordingResticRunner) record(args, env []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, recordedResticCall{args: args, env: env})
+}
+
+// repoFor returns the RESTIC_REPOSITORY the runner was given for the first
+// invocation whose first argument is subcommand and whose argument list
+// contains every string in mustContain. ok is false if no such invocation was
+// recorded.
+//
+// mustContain matters: BackupService.CheckRepository also shells out to
+// `restic snapshots --quiet`, and it already resolves its config correctly. A
+// test that matched on the subcommand alone would observe that call and pass
+// regardless of the bug. Matching on `--json` pins the listing path instead.
+func (r *recordingResticRunner) repoFor(subcommand string, mustContain ...string) (repo string, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.calls {
+		if len(c.args) == 0 || c.args[0] != subcommand {
+			continue
+		}
+		if !argsContainAll(c.args, mustContain) {
+			continue
+		}
+		for _, e := range c.env {
+			if strings.HasPrefix(e, "RESTIC_REPOSITORY=") {
+				return strings.TrimPrefix(e, "RESTIC_REPOSITORY="), true
+			}
+		}
+		return "", true
+	}
+	return "", false
+}
+
+// argsContainAll reports whether args contains every string in want.
+func argsContainAll(args, want []string) bool {
+	for _, w := range want {
+		found := false
+		for _, a := range args {
+			if a == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *recordingResticRunner) Run(
+	_ context.Context,
+	_ string,
+	args []string,
+	env []string,
+	_ chan<- services.StreamLine,
+) error {
+	r.record(args, env)
+	// BackupService.CheckRepository probes with `restic snapshots --quiet`.
+	// `snapshots --json` (the listing path) is a different invocation and must
+	// never be failed by this probe.
+	if r.failRepoProbe && argsContainAll(args, []string{"snapshots", "--quiet"}) {
+		return errors.New("repository does not exist")
+	}
+	return nil
+}
+
+func (r *recordingResticRunner) Output(
+	_ context.Context,
+	_ string,
+	args []string,
+	env []string,
+) ([]byte, error) {
+	r.record(args, env)
+	return []byte(`[]`), nil
+}
+
+// TestRepoInit_InitialisesRepositoryUnderDataDir pins the fix for agent-os-9au.
+//
+// repoInit used to resolve its BackupConfig with services.ResolveBackupConfig(db),
+// which passed an EMPTY &config.Config{}. With no DataDir the default repository
+// became filepath.Join("", "restic-repo") — the RELATIVE path "restic-repo",
+// resolved against the server's working directory. Every other code path used
+// the service's config and correctly produced <DataDir>/restic-repo, so init
+// created a repository somewhere the backups never looked, reported success, and
+// every subsequent backup failed with "repository does not exist".
+//
+// Observed on a real container before the fix: init logged path=restic-repo and
+// created /app/restic-repo, while GET /settings/backup reported
+// /app/data/restic-repo and repositoryInitialized=false.
+//
+// This test fails against the old code for the right reason: repoInit built its
+// own ResticManager with services.NewResticManager, bypassing the service
+// factory entirely, so the injected runner never saw the `init` call at all.
+func TestRepoInit_InitialisesRepositoryUnderDataDir(t *testing.T) {
+	// Not parallel — injects a manager factory on the service.
+
+	db := newBackupHandlerDB(t)
+	require.NoError(t, db.SetSetting("restic_password", "test-repo-password"))
+
+	svc := buildBackupSvc(t, db, true, false)
+	// The repository must look uninitialised so repoInit proceeds to `init`.
+	runner := &recordingResticRunner{failRepoProbe: true}
+	svc.SetResticMgrFactory(func(bc services.BackupConfig) *services.ResticManager {
+		return services.NewResticManagerForTest(bc, runner, slog.Default())
+	})
+
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, jsonReq(t, http.MethodPost, "/api/backups/repo/init", map[string]interface{}{}))
+
+	require.Equal(t, http.StatusOK, w.Code, "repo init should succeed against the injected runner")
+
+	repo, ok := runner.repoFor("init")
+	require.True(t, ok,
+		"repoInit must build its ResticManager through the service factory; "+
+			"constructing one directly bypasses both the injected runner and the live config")
+
+	wantRepo := filepath.Join(svc.Config().DataDir, "restic-repo")
+	assert.Equal(t, wantRepo, repo,
+		"restic init must target <DataDir>/restic-repo, not a path relative to the process working directory")
+	assert.True(t, filepath.IsAbs(repo), "the resolved repository must be an absolute path")
+}
+
+// TestSnapshotListing_ResolvesRepositoryUnderDataDir covers the same defect on
+// the snapshot-listing path, which shared the DataDir-less resolver.
+func TestSnapshotListing_ResolvesRepositoryUnderDataDir(t *testing.T) {
+	// Not parallel — injects a manager factory on the service.
+
+	db := newBackupHandlerDB(t)
+	require.NoError(t, db.SetSetting("restic_password", "test-repo-password"))
+
+	svc := buildBackupSvc(t, db, true, false)
+	runner := &recordingResticRunner{}
+	svc.SetResticMgrFactory(func(bc services.BackupConfig) *services.ResticManager {
+		return services.NewResticManagerForTest(bc, runner, slog.Default())
+	})
+
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots", nil))
+
+	repo, ok := runner.repoFor("snapshots", "--json")
+	require.True(t, ok, "snapshot listing must build its ResticManager through the service factory")
+
+	assert.Equal(t, filepath.Join(svc.Config().DataDir, "restic-repo"), repo,
+		"restic snapshots must target <DataDir>/restic-repo")
 }
