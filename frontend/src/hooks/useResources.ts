@@ -541,6 +541,28 @@ export function useUpdateGlobalEnv() {
   })
 }
 
+export function useRetentionSettings() {
+  return useQuery({
+    queryKey: queryKeys.settings.retention(),
+    queryFn: () => settingsApi.getRetention(),
+    retry: 1,
+  })
+}
+
+export function useUpdateRetentionSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (data: {
+      retentionDays?: number
+      updateHistoryRetentionDays?: number
+      backupHistoryRetentionDays?: number
+    }) => settingsApi.updateRetention(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.settings.retention() })
+    },
+  })
+}
+
 export function useUpdateGitSettings() {
   const queryClient = useQueryClient()
   return useMutation({

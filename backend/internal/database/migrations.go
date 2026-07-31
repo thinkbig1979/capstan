@@ -281,6 +281,21 @@ ALTER TABLE action_log ADD COLUMN request_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_action_log_request_id ON action_log(request_id);
 `,
 	},
+	{
+		Version: 11,
+		Name:    "history_retention_settings",
+		SQL: `
+-- Retention for the two history tables that previously grew without bound.
+-- Defaults match max_log_retention_days so all three behave the same; the
+-- floor is enforced in code (database.RetentionDays), not here, so an operator
+-- editing the row directly cannot bypass it either.
+INSERT OR IGNORE INTO settings (key, value) VALUES ('max_update_history_retention_days', '90');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('max_backup_history_retention_days', '90');
+
+-- update_history was only ever queried by completed_at through a full scan.
+CREATE INDEX IF NOT EXISTS idx_update_history_completed_at ON update_history(completed_at);
+`,
+	},
 }
 
 func RunMigrations(db *DB) error {

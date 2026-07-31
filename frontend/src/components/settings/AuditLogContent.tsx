@@ -12,6 +12,7 @@ import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { HelpHint } from '@/components/ui/help-hint'
 import { ChevronLeft, ChevronRight, ChevronDown, ScrollText, X } from 'lucide-react'
 import { queryKeys } from '@/lib/query-keys'
+import { HistoryRetentionSection } from './HistoryRetentionSection'
 
 const ALL_ACTIONS = '__all__'
 
@@ -65,7 +66,7 @@ function AuditedEventsNote() {
   )
 }
 
-export function AuditLogContent() {
+function AuditLogTable() {
   const [page, setPage] = useState(1)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const pageSize = 50
@@ -306,6 +307,17 @@ export function AuditLogContent() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/** The audit log itself, plus the retention controls that govern how long it
+ *  and the other history tables are kept. */
+export function AuditLogContent() {
+  return (
+    <div className="space-y-6">
+      <AuditLogTable />
+      <HistoryRetentionSection />
     </div>
   )
 }

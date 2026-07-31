@@ -296,6 +296,15 @@ export interface AutoUpdatePolicy {
   updatedAt: string
 }
 
+/** How long each history table is kept, in days. `minRetentionDays` is the
+ *  server-enforced floor — a prune is irreversible, so the API rejects less. */
+export interface RetentionSettings {
+  retentionDays: number
+  updateHistoryRetentionDays: number
+  backupHistoryRetentionDays: number
+  minRetentionDays: number
+}
+
 export interface UpdateSettings {
   scanIntervalMinutes: number
   lastScanAt: string | null
