@@ -40,6 +40,22 @@ const (
 	TriggerScheduled = "scheduled" // automatic, from the backup scheduler
 )
 
+// DatabaseBackupTag is the restic tag carried by the capstan.db snapshot.
+//
+// It is deliberately not a stack ID. Stack snapshots are tagged with the stack
+// they came from, so tagging the database distinctly keeps it selectable in the
+// Snapshots UI and impossible to mistake for a stack — and lets a restore
+// target it directly with `restic snapshots --tag capstan-database`.
+const DatabaseBackupTag = "capstan-database"
+
+// databaseStagingDir is the directory under DataDir where the database snapshot
+// is staged before restic picks it up.
+//
+// The path is fixed rather than a random temp dir on purpose: it becomes the
+// path recorded inside the restic snapshot, and therefore the path an operator
+// types during a restore. A random path would make the runbook unwritable.
+const databaseStagingDir = "backup-staging"
+
 // BackupAvailability describes which parts of the engine are functional.
 type BackupAvailability struct {
 	ResticPresent bool   `json:"resticPresent"`
@@ -420,6 +436,19 @@ func (s *BackupService) RunBackup(
 	run.StacksTotal = len(policies)
 
 	var totalBytesAdded int64
+
+	// The database goes first, deliberately. It is the artifact without which a
+	// restore produces an empty Capstan, and capturing it before the per-stack
+	// loop means a stack failure part-way through still leaves it in the
+	// repository. See backupDatabase for the full rationale (agent-os-36o).
+	dbFailed := false
+	if dbBytes, dbErr := s.backupDatabase(ctx, restic, dryRun, out); dbErr != nil {
+		dbFailed = true
+		stream(out, "error", fmt.Sprintf("database snapshot failed: %v", dbErr))
+	} else {
+		totalBytesAdded += dbBytes
+	}
+
 	for _, policy := range policies {
 		stackID := policy.TargetID
 		itemBytes, itemErr := s.backupStack(ctx, restic, stackID, policy.StopPolicy, dryRun, run.ID, out)
@@ -453,6 +482,17 @@ func (s *BackupService) RunBackup(
 		run.Status = "failed"
 	default:
 		run.Status = "partial"
+	}
+
+	// A run that saved every stack but lost the database is not a success. It
+	// would look green in the UI while leaving the single most important
+	// artifact out of the repository, which is exactly the silent failure
+	// agent-os-36o exists to remove.
+	if dbFailed && run.Status == "success" {
+		run.Status = "partial"
+		if run.ErrorMessage == "" {
+			run.ErrorMessage = "database snapshot failed; stack backups succeeded"
+		}
 	}
 
 	s.finaliseRun(run)
@@ -527,6 +567,19 @@ func (s *BackupService) RunBackupWithRunID(
 	run.StacksTotal = len(policies)
 
 	var totalBytesAdded int64
+
+	// The database goes first, deliberately. It is the artifact without which a
+	// restore produces an empty Capstan, and capturing it before the per-stack
+	// loop means a stack failure part-way through still leaves it in the
+	// repository. See backupDatabase for the full rationale (agent-os-36o).
+	dbFailed := false
+	if dbBytes, dbErr := s.backupDatabase(ctx, restic, dryRun, out); dbErr != nil {
+		dbFailed = true
+		stream(out, "error", fmt.Sprintf("database snapshot failed: %v", dbErr))
+	} else {
+		totalBytesAdded += dbBytes
+	}
+
 	for _, policy := range policies {
 		stackID := policy.TargetID
 		itemBytes, itemErr := s.backupStack(ctx, restic, stackID, policy.StopPolicy, dryRun, run.ID, out)
@@ -552,6 +605,17 @@ func (s *BackupService) RunBackupWithRunID(
 		run.Status = "failed"
 	default:
 		run.Status = "partial"
+	}
+
+	// A run that saved every stack but lost the database is not a success. It
+	// would look green in the UI while leaving the single most important
+	// artifact out of the repository, which is exactly the silent failure
+	// agent-os-36o exists to remove.
+	if dbFailed && run.Status == "success" {
+		run.Status = "partial"
+		if run.ErrorMessage == "" {
+			run.ErrorMessage = "database snapshot failed; stack backups succeeded"
+		}
 	}
 
 	s.finaliseRun(run)
@@ -1057,4 +1121,90 @@ func drainOut(wg *sync.WaitGroup, src <-chan StreamLine, dst chan<- StreamLine) 
 	for line := range src {
 		stream(dst, line.Type, line.Line)
 	}
+}
+
+// DatabaseSnapshotPath returns the absolute path the capstan.db snapshot is
+// staged at, and therefore the path recorded inside the restic snapshot.
+//
+// Exported because the disaster-recovery runbook has to name it exactly: a
+// restore writes to <target>/<this path>, and an operator following the runbook
+// under pressure should not have to derive it.
+func (s *BackupService) DatabaseSnapshotPath() string {
+	return filepath.Join(s.cfg.DataDir, databaseStagingDir, "capstan.db")
+}
+
+// backupDatabase snapshots capstan.db and hands the artifact to restic under
+// DatabaseBackupTag.
+//
+// Why this exists (agent-os-36o): the backup engine's scope was each stack's
+// compose directory. capstan.db — user accounts, the encrypted git tokens and
+// restic password, every setting, the backup and auto-update policies, the
+// stacks registry and the audit log — was in no snapshot at all. Worse, the
+// restic repository defaults to <DataDir>/restic-repo, the same volume the
+// database lives on, so losing that one volume lost the database and the local
+// snapshots together. The only surviving copy was whatever rclone had synced
+// offsite, which contained stack directories and nothing else.
+//
+// The snapshot is taken with VACUUM INTO rather than by copying the file:
+// capstan.db runs in WAL mode, so a file copy taken while writes are in flight
+// can be torn or missing recent commits. See database.DB.VacuumInto.
+//
+// NOTE ON SECRETS: the secrets inside are encrypted with a key derived from
+// STORAGE_KEY, which lives in the environment and is deliberately NOT in the
+// backup. A stolen backup therefore does not yield the git tokens — but it also
+// means restoring onto a host with a different STORAGE_KEY produces a database
+// whose secrets cannot be decrypted. The runbook states this; see README.
+func (s *BackupService) backupDatabase(
+	ctx context.Context,
+	restic *ResticManager,
+	dryRun bool,
+	out chan<- StreamLine,
+) (bytesAdded int64, retErr error) {
+	dest := s.DatabaseSnapshotPath()
+
+	if dryRun {
+		stream(out, "info", fmt.Sprintf("[database] dry run: would snapshot capstan.db to %s", dest))
+		return 0, nil
+	}
+
+	stream(out, "info", "[database] snapshotting capstan.db (VACUUM INTO)")
+
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return 0, fmt.Errorf("create staging dir: %w", err)
+	}
+
+	// VACUUM INTO refuses to overwrite. A file here is a leftover from a run
+	// that died before its cleanup, so removing it is correct — but only ever
+	// this exact path, never a directory.
+	if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf("remove stale staged snapshot: %w", err)
+	}
+
+	if err := s.db.VacuumInto(dest); err != nil {
+		return 0, fmt.Errorf("snapshot database: %w", err)
+	}
+
+	// The staged copy is a full plaintext database. It must not outlive the run,
+	// whatever happens next.
+	defer func() {
+		if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
+			stream(out, "error", fmt.Sprintf("[database] failed to remove staged snapshot %s: %v", dest, err))
+			if retErr == nil {
+				retErr = fmt.Errorf("remove staged snapshot: %w", err)
+			}
+		}
+	}()
+
+	summary, err := restic.Backup(ctx, dest, []string{DatabaseBackupTag}, out)
+	if err != nil {
+		return 0, fmt.Errorf("restic backup database: %w", err)
+	}
+
+	if summary != nil {
+		bytesAdded = summary.BytesAdded
+		stream(out, "info", fmt.Sprintf("[database] snapshot %s captured (%d bytes added)",
+			summary.SnapshotID, summary.BytesAdded))
+	}
+
+	return bytesAdded, nil
 }

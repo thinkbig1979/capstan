@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -542,8 +543,16 @@ func TestRunBackup_PerStackFailureIsolation_Partial(t *testing.T) {
 	runner := &fakeRunner{} // unused; multiCallRunner below drives all calls
 
 	// Use a multi-call runner: fail stack-a, succeed stack-b.
+	//
+	// The sequence is positional, so it must account for the capstan.db snapshot
+	// that every run now takes BEFORE the per-stack loop (agent-os-36o). Without
+	// this leading entry the database call would consume stack-a's injected
+	// failure and the isolation this test checks would silently stop being
+	// exercised.
 	multiRunner := &multiCallRunner{
 		responses: []multiCallResponse{
+			// database snapshot → success
+			{binary: "restic", argPrefix: "backup", err: nil},
 			// stack-a backup call → error
 			{binary: "restic", argPrefix: "backup", err: errors.New("disk full")},
 			// stack-b backup call → success
@@ -1863,4 +1872,168 @@ func TestRunRestore_HappyPath_EscapingSubdirIsRejected(t *testing.T) {
 			assert.NotEqual(t, "restore", c.Args[0], "restic restore must not be called on path escape")
 		}
 	}
+}
+
+// ============================================================
+// Database snapshot in every backup run (agent-os-36o)
+// ============================================================
+
+// findCall returns the first recorded call whose args start with subcommand and
+// contain every string in mustContain.
+func findCall(calls []fakeCall, subcommand string, mustContain ...string) (fakeCall, bool) {
+	for _, c := range calls {
+		if len(c.Args) == 0 || c.Args[0] != subcommand {
+			continue
+		}
+		ok := true
+		for _, w := range mustContain {
+			found := false
+			for _, a := range c.Args {
+				if a == w {
+					found = true
+					break
+				}
+			}
+			if !found {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return c, true
+		}
+	}
+	return fakeCall{}, false
+}
+
+// TestRunBackup_CapturesDatabaseUnderItsOwnTag pins the core of agent-os-36o:
+// capstan.db is captured on every run, under a tag that is not a stack ID.
+//
+// Before this, the backup engine's scope was each stack's compose directory and
+// the database — accounts, encrypted git tokens and restic password, settings,
+// policies, history — was in no snapshot at all.
+func TestRunBackup_CapturesDatabaseUnderItsOwnTag(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc", "myapp")}
+	svc := buildSvc(t, db, &fakeDocker{}, runner, runner)
+	seedStack(t, db, "myapp", "hot")
+
+	out := make(chan StreamLine, 256)
+	run, err := svc.RunBackup(context.Background(), nil, false, TriggerManual, out)
+	require.NoError(t, err)
+	assert.Equal(t, "success", run.Status)
+
+	call, ok := findCall(runner.calls, "backup", "--tag", DatabaseBackupTag)
+	require.True(t, ok, "every backup run must capture capstan.db under the %q tag", DatabaseBackupTag)
+
+	assert.Contains(t, call.Args, svc.DatabaseSnapshotPath(),
+		"the database snapshot must be taken from the staged VACUUM INTO copy")
+
+	// The tag must not collide with a stack ID, or the snapshot becomes
+	// selectable as if it were a stack.
+	assert.NotContains(t, call.Args, "myapp",
+		"the database snapshot must not carry a stack tag")
+}
+
+// TestRunBackup_StagedDatabaseCopyIsRemoved verifies the staged artifact does
+// not outlive the run. It is a full plaintext database sitting on disk.
+func TestRunBackup_StagedDatabaseCopyIsRemoved(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc", "myapp")}
+	svc := buildSvc(t, db, &fakeDocker{}, runner, runner)
+	seedStack(t, db, "myapp", "hot")
+
+	out := make(chan StreamLine, 256)
+	_, err := svc.RunBackup(context.Background(), nil, false, TriggerManual, out)
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(svc.DatabaseSnapshotPath())
+	assert.True(t, os.IsNotExist(statErr),
+		"the staged plaintext database copy must be removed after the run, got err=%v", statErr)
+}
+
+// TestRunBackup_DryRunDoesNotStageDatabase verifies a dry run neither writes the
+// staged copy nor hands anything to restic.
+func TestRunBackup_DryRunDoesNotStageDatabase(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc", "myapp")}
+	svc := buildSvc(t, db, &fakeDocker{}, runner, runner)
+	seedStack(t, db, "myapp", "hot")
+
+	out := make(chan StreamLine, 256)
+	_, err := svc.RunBackup(context.Background(), nil, true, TriggerManual, out)
+	require.NoError(t, err)
+
+	_, ok := findCall(runner.calls, "backup", "--tag", DatabaseBackupTag)
+	assert.False(t, ok, "a dry run must not hand the database to restic")
+
+	_, statErr := os.Stat(svc.DatabaseSnapshotPath())
+	assert.True(t, os.IsNotExist(statErr), "a dry run must not stage a database copy")
+}
+
+// databaseFailingRunner fails only the restic invocation that carries the
+// database tag, so a test can isolate a database-snapshot failure from a
+// stack-backup failure.
+type databaseFailingRunner struct {
+	fakeRunner
+}
+
+func (f *databaseFailingRunner) Run(
+	ctx context.Context,
+	name string,
+	args []string,
+	env []string,
+	out chan<- StreamLine,
+) error {
+	for _, a := range args {
+		if a == DatabaseBackupTag {
+			f.fakeRunner.calls = append(f.fakeRunner.calls, fakeCall{Binary: name, Args: args, Env: env})
+			return errors.New("injected database snapshot failure")
+		}
+	}
+	return f.fakeRunner.Run(ctx, name, args, env, out)
+}
+
+// TestRunBackup_DatabaseFailureDowngradesSuccessToPartial pins the rule that a
+// run which saved every stack but lost the database is NOT reported as success.
+//
+// Without this, the most important artifact could go missing while the UI stayed
+// green — the silent failure agent-os-36o exists to remove.
+func TestRunBackup_DatabaseFailureDowngradesSuccessToPartial(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	runner := &databaseFailingRunner{fakeRunner: fakeRunner{outputData: snapshotJSON("abc123", "abc", "myapp")}}
+	svc := buildSvc(t, db, &fakeDocker{}, runner, runner)
+	seedStack(t, db, "myapp", "hot")
+
+	out := make(chan StreamLine, 256)
+	run, err := svc.RunBackup(context.Background(), nil, false, TriggerManual, out)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, run.StacksOK, "the stack backup itself should have succeeded")
+	assert.Equal(t, 0, run.StacksFailed)
+	assert.Equal(t, "partial", run.Status,
+		"a run that lost the database must not report success")
+	assert.NotEmpty(t, run.ErrorMessage, "the run must say why it was downgraded")
+}
+
+// TestDatabaseSnapshotPath_IsUnderDataDir pins the path the runbook names. An
+// operator restoring under pressure reads this path out of README; if it moves
+// silently, the runbook is wrong at the worst possible moment.
+func TestDatabaseSnapshotPath_IsUnderDataDir(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	svc := buildSvc(t, db, &fakeDocker{}, &fakeRunner{}, &fakeRunner{})
+
+	assert.Equal(t,
+		filepath.Join(svc.Config().DataDir, "backup-staging", "capstan.db"),
+		svc.DatabaseSnapshotPath())
 }
