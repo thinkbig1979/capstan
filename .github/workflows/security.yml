@@ -311,7 +311,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       # ADVISORY, for now. This is the only check covering the Alpine 3.21
-      # runtime base and the pinned restic 0.18.0 / rclone 1.68.2 static
+      # runtime base and the pinned restic 0.19.1 / rclone 1.74.4 static
       # binaries — nothing else in CI looks at them at all. Starting advisory is
       # a deliberate choice about sequencing, not about importance: this scan
       # has no observed baseline yet, and turning on an unknown number of
