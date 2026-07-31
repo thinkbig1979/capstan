@@ -262,15 +262,20 @@ jobs:
       # author can fix, which is the fastest way to teach a team to ignore a red
       # security check. Reported to the run summary instead, so the number stays
       # visible and a sudden jump is noticeable.
+      #
+      # Echoed to stdout as well as the summary, so the job log records what
+      # was found rather than only the summary page.
       - name: Full advisories including dev dependencies (advisory only)
         working-directory: frontend
         continue-on-error: true
         run: |
+          REPORT="$(pnpm audit --audit-level=moderate 2>&1 | tail -40 || true)"
+          echo "${REPORT}"
           {
             echo '## pnpm audit — all dependencies (advisory, not gated)'
             echo
             echo '```'
-            pnpm audit --audit-level=moderate 2>&1 | tail -40 || true
+            echo "${REPORT}"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
 
@@ -334,9 +339,24 @@ jobs:
 
       # An advisory scan nobody reads is theatre. Put the table on the run's
       # summary page so the findings are one click from the check, not four.
+      #
+      # Also echoed to stdout, deliberately. A step that writes only to
+      # GITHUB_STEP_SUMMARY leaves nothing in the job log, and then "the scan
+      # found nothing" and "the scan produced nothing" are indistinguishable
+      # after the fact. The explicit missing-file branch below exists for the
+      # same reason: silence is not success.
       - name: Report findings
         if: always()
         run: |
+          if [ ! -f trivy.txt ]; then
+            echo "::warning::trivy.txt was not produced — the scan step did not report."
+            REPORT='Scan produced no report file. Treat this as a broken scan, not a clean one.'
+          elif [ ! -s trivy.txt ]; then
+            REPORT='No findings at HIGH/CRITICAL with a fix available.'
+          else
+            REPORT="$(cat trivy.txt)"
+          fi
+          echo "${REPORT}"
           {
             echo '## Trivy — image scan (advisory, not gated)'
             echo
@@ -344,6 +364,6 @@ jobs:
             echo 'Unfixed advisories are excluded.'
             echo
             echo '```'
-            if [ -s trivy.txt ]; then cat trivy.txt; else echo 'No findings.'; fi
+            echo "${REPORT}"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
