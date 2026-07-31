@@ -1,7 +1,7 @@
 # Frontend build stage — runs on the build host's native arch ($BUILDPLATFORM),
 # not the target arch, because the compiled output (static JS/CSS in dist/) is
 # architecture-neutral. This avoids slow QEMU emulation of the Node build.
-FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-build
+FROM --platform=$BUILDPLATFORM node:25-alpine AS frontend-build
 
 WORKDIR /app/frontend
 
