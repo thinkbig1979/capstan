@@ -70,8 +70,12 @@ vi.mock('@/components/dashboard/DashboardHeader', () => ({
 vi.mock('@/components/dashboard/DashboardMetricsTab', () => ({
   DashboardMetricsTab: () => <div data-testid="tab-overview" />,
 }))
+// Surfaces the sort/filter the page hands down, so the localStorage-restore
+// contract is observable without exercising StacksTab's internals.
 vi.mock('@/components/dashboard/StacksTab', () => ({
-  StacksTab: () => <div data-testid="tab-stacks" />,
+  StacksTab: ({ sortBy, statusFilter }: { sortBy: string; statusFilter: string }) => (
+    <div data-testid="tab-stacks" data-sort-by={sortBy} data-status-filter={statusFilter} />
+  ),
 }))
 vi.mock('@/components/dashboard/ContainersOverviewTab', () => ({
   ContainersOverviewTab: () => <div data-testid="tab-containers" />,
@@ -144,6 +148,9 @@ function renderPage(route = '/') {
 describe('DashboardPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // The page persists sort/filter on every change, so state leaks between
+    // tests unless this is cleared.
+    localStorage.clear()
     listDirectories.mockResolvedValue([])
     listStacks.mockResolvedValue([])
     dashboardStats.mockResolvedValue({ runningContainers: 0 })
@@ -241,6 +248,39 @@ describe('DashboardPage', () => {
 
       await waitFor(() => expect(screen.getByText('Quick Start')).toBeInTheDocument())
       expect(screen.getByText('Create Your First Stack')).toBeInTheDocument()
+    })
+
+    // Pins the localStorage-restore contract itself, which had no coverage
+    // before agent-os-14b moved the read out of a mount effect and into the
+    // useState initialiser. These assert the restored values are what the page
+    // hands to StacksTab; they deliberately do NOT claim to distinguish the two
+    // implementations. They cannot: StacksTab is gated behind the loading state,
+    // so it first renders after effects have already flushed, and both versions
+    // look identical from the DOM. Verified by reverting the fix — these still
+    // passed. The guard against a relapse to setState-in-effect is the
+    // react-hooks/set-state-in-effect lint rule, not this file.
+    it('restores the persisted sort and filter', async () => {
+      localStorage.setItem('dashboard-sort', 'status')
+      localStorage.setItem('dashboard-filter', 'running')
+      listStacks.mockResolvedValue([makeStack({ id: 's1' })])
+      listDirectories.mockResolvedValue([makeDir({ path: '/stacks/s1' })])
+
+      renderPage('/?tab=stacks')
+
+      const tab = await screen.findByTestId('tab-stacks')
+      expect(tab).toHaveAttribute('data-sort-by', 'status')
+      expect(tab).toHaveAttribute('data-status-filter', 'running')
+    })
+
+    it('falls back to the defaults when nothing is persisted', async () => {
+      listStacks.mockResolvedValue([makeStack({ id: 's1' })])
+      listDirectories.mockResolvedValue([makeDir({ path: '/stacks/s1' })])
+
+      renderPage('/?tab=stacks')
+
+      const tab = await screen.findByTestId('tab-stacks')
+      expect(tab).toHaveAttribute('data-sort-by', 'name')
+      expect(tab).toHaveAttribute('data-status-filter', 'all')
     })
 
     it('hides the Quick Start empty state once stacks exist', async () => {

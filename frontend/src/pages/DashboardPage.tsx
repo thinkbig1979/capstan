@@ -65,18 +65,19 @@ export function DashboardPage() {
   const queryClient = useQueryClient()
   const { confirm, ConfirmComponent } = useConfirm()
   const [deletingStackId, setDeletingStackId] = useState<string | null>(null)
-  const [sortBy, setSortBy] = useState<SortOption>('name')
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  // Read the persisted sort/filter in the initialiser rather than in a mount
+  // effect. An effect would render once with the default and again with the
+  // stored value, which is both a visible flash of the wrong sort order and
+  // what react-hooks/set-state-in-effect flags.
+  const [sortBy, setSortBy] = useState<SortOption>(
+    () => (localStorage.getItem('dashboard-sort') as SortOption) || 'name',
+  )
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(
+    () => (localStorage.getItem('dashboard-filter') as StatusFilter) || 'all',
+  )
   const [isRefreshing, setIsRefreshing] = useState(false)
 
   const { containers: metricsContainers, aggregates, latestMetrics, isConnected: metricsConnected, ws: metricsWs } = useDashboardMetrics()
-
-  useEffect(() => {
-    const savedSort = localStorage.getItem('dashboard-sort') as SortOption
-    const savedFilter = localStorage.getItem('dashboard-filter') as StatusFilter
-    if (savedSort) setSortBy(savedSort)
-    if (savedFilter) setStatusFilter(savedFilter)
-  }, [])
 
   useEffect(() => {
     localStorage.setItem('dashboard-sort', sortBy)
