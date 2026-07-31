@@ -13,6 +13,25 @@
 #   This is a dedicated workflow. The existing docker-publish.yml workflow is
 #   untouched. Integration tests carry `-tags=integration` and do NOT run in
 #   the normal `go test ./...` (no-tag) path, so they cannot break unit CI.
+#
+# DELIBERATELY NOT A REQUIRED STATUS CHECK (agent-os-x8n):
+#   backend.yml and frontend.yml had their path filters removed so they could
+#   be required. This one keeps both its `paths:` and its base-branch filter,
+#   and is not required, for two independent reasons:
+#
+#   1. It would reintroduce as a *merge blocker* the exact fragility that
+#      backend.yml was split out to escape. See that file's header: a Docker
+#      Hub outage or rate limit fails this job before any test runs. A
+#      required check with an external dependency means main is only mergeable
+#      when docker.io is reachable.
+#   2. Its `branches: [main, 'feat/**']` filter is on the *base* branch, so it
+#      skips stacked PRs entirely. As a required check that is a permanent
+#      pending status on every stacked PR.
+#
+#   It stays advisory: it still runs and still goes honestly red on real
+#   breakage, and a red advisory check is visible in the PR. Revisit if the
+#   suite is ever made independent of Docker Hub — the base-branch filter
+#   would have to go first.
 
 name: Integration tests
 
