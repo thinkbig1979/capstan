@@ -21,28 +21,35 @@
 #   integration.yml filters `pull_request` on `branches: [main, 'feat/**']`,
 #   which is a filter on the *base* branch. A stacked PR (feature onto
 #   feature) or any base outside that set silently skips the job. Unit tests
-#   must run on every PR that touches backend code, so this workflow filters
-#   on paths only.
+#   must run on every PR that touches backend code, so this workflow does not
+#   filter on the base branch.
+#
+# NO PATH FILTER EITHER, SINCE agent-os-x8n:
+#   Both jobs here are required status checks on main. A workflow-level
+#   `paths:` filter does not make a required check pass on an unrelated PR —
+#   it makes the check never report at all, so the PR sits on "Expected —
+#   waiting for status" and can never merge. That is a merge deadlock on every
+#   docs-only or frontend-only PR, which is why the filters were removed
+#   rather than kept.
+#
+#   The alternative was a change-detection job fanning out to `if:`-gated jobs
+#   (skipped jobs DO report a conclusion and so satisfy a required check).
+#   That was rejected as more machinery than the cost it saves: this whole
+#   workflow needs no Docker and no registry, and runs in ~1-2 minutes. Paying
+#   that on a README-only PR is cheaper than maintaining a second mechanism
+#   whose failure mode is a silent unprotected merge.
+#
+#   The paths that used to be listed here — 'backend/**', 'docker/Dockerfile',
+#   '.github/workflows/backend.yml' — are now a subset of "everything", so the
+#   Dockerfile/go.mod lockstep this filter was protecting is still covered.
 
 name: Backend CI
 
 on:
   pull_request:
-    paths:
-      - 'backend/**'
-      # The Go version is pinned in two places that must agree — go.mod's
-      # toolchain directive and the Dockerfile's base image. Without this
-      # entry a Dockerfile-only drift triggers no backend job at all, which
-      # is exactly the drift the lockstep requirement exists to prevent.
-      - 'docker/Dockerfile'
-      - '.github/workflows/backend.yml'
   push:
     branches:
       - main
-    paths:
-      - 'backend/**'
-      - 'docker/Dockerfile'
-      - '.github/workflows/backend.yml'
   # Allow manual one-off runs from the Actions tab.
   workflow_dispatch:
 

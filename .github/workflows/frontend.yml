@@ -2,20 +2,21 @@
 #
 # Nothing previously ran the frontend test suite, lint, or build in CI;
 # integration.yml only covers backend/**. This workflow closes that gap.
+#
+# NO PATH FILTER, SINCE agent-os-x8n:
+#   This job is a required status check on main. A workflow-level `paths:`
+#   filter does not make a required check pass on an unrelated PR — it makes
+#   the check never report at all, leaving the PR on "Expected — waiting for
+#   status" with no way to merge. See backend.yml's header for the full
+#   reasoning and for why a change-detection fan-out was rejected.
 
 name: Frontend CI
 
 on:
   pull_request:
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend.yml'
   push:
     branches:
       - main
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend.yml'
 
 jobs:
   frontend:
