@@ -24,6 +24,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/logging"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/version"
 )
 
 // buildConnectSrc constructs the CSP connect-src directive from the configured
@@ -106,7 +107,13 @@ func main() {
 		log.Fatal("Failed to configure logging:", err)
 	}
 
+	// Build identity goes on the very first line, so it is present even if the
+	// process dies later in startup (agent-os-r7e).
+	build := version.Get()
 	slog.Info("Starting Capstan backend",
+		"version", build.Version,
+		"commit", build.Commit,
+		"built", build.BuildDate,
 		"log_level", cfg.LogLevel,
 		"log_format", cfg.LogFormat,
 	)
@@ -245,6 +252,11 @@ func main() {
 	})
 
 	api := r.Group("/api/v1")
+
+	// Public by choice: build identity answers "what is running here?" for
+	// monitoring and support without a session. Mirrored in
+	// middleware.PublicPaths, which both auth and CSRF consult (agent-os-r7e).
+	handlers.NewVersionHandler().RegisterVersionRoutes(api)
 
 	authHandler := handlers.NewAuthHandler(db, cfg.JWTSecret, cfg.AuthDisabled)
 	authGroup := api.Group("/auth")

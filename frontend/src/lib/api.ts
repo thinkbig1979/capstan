@@ -29,6 +29,7 @@ import type {
   BackupSettings,
   BackupStatus,
   BackupOperationResult,
+  VersionInfo,
 } from '@/types'
 
 /**
@@ -142,6 +143,14 @@ export const authApi = {
 
   verifyPassword: async (password: string) => {
     const response = await apiClient.post<{ ok: boolean }>('/auth/verify-password', { password })
+    return response.data
+  },
+}
+
+/** Build identity of the running backend. Public endpoint — no session needed. */
+export const versionApi = {
+  get: async () => {
+    const response = await apiClient.get<VersionInfo>('/version')
     return response.data
   },
 }

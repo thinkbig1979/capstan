@@ -14,8 +14,9 @@ import { formatDateFull } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
   Sun, Moon, Monitor, Shield, Palette, Clock, KeyRound, FolderCog,
-  ScrollText, Globe, HardDrive, Search, type LucideIcon,
+  ScrollText, Globe, HardDrive, Search, Info, type LucideIcon,
 } from 'lucide-react'
+import { AboutContent } from '@/components/settings/AboutContent'
 import { BackupSettingsContent } from '@/components/settings/BackupSettingsContent'
 import { authApi } from '@/lib/api'
 import {
@@ -89,6 +90,12 @@ const ALL_SECTIONS: SettingsSection[] = [
     description: 'View a history of actions performed in the application',
     Icon: ScrollText,
   },
+  {
+    id: 'about',
+    title: 'About',
+    description: 'Build identity of the running instance',
+    Icon: Info,
+  },
 ]
 
 // Sidebar grouping. Each group lists section ids in display order.
@@ -96,7 +103,7 @@ const GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Account', ids: ['account-security', 'appearance'] },
   { label: 'Stacks', ids: ['directories', 'global-env', 'git'] },
   { label: 'Automation', ids: ['update-schedule', 'backup'] },
-  { label: 'System', ids: ['audit-log'] },
+  { label: 'System', ids: ['audit-log', 'about'] },
 ]
 
 const DEFAULT_SECTION = 'account-security'
@@ -352,6 +359,8 @@ export function SettingsPage() {
         return <BackupSettingsContent />
       case 'audit-log':
         return <AuditLogContent />
+      case 'about':
+        return <AboutContent />
       default:
         return null
     }

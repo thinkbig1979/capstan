@@ -574,11 +574,26 @@ npm run build              # production build
 ## API Endpoints
 
 All routes are under `/api/v1` and require authentication (unless
-`AUTH_DISABLED=true`), except `/health`. The web UI is the primary interface;
-these are the main REST routes.
+`AUTH_DISABLED=true`), except `/health` and `/api/v1/version`. The web UI is the
+primary interface; these are the main REST routes.
 
 ### Health
 - `GET /health` — health check (restricted to localhost)
+
+### Version
+- `GET /api/v1/version` — build identity of the running binary. Public, so an
+  uptime check or a support conversation can answer "what is running here?"
+  without a session.
+
+```console
+$ curl -s localhost:5001/api/v1/version
+{"version":"0.9.0","commit":"6fb9879...","buildDate":"2026-07-31T09:12:44Z"}
+```
+
+The same values appear on the first startup log line and in the UI under
+**Settings → About**. A published image reports the tag it was built under; a
+local `docker build` with no `--build-arg` reports `version: dev`, which is the
+honest answer rather than a blank.
 
 ### Authentication
 - `POST /api/v1/auth/setup` — create the first admin (only when no user exists)
