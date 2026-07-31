@@ -84,8 +84,8 @@ Capstan includes a built-in backup engine powered by [restic](https://restic.net
 
 | Tool   | Version | Purpose                          |
 | ------ | ------- | -------------------------------- |
-| restic | 0.18.0  | Local encrypted snapshot backups |
-| rclone | 1.68.2  | Cloud sync / offsite DR copies   |
+| restic | 0.19.1  | Local encrypted snapshot backups |
+| rclone | 1.74.4  | Cloud sync / offsite DR copies   |
 
 ### What gets backed up
 

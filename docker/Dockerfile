@@ -46,17 +46,17 @@ FROM alpine:3.21 AS backup-tools
 # Pinned versions — bump here when upgrading.
 # Note: use RESTIC_VER / RCLONE_VER (not RESTIC_VERSION / RCLONE_VERSION) to
 # avoid accidental collision with restic/rclone's own env-var flags.
-ARG RESTIC_VER=0.18.0
-ARG RCLONE_VER=1.68.2
+ARG RESTIC_VER=0.19.1
+ARG RCLONE_VER=1.74.4
 
 # SHA256 checksums of the per-arch release archives, from the projects' official
 # SHA256SUMS (restic GitHub release; rclone downloads.rclone.org). Pin these in
 # lockstep with the versions above so a tampered or corrupted download fails the
 # build. Restic ships .bz2, rclone ships .zip — the sums are of those archives.
-ARG RESTIC_SHA256_AMD64=98f6dd8bf5b59058d04bfd8dab58e196cc2a680666ccee90275a3b722374438e
-ARG RESTIC_SHA256_ARM64=ce18179c25dc5f2e33e3c233ba1e580f9de1a4566d2977e8d9600210363ec209
-ARG RCLONE_SHA256_AMD64=0e6fa18051e67fc600d803a2dcb10ddedb092247fc6eee61be97f64ec080a13c
-ARG RCLONE_SHA256_ARM64=c6e9d4cf9c88b279f6ad80cd5675daebc068e404890fa7e191412c1bc7a4ac5f
+ARG RESTIC_SHA256_AMD64=f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c
+ARG RESTIC_SHA256_ARM64=a5f64aaab53d51e311fa3829124c5b703f2d14cf187d8640b6be3b2b49376465
+ARG RCLONE_SHA256_AMD64=fe435e0c36228e7c2f116a8701f01127bb1f694005fc11d1f27186c8bca4115d
+ARG RCLONE_SHA256_ARM64=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c358de419
 
 ARG TARGETARCH
 
