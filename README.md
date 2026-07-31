@@ -530,6 +530,33 @@ environment files: [`.env.example`](.env.example) (production) and
 - State: TanStack Query
 - Editor: CodeMirror 6
 
+### Branch protection
+
+`main` requires these six checks to pass before a pull request can merge:
+
+| Check | Workflow |
+| --- | --- |
+| Go vulnerabilities (govulncheck) | `security.yml` |
+| npm advisories (pnpm audit) | `security.yml` |
+| Image vulnerabilities (Trivy) | `security.yml` |
+| Build, vet, and unit tests | `backend.yml` |
+| Race detector | `backend.yml` |
+| Lint, test, and build | `frontend.yml` |
+
+Force pushes and branch deletion are blocked. Reviews are not required, and
+administrators can bypass a stuck check — the rule is there to stop an
+accidental merge over a red check, not to lock the repository against its
+maintainer.
+
+Real-Docker integration tests run on every backend change but are deliberately
+**not** required: the job depends on Docker Hub being reachable, so requiring it
+would make `main` mergeable only while an external service is up. The reasoning
+is recorded in the header of `.github/workflows/integration.yml`.
+
+This is also why `backend.yml` and `frontend.yml` carry no `paths:` filters. A
+path-filtered workflow does not report a required check at all on an unrelated
+PR, which leaves it pending forever rather than passing.
+
 ## Versioning
 
 Capstan follows [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`),
