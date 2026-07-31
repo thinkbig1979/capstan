@@ -2,7 +2,9 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -91,4 +93,33 @@ func NewWithMigrationsAndEncryptor(dataDir string, encryptor TokenEncryptor) (*D
 
 func (d *DB) Close() error {
 	return d.db.Close()
+}
+
+// VacuumInto writes a consistent point-in-time copy of the database to dest
+// using SQLite's `VACUUM INTO`.
+//
+// This is not a convenience wrapper around a file copy — it is the only correct
+// way to snapshot this database. capstan.db runs in WAL mode (see the
+// journal_mode pragma above), so the .db file on disk is not self-contained:
+// recent commits live in the -wal sidecar until a checkpoint. Copying the file
+// while writes are in flight yields a torn or stale database. VACUUM INTO runs
+// through the SQL layer, so it observes a single consistent snapshot and emits
+// a standalone, already-compacted database with no sidecar files.
+//
+// It does not block writers.
+//
+// dest must not already exist — SQLite refuses to overwrite, and that refusal
+// is deliberate rather than something to work around: silently clobbering a
+// previous snapshot would destroy the artifact a restore depends on. Callers
+// remove a stale file explicitly if they intend to replace it.
+func (d *DB) VacuumInto(dest string) error {
+	// Parameter binding is not permitted for VACUUM INTO in SQLite, so the path
+	// is interpolated. Callers construct dest from configuration, never from
+	// user input; the quote-doubling keeps a path containing a single quote from
+	// terminating the literal.
+	quoted := "'" + strings.ReplaceAll(dest, "'", "''") + "'"
+	if _, err := d.db.Exec("VACUUM INTO " + quoted); err != nil {
+		return fmt.Errorf("vacuum into %s: %w", dest, err)
+	}
+	return nil
 }
