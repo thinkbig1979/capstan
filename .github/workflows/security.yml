@@ -1,0 +1,384 @@
+# Security CI — dependency and image vulnerability scanning.
+#
+# WHY THIS IS A SEPARATE WORKFLOW:
+#   A scan failure means "a new advisory affects us", which is a different
+#   thing from "the build broke". Bolting these jobs onto backend.yml or
+#   frontend.yml would entangle the two, so a red X could mean either, and a
+#   scan that goes red for reasons outside the PR would train people to ignore
+#   the build check as well.
+#
+# WHY THE SCHEDULE IS THE IMPORTANT TRIGGER:
+#   A push-triggered scan only catches vulnerabilities *this repo introduces*.
+#   Most do not arrive that way — they arrive when a researcher publishes an
+#   advisory against code nobody has touched in months. Without the weekly run,
+#   this workflow would go stale silently and still show green.
+#
+# NO PATH FILTERS, DELIBERATELY:
+#   Every other workflow here filters on paths. This one must not. The whole
+#   point is to scan unchanged code against a changed advisory database, and a
+#   path-filtered workflow is also what leaves a required status check
+#   permanently pending on unrelated PRs once branch protection lands
+#   (agent-os-x8n).
+#
+# GATE LEVELS — see each job for the specific rationale. In summary:
+#   BLOCKING  Go vulnerabilities govulncheck reports as reachable (called).
+#   BLOCKING  Production npm advisories at high severity or above.
+#   ADVISORY  Dev-dependency npm advisories.
+#   ADVISORY  Container image findings.
+#   The blocking set is deliberately narrow. A gate that fires on findings
+#   nobody can act on gets routed around, and then it protects nothing.
+
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  # Weekly, Monday 04:17 UTC. The odd minute is intentional: scheduled jobs on
+  # the hour contend with everyone else's, and GitHub drops queued runs under
+  # load rather than delaying them.
+  schedule:
+    - cron: '17 4 * * 1'
+  # Allows dispatching from the Actions tab, which is also how the schedule
+  # wiring gets verified without waiting a week.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A scan of an older commit tells you nothing once a newer one exists.
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Go dependencies
+  # ---------------------------------------------------------------------------
+  go-vulns:
+    name: Go vulnerabilities (govulncheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # setup-go@v6 or later is load-bearing: v5 reads only go.mod's `go`
+      # directive, and backend/go.mod carries both `go 1.25.0` and
+      # `toolchain go1.25.12`. See backend.yml for the full explanation.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      # The only line in the log that states what actually compiled, rather
+      # than what was requested. GOTOOLCHAIN=auto re-execs invisibly.
+      - name: Report Go version
+        working-directory: backend
+        run: go version
+
+      # Deliberately @latest rather than a pin. Pinning the scanner would not
+      # make the scan reproducible anyway — the vulnerability database is
+      # fetched at run time — and an old analyzer is strictly worse at finding
+      # things. Freshness beats reproducibility for this specific tool.
+      - name: Run govulncheck
+        working-directory: backend
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@latest -format json ./... \
+            > "${RUNNER_TEMP}/govulncheck.json"
+
+      # WHY THIS PARSES JSON INSTEAD OF CHECKING THE EXIT CODE:
+      #   `govulncheck -format json` exits 0 unconditionally, including when it
+      #   finds reachable vulnerabilities. The obvious formulation —
+      #   `govulncheck ./... || exit 1` — would look correct, pass review, and
+      #   never fire. Verified against this repo on 2026-07-31.
+      #
+      # WHY IT GATES ON THE SYMBOL TIER:
+      #   govulncheck reports three tiers. A finding whose trace carries a
+      #   `function` is one govulncheck traced to a call in our code; those are
+      #   the high-signal ones. Findings that name only a package (imported) or
+      #   only a module (required) are reported here for visibility but do not
+      #   gate — treating "a module we depend on has an advisory in code we
+      #   never call" as a build failure is how a gate loses its audience.
+      #
+      # ACCEPTED EXCEPTIONS (symbol-tier findings that do not fail this job):
+      #   All three are docker/docker, all found in v28.5.2+incompatible, all
+      #   with "Fixed in: N/A" — no upstream release carries a fix, so there is
+      #   no version to move to. The reachability assessment recorded in
+      #   agent-os-vkr is that none is exploitable through capstan: all three
+      #   are daemon-side, and capstan links only the API client
+      #   (github.com/docker/docker/api/** and .../client).
+      #
+      #     GO-2026-5668  race in `docker cp`; arbitrary empty-file creation on
+      #                   the host via symlink swap. Daemon-side. capstan has no
+      #                   CopyToContainer / CopyFromContainer call sites.
+      #     GO-2026-4887  AuthZ plugin bypass on oversized request bodies.
+      #                   Daemon-side; capstan runs no authz plugins.
+      #     GO-2026-4883  off-by-one in plugin privilege validation. Daemon-side;
+      #                   capstan has no PluginInstall / PluginUpgrade call sites.
+      #
+      #   This assessment is tied to what capstan imports *today* and expires:
+      #   agent-os-96h re-checks it on 2026-10-30, including re-running
+      #   `go list -deps ./... | grep '^github.com/docker/docker'` to confirm
+      #   only api/** and client are still linked. Delete entries from this list
+      #   when a fix ships; do not extend the list without the same standard of
+      #   written reachability evidence.
+      - name: Evaluate findings against accepted exceptions
+        run: |
+          set -euo pipefail
+          REPORT="${RUNNER_TEMP}/govulncheck.json"
+
+          cat > "${RUNNER_TEMP}/allowed.txt" <<'ALLOWED'
+          GO-2026-4883
+          GO-2026-4887
+          GO-2026-5668
+          ALLOWED
+          sort -u -o "${RUNNER_TEMP}/allowed.txt" "${RUNNER_TEMP}/allowed.txt"
+
+          # Symbol tier: govulncheck traced a call from our code.
+          jq -r 'select(has("finding")) | .finding
+                 | select(.trace[0].function != null) | .osv' "${REPORT}" \
+            | sort -u > "${RUNNER_TEMP}/called.txt"
+
+          # Module tier: required but neither imported nor called. Informational.
+          jq -r 'select(has("finding")) | .finding
+                 | select(.trace[0].package == null) | .osv' "${REPORT}" \
+            | sort -u > "${RUNNER_TEMP}/module.txt"
+
+          comm -23 "${RUNNER_TEMP}/called.txt" "${RUNNER_TEMP}/allowed.txt" \
+            > "${RUNNER_TEMP}/unexpected.txt"
+          comm -13 "${RUNNER_TEMP}/called.txt" "${RUNNER_TEMP}/allowed.txt" \
+            > "${RUNNER_TEMP}/stale.txt"
+
+          {
+            echo '## govulncheck'
+            echo
+            echo "Reachable (symbol tier): $(wc -l < "${RUNNER_TEMP}/called.txt")"
+            echo "Accepted exceptions: $(wc -l < "${RUNNER_TEMP}/allowed.txt")"
+            echo "Module tier (informational): $(wc -l < "${RUNNER_TEMP}/module.txt")"
+            echo
+            if [ -s "${RUNNER_TEMP}/module.txt" ]; then
+              echo '<details><summary>Module-tier findings (not gated)</summary>'
+              echo
+              sed 's/^/- /' "${RUNNER_TEMP}/module.txt"
+              echo
+              echo '</details>'
+              echo
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          # A stale exception is not a failure, but it is rot: it means an
+          # allowlist entry is protecting nothing and should be removed.
+          if [ -s "${RUNNER_TEMP}/stale.txt" ]; then
+            echo '> **Note:** these accepted exceptions no longer appear and can be removed:' \
+              >> "${GITHUB_STEP_SUMMARY}"
+            sed 's/^/> - /' "${RUNNER_TEMP}/stale.txt" >> "${GITHUB_STEP_SUMMARY}"
+            echo '::notice::Stale govulncheck exceptions (no longer reported):' \
+              "$(tr '\n' ' ' < "${RUNNER_TEMP}/stale.txt")"
+          fi
+
+          if [ -s "${RUNNER_TEMP}/unexpected.txt" ]; then
+            {
+              echo
+              echo '### :x: New reachable vulnerabilities'
+              echo
+              sed 's/^/- /' "${RUNNER_TEMP}/unexpected.txt"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo '::error::govulncheck reports reachable vulnerabilities that are not accepted exceptions:' \
+              "$(tr '\n' ' ' < "${RUNNER_TEMP}/unexpected.txt")"
+            echo
+            echo 'Full report for the findings above:'
+            go run golang.org/x/vuln/cmd/govulncheck@latest -format text ./... || true
+            exit 1
+          fi
+
+          echo ':white_check_mark: No reachable vulnerabilities outside the accepted set.' \
+            >> "${GITHUB_STEP_SUMMARY}"
+        working-directory: backend
+
+  # ---------------------------------------------------------------------------
+  # Frontend dependencies
+  # ---------------------------------------------------------------------------
+  frontend-audit:
+    name: npm advisories (pnpm audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Same corepack dance as frontend.yml, for the same reason: the repo root
+      # has its own packageManager-less package.json, so corepack resolves the
+      # wrong (latest installed) pnpm when invoked outside frontend/. See the
+      # comment at frontend.yml:29-36.
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.5.1 --activate
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      # BLOCKING. Production dependencies ship to users inside the image, so a
+      # high-or-critical advisory here is a real exposure, not a maintenance
+      # chore.
+      #
+      # ACCEPTED EXCEPTION: GHSA-qwww-vcr4-c8h2 (react-router RSC Mode CSRF
+      # bypass) is suppressed via `auditConfig.ignoreGhsas` in
+      # frontend/pnpm-workspace.yaml, where the reasoning lives next to it.
+      # Short version: it is patched only in react-router >=8.3.0,
+      # react-router-dom has no 8.x release, and the advisory text scopes the
+      # impact to the unstable RSC APIs, which capstan does not use. Tracked as
+      # agent-os-e0t; delete the exception when that migration lands.
+      #
+      # The suppression is visible, not silent — pnpm still prints the finding
+      # and appends "(N ignored)" to the severity line. That is why the
+      # exception lives in config rather than behind `|| true`, which would
+      # disable the entire gate rather than one known finding.
+      - name: Production advisories (blocking, high and above)
+        working-directory: frontend
+        run: pnpm audit --prod --audit-level=high
+
+      # ADVISORY. Dev dependencies do not reach the runtime: the Dockerfile runs
+      # `pnpm build` and copies only dist/. As of 2026-07-31 this reports ~30
+      # findings, and every one is a transitive pinned by a parent that has not
+      # raised its floor (undici via jsdom<-vitest; minimatch, brace-expansion,
+      # flatted, js-yaml, ajv all via eslint; @babel/core). None is actionable
+      # from this repo without forcing resolutions that break the toolchain.
+      #
+      # Gating on these would make the check permanently red for reasons no PR
+      # author can fix, which is the fastest way to teach a team to ignore a red
+      # security check. Reported to the run summary instead, so the number stays
+      # visible and a sudden jump is noticeable.
+      #
+      # Echoed to stdout as well as the summary, so the job log records what
+      # was found rather than only the summary page.
+      - name: Full advisories including dev dependencies (advisory only)
+        working-directory: frontend
+        continue-on-error: true
+        run: |
+          REPORT="$(pnpm audit --audit-level=moderate 2>&1 | tail -40 || true)"
+          echo "${REPORT}"
+          {
+            echo '## pnpm audit — all dependencies (advisory, not gated)'
+            echo
+            echo '```'
+            echo "${REPORT}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  # ---------------------------------------------------------------------------
+  # Container image
+  # ---------------------------------------------------------------------------
+  image-scan:
+    name: Image vulnerabilities (Trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Single platform and `load: true` so the image lands in the local daemon
+      # for Trivy to scan. The published image is multi-arch (docker-publish.yml),
+      # but the OS packages and vendored binaries are the same on both arches, so
+      # scanning amd64 covers the same advisory surface at half the build cost.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: capstan:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ADVISORY, for now. This is the only check covering the Alpine 3.21
+      # runtime base and the pinned restic 0.18.0 / rclone 1.68.2 static
+      # binaries — nothing else in CI looks at them at all. Starting advisory is
+      # a deliberate choice about sequencing, not about importance: this scan
+      # has no observed baseline yet, and turning on an unknown number of
+      # findings as a merge blocker on day one blocks work that has nothing to
+      # do with them.
+      #
+      # TO GRADUATE THE GATE once the baseline is known and triaged: set
+      # `exit-code: '1'` below, and narrow `severity` to the level being
+      # enforced. Prefer graduating to CRITICAL-only first rather than going
+      # straight to HIGH,CRITICAL.
+      #
+      # `ignore-unfixed: true` on purpose — a finding with no fixed version is
+      # not something a PR can act on. It stays out of the report so the report
+      # stays worth reading.
+      #
+      # OBSERVED BASELINE, first run 2026-07-31: alpine 3.21.7 clean; the
+      # Capstan binary carrying one finding; rclone 39 and restic 35, which is
+      # 8 CRITICAL and 11 HIGH once filtered to fixable. Those two are pinned
+      # static binaries several releases behind upstream and are tracked as
+      # agent-os-9e1. That baseline is the reason this job starts advisory:
+      # turning it blocking today would red-X every unrelated PR until 9e1
+      # lands.
+      #
+      # READING THE `Fixed Version` COLUMN: it is the *product* version, which
+      # is not always a Go module version. Trivy reports CVE-2026-34040 in
+      # github.com/docker/docker as "fixed in 29.3.1", but the Go module has no
+      # v29 tag at all — `go list -m -versions github.com/docker/docker` showed
+      # v28.5.2+incompatible as newest on 2026-07-31. It reads as actionable and
+      # is not. See agent-os-96h before acting on a docker/docker row here.
+      - name: Scan image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: capstan:scan
+          format: table
+          output: trivy.txt
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          scanners: vuln
+          exit-code: '0'
+
+      # An advisory scan nobody reads is theatre. Put the table on the run's
+      # summary page so the findings are one click from the check, not four.
+      #
+      # Also echoed to stdout, deliberately. A step that writes only to
+      # GITHUB_STEP_SUMMARY leaves nothing in the job log, and then "the scan
+      # found nothing" and "the scan produced nothing" are indistinguishable
+      # after the fact. The explicit missing-file branch below exists for the
+      # same reason: silence is not success.
+      - name: Report findings
+        if: always()
+        run: |
+          if [ ! -f trivy.txt ]; then
+            echo "::warning::trivy.txt was not produced — the scan step did not report."
+            REPORT='Scan produced no report file. Treat this as a broken scan, not a clean one.'
+          elif [ ! -s trivy.txt ]; then
+            REPORT='No findings at HIGH/CRITICAL with a fix available.'
+          else
+            REPORT="$(cat trivy.txt)"
+          fi
+          echo "${REPORT}"
+          {
+            echo '## Trivy — image scan (advisory, not gated)'
+            echo
+            echo 'Covers the Alpine runtime base and the vendored restic/rclone binaries.'
+            echo 'Unfixed advisories are excluded.'
+            echo
+            echo '```'
+            echo "${REPORT}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -1,0 +1,131 @@
+# Dependabot — automated dependency updates.
+#
+# WHY THIS EXISTS ALONGSIDE .github/workflows/security.yml:
+#   The scan raises the alarm; this supplies the fix. Either one alone fails in
+#   a predictable way. A gate with no repair path leaves main red until people
+#   learn to route around it. A repair path with no gate produces PRs nobody
+#   has a reason to merge. They were added together on purpose.
+#
+# ALL FOUR ECOSYSTEMS THIS REPO ACTUALLY HAS:
+#   gomod (/backend), npm (/frontend), docker (/docker), github-actions (/).
+#   The last one is the easy one to forget and is how pinned action versions
+#   rot quietly — nothing else in this repo would ever notice.
+#
+# GROUPING:
+#   Minor and patch updates are grouped per ecosystem into a single PR, so the
+#   volume stays reviewable. Majors stay ungrouped and arrive one at a time,
+#   because a major is a judgement call and does not belong in a batch that
+#   gets approved on the strength of the other five entries.
+#
+# Schedules are spread across the week rather than all landing Monday, so a
+# quiet week produces four small PRs on four days instead of one wall.
+
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      go-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # ---------------------------------------------------------------------------
+  # COOLDOWN IS LOAD-BEARING HERE, unlike the other three ecosystems.
+  #
+  # frontend/pnpm-workspace.yaml sets `minimumReleaseAge: 10080` (7 days): pnpm
+  # refuses to resolve any version published more recently than that. It is a
+  # deliberate supply-chain control and it already blocked two upgrades during
+  # session 2.
+  #
+  # Dependabot does its own resolution and does not know about that setting, so
+  # without a matching cooldown it would happily open a PR for a release
+  # published hours ago — a version pnpm itself would refuse. The cooldown below
+  # aligns the two windows so Dependabot only proposes versions pnpm will accept.
+  #
+  # The interaction to watch: frontend CI runs `pnpm install --frozen-lockfile`
+  # (.github/workflows/frontend.yml:51). A frozen install replays the lockfile
+  # rather than resolving, so minimumReleaseAge should not apply to it — but that
+  # is reasoning, not evidence, and it is being verified on a real Dependabot PR
+  # rather than assumed. If a fresh-resolution path does trip the quarantine, the
+  # fix is to widen the cooldown, not to weaken minimumReleaseAge.
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    cooldown:
+      default-days: 7
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # ---------------------------------------------------------------------------
+  # Covers the Dockerfile's pinned bases: node:22-alpine, golang:1.25.12-alpine,
+  # and alpine:3.21.
+  #
+  # NOTE for reviewers of these PRs: the Go base image is pinned in lockstep with
+  # backend/go.mod's `toolchain` directive. Dependabot updates the Dockerfile
+  # only and cannot know about that relationship, so a golang:* bump here must be
+  # paired with the matching go.mod change or CI and the shipped image compile
+  # against different standard libraries. backend.yml deliberately triggers on
+  # docker/Dockerfile so this drift is at least visible.
+  #
+  # The restic and rclone binaries are fetched by URL with pinned SHA256 sums,
+  # not by image reference, so Dependabot cannot see them. Trivy's scan of the
+  # built image is what covers those.
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      docker-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # ---------------------------------------------------------------------------
+  # Directory is `/` — Dependabot finds .github/workflows/ from the repo root,
+  # not from .github/.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: thursday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - minor
+          - patch
