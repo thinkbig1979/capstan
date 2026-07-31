@@ -51,6 +51,26 @@ func NewDockerService(cfg *config.Config) (*DockerService, error) {
 	}, nil
 }
 
+// Ping reports whether the Docker daemon is reachable, honouring ctx's deadline.
+//
+// It is the readiness probe's dependency check. Ping is a single cheap
+// round-trip, unlike the GetContainerList("") the old inline /health handler ran
+// every 30 seconds.
+//
+// The nil receiver and nil client are handled rather than dereferenced: main
+// leaves dockerService nil when the daemon was unreachable at startup, and a nil
+// *DockerService stored in an interface is a non-nil interface value — calling
+// through it would panic instead of reporting the outage it exists to report.
+func (s *DockerService) Ping(ctx context.Context) error {
+	if s == nil || s.client == nil {
+		return fmt.Errorf("docker client not initialized")
+	}
+	if _, err := s.client.Ping(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
 	args := s.buildComposeArgs(stack, "logs", []string{"--tail", fmt.Sprintf("%d", tail), "--timestamps"})
 

@@ -574,11 +574,49 @@ npm run build              # production build
 ## API Endpoints
 
 All routes are under `/api/v1` and require authentication (unless
-`AUTH_DISABLED=true`), except `/health` and `/api/v1/version`. The web UI is the
-primary interface; these are the main REST routes.
+`AUTH_DISABLED=true`), except `/health`, `/health/ready` and `/api/v1/version`.
+The web UI is the primary interface; these are the main REST routes.
 
 ### Health
-- `GET /health` — health check (restricted to localhost)
+
+Liveness and readiness are separate endpoints, because Capstan is a separate
+process from Docker. Point restart-on-failure checks at liveness and dependency
+monitoring at readiness.
+
+- `GET /health` — **liveness**. 200 whenever the process is up and serving. Makes
+  no Docker call, so a Docker daemon restart cannot mark the container unhealthy
+  and get Capstan bounced for an outage restarting it would not fix. This is what
+  the container `HEALTHCHECK`, and any orchestrator liveness probe, should use.
+- `GET /health/ready` — **readiness**. Reports dependencies, 503 when any is
+  degraded, naming which. The Docker probe is bounded by a 2-second timeout so a
+  hung daemon cannot pile up goroutines across repeated probes. Point an uptime
+  monitor, a load balancer, or a Kubernetes readiness probe here.
+
+```console
+$ curl -s localhost:5001/health
+{"status":"healthy"}
+
+$ curl -s localhost:5001/health/ready          # Docker up
+{"checks":{"docker":{"status":"ok"}},"status":"ready"}
+
+$ curl -s localhost:5001/health/ready          # Docker daemon stopped -> HTTP 503
+{"checks":{"docker":{"error":"Cannot connect to the Docker daemon at unix:///var/run/docker.sock.",
+"status":"unavailable"}},"degraded":["docker"],"status":"degraded"}
+```
+
+**Reachability.** Loopback reaches both with no configuration, so the container's
+own healthcheck needs no setup. Every other address is denied by default —
+upgrading does not silently widen exposure. To let an external monitor in, list
+its network in `HEALTH_ALLOWED_NETWORKS`:
+
+```bash
+HEALTH_ALLOWED_NETWORKS=10.1.0.0/16,192.168.50.7
+```
+
+This is deliberately **not** `TRUSTED_NETWORKS`. That value is Gin's
+trusted-proxy list *and* the `AUTH_DISABLED` bypass list, so reusing it would
+mean granting an uptime monitor `X-Forwarded-For` spoofing and authentication
+bypass just to let it read a health endpoint.
 
 ### Version
 - `GET /api/v1/version` — build identity of the running binary. Public, so an
