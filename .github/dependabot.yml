@@ -54,12 +54,21 @@ updates:
   # published hours ago — a version pnpm itself would refuse. The cooldown below
   # aligns the two windows so Dependabot only proposes versions pnpm will accept.
   #
-  # The interaction to watch: frontend CI runs `pnpm install --frozen-lockfile`
-  # (.github/workflows/frontend.yml:51). A frozen install replays the lockfile
-  # rather than resolving, so minimumReleaseAge should not apply to it — but that
-  # is reasoning, not evidence, and it is being verified on a real Dependabot PR
-  # rather than assumed. If a fresh-resolution path does trip the quarantine, the
-  # fix is to widen the cooldown, not to weaken minimumReleaseAge.
+  # VERIFIED 2026-07-31, on Dependabot PR #22 (the npm minor+patch group, 36
+  # updates): frontend CI's `pnpm install --frozen-lockfile`
+  # (.github/workflows/frontend.yml:51) succeeded against a Dependabot-generated
+  # lockfile. A frozen install replays the lockfile rather than resolving, so the
+  # quarantine never applies to it. The two controls do not conflict.
+  #
+  # That PR did fail overall, on Lint, because a new rule shipped by one of the
+  # updated dev dependencies flagged pre-existing code. That is an ordinary
+  # consequence of updating, not a supply-chain-control interaction — worth
+  # stating so the failure is not later misread as evidence against the cooldown.
+  #
+  # The cooldown above stays regardless: it keeps Dependabot from proposing a
+  # version pnpm would refuse on any path that *does* resolve. If a
+  # fresh-resolution path ever trips the quarantine, widen the cooldown rather
+  # than weaken minimumReleaseAge.
   - package-ecosystem: npm
     directory: /frontend
     schedule:
