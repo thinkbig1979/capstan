@@ -139,32 +139,22 @@ func main() {
 	}()
 
 	go func() {
+		// Prune shortly after startup as well as on the tick. The ticker's first
+		// fire is 24h away, so an instance that restarts daily — a container on a
+		// nightly compose pull, say — never reached it and the cleanup never ran
+		// at all. The short delay keeps the prune off the startup critical path.
+		startup := time.NewTimer(2 * time.Minute)
+		defer startup.Stop()
+
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 
 		for {
 			select {
+			case <-startup.C:
+				db.PruneHistory()
 			case <-ticker.C:
-				retentionStr, err := db.GetSetting("max_log_retention_days")
-				if err != nil {
-					slog.Error("Failed to get log retention setting", "error", err)
-					continue
-				}
-				retentionDays := 90
-				if retentionStr != "" {
-					if _, err := fmt.Sscanf(retentionStr, "%d", &retentionDays); err != nil {
-						slog.Error("Failed to parse log retention days", "error", err)
-						continue
-					}
-				}
-				if retentionDays < 7 {
-					retentionDays = 7
-				}
-				if err := db.DeleteOldActionLogs(retentionDays); err != nil {
-					slog.Error("Failed to delete old action logs", "error", err)
-				} else {
-					slog.Info("Cleaned up old action logs", "retention_days", retentionDays)
-				}
+				db.PruneHistory()
 			case <-ctx.Done():
 				return
 			}

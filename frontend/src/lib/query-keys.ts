@@ -82,6 +82,7 @@ export const queryKeys = {
     updates: () => ['settings', 'updates'] as const,
     git: () => ['settings', 'git'] as const,
     globalEnv: () => ['settings', 'global-env'] as const,
+    retention: () => ['settings', 'retention'] as const,
   },
 
   /** Git state for a stack. `all` prefix-matches log and diff. */

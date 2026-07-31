@@ -315,57 +315,82 @@ func parseEnvFile(path string) ([]map[string]string, error) {
 }
 
 func (h *SettingsHandler) GetLogRetention(c *gin.Context) {
-	retentionStr, err := h.db.GetSetting("max_log_retention_days")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to get log retention setting",
-		))
-		return
-	}
-
-	retentionDays := 90
-	if retentionStr != "" {
-		if _, err := fmt.Sscanf(retentionStr, "%d", &retentionDays); err != nil {
-			slog.Error("Failed to parse log retention days", "error", err)
-			retentionDays = 90
-		}
-	}
-
+	// All three histories are read through the same clamped accessor, so the
+	// UI shows the value that will actually be applied rather than the raw row.
 	c.JSON(http.StatusOK, gin.H{
-		"retentionDays": retentionDays,
+		"retentionDays":              h.db.RetentionDays(database.SettingLogRetentionDays),
+		"updateHistoryRetentionDays": h.db.RetentionDays(database.SettingUpdateHistoryRetentionDays),
+		"backupHistoryRetentionDays": h.db.RetentionDays(database.SettingBackupHistoryRetentionDays),
+		"minRetentionDays":           database.MinRetentionDays,
 	})
 }
 
 func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {
+	// All three fields are optional so a client can update one without having
+	// to know the others; at least one must be present.
 	var req struct {
-		RetentionDays int `json:"retentionDays" binding:"required,min=7"`
+		RetentionDays              *int `json:"retentionDays"`
+		UpdateHistoryRetentionDays *int `json:"updateHistoryRetentionDays"`
+		BackupHistoryRetentionDays *int `json:"backupHistoryRetentionDays"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
 			"VALIDATION_ERROR",
-			"Retention days must be at least 7",
+			"Invalid request body",
 		))
 		return
 	}
 
-	if err := h.db.SetSetting("max_log_retention_days", fmt.Sprintf("%d", req.RetentionDays)); err != nil {
-		slog.Error("Failed to update log retention setting", "error", err)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to update log retention setting",
+	updates := []struct {
+		value *int
+		key   string
+		label string
+	}{
+		{req.RetentionDays, database.SettingLogRetentionDays, "log_retention"},
+		{req.UpdateHistoryRetentionDays, database.SettingUpdateHistoryRetentionDays, "update_history_retention"},
+		{req.BackupHistoryRetentionDays, database.SettingBackupHistoryRetentionDays, "backup_history_retention"},
+	}
+
+	applied := gin.H{}
+	for _, u := range updates {
+		if u.value == nil {
+			continue
+		}
+		if *u.value < database.MinRetentionDays {
+			c.JSON(http.StatusBadRequest, models.NewAppError(
+				http.StatusBadRequest,
+				"VALIDATION_ERROR",
+				fmt.Sprintf("Retention days must be at least %d", database.MinRetentionDays),
+			))
+			return
+		}
+		if err := h.db.SetSetting(u.key, strconv.Itoa(*u.value)); err != nil {
+			slog.Error("Failed to update retention setting", "setting", u.label, "error", err)
+			c.JSON(http.StatusInternalServerError, models.NewAppError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to update retention setting",
+			))
+			return
+		}
+		applied[u.label] = *u.value
+	}
+
+	if len(applied) == 0 {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			"VALIDATION_ERROR",
+			"At least one retention value is required",
 		))
 		return
 	}
 
-	slog.Info("Log retention updated", "retention_days", req.RetentionDays)
+	slog.Info("Retention settings updated", "applied", applied)
 	logActionFromContext(h.actionLog, c, nil, services.ActionUpdateSettings, gin.H{
-		"setting":        "log_retention",
-		"retention_days": req.RetentionDays,
+		"setting": "retention",
+		"applied": applied,
 	})
 	c.Status(http.StatusNoContent)
 }

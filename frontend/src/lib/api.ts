@@ -18,6 +18,7 @@ import type {
   UpdateHistoryEntry,
   AutoUpdatePolicy,
   UpdateSettings,
+  RetentionSettings,
   UpdateHistoryFilters,
   GitStatus,
   GitCommit,
@@ -179,6 +180,15 @@ export const settingsApi = {
   updateGit: async (data: { sshKey?: string; httpsUser?: string; httpsToken?: string }) => {
     const response = await apiClient.put<{ sshKey: string; httpsUser: string; hasHttpsToken: boolean }>('/settings/git', data)
     return response.data
+  },
+
+  getRetention: async () => {
+    const response = await apiClient.get<RetentionSettings>('/settings/log-retention')
+    return response.data
+  },
+
+  updateRetention: async (data: Partial<Omit<RetentionSettings, 'minRetentionDays'>>) => {
+    await apiClient.put('/settings/log-retention', data)
   },
 
   getAuditLog: async (
