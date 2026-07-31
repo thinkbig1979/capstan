@@ -232,8 +232,21 @@ Define this once, adjusting the paths to your deployment:
 alias capstan-tools='docker run --rm \
   -v ./data:/app/data \
   -v ~/.config/rclone/rclone.conf:/home/appuser/.config/rclone/rclone.conf:ro \
+  -e RCLONE_CONFIG=/home/appuser/.config/rclone/rclone.conf \
   --entrypoint sh ghcr.io/thinkbig1979/capstan:latest -c'
 ```
+
+`RCLONE_CONFIG` is not optional. `--entrypoint sh` skips the entrypoint that
+would drop to `appuser`, so these commands run as **root** with `HOME=/root`,
+and rclone looks for its config under `$HOME`. Without the variable it never
+reads the file you just mounted and step 2 fails with:
+
+```
+NOTICE: Config file "/root/.config/rclone/rclone.conf" not found - using defaults
+CRITICAL: Failed to create file system for "<remote>:<path>": didn't find section in config file
+```
+
+which reads like a broken remote rather than a config it never opened.
 
 #### 2. Get the repository back from the remote
 
@@ -244,6 +257,9 @@ capstan-tools 'rclone sync <remote>:<path> /app/data/restic-repo --stats-one-lin
 `<remote>:<path>` are exactly the values shown in Settings → Backup. This is
 what the UI's DR Restore does; doing it by hand keeps step 1's "container
 stopped" rule intact.
+
+If the remote is a local-filesystem one, add its bind mount to the alias too —
+the path is resolved inside the container.
 
 #### 3. Find the database snapshot
 
