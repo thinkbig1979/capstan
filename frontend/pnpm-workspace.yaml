@@ -18,6 +18,35 @@ trustPolicyExclude:
   - react-redux@9.2.0
   - reselect@5.1.1
   - semver@6.3.1
+# Security: advisories that `pnpm audit` reports but that have been assessed as
+# not applicable here. Every entry needs a written reason and an issue that
+# removes it — an allowlist without an expiry date becomes a place findings go
+# to be forgotten. Suppression is visible, not silent: pnpm still lists the
+# finding and appends "(N ignored)" to the severity line.
+#
+# This is what .github/workflows/security.yml gates on, so an entry added here
+# silences CI as well as local audits. That is the intent — one place to state
+# the exception, one place to review it — but it is also why the bar for adding
+# one is a reachability argument, not an inconvenience.
+auditConfig:
+  ignoreGhsas:
+    # GHSA-qwww-vcr4-c8h2 — react-router: RSC Mode CSRF bypass, action execution
+    # before the 400 response. Vulnerable >=7.12.0 <8.3.0, patched only in
+    # react-router >=8.3.0.
+    #
+    # Not clearable by upgrading: react-router-dom has no 8.x release (latest
+    # 7.18.2), so reaching the patched version means migrating off
+    # react-router-dom onto react-router v8 — an architectural change, tracked
+    # separately as agent-os-e0t.
+    #
+    # Not applicable: the advisory text states it "only affects your application
+    # if you are using the unstable RSC APIs". capstan is Declarative Mode only —
+    # BrowserRouter in main.tsx; Routes/Route/Navigate/Outlet in App.tsx; no
+    # createBrowserRouter, no RouterProvider, no loaders or actions, no RSC, no
+    # SSR, no prerendering. Verified during session 2 (agent-os-40s).
+    #
+    # Remove this entry when agent-os-e0t lands.
+    - GHSA-qwww-vcr4-c8h2
 overrides:
   # Security: pull fast-uri past the path-traversal fix and past the two host
   # confusion advisories, GHSA-4c8g-83qw-93j6 (fixed 3.1.3) and

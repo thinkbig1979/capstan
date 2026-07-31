@@ -310,9 +310,20 @@ audit; the measures below are in place and covered by tests.
   error responses avoid leaking stack traces or internals.
 
 **Dependencies and build**
-- Go and npm dependencies are scanned (`govulncheck`, `pnpm audit`) and kept
-  current; the binary is built with a patched Go toolchain and base images are
-  pinned.
+- CI scans dependencies on every pull request, on every push to `main`, and on a
+  weekly schedule, so advisories published against unchanged code are still
+  caught. Two checks block a merge: Go vulnerabilities that `govulncheck` traces
+  to a call in Capstan's own code, and production npm advisories of high severity
+  or above. Container image findings (`trivy`, covering the Alpine base and the
+  vendored `restic`/`rclone` binaries) and dev-dependency npm advisories are
+  reported but do not block, since neither reaches the running application.
+- A small number of advisories are accepted rather than fixed, each recorded in
+  the file that suppresses it with the reason and the issue that removes it.
+  These are visible in the scan output rather than silently filtered.
+- Dependabot opens grouped update pull requests for all four ecosystems (Go
+  modules, npm, Docker base images, and GitHub Actions).
+- The binary is built with a patched Go toolchain, and base images are pinned by
+  tag with the Go image kept in lockstep with `go.mod`'s toolchain directive.
 
 **The honest boundary.** None of this changes the fact that access to the Docker
 socket is root-equivalent control of the host (see
