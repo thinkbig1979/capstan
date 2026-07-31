@@ -109,6 +109,20 @@ updates:
         update-types:
           - minor
           - patch
+    # Node major bumps are ignored because this repo tracks Node LTS
+    # deliberately, in three places that must agree: docker/Dockerfile's
+    # frontend-build stage, frontend.yml's `node-version: 22`, and the "Node
+    # Version: 22 LTS" standard in CLAUDE.md. Dependabot's first run proposed
+    # node:22-alpine -> node:25-alpine (PR #14), which is an odd-numbered, i.e.
+    # non-LTS, line — and it would have moved one of those three without the
+    # other two.
+    #
+    # This encodes the existing policy rather than setting a new one. Moving to
+    # the next LTS is a deliberate change across all three files, not a bot PR.
+    ignore:
+      - dependency-name: node
+        update-types:
+          - version-update:semver-major
 
   # ---------------------------------------------------------------------------
   # Directory is `/` — Dependabot finds .github/workflows/ from the repo root,
