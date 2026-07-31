@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -77,14 +76,6 @@ func SecurityHeaders(cfg *config.Config) gin.HandlerFunc {
 		))
 		c.Next()
 	}
-}
-
-func isLocalhost(c *gin.Context) bool {
-	ip := net.ParseIP(c.ClientIP())
-	if ip == nil {
-		return false
-	}
-	return ip.IsLoopback()
 }
 
 func main() {
@@ -224,32 +215,15 @@ func main() {
 	r.Use(middleware.ValidateInput())
 	r.Use(SecurityHeaders(cfg))
 
-	r.GET("/health", func(c *gin.Context) {
-		if !isLocalhost(c) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Health endpoint restricted to localhost"})
-			return
-		}
-
-		dockerHealthy := false
-
-		if dockerService != nil {
-			_, err := dockerService.GetContainerList("")
-			if err == nil {
-				dockerHealthy = true
-			}
-		}
-
-		if !dockerHealthy {
-			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"status": "unhealthy",
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"status": "healthy",
-		})
-	})
+	// Liveness and readiness. dockerService is a typed nil when the daemon was
+	// unreachable at startup; hand the handler an untyped nil so it reports the
+	// outage rather than calling through a non-nil interface holding a nil
+	// pointer (agent-os-69a).
+	var dockerPinger handlers.DockerPinger
+	if dockerService != nil {
+		dockerPinger = dockerService
+	}
+	handlers.NewHealthHandler(dockerPinger, cfg.HealthNetworks).RegisterRoutes(r)
 
 	api := r.Group("/api/v1")
 

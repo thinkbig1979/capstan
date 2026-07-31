@@ -20,7 +20,10 @@ var PublicPaths = []string{
 	// conversation needs to answer "what is running here?" without a session.
 	// This list is consulted by the CSRF middleware too, so keep the two in step.
 	"/api/v1/version",
+	// Liveness and readiness. Both carry their own network policy
+	// (HEALTH_ALLOWED_NETWORKS, loopback always allowed) rather than a session.
 	"/health",
+	"/health/ready",
 }
 
 func IsPublicPath(path string) bool {
@@ -32,16 +35,24 @@ func IsPublicPath(path string) bool {
 	return false
 }
 
-func isTrustedIP(clientIP string, trustedNetworks string) bool {
+// IsTrustedIP reports whether clientIP is loopback or falls inside one of the
+// comma-separated CIDRs (or literal addresses) in networks. Loopback is always
+// allowed, and an empty list means loopback only.
+//
+// Two callers with deliberately different lists: the AUTH_DISABLED bypass uses
+// TRUSTED_NETWORKS, the health endpoints use HEALTH_ALLOWED_NETWORKS. Only the
+// matching logic is shared — see config.Config.HealthNetworks for why the lists
+// are not.
+func IsTrustedIP(clientIP string, networks string) bool {
 	if clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" {
 		return true
 	}
 
-	if trustedNetworks == "" {
+	if networks == "" {
 		return false
 	}
 
-	for _, networkStr := range strings.Split(trustedNetworks, ",") {
+	for _, networkStr := range strings.Split(networks, ",") {
 		networkStr = strings.TrimSpace(networkStr)
 		if networkStr == "" {
 			continue
@@ -91,7 +102,7 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 	return func(c *gin.Context) {
 		if authDisabled {
 			clientIP := c.ClientIP()
-			if !isTrustedIP(clientIP, trustedNetworks) {
+			if !IsTrustedIP(clientIP, trustedNetworks) {
 				slog.Warn("Untrusted IP attempt with auth disabled", "ip", clientIP, "trusted_networks", trustedNetworks)
 				c.JSON(403, models.NewAppError(403, "FORBIDDEN", "Authentication disabled - only local connections allowed"))
 				c.Abort()

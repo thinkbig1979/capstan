@@ -30,6 +30,14 @@ type Config struct {
 	AuthDisabled    bool
 	CORSOrigins     string
 	TrustedNetworks string
+	// HealthNetworks lists the CIDRs, beyond loopback, that may reach /health
+	// and /health/ready. Deliberately separate from TrustedNetworks: that value
+	// is Gin's trusted-proxy list *and* the AUTH_DISABLED bypass list, so
+	// reusing it would force an operator to grant an uptime monitor
+	// X-Forwarded-For spoofing and auth bypass just to read a health endpoint
+	// (agent-os-69a). Empty means loopback only, which is the pre-split
+	// behaviour.
+	HealthNetworks  string
 	ExtraStacksDirs []string
 
 	// Backup / restic env-var fallbacks (DB settings take precedence at runtime).
@@ -57,6 +65,7 @@ func Load() (*Config, error) {
 		GitHTTPSUser:    "git",
 		AuthDisabled:    os.Getenv("AUTH_DISABLED") == "true",
 		TrustedNetworks: os.Getenv("TRUSTED_NETWORKS"),
+		HealthNetworks:  os.Getenv("HEALTH_ALLOWED_NETWORKS"),
 	}
 
 	if stacksDir := os.Getenv("STACKS_DIR"); stacksDir != "" {

@@ -13,7 +13,9 @@ func LoggingMiddleware() gin.HandlerFunc {
 		start := time.Now()
 		path := c.Request.URL.Path
 
-		if path == "/health" {
+		// Probes run on a timer; logging every one buries the real traffic.
+		// Exact matches, not a prefix, so a real route under /health* still logs.
+		if path == "/health" || path == "/health/ready" {
 			c.Next()
 			return
 		}
