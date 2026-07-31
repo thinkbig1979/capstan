@@ -41,7 +41,7 @@ jobs:
 
       # The self-hosted runner container ships Node 10; react-doctor's action
       # needs a modern Node on PATH.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
