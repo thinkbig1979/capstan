@@ -53,7 +53,16 @@ func NewActionLogger(db *database.DB) *ActionLogger {
 	return &ActionLogger{db: db}
 }
 
+// Log records an action with no request correlation. Background jobs and
+// schedulers serve no HTTP request, so they legitimately have no ID.
 func (l *ActionLogger) Log(userID string, stackID *string, action string, detail interface{}) {
+	l.LogWithRequest("", userID, stackID, action, detail)
+}
+
+// LogWithRequest records an action tagged with the ID of the request that
+// caused it, so an HTTP log line and the audit row it produced can be joined
+// (agent-os-7li).
+func (l *ActionLogger) LogWithRequest(requestID, userID string, stackID *string, action string, detail interface{}) {
 	detailJSON, err := json.Marshal(detail)
 	if err != nil {
 		slog.Error("failed to marshal action detail", "action", action, "error", err)
@@ -71,6 +80,7 @@ func (l *ActionLogger) Log(userID string, stackID *string, action string, detail
 		StackID:   stackIDStr,
 		Action:    action,
 		Detail:    string(detailJSON),
+		RequestID: requestID,
 		CreatedAt: time.Now(),
 	}
 

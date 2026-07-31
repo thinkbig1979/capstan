@@ -21,6 +21,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/handlers"
+	"github.com/thinkbig1979/capstan/backend/internal/logging"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
@@ -86,12 +87,29 @@ func isLocalhost(c *gin.Context) bool {
 }
 
 func main() {
-	slog.Info("Starting Capstan backend")
+	// Bootstrap the logger from the environment before config.Load, so that
+	// config's own startup lines — including the volume-path-identity warning —
+	// go through the configured handler instead of slog's default. An
+	// unrecognised value stops the process here rather than silently becoming
+	// info (agent-os-7li).
+	if err := logging.ConfigureFromEnv(os.Stderr); err != nil {
+		log.Fatal("Failed to configure logging:", err)
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal("Failed to load config:", err)
 	}
+
+	// Re-install from the validated config, which is the authoritative source.
+	if err := logging.Configure(os.Stderr, cfg.LogLevel, cfg.LogFormat); err != nil {
+		log.Fatal("Failed to configure logging:", err)
+	}
+
+	slog.Info("Starting Capstan backend",
+		"log_level", cfg.LogLevel,
+		"log_format", cfg.LogFormat,
+	)
 
 	db, err := database.NewWithMigrationsAndEncryptor(cfg.DataDir, services.NewTokenEncryptorOrDefault(cfg.StorageKey, cfg.JWTSecret))
 	if err != nil {
@@ -201,6 +219,8 @@ func main() {
 	}
 
 	r.Use(middleware.RecoveryMiddleware())
+	// Before LoggingMiddleware: the HTTP log line carries the request ID.
+	r.Use(middleware.RequestID())
 	r.Use(middleware.LoggingMiddleware())
 	r.Use(middleware.BodySizeLimit())
 	r.Use(middleware.CORSMiddleware(cfg.CORSOrigins))

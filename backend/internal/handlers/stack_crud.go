@@ -203,8 +203,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), stackID, "create", fmt.Sprintf("Created new stack: %s", req.Name))
+	h.logAction(c, stackID, "create", fmt.Sprintf("Created new stack: %s", req.Name))
 
 	// req.Deploy is false: stack created successfully, no deploy requested.
 	if !req.Deploy || h.docker == nil {
@@ -223,7 +222,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	// Attempt deployment using StartVerified so the outcome reflects the actual
 	// running state, not just compose exit code (finding #14).
 	deployAR, deployOutput := h.docker.StartVerified(stack)
-	h.logAction(userID.(string), stackID, "start", deployOutput)
+	h.logAction(c, stackID, "start", deployOutput)
 
 	// Update DB with the verified status regardless of outcome.
 	verifiedStatus := lifecycleStatus(deployAR)
@@ -361,8 +360,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	// Start/Stop/Restart's verified lifecycle).
 	deleteAR, deleteOutput := h.docker.DeleteVerified(*stack)
 
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "delete", deleteOutput)
+	h.logAction(c, id, "delete", deleteOutput)
 
 	if deleteAR.Outcome != truth.OutcomeSuccess && deleteAR.Outcome != truth.OutcomeNoChange {
 		renderResult(c, truth.ActionResult{

@@ -19,14 +19,14 @@ func (d *DB) LogAction(log models.ActionLog) error {
 	if log.StackID != "" {
 		stackID = log.StackID
 	}
-	query := `INSERT INTO action_log (id, user_id, stack_id, action, detail, created_at)
-	          VALUES (?, ?, ?, ?, ?, ?)`
-	_, err := d.db.Exec(query, log.ID, log.UserID, stackID, log.Action, log.Detail, log.CreatedAt)
+	query := `INSERT INTO action_log (id, user_id, stack_id, action, detail, request_id, created_at)
+	          VALUES (?, ?, ?, ?, ?, ?, ?)`
+	_, err := d.db.Exec(query, log.ID, log.UserID, stackID, log.Action, log.Detail, log.RequestID, log.CreatedAt)
 	return err
 }
 
 func (d *DB) GetActionsByStack(stackID string, limit int) ([]models.ActionLog, error) {
-	query := `SELECT id, user_id, stack_id, action, detail, created_at
+	query := `SELECT id, user_id, stack_id, action, detail, request_id, created_at
 	          FROM action_log WHERE stack_id = ? ORDER BY created_at DESC LIMIT ?`
 	rows, err := d.db.Query(query, stackID, limit)
 	if err != nil {
@@ -37,19 +37,20 @@ func (d *DB) GetActionsByStack(stackID string, limit int) ([]models.ActionLog, e
 	actions := make([]models.ActionLog, 0)
 	for rows.Next() {
 		var action models.ActionLog
-		var stackID sql.NullString
-		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &action.CreatedAt)
+		var stackID, requestID sql.NullString
+		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &requestID, &action.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
 		action.StackID = stackID.String
+		action.RequestID = requestID.String
 		actions = append(actions, action)
 	}
 	return actions, nil
 }
 
 func (d *DB) GetRecentActions(limit int) ([]models.ActionLog, error) {
-	query := `SELECT id, user_id, stack_id, action, detail, created_at
+	query := `SELECT id, user_id, stack_id, action, detail, request_id, created_at
 	          FROM action_log ORDER BY created_at DESC LIMIT ?`
 	rows, err := d.db.Query(query, limit)
 	if err != nil {
@@ -60,12 +61,13 @@ func (d *DB) GetRecentActions(limit int) ([]models.ActionLog, error) {
 	actions := make([]models.ActionLog, 0)
 	for rows.Next() {
 		var action models.ActionLog
-		var stackID sql.NullString
-		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &action.CreatedAt)
+		var stackID, requestID sql.NullString
+		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &requestID, &action.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
 		action.StackID = stackID.String
+		action.RequestID = requestID.String
 		actions = append(actions, action)
 	}
 	return actions, nil
@@ -123,7 +125,7 @@ func (d *DB) ListActionLogsFiltered(limit, offset int, f ActionLogFilter) ([]mod
 		return nil, 0, err
 	}
 
-	query := `SELECT id, user_id, stack_id, action, detail, created_at
+	query := `SELECT id, user_id, stack_id, action, detail, request_id, created_at
 	          FROM action_log` + whereClause + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	queryArgs := append(append([]interface{}{}, args...), limit, offset)
 	rows, err := d.db.Query(query, queryArgs...)
@@ -135,12 +137,13 @@ func (d *DB) ListActionLogsFiltered(limit, offset int, f ActionLogFilter) ([]mod
 	actions := make([]models.ActionLog, 0)
 	for rows.Next() {
 		var action models.ActionLog
-		var stackID sql.NullString
-		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &action.CreatedAt)
+		var stackID, requestID sql.NullString
+		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &requestID, &action.CreatedAt)
 		if err != nil {
 			return nil, 0, err
 		}
 		action.StackID = stackID.String
+		action.RequestID = requestID.String
 		actions = append(actions, action)
 	}
 	return actions, total, nil

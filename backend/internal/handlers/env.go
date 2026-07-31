@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
@@ -196,8 +197,7 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		return
 	}
 
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "update_env", "Updated env file: "+stack.EnvFile)
+	h.logAction(c, id, "update_env", "Updated env file: "+stack.EnvFile)
 
 	renderResult(c, truth.Success("env file saved",
 		truth.KV("filename", stack.EnvFile),
@@ -284,8 +284,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 		}
 	}
 
-	userID, _ := c.Get("userID")
-	h.logAction(userID.(string), id, "create_env", "Created env file: "+envFileName)
+	h.logAction(c, id, "create_env", "Created env file: "+envFileName)
 
 	c.JSON(http.StatusCreated, truth.Success("env file created",
 		truth.KV("filename", envFileName),
@@ -502,6 +501,6 @@ func (h *EnvHandler) isSensitiveKey(key string) bool {
 	return false
 }
 
-func (h *EnvHandler) logAction(userID, stackID, action, detail string) {
-	h.actionLog.Log(userID, &stackID, action, detail)
+func (h *EnvHandler) logAction(c *gin.Context, stackID, action, detail string) {
+	h.actionLog.LogWithRequest(middleware.RequestIDFrom(c), userIDFrom(c), &stackID, action, detail)
 }

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
@@ -40,5 +41,5 @@ func userIDFrom(c *gin.Context) string {
 // logActionFromContext logs an action using the userID found on the gin
 // context, delegating to the given ActionLogger.
 func logActionFromContext(l *services.ActionLogger, c *gin.Context, stackID *string, action string, detail interface{}) {
-	l.Log(userIDFrom(c), stackID, action, detail)
+	l.LogWithRequest(middleware.RequestIDFrom(c), userIDFrom(c), stackID, action, detail)
 }
