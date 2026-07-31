@@ -76,7 +76,7 @@ jobs:
       # the truth package — the exact command that was broken by buildx v0.23
       # on the VPS). Pinning to a recent version avoids the --format bug.
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # go-version-file reads backend/go.mod and, from setup-go v6, prefers
       # its `toolchain` directive over the `go` directive — so this workflow
