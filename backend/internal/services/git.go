@@ -3,7 +3,6 @@ package services
 import (
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
@@ -195,13 +194,13 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 }
 
 func (s *GitService) gitCommand(dirPath string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-c", "safe.directory=" + dirPath}, args...)...)
-	cmd.Dir = dirPath
+	cmd, token := s.gitCmd(dirPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w (%s)", args[0], err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("git %s: %w (%s)", args[0], err,
+			redactToken(strings.TrimSpace(string(output)), token))
 	}
-	return strings.TrimSpace(string(output)), nil
+	return redactToken(strings.TrimSpace(string(output)), token), nil
 }
 
 func (s *GitService) Pull(dirPath string) (*models.PullResult, error) {
