@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # QEMU only emulates the lightweight runtime-stage steps (apk add, user
       # setup) for arm64; the heavy Go/Node builds cross-compile on the host.
