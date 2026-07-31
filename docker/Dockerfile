@@ -23,7 +23,7 @@ RUN npm run build
 # Backend build stage — also pinned to $BUILDPLATFORM. Go cross-compiles
 # natively (CGO disabled), so we build on the fast host arch and emit a binary
 # for the requested $TARGETARCH. TARGETOS/TARGETARCH are provided by Buildx.
-FROM --platform=$BUILDPLATFORM golang:1.25.12-alpine AS backend-build
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS backend-build
 
 WORKDIR /app
 
@@ -41,7 +41,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a -o server ./
 # target architecture on the build host. Pinned to exact versions for
 # reproducible builds. No QEMU emulation needed: the binaries are static and
 # architecture-specific, resolved via $TARGETARCH provided by Buildx.
-FROM alpine:3.21 AS backup-tools
+FROM alpine:3.24 AS backup-tools
 
 # Pinned versions — bump here when upgrading.
 # Note: use RESTIC_VER / RCLONE_VER (not RESTIC_VERSION / RCLONE_VERSION) to
@@ -98,7 +98,7 @@ RUN set -eu; \
     rm /tmp/rclone.zip
 
 # Runtime stage
-FROM alpine:3.21
+FROM alpine:3.24
 
 WORKDIR /app
 
