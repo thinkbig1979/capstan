@@ -1660,8 +1660,46 @@ func TestResolveBackupConfig_ExportedVariantReadsMergedConfig(t *testing.T) {
 	db := newBackupTestDB(t)
 	require.NoError(t, db.SetSetting("restic_repository", "/exported/repo"))
 
-	bc := ResolveBackupConfig(db)
+	bc := ResolveBackupConfigWithCfg(db, &config.Config{DataDir: t.TempDir()})
 	assert.Equal(t, "/exported/repo", bc.ResticRepository)
+}
+
+// TestResolveBackupConfig_DefaultRepositoryIsAbsoluteUnderDataDir is the
+// regression guard for agent-os-9au.
+//
+// The test above sets restic_repository explicitly, so it never exercised the
+// default branch — which is precisely why the bug survived. When neither the DB
+// nor the environment supplies a repository, the default is computed as
+// filepath.Join(cfg.DataDir, "restic-repo"). Resolving with an empty
+// config.Config made that filepath.Join("", "restic-repo") == "restic-repo", a
+// RELATIVE path resolved against the server's working directory.
+func TestResolveBackupConfig_DefaultRepositoryIsAbsoluteUnderDataDir(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	dataDir := t.TempDir()
+
+	bc := ResolveBackupConfigWithCfg(db, &config.Config{DataDir: dataDir})
+
+	assert.Equal(t, filepath.Join(dataDir, "restic-repo"), bc.ResticRepository,
+		"the default repository must sit under DataDir")
+	assert.True(t, filepath.IsAbs(bc.ResticRepository),
+		"the default repository must be absolute; a relative path resolves against the "+
+			"server's working directory and lands outside the data volume")
+}
+
+// TestBackupService_ResolveConfig_UsesLiveDataDir pins the replacement entry
+// point. Callers outside this package can only resolve through the service, so
+// there is no longer a way to resolve without the live config.
+func TestBackupService_ResolveConfig_UsesLiveDataDir(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	dataDir := t.TempDir()
+	cfg := &config.Config{DataDir: dataDir}
+	svc := NewBackupService(cfg, db, nil, NewOperationLock(), NewActionLogger(db))
+
+	assert.Equal(t, filepath.Join(dataDir, "restic-repo"), svc.ResolveConfig().ResticRepository)
 }
 
 // ============================================================

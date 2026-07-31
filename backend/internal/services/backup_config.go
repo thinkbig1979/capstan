@@ -129,9 +129,20 @@ func resolveBackupConfig(db *database.DB, cfg *config.Config) BackupConfig {
 // ResolveBackupConfig is the exported variant of resolveBackupConfig for use
 // by the BackupHandler. It builds the effective BackupConfig from DB settings,
 // using an empty Config struct as the env-var fallback layer (DB values win).
-func ResolveBackupConfig(db *database.DB) BackupConfig {
-	return resolveBackupConfig(db, &config.Config{})
-}
+// REMOVED (agent-os-9au): ResolveBackupConfig(db *database.DB).
+//
+// It called resolveBackupConfig(db, &config.Config{}) — an EMPTY config. With
+// cfg.DataDir == "" the default repository became filepath.Join("", "restic-repo"),
+// i.e. the RELATIVE path "restic-repo", resolved against the server's working
+// directory (/app). Four handlers used it, so repo init, cloud test, snapshot
+// listing and snapshot preview all pointed at /app/restic-repo while every
+// other path correctly used <DataDir>/restic-repo. Init reported success and
+// backups then failed with "repository does not exist".
+//
+// Deliberately not replaced with a fixed version: any resolver that does not
+// take the live config can reintroduce the same defect silently. Callers go
+// through BackupService.ResolveConfig / NewResticManager / NewRcloneManager,
+// which cannot be constructed without a config.Config.
 
 // ResolveBackupConfigWithCfg is like ResolveBackupConfig but accepts a
 // config.Config so env-var fallbacks are applied. Use this when the caller

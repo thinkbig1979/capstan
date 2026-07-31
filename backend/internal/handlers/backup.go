@@ -789,8 +789,7 @@ func (h *BackupHandler) repoInit(c *gin.Context) {
 		return
 	}
 
-	bc := services.ResolveBackupConfig(h.db)
-	restic := services.NewResticManager(bc, h.logger)
+	restic := h.svc.NewResticManager()
 
 	if err := restic.EnsureRepository(ctx); err != nil {
 		h.internalError(c, "Failed to initialise repository", err)
@@ -811,7 +810,7 @@ func (h *BackupHandler) cloudTest(c *gin.Context) {
 		return
 	}
 
-	bc := services.ResolveBackupConfig(h.db)
+	bc := h.svc.ResolveConfig()
 
 	if bc.RcloneRemote == "" {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
@@ -825,7 +824,7 @@ func (h *BackupHandler) cloudTest(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	rclone := services.NewRcloneManager(bc, h.logger)
+	rclone := h.svc.NewRcloneManager()
 	if err := rclone.TestConnectivity(ctx, bc.RcloneRemote); err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
@@ -1033,15 +1032,13 @@ func (h *BackupHandler) internalError(c *gin.Context, msg string, err error) {
 // listSnapshotsViaRestic builds a ResticManager and returns all snapshots for
 // the given tag (empty = all).
 func (h *BackupHandler) listSnapshotsViaRestic(ctx context.Context, stackID string) ([]models.BackupSnapshot, error) {
-	bc := services.ResolveBackupConfig(h.db)
-	restic := services.NewResticManager(bc, h.logger)
+	restic := h.svc.NewResticManager()
 	return restic.ListSnapshots(ctx, stackID, 0)
 }
 
 // previewSnapshotViaRestic runs restic ls and collects the output lines.
 func (h *BackupHandler) previewSnapshotViaRestic(ctx context.Context, snapshotID string) ([]string, error) {
-	bc := services.ResolveBackupConfig(h.db)
-	restic := services.NewResticManager(bc, h.logger)
+	restic := h.svc.NewResticManager()
 
 	out := make(chan services.StreamLine, 256)
 	done := make(chan error, 1)
