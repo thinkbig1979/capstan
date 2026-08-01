@@ -82,11 +82,7 @@ func (h *LogsHandler) GetLogs(c *gin.Context) {
 	output, err := h.docker.Logs(*stack, tail)
 	if err != nil {
 		slog.Error("Failed to get logs", "error", err)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"LOGS_ERROR",
-			"Failed to retrieve logs",
-		))
+		respondDockerErr(c, err, http.StatusInternalServerError, "LOGS_ERROR", "Failed to retrieve logs")
 		return
 	}
 
@@ -99,6 +95,15 @@ func (h *LogsHandler) GetLogs(c *gin.Context) {
 
 func (h *LogsHandler) StreamLogs(c *gin.Context) {
 	id := c.Param("id")
+
+	// Refuse before the upgrade, not after: an upgraded socket that immediately
+	// closes reads to the operator as a network fault, while a 503 names the
+	// cause. h.docker is the concrete *services.DockerService here, so the nil
+	// check means what it says (agent-os-xay).
+	if h.docker == nil {
+		writeJSONError(c, http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage)
+		return
+	}
 
 	stack, err := h.db.GetStack(id)
 	if err != nil || stack == nil {

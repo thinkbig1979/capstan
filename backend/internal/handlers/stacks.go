@@ -43,6 +43,13 @@ type stackStore interface {
 }
 
 type StacksHandler struct {
+	// docker is nil only when no Docker service was wired at all (tests). In
+	// production main.go passes the concrete *services.DockerService, which is a
+	// nil POINTER inside a non-nil interface during a Docker outage — so an
+	// `h.docker != nil` test cannot detect one and must never be written here.
+	// Always call through dockerSvc: DockerService guards its own nil receiver
+	// and returns services.ErrDockerUnavailable, which the error branches
+	// already handle (agent-os-xay).
 	docker    stackDocker
 	scanner   *services.ScannerService
 	linter    *services.LinterService
@@ -62,6 +69,21 @@ func NewStacksHandler(docker stackDocker, scanner *services.ScannerService, lint
 		actionLog: actionLog,
 		opLock:    opLock,
 	}
+}
+
+// dockerSvc returns the Docker dependency, substituting a typed-nil
+// *services.DockerService when none was wired at all.
+//
+// Calling a method on a nil INTERFACE panics, while calling one on a nil
+// *services.DockerService dispatches to that type's nil-receiver guards and
+// returns services.ErrDockerUnavailable (agent-os-xay). Converting the first
+// shape into the second means the lifecycle handlers below refuse cleanly for
+// both, without a nil check at every call site.
+func (h *StacksHandler) dockerSvc() stackDocker {
+	if h.docker == nil {
+		return (*services.DockerService)(nil)
+	}
+	return h.docker
 }
 
 func (h *StacksHandler) RegisterRoutes(group *gin.RouterGroup) {
@@ -125,18 +147,17 @@ func (h *StacksHandler) List(c *gin.Context) {
 		return
 	}
 
-	if h.docker != nil {
-		// One ContainerList snapshot bucketed by compose project replaces the
-		// former per-stack `docker compose ps` subprocess fan-out (O(1) Docker
-		// call instead of O(N) process spawns). On snapshot error we leave each
-		// stack's stored DB status untouched (same graceful fallback as before).
-		statuses, err := h.docker.GetStackStatuses(c.Request.Context(), h.db)
-		if err != nil {
-			slog.Error("Failed to derive live stack statuses", "error", err)
-		} else {
-			for i := range stacks {
-				applyLiveStatus(&stacks[i], statuses)
-			}
+	// One ContainerList snapshot bucketed by compose project replaces the former
+	// per-stack `docker compose ps` subprocess fan-out (O(1) Docker call instead
+	// of O(N) process spawns). On snapshot error — including a Docker outage,
+	// which arrives as services.ErrDockerUnavailable — we leave each stack's
+	// stored DB status untouched (same graceful fallback as before).
+	statuses, err := h.dockerSvc().GetStackStatuses(c.Request.Context(), h.db)
+	if err != nil {
+		slog.Error("Failed to derive live stack statuses", "error", err)
+	} else {
+		for i := range stacks {
+			applyLiveStatus(&stacks[i], statuses)
 		}
 	}
 
@@ -187,17 +208,15 @@ func (h *StacksHandler) Get(c *gin.Context) {
 		return
 	}
 
-	if h.docker != nil {
-		// Derive status from the same single-snapshot path List uses so a stack's
-		// detail page agrees with its list row, instead of the old per-stack
-		// `docker compose ps` subprocess (which returned "unknown" on error). On
-		// snapshot failure we leave the stored DB status untouched, as List does.
-		statuses, err := h.docker.GetStackStatuses(c.Request.Context(), h.db)
-		if err != nil {
-			slog.Error("Failed to derive live stack status", "error", err)
-		} else {
-			applyLiveStatus(stack, statuses)
-		}
+	// Derive status from the same single-snapshot path List uses so a stack's
+	// detail page agrees with its list row, instead of the old per-stack
+	// `docker compose ps` subprocess (which returned "unknown" on error). On
+	// snapshot failure we leave the stored DB status untouched, as List does.
+	statuses, err := h.dockerSvc().GetStackStatuses(c.Request.Context(), h.db)
+	if err != nil {
+		slog.Error("Failed to derive live stack status", "error", err)
+	} else {
+		applyLiveStatus(stack, statuses)
 	}
 
 	c.JSON(http.StatusOK, stack)

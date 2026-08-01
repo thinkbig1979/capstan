@@ -72,7 +72,7 @@ func (h *ResourcesHandler) listImages(c *gin.Context) {
 	images, err := h.docker.ListImages(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to list images", "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list images"))
+		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list images")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"images": images})
@@ -82,7 +82,7 @@ func (h *ResourcesHandler) listContainers(c *gin.Context) {
 	containers, err := h.docker.GetAllContainersWithDetails(c.Request.Context(), nil)
 	if err != nil {
 		slog.Error("Failed to list containers", "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list containers"))
+		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list containers")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"containers": containers})
@@ -92,7 +92,7 @@ func (h *ResourcesHandler) startContainer(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.docker.StartContainer(c.Request.Context(), id); err != nil {
 		slog.Error("Failed to start container", "id", id, "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to start container"))
+		respondDockerErr(c, err, http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to start container")
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_start", ContainerID: id, Timestamp: time.Now()})
@@ -103,7 +103,7 @@ func (h *ResourcesHandler) stopContainer(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.docker.StopContainer(c.Request.Context(), id); err != nil {
 		slog.Error("Failed to stop container", "id", id, "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to stop container"))
+		respondDockerErr(c, err, http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to stop container")
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_stop", ContainerID: id, Timestamp: time.Now()})
@@ -114,7 +114,7 @@ func (h *ResourcesHandler) restartContainer(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.docker.RestartContainer(c.Request.Context(), id); err != nil {
 		slog.Error("Failed to restart container", "id", id, "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to restart container"))
+		respondDockerErr(c, err, http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to restart container")
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_restart", ContainerID: id, Timestamp: time.Now()})
@@ -126,7 +126,7 @@ func (h *ResourcesHandler) inspectContainer(c *gin.Context) {
 	inspect, err := h.docker.InspectContainer(c.Request.Context(), id)
 	if err != nil {
 		slog.Error("Failed to inspect container", "id", id, "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to inspect container"))
+		respondDockerErr(c, err, http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to inspect container")
 		return
 	}
 
@@ -144,7 +144,7 @@ func (h *ResourcesHandler) listVolumes(c *gin.Context) {
 	volumes, err := h.docker.ListVolumes(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to list volumes", "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list volumes"))
+		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list volumes")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"volumes": volumes})
@@ -154,7 +154,7 @@ func (h *ResourcesHandler) listNetworks(c *gin.Context) {
 	networks, err := h.docker.ListNetworks(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to list networks", "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list networks"))
+		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list networks")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"networks": networks})
@@ -164,7 +164,7 @@ func (h *ResourcesHandler) listBuildCache(c *gin.Context) {
 	entries, err := h.docker.ListBuildCache(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to list build cache", "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list build cache"))
+		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list build cache")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"entries": entries})

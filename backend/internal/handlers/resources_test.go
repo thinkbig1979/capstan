@@ -48,6 +48,8 @@ func TestResourcesHandler_CheckUpdates_CachedEmpty(t *testing.T) {
 	assert.Len(t, updates, 0)
 }
 
+// A refresh with no Docker service used to panic on the nil receiver. It now
+// refuses with 503 and names the cause (agent-os-xay).
 func TestResourcesHandler_CheckUpdates_RefreshNoDocker(t *testing.T) {
 	handler := newTestResourcesHandler(t)
 	router := setupResourcesRouter(handler)
@@ -55,9 +57,10 @@ func TestResourcesHandler_CheckUpdates_RefreshNoDocker(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/resources/updates?refresh=true", nil)
 	w := httptest.NewRecorder()
 
-	assert.Panics(t, func() {
+	require.NotPanics(t, func() {
 		router.ServeHTTP(w, req)
 	})
+	assertUnavailable(t, w)
 }
 
 func TestResourcesHandler_GetUpdateHistory_Empty(t *testing.T) {

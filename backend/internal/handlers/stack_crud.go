@@ -206,7 +206,14 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	h.logAction(c, stackID, "create", fmt.Sprintf("Created new stack: %s", req.Name))
 
 	// req.Deploy is false: stack created successfully, no deploy requested.
-	if !req.Deploy || h.docker == nil {
+	//
+	// Deliberately no `h.docker == nil` term here: main.go passes the concrete
+	// *services.DockerService, so a Docker outage leaves a nil pointer inside a
+	// non-nil interface and that test never fires. The deploy attempt below
+	// refuses on its own and reports "created but not deployed: Docker daemon
+	// unreachable", which tells the operator more than silently skipping it
+	// would (agent-os-xay).
+	if !req.Deploy {
 		c.JSON(http.StatusCreated, truth.ActionResult{
 			Outcome: truth.OutcomeSuccess,
 			Reason:  "stack created",
@@ -221,7 +228,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 
 	// Attempt deployment using StartVerified so the outcome reflects the actual
 	// running state, not just compose exit code (finding #14).
-	deployAR, deployOutput := h.docker.StartVerified(stack)
+	deployAR, deployOutput := h.dockerSvc().StartVerified(stack)
 	h.logAction(c, stackID, "start", deployOutput)
 
 	// Update DB with the verified status regardless of outcome.
@@ -358,12 +365,12 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	// actually gone before touching the filesystem or DB — a compose exit code
 	// of 0 does not guarantee the containers stopped (same reasoning as
 	// Start/Stop/Restart's verified lifecycle).
-	deleteAR, deleteOutput := h.docker.DeleteVerified(*stack)
+	deleteAR, deleteOutput := h.dockerSvc().DeleteVerified(*stack)
 
 	h.logAction(c, id, "delete", deleteOutput)
 
 	if deleteAR.Outcome != truth.OutcomeSuccess && deleteAR.Outcome != truth.OutcomeNoChange {
-		renderResult(c, truth.ActionResult{
+		renderDockerResult(c, deleteAR.Err, truth.ActionResult{
 			Outcome: deleteAR.Outcome,
 			Reason:  "compose down did not verify as removed: " + deleteAR.Reason,
 			Details: mergeDetails(deleteAR.Details, map[string]any{

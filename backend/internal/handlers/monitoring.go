@@ -57,7 +57,7 @@ func (h *MonitoringHandler) getStackContainers(jwtSecret string, authDisabled bo
 		containers, err := h.docker.GetContainerList(stack.ProjectName)
 		if err != nil {
 			slog.Error("Failed to get container list", "userId", userID, "stackId", stackID, "error", err)
-			handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve container list"))
+			respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve container list")
 			return
 		}
 
