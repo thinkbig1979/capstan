@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -29,6 +32,36 @@ type userRequests struct {
 var (
 	ipRegex   = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
 	uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+	// loginKeyRegex matches the account half of a composite login key: the
+	// normalised username charset, or the sentinel used for anything that could
+	// not be a real account. Deliberately narrower than "any string" so the
+	// composite form is a third accepted shape, not an escape hatch.
+	loginKeyRegex = regexp.MustCompile(`^([a-z0-9_-]{3,50}|` + regexp.QuoteMeta(loginKeyUnknownAccount) + `)$`)
+)
+
+const (
+	// loginKeyPrefix marks a composite "scope + account" rate limit key, where
+	// scope is a client IP or loginKeyAnyIP. The ':' and '|' separators cannot
+	// appear in an IPv4 address, a UUID, or a username, so a composite key can
+	// never be confused with a plain one.
+	loginKeyPrefix = "login:"
+
+	// loginKeyAnyIP is the scope of the account-wide bucket, which counts
+	// attempts against one account from every source address at once.
+	loginKeyAnyIP = "*"
+
+	// loginKeyUnknownAccount buckets every login attempt whose submitted
+	// username could not be a real account (missing, wrong charset, wrong
+	// length) under one key per client IP, so unparseable input cannot be used
+	// to mint unlimited buckets.
+	loginKeyUnknownAccount = "-"
+
+	// loginBodyPeekLimit caps how much of a login request body is buffered to
+	// read the username. Real login bodies are well under 1 KB; anything larger
+	// is passed through untouched and falls back to IP-only keying rather than
+	// being held in memory.
+	loginBodyPeekLimit = 8 << 10
 )
 
 func NewRateLimiter(window time.Duration, maxReqs int) *RateLimiter {
@@ -45,6 +78,10 @@ func NewRateLimiter(window time.Duration, maxReqs int) *RateLimiter {
 	return rl
 }
 
+// validateRateLimitKey reports whether key is one of the three shapes this
+// package issues: a client IP, a user UUID, or a composite login key
+// ("login:<scope>|<account>"). Every shape is validated in full; the composite
+// form is not a wildcard.
 func validateRateLimitKey(key string) bool {
 	if key == "" {
 		return false
@@ -54,6 +91,18 @@ func validateRateLimitKey(key string) bool {
 		return false
 	}
 
+	if strings.HasPrefix(key, loginKeyPrefix) {
+		return validateLoginKey(key)
+	}
+
+	if uuidRegex.MatchString(key) {
+		return true
+	}
+
+	return validateIPKey(key)
+}
+
+func validateIPKey(key string) bool {
 	if ipRegex.MatchString(key) {
 		parts := strings.Split(key, ".")
 		for _, part := range parts {
@@ -69,17 +118,56 @@ func validateRateLimitKey(key string) bool {
 		return true
 	}
 
-	if uuidRegex.MatchString(key) {
-		return true
-	}
-
-	if net.ParseIP(key) != nil {
-		return true
-	}
-
-	return false
+	return net.ParseIP(key) != nil
 }
 
+// validateLoginKey validates the composite "login:<scope>|<account>" form: the
+// scope half must be a valid IP or loginKeyAnyIP, and the account half must
+// already be normalised. Keys are only ever built by loginRateLimitKey, so a
+// key that fails here is a bug or a forgery, not user input to be accommodated.
+func validateLoginKey(key string) bool {
+	body := strings.TrimPrefix(key, loginKeyPrefix)
+	scope, account, found := strings.Cut(body, "|")
+	if !found {
+		return false
+	}
+	if scope != loginKeyAnyIP && !validateIPKey(scope) {
+		return false
+	}
+	return loginKeyRegex.MatchString(account)
+}
+
+// normalizeAccount folds a submitted username into the account half of a
+// composite key.
+//
+// The username is attacker-controlled, so it is lower-cased and required to
+// match the account charset before it reaches a map key or a log line;
+// everything else collapses to the sentinel. Folding case deliberately
+// over-groups — usernames compare case-sensitively at login
+// (database.GetUserByUsername), so "Alice" and "alice" are distinct accounts
+// that share a bucket. That direction is the safe one: it stops case rotation
+// from multiplying an attacker's budget.
+func normalizeAccount(username string) string {
+	account := strings.ToLower(strings.TrimSpace(username))
+	if !loginKeyRegex.MatchString(account) {
+		return loginKeyUnknownAccount
+	}
+	return account
+}
+
+// loginRateLimitKey builds a composite bucket key. Pass loginKeyAnyIP as scope
+// for the account-wide bucket.
+func loginRateLimitKey(scope, account string) string {
+	return loginKeyPrefix + scope + "|" + account
+}
+
+// accessOrder and requests must be removed from together. Anything that drops a
+// key from one and not the other leaves a permanent entry in accessOrder, and
+// re-creating that key later appends a duplicate — so the slice grows for the
+// process lifetime. That was survivable while keys were client IPs; with an
+// account half derived from submitted usernames the key space is unbounded and
+// attacker-influenced, which turns it into a remotely-driven leak (agent-os-boe).
+// Pinned by TestAccessOrderMirrorsRequestsAfterExpiry.
 func evictLRU(rl *RateLimiter) {
 	if len(rl.requests) <= rl.maxEntries {
 		return
@@ -92,12 +180,25 @@ func evictLRU(rl *RateLimiter) {
 	}
 }
 
+// pruneAccessOrder drops order entries whose key is no longer in requests,
+// preserving the relative order of the survivors. Caller holds rl.mu.
+func pruneAccessOrder(rl *RateLimiter) {
+	kept := rl.accessOrder[:0]
+	for _, key := range rl.accessOrder {
+		if _, ok := rl.requests[key]; ok {
+			kept = append(kept, key)
+		}
+	}
+	rl.accessOrder = kept
+}
+
 func (rl *RateLimiter) cleanup() {
 	ticker := time.NewTicker(rl.window)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		rl.mu.Lock()
+		expired := false
 		for key, ur := range rl.requests {
 			now := time.Now()
 			valid := make([]time.Time, 0, len(ur.timestamps))
@@ -108,18 +209,28 @@ func (rl *RateLimiter) cleanup() {
 			}
 			if len(valid) == 0 {
 				delete(rl.requests, key)
+				expired = true
 			} else {
 				ur.timestamps = valid
 			}
+		}
+		if expired {
+			pruneAccessOrder(rl)
 		}
 		rl.mu.Unlock()
 	}
 }
 
+// check records a request against key and reports whether it is allowed.
+//
+// It fails CLOSED: a key that does not validate is denied rather than waved
+// through. Callers reach check() through enforceLimit, which validates first so
+// the caller can answer 400 rather than 429; this branch is the backstop for a
+// future caller that forgets. Pinned by TestCheckFailsClosedOnInvalidKey.
 func (rl *RateLimiter) check(key string) bool {
 	if !validateRateLimitKey(key) {
 		slog.Warn("Invalid rate limit key rejected", "key", key)
-		return true
+		return false
 	}
 
 	rl.mu.Lock()
@@ -161,71 +272,159 @@ func (rl *RateLimiter) check(key string) bool {
 	return true
 }
 
+// enforceLimit is the single place a request key is validated and turned into a
+// response. Both rate limit middlewares go through it, so the validate-then-400
+// policy exists once rather than at every call site. It returns false when the
+// request has been answered and must not continue.
+func enforceLimit(c *gin.Context, rl *RateLimiter, key string) bool {
+	if !validateRateLimitKey(key) {
+		slog.Warn("Invalid rate limit key", "key", key)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    "INVALID_KEY",
+			"message": "Invalid request identifier",
+		})
+		c.Abort()
+		return false
+	}
+
+	if !rl.check(key) {
+		slog.Warn("Rate limit exceeded", "key", key)
+		c.Header("Retry-After", "60")
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"code":    "RATE_LIMITED",
+			"message": "Too many requests. Please try again later.",
+		})
+		c.Abort()
+		return false
+	}
+
+	return true
+}
+
 func (rl *RateLimiter) Middleware(keyFunc func(*gin.Context) string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		key := keyFunc(c)
-
-		if !validateRateLimitKey(key) {
-			slog.Warn("Invalid rate limit key", "key", key)
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    "INVALID_KEY",
-				"message": "Invalid request identifier",
-			})
-			c.Abort()
-			return
-		}
-
-		if !rl.check(key) {
-			c.Header("Retry-After", "60")
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"code":    "RATE_LIMITED",
-				"message": "Too many requests. Please try again later.",
-			})
-			c.Abort()
+		if !enforceLimit(c, rl, keyFunc(c)) {
 			return
 		}
 		c.Next()
 	}
 }
 
-var authRateLimiter *RateLimiter
+var authIPRateLimiter *RateLimiter
+var authAccountRateLimiter *RateLimiter
+var authAccountAnyIPRateLimiter *RateLimiter
 var apiRateLimiter *RateLimiter
 
+const (
+	// authAccountMaxReqs is the brute-force budget for one account from one
+	// client IP — the tight layer, and the one a real user notices.
+	authAccountMaxReqs = 5
+
+	// authIPMaxReqs caps one client IP across all accounts, so an attacker
+	// cannot buy unlimited attempts by rotating usernames. It is deliberately
+	// looser than the per-account limit: behind a reverse proxy every user can
+	// share one client IP, and a 5/min ceiling there lets one person fumbling
+	// their password lock out everyone else.
+	authIPMaxReqs = 20
+
+	// authAccountAnyIPMaxReqs caps one account across all source addresses,
+	// which is the only layer a distributed attacker rotating IPs still meets.
+	// It is loose on purpose: this is a ceiling on aggregate guess rate, not an
+	// account lockout (explicitly out of scope), and a legitimate user retyping
+	// a password never approaches 60 attempts in a rolling minute.
+	authAccountAnyIPMaxReqs = 60
+)
+
 func InitRateLimiters() {
-	authRateLimiter = NewRateLimiter(1*time.Minute, 5)
+	authIPRateLimiter = NewRateLimiter(1*time.Minute, authIPMaxReqs)
+	authAccountRateLimiter = NewRateLimiter(1*time.Minute, authAccountMaxReqs)
+	authAccountAnyIPRateLimiter = NewRateLimiter(1*time.Minute, authAccountAnyIPMaxReqs)
 	apiRateLimiter = NewRateLimiter(1*time.Minute, 300)
 	slog.Info("Rate limiters initialized",
-		"auth", "5/min",
+		"auth_per_ip", strconv.Itoa(authIPMaxReqs)+"/min",
+		"auth_per_ip_account", strconv.Itoa(authAccountMaxReqs)+"/min",
+		"auth_per_account", strconv.Itoa(authAccountAnyIPMaxReqs)+"/min",
 		"api", "300/min",
 	)
 }
 
-func RateLimitByIP() gin.HandlerFunc {
+// RateLimitAuth limits the auth endpoints in three layers: per (client IP,
+// account), per client IP, and per account across all addresses.
+//
+// The per-account layers are what survive a reverse proxy that presents one
+// client IP for every user — without them the whole deployment shares a single
+// login bucket and one person mistyping a password locks out everybody.
+func RateLimitAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		key := c.ClientIP()
+		clientIP := c.ClientIP()
 
-		if !validateRateLimitKey(key) {
-			slog.Warn("Invalid rate limit key", "key", key)
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    "INVALID_KEY",
-				"message": "Invalid request identifier",
-			})
-			c.Abort()
+		if !enforceLimit(c, authIPRateLimiter, clientIP) {
 			return
 		}
 
-		if !authRateLimiter.check(key) {
-			slog.Warn("Rate limit exceeded", "key", key)
-			c.Header("Retry-After", "60")
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"code":    "RATE_LIMITED",
-				"message": "Too many requests. Please try again later.",
-			})
-			c.Abort()
+		if !validateIPKey(clientIP) {
+			// enforceLimit already accepted clientIP, so this cannot happen; guard
+			// anyway rather than build a composite key around an unvalidated half.
+			c.Next()
 			return
 		}
+
+		account := normalizeAccount(peekLoginUsername(c))
+
+		if !enforceLimit(c, authAccountRateLimiter, loginRateLimitKey(clientIP, account)) {
+			return
+		}
+
+		// Attempts whose username could not name a real account all share the
+		// sentinel; counting them account-wide would let a scanner spraying junk
+		// exhaust one globally shared bucket. The two layers above already cap it.
+		if account != loginKeyUnknownAccount {
+			if !enforceLimit(c, authAccountAnyIPRateLimiter, loginRateLimitKey(loginKeyAnyIP, account)) {
+				return
+			}
+		}
+
 		c.Next()
 	}
+}
+
+// peekLoginUsername reads the username out of a JSON request body without
+// consuming it, so the handler's own binding still sees the full body. Bodies
+// over loginBodyPeekLimit are streamed straight back through untouched and
+// yield "", which falls back to the sentinel account bucket.
+//
+// The restored body is byte-identical, so Content-Length stays correct and
+// nothing downstream needs to know this ran. Every failure mode — no body, a
+// read error, an oversized body, malformed JSON, a username that is not a
+// string — returns "" and lets the handler produce its own verdict. The limiter
+// must not become a new way to reject a request the handler would have accepted.
+// Pinned by TestPeekLoginUsername_PreservesBodyAndContentLength and
+// TestAuthLimit_UnparseableBodyFallsThroughToHandler.
+func peekLoginUsername(c *gin.Context) string {
+	if c.Request == nil || c.Request.Body == nil {
+		return ""
+	}
+
+	buf, err := io.ReadAll(io.LimitReader(c.Request.Body, loginBodyPeekLimit+1))
+	if err != nil {
+		// Restore what was read so the handler reports the error itself.
+		c.Request.Body = io.NopCloser(io.MultiReader(bytes.NewReader(buf), c.Request.Body))
+		return ""
+	}
+
+	c.Request.Body = io.NopCloser(io.MultiReader(bytes.NewReader(buf), c.Request.Body))
+
+	if len(buf) > loginBodyPeekLimit {
+		return ""
+	}
+
+	var body struct {
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(buf, &body); err != nil {
+		return ""
+	}
+	return body.Username
 }
 
 func RateLimitByUser() gin.HandlerFunc {
