@@ -56,6 +56,10 @@ func selectUpdates(candidates []updateCandidate, remoteDigests map[string]string
 // If a candidate's remote fetch errors or the local digest cannot be resolved
 // for the imageRef, the candidate is skipped — never emitted as a phantom update.
 func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]models.ContainerUpdateInfo, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	containers, err := s.client.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("listing containers: %w", err)
@@ -169,6 +173,10 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 // Pull stream errors (auth failures, manifest-unknown) are decoded via
 // truth.DrainPullStream and surface as failed, not success (finding #3 fix).
 func (s *DockerService) UpdateContainer(ctx context.Context, containerID string, db DashboardDB) (models.UpdateResult, truth.ActionResult) {
+	if s == nil {
+		return models.UpdateResult{}, truth.Failed(dockerUnavailableReason, ErrDockerUnavailable)
+	}
+
 	// Capture the pre-update image ID so we can verify advancement afterward.
 	imageRef, _, oldImageID, err := truth.ResolveContainerImage(ctx, s.client, containerID)
 	if err != nil {
@@ -406,6 +414,10 @@ func (s *DockerService) UpdateContainerStreaming(
 	emit func(LogLine),
 	setStatus func(Status),
 ) (models.UpdateResult, truth.ActionResult) {
+	if s == nil {
+		return models.UpdateResult{}, truth.Failed(dockerUnavailableReason, ErrDockerUnavailable)
+	}
+
 	// Capture the pre-update image ID.
 	imageRef, _, oldImageID, err := truth.ResolveContainerImage(ctx, s.client, containerID)
 	if err != nil {
@@ -614,6 +626,11 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	emit func(LogLine),
 	setStatus func(Status),
 ) (oldImageID, newImageID string, durationMs int64, ar truth.ActionResult) {
+	if s == nil {
+		ar = truth.Failed(dockerUnavailableReason, ErrDockerUnavailable)
+		return
+	}
+
 	start := time.Now()
 
 	// Find the pre-update container.

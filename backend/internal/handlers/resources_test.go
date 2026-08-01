@@ -55,7 +55,10 @@ func TestResourcesHandler_CheckUpdates_RefreshNoDocker(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/resources/updates?refresh=true", nil)
 	w := httptest.NewRecorder()
 
-	assert.Panics(t, func() {
+	// The nil Docker service used to be dereferenced here and panic. It now
+	// refuses; the status this becomes is asserted once the handlers map the
+	// outage sentinel to 503 (agent-os-xay).
+	require.NotPanics(t, func() {
 		router.ServeHTTP(w, req)
 	})
 }

@@ -39,6 +39,14 @@ func NewMonitorServiceWithDB(dockerClient *client.Client, db Database) *MonitorS
 }
 
 func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string) (<-chan []models.ContainerMetrics, error) {
+	// main.go leaves the Docker client nil when it could not be constructed
+	// (e.g. DOCKER_HOST pointing at nothing). Refuse before the goroutine
+	// starts: a panic in there is not caught by gin's RecoveryMiddleware and
+	// takes the process down (agent-os-xay).
+	if s == nil || s.client == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	statsChan := make(chan []models.ContainerMetrics, 10)
 
 	if len(containerIDs) == 0 {
@@ -197,6 +205,10 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 }
 
 func (s *MonitorService) ListenEvents(ctx context.Context) (<-chan models.StackEvent, error) {
+	if s == nil || s.client == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	eventChan := make(chan models.StackEvent, 100)
 
 	dockerEvents, errChan := s.client.Events(ctx, events.ListOptions{
@@ -305,6 +317,10 @@ func (s *MonitorService) ListenEvents(ctx context.Context) (<-chan models.StackE
 }
 
 func (s *MonitorService) GetContainersForStack(ctx context.Context, projectName string) ([]string, error) {
+	if s == nil || s.client == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("label", "com.docker.compose.project="+projectName)
 

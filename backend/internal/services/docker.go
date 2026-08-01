@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,6 +22,34 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
+
+// ErrDockerUnavailable is returned by every DockerService method when the
+// service itself is nil — main leaves dockerService nil when the daemon was
+// unreachable at startup (see cmd/server/main.go).
+//
+// Design decision (agent-os-xay): the guard lives on the RECEIVER, not on the
+// ~40 call sites, and there is deliberately no no-op DockerService type.
+//
+//   - Go allows calling a pointer-receiver method on a nil pointer; only the
+//     dereference panics. A `if s == nil` guard at the top of each method
+//     therefore gives the same "uniform, impossible to forget" behaviour a no-op
+//     implementation would, without a 40-method interface and a second
+//     implementation to keep in sync forever.
+//   - It is also the only shape that survives the typed-nil-in-an-interface
+//     trap: a nil *DockerService stored in an interface is a NON-nil interface
+//     value, so consumer-side interfaces (handlers.stackDocker,
+//     services.dockerStopper) that receive the concrete pointer from main.go
+//     cannot detect the outage with `!= nil`, and a no-op type would never be
+//     substituted in at those seams.
+//   - Precedent: Ping already did exactly this.
+//
+// Handlers map this sentinel to 503 DOCKER_UNAVAILABLE via respondDockerErr.
+var ErrDockerUnavailable = errors.New("docker daemon unreachable")
+
+// dockerUnavailableReason is the operator-facing phrasing of ErrDockerUnavailable,
+// used where the outage is reported as a reason string rather than an error:
+// truth.ActionResult reasons and streamed error frames.
+const dockerUnavailableReason = "Docker daemon unreachable: the server started without a usable Docker connection"
 
 type DockerService struct {
 	config *config.Config
@@ -63,7 +92,7 @@ func NewDockerService(cfg *config.Config) (*DockerService, error) {
 // through it would panic instead of reporting the outage it exists to report.
 func (s *DockerService) Ping(ctx context.Context) error {
 	if s == nil || s.client == nil {
-		return fmt.Errorf("docker client not initialized")
+		return fmt.Errorf("docker client not initialized: %w", ErrDockerUnavailable)
 	}
 	if _, err := s.client.Ping(ctx); err != nil {
 		return err
@@ -72,6 +101,10 @@ func (s *DockerService) Ping(ctx context.Context) error {
 }
 
 func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
+	if s == nil {
+		return "", ErrDockerUnavailable
+	}
+
 	args := s.buildComposeArgs(stack, "logs", []string{"--tail", fmt.Sprintf("%d", tail), "--timestamps"})
 
 	cmd := exec.Command("docker", args...)
@@ -86,6 +119,10 @@ func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
 }
 
 func (s *DockerService) GetContainerList(projectName string) ([]models.Container, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	ctx := context.Background()
 
 	filterArgs := filters.NewArgs()
@@ -135,6 +172,10 @@ func (s *DockerService) GetContainerList(projectName string) ([]models.Container
 }
 
 func (s *DockerService) GetContainerStats(ctx context.Context, containerID string) (<-chan models.ContainerMetrics, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	statsChan := make(chan models.ContainerMetrics, 10)
 
 	go func() {
@@ -196,6 +237,10 @@ func (s *DockerService) GetContainerStats(ctx context.Context, containerID strin
 }
 
 func (s *DockerService) ListenEvents(ctx context.Context) (<-chan models.DockerEvent, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	eventChan := make(chan models.DockerEvent, 100)
 
 	dockerEvents, errChan := s.client.Events(ctx, events.ListOptions{})
@@ -255,6 +300,9 @@ func (s *DockerService) buildComposeArgs(stack models.Stack, subcommand string, 
 	return args
 }
 
+// ValidateName is the one exported method with no nil-receiver guard, and
+// deliberately so: it validates a string and never touches the receiver, so
+// reporting a Docker outage from it would be a lie.
 func (s *DockerService) ValidateName(name string) error {
 	matched, _ := regexp.MatchString(`^[a-zA-Z0-9._:-]+$`, name)
 	if !matched {
@@ -372,6 +420,10 @@ func parsePorts(portsStr string) []models.PortBinding {
 }
 
 func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db DashboardDB) ([]models.DashboardContainerInfo, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	containers, err := s.client.ContainerList(ctx, container.ListOptions{All: true, Size: true})
 	if err != nil {
 		return nil, err
@@ -456,6 +508,10 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 }
 
 func (s *DockerService) GetImageDiskUsage(ctx context.Context) (int64, error) {
+	if s == nil {
+		return 0, ErrDockerUnavailable
+	}
+
 	images, err := s.client.ImageList(ctx, image.ListOptions{})
 	if err != nil {
 		return 0, err
@@ -478,6 +534,10 @@ type DiskUsageBreakdown struct {
 }
 
 func (s *DockerService) GetDiskUsage(ctx context.Context) (*DiskUsageBreakdown, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	du, err := s.client.DiskUsage(ctx, types.DiskUsageOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("getting disk usage: %w", err)
@@ -507,6 +567,10 @@ func (s *DockerService) GetDiskUsage(ctx context.Context) (*DiskUsageBreakdown, 
 }
 
 func (s *DockerService) GetRunningContainerIDs(ctx context.Context) ([]string, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("status", "running")
 
@@ -587,6 +651,10 @@ func BuildStackStatuses(containers []models.DashboardContainerInfo) map[string]L
 // returns live status per compose project, replacing the per-stack `docker
 // compose ps` subprocess fan-out the stack list used to run (O(1) Docker call
 // instead of O(N) process spawns).
+//
+// No nil-receiver guard of its own: its first statement delegates to
+// GetAllContainersWithDetails, which returns ErrDockerUnavailable for a nil
+// receiver.
 func (s *DockerService) GetStackStatuses(ctx context.Context, db DashboardDB) (map[string]LiveStatus, error) {
 	containers, err := s.GetAllContainersWithDetails(ctx, db)
 	if err != nil {
@@ -596,17 +664,33 @@ func (s *DockerService) GetStackStatuses(ctx context.Context, db DashboardDB) (m
 }
 
 func (s *DockerService) StartContainer(ctx context.Context, containerID string) error {
+	if s == nil {
+		return ErrDockerUnavailable
+	}
+
 	return s.client.ContainerStart(ctx, containerID, container.StartOptions{})
 }
 
 func (s *DockerService) StopContainer(ctx context.Context, containerID string) error {
+	if s == nil {
+		return ErrDockerUnavailable
+	}
+
 	return s.client.ContainerStop(ctx, containerID, container.StopOptions{})
 }
 
 func (s *DockerService) InspectContainer(ctx context.Context, containerID string) (types.ContainerJSON, error) {
+	if s == nil {
+		return types.ContainerJSON{}, ErrDockerUnavailable
+	}
+
 	return s.client.ContainerInspect(ctx, containerID)
 }
 
 func (s *DockerService) RestartContainer(ctx context.Context, containerID string) error {
+	if s == nil {
+		return ErrDockerUnavailable
+	}
+
 	return s.client.ContainerRestart(ctx, containerID, container.StopOptions{})
 }

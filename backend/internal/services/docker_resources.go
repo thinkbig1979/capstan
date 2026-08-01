@@ -29,6 +29,10 @@ type PruneOptions struct {
 }
 
 func (s *DockerService) ListImages(ctx context.Context) ([]models.DockerImage, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	images, err := s.client.ImageList(ctx, image.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing images: %w", err)
@@ -54,10 +58,18 @@ func (s *DockerService) ListImages(ctx context.Context) ([]models.DockerImage, e
 }
 
 func (s *DockerService) DeleteImage(ctx context.Context, imageID string, force bool) ([]image.DeleteResponse, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	return s.client.ImageRemove(ctx, imageID, image.RemoveOptions{Force: force})
 }
 
 func (s *DockerService) PruneImages(ctx context.Context, opts PruneOptions) (image.PruneReport, error) {
+	if s == nil {
+		return image.PruneReport{}, ErrDockerUnavailable
+	}
+
 	f := filters.NewArgs()
 	// Docker's default prune only removes dangling (untagged) images. dangling=false
 	// widens it to all unused images (the `docker image prune -a` behaviour).
@@ -71,6 +83,10 @@ func (s *DockerService) PruneImages(ctx context.Context, opts PruneOptions) (ima
 }
 
 func (s *DockerService) ListVolumes(ctx context.Context) ([]models.DockerVolume, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	volumes, err := s.client.VolumeList(ctx, volume.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing volumes: %w", err)
@@ -126,10 +142,18 @@ func (s *DockerService) ListVolumes(ctx context.Context) ([]models.DockerVolume,
 }
 
 func (s *DockerService) DeleteVolume(ctx context.Context, volumeName string, force bool) error {
+	if s == nil {
+		return ErrDockerUnavailable
+	}
+
 	return s.client.VolumeRemove(ctx, volumeName, force)
 }
 
 func (s *DockerService) PruneVolumes(ctx context.Context, opts PruneOptions) (volume.PruneReport, error) {
+	if s == nil {
+		return volume.PruneReport{}, ErrDockerUnavailable
+	}
+
 	f := filters.NewArgs()
 	// Default prune only removes anonymous volumes. all=true widens it to every
 	// unused volume (the `docker volume prune -a` behaviour).
@@ -140,6 +164,10 @@ func (s *DockerService) PruneVolumes(ctx context.Context, opts PruneOptions) (vo
 }
 
 func (s *DockerService) ListNetworks(ctx context.Context) ([]models.DockerNetwork, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	networks, err := s.client.NetworkList(ctx, network.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing networks: %w", err)
@@ -194,10 +222,18 @@ func networkContainerCount(ctx context.Context, inspector networkInspector, netw
 }
 
 func (s *DockerService) DeleteNetwork(ctx context.Context, networkID string) error {
+	if s == nil {
+		return ErrDockerUnavailable
+	}
+
 	return s.client.NetworkRemove(ctx, networkID)
 }
 
 func (s *DockerService) CreateNetwork(ctx context.Context, name string, opts network.CreateOptions) (string, error) {
+	if s == nil {
+		return "", ErrDockerUnavailable
+	}
+
 	resp, err := s.client.NetworkCreate(ctx, name, opts)
 	if err != nil {
 		return "", fmt.Errorf("creating network: %w", err)
@@ -206,6 +242,10 @@ func (s *DockerService) CreateNetwork(ctx context.Context, name string, opts net
 }
 
 func (s *DockerService) PruneNetworks(ctx context.Context, opts PruneOptions) (network.PruneReport, error) {
+	if s == nil {
+		return network.PruneReport{}, ErrDockerUnavailable
+	}
+
 	f := filters.NewArgs()
 	if opts.Until != "" {
 		f.Add("until", opts.Until)
@@ -214,10 +254,18 @@ func (s *DockerService) PruneNetworks(ctx context.Context, opts PruneOptions) (n
 }
 
 func (s *DockerService) DeleteContainer(ctx context.Context, containerID string, force bool) error {
+	if s == nil {
+		return ErrDockerUnavailable
+	}
+
 	return s.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force})
 }
 
 func (s *DockerService) PruneContainers(ctx context.Context, opts PruneOptions) (container.PruneReport, error) {
+	if s == nil {
+		return container.PruneReport{}, ErrDockerUnavailable
+	}
+
 	f := filters.NewArgs()
 	if opts.Until != "" {
 		f.Add("until", opts.Until)
@@ -226,6 +274,10 @@ func (s *DockerService) PruneContainers(ctx context.Context, opts PruneOptions) 
 }
 
 func (s *DockerService) ListBuildCache(ctx context.Context) ([]*dockertypes.BuildCache, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	du, err := s.client.DiskUsage(ctx, dockertypes.DiskUsageOptions{})
 	if err != nil {
 		return nil, err
@@ -234,6 +286,10 @@ func (s *DockerService) ListBuildCache(ctx context.Context) ([]*dockertypes.Buil
 }
 
 func (s *DockerService) PruneBuildCache(ctx context.Context, opts PruneOptions) (*dockertypes.BuildCachePruneReport, error) {
+	if s == nil {
+		return nil, ErrDockerUnavailable
+	}
+
 	f := filters.NewArgs()
 	if opts.Until != "" {
 		f.Add("until", opts.Until)

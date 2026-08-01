@@ -345,6 +345,10 @@ func trimOutput(s string) string {
 // plus the raw combined output. Success is reported only when Status() confirms all
 // containers have been continuously running for the dwell window (finding #5 / #10 fix).
 func (s *DockerService) StartVerified(stack models.Stack) (truth.ActionResult, string) {
+	if s == nil {
+		return truth.Failed(dockerUnavailableReason, ErrDockerUnavailable), ""
+	}
+
 	args := s.buildComposeArgs(stack, "up", []string{"-d"})
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory
@@ -362,6 +366,10 @@ func (s *DockerService) StartVerified(stack models.Stack) (truth.ActionResult, s
 // StopVerified runs `docker compose down` and returns a verified truth.ActionResult
 // plus the raw combined output. Success only when no containers remain running.
 func (s *DockerService) StopVerified(stack models.Stack) (truth.ActionResult, string) {
+	if s == nil {
+		return truth.Failed(dockerUnavailableReason, ErrDockerUnavailable), ""
+	}
+
 	args := s.buildComposeArgs(stack, "down", nil)
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory
@@ -380,6 +388,10 @@ func (s *DockerService) StopVerified(stack models.Stack) (truth.ActionResult, st
 // plus the combined output of both phases. Success only when all containers are
 // confirmed running after the start phase.
 func (s *DockerService) RestartVerified(stack models.Stack) (truth.ActionResult, string) {
+	if s == nil {
+		return truth.Failed(dockerUnavailableReason, ErrDockerUnavailable), ""
+	}
+
 	stopAR, stopOut := s.StopVerified(stack)
 	if stopAR.Outcome == truth.OutcomeFailed {
 		return stopAR, stopOut
@@ -416,6 +428,10 @@ waitLoop:
 // PullVerified runs `docker compose pull` and returns a verified truth.ActionResult
 // plus the raw output. Success only when the pull command exits 0.
 func (s *DockerService) PullVerified(stack models.Stack) (truth.ActionResult, string) {
+	if s == nil {
+		return truth.Failed(dockerUnavailableReason, ErrDockerUnavailable), ""
+	}
+
 	args := s.buildComposeArgs(stack, "pull", nil)
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory
@@ -431,6 +447,10 @@ func (s *DockerService) PullVerified(stack models.Stack) (truth.ActionResult, st
 // the same Status/verifyLifecycle machinery StopVerified uses — a compose
 // exit code of 0 alone does not guarantee the containers actually stopped.
 func (s *DockerService) DeleteVerified(stack models.Stack) (truth.ActionResult, string) {
+	if s == nil {
+		return truth.Failed(dockerUnavailableReason, ErrDockerUnavailable), ""
+	}
+
 	args := s.buildComposeArgs(stack, "down", []string{"-v"})
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory
@@ -451,6 +471,10 @@ func (s *DockerService) DeleteVerified(stack models.Stack) (truth.ActionResult, 
 // used both internally by verifyLifecycle/pollUntilSettled and by callers
 // outside this domain (e.g. BackupService).
 func (s *DockerService) Status(stack models.Stack) (string, []models.Container, error) {
+	if s == nil {
+		return "", nil, ErrDockerUnavailable
+	}
+
 	args := s.buildComposeArgs(stack, "ps", []string{"--format", "json"})
 
 	cmd := exec.Command("docker", args...)
@@ -524,6 +548,16 @@ func parseComposePSOutput(output []byte) (string, []models.Container, error) {
 // Reason for start/stop/restart actions so the frontend has an unambiguous signal
 // (finding #5 + #18 fix). Pull success is still determined by exit code.
 func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, subcommand string, extraArgs []string) <-chan StreamLine {
+	// The nil receiver is checked before the goroutine starts. buildComposeArgs
+	// dereferences s.config inside it, and a panic in a goroutine is not caught
+	// by gin's RecoveryMiddleware — it kills the whole process (agent-os-xay).
+	if s == nil {
+		out := make(chan StreamLine, 1)
+		out <- StreamLine{Type: "error", Error: dockerUnavailableReason}
+		close(out)
+		return out
+	}
+
 	out := make(chan StreamLine, 100)
 
 	// Derive the lifecycle action from the subcommand so we can run verification
