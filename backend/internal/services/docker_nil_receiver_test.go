@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -78,13 +79,26 @@ func TestNilDockerService_NoExportedMethodPanics(t *testing.T) {
 				args = append(args, reflect.Zero(paramType))
 			}
 
+			var results []reflect.Value
 			require.NotPanics(t, func() {
 				if fnType.IsVariadic() {
-					fn.CallSlice(append(args, reflect.MakeSlice(fnType.In(fnType.NumIn()-1), 0, 0)))
+					results = fn.CallSlice(append(args, reflect.MakeSlice(fnType.In(fnType.NumIn()-1), 0, 0)))
 					return
 				}
-				fn.Call(args)
+				results = fn.Call(args)
 			}, "%s must guard its nil receiver: main.go leaves dockerService nil when the daemon is unreachable", method.Name)
+
+			// Returning without panicking is only half the claim. A method that
+			// hands back a channel may have spawned the goroutine that fills it,
+			// and that is where the process-killing panic lived — gin's
+			// RecoveryMiddleware cannot catch it. Drain every channel result so
+			// the goroutine, if any, runs to completion inside this test.
+			for _, res := range results {
+				if res.Kind() != reflect.Chan || res.IsNil() {
+					continue
+				}
+				drainUntilClosed(t, method.Name, res)
+			}
 		})
 		called++
 	}
@@ -94,6 +108,35 @@ func TestNilDockerService_NoExportedMethodPanics(t *testing.T) {
 	require.GreaterOrEqual(t, called, 30,
 		"expected the sweep to cover the full DockerService surface; got %d methods", called)
 	t.Logf("swept %d exported methods, %d excluded", called, len(nilReceiverExclusions))
+}
+
+// drainUntilClosed reads ch to completion, failing if it does not close.
+//
+// Two things are being checked. First, that any goroutine behind the channel
+// runs here rather than after the test returns — a panic in it would otherwise
+// escape attribution (and, in production, the process). Second, that the
+// channel closes at all: a method that returns a never-closing channel during
+// an outage blocks its caller forever, which is a different way of hanging the
+// server rather than a refusal.
+func drainUntilClosed(t *testing.T, methodName string, ch reflect.Value) {
+	t.Helper()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if _, ok := ch.Recv(); !ok {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s returned a channel that never closed; a caller would block "+
+			"forever during a Docker outage instead of being refused", methodName)
+	}
 }
 
 // TestNilDockerService_FailsLoudly covers the dangerous half of the surface: a
