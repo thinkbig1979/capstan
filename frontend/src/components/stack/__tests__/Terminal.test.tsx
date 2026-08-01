@@ -165,7 +165,7 @@ describe('TerminalComponent — connection lifecycle', () => {
     expect(screen.getByText('Connected')).toBeInTheDocument()
 
     await act(async () => {
-      capturedOptions?.onClose?.()
+      capturedOptions?.onClose?.(new CloseEvent('close', { code: 1006 }))
       await new Promise((r) => setTimeout(r, 50))
     })
 
@@ -424,4 +424,49 @@ describe('TerminalComponent — session duration', () => {
 
     expect(screen.getByText(/Active for 0:03/)).toBeInTheDocument()
   })
+
+  // agent-os-a0y / agent-os-7u5: a policy refusal must read as a reason, not as
+  // a mystery disconnect. The server closes with 4429 when the per-user
+  // terminal cap is reached and 4401 when the requested container does not
+  // belong to the requested stack.
+  it('surfaces the session limit when the server closes with 4429', async () => {
+    render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+
+    await act(async () => {
+      capturedOptions?.onClose?.(new CloseEvent('close', { code: 4429 }))
+      await new Promise((r) => setTimeout(r, 50))
+    })
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining('Too many open terminal sessions'),
+    )
+  })
+
+  it('surfaces the server reason when the connection is refused with 4401', async () => {
+    render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+
+    await act(async () => {
+      capturedOptions?.onClose?.(
+        new CloseEvent('close', { code: 4401, reason: 'Container does not belong to this stack' }),
+      )
+      await new Promise((r) => setTimeout(r, 50))
+    })
+
+    expect(toast.error).toHaveBeenCalledWith('Container does not belong to this stack')
+  })
+
+  it('does not raise a limit error on an ordinary disconnect', async () => {
+    render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+
+    await act(async () => {
+      capturedOptions?.onClose?.(new CloseEvent('close', { code: 1006 }))
+      await new Promise((r) => setTimeout(r, 50))
+    })
+
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
 })

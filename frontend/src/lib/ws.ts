@@ -2,10 +2,27 @@ import { useAuthStore } from '@/stores/authStore'
 
 export type WSState = 'CONNECTING' | 'OPEN' | 'CLOSING' | 'CLOSED' | 'RECONNECTING'
 
+/** Close codes the server uses for policy refusals. Mirrors
+ *  CloseCodeAuthFailure / CloseCodeRateLimit in backend/internal/handlers/ws.go. */
+export const WS_CLOSE_AUTH_FAILURE = 4401
+export const WS_CLOSE_RATE_LIMIT = 4429
+
+/** A policy refusal is a decision, not a blip. Retrying cannot change the
+ *  outcome, and for the connection cap the retry loop *is* the problem the cap
+ *  exists to contain — the runaway client would sit there refusing and
+ *  reconnecting forever (agent-os-a0y). */
+// A missing code means we cannot tell, so reconnect — the reconnect ladder is
+// the safe default and only an explicit policy code suppresses it.
+function shouldReconnectAfter(code: number | undefined): boolean {
+  return code !== WS_CLOSE_AUTH_FAILURE && code !== WS_CLOSE_RATE_LIMIT
+}
+
 export interface WSClientOptions {
   binary?: boolean
   onOpen?: () => void
-  onClose?: () => void
+  /** Receives the close event so callers can distinguish a policy refusal
+   *  (4401/4429) from an ordinary disconnect. */
+  onClose?: (event: CloseEvent) => void
   onError?: (error: Event) => void
   onReconnecting?: (attempt: number) => void
   onReconnectFailed?: () => void
@@ -60,9 +77,16 @@ export class WSClient {
       onMessage(data)
     }
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
       this.ws = null
-      options.onClose?.()
+      options.onClose?.(event)
+      if (!shouldReconnectAfter(event?.code)) {
+        // Stop retrying and stop tracking the path, so a later recovery signal
+        // (focus/online) does not resurrect the loop either.
+        this.currentPath = null
+        this.currentOnMessage = null
+        return
+      }
       if (this.currentPath && this.currentOnMessage) {
         this.scheduleReconnect()
       }
