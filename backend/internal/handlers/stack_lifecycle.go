@@ -34,7 +34,7 @@ func (h *StacksHandler) Start(c *gin.Context) {
 	defer h.opLock.Release(id)
 
 	startTime := time.Now()
-	ar, output := h.docker.StartVerified(*stack)
+	ar, output := h.dockerSvc().StartVerified(*stack)
 	duration := time.Since(startTime)
 
 	h.logAction(c, id, "start", output)
@@ -44,7 +44,7 @@ func (h *StacksHandler) Start(c *gin.Context) {
 		slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
 	}
 
-	renderResult(c, truth.ActionResult{
+	renderDockerResult(c, ar.Err, truth.ActionResult{
 		Outcome: ar.Outcome,
 		Reason:  ar.Reason,
 		Details: mergeDetails(ar.Details, map[string]any{
@@ -80,7 +80,7 @@ func (h *StacksHandler) Stop(c *gin.Context) {
 	defer h.opLock.Release(id)
 
 	startTime := time.Now()
-	ar, output := h.docker.StopVerified(*stack)
+	ar, output := h.dockerSvc().StopVerified(*stack)
 	duration := time.Since(startTime)
 
 	h.logAction(c, id, "stop", output)
@@ -90,7 +90,7 @@ func (h *StacksHandler) Stop(c *gin.Context) {
 		slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
 	}
 
-	renderResult(c, truth.ActionResult{
+	renderDockerResult(c, ar.Err, truth.ActionResult{
 		Outcome: ar.Outcome,
 		Reason:  ar.Reason,
 		Details: mergeDetails(ar.Details, map[string]any{
@@ -126,7 +126,7 @@ func (h *StacksHandler) Restart(c *gin.Context) {
 	defer h.opLock.Release(id)
 
 	startTime := time.Now()
-	ar, output := h.docker.RestartVerified(*stack)
+	ar, output := h.dockerSvc().RestartVerified(*stack)
 	duration := time.Since(startTime)
 
 	h.logAction(c, id, "restart", output)
@@ -136,7 +136,7 @@ func (h *StacksHandler) Restart(c *gin.Context) {
 		slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
 	}
 
-	renderResult(c, truth.ActionResult{
+	renderDockerResult(c, ar.Err, truth.ActionResult{
 		Outcome: ar.Outcome,
 		Reason:  ar.Reason,
 		Details: mergeDetails(ar.Details, map[string]any{
@@ -172,7 +172,7 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 	defer h.opLock.Release(id)
 
 	startTime := time.Now()
-	pullAR, pullOutput := h.docker.PullVerified(*stack)
+	pullAR, pullOutput := h.dockerSvc().PullVerified(*stack)
 	duration := time.Since(startTime)
 
 	h.logAction(c, id, "pull", pullOutput)
@@ -180,7 +180,7 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 	restartAfterPull := c.Query("restart") == "true"
 
 	if pullAR.Outcome == truth.OutcomeFailed {
-		renderResult(c, truth.ActionResult{
+		renderDockerResult(c, pullAR.Err, truth.ActionResult{
 			Outcome: pullAR.Outcome,
 			Reason:  pullAR.Reason,
 			Details: mergeDetails(pullAR.Details, map[string]any{
@@ -194,13 +194,13 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 	}
 
 	if restartAfterPull {
-		restartAR, restartOutput := h.docker.RestartVerified(*stack)
+		restartAR, restartOutput := h.dockerSvc().RestartVerified(*stack)
 		verifiedStatus := lifecycleStatus(restartAR)
 		if statusErr := h.db.UpdateStackStatus(id, verifiedStatus); statusErr != nil {
 			slog.Warn("Failed to persist verified stack status", "stackID", id, "status", verifiedStatus, "error", statusErr)
 		}
 
-		renderResult(c, truth.ActionResult{
+		renderDockerResult(c, restartAR.Err, truth.ActionResult{
 			Outcome: restartAR.Outcome,
 			Reason:  restartAR.Reason,
 			Details: mergeDetails(restartAR.Details, map[string]any{

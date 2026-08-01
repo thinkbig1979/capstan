@@ -154,6 +154,26 @@ func NewBackupService(
 	return svc
 }
 
+// dockerSvc returns the Docker dependency, substituting a typed-nil
+// *DockerService when nothing was wired at all.
+//
+// The two outage shapes have to converge on one behaviour (agent-os-xay):
+// main.go passes the concrete *DockerService, which is a NIL POINTER inside a
+// non-nil interface when the daemon was unreachable at startup, while a caller
+// that passes no docker leaves a NIL INTERFACE here. Calling a method on the
+// former dispatches to DockerService's nil-receiver guards and returns
+// ErrDockerUnavailable; calling one on the latter panics. Converting the second
+// case into the first means every backup path reports "docker daemon
+// unreachable" instead of panicking inside a detached run goroutine, where the
+// panic is recovered into an unactionable "panic: runtime error: invalid memory
+// address" run status (agent-os-ck4).
+func (s *BackupService) dockerSvc() dockerStopper {
+	if s.docker == nil {
+		return (*DockerService)(nil)
+	}
+	return s.docker
+}
+
 // SetScheduler wires the BackupScheduler (called by main.go after both objects
 // are constructed to avoid an import cycle).
 func (s *BackupService) SetScheduler(sched BackupScheduler) {
@@ -437,6 +457,11 @@ func (s *BackupService) RunBackup(
 
 	var totalBytesAdded int64
 
+	// firstItemErr carries the first per-stack failure up to the run record, so a
+	// failed run names its cause instead of showing an empty ErrorMessage
+	// (agent-os-ck4: a Docker outage used to surface here as a raw panic string).
+	var firstItemErr error
+
 	// The database goes first, deliberately. It is the artifact without which a
 	// restore produces an empty Capstan, and capturing it before the per-stack
 	// loop means a stack failure part-way through still leaves it in the
@@ -454,6 +479,9 @@ func (s *BackupService) RunBackup(
 		itemBytes, itemErr := s.backupStack(ctx, restic, stackID, policy.StopPolicy, dryRun, run.ID, out)
 		if itemErr != nil {
 			run.StacksFailed++
+			if firstItemErr == nil {
+				firstItemErr = itemErr
+			}
 			stream(out, "error", fmt.Sprintf("stack %s failed: %v", stackID, itemErr))
 		} else {
 			run.StacksOK++
@@ -480,6 +508,9 @@ func (s *BackupService) RunBackup(
 		run.Status = "success"
 	case run.StacksOK == 0:
 		run.Status = "failed"
+		if run.ErrorMessage == "" && firstItemErr != nil {
+			run.ErrorMessage = firstItemErr.Error()
+		}
 	default:
 		run.Status = "partial"
 	}
@@ -568,6 +599,11 @@ func (s *BackupService) RunBackupWithRunID(
 
 	var totalBytesAdded int64
 
+	// firstItemErr carries the first per-stack failure up to the run record, so a
+	// failed run names its cause instead of showing an empty ErrorMessage
+	// (agent-os-ck4: a Docker outage used to surface here as a raw panic string).
+	var firstItemErr error
+
 	// The database goes first, deliberately. It is the artifact without which a
 	// restore produces an empty Capstan, and capturing it before the per-stack
 	// loop means a stack failure part-way through still leaves it in the
@@ -585,6 +621,9 @@ func (s *BackupService) RunBackupWithRunID(
 		itemBytes, itemErr := s.backupStack(ctx, restic, stackID, policy.StopPolicy, dryRun, run.ID, out)
 		if itemErr != nil {
 			run.StacksFailed++
+			if firstItemErr == nil {
+				firstItemErr = itemErr
+			}
 			stream(out, "error", fmt.Sprintf("stack %s failed: %v", stackID, itemErr))
 		} else {
 			run.StacksOK++
@@ -603,6 +642,9 @@ func (s *BackupService) RunBackupWithRunID(
 		run.Status = "success"
 	case run.StacksOK == 0:
 		run.Status = "failed"
+		if run.ErrorMessage == "" && firstItemErr != nil {
+			run.ErrorMessage = firstItemErr.Error()
+		}
 	default:
 		run.Status = "partial"
 	}
@@ -671,7 +713,7 @@ func (s *BackupService) backupStack(
 	// Determine whether the stack is currently running so we know whether to
 	// restart it after backup.
 	wasRunning := false
-	if status, _, statusErr := s.docker.Status(stack); statusErr == nil {
+	if status, _, statusErr := s.dockerSvc().Status(stack); statusErr == nil {
 		wasRunning = status == "running" || status == "partial"
 	}
 
@@ -682,7 +724,7 @@ func (s *BackupService) backupStack(
 	defer func() {
 		if stopApplied && wasRunning {
 			stream(out, "info", fmt.Sprintf("[%s] restarting stack (defensive)", stackID))
-			ar, _ := s.docker.StartVerified(stack)
+			ar, _ := s.dockerSvc().StartVerified(stack)
 			switch ar.Outcome {
 			case truth.OutcomeFailed:
 				startErr := ar.Err
@@ -700,7 +742,7 @@ func (s *BackupService) backupStack(
 	// Apply stop policy.
 	if stopPolicy == "stop" && !dryRun {
 		stream(out, "info", fmt.Sprintf("[%s] stopping stack", stackID))
-		if ar, _ := s.docker.StopVerified(stack); ar.Outcome == truth.OutcomeFailed {
+		if ar, _ := s.dockerSvc().StopVerified(stack); ar.Outcome == truth.OutcomeFailed {
 			stopErr := ar.Err
 			if stopErr == nil {
 				stopErr = errors.New(ar.Reason)
@@ -865,7 +907,7 @@ func (s *BackupService) RunRestore(
 
 	// Determine if the stack was running.
 	wasRunning := false
-	if status, _, statusErr := s.docker.Status(stack); statusErr == nil {
+	if status, _, statusErr := s.dockerSvc().Status(stack); statusErr == nil {
 		wasRunning = status == "running" || status == "partial"
 	}
 
@@ -881,7 +923,7 @@ func (s *BackupService) RunRestore(
 	defer func() {
 		if stopApplied && wasRunning {
 			stream(out, "info", fmt.Sprintf("[%s] restarting stack after restore", stackID))
-			ar, _ := s.docker.StartVerified(stack)
+			ar, _ := s.dockerSvc().StartVerified(stack)
 			switch ar.Outcome {
 			case truth.OutcomeFailed:
 				startErr := ar.Err
@@ -897,7 +939,7 @@ func (s *BackupService) RunRestore(
 
 	if stopPolicy == "stop" {
 		stream(out, "info", fmt.Sprintf("[%s] stopping stack before restore", stackID))
-		if ar, _ := s.docker.StopVerified(stack); ar.Outcome == truth.OutcomeFailed {
+		if ar, _ := s.dockerSvc().StopVerified(stack); ar.Outcome == truth.OutcomeFailed {
 			stopErr := ar.Err
 			if stopErr == nil {
 				stopErr = errors.New(ar.Reason)

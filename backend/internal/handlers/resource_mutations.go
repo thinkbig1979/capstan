@@ -76,7 +76,7 @@ func (h *ResourcesHandler) deleteImage(c *gin.Context) {
 	resp, err := h.docker.DeleteImage(c.Request.Context(), id, force)
 	if err != nil {
 		slog.Error("Failed to delete image", "id", id, "error", err)
-		renderResult(c, truth.Failed("failed to delete image", err,
+		renderDockerResult(c, err, truth.Failed("failed to delete image", err,
 			truth.KV("id", id),
 		))
 		return
@@ -123,7 +123,7 @@ func (h *ResourcesHandler) pruneImages(c *gin.Context) {
 	report, err := h.docker.PruneImages(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune images", "error", err)
-		renderResult(c, truth.Failed("failed to prune images", err))
+		renderDockerResult(c, err, truth.Failed("failed to prune images", err))
 		return
 	}
 
@@ -136,7 +136,7 @@ func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
 	report, err := h.docker.PruneContainers(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune containers", "error", err)
-		renderResult(c, truth.Failed("failed to prune containers", err))
+		renderDockerResult(c, err, truth.Failed("failed to prune containers", err))
 		return
 	}
 
@@ -169,7 +169,7 @@ func (h *ResourcesHandler) deleteContainer(c *gin.Context) {
 
 	if err := h.docker.DeleteContainer(c.Request.Context(), id, force); err != nil {
 		slog.Error("Failed to delete container", "id", id, "error", err)
-		renderResult(c, truth.Failed("failed to delete container", err,
+		renderDockerResult(c, err, truth.Failed("failed to delete container", err,
 			truth.KV("id", id),
 		))
 		return
@@ -188,7 +188,7 @@ func (h *ResourcesHandler) deleteVolume(c *gin.Context) {
 
 	if err := h.docker.DeleteVolume(c.Request.Context(), name, force); err != nil {
 		slog.Error("Failed to delete volume", "name", name, "error", err)
-		renderResult(c, truth.Failed("failed to delete volume", err,
+		renderDockerResult(c, err, truth.Failed("failed to delete volume", err,
 			truth.KV("name", name),
 		))
 		return
@@ -205,7 +205,7 @@ func (h *ResourcesHandler) pruneVolumes(c *gin.Context) {
 	report, err := h.docker.PruneVolumes(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune volumes", "error", err)
-		renderResult(c, truth.Failed("failed to prune volumes", err))
+		renderDockerResult(c, err, truth.Failed("failed to prune volumes", err))
 		return
 	}
 
@@ -264,7 +264,7 @@ func (h *ResourcesHandler) createNetwork(c *gin.Context) {
 	id, err := h.docker.CreateNetwork(c.Request.Context(), req.Name, opts)
 	if err != nil {
 		slog.Error("Failed to create network", "name", req.Name, "error", err)
-		renderResult(c, truth.Failed("failed to create network", err,
+		renderDockerResult(c, err, truth.Failed("failed to create network", err,
 			truth.KV("name", req.Name),
 		))
 		return
@@ -287,7 +287,7 @@ func (h *ResourcesHandler) deleteNetwork(c *gin.Context) {
 
 	if err := h.docker.DeleteNetwork(c.Request.Context(), id); err != nil {
 		slog.Error("Failed to delete network", "id", id, "error", err)
-		renderResult(c, truth.Failed("failed to delete network", err,
+		renderDockerResult(c, err, truth.Failed("failed to delete network", err,
 			truth.KV("id", id),
 		))
 		return
@@ -304,7 +304,7 @@ func (h *ResourcesHandler) pruneNetworks(c *gin.Context) {
 	report, err := h.docker.PruneNetworks(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune networks", "error", err)
-		renderResult(c, truth.Failed("failed to prune networks", err))
+		renderDockerResult(c, err, truth.Failed("failed to prune networks", err))
 		return
 	}
 
@@ -333,7 +333,7 @@ func (h *ResourcesHandler) pruneBuildCache(c *gin.Context) {
 	report, err := h.docker.PruneBuildCache(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune build cache", "error", err)
-		renderResult(c, truth.Failed("failed to prune build cache", err))
+		renderDockerResult(c, err, truth.Failed("failed to prune build cache", err))
 		return
 	}
 

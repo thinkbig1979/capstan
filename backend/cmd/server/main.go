@@ -159,6 +159,20 @@ func main() {
 		}
 	}()
 
+	// dockerService is nil when the daemon was unreachable at startup — the
+	// server still boots so the UI can report the outage. Two rules keep that
+	// nil from panicking anything downstream (agent-os-xay):
+	//
+	//  1. Every *DockerService method guards its own nil receiver and returns
+	//     services.ErrDockerUnavailable. Handlers therefore receive the concrete
+	//     pointer directly, and consumer-side interfaces (stackDocker,
+	//     dockerStopper) keep working even though a nil pointer inside an
+	//     interface is a non-nil interface value.
+	//  2. The seams below that convert to an UNTYPED nil (dockerPinger,
+	//     containerLister, operationStreamer) are exactly those whose consumer
+	//     checks `== nil` before calling. Never hand an untyped nil to a consumer
+	//     that calls straight through: a method call on a nil interface panics,
+	//     where a nil *DockerService refuses cleanly.
 	dockerService, err := services.NewDockerService(cfg)
 	if err != nil {
 		slog.Warn("Docker service unavailable", "error", err)

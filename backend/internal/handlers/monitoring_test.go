@@ -46,6 +46,8 @@ func TestMonitoringHandler_GetStackContainers_NotFound(t *testing.T) {
 	assert.Equal(t, models.ErrNotFound, response["code"])
 }
 
+// The handler used to dereference the nil Docker service here and panic; it now
+// refuses with 503 and names the cause (agent-os-xay).
 func TestMonitoringHandler_GetStackContainers_WithStack_NoDocker(t *testing.T) {
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
@@ -74,12 +76,10 @@ func TestMonitoringHandler_GetStackContainers_WithStack_NoDocker(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/stacks/test~dir:default/containers", nil)
 	w := httptest.NewRecorder()
 
-	// The nil Docker service used to be dereferenced here and panic. It now
-	// refuses; the status this becomes is asserted once the handlers map the
-	// outage sentinel to 503 (agent-os-xay).
 	require.NotPanics(t, func() {
 		router.ServeHTTP(w, req)
 	})
+	assertUnavailable(t, w)
 }
 
 func TestMonitoringHandler_MetricsWS_StackNotFound(t *testing.T) {

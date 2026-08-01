@@ -64,7 +64,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 		updates, err := h.docker.CheckForUpdates(c.Request.Context(), h.db)
 		if err != nil {
 			slog.Error("Failed to check for updates", "error", err)
-			handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to check for updates"))
+			respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to check for updates")
 			return
 		}
 		if updates == nil {
@@ -136,7 +136,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	inspect, err := h.docker.InspectContainer(c.Request.Context(), id)
 	if err != nil {
 		slog.Error("Failed to inspect container before update", "id", id, "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container"))
+		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container")
 		return
 	}
 
@@ -282,7 +282,7 @@ func (h *ResourcesHandler) updateContainerSync(c *gin.Context, id string) {
 	inspect, err := h.docker.InspectContainer(c.Request.Context(), id)
 	if err != nil {
 		slog.Error("Failed to inspect container before update", "id", id, "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container"))
+		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container")
 		return
 	}
 

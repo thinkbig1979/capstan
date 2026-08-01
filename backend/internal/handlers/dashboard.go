@@ -109,6 +109,13 @@ func countLiveStackStatuses(stacks []models.Stack, containers []models.Dashboard
 
 func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, authDisabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Refuse before the upgrade so the caller gets a 503 naming the cause
+		// rather than a socket that opens and closes (agent-os-xay).
+		if h.docker == nil {
+			writeJSONError(c, http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage)
+			return
+		}
+
 		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
 		if err != nil {
 			c.Error(err)
