@@ -33,8 +33,12 @@ func (o *OperationLock) Acquire(stackID string) (string, error) {
 
 	sl.mu.Lock()
 	if sl.count > 0 {
+		// Read the owner while still holding sl.mu: Acquire and Release both
+		// write ownerID under the same lock, so formatting the message after
+		// unlocking races them and can name a stale or empty holder.
+		owner := sl.ownerID
 		sl.mu.Unlock()
-		return "", fmt.Errorf("operation already in progress for stack %s (started by %s)", stackID, sl.ownerID)
+		return "", fmt.Errorf("operation already in progress for stack %s (started by %s)", stackID, owner)
 	}
 	sl.count++
 	sl.ownerID = stackID
