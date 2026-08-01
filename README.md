@@ -542,10 +542,18 @@ start returning `429` to everybody. If the proxy forwards a client-supplied
 address and rotates past the per-IP limit at will. Capstan logs its effective
 trusted-proxy list at startup, and warns once per peer when a forwarding header
 arrives from an address it does not trust — check that log after any proxy
-change. Login attempts are limited per account as well as per address
-(`backend/internal/middleware/ratelimit.go`), so a shared proxy address degrades
-the limiter rather than collapsing it, but the configuration above is still what
-makes it behave correctly.
+change.
+
+Login attempts are limited in three layers, so a shared proxy address degrades
+the limiter rather than collapsing it
+(`backend/internal/middleware/ratelimit.go`): 5 per minute per account per
+client address, 20 per minute per client address across all accounts, and 60
+per minute per account across all addresses. The second layer is the one a
+shared proxy address concentrates, which is why it is looser than the
+per-account budget; the third is the only layer an attacker rotating source
+addresses still meets. None of them is an account lockout — each is a rolling
+one-minute window that clears itself. The configuration above is still what
+makes the limiter behave correctly.
 
 **There is one role: authenticated.** Any account that can log in has full
 control of the Docker socket, which is root-equivalent control of the host

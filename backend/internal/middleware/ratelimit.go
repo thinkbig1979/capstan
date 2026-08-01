@@ -161,6 +161,13 @@ func loginRateLimitKey(scope, account string) string {
 	return loginKeyPrefix + scope + "|" + account
 }
 
+// accessOrder and requests must be removed from together. Anything that drops a
+// key from one and not the other leaves a permanent entry in accessOrder, and
+// re-creating that key later appends a duplicate — so the slice grows for the
+// process lifetime. That was survivable while keys were client IPs; with an
+// account half derived from submitted usernames the key space is unbounded and
+// attacker-influenced, which turns it into a remotely-driven leak (agent-os-boe).
+// Pinned by TestAccessOrderMirrorsRequestsAfterExpiry.
 func evictLRU(rl *RateLimiter) {
 	if len(rl.requests) <= rl.maxEntries {
 		return
@@ -173,12 +180,25 @@ func evictLRU(rl *RateLimiter) {
 	}
 }
 
+// pruneAccessOrder drops order entries whose key is no longer in requests,
+// preserving the relative order of the survivors. Caller holds rl.mu.
+func pruneAccessOrder(rl *RateLimiter) {
+	kept := rl.accessOrder[:0]
+	for _, key := range rl.accessOrder {
+		if _, ok := rl.requests[key]; ok {
+			kept = append(kept, key)
+		}
+	}
+	rl.accessOrder = kept
+}
+
 func (rl *RateLimiter) cleanup() {
 	ticker := time.NewTicker(rl.window)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		rl.mu.Lock()
+		expired := false
 		for key, ur := range rl.requests {
 			now := time.Now()
 			valid := make([]time.Time, 0, len(ur.timestamps))
@@ -189,9 +209,13 @@ func (rl *RateLimiter) cleanup() {
 			}
 			if len(valid) == 0 {
 				delete(rl.requests, key)
+				expired = true
 			} else {
 				ur.timestamps = valid
 			}
+		}
+		if expired {
+			pruneAccessOrder(rl)
 		}
 		rl.mu.Unlock()
 	}
@@ -368,6 +392,14 @@ func RateLimitAuth() gin.HandlerFunc {
 // consuming it, so the handler's own binding still sees the full body. Bodies
 // over loginBodyPeekLimit are streamed straight back through untouched and
 // yield "", which falls back to the sentinel account bucket.
+//
+// The restored body is byte-identical, so Content-Length stays correct and
+// nothing downstream needs to know this ran. Every failure mode — no body, a
+// read error, an oversized body, malformed JSON, a username that is not a
+// string — returns "" and lets the handler produce its own verdict. The limiter
+// must not become a new way to reject a request the handler would have accepted.
+// Pinned by TestPeekLoginUsername_PreservesBodyAndContentLength and
+// TestAuthLimit_UnparseableBodyFallsThroughToHandler.
 func peekLoginUsername(c *gin.Context) string {
 	if c.Request == nil || c.Request.Body == nil {
 		return ""

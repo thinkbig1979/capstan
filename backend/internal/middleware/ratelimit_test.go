@@ -111,6 +111,37 @@ func TestAuthLimit_OneAccountAcrossManyIPsIsStillLimited(t *testing.T) {
 	}
 }
 
+// The reported availability bug, end to end: behind a proxy that is not in
+// TRUSTED_NETWORKS every user presents the same client IP. A team must still be
+// able to log in, including after one member fumbles their password.
+//
+// This is why the per-IP ceiling had to rise from 5: the broad layer is checked
+// first, so at 5/min it denies the sixth request from the whole deployment and
+// the per-account layer never gets to help. The composite key fixes the keying;
+// this constant is what makes the fix reachable.
+func TestAuthLimit_SharedProxyAddressDoesNotLockOutOtherUsers(t *testing.T) {
+	r := newAuthTestRouter(t)
+	const sharedProxyIP = "203.0.113.20"
+
+	// One user burns their whole per-account budget getting the password wrong.
+	for i := 0; i < authAccountMaxReqs; i++ {
+		if w := loginAttempt(r, sharedProxyIP, "fumbler"); w.Code != http.StatusOK {
+			t.Fatalf("fumbler attempt %d: expected 200, got %d", i+1, w.Code)
+		}
+	}
+	if w := loginAttempt(r, sharedProxyIP, "fumbler"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("fumbler should be limited after %d attempts, got %d", authAccountMaxReqs, w.Code)
+	}
+
+	// Everyone else behind the same proxy address still gets in.
+	for i := 0; i < 10; i++ {
+		user := fmt.Sprintf("colleague%02d", i)
+		if w := loginAttempt(r, sharedProxyIP, user); w.Code != http.StatusOK {
+			t.Fatalf("%s locked out by a colleague's failed logins: got %d (%s)", user, w.Code, w.Body.String())
+		}
+	}
+}
+
 // Case variants must not multiply the budget: the key folds case even though
 // login itself compares usernames case-sensitively.
 func TestAuthLimit_CaseVariantsShareABucket(t *testing.T) {
@@ -163,19 +194,87 @@ func TestAuthLimit_OversizedBodyIsPassedThroughUnread(t *testing.T) {
 	}
 }
 
-// Bodies that are not JSON must not break the limiter or the handler's own
-// error reporting.
-func TestAuthLimit_NonJSONBodyFallsBackToSentinelBucket(t *testing.T) {
-	r := newAuthTestRouter(t)
+// Bodies the limiter cannot parse must fall through to the handler unchanged.
+// The limiter must never become a new way to reject an otherwise valid request:
+// the 400 here is the handler's own, not the limiter's.
+func TestAuthLimit_UnparseableBodyFallsThroughToHandler(t *testing.T) {
+	cases := map[string]string{
+		"not json":            "not json at all",
+		"empty body":          "",
+		"username not string": `{"username":123,"password":"x"}`,
+		"username absent":     `{"password":"x"}`,
+		"json array":          `["alice"]`,
+	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader("not json at all"))
-	req.Header.Set("Content-Type", "application/json")
-	req.RemoteAddr = "203.0.113.15:1234"
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newAuthTestRouter(t)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.RemoteAddr = "203.0.113.15:1234"
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected the handler to reject the body with 400, got %d (%s)", w.Code, w.Body.String())
+			got := w.Body.String()
+			if strings.Contains(got, "INVALID_KEY") || strings.Contains(got, "RATE_LIMITED") {
+				t.Fatalf("the limiter rejected the request instead of passing it to the handler: %d %s", w.Code, got)
+			}
+			if !strings.Contains(got, "BAD_BODY") && w.Code != http.StatusOK {
+				t.Fatalf("expected the handler's own verdict, got %d %s", w.Code, got)
+			}
+		})
+	}
+}
+
+// The peek must leave the request byte-identical, including Content-Length,
+// which is what gin's binding and any downstream middleware rely on.
+func TestPeekLoginUsername_PreservesBodyAndContentLength(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const body = `{"username":"Alice","password":"hunter2"}`
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body))
+	lengthBefore := c.Request.ContentLength
+	headerBefore := c.Request.Header.Get("Content-Length")
+
+	if got := peekLoginUsername(c); got != "Alice" {
+		t.Fatalf("peekLoginUsername = %q, want \"Alice\" (raw, before normalisation)", got)
+	}
+
+	if c.Request.ContentLength != lengthBefore {
+		t.Errorf("ContentLength changed: %d -> %d", lengthBefore, c.Request.ContentLength)
+	}
+	if got := c.Request.Header.Get("Content-Length"); got != headerBefore {
+		t.Errorf("Content-Length header changed: %q -> %q", headerBefore, got)
+	}
+
+	rest, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		t.Fatalf("body unreadable after peek: %v", err)
+	}
+	if string(rest) != body {
+		t.Fatalf("body after peek = %q, want %q", rest, body)
+	}
+
+	// The replacement must still be a ReadCloser, and closing it must be safe.
+	if err := c.Request.Body.Close(); err != nil {
+		t.Fatalf("closing the restored body failed: %v", err)
+	}
+}
+
+func TestPeekLoginUsername_NilRequestAndNilBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = nil
+	if got := peekLoginUsername(c); got != "" {
+		t.Fatalf("peekLoginUsername with a nil request = %q, want \"\"", got)
+	}
+
+	c.Request = httptest.NewRequest(http.MethodPost, "/x", nil)
+	c.Request.Body = nil
+	if got := peekLoginUsername(c); got != "" {
+		t.Fatalf("peekLoginUsername with a nil body = %q, want \"\"", got)
 	}
 }
 
@@ -232,6 +331,156 @@ func TestValidateRateLimitKey_AcceptedShapes(t *testing.T) {
 	for _, key := range invalid {
 		if validateRateLimitKey(key) {
 			t.Errorf("validateRateLimitKey(%q) = true, want false", key)
+		}
+	}
+}
+
+// Fail-closed means any drift between the key RateLimitAuth generates and what
+// validateRateLimitKey accepts denies every login rather than failing quietly
+// open. Drive the real generator — a hand-written literal would keep passing
+// while production drifted.
+func TestGeneratedLoginKeysRoundTripThroughValidation(t *testing.T) {
+	usernames := []string{
+		"alice",                   // ordinary
+		"abc",                     // minimum length
+		strings.Repeat("u", 50),   // maximum length
+		"a-b_c",                   // both permitted separators
+		"ALICE",                   // folded to lower case by the generator
+		"  alice  ",               // trimmed by the generator
+		"bad user!",               // sentinel fallback
+		"ab",                      // too short: sentinel fallback
+		strings.Repeat("u", 51),   // too long: sentinel fallback
+		"",                        // absent username: sentinel fallback
+		"alice; DROP TABLE users", // injection-shaped: sentinel fallback
+	}
+	clientIPs := []string{
+		"203.0.113.7",
+		"127.0.0.1",
+		"::1",
+		"2001:db8::1",
+		"0000:0000:0000:0000:0000:0000:0000:0001", // long form, as a proxy may forward it
+	}
+
+	for _, ip := range clientIPs {
+		for _, username := range usernames {
+			// Exactly the two calls RateLimitAuth makes.
+			account := normalizeAccount(username)
+			perIP := loginRateLimitKey(ip, account)
+			if !validateRateLimitKey(perIP) {
+				t.Errorf("generated per-IP key %q was rejected by its own validator", perIP)
+			}
+			anyIP := loginRateLimitKey(loginKeyAnyIP, account)
+			if !validateRateLimitKey(anyIP) {
+				t.Errorf("generated account-wide key %q was rejected by its own validator", anyIP)
+			}
+		}
+
+		// The IP itself is the key for the broad layer.
+		if !validateRateLimitKey(ip) {
+			t.Errorf("client IP %q was rejected as a rate limit key", ip)
+		}
+	}
+
+	// The sentinel must validate in its own right: if it did not, a malformed
+	// username would become a hard denial for that client rather than a shared
+	// bucket.
+	sentinelKey := loginRateLimitKey("203.0.113.7", loginKeyUnknownAccount)
+	if !validateRateLimitKey(sentinelKey) {
+		t.Fatalf("sentinel key %q was rejected; a bad username would deny the client outright", sentinelKey)
+	}
+}
+
+// gin's ClientIP returns "" when RemoteAddr does not parse (context.go: it runs
+// net.ParseIP over RemoteIP and bails on nil), which is what a zone-scoped IPv6
+// peer produces. That must be rejected at the IP layer with a 400, never folded
+// into a composite key like "login:|alice".
+func TestAuthLimit_UnparseableClientAddressIsRejectedNotKeyed(t *testing.T) {
+	r := newAuthTestRouter(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"alice","password":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "[fe80::1%eth0]:1234"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an unparseable client address, got %d (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "INVALID_KEY") {
+		t.Fatalf("expected INVALID_KEY, got: %s", w.Body.String())
+	}
+	if validateRateLimitKey(loginRateLimitKey("", "alice")) {
+		t.Fatal("a composite key with an empty scope must not validate")
+	}
+}
+
+// accessOrder must not outlive the entries it orders. cleanup() deletes expired
+// keys from requests; if it does not also drop them from accessOrder, the slice
+// grows for the process lifetime and re-created keys are appended twice.
+func TestAccessOrderMirrorsRequestsAfterExpiry(t *testing.T) {
+	rl := NewRateLimiter(40*time.Millisecond, 100)
+
+	for i := 0; i < 50; i++ {
+		key := loginRateLimitKey("203.0.113.9", fmt.Sprintf("user%03d", i))
+		if !rl.check(key) {
+			t.Fatalf("check(%q) denied below the limit", key)
+		}
+	}
+
+	rl.mu.RLock()
+	before := len(rl.accessOrder)
+	rl.mu.RUnlock()
+	if before != 50 {
+		t.Fatalf("expected 50 tracked keys, got %d", before)
+	}
+
+	// Wait for cleanup() to tick past the window and expire everything.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		rl.mu.RLock()
+		reqs, order := len(rl.requests), len(rl.accessOrder)
+		rl.mu.RUnlock()
+		if reqs == 0 && order == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after expiry: len(requests)=%d, len(accessOrder)=%d, want 0 and 0", reqs, order)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Re-creating the same keys must not append duplicates.
+	for i := 0; i < 50; i++ {
+		rl.check(loginRateLimitKey("203.0.113.9", fmt.Sprintf("user%03d", i)))
+	}
+	rl.mu.RLock()
+	reqs, order := len(rl.requests), len(rl.accessOrder)
+	rl.mu.RUnlock()
+	if order != reqs {
+		t.Fatalf("accessOrder drifted from requests: len(accessOrder)=%d, len(requests)=%d", order, reqs)
+	}
+}
+
+func TestPruneAccessOrderKeepsSurvivorOrder(t *testing.T) {
+	rl := NewRateLimiter(time.Minute, 100)
+	for _, k := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"} {
+		rl.check(k)
+	}
+
+	rl.mu.Lock()
+	delete(rl.requests, "2.2.2.2")
+	delete(rl.requests, "3.3.3.3")
+	pruneAccessOrder(rl)
+	got := append([]string(nil), rl.accessOrder...)
+	rl.mu.Unlock()
+
+	want := []string{"1.1.1.1", "4.4.4.4"}
+	if len(got) != len(want) {
+		t.Fatalf("accessOrder = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("accessOrder = %v, want %v", got, want)
 		}
 	}
 }
