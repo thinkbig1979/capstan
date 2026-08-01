@@ -65,10 +65,10 @@ export function useWebSocket(
         setWsState('OPEN')
         opts.onOpen?.()
       },
-      onClose: () => {
+      onClose: (event) => {
         setStatus('disconnected')
         setWsState('CLOSED')
-        opts.onClose?.()
+        opts.onClose?.(event)
       },
       onError: (error) => {
         setStatus('disconnected')

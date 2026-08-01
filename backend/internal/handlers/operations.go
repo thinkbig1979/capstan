@@ -7,20 +7,31 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
-type OperationsHandler struct {
-	docker *services.DockerService
-	db     *database.DB
-	opLock *services.OperationLock
+// OperationStreamer is the operations handler's view of DockerService: stream a
+// compose subcommand. Narrow enough to fake in a test, which is what lets the
+// connection-cap behaviour be covered without a live daemon.
+type OperationStreamer interface {
+	RunStreaming(ctx context.Context, stack models.Stack, subcommand string, extraArgs []string) <-chan services.StreamLine
 }
 
-func NewOperationsHandler(docker *services.DockerService, db *database.DB, opLock *services.OperationLock) *OperationsHandler {
+type OperationsHandler struct {
+	// docker is nil when the daemon was unreachable at startup.
+	docker OperationStreamer
+	db     *database.DB
+	opLock *services.OperationLock
+	cm     *ConnectionManager
+}
+
+func NewOperationsHandler(docker OperationStreamer, db *database.DB, opLock *services.OperationLock, cm *ConnectionManager) *OperationsHandler {
 	return &OperationsHandler{
 		docker: docker,
 		db:     db,
 		opLock: opLock,
+		cm:     cm,
 	}
 }
 
@@ -32,6 +43,17 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 	return func(c *gin.Context) {
 		stackID := c.Param("id")
 		action := c.Param("action")
+
+		// main leaves dockerService nil when the daemon was unreachable at
+		// startup. RunStreaming dereferences it inside a goroutine, so the
+		// resulting nil-pointer panic is not caught by RecoveryMiddleware and
+		// takes the whole process down. Refuse before the upgrade instead, the
+		// way the checks below already do. (Same shape as agent-os-ck4; the
+		// wider audit of nil-docker paths is agent-os-xay.)
+		if h.docker == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Docker is unavailable"})
+			return
+		}
 
 		stack, err := h.db.GetStack(stackID)
 		if err != nil || stack == nil {
@@ -67,6 +89,17 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			return
 		}
 		defer conn.Conn.Close()
+
+		// After authentication, so the cap keys on a real user ID. Operations
+		// streams were the other endpoint missing from the ConnectionManager
+		// every other WebSocket handler already uses (agent-os-a0y).
+		if err := h.cm.Add(conn.ID, conn); err != nil {
+			slog.Warn("Operations connection refused: per-user limit reached",
+				"user_id", conn.UserID, "stack_id", stackID, "action", action)
+			writeCloseMessage(conn.Conn, CloseCodeRateLimit, "Too many open connections")
+			return
+		}
+		defer h.cm.Remove(conn.ID)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()

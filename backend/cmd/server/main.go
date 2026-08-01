@@ -269,6 +269,15 @@ func main() {
 	gitHandler.RegisterRoutes(gitGroup)
 
 	connectionManager := handlers.NewConnectionManager(10)
+
+	// Terminals get their own, lower cap. Every terminal connection is a real
+	// `docker exec` process with a PTY held for up to 30 minutes, which is
+	// materially more expensive than a log or metrics stream, and five
+	// concurrent shells is already generous for an interactive tool
+	// (agent-os-a0y). services.MaxConcurrentSessions is the host-wide ceiling
+	// behind it.
+	terminalConnections := handlers.NewConnectionManager(5)
+
 	logsHandler := handlers.NewLogsHandler(dockerService, db, cfg.JWTSecret, cfg.AuthDisabled, cfg.DataDir, connectionManager)
 	logsHandler.RegisterRoutes(protected)
 
@@ -323,10 +332,23 @@ func main() {
 	wsGroup := protected.Group("")
 	wsGroup.Use(timeoutMiddleware(300 * time.Second))
 
-	terminalHandler := handlers.NewTerminalHandler(terminalService, db)
+	// Untyped nil when the daemon was unreachable at startup: a typed nil in an
+	// interface is non-nil, and the handler's nil check is what makes it deny
+	// rather than skip the container-membership check (agent-os-7u5).
+	var containerLister handlers.ContainerLister
+	if dockerService != nil {
+		containerLister = dockerService
+	}
+	terminalHandler := handlers.NewTerminalHandler(terminalService, containerLister, db, terminalConnections, services.NewActionLogger(db))
 	terminalHandler.RegisterRoutes(wsGroup, cfg.JWTSecret, cfg.AuthDisabled)
 
-	operationsHandler := handlers.NewOperationsHandler(dockerService, db, opLock)
+	// Untyped nil again: OperationsHandler now takes an interface, and its own
+	// nil check is what keeps a Docker outage from panicking the process.
+	var operationStreamer handlers.OperationStreamer
+	if dockerService != nil {
+		operationStreamer = dockerService
+	}
+	operationsHandler := handlers.NewOperationsHandler(operationStreamer, db, opLock, connectionManager)
 	operationsHandler.RegisterRoutes(wsGroup, cfg.JWTSecret, cfg.AuthDisabled)
 
 	updateJobsWSHandler := handlers.NewUpdateJobsWSHandler(updateJobManager, db, cfg.JWTSecret, cfg.AuthDisabled, connectionManager)
@@ -418,6 +440,12 @@ func main() {
 
 	if connectionManager != nil {
 		connectionManager.CloseAll()
+	}
+
+	// Terminals live in their own manager, so shutdown has to close both or
+	// their PTY sessions outlive the shutdown that was meant to end them.
+	if terminalConnections != nil {
+		terminalConnections.CloseAll()
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)

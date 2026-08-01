@@ -3,6 +3,7 @@ import type { Terminal as XTerm } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import type { SearchAddon } from '@xterm/addon-search'
 import { useWebSocketBinary } from '@/hooks/useWebSocket'
+import { WS_CLOSE_AUTH_FAILURE, WS_CLOSE_RATE_LIMIT } from '@/lib/ws'
 import { toast } from 'sonner'
 import type { Stack } from '@/types'
 import { useXtermLifecycle } from './useXtermLifecycle'
@@ -67,13 +68,28 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
         toast.success('Terminal connected')
         resetInactivityTimer()
       },
-      onClose: () => {
+      onClose: (event) => {
         setIsConnected(false)
         setIsConnecting(false)
         const terminal = xtermRef.current
-        if (terminal) {
-          terminal.writeln('\r\n\x1b[31mDisconnected. Press Reconnect to continue.\x1b[0m\r\n')
+
+        // A refused connection reads as a mystery disconnect unless the reason
+        // is surfaced, and a mystery disconnect generates bug reports
+        // (agent-os-a0y / agent-os-7u5).
+        if (event?.code === WS_CLOSE_RATE_LIMIT) {
+          toast.error('Too many open terminal sessions. Close one and try again.')
+          terminal?.writeln(
+            '\r\n\x1b[31mToo many open terminal sessions. Close another terminal and press Reconnect.\x1b[0m\r\n',
+          )
+        } else if (event?.code === WS_CLOSE_AUTH_FAILURE) {
+          toast.error(event.reason || 'Terminal session refused')
+          terminal?.writeln(
+            `\r\n\x1b[31m${event.reason || 'Terminal session refused.'}\x1b[0m\r\n`,
+          )
+        } else {
+          terminal?.writeln('\r\n\x1b[31mDisconnected. Press Reconnect to continue.\x1b[0m\r\n')
         }
+
         clearInactivityTimers()
       },
       onError: () => {

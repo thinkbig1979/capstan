@@ -18,7 +18,7 @@ func newTestTerminalHandler(t *testing.T) *TerminalHandler {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
-	return NewTerminalHandler(nil, db)
+	return NewTerminalHandler(nil, nil, db, NewConnectionManager(5), nil)
 }
 
 func setupTerminalRouter(handler *TerminalHandler) *gin.Engine {
@@ -33,7 +33,7 @@ func TestTerminalHandler_WS_StackNotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	handler := NewTerminalHandler(nil, db)
+	handler := NewTerminalHandler(nil, nil, db, NewConnectionManager(5), nil)
 	router := setupTerminalRouter(handler)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/ws/terminal/nonexistent~stack:default/container1", nil)
@@ -91,7 +91,7 @@ func TestTerminalHandler_WS_RejectsNonWS(t *testing.T) {
 	err = db.UpsertStack(stack)
 	require.NoError(t, err)
 
-	handler := NewTerminalHandler(nil, db)
+	handler := NewTerminalHandler(nil, nil, db, NewConnectionManager(5), nil)
 
 	router := gin.New()
 	group := router.Group("/api")
