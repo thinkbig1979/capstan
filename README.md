@@ -508,7 +508,7 @@ to Capstan itself.
 
 ## Deployment Security
 
-Three configuration-dependent risks to understand before exposing Capstan
+Four configuration-dependent risks to understand before exposing Capstan
 beyond localhost:
 
 **TLS is not optional off localhost.** The session cookie's `Secure` flag is
@@ -524,12 +524,28 @@ a client IP that a reverse proxy can control.** With `AUTH_DISABLED=true`,
 any request from a trusted IP is admitted without a login. That IP comes from
 `X-Forwarded-For`, honored under Gin's trusted-proxy list, which defaults to
 the same `TRUSTED_NETWORKS` value (`backend/internal/middleware/auth.go`,
-`backend/cmd/server/main.go:187-201`). If a reverse proxy in front of Capstan
+`backend/cmd/server/main.go:193-212`). If a reverse proxy in front of Capstan
 forwards a client-supplied `X-Forwarded-For` instead of overwriting it with
 the real client IP, every request can appear to originate from a trusted
 address and skip authentication entirely. Don't run `AUTH_DISABLED=true`
 behind a reverse proxy unless you've confirmed it always overwrites
 `X-Forwarded-For`.
+
+**A reverse proxy must overwrite `X-Forwarded-For`, and its address must be in
+`TRUSTED_NETWORKS`.** The same client IP that decides `AUTH_DISABLED` also keys
+the login rate limiter, so both misconfigurations show up there too. If the
+proxy's address is missing from `TRUSTED_NETWORKS`, Capstan ignores
+`X-Forwarded-For` and sees every request as coming from the proxy: all users
+then share one per-IP login budget, and one person mistyping a password can
+start returning `429` to everybody. If the proxy forwards a client-supplied
+`X-Forwarded-For` instead of overwriting it, a caller picks their own apparent
+address and rotates past the per-IP limit at will. Capstan logs its effective
+trusted-proxy list at startup, and warns once per peer when a forwarding header
+arrives from an address it does not trust — check that log after any proxy
+change. Login attempts are limited per account as well as per address
+(`backend/internal/middleware/ratelimit.go`), so a shared proxy address degrades
+the limiter rather than collapsing it, but the configuration above is still what
+makes it behave correctly.
 
 **There is one role: authenticated.** Any account that can log in has full
 control of the Docker socket, which is root-equivalent control of the host

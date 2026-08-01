@@ -190,23 +190,29 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 
+	// TRUSTED_NETWORKS doubles as Gin's trusted-proxy list, which is not obvious
+	// from its name, so log what it resolved to (agent-os-boe).
+	trustedProxies := []string{"127.0.0.1", "::1"}
+	fromConfig := false
 	if cfg.TrustedNetworks != "" {
-		proxies := strings.Split(cfg.TrustedNetworks, ",")
 		var trimmed []string
-		for _, p := range proxies {
-			p = strings.TrimSpace(p)
-			if p != "" {
+		for _, p := range strings.Split(cfg.TrustedNetworks, ",") {
+			if p = strings.TrimSpace(p); p != "" {
 				trimmed = append(trimmed, p)
 			}
 		}
 		if len(trimmed) > 0 {
-			r.SetTrustedProxies(trimmed)
+			trustedProxies = trimmed
+			fromConfig = true
 		}
-	} else {
-		r.SetTrustedProxies([]string{"127.0.0.1", "::1"})
 	}
+	if err := r.SetTrustedProxies(trustedProxies); err != nil {
+		slog.Warn("Invalid trusted proxy configuration", "error", err, "proxies", trustedProxies)
+	}
+	middleware.LogTrustedProxies(trustedProxies, fromConfig)
 
 	r.Use(middleware.RecoveryMiddleware())
+	r.Use(middleware.TrustedProxyWarning())
 	// Before LoggingMiddleware: the HTTP log line carries the request ID.
 	r.Use(middleware.RequestID())
 	r.Use(middleware.LoggingMiddleware())
@@ -235,7 +241,7 @@ func main() {
 	authHandler := handlers.NewAuthHandler(db, cfg.JWTSecret, cfg.AuthDisabled)
 	authGroup := api.Group("/auth")
 	authHandler.RegisterPublicRoutes(authGroup)
-	authGroup.Use(middleware.RateLimitByIP())
+	authGroup.Use(middleware.RateLimitAuth())
 	authHandler.RegisterRoutes(authGroup)
 
 	settingsHandler := handlers.NewSettingsHandler(db, cfg.StacksDir, cfg.JWTSecret, cfg.AuthDisabled, schedulerService, cfg)
