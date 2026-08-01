@@ -120,12 +120,32 @@ jobs:
       #     GO-2026-4883  off-by-one in plugin privilege validation. Daemon-side;
       #                   capstan has no PluginInstall / PluginUpgrade call sites.
       #
+      # DELIBERATELY *NOT* IN THE LIST:
+      #   Two further docker/docker advisories land on the same
+      #   v28.5.2+incompatible, and both are reported at module tier only —
+      #   their sole finding carries neither `package` nor `function`, so the
+      #   symbol-tier gate below never sees them and an allowlist entry would
+      #   protect nothing and trip the stale-exception notice on every run.
+      #
+      #     GO-2026-5746  CVE-2026-41567 / GHSA-x86f-5xw2-fm2r. `PUT
+      #                   /containers/{id}/archive` executes container binaries.
+      #                   Daemon-side; capstan has no CopyToContainer call sites.
+      #     GO-2026-5617  CVE-2026-42306 / GHSA-rg2x-37c3-w2rh. Race in
+      #                   `docker cp` allows bind mount redirection. Daemon-side,
+      #                   the same class as GO-2026-5668 above.
+      #
+      #   They are written down here rather than left out silently because
+      #   Dependabot raises both as runtime-scope alerts, and the answer to "why
+      #   is this one not allowlisted like the other three?" needs to be "it
+      #   does not need to be", not "nobody looked". Verified 2026-08-01.
+      #
       #   This assessment is tied to what capstan imports *today* and expires:
-      #   agent-os-96h re-checks it on 2026-10-30, including re-running
+      #   agent-os-96h re-checks all five on 2026-10-30, including re-running
       #   `go list -deps ./... | grep '^github.com/docker/docker'` to confirm
-      #   only api/** and client are still linked. Delete entries from this list
-      #   when a fix ships; do not extend the list without the same standard of
-      #   written reachability evidence.
+      #   only api/** and client are still linked, and re-checking whether
+      #   GO-2026-5746 / GO-2026-5617 have risen to the symbol tier. Delete
+      #   entries from this list when a fix ships; do not extend the list
+      #   without the same standard of written reachability evidence.
       - name: Evaluate findings against accepted exceptions
         run: |
           set -euo pipefail
