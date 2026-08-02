@@ -1,6 +1,7 @@
 package services
 
 import (
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -35,11 +36,49 @@ const gitCredentialHelper = `!f() { test "$1" = get && printf 'username=%s\npass
 // token ignore the username, but it must not be empty or git re-prompts.
 const defaultGitHTTPSUser = "oauth2"
 
-// httpsCredentials resolves the git HTTPS credential, preferring the value
-// stored (encrypted) in settings over the GIT_HTTPS_TOKEN environment variable.
+// httpsCredentials resolves the git HTTPS credential for dirPath, in order:
+//  1. directory authType "https" — that directory's own stored credential,
+//     used as-is even if empty. Falling back to the global token here would
+//     silently use a different credential than the one configured for this
+//     directory, which is the exact failure mode being fixed (agent-os-qll):
+//     a feature that reports "configured" while doing something else.
+//  2. directory authType "ssh" — no HTTPS credential applies. SSH key auth
+//     is a separate, currently unimplemented path (nothing in gitCmd consumes
+//     GitSSHKeyPath); this only makes sure "ssh" never falls through to the
+//     https credential below.
+//  3. directory authType "" or "inherit" (or no directory row at all) — the
+//     value stored (encrypted) in global settings, then GIT_HTTPS_TOKEN.
+//
 // It returns an empty token when none is configured, in which case git runs
 // exactly as before.
-func (s *GitService) httpsCredentials() (user, token string) {
+func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
+	if s.db != nil {
+		// A lookup failure (no row for dirPath, or a decrypt failure from a
+		// wrong STORAGE_KEY) is treated as "no directory-specific credential"
+		// and falls through to the global resolution below.
+		if cred, err := s.db.GetDirectoryCredentials(dirPath); err == nil {
+			switch strings.ToLower(cred.GitAuthType) {
+			case "https":
+				user, token = cred.GitHTTPSUser, cred.GitHTTPSToken
+				if user == "" {
+					user = defaultGitHTTPSUser
+				}
+				if token == "" {
+					// Otherwise this state is indistinguishable from "everything is
+					// fine" until the pull fails with a generic auth error: the UI
+					// reports the directory as configured for its own HTTPS
+					// credential, but no token was ever saved. The log line carries
+					// only the directory path, never a token value or any other
+					// directory's state, so nothing here reaches action-log details.
+					slog.Warn("directory is configured for https git auth but has no stored credential; not falling back to a different (global) credential", "path", dirPath)
+				}
+				return user, token
+			case "ssh":
+				return "", ""
+			}
+		}
+	}
+
 	if s.db != nil {
 		// A decrypt failure (wrong STORAGE_KEY) surfaces as an error here; treat
 		// it as "no credential" and let git report the auth failure, rather than
@@ -78,7 +117,7 @@ func (s *GitService) gitCmd(dirPath string, args ...string) (*exec.Cmd, string) 
 	gitArgs := []string{"-c", "safe.directory=" + dirPath}
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 
-	user, token := s.httpsCredentials()
+	user, token := s.httpsCredentials(dirPath)
 	if token != "" {
 		// The empty assignment first clears any helper inherited from system or
 		// global config, so ours is the only one consulted.

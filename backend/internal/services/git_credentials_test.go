@@ -1,6 +1,8 @@
 package services
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 // The stored git HTTPS token was encrypted, persisted and reported as present,
@@ -136,6 +139,221 @@ func gitServiceWithStoredToken(t *testing.T) *GitService {
 		t.Fatalf("store git_https_token: %v", err)
 	}
 	return NewGitService(&config.Config{}, db)
+}
+
+// gitServiceWithDirectoryCredential returns a GitService whose database holds
+// a directory-scoped git credential for dirPath (encrypted at rest, exactly
+// as UpdateDirectoryCredentials stores it), plus a DIFFERENT, invalid global
+// settings token. A test using this must fail unless the directory-scoped
+// credential — not merely "some" credential — is the one gitCmd used.
+func gitServiceWithDirectoryCredential(t *testing.T, dirPath, authType, user, token string) *GitService {
+	t.Helper()
+	db := newTestDBWithEncryptor(t)
+	if err := db.UpsertDirectory(models.Directory{Path: dirPath, Name: filepath.Base(dirPath)}); err != nil {
+		t.Fatalf("seed directory row: %v", err)
+	}
+	if err := db.UpdateDirectoryCredentials(dirPath, authType, "", user, token); err != nil {
+		t.Fatalf("store directory credentials: %v", err)
+	}
+	if err := db.SetSetting("git_https_user", "wrong-global-user"); err != nil {
+		t.Fatalf("store git_https_user: %v", err)
+	}
+	if err := db.SetSetting("git_https_token", "wrong-global-token"); err != nil {
+		t.Fatalf("store git_https_token: %v", err)
+	}
+	return NewGitService(&config.Config{}, db)
+}
+
+// TestPull_UsesDirectoryHTTPSToken is the regression test for agent-os-qll's
+// first defect (no read path): a per-directory credential saved via
+// UpdateDirectoryCredentials must be the one gitCmd actually uses for that
+// directory, in preference to whatever is stored globally.
+func TestPull_UsesDirectoryHTTPSToken(t *testing.T) {
+	local, advance := authenticatedHTTPRepo(t)
+	want := advance()
+
+	svc := gitServiceWithDirectoryCredential(t, local, "https", testGitUser, testGitToken)
+
+	result, err := svc.Pull(local)
+	if err != nil {
+		t.Fatalf("Pull with a directory-scoped HTTPS token failed: %v", err)
+	}
+	if result.CurrentCommit != want {
+		t.Errorf("HEAD after pull = %q, want the remote's new commit %q", result.CurrentCommit, want)
+	}
+
+	// Same leak check as TestPull_TokenNeverPersistsToGitConfig, for the
+	// directory-scoped path.
+	cfg, err := os.ReadFile(filepath.Join(local, ".git", "config"))
+	if err != nil {
+		t.Fatalf("read .git/config: %v", err)
+	}
+	if strings.Contains(string(cfg), testGitToken) {
+		t.Errorf(".git/config contains the token:\n%s", cfg)
+	}
+}
+
+// TestPull_DirectoryHTTPSAuthType_EmptyTokenDoesNotFallBackToGlobal covers the
+// failure mode the fix must not reintroduce: a directory explicitly configured
+// for its own HTTPS credential (authType "https") but with an empty stored
+// token must NOT silently use the global settings token instead. That would
+// reproduce agent-os-qll's whole pattern — the feature reports a specific
+// credential is configured for this directory while actually doing something
+// else — just shifted from "wipe on scan" to "wrong credential on pull".
+func TestPull_DirectoryHTTPSAuthType_EmptyTokenDoesNotFallBackToGlobal(t *testing.T) {
+	local, advance := authenticatedHTTPRepo(t)
+	advance()
+
+	// Global settings hold the CORRECT token; the directory row claims authType
+	// "https" but never got one stored (empty string).
+	svc := gitServiceWithDirectoryCredential(t, local, "https", testGitUser, "")
+	if err := svc.db.SetSetting("git_https_token", testGitToken); err != nil {
+		t.Fatalf("store git_https_token: %v", err)
+	}
+	if err := svc.db.SetSetting("git_https_user", testGitUser); err != nil {
+		t.Fatalf("store git_https_user: %v", err)
+	}
+
+	if _, err := svc.Pull(local); err == nil {
+		t.Fatal("expected the pull to fail: authType=https with no stored token must not fall back to the global one")
+	}
+}
+
+// TestPull_DirectoryInheritAuthType_UsesGlobalToken covers the other half of
+// the acceptance criteria: a directory left at authType "inherit" (or with no
+// credential row at all) must still use the global settings token, exactly
+// like agent-os-qqw's original fix.
+func TestPull_DirectoryInheritAuthType_UsesGlobalToken(t *testing.T) {
+	local, advance := authenticatedHTTPRepo(t)
+	want := advance()
+
+	db := newTestDBWithEncryptor(t)
+	if err := db.UpsertDirectory(models.Directory{Path: local, Name: filepath.Base(local)}); err != nil {
+		t.Fatalf("seed directory row: %v", err)
+	}
+	if err := db.UpdateDirectoryCredentials(local, "inherit", "", "", ""); err != nil {
+		t.Fatalf("store directory credentials: %v", err)
+	}
+	if err := db.SetSetting("git_https_user", testGitUser); err != nil {
+		t.Fatalf("store git_https_user: %v", err)
+	}
+	if err := db.SetSetting("git_https_token", testGitToken); err != nil {
+		t.Fatalf("store git_https_token: %v", err)
+	}
+	svc := NewGitService(&config.Config{}, db)
+
+	result, err := svc.Pull(local)
+	if err != nil {
+		t.Fatalf("Pull with authType=inherit and a stored global token failed: %v", err)
+	}
+	if result.CurrentCommit != want {
+		t.Errorf("HEAD after pull = %q, want the remote's new commit %q", result.CurrentCommit, want)
+	}
+}
+
+// TestHTTPSCredentials_SSHAuthType_NoHTTPSCredentialApplies asserts that a
+// directory configured for SSH auth never has the global (or any) HTTPS
+// credential applied to it — SSH key auth is a separate, currently unwired
+// path, and falling back to HTTPS here would silently use the wrong
+// credential for that directory.
+func TestHTTPSCredentials_SSHAuthType_NoHTTPSCredentialApplies(t *testing.T) {
+	dirPath := "/stacks/ssh-repo"
+	svc := gitServiceWithDirectoryCredential(t, dirPath, "ssh", "", "")
+	if err := svc.db.SetSetting("git_https_user", testGitUser); err != nil {
+		t.Fatalf("store git_https_user: %v", err)
+	}
+	if err := svc.db.SetSetting("git_https_token", testGitToken); err != nil {
+		t.Fatalf("store git_https_token: %v", err)
+	}
+
+	user, token := svc.httpsCredentials(dirPath)
+	if user != "" || token != "" {
+		t.Errorf("got user=%q token=%q, want no HTTPS credential for an ssh-authType directory", user, token)
+	}
+}
+
+// captureSlog redirects the process-wide slog default to a buffer for the
+// duration of the test and restores the previous default on cleanup.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// TestHTTPSCredentials_DirectoryHTTPSEmptyToken_LogsWarning gives the silent
+// failure covered by TestPull_DirectoryHTTPSAuthType_EmptyTokenDoesNotFallBackToGlobal
+// an operator-visible trail. Without this, "authType=https configured but no
+// token saved" fails a pull with nothing beyond a generic auth error — exactly
+// the kind of invisible failure agent-os-qll is about, just moved one step
+// over from "wiped on scan" to "never explained on pull".
+func TestHTTPSCredentials_DirectoryHTTPSEmptyToken_LogsWarning(t *testing.T) {
+	dirPath := "/stacks/half-configured"
+	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, "")
+	buf := captureSlog(t)
+
+	user, token := svc.httpsCredentials(dirPath)
+	if token != "" {
+		t.Fatalf("expected an empty token, got %q", token)
+	}
+	_ = user
+
+	out := buf.String()
+	if !strings.Contains(out, dirPath) {
+		t.Errorf("warning does not name the affected directory: %s", out)
+	}
+	if !strings.Contains(out, "no stored credential") {
+		t.Errorf("warning does not explain the missing token: %s", out)
+	}
+	if strings.Contains(out, testGitToken) || strings.Contains(out, "wrong-global-token") {
+		t.Errorf("warning leaked a token value: %s", out)
+	}
+}
+
+// TestHTTPSCredentials_DirectoryHTTPSWithToken_NoWarning is the negative case:
+// a directory that IS fully configured must not log anything, so the warning
+// above stays a meaningful signal instead of routine noise on every pull.
+func TestHTTPSCredentials_DirectoryHTTPSWithToken_NoWarning(t *testing.T) {
+	dirPath := "/stacks/fully-configured"
+	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, testGitToken)
+	buf := captureSlog(t)
+
+	svc.httpsCredentials(dirPath)
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no warning for a fully-configured directory credential, got: %s", buf.String())
+	}
+}
+
+// TestGitCmd_DirectoryToken_TravelsInEnvNotArgv pins the same argv-safety
+// invariant as TestGitCmd_TokenTravelsInEnvNotArgv onto the directory-scoped
+// credential path.
+func TestGitCmd_DirectoryToken_TravelsInEnvNotArgv(t *testing.T) {
+	dirPath := "/stacks/https-repo"
+	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, testGitToken)
+
+	cmd, token := svc.gitCmd(dirPath, "pull", "--ff-only")
+
+	if token != testGitToken {
+		t.Errorf("gitCmd returned token %q, want the directory-scoped one", token)
+	}
+	for i, arg := range cmd.Args {
+		if strings.Contains(arg, testGitToken) {
+			t.Errorf("argv[%d] contains the token: %q", i, arg)
+		}
+	}
+
+	var sawToken bool
+	for _, kv := range cmd.Env {
+		if kv == credentialEnvToken+"="+testGitToken {
+			sawToken = true
+		}
+	}
+	if !sawToken {
+		t.Error("directory-scoped credential missing from the child environment")
+	}
 }
 
 // TestPull_UsesStoredHTTPSToken is the regression test for agent-os-qqw. With a
@@ -285,14 +503,16 @@ func TestHTTPSCredentials_SettingsBeatEnvironment(t *testing.T) {
 	svc := gitServiceWithStoredToken(t)
 	svc.config = &config.Config{GitHTTPSUser: "env-user", GitHTTPSToken: "env-token"}
 
-	user, token := svc.httpsCredentials()
+	// No directory row exists for this path, so resolution falls straight
+	// through to global settings/environment.
+	user, token := svc.httpsCredentials("/no/such/directory")
 	if user != testGitUser || token != testGitToken {
 		t.Errorf("got %q/%q, want the stored settings values", user, token)
 	}
 
 	// With nothing stored, the environment is the fallback rather than nothing.
 	bare := NewGitService(&config.Config{GitHTTPSUser: "env-user", GitHTTPSToken: "env-token"}, newTestDBWithEncryptor(t))
-	user, token = bare.httpsCredentials()
+	user, token = bare.httpsCredentials("/no/such/directory")
 	if user != "env-user" || token != "env-token" {
 		t.Errorf("got %q/%q, want the environment values", user, token)
 	}

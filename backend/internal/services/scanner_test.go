@@ -219,6 +219,41 @@ func TestScannerService_ScanAll_WithGitRepo(t *testing.T) {
 	assert.Equal(t, "main", stacks[0].GitBranch)
 }
 
+// TestScannerService_ScanAll_PreservesCredentialsAcrossRescan is the
+// regression test for agent-os-qll: a scan built a models.Directory with only
+// Path/Name/RootDir/IsGitRepo/GitRemote/GitBranch set and passed it to
+// UpsertDirectory, which used to be INSERT OR REPLACE over all eleven
+// columns — deleting and rewriting the row, wiping any credential an
+// operator had saved. A rescan must leave a previously-saved per-directory
+// credential intact.
+func TestScannerService_ScanAll_PreservesCredentialsAcrossRescan(t *testing.T) {
+	tempDir := t.TempDir()
+	stackDir := filepath.Join(tempDir, "my-stack")
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "compose.yaml"), []byte("services: {}\n"), 0644))
+
+	cfg := &config.Config{StacksDir: tempDir}
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+
+	service := NewScannerService(cfg, db)
+
+	_, err = service.ScanAll()
+	require.NoError(t, err)
+
+	require.NoError(t, db.UpdateDirectoryCredentials(stackDir, "https", "", "git-user", "s3cr3t-token"))
+
+	// Rescan. This is the operation the bug report says wipes the row.
+	_, err = service.ScanAll()
+	require.NoError(t, err)
+
+	cred, err := db.GetDirectoryCredentials(stackDir)
+	require.NoError(t, err)
+	assert.Equal(t, "https", cred.GitAuthType)
+	assert.Equal(t, "git-user", cred.GitHTTPSUser)
+	assert.Equal(t, "s3cr3t-token", cred.GitHTTPSToken)
+}
+
 func TestScannerService_ScanAll_WithEnvFile(t *testing.T) {
 	tempDir := t.TempDir()
 
