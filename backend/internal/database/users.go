@@ -19,10 +19,14 @@ func (d *DB) CreateUser(user models.User) error {
 	return err
 }
 
+// GetUserByUsername looks up a user case-insensitively (agent-os-tmo): the
+// COLLATE NOCASE predicate matches the unique index migration 13 creates
+// (idx_users_username_nocase), so "Admin" and "admin" resolve to the same
+// row here the same way the index treats them as the same value on insert.
 func (d *DB) GetUserByUsername(username string) (*models.User, error) {
 	var user models.User
 	query := `SELECT id, username, password, created_at, updated_at
-	          FROM users WHERE username = ?`
+	          FROM users WHERE username = ? COLLATE NOCASE`
 	err := d.db.QueryRow(query, username).Scan(&user.ID, &user.Username, &user.Password, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err

@@ -196,6 +196,39 @@ func TestAuthHandler_Login_Success(t *testing.T) {
 	assert.Equal(t, "testuser", userData["username"])
 }
 
+// TestAuthHandler_Login_CaseInsensitiveUsername pins agent-os-tmo end to end
+// through the real HTTP handler, not just at the DB layer: a user who
+// registered as "Admin" must be able to log in typing any casing of that
+// username, and the account's originally-stored casing (not the casing
+// typed at login) must come back in the response.
+func TestAuthHandler_Login_CaseInsensitiveUsername(t *testing.T) {
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+
+	createTestUser(t, db, "Admin", "password123")
+
+	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
+	router := setupTestRouter(handler)
+
+	for _, typedUsername := range []string{"Admin", "admin", "ADMIN", "aDmIn"} {
+		reqBody := `{"username": "` + typedUsername + `", "password": "password123"}`
+		req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code, "login must succeed typing %q when the account is stored as \"Admin\"", typedUsername)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.NotEmpty(t, response["token"], "typed %q", typedUsername)
+		userData := response["user"].(map[string]interface{})
+		assert.Equal(t, "Admin", userData["username"], "typed %q: the account's stored casing must be returned, not the casing typed at login", typedUsername)
+	}
+}
+
 func TestAuthHandler_Login_InvalidCredentials(t *testing.T) {
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
