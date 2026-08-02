@@ -1,0 +1,224 @@
+# Backup-flow E2E — Playwright suite against a real Capstan instance
+# (agent-os-5y9).
+#
+# WHY SCHEDULED, NOT PER-PR:
+#   The suite is `workers: 1`, sequential (tests share stack/snapshot state
+#   within the describe block — see backup-flow.spec.ts), with a 120s
+#   per-test timeout, and drives real restic I/O plus WebSocket streaming
+#   end to end: login -> configure backup -> init repo -> enable policy ->
+#   run backup -> verify snapshot -> restore -> verify post-restore state.
+#   That is exactly the coverage unit tests cannot give — backup is the
+#   highest-risk subsystem in this codebase (the DR drill that found
+#   agent-os-pid lived here). But it needs a live frontend + backend + restic
+#   binary and is too slow for PR feedback, so it runs nightly plus on-demand
+#   instead.
+#
+# WHAT AGENT-OS-5Y9 PHASE 1 FOUND (2026-08-02/03):
+#   The suite had rotted — 2 of 7 tests failed — but both failures were
+#   narrow, dated spec bugs against stable backend behaviour, not flakiness
+#   and not the Playwright 1.58->1.62 bump that landed underneath it:
+#     - runViaWs() checked a `success` boolean the WS `done` frame has never
+#       sent; it sends `outcome: "success"|"partial"|"failed"` (added in
+#       54cd300, 2026-06-03).
+#     - Snapshot selection took `snapshotList[0]` from the UNSCOPED
+#       GET /backups/snapshots, which as of 7d613ab (2026-07-31) also
+#       contains the automatic capstan-database self-backup snapshot, so
+#       index 0 is not reliably this stack's own snapshot.
+#   Both are fixed in the same change that added this workflow — see the
+#   inline comments in backup-flow.spec.ts for the full detail and the exact
+#   backend lines each was diagnosed against.
+#
+# RUNNER REQUIREMENTS (all satisfied by ubuntu-latest):
+#   - restic 0.18.0+ on PATH — installed below, pinned to the same version
+#     and checksum as docker/Dockerfile's backup-tools stage, so this
+#     workflow is never exercising a different restic than production ships.
+#   - Docker Engine present. Not actually exercised by this spec today — the
+#     backup flow is restic-driven file-level backup of the stack directory,
+#     not container lifecycle — but kept as a stated requirement since the
+#     backend is a Docker-managing service by design.
+#
+# TEST FIXTURE:
+#   The spec expects a stack named `test-app` to already exist (it does not
+#   create one itself). It is seeded here by writing its compose file
+#   directly into STACKS_DIR before the backend's first startup scan, so the
+#   directory-scanner path registers it (correct insert order: directory row
+#   before stack row). This deliberately avoids POST /api/v1/stacks, which
+#   currently 500s on a brand-new stack directory once FK enforcement went
+#   pool-wide (agent-os-jcu, a real backend bug found during agent-os-5y9
+#   Phase 1 and filed separately — out of scope for this workflow).
+
+name: E2E - Backup flow
+
+on:
+  schedule:
+    # 03:17 UTC daily — off the top of the hour to avoid the scheduling
+    # stampede every workflow with a bare `0 * * * *`-style cron competes in.
+    - cron: '17 3 * * *'
+  # Allow manual one-off runs from the Actions tab.
+  workflow_dispatch:
+
+jobs:
+  backup-flow:
+    name: Playwright backup-flow suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Pin the exact pnpm version declared in the repo root's and frontend's
+      # "packageManager" fields, matching frontend.yml's rationale.
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.5.1 --activate
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      # Root is pnpm-managed as of agent-os-l78 and carries the Playwright
+      # devDependency; frontend/ is a separate pnpm project with its own
+      # lockfile (see docker/Dockerfile's frontend-build stage).
+      - name: Install root dependencies (Playwright)
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # Pinned to the same version + checksum as docker/Dockerfile's
+      # backup-tools stage (RESTIC_VER / RESTIC_SHA256_AMD64) — keep the two
+      # in lockstep when bumping either one.
+      - name: Install restic
+        run: |
+          set -eu
+          RESTIC_VER=0.19.1
+          RESTIC_SHA256=f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c
+          curl -fsSL \
+            "https://github.com/restic/restic/releases/download/v${RESTIC_VER}/restic_${RESTIC_VER}_linux_amd64.bz2" \
+            -o /tmp/restic.bz2
+          echo "${RESTIC_SHA256}  /tmp/restic.bz2" | sha256sum -c -
+          bunzip2 /tmp/restic.bz2
+          sudo mv /tmp/restic /usr/local/bin/restic
+          sudo chmod +x /usr/local/bin/restic
+          restic version
+
+      - name: Build backend
+        working-directory: backend
+        run: go build -o server ./cmd/server
+
+      # Seed the test-app fixture before the backend's first startup scan —
+      # see the TEST FIXTURE note in the file header for why this bypasses
+      # POST /api/v1/stacks.
+      - name: Seed test-app stack fixture
+        run: |
+          set -eu
+          mkdir -p /tmp/capstan-e2e/stacks/test-app /tmp/capstan-e2e/data
+          cat > /tmp/capstan-e2e/stacks/test-app/compose.yaml <<'EOF'
+          services:
+            web:
+              image: nginx:1.25-alpine
+              restart: unless-stopped
+          EOF
+
+      - name: Start backend
+        working-directory: backend
+        run: |
+          set -eu
+          PORT=5001 \
+          STACKS_DIR=/tmp/capstan-e2e/stacks \
+          DATA_DIR=/tmp/capstan-e2e/data \
+          AUTH_DISABLED=true \
+          JWT_SECRET=e2e-ci-secret-32-characters-min-pad \
+          LOG_LEVEL=info \
+          LOG_FORMAT=text \
+          CORS_ORIGINS=http://localhost:3001 \
+          nohup ./server > /tmp/capstan-e2e/backend.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5001/health > /dev/null; then
+              echo "backend healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "backend did not become healthy within 30s" >&2
+          cat /tmp/capstan-e2e/backend.log
+          exit 1
+
+      # frontend/vite.config.ts proxies /api to the hardcoded
+      # http://localhost:5001 in dev mode, matching the backend port above —
+      # no override needed. --port/--strictPort pin 3001 to match
+      # playwright.config.ts's CAPSTAN_BASE_URL default.
+      - name: Start frontend dev server
+        working-directory: frontend
+        run: |
+          set -eu
+          nohup npx vite --port 3001 --strictPort > /tmp/capstan-e2e/frontend.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3001/ > /dev/null; then
+              echo "frontend healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "frontend did not become healthy within 30s" >&2
+          cat /tmp/capstan-e2e/frontend.log
+          exit 1
+
+      - name: Run Playwright backup-flow suite
+        env:
+          CAPSTAN_BASE_URL: http://localhost:3001
+          CAPSTAN_API_URL: http://localhost:5001
+          AUTH_DISABLED: 'true'
+          CAPSTAN_TEST_STACK: test-app
+        # No --reporter flag: it REPLACES playwright.config.ts's reporter
+        # array wholesale, including each reporter's options — so even
+        # `--reporter=list,html,json` silently drops the config's custom
+        # outputFolder/outputFile and falls back to the html reporter's
+        # default 'playwright-report/' and the json reporter's default
+        # (stdout), leaving the "Upload Playwright HTML report" step below
+        # with nothing at the path it expects. Verified empirically: with the
+        # flag, `--list` still prints a JSON summary to stdout instead of
+        # writing testing/reports/playwright-results.json. Omitting the flag
+        # entirely lets the config's list+html+json array (with its custom
+        # paths) apply as configured — confirmed against a deliberately
+        # broken run during agent-os-5y9, where the upload step had
+        # previously reported success on 0 files rather than failing loudly.
+        run: npx playwright test testing/tests/playwright/backup-flow.spec.ts
+
+      # A scheduled job whose failures cannot be inspected gets ignored —
+      # upload the HTML report (configured in playwright.config.ts) whenever
+      # the suite fails.
+      - name: Upload Playwright HTML report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-html-report
+          path: testing/reports/playwright-html
+          retention-days: 14
+
+      - name: Upload backend/frontend logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capstan-e2e-logs
+          path: |
+            /tmp/capstan-e2e/backend.log
+            /tmp/capstan-e2e/frontend.log
+          retention-days: 14
