@@ -28,6 +28,17 @@ concurrency:
 jobs:
   react-doctor:
     runs-on: self-hosted
+    # Runner dependency: this is a deliberate choice, not an inherited
+    # default. Kept on self-hosted rather than moving to ubuntu-latest
+    # because the fork guard right below assumes a self-hosted target — it
+    # stops a fork PR from running arbitrary code on our own hardware. On a
+    # hosted runner the same guard would only be protecting a disposable VM,
+    # a much weaker requirement, so switching runners later should come with
+    # a re-evaluation of whether the guard is still needed, not a bare
+    # runs-on edit. Runner "capstan" was confirmed online and this
+    # workflow's most recent push-to-main run completed successfully as of
+    # 2026-08-02.
+    #
     # Repo is public and this job runs self-hosted: without this guard, a PR
     # from a fork could get its workflow code executed on our runner. Only
     # push events (never fork-originated) and same-repo PRs get through.
@@ -45,7 +56,7 @@ jobs:
         with:
           node-version: 22
 
-      - uses: millionco/react-doctor@v2
+      - uses: millionco/react-doctor@01820bb4fd4d0a4aebcd8df2b2a143a098649cb2 # v2.2.8
         # Advisory by default: React Doctor reports findings on every PR — a
         # sticky summary comment, inline review comments, and a commit status
         # with the health score — but never fails the check, so it won't red-X
@@ -53,12 +64,21 @@ jobs:
         # the gate: uncomment the block below and set blocking to "error" (fail
         # on new error-severity findings) or "warning" (fail on any finding).
         # Full reference: https://www.react.doctor/ci
+        #
+        # Review cadence (decided 2026-08-03, agent-os-3g7): nobody reads
+        # findings on a fixed schedule today. Owner is whoever holds the
+        # CI/tooling backlog (currently @edwin); they review at each release
+        # cut, and ad hoc whenever the health score on the push-to-main
+        # commit status moves materially or a PR's sticky comment reports a
+        # new error-severity finding. As of the most recent push-to-main run
+        # (2026-08-02), main scored 73/100 (1 error, 52 warnings) — that is
+        # the baseline the next review should compare against.
         with:
           directory: frontend        # The React app lives here, not at the repo root.
+          version: "0.9.3"           # Pinned so this action, frontend/package.json, and the root doctor script can't drift to different react-doctor versions independently.
         #   blocking: error          # Gate level: "none" (advisory, the default) | "warning" | "error"
         #   scope: full              # On PRs, scan the whole project instead of just changed files
         #   comment: false           # Disable the sticky PR summary comment
         #   review-comments: false   # Disable inline review comments on changed lines
         #   commit-status: false     # Disable the commit status (score + counts, links to the run)
-        #   version: "0.4.0"         # Pin to a specific react-doctor version instead of "latest"
         #   project: "web,admin"     # In a monorepo, scan specific workspace project(s)

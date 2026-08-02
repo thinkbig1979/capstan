@@ -11,7 +11,7 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
-    "doctor": "npx react-doctor@latest"
+    "doctor": "npx react-doctor@0.9.3"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
