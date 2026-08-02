@@ -1,4 +1,5 @@
 import { Suspense, lazy } from 'react'
+import { useDefaultLayout } from 'react-resizable-panels'
 import { EnvEditor } from './EnvEditor'
 import { TabErrorBoundary } from '@/components/TabErrorBoundary'
 import {
@@ -32,18 +33,37 @@ interface ComposeEnvSplitProps {
  */
 export function ComposeEnvSplit({ stackId }: ComposeEnvSplitProps) {
   const isWide = useMediaQuery('(min-width: 768px)')
-  const direction = isWide ? 'horizontal' : 'vertical'
+  const orientation = isWide ? 'horizontal' : 'vertical'
+  // react-resizable-panels v4 dropped `autoSaveId`; `useDefaultLayout` is its
+  // replacement for persisting/restoring a group's layout via storage.
+  // Passing panelIds makes the storage key `react-resizable-panels:<id>:compose:env`
+  // (keyed by these stable, human-readable panel names) instead of v4's
+  // fallback heuristic, which infers panel identity from a single stored key
+  // by splitting on commas -- fragile, and unnecessary once ids are explicit.
+  // This key does NOT match v3's old `react-resizable-panels:<autoSaveId>`
+  // key, so any split ratio a user previously saved is abandoned (old data is
+  // simply never read) and they see one silent reset to the 50/50 default the
+  // first time they open this after the upgrade -- verified in a real
+  // browser: dragging then reloading restores the new layout correctly, and
+  // seeding localStorage with old-format v3 data does not error, it's just
+  // ignored and the panels render at defaultSize.
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: `compose-env-split-${orientation}`,
+    panelIds: ['compose', 'env'],
+    storage: window.localStorage,
+  })
 
   return (
     <ResizablePanelGroup
-      // Key by direction so the panels remount cleanly when orientation flips,
-      // and persist each orientation's ratio independently.
-      key={direction}
-      direction={direction}
-      autoSaveId={`compose-env-split-${direction}`}
+      // Key by orientation so the panels remount cleanly when it flips, and
+      // persist each orientation's ratio independently.
+      key={orientation}
+      orientation={orientation}
+      defaultLayout={defaultLayout}
+      onLayoutChanged={onLayoutChanged}
       className="min-h-[600px] rounded-lg"
     >
-      <ResizablePanel defaultSize={50} minSize={25} className="pr-0 md:pr-3">
+      <ResizablePanel id="compose" defaultSize={50} minSize={25} className="pr-0 md:pr-3">
         <div className="h-full overflow-auto">
           <TabErrorBoundary>
             <Suspense fallback={<EditorSkeleton />}>
@@ -53,7 +73,7 @@ export function ComposeEnvSplit({ stackId }: ComposeEnvSplitProps) {
         </div>
       </ResizablePanel>
       <ResizableHandle withHandle className="my-3 md:my-0 md:mx-1" />
-      <ResizablePanel defaultSize={50} minSize={25} className="pl-0 md:pl-3">
+      <ResizablePanel id="env" defaultSize={50} minSize={25} className="pl-0 md:pl-3">
         <div className="h-full overflow-auto">
           <TabErrorBoundary>
             <EnvEditor stackId={stackId} />

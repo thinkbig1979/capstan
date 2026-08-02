@@ -53,6 +53,16 @@ describe('ComposeEnvSplit', () => {
     expect(
       document.querySelector('[data-panel-group-direction="horizontal"]'),
     ).toBeInTheDocument()
+    // `data-panel-group-direction` is our own wrapper's attribute (it just
+    // forwards its own `orientation` prop), so it can't tell a correctly
+    // laid-out group from a wrapper that merely claims to be horizontal. The
+    // handle's `aria-orientation` comes from the library itself, and is the
+    // inverse of the group's real orientation (a horizontal, side-by-side
+    // group has a *vertical* divider line) -- so this is the assertion that
+    // actually pins the library's layout, not just our wrapper's bookkeeping.
+    expect(
+      document.querySelector('[data-slot="resizable-handle"][aria-orientation="vertical"]'),
+    ).toBeInTheDocument()
   })
 
   it('stacks vertically on narrow screens', () => {
@@ -60,6 +70,12 @@ describe('ComposeEnvSplit', () => {
     renderWithProviders(<ComposeEnvSplit stackId="s1" />)
     expect(
       document.querySelector('[data-panel-group-direction="vertical"]'),
+    ).toBeInTheDocument()
+    // See note above: assert the library's own aria-orientation (inverse of
+    // the group's orientation) so a wrapper that lies about its own attribute
+    // can't fake this test.
+    expect(
+      document.querySelector('[data-slot="resizable-handle"][aria-orientation="horizontal"]'),
     ).toBeInTheDocument()
   })
 })
