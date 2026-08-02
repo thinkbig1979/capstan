@@ -4,7 +4,7 @@ import { useCallback, useSyncExternalStore } from 'react'
  * Subscribe to a CSS media query and re-render when it changes.
  *
  * Used to drive JS-only layout switches that CSS classes can't reach, e.g. the
- * `direction` prop on react-resizable-panels. For purely visual show/hide,
+ * `orientation` prop on react-resizable-panels. For purely visual show/hide,
  * prefer Tailwind responsive classes instead.
  *
  * Backed by useSyncExternalStore so the matchMedia subscription is tear-free and

@@ -1,4 +1,5 @@
 import { Suspense, lazy } from 'react'
+import { useDefaultLayout } from 'react-resizable-panels'
 import { EnvEditor } from './EnvEditor'
 import { TabErrorBoundary } from '@/components/TabErrorBoundary'
 import {
@@ -32,15 +33,22 @@ interface ComposeEnvSplitProps {
  */
 export function ComposeEnvSplit({ stackId }: ComposeEnvSplitProps) {
   const isWide = useMediaQuery('(min-width: 768px)')
-  const direction = isWide ? 'horizontal' : 'vertical'
+  const orientation = isWide ? 'horizontal' : 'vertical'
+  // react-resizable-panels v4 dropped `autoSaveId`; `useDefaultLayout` is its
+  // replacement for persisting/restoring a group's layout via storage.
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: `compose-env-split-${orientation}`,
+    storage: window.localStorage,
+  })
 
   return (
     <ResizablePanelGroup
-      // Key by direction so the panels remount cleanly when orientation flips,
-      // and persist each orientation's ratio independently.
-      key={direction}
-      direction={direction}
-      autoSaveId={`compose-env-split-${direction}`}
+      // Key by orientation so the panels remount cleanly when it flips, and
+      // persist each orientation's ratio independently.
+      key={orientation}
+      orientation={orientation}
+      defaultLayout={defaultLayout}
+      onLayoutChanged={onLayoutChanged}
       className="min-h-[600px] rounded-lg"
     >
       <ResizablePanel defaultSize={50} minSize={25} className="pr-0 md:pr-3">
