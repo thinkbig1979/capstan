@@ -292,13 +292,46 @@ CREATE TABLE backup_run_items (
 	require.NoError(t, db.db.QueryRow(`SELECT COUNT(*) FROM backup_run_items WHERE id = 'item-legacy' AND run_id = 'run-legacy'`).Scan(&itemCount))
 	assert.Equal(t, 1, itemCount, "the child item row must survive the parent table rebuild")
 
+	// Belt and braces on the FK, per review: validity (foreign_key_check) is
+	// not sufficient on its own -- a dangling reference can pass depending on
+	// how SQLite resolves it at check time. Assert the FK's stored TEXT too,
+	// read straight out of sqlite_master, so a future migration that
+	// reintroduces migration 9's rename-out pattern (leaving this pointing at
+	// "backup_runs_v11" or "backup_runs_new") is caught even if
+	// foreign_key_check somehow does not flag it.
+	var childSchemaSQL string
+	require.NoError(t, db.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'backup_run_items'`).Scan(&childSchemaSQL))
+	assert.Contains(t, childSchemaSQL, `REFERENCES backup_runs(id)`,
+		"backup_run_items' FK must reference the final \"backup_runs\" table by name, not a transient rebuild name")
+	assert.NotContains(t, childSchemaSQL, "backup_runs_v11", "the FK must not be left pointing at the dropped detach-table name")
+	assert.NotContains(t, childSchemaSQL, "backup_runs_new", "the FK must not be left pointing at the transient rebuild name")
+
+	fkRows, err := db.db.Query(`PRAGMA foreign_key_check`)
+	require.NoError(t, err)
+	var fkViolations int
+	for fkRows.Next() {
+		fkViolations++
+	}
+	require.NoError(t, fkRows.Close())
+	assert.Equal(t, 0, fkViolations, "the rebuild must leave zero foreign_key_check violations")
+
+	// ON DELETE CASCADE must still fire for a row that was carried over from
+	// the OLD table by the migration itself, not only for a fresh one -- the
+	// migrated row is the one a real upgrade actually contains.
+	_, err = db.db.Exec(`DELETE FROM backup_runs WHERE id = 'run-legacy'`)
+	require.NoError(t, err)
+	var legacyCascadeCount int
+	require.NoError(t, db.db.QueryRow(`SELECT COUNT(*) FROM backup_run_items WHERE id = 'item-legacy'`).Scan(&legacyCascadeCount))
+	assert.Equal(t, 0, legacyCascadeCount, "ON DELETE CASCADE must fire for a row migrated over from the old table")
+
 	// 'interrupted' must now be accepted.
 	_, err = db.db.Exec(`INSERT INTO backup_runs (id, kind, trigger, status, started_at) VALUES ('run-int', 'backup', 'manual', 'interrupted', '2026-02-01T00:00:00Z')`)
 	require.NoError(t, err, "'interrupted' must be accepted after the migration widens the CHECK constraint")
 
 	// The FK must still be live post-migration against the REBUILT parent: a
 	// new child insert must succeed (this is what fails with "no such table"
-	// under the naive rename-based rebuild), and ON DELETE CASCADE must fire.
+	// under the naive rename-based rebuild), and ON DELETE CASCADE must fire
+	// for this freshly-inserted row too.
 	_, err = db.db.Exec(`INSERT INTO backup_run_items (id, run_id, stack_id, status) VALUES ('item-new', 'run-int', 'stacks~a', 'success')`)
 	require.NoError(t, err, "a new backup_run_items insert against the rebuilt parent must succeed")
 
