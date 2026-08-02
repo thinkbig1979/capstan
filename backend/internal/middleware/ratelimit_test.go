@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -414,9 +415,10 @@ func TestAuthLimit_UnparseableClientAddressIsRejectedNotKeyed(t *testing.T) {
 	}
 }
 
-// accessOrder must not outlive the entries it orders. cleanup() deletes expired
-// keys from requests; if it does not also drop them from accessOrder, the slice
-// grows for the process lifetime and re-created keys are appended twice.
+// accessOrder and accessIndex must not outlive the entries they order.
+// cleanup() deletes expired keys from requests; if it does not also drop them
+// from accessOrder/accessIndex via removeKey, the list grows for the process
+// lifetime and re-created keys are appended twice.
 func TestAccessOrderMirrorsRequestsAfterExpiry(t *testing.T) {
 	rl := NewRateLimiter(40*time.Millisecond, 100)
 
@@ -428,7 +430,7 @@ func TestAccessOrderMirrorsRequestsAfterExpiry(t *testing.T) {
 	}
 
 	rl.mu.RLock()
-	before := len(rl.accessOrder)
+	before := rl.accessOrder.Len()
 	rl.mu.RUnlock()
 	if before != 50 {
 		t.Fatalf("expected 50 tracked keys, got %d", before)
@@ -438,13 +440,13 @@ func TestAccessOrderMirrorsRequestsAfterExpiry(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		rl.mu.RLock()
-		reqs, order := len(rl.requests), len(rl.accessOrder)
+		reqs, order, index := len(rl.requests), rl.accessOrder.Len(), len(rl.accessIndex)
 		rl.mu.RUnlock()
-		if reqs == 0 && order == 0 {
+		if reqs == 0 && order == 0 && index == 0 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("after expiry: len(requests)=%d, len(accessOrder)=%d, want 0 and 0", reqs, order)
+			t.Fatalf("after expiry: len(requests)=%d, accessOrder.Len()=%d, len(accessIndex)=%d, want 0, 0, 0", reqs, order, index)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -454,35 +456,97 @@ func TestAccessOrderMirrorsRequestsAfterExpiry(t *testing.T) {
 		rl.check(loginRateLimitKey("203.0.113.9", fmt.Sprintf("user%03d", i)))
 	}
 	rl.mu.RLock()
-	reqs, order := len(rl.requests), len(rl.accessOrder)
+	reqs, order, index := len(rl.requests), rl.accessOrder.Len(), len(rl.accessIndex)
 	rl.mu.RUnlock()
-	if order != reqs {
-		t.Fatalf("accessOrder drifted from requests: len(accessOrder)=%d, len(requests)=%d", order, reqs)
+	if order != reqs || index != reqs {
+		t.Fatalf("accessOrder/accessIndex drifted from requests: accessOrder.Len()=%d, len(accessIndex)=%d, len(requests)=%d", order, index, reqs)
 	}
 }
 
-func TestPruneAccessOrderKeepsSurvivorOrder(t *testing.T) {
+// This replaces TestPruneAccessOrderKeepsSurvivorOrder: pruneAccessOrder no
+// longer exists because removeKey deletes from requests, accessOrder, and
+// accessIndex together at the one call site that ever removes a key, so the
+// drift that test policed (a key surviving in requests but not accessOrder,
+// or vice versa) is now structurally impossible rather than repaired
+// after the fact. What still needs pinning is the behaviour the list gives
+// removeKey/evictLRU for free: eviction must take the least-recently-used
+// key, and a refreshed key must not be it.
+func TestEvictLRUPicksLeastRecentlyUsed(t *testing.T) {
 	rl := NewRateLimiter(time.Minute, 100)
-	for _, k := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"} {
-		rl.check(k)
-	}
+	rl.maxEntries = 3
 
-	rl.mu.Lock()
-	delete(rl.requests, "2.2.2.2")
-	delete(rl.requests, "3.3.3.3")
-	pruneAccessOrder(rl)
-	got := append([]string(nil), rl.accessOrder...)
-	rl.mu.Unlock()
-
-	want := []string{"1.1.1.1", "4.4.4.4"}
-	if len(got) != len(want) {
-		t.Fatalf("accessOrder = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("accessOrder = %v, want %v", got, want)
+	for _, k := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"} {
+		if !rl.check(k) {
+			t.Fatalf("check(%q) denied below the limit", k)
 		}
 	}
+
+	// Refresh 1.1.1.1 so 2.2.2.2 becomes the least recently used.
+	if !rl.check("1.1.1.1") {
+		t.Fatal("refresh of 1.1.1.1 denied")
+	}
+
+	// A fourth key pushes the entry count over maxEntries, but evictLRU runs at
+	// the top of check() before the new key is inserted, so the map is only
+	// over budget *after* this call returns; eviction is one call behind. A
+	// fifth call is what actually triggers it.
+	if !rl.check("4.4.4.4") {
+		t.Fatal("check(4.4.4.4) denied")
+	}
+	if !rl.check("5.5.5.5") {
+		t.Fatal("check(5.5.5.5) denied")
+	}
+
+	rl.mu.RLock()
+	_, has1 := rl.requests["1.1.1.1"]
+	_, has2 := rl.requests["2.2.2.2"]
+	_, has3 := rl.requests["3.3.3.3"]
+	_, has4 := rl.requests["4.4.4.4"]
+	_, has5 := rl.requests["5.5.5.5"]
+	reqs, order, index := len(rl.requests), rl.accessOrder.Len(), len(rl.accessIndex)
+	rl.mu.RUnlock()
+
+	if has2 {
+		t.Fatal("2.2.2.2 should have been evicted as the least recently used key")
+	}
+	if !has1 || !has3 || !has4 || !has5 {
+		t.Fatalf("unexpected eviction: has1=%v has3=%v has4=%v has5=%v (want all true)", has1, has3, has4, has5)
+	}
+	// evictLRU trims down to maxEntries before the new key is inserted, so
+	// steady state after inserting a new key is maxEntries+1, not maxEntries.
+	if reqs != 4 || order != 4 || index != 4 {
+		t.Fatalf("accessOrder/accessIndex should mirror requests (4 entries), got requests=%d accessOrder.Len()=%d len(accessIndex)=%d", reqs, order, index)
+	}
+}
+
+// check() guards every access to requests, accessOrder, and accessIndex with
+// rl.mu — container/list.List and a plain map are not otherwise safe for
+// concurrent use. The single mutex covering all three was true of the slice
+// design too, but this rewrite is the first time a shared-state structure
+// (list.Element pointers) crosses between requests and accessIndex, so it is
+// worth a direct hammering test under -race rather than relying only on the
+// sequential, single-goroutine coverage the HTTP-level tests give the same
+// code path.
+func TestCheckConcurrentAccessDoesNotRace(t *testing.T) {
+	rl := NewRateLimiter(time.Minute, 1000)
+
+	const goroutines = 50
+	const iterations = 200
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				// Deliberately overlapping keyspace (5 keys shared across all 50
+				// goroutines) so refresh, insert, and evict all interleave on the
+				// same map entries and list nodes, not just disjoint ones.
+				key := fmt.Sprintf("10.0.%d.%d", g%5, i%5)
+				rl.check(key)
+			}
+		}(g)
+	}
+	wg.Wait()
 }
 
 func TestNormalizeAccount(t *testing.T) {

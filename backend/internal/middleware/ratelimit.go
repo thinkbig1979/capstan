@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"container/list"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -17,12 +18,17 @@ import (
 )
 
 type RateLimiter struct {
-	mu          sync.RWMutex
-	requests    map[string]*userRequests
-	window      time.Duration
-	maxReqs     int
-	maxEntries  int
-	accessOrder []string
+	mu         sync.RWMutex
+	requests   map[string]*userRequests
+	window     time.Duration
+	maxReqs    int
+	maxEntries int
+
+	// accessOrder tracks LRU order: Front() is the least-recently-used key,
+	// Back() is the most recently used. accessIndex maps a key to its node so
+	// check() can refresh or evictLRU can pop in O(1) instead of scanning.
+	accessOrder *list.List
+	accessIndex map[string]*list.Element
 }
 
 type userRequests struct {
@@ -70,7 +76,8 @@ func NewRateLimiter(window time.Duration, maxReqs int) *RateLimiter {
 		window:      window,
 		maxReqs:     maxReqs,
 		maxEntries:  10000,
-		accessOrder: make([]string, 0, 100),
+		accessOrder: list.New(),
+		accessIndex: make(map[string]*list.Element, 100),
 	}
 
 	go rl.cleanup()
@@ -161,35 +168,32 @@ func loginRateLimitKey(scope, account string) string {
 	return loginKeyPrefix + scope + "|" + account
 }
 
-// accessOrder and requests must be removed from together. Anything that drops a
-// key from one and not the other leaves a permanent entry in accessOrder, and
-// re-creating that key later appends a duplicate — so the slice grows for the
-// process lifetime. That was survivable while keys were client IPs; with an
-// account half derived from submitted usernames the key space is unbounded and
-// attacker-influenced, which turns it into a remotely-driven leak (agent-os-boe).
-// Pinned by TestAccessOrderMirrorsRequestsAfterExpiry.
-func evictLRU(rl *RateLimiter) {
-	if len(rl.requests) <= rl.maxEntries {
-		return
-	}
-
-	for len(rl.requests) > rl.maxEntries && len(rl.accessOrder) > 0 {
-		oldestKey := rl.accessOrder[0]
-		delete(rl.requests, oldestKey)
-		rl.accessOrder = rl.accessOrder[1:]
+// removeKey deletes key from requests, accessOrder, and accessIndex together.
+// This is the only place any of the three is removed, so — unlike the slice
+// design this replaced — dropping a key from one without the other is not a
+// mistake a future call site can make; there is only one call site. That
+// matters because with an account half derived from submitted usernames the
+// key space is unbounded and attacker-influenced, so a drifting mirror is a
+// remotely-driven leak, not just a bookkeeping bug (agent-os-boe). Caller holds
+// rl.mu. Pinned by TestAccessOrderMirrorsRequestsAfterExpiry.
+func removeKey(rl *RateLimiter, key string) {
+	delete(rl.requests, key)
+	if el, ok := rl.accessIndex[key]; ok {
+		rl.accessOrder.Remove(el)
+		delete(rl.accessIndex, key)
 	}
 }
 
-// pruneAccessOrder drops order entries whose key is no longer in requests,
-// preserving the relative order of the survivors. Caller holds rl.mu.
-func pruneAccessOrder(rl *RateLimiter) {
-	kept := rl.accessOrder[:0]
-	for _, key := range rl.accessOrder {
-		if _, ok := rl.requests[key]; ok {
-			kept = append(kept, key)
+// evictLRU pops the least-recently-used key — accessOrder.Front() — until
+// requests is back at maxEntries. Pinned by TestEvictLRUPicksLeastRecentlyUsed.
+func evictLRU(rl *RateLimiter) {
+	for len(rl.requests) > rl.maxEntries {
+		oldest := rl.accessOrder.Front()
+		if oldest == nil {
+			return
 		}
+		removeKey(rl, oldest.Value.(string))
 	}
-	rl.accessOrder = kept
 }
 
 func (rl *RateLimiter) cleanup() {
@@ -198,7 +202,6 @@ func (rl *RateLimiter) cleanup() {
 
 	for range ticker.C {
 		rl.mu.Lock()
-		expired := false
 		for key, ur := range rl.requests {
 			now := time.Now()
 			valid := make([]time.Time, 0, len(ur.timestamps))
@@ -208,14 +211,10 @@ func (rl *RateLimiter) cleanup() {
 				}
 			}
 			if len(valid) == 0 {
-				delete(rl.requests, key)
-				expired = true
+				removeKey(rl, key)
 			} else {
 				ur.timestamps = valid
 			}
-		}
-		if expired {
-			pruneAccessOrder(rl)
 		}
 		rl.mu.Unlock()
 	}
@@ -243,16 +242,20 @@ func (rl *RateLimiter) check(key string) bool {
 	if !exists {
 		ur = &userRequests{timestamps: []time.Time{}}
 		rl.requests[key] = ur
-
-		rl.accessOrder = append(rl.accessOrder, key)
+		rl.accessIndex[key] = rl.accessOrder.PushBack(key)
+	} else if el, ok := rl.accessIndex[key]; ok {
+		rl.accessOrder.MoveToBack(el)
 	} else {
-		for i, k := range rl.accessOrder {
-			if k == key {
-				rl.accessOrder = append(rl.accessOrder[:i], rl.accessOrder[i+1:]...)
-				rl.accessOrder = append(rl.accessOrder, key)
-				break
-			}
-		}
+		// requests and accessIndex are written together above and removed
+		// together by removeKey, so this branch is unreachable today. But
+		// insertion, unlike removal, is still two adjacent statements rather
+		// than one call site — nothing structural stops a future edit from
+		// separating them. list.MoveToBack dereferences its argument's
+		// internal list pointer, so a nil *list.Element there would panic on
+		// the login path rather than silently miss a refresh. Re-inserting
+		// instead heals the mirror and degrades a future bug to a missed LRU
+		// refresh, not a crash.
+		rl.accessIndex[key] = rl.accessOrder.PushBack(key)
 	}
 
 	cutoff := now.Add(-rl.window)
