@@ -231,10 +231,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Same corepack dance as frontend.yml, for the same reason: the repo root
-      # has its own packageManager-less package.json, so corepack resolves the
-      # wrong (latest installed) pnpm when invoked outside frontend/. See the
-      # comment at frontend.yml:29-36.
+      # Same corepack dance as frontend.yml, and now also used below to
+      # install the repo root's own pnpm-managed tree (cclsp, playwright).
+      # Explicit version pin rather than packageManager auto-detection: this
+      # used to be load-bearing because the repo root's package.json had no
+      # "packageManager" field, so corepack resolved the wrong (latest
+      # installed) pnpm when invoked outside frontend/. As of agent-os-l78
+      # both manifests declare pnpm@11.5.1, so this is redundant-but-harmless
+      # rather than load-bearing — see frontend.yml's corepack comment for the
+      # full history.
       - name: Set up pnpm
         run: |
           corepack enable
@@ -293,6 +298,45 @@ jobs:
           echo "${REPORT}"
           {
             echo '## pnpm audit — all dependencies (advisory, not gated)'
+            echo
+            echo '```'
+            echo "${REPORT}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # Repo root (agent-os-l78). Before this, the root's dependencies
+      # (cclsp, playwright — editor/agent tooling and the E2E runner, neither
+      # shipped anywhere) lived in an npm package-lock.json that nothing in
+      # CI ever read: 11 of the pre-agent-os-l78 Dependabot alerts were
+      # against it, invisible to every workflow here. Now pnpm-managed, with
+      # its own lockfile, installed with the pnpm pinned above.
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      # BLOCKING, same gate level as the frontend production step above —
+      # but root's package.json declares only `devDependencies`, no
+      # `dependencies` at all, so `--prod` has nothing to inspect and this
+      # step is a structural no-op today (confirmed: `pnpm audit --prod
+      # --audit-level=high` at root reports "No known vulnerabilities
+      # found" unconditionally, since there is nothing in scope). Kept
+      # anyway rather than left out: it starts protecting automatically,
+      # with no further workflow change, the day a real production
+      # dependency is added at the root.
+      - name: Root production advisories (blocking, high and above)
+        run: pnpm audit --prod --audit-level=high
+
+      # ADVISORY, for the same reason as frontend's dev-dependency step
+      # above: everything at the root is dev/editor tooling, none of it
+      # ships, and a check that can never go green for a reason a PR author
+      # can act on gets ignored rather than fixed. Reported to the summary so
+      # the count stays visible and a sudden jump is noticeable.
+      - name: Root advisories including dev dependencies (advisory only)
+        continue-on-error: true
+        run: |
+          REPORT="$(pnpm audit --audit-level=moderate 2>&1 | tail -40 || true)"
+          echo "${REPORT}"
+          {
+            echo '## pnpm audit — repo root: cclsp, playwright (advisory, not gated)'
             echo
             echo '```'
             echo "${REPORT}"

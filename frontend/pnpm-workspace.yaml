@@ -34,6 +34,40 @@ trustPolicyExclude:
 # react-router-dom onto react-router 8.3.0 (agent-os-e0t) — no entries remain.
 auditConfig:
   ignoreGhsas: []
+
+# Security: dev-scope disposition (agent-os-l78, 2026-08-03), not entered
+# above because nothing here is a production finding to allowlist — see
+# "why no entries" at the end. `pnpm audit --audit-level=moderate --json`
+# reports 20 advisories today, none production-reachable (the Dockerfile
+# build copies only `vite build`'s dist/ output; none of these packages are
+# imported by app code). security.yml's frontend-audit job already treats
+# dev-dependency advisories as advisory-only for this reason, in its "Full
+# advisories including dev dependencies" step. They fall into two chains:
+#
+# 1. minimatch, ajv, flatted, js-yaml, brace-expansion — transitive through
+#    @typescript-eslint/eslint-plugin > ... > eslint, the lint toolchain
+#    every PR runs. `react-doctor` (devDependency, kept per the agent-os-3g7
+#    decision) bundles its own `eslint-plugin-react-hooks` and so resolves a
+#    second copy of the same eslint chain, and some of these advisories list
+#    a `react-doctor` path alongside it — but checked via `pnpm audit
+#    --audit-level=moderate --json` on 2026-08-03, every one of them also has
+#    20+ paths through the direct eslint devDependency with no react-doctor
+#    in them. Pinning or removing react-doctor would not clear these; the fix
+#    is an eslint-toolchain bump, which will land on its own schedule as
+#    upstream (`eslint`, `@typescript-eslint/*`) releases one.
+#
+# 2. undici — transitive through jsdom > vitest, the test runner's DOM
+#    implementation. `pnpm why undici` shows only jsdom/vitest paths; not
+#    reachable from react-doctor or any other package. vitest never runs in
+#    the built image.
+#
+# Why no entries in ignoreGhsas above: that list is for a *production*
+# finding assessed as unreachable despite `pnpm audit --prod` flagging it.
+# Everything here is already excluded from that gate by being a dev
+# dependency; adding it to ignoreGhsas would silence a signal
+# (`pnpm audit --audit-level=moderate`, the non-gating advisory step) that is
+# supposed to stay visible so a sudden jump is noticeable, per that step's
+# own comment in security.yml.
 overrides:
   # Security: pull fast-uri past the path-traversal fix and past the two host
   # confusion advisories, GHSA-4c8g-83qw-93j6 (fixed 3.1.3) and
