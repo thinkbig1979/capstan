@@ -149,11 +149,23 @@ func validateLoginKey(key string) bool {
 //
 // The username is attacker-controlled, so it is lower-cased and required to
 // match the account charset before it reaches a map key or a log line;
-// everything else collapses to the sentinel. Folding case deliberately
-// over-groups — usernames compare case-sensitively at login
-// (database.GetUserByUsername), so "Alice" and "alice" are distinct accounts
-// that share a bucket. That direction is the safe one: it stops case rotation
-// from multiplying an attacker's budget.
+// everything else collapses to the sentinel. This folding is now consistent
+// with the DB layer (agent-os-tmo): database.GetUserByUsername compares
+// case-insensitively (COLLATE NOCASE, migration 13, idx_users_username_nocase),
+// so "Alice" and "alice" are the same account at login too, and this bucket
+// key groups exactly the login attempts that land on one account. Do not
+// "fix" this to preserve case — that would split one account's budget across
+// buckets again, the opposite of what this key is for.
+//
+// Before migration 13, usernames compared case-sensitively at login while
+// this limiter already folded case for a different reason: preventing case
+// rotation from multiplying an attacker's per-account budget. That rationale
+// assumed a two-account scenario ("Alice" and "alice" both real, sharing a
+// bucket) that turned out to be unreachable in this codebase — CreateUser
+// has exactly one call site (handlers.AuthHandler.Setup), which refuses once
+// a single user exists, so a second real account by any casing never
+// existed to share a bucket with. The folding was kept anyway because it is
+// now simply correct, not because of the original multi-account rationale.
 func normalizeAccount(username string) string {
 	account := strings.ToLower(strings.TrimSpace(username))
 	if !loginKeyRegex.MatchString(account) {

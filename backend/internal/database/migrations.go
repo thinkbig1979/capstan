@@ -10,6 +10,20 @@ type Migration struct {
 	Version int
 	Name    string
 	SQL     string
+	// PreCheck runs inside the same transaction as SQL, immediately before it,
+	// and only when this migration has not yet been applied. It exists for
+	// migrations that must validate pre-existing data before altering schema
+	// and report a specific, actionable error rather than let a raw
+	// constraint failure abort the migration (agent-os-tmo: a NOCASE unique
+	// index built directly against pre-existing case-colliding usernames
+	// fails with a bare "UNIQUE constraint failed", naming no rows).
+	// SQLite's RAISE() can only be used inside a trigger body, not a plain
+	// statement, so this kind of check cannot be expressed as SQL text here.
+	// A non-nil error rolls back the transaction, leaving schema and
+	// schema_migrations untouched, and propagates out of RunMigrations exactly
+	// like any other migration failure. Nil for every migration that needs no
+	// pre-check.
+	PreCheck func(tx *sql.Tx) error
 }
 
 var migrations = []Migration{
@@ -386,6 +400,87 @@ CREATE INDEX IF NOT EXISTS idx_backup_run_items_run_id ON backup_run_items(run_i
 CREATE INDEX IF NOT EXISTS idx_backup_run_items_stack_id ON backup_run_items(stack_id);
 `,
 	},
+	{
+		Version: 13,
+		Name:    "users_username_nocase_unique",
+		// Usernames become case-insensitive at the DB layer (agent-os-tmo).
+		// Without this, database.GetUserByUsername compares under SQLite's
+		// default BINARY collation, so "Admin" and "admin" are distinct
+		// accounts -- indistinguishable in most UI, and (unlike the login
+		// rate limiter's normalizeAccount, which already folds case for a
+		// different reason, see middleware/ratelimit.go) not what the DB
+		// itself enforces.
+		//
+		// This is an index, not a users-table rebuild, deliberately: users
+		// and sessions are the two tables where a botched migration means
+		// nobody can log in at all, and sessions.user_id has a live
+		// ON DELETE CASCADE FK to users(id) (migrations.go v1) that would
+		// hit the same two hazards migration 12's comment documents if users
+		// were dropped/renamed. A NOCASE index sidesteps both -- verified
+		// empirically (agent-os-tmo) that (a) the index enforces on INSERT
+		// regardless of the inserting statement's own collation, (b) a query
+		// with `COLLATE NOCASE` on the predicate uses the index (EXPLAIN
+		// QUERY PLAN: SEARCH ... USING INDEX idx_users_username_nocase), and
+		// (c) the pre-existing binary-collation UNIQUE on the column does
+		// not conflict with it.
+		//
+		// PreCheck (below) is required, not optional: creating this index
+		// directly against a database that already holds two usernames
+		// differing only by case fails with a bare "UNIQUE constraint
+		// failed", naming no rows -- exactly the "dying on a unique index"
+		// outcome this migration must not produce. PreCheck runs first and
+		// aborts with the actual colliding usernames named, leaving schema
+		// untouched, so an operator can resolve it by hand.
+		PreCheck: checkNoCaseCollidingUsernames,
+		SQL: `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users(username COLLATE NOCASE);
+`,
+	},
+}
+
+// checkNoCaseCollidingUsernames is migration 13's PreCheck. It detects
+// usernames that differ only by case -- which the pre-v13 schema's BINARY
+// collation allowed to coexist as two distinct accounts -- and fails with
+// their exact values rather than let the CREATE UNIQUE INDEX below abort
+// with a bare constraint-violation error that names nothing. Case-only
+// collisions cannot arise through the application itself: CreateUser
+// (database/users.go) has exactly one caller, AuthHandler.Setup, which
+// refuses once a single user exists, so this can only fire against a
+// database that was altered outside the app (manual SQL, a restored/merged
+// backup). That is precisely when an operator needs an explicit stop, not a
+// migration that silently renames or drops one of the colliding accounts.
+func checkNoCaseCollidingUsernames(tx *sql.Tx) error {
+	rows, err := tx.Query(`
+		SELECT username FROM users
+		WHERE LOWER(username) IN (
+			SELECT LOWER(username) FROM users GROUP BY LOWER(username) HAVING COUNT(*) > 1
+		)
+		ORDER BY LOWER(username), username
+	`)
+	if err != nil {
+		return fmt.Errorf("checking for case-colliding usernames: %w", err)
+	}
+	defer rows.Close()
+
+	var colliding []string
+	for rows.Next() {
+		var username string
+		if err := rows.Scan(&username); err != nil {
+			return fmt.Errorf("scanning colliding username: %w", err)
+		}
+		colliding = append(colliding, username)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reading colliding usernames: %w", err)
+	}
+
+	if len(colliding) > 0 {
+		return fmt.Errorf(
+			"cannot make usernames case-insensitive: %d existing username(s) collide only by case and must be resolved by hand before restarting: %s",
+			len(colliding), strings.Join(colliding, ", "),
+		)
+	}
+	return nil
 }
 
 func RunMigrations(db *DB) error {
@@ -410,6 +505,13 @@ func RunMigrations(db *DB) error {
 			tx, err := db.db.Begin()
 			if err != nil {
 				return fmt.Errorf("failed to begin transaction for migration %d: %w", migration.Version, err)
+			}
+
+			if migration.PreCheck != nil {
+				if err := migration.PreCheck(tx); err != nil {
+					tx.Rollback()
+					return fmt.Errorf("migration %d pre-check failed: %w", migration.Version, err)
+				}
 			}
 
 			_, err = tx.Exec(migration.SQL)

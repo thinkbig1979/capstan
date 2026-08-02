@@ -369,3 +369,95 @@ CREATE TABLE backup_run_items (
 	assert.Contains(t, itemNames, "idx_backup_run_items_run_id")
 	assert.Contains(t, itemNames, "idx_backup_run_items_stack_id")
 }
+
+// applyMigrationsThrough applies migrations 1..throughVersion (inclusive) by
+// driving the real Migration entries (PreCheck + SQL) through the same
+// begin/PreCheck/Exec/record/commit sequence RunMigrations uses, but stops
+// before a later version so a test can seed data in the gap -- e.g. inserting
+// pre-existing case-colliding usernames after v12 (users exists, unchanged
+// shape since v1) but before v13 (the NOCASE index) runs. This is not a
+// hand-rolled schema probe: it is the actual migration definitions and the
+// actual apply sequence, just checkpointed partway through, which is what
+// the v12 test comment warns is required to see FK/constraint hazards that
+// only show up under real transactional execution.
+func applyMigrationsThrough(t *testing.T, db *DB, throughVersion int) {
+	t.Helper()
+	_, err := db.db.Exec(`
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version INTEGER PRIMARY KEY,
+			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	require.NoError(t, err)
+
+	for _, m := range migrations {
+		if m.Version > throughVersion {
+			break
+		}
+		tx, err := db.db.Begin()
+		require.NoError(t, err)
+		if m.PreCheck != nil {
+			require.NoError(t, m.PreCheck(tx))
+		}
+		_, err = tx.Exec(m.SQL)
+		require.NoError(t, err)
+		_, err = tx.Exec("INSERT INTO schema_migrations (version, applied_at) VALUES (?, CURRENT_TIMESTAMP)", m.Version)
+		require.NoError(t, err)
+		require.NoError(t, tx.Commit())
+	}
+}
+
+// TestMigration_UsernameNocase_DetectsCollisionAndAborts pins the required
+// behavior from the decision note: a pre-existing pair of usernames that
+// differ only by case must abort migration 13 with a named, actionable
+// error -- not the bare "UNIQUE constraint failed" that CREATE UNIQUE INDEX
+// would produce unaided -- and must leave the schema untouched so a retry
+// after the operator fixes the data starts clean.
+func TestMigration_UsernameNocase_DetectsCollisionAndAborts(t *testing.T) {
+	db, err := New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	applyMigrationsThrough(t, db, 12)
+
+	_, err = db.db.Exec(`INSERT INTO users (id, username, password) VALUES ('u1', 'Alice', 'h')`)
+	require.NoError(t, err)
+	_, err = db.db.Exec(`INSERT INTO users (id, username, password) VALUES ('u2', 'alice', 'h')`)
+	require.NoError(t, err)
+
+	err = RunMigrations(db)
+	require.Error(t, err, "migration 13 must abort when case-colliding usernames already exist")
+	assert.Contains(t, err.Error(), "Alice", "the error must name the actual colliding usernames")
+	assert.Contains(t, err.Error(), "alice", "the error must name the actual colliding usernames")
+
+	var recorded int
+	require.NoError(t, db.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 13`).Scan(&recorded))
+	assert.Equal(t, 0, recorded, "migration 13 must not be recorded as applied when it aborted")
+
+	var idxCount int
+	require.NoError(t, db.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_users_username_nocase'`).Scan(&idxCount))
+	assert.Equal(t, 0, idxCount, "the NOCASE index must not exist when the pre-check aborted the migration")
+
+	// Both colliding rows must survive untouched -- an abort must not delete
+	// or alter data, only refuse to proceed.
+	var userCount int
+	require.NoError(t, db.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&userCount))
+	assert.Equal(t, 2, userCount, "an aborted migration must not delete the colliding rows")
+}
+
+// TestMigration_UsernameNocase_NoCollision_EnforcesGoingForward is the
+// positive case: with no pre-existing collision, migration 13 must apply
+// cleanly and the resulting index must reject a new case-only duplicate.
+func TestMigration_UsernameNocase_NoCollision_EnforcesGoingForward(t *testing.T) {
+	db := newTestDB(t)
+
+	_, err := db.db.Exec(`INSERT INTO users (id, username, password) VALUES ('u1', 'Bob', 'h')`)
+	require.NoError(t, err)
+
+	_, err = db.db.Exec(`INSERT INTO users (id, username, password) VALUES ('u2', 'bob', 'h')`)
+	require.Error(t, err, "the NOCASE unique index created by migration 13 must reject a case-only duplicate")
+
+	var recorded int
+	require.NoError(t, db.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 13`).Scan(&recorded))
+	assert.Equal(t, 1, recorded, "migration 13 must be recorded as applied when there is no collision")
+}
