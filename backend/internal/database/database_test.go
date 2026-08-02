@@ -248,6 +248,129 @@ func TestGetBackupRuns_Limit(t *testing.T) {
 	assert.Len(t, runs, 2, "limit parameter must be respected")
 }
 
+// --- Backup Run Sweep tests (agent-os-pid) ---
+
+// TestSweepInterruptedBackupRuns_OpenedAtStartup_ReachesTerminalState pins the
+// startup path end-to-end rather than calling the sweep function directly: it
+// writes a real file-backed database with a 'running' row still in it (as a
+// killed process or a mid-run snapshot would leave behind), closes it, then
+// reopens it exactly the way main.go does. The reopen must alone be enough to
+// bring the row to a terminal state — nothing else runs between NewWithMigrations
+// returning and this assertion.
+func TestSweepInterruptedBackupRuns_OpenedAtStartup_ReachesTerminalState(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	seed, err := NewWithMigrations(dir)
+	require.NoError(t, err)
+
+	stuck := &models.BackupRun{
+		ID:        "run-stuck",
+		Kind:      "backup",
+		Trigger:   "scheduled",
+		Status:    "running",
+		StartedAt: "2026-07-31T17:50:00Z",
+	}
+	require.NoError(t, seed.CreateBackupRun(stuck))
+	require.NoError(t, seed.Close())
+
+	// Reopen exactly as main.go does (database.NewWithMigrationsAndEncryptor
+	// wraps NewWithMigrations with an encryptor argument; NewWithMigrations
+	// exercises the same startup path).
+	restarted, err := NewWithMigrations(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { restarted.Close() })
+
+	got, err := restarted.GetBackupRunByID("run-stuck")
+	require.NoError(t, err)
+	assert.Equal(t, "interrupted", got.Status, "a run still 'running' at startup must reach a terminal state")
+	require.NotNil(t, got.FinishedAt, "finished_at must be set, not left null")
+	assert.NotEmpty(t, *got.FinishedAt)
+	assert.NotEmpty(t, got.ErrorMessage, "an operator needs to know why the run never completed")
+}
+
+// TestSweepInterruptedBackupRuns_Idempotent_PreservesTerminalRows asserts that
+// running the sweep twice does not corrupt or re-touch a row that already
+// reached a real terminal state on its own (e.g. a completed 'success' run).
+func TestSweepInterruptedBackupRuns_Idempotent_PreservesTerminalRows(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+
+	finishedAt := "2026-05-30T10:05:00Z"
+	completed := &models.BackupRun{
+		ID:         "run-done",
+		Kind:       "backup",
+		Trigger:    "manual",
+		Status:     "success",
+		StartedAt:  "2026-05-30T10:00:00Z",
+		FinishedAt: &finishedAt,
+	}
+	require.NoError(t, db.CreateBackupRun(completed))
+
+	stuck := &models.BackupRun{
+		ID:        "run-stuck",
+		Kind:      "sync",
+		Trigger:   "scheduled",
+		Status:    "running",
+		StartedAt: "2026-05-30T11:00:00Z",
+	}
+	require.NoError(t, db.CreateBackupRun(stuck))
+
+	n, err := db.SweepInterruptedBackupRuns()
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "only the running row should be touched")
+
+	// Second pass must be a no-op: nothing left at 'running' to touch.
+	n, err = db.SweepInterruptedBackupRuns()
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "a second sweep must not re-touch already-terminal rows")
+
+	stillDone, err := db.GetBackupRunByID("run-done")
+	require.NoError(t, err)
+	assert.Equal(t, "success", stillDone.Status, "an already-successful run must not be reclassified as failed")
+	require.NotNil(t, stillDone.FinishedAt)
+	assert.Equal(t, finishedAt, *stillDone.FinishedAt, "an already-terminal row's finished_at must not be overwritten")
+
+	nowInterrupted, err := db.GetBackupRunByID("run-stuck")
+	require.NoError(t, err)
+	assert.Equal(t, "interrupted", nowInterrupted.Status)
+}
+
+// TestSweepInterruptedBackupRuns_NeverTouchesTerminalRows asserts the sweep's
+// WHERE clause — not just repeated calls — is what protects history. This is a
+// different property from idempotency: a database that never had a 'running'
+// row to begin with must come through a single pass byte-identical. If the
+// WHERE clause were ever widened (e.g. to match on kind or a date range
+// instead of status), this is what would catch it; the idempotency test above
+// would not, since after one correct sweep there is nothing left at 'running'
+// for a second call to expose.
+func TestSweepInterruptedBackupRuns_NeverTouchesTerminalRows(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+
+	finishedAt := "2026-05-30T10:05:00Z"
+	completed := &models.BackupRun{
+		ID:         "run-done-only",
+		Kind:       "backup",
+		Trigger:    "manual",
+		Status:     "success",
+		StartedAt:  "2026-05-30T10:00:00Z",
+		FinishedAt: &finishedAt,
+	}
+	require.NoError(t, db.CreateBackupRun(completed))
+
+	n, err := db.SweepInterruptedBackupRuns()
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "there is no 'running' row for the sweep to touch")
+
+	got, err := db.GetBackupRunByID("run-done-only")
+	require.NoError(t, err)
+	assert.Equal(t, "success", got.Status, "status must be untouched")
+	require.NotNil(t, got.FinishedAt)
+	assert.Equal(t, finishedAt, *got.FinishedAt, "finished_at must be byte-identical to what was written")
+	assert.Empty(t, got.ErrorMessage, "a successful run must not gain an error_message")
+}
+
 // --- Backup Run Item tests ---
 
 func TestAddBackupRunItem_AndGetBackupRunItems(t *testing.T) {

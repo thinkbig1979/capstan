@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -88,6 +89,21 @@ func NewWithMigrationsAndEncryptor(dataDir string, encryptor TokenEncryptor) (*D
 		db.Close()
 		return nil, err
 	}
+
+	// Run before anything else touches backup_runs: a row this process never
+	// started can only be left over from a crash or a restore of a mid-run
+	// snapshot (agent-os-pid), and either way it must not be shown as running.
+	//
+	// A failure here is logged, not fatal: it leaves history cosmetically wrong
+	// (a stale 'running' row) rather than breaking anything functional, so it
+	// must not block the whole server from starting the way a real migration
+	// failure does.
+	if n, err := db.SweepInterruptedBackupRuns(); err != nil {
+		slog.Warn("Failed to sweep interrupted backup runs", "error", err)
+	} else if n > 0 {
+		slog.Warn("Marked interrupted backup runs as failed on startup", "count", n)
+	}
+
 	return db, nil
 }
 

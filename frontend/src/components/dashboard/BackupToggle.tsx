@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
-import { Lock, CheckCircle2, XCircle } from 'lucide-react'
+import { Lock, CheckCircle2, XCircle, CircleDashed } from 'lucide-react'
 import { toast } from 'sonner'
 import { useToggleBackup, useBackupPolicies, useBackupStatus } from '@/hooks/useBackup'
 import { classifyError } from '@/lib/error-handler'
@@ -199,6 +199,25 @@ export function BackupToggle({ stackId }: BackupToggleProps) {
             </TooltipTrigger>
             <TooltipContent>
               <p>Last backup failed</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+
+      {lastRunStatus === 'interrupted' && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {/* Neutral, not destructive-red: the run never reported a real
+                  outcome (crash, or a restore from a mid-run snapshot) and
+                  may have succeeded on the original instance. */}
+              <CircleDashed
+                className="h-3.5 w-3.5 text-muted-foreground cursor-help"
+                aria-label="Last backup was interrupted"
+              />
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Last backup was interrupted</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>

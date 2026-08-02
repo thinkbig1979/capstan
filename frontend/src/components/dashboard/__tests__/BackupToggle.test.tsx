@@ -62,7 +62,7 @@ function makeStatus(resticAvailable = true, repositoryInitialized = true) {
   }
 }
 
-function makeStatusWithLastRun(status: 'success' | 'failed') {
+function makeStatusWithLastRun(status: 'success' | 'failed' | 'interrupted') {
   return {
     data: {
       resticAvailable: true,
@@ -80,7 +80,7 @@ function makeStatusWithLastRun(status: 'success' | 'failed') {
         stacksOk: status === 'success' ? 1 : 0,
         stacksFailed: status === 'failed' ? 1 : 0,
         bytesAdded: 1024,
-        errorMessage: '',
+        errorMessage: status === 'interrupted' ? 'process stopped before this run completed' : '',
       },
       nextRunAt: null,
       repoSizeBytes: null,
@@ -265,6 +265,17 @@ describe('BackupToggle — last run status indicator', () => {
     expect(screen.getByLabelText('Last backup failed')).toBeInTheDocument()
   })
 
+  it('shows an interrupted icon (not a failure icon) when last run status is interrupted', () => {
+    // agent-os-pid: a swept run never reported a real outcome and may have
+    // succeeded on the original instance, so it must not render as "failed".
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatusWithLastRun('interrupted'))
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    expect(screen.getByLabelText('Last backup was interrupted')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Last backup failed')).not.toBeInTheDocument()
+  })
+
   it('shows no status icon when lastRun is null', () => {
     ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true))
     ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatus())
@@ -272,5 +283,6 @@ describe('BackupToggle — last run status indicator', () => {
 
     expect(screen.queryByLabelText('Last backup succeeded')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Last backup failed')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Last backup was interrupted')).not.toBeInTheDocument()
   })
 })

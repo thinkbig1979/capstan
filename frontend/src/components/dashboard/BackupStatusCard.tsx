@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Clock,
   HardDrive,
+  CircleDashed,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useBackupStatus, useRunBackup, useBackupStreaming } from '@/hooks/useBackup'
@@ -64,6 +65,18 @@ function LastRunBadge({ status }: { status: string }) {
       <Badge variant="outline" className="gap-1">
         <RefreshCw className="h-3 w-3 animate-spin" />
         Running
+      </Badge>
+    )
+  }
+  if (status === 'interrupted') {
+    // Neutral/slate, not destructive-red: the run never reported a real
+    // outcome (crash, or a restore from a mid-run snapshot) and may have
+    // succeeded on the original instance, so "Failed" styling would mislead
+    // an operator reading this right after recovering from an outage.
+    return (
+      <Badge variant="outline" className="gap-1 border-slate-300 text-slate-600 dark:text-slate-400">
+        <CircleDashed className="h-3 w-3" />
+        Interrupted
       </Badge>
     )
   }

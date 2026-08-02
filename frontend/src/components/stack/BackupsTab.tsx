@@ -73,6 +73,10 @@ const RUN_STATUS_VARIANTS: Record<BackupRun['status'], { label: string; classNam
   partial: { label: 'Partial', className: 'bg-yellow-500/15 text-yellow-700 dark:text-yellow-400 border-yellow-500/30' },
   failed: { label: 'Failed', className: 'bg-destructive/15 text-destructive border-destructive/30' },
   running: { label: 'Running', className: 'bg-blue-500/15 text-blue-700 dark:text-blue-400 border-blue-500/30' },
+  // Neutral/warning-toned, not destructive-red: the run never reported a real
+  // outcome (crash or a restore from a mid-run snapshot) and may have
+  // succeeded on the original instance, so "Failed" styling would mislead.
+  interrupted: { label: 'Interrupted', className: 'bg-slate-500/15 text-slate-700 dark:text-slate-400 border-slate-500/30' },
 }
 
 function RunStatusBadge({ status }: { status: BackupRun['status'] }) {
