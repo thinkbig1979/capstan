@@ -27,14 +27,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Pin the exact pnpm version declared in frontend/package.json's
-      # "packageManager" field so CI never drifts from what contributors run
-      # locally. `corepack prepare --activate` is used instead of relying on
-      # packageManager auto-detection: the repo root has its own
-      # (packageManager-less) package.json, so corepack resolves the wrong
+      # Pin the exact pnpm version declared in frontend/package.json's (and,
+      # as of agent-os-l78, the repo root's) "packageManager" field, so CI
+      # never drifts from what contributors run locally. `corepack prepare
+      # --activate` was load-bearing here rather than relying on
+      # packageManager auto-detection: the repo root's package.json used to
+      # have no "packageManager" field, so corepack resolved the wrong
       # (latest installed) pnpm version when invoked outside frontend/ —
       # which is exactly where actions/setup-node's `cache: pnpm` step below
-      # runs pnpm from.
+      # runs pnpm from. Both manifests now agree, so auto-detection would
+      # work too, but the explicit pin is kept: it costs nothing and removes
+      # any dependency on which package.json corepack happens to resolve
+      # against.
       - name: Set up pnpm
         run: |
           corepack enable
