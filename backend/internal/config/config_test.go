@@ -133,15 +133,68 @@ func TestValidate_AcceptsPlausiblePorts(t *testing.T) {
 	}
 }
 
-// TestLoad_DefaultPortIsValid guards against Load's hardcoded default drifting
-// away from what validate accepts, which would make the server refuse to start
-// with no PORT env var set at all — the same regression class as
-// TestLoad_DefaultsAreValid above, isolated to PORT.
-func TestLoad_DefaultPortIsValid(t *testing.T) {
-	cfg := newValidConfig()
-	cfg.Port = "5001" // must match Load's default
+// setBaseLoadEnv pins every env var validate() cares about to a known-good
+// value, via t.Setenv (auto-restored, and safe here since these tests aren't
+// parallel). Without this, Load() reading the ambient process environment
+// would make these tests depend on whatever happens to be set on the machine
+// running them. AUTH_DISABLED=true sidesteps the JWT_SECRET requirement,
+// which is irrelevant to what these tests are pinning.
+func setBaseLoadEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("AUTH_DISABLED", "true")
+	t.Setenv("STACKS_DIR", t.TempDir())
+	t.Setenv("DATA_DIR", t.TempDir())
+	t.Setenv("LOG_LEVEL", "")
+	t.Setenv("LOG_FORMAT", "")
+}
 
-	if err := validate(cfg); err != nil {
-		t.Errorf("Load's default PORT does not pass validation: %v", err)
+// TestLoad_HonoursPortFromEnvironment is the test that actually pins the bug
+// this ticket fixed: PORT was read into a struct field with a validation rule
+// that nothing ever exercised, because Load() never assigned the environment
+// value to cfg.Port in the first place. Every other test above calls
+// validate() directly and would stay green even if the os.Getenv("PORT") read
+// in Load() were deleted.
+func TestLoad_HonoursPortFromEnvironment(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("PORT", "9090")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if cfg.Port != "9090" {
+		t.Errorf("expected Load() to honour PORT=9090, got Port=%q", cfg.Port)
+	}
+}
+
+// TestLoad_DefaultsPortWhenUnset guards the other half of the same fix: an
+// unset PORT must keep the 5001 default rather than becoming a required
+// variable or an empty string reaching the listen address.
+func TestLoad_DefaultsPortWhenUnset(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("PORT", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if cfg.Port != "5001" {
+		t.Errorf("expected unset PORT to default to 5001, got Port=%q", cfg.Port)
+	}
+}
+
+// TestLoad_RejectsImplausiblePort proves the rejection happens at startup
+// (Load returning an error), not merely inside validate() called in
+// isolation by the tests above.
+func TestLoad_RejectsImplausiblePort(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("PORT", "not-a-port")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load() to reject PORT=not-a-port, got nil error")
+	}
+	if !strings.Contains(err.Error(), "PORT") {
+		t.Errorf("error should name the offending variable, got: %v", err)
 	}
 }
