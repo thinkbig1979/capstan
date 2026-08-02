@@ -69,6 +69,16 @@ backend/frontend/assets/
 /scorecard.png
 /reports/
 
+# Playwright's own output (agent-os-5y9). testing/reports/results.json and
+# testing/reports/screenshots/ above are pre-existing, intentionally
+# committed bash-harness fixtures — leave those tracked. These are Playwright
+# itself: /test-results/ is its default trace/attachment outputDir (created
+# on any local failing run), and the html/json paths are the reporter outputs
+# configured in playwright.config.ts.
+/test-results/
+/testing/reports/playwright-html/
+/testing/reports/playwright-results.json
+
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
 

@@ -152,34 +152,43 @@ async function apiMutate(
  * wsUrl is the backend-relative path (e.g. "/ws/backups/run/<id>"); it lives
  * under /api/v1 on the BACKEND, which vite does NOT proxy — so we always dial
  * API_URL directly, never BASE_URL.
+ *
+ * The terminal frame is `{type:"done", outcome:"success"|"partial"|"failed",
+ * reason:"..."}` (backend/internal/handlers/backup.go:846,976-980) — there has
+ * never been a boolean `success` field on this frame; `outcome` is returned
+ * as-is and callers decide what counts as passing (see the two call sites
+ * below — for these single-target runs, "partial" is treated as a failure,
+ * not a lesser pass: backend/internal/services/backup.go:499-527,634-661
+ * shows "partial" only fires here when the capstan-database self-backup
+ * failed alongside an otherwise-successful stack backup, a real degradation).
  */
 async function runViaWs(
   wsUrl: string,
   timeoutMs = 90_000,
-): Promise<{ success: boolean; events: string[] }> {
+): Promise<{ outcome: string; reason: string; events: string[] }> {
   const wsBase = API_URL.replace(/^http/, 'ws') + '/api/v1'
   return new Promise((resolve) => {
     const events: string[] = []
     const ws = new WebSocket(wsBase + wsUrl)
     let settled = false
-    const finish = (success: boolean) => {
+    const finish = (outcome: string, reason = '') => {
       if (settled) return
       settled = true
       try { ws.close() } catch { /* already closing */ }
-      resolve({ success, events })
+      resolve({ outcome, reason, events })
     }
     ws.onmessage = (m: MessageEvent) => {
       const raw = String(m.data)
       events.push(raw.slice(0, 200))
       try {
         const j = JSON.parse(raw)
-        if (j.type === 'done') finish(j.success === true)
+        if (j.type === 'done') finish(j.outcome ?? 'failed', j.reason ?? '')
       } catch { /* non-JSON stream line */ }
     }
     // A clean close before a done event means the op failed/expired.
-    ws.onclose = () => finish(false)
+    ws.onclose = () => finish('failed', 'WebSocket closed before a done frame arrived')
     ws.onerror = () => { /* close handler resolves */ }
-    setTimeout(() => finish(false), timeoutMs)
+    setTimeout(() => finish('failed', `timed out after ${timeoutMs}ms`), timeoutMs)
   })
 }
 
@@ -376,10 +385,12 @@ test.describe('Backup flow E2E', () => {
       // The op is only stashed; connect the WS to actually execute the backup
       // and await the streamed completion before asserting on history.
       const wsResult = await runViaWs(wsUrl)
+      // "partial" fails here too — see the runViaWs doc comment for why.
       expect(
-        wsResult.success,
-        `Backup WS did not report success. Last events: ${wsResult.events.slice(-3).join(' | ')}`,
-      ).toBe(true)
+        wsResult.outcome,
+        `Backup WS did not report success (outcome=${wsResult.outcome}, reason="${wsResult.reason}"). ` +
+          `Last events: ${wsResult.events.slice(-3).join(' | ')}`,
+      ).toBe('success')
 
       // Poll history until the run completes
       const completedRun = await pollUntil(async () => {
@@ -412,8 +423,31 @@ test.describe('Backup flow E2E', () => {
   }) => {
     await loginIfNeeded(page)
 
+    // Resolve stack ID first — needed to scope the snapshot lookup below. The
+    // repo also holds an automatic capstan-database self-backup snapshot
+    // (backend/internal/services/backup.go:1240), so an unscoped snapshot
+    // list can contain more than just this stack's own backups, and is not
+    // safe to index by position (agent-os-5y9 Phase 1 finding).
+    if (!testStackId) {
+      // If previous test did not run in sequence, resolve stack ID
+      const stacksResp = await apiGet(request, '/api/v1/stacks')
+      const stacksBody = await stacksResp.json()
+      const stacks = Array.isArray(stacksBody) ? stacksBody : stacksBody.stacks ?? []
+      const s = stacks.find((st: { id: string; name: string }) =>
+        (st.name ?? st.id ?? '').includes(TEST_STACK_NAME),
+      )
+      if (s) testStackId = s.id ?? s.name
+    }
+    expect(testStackId, 'Stack ID required to scope the snapshot lookup').toBeTruthy()
+
     // ── Step 1: API snapshot count ────────────────────────────────────────
-    const snapshotsResp = await apiGet(request, '/api/v1/backups/snapshots')
+    // Scoped via ?stackId — the backend filters server-side by restic tag
+    // (backend/internal/handlers/backup.go:481), so this only ever returns
+    // test-app's own snapshots, never the capstan-database self-backup one.
+    const snapshotsResp = await apiGet(
+      request,
+      `/api/v1/backups/snapshots?stackId=${encodeURIComponent(testStackId)}`,
+    )
     expect(snapshotsResp.ok()).toBe(true)
     const snapshots = await snapshotsResp.json()
     const snapshotList: Array<{ id: string; shortId?: string; tags?: string[] }> =
@@ -427,17 +461,6 @@ test.describe('Backup flow E2E', () => {
     console.log(`First snapshot: id=${firstSnapshotId}, shortId=${shortId}`)
 
     // ── Step 2: UI BackupsTab ─────────────────────────────────────────────
-    if (!testStackId) {
-      // If previous test did not run in sequence, resolve stack ID
-      const stacksResp = await apiGet(request, '/api/v1/stacks')
-      const stacksBody = await stacksResp.json()
-      const stacks = Array.isArray(stacksBody) ? stacksBody : stacksBody.stacks ?? []
-      const s = stacks.find((st: { id: string; name: string }) =>
-        (st.name ?? st.id ?? '').includes(TEST_STACK_NAME),
-      )
-      if (s) testStackId = s.id ?? s.name
-    }
-
     if (testStackId) {
       await page.goto(`${BASE_URL}/stacks/${testStackId}`)
       await page.waitForLoadState('networkidle')
@@ -472,16 +495,7 @@ test.describe('Backup flow E2E', () => {
     await loginIfNeeded(page)
     await ensureCsrf(request)
 
-    // Resolve snapshot ID if not set from previous test
-    if (!firstSnapshotId) {
-      const snapshotsResp = await apiGet(request, '/api/v1/backups/snapshots')
-      const snaps = await snapshotsResp.json()
-      const list = Array.isArray(snaps) ? snaps : []
-      expect(list.length, 'No snapshots available for restore').toBeGreaterThan(0)
-      firstSnapshotId = list[0].id
-    }
-
-    // Resolve stack ID
+    // Resolve stack ID first — the snapshot lookup below is scoped by it.
     if (!testStackId) {
       const stacksResp = await apiGet(request, '/api/v1/stacks')
       const body = await stacksResp.json()
@@ -491,9 +505,24 @@ test.describe('Backup flow E2E', () => {
       )
       if (s) testStackId = s.id ?? s.name
     }
+    expect(testStackId, 'No stack ID for restore').toBeTruthy()
+
+    // Resolve snapshot ID if not set from previous test. Scoped via ?stackId
+    // for the same reason as BACKUP-PW-005 — the repo also holds the
+    // capstan-database self-backup snapshot, and an unscoped list is not safe
+    // to index by position (agent-os-5y9 Phase 1 finding).
+    if (!firstSnapshotId) {
+      const snapshotsResp = await apiGet(
+        request,
+        `/api/v1/backups/snapshots?stackId=${encodeURIComponent(testStackId)}`,
+      )
+      const snaps = await snapshotsResp.json()
+      const list = Array.isArray(snaps) ? snaps : []
+      expect(list.length, 'No snapshots available for restore').toBeGreaterThan(0)
+      firstSnapshotId = list[0].id
+    }
 
     expect(firstSnapshotId, 'No snapshot ID for restore').toBeTruthy()
-    expect(testStackId, 'No stack ID for restore').toBeTruthy()
 
     let restoredViaUI = false
 
@@ -555,10 +584,12 @@ test.describe('Backup flow E2E', () => {
 
       // Connect the WS to actually run the restore and await completion.
       const wsResult = await runViaWs(restoreWsUrl)
+      // "partial" fails here too — see the runViaWs doc comment for why.
       expect(
-        wsResult.success,
-        `Restore WS did not report success. Last events: ${wsResult.events.slice(-3).join(' | ')}`,
-      ).toBe(true)
+        wsResult.outcome,
+        `Restore WS did not report success (outcome=${wsResult.outcome}, reason="${wsResult.reason}"). ` +
+          `Last events: ${wsResult.events.slice(-3).join(' | ')}`,
+      ).toBe('success')
 
       // Poll for completion
       const done = await pollUntil(async () => {
