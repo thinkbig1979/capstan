@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/thinkbig1979/capstan/backend/internal/logging"
@@ -92,6 +93,10 @@ func Load() (*Config, error) {
 	// (H2). Optional: when unset the encryptor falls back to JWT_SECRET so
 	// existing deployments keep working.
 	cfg.StorageKey = os.Getenv("STORAGE_KEY")
+
+	if port := os.Getenv("PORT"); port != "" {
+		cfg.Port = port
+	}
 
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
 		cfg.LogLevel = logLevel
@@ -183,6 +188,17 @@ func validate(cfg *Config) error {
 
 	if cfg.DataDir == "" {
 		return &ConfigError{Field: "DATA_DIR", Message: "required"}
+	}
+
+	// An implausible PORT (non-numeric, 0, or outside the TCP port range) is
+	// rejected here rather than reaching net/http.Server.ListenAndServe, which
+	// would either fail with an opaque "listen tcp: address ..." error or,
+	// worse, silently take the platform's ephemeral-port behaviour for an empty
+	// port string. Caught at startup like every other malformed variable.
+	if portNum, err := strconv.Atoi(cfg.Port); err != nil {
+		return &ConfigError{Field: "PORT", Message: "must be a number, got " + strconv.Quote(cfg.Port)}
+	} else if portNum < 1 || portNum > 65535 {
+		return &ConfigError{Field: "PORT", Message: "must be between 1 and 65535, got " + cfg.Port}
 	}
 
 	// A typo here is caught at startup rather than silently defaulting to info.
