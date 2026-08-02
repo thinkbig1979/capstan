@@ -1,6 +1,8 @@
 package database
 
 import (
+	"time"
+
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -129,6 +131,39 @@ func (d *DB) GetBackupRunByID(id string) (*models.BackupRun, error) {
 		return nil, err
 	}
 	return &r, nil
+}
+
+// interruptedRunErrorMessage explains, to an operator reading history, why a
+// run ended without ever reaching a normal outcome.
+const interruptedRunErrorMessage = "process stopped before this run completed"
+
+// SweepInterruptedBackupRuns terminates any backup_runs row still at
+// status='running'. Nothing can legitimately be running in a freshly started
+// process, so every such row is left over from either a crash (the process
+// died mid-run) or a restore (the row was captured mid-flight by the snapshot
+// that seeded this database) — both need the same fix: a terminal status and
+// a non-null finished_at, so history stops showing a backup as perpetually
+// in progress.
+//
+// 'failed' is reused rather than adding a new status value: the backup_runs
+// CHECK constraint already permits it, so this needs no schema migration, and
+// the row's own error_message says why a plain "failed" read wouldn't.
+//
+// The single UPDATE is naturally idempotent — once a row's status leaves
+// 'running' it no longer matches the WHERE clause, so calling this again
+// (e.g. on every startup) never re-touches an already-terminal row.
+func (d *DB) SweepInterruptedBackupRuns() (int, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := d.db.Exec(
+		`UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ?
+		 WHERE status = 'running'`,
+		now, interruptedRunErrorMessage,
+	)
+	if err != nil {
+		return 0, err
+	}
+	affected, _ := result.RowsAffected()
+	return int(affected), nil
 }
 
 // --- Backup Run Items ---
