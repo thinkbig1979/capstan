@@ -246,11 +246,15 @@ func TestGit_PullVerified_PartialOnFailedRedeploy(t *testing.T) {
 	if pullResult == nil || pullResult.PreviousCommit == pullResult.CurrentCommit {
 		t.Fatalf("test setup error: HEAD did not advance (prev=%v cur=%v) outcome=%s reason=%s",
 			func() string {
-				if pullResult != nil { return pullResult.PreviousCommit }
+				if pullResult != nil {
+					return pullResult.PreviousCommit
+				}
 				return "<nil>"
 			}(),
 			func() string {
-				if pullResult != nil { return pullResult.CurrentCommit }
+				if pullResult != nil {
+					return pullResult.CurrentCommit
+				}
 				return "<nil>"
 			}(),
 			ar.Outcome, ar.Reason)

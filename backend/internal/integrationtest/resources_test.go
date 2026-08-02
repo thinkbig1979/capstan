@@ -4,19 +4,19 @@
 //
 // Tests covered:
 //
-//  #12: build a unique minimal image, tag it with a second name, delete by the
-//       second name → assert no_change (untagged-only, layer still present via
-//       the original tag); delete the original tag too → assert success (layer
-//       actually deleted). This is the false-success guard for finding #12.
+//	#12: build a unique minimal image, tag it with a second name, delete by the
+//	     second name → assert no_change (untagged-only, layer still present via
+//	     the original tag); delete the original tag too → assert success (layer
+//	     actually deleted). This is the false-success guard for finding #12.
 //
-//  #13: pull an image, make a dangling copy, prune → assert the reported entry
-//       count is non-zero.
+//	#13: pull an image, make a dangling copy, prune → assert the reported entry
+//	     count is non-zero.
 //
-//  #6:  create a temp stack dir + DB row, run compose down, remove dir and DB row,
-//       assert the directory is GONE and the DB row is removed.
+//	#6:  create a temp stack dir + DB row, run compose down, remove dir and DB row,
+//	     assert the directory is GONE and the DB row is removed.
 //
-//  #14: create a stack with a crash-looping deploy → assert outcome=partial/failed
-//       and the stack row still exists; create with a healthy deploy → success.
+//	#14: create a stack with a crash-looping deploy → assert outcome=partial/failed
+//	     and the stack row still exists; create with a healthy deploy → success.
 package integrationtest
 
 import (

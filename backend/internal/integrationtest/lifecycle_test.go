@@ -10,18 +10,18 @@
 //  1. Start a healthy pinned-image stack → action reports outcome=success and
 //     the container is confirmed running.
 //
-//  2a. Start a stack whose single service exits immediately (exit 1, restart:"no")
-//      → action reports outcome=failed or partial, NEVER success.
+//     2a. Start a stack whose single service exits immediately (exit 1, restart:"no")
+//     → action reports outcome=failed or partial, NEVER success.
 //
-//  2b. Start a stack whose single service runs briefly then exits (sleep 0.7; exit 1)
-//      → must also report failed/partial, NOT success. This is the slow-crash guard
-//      that the old single-interval pollUntilStable got wrong.
+//     2b. Start a stack whose single service runs briefly then exits (sleep 0.7; exit 1)
+//     → must also report failed/partial, NOT success. This is the slow-crash guard
+//     that the old single-interval pollUntilStable got wrong.
 //
 //  3. Stop a running stack → action reports outcome=success and the container is
 //     confirmed gone.
 //
-//  4a/4b. Streaming path for the same crash-loop and slow-crash cases: done frame
-//         must have success=false and outcome=failed|partial.
+//     4a/4b. Streaming path for the same crash-loop and slow-crash cases: done frame
+//     must have success=false and outcome=failed|partial.
 package integrationtest
 
 import (

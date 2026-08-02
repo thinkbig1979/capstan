@@ -73,9 +73,10 @@ func dialOperations(t *testing.T, srv *httptest.Server, stackID, action string) 
 	t.Helper()
 
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/ws/operations/" + stackID + "/" + action
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
 	require.NoError(t, err, "dialing %s", url)
 	defer conn.Close()
+	defer resp.Body.Close()
 
 	closeCode := 0
 	closeText := ""
@@ -84,7 +85,7 @@ func dialOperations(t *testing.T, srv *httptest.Server, stackID, action string) 
 		return nil
 	})
 
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			if ce, ok := err.(*websocket.CloseError); ok && closeCode == 0 {
@@ -183,6 +184,9 @@ func TestOperationsRefusesWhenDockerUnavailable(t *testing.T) {
 
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/ws/operations/stack-a/pull"
 	conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 	if err == nil {
 		conn.Close()
 		t.Fatal("expected the upgrade to be refused with Docker unavailable")
@@ -205,6 +209,9 @@ func TestOperationsRejectsUnknownActionWithoutConsumingASlot(t *testing.T) {
 
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/ws/operations/stack-a/bogus"
 	conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 	if err == nil {
 		conn.Close()
 		t.Fatal("expected the upgrade to be refused for an unknown action")

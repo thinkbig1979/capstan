@@ -1993,7 +1993,7 @@ func (f *databaseFailingRunner) Run(
 ) error {
 	for _, a := range args {
 		if a == DatabaseBackupTag {
-			f.fakeRunner.calls = append(f.fakeRunner.calls, fakeCall{Binary: name, Args: args, Env: env})
+			f.calls = append(f.calls, fakeCall{Binary: name, Args: args, Env: env})
 			return errors.New("injected database snapshot failure")
 		}
 	}

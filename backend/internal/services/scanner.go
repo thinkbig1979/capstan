@@ -105,7 +105,13 @@ func (s *ScannerService) pruneStaleStacks() error {
 	}
 	for _, dir := range directories {
 		if !activeDirs[dir.Path] {
-			s.db.DeleteDirectory(dir.Path)
+			// The next scan re-evaluates and retries this delete, so a
+			// single failure isn't fatal to the sweep — but a delete that
+			// keeps failing drifts the DB from disk indefinitely with
+			// nothing to notice it, so surface it.
+			if delErr := s.db.DeleteDirectory(dir.Path); delErr != nil {
+				slog.Warn("Failed to delete stale directory row", "path", dir.Path, "error", delErr)
+			}
 		}
 	}
 
@@ -116,7 +122,11 @@ func (s *ScannerService) pruneStaleStacks() error {
 
 	for _, stack := range stacks {
 		if !activeDirs[stack.Directory] {
-			s.db.DeleteStack(stack.ID)
+			// See the DeleteDirectory comment above: retried next scan, but
+			// a persistent failure should not go unnoticed.
+			if delErr := s.db.DeleteStack(stack.ID); delErr != nil {
+				slog.Warn("Failed to delete stale stack row", "stackID", stack.ID, "error", delErr)
+			}
 		}
 	}
 

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/fsnotify/fsnotify"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
 )
 
 const DEBOUNCE_DELAY = 500 * time.Millisecond
@@ -158,11 +158,7 @@ func (w *WatcherService) shouldProcessEvent(filePath string) bool {
 		}
 	}
 
-	if strings.HasPrefix(filename, ".env") {
-		return true
-	}
-
-	return false
+	return strings.HasPrefix(filename, ".env")
 }
 
 func (w *WatcherService) scheduleRescan(dirPath string) {

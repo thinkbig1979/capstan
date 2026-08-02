@@ -509,14 +509,16 @@ func RunMigrations(db *DB) error {
 
 			if migration.PreCheck != nil {
 				if err := migration.PreCheck(tx); err != nil {
-					tx.Rollback()
+					// Rollback error is secondary to the pre-check error
+					// already being returned; the tx is abandoned either way.
+					_ = tx.Rollback()
 					return fmt.Errorf("migration %d pre-check failed: %w", migration.Version, err)
 				}
 			}
 
 			_, err = tx.Exec(migration.SQL)
 			if err != nil {
-				tx.Rollback()
+				_ = tx.Rollback()
 				return fmt.Errorf("failed to apply migration %d: %w", migration.Version, err)
 			}
 
@@ -525,7 +527,7 @@ func RunMigrations(db *DB) error {
 				migration.Version,
 			)
 			if err != nil {
-				tx.Rollback()
+				_ = tx.Rollback()
 				return fmt.Errorf("failed to record migration %d: %w", migration.Version, err)
 			}
 
@@ -567,7 +569,9 @@ func (d *DB) MigrateStackIDsToRootPrefixed(stacksDir string) error {
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	// No-op once Commit succeeds (sql.ErrTxDone); the safety net for the
+	// early-return error paths below is what matters.
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec("UPDATE directories SET root_dir = ? WHERE root_dir = ''", stacksDir); err != nil {
 		return fmt.Errorf("update directory root_dir: %w", err)

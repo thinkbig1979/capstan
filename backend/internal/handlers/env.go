@@ -494,11 +494,7 @@ func (h *EnvHandler) isSensitiveKey(key string) bool {
 		}
 	}
 
-	if strings.Contains(upperKey, "_API_") {
-		return true
-	}
-
-	return false
+	return strings.Contains(upperKey, "_API_")
 }
 
 func (h *EnvHandler) logAction(c *gin.Context, stackID, action, detail string) {

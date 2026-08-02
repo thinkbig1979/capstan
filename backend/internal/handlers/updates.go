@@ -509,9 +509,11 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 		emit(services.LogLine{Ts: time.Now().UTC(), Stream: services.StreamStatus,
 			Text: fmt.Sprintf("==> Updating %d outdated service(s) sequentially: %s", total, strings.Join(serviceNames, ", "))})
 
-		// Track overall outcome for the job.
-		overallOutcome := string(truth.OutcomeSuccess)
-		overallReason := fmt.Sprintf("All %d service(s) up to date or updated", total)
+		// Track overall outcome for the job. Every path that reads these
+		// below (the per-service failure branch and the end-of-loop
+		// anyAdvanced branch) assigns both before use, so no seed value is
+		// ever observed — declare rather than assign dead initial values.
+		var overallOutcome, overallReason string
 		anyAdvanced := false
 
 		for i, svc := range outdatedCopy {

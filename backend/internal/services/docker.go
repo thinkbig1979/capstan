@@ -377,9 +377,10 @@ func calculateBlockIO(stats *container.StatsResponse) (float64, float64) {
 	var read, write uint64
 
 	for _, stat := range stats.BlkioStats.IoServiceBytesRecursive {
-		if stat.Op == "read" || stat.Op == "Read" {
+		switch stat.Op {
+		case "read", "Read":
 			read += stat.Value
-		} else if stat.Op == "write" || stat.Op == "Write" {
+		case "write", "Write":
 			write += stat.Value
 		}
 	}

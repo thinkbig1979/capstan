@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/database"
-	"github.com/thinkbig1979/capstan/backend/internal/middleware"
-	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 const (
@@ -220,12 +220,16 @@ func authenticateToken(token string, db *database.DB, jwtSecret string) (string,
 }
 
 func writeJSON(conn *websocket.Conn, v interface{}) error {
-	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	// A failed deadline set surfaces immediately as a write error below,
+	// which the caller already handles.
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	return conn.WriteJSON(v)
 }
 
 func readJSON(conn *websocket.Conn, v interface{}) error {
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	// A failed deadline set surfaces immediately as a read error below,
+	// which the caller already handles.
+	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	return conn.ReadJSON(v)
 }
 
@@ -245,7 +249,9 @@ func safePingLoop(ctx context.Context, c *Connection, interval time.Duration) {
 			return
 		case <-ticker.C:
 			c.WriteMutex.Lock()
-			c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			// A failed deadline set surfaces immediately as a write error
+			// on the next line, which is already handled.
+			_ = c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			err := c.Conn.WriteMessage(websocket.PingMessage, nil)
 			c.WriteMutex.Unlock()
 			if err != nil {
@@ -257,7 +263,9 @@ func safePingLoop(ctx context.Context, c *Connection, interval time.Duration) {
 }
 
 func writeCloseMessage(conn *websocket.Conn, closeCode int, reason string) {
-	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	// A failed deadline set surfaces immediately as a write error below,
+	// which is already handled.
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	msg := websocket.FormatCloseMessage(closeCode, reason)
 	if err := conn.WriteMessage(websocket.CloseMessage, msg); err != nil {
 		slog.Debug("Failed to send close message", "error", err)
@@ -288,7 +296,9 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 				return nil, err
 			}
 		} else {
-			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			// A failed deadline set surfaces immediately as a read error
+			// below, which is already handled.
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 			var authMsg struct {
 				Type  string `json:"type"`
 				Token string `json:"token"`
@@ -322,9 +332,11 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 		CreatedAt: time.Now(),
 	}
 
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	// Deadlines here govern reads the caller performs after this function
+	// returns; a failed set surfaces there as a read error instead.
+	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		return nil
 	})
 

@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thinkbig1979/capstan/backend/internal/config"
-	"github.com/thinkbig1979/capstan/backend/internal/database"
-	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
 func setupSettingsFullRouter(handler *SettingsHandler) *gin.Engine {

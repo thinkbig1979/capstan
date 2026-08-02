@@ -121,7 +121,9 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			}
 		}()
 
-		safeWriteJSON(conn, gin.H{
+		// Best-effort notification; a write failure here surfaces on the
+		// next read/ping and the connection is torn down there.
+		_ = safeWriteJSON(conn, gin.H{
 			"type":   "start",
 			"action": action,
 			"stack":  stack.ProjectName,
@@ -150,7 +152,9 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 					return
 				}
 			}
-			safeWriteJSON(conn, gin.H{
+			// Best-effort notification; a write failure here surfaces on the
+			// next line written below, which is error-checked.
+			_ = safeWriteJSON(conn, gin.H{
 				"type":    "phase",
 				"phase":   "starting",
 				"message": "Stack stopped, starting...",

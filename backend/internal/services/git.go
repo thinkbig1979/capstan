@@ -9,16 +9,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/config"
-	"github.com/thinkbig1979/capstan/backend/internal/database"
-	"github.com/thinkbig1979/capstan/backend/internal/models"
-	"github.com/thinkbig1979/capstan/backend/internal/truth"
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/filesystem"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
 // RedeployFailure records a stack redeploy that did not reach verified-running.
@@ -561,13 +561,20 @@ func (s *GitService) findMergeBase(repo *git.Repository, commit1, commit2 *objec
 		}
 
 		parents := current.Parents()
-		parents.ForEach(func(parent *object.Commit) error {
+		// The callback never returns an error, so a non-nil return here is
+		// an iteration/storage fault. It silently truncates this commit's
+		// parent set for the BFS rather than aborting the walk, which can
+		// turn a real merge base into a false "no merge base found" below —
+		// worth knowing about even though there's nothing to retry inline.
+		if err := parents.ForEach(func(parent *object.Commit) error {
 			if !visited[parent.Hash] {
 				visited[parent.Hash] = true
 				queue = append(queue, parent)
 			}
 			return nil
-		})
+		}); err != nil {
+			slog.Warn("Merge-base parent traversal truncated by a storage error", "commit", current.Hash, "error", err)
+		}
 	}
 
 	return nil, fmt.Errorf("no merge base found")
@@ -584,13 +591,19 @@ func (s *GitService) collectAncestors(repo *git.Repository, commit *object.Commi
 		queue = queue[1:]
 
 		parents := current.Parents()
-		parents.ForEach(func(parent *object.Commit) error {
+		// See findMergeBase above: a non-nil return here is a storage
+		// fault that silently truncates the ancestor set this function
+		// builds, which callers use to compute ahead/behind — worth
+		// logging even though there's nothing to retry inline.
+		if err := parents.ForEach(func(parent *object.Commit) error {
 			if !ancestors[parent.Hash] {
 				ancestors[parent.Hash] = true
 				queue = append(queue, parent)
 			}
 			return nil
-		})
+		}); err != nil {
+			slog.Warn("Ancestor traversal truncated by a storage error", "commit", current.Hash, "error", err)
+		}
 	}
 
 	return ancestors
@@ -636,13 +649,19 @@ func (s *GitService) countCommits(repo *git.Repository, base, target plumbing.Ha
 		}
 		count++
 
-		current.Parents().ForEach(func(parent *object.Commit) error {
+		// See findMergeBase above: a non-nil return here is a storage
+		// fault that silently truncates the walk, which would undercount
+		// commits ahead/behind — worth logging even though there's
+		// nothing to retry inline.
+		if err := current.Parents().ForEach(func(parent *object.Commit) error {
 			if !visited[parent.Hash] {
 				visited[parent.Hash] = true
 				queue = append(queue, parent)
 			}
 			return nil
-		})
+		}); err != nil {
+			slog.Warn("Commit count traversal truncated by a storage error", "commit", current.Hash, "error", err)
+		}
 	}
 
 	return count

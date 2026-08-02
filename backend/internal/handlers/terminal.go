@@ -186,7 +186,9 @@ func (h *TerminalHandler) readFromWebSocket(conn *Connection, session *services.
 		case <-stop:
 			return
 		default:
-			conn.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			// A failed deadline set surfaces immediately as a read error
+			// below, which is already handled.
+			_ = conn.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			messageType, data, err := conn.Conn.ReadMessage()
 			if err != nil {
 				if err != io.EOF {
@@ -197,13 +199,14 @@ func (h *TerminalHandler) readFromWebSocket(conn *Connection, session *services.
 
 			h.terminal.UpdateActivity(session.ID)
 
-			if messageType == websocket.BinaryMessage {
+			switch messageType {
+			case websocket.BinaryMessage:
 				_, err := session.Pty.Write(data)
 				if err != nil {
 					slog.Error("Failed to write to PTY", "error", err)
 					return
 				}
-			} else if messageType == websocket.TextMessage {
+			case websocket.TextMessage:
 				var resize ResizeMessage
 				if err := json.Unmarshal(data, &resize); err == nil && resize.Type == "resize" {
 					if err := h.terminal.ResizeSession(session.ID, resize.Cols, resize.Rows); err != nil {
@@ -234,7 +237,9 @@ func (h *TerminalHandler) writeToWebSocket(conn *Connection, session *services.T
 
 			h.terminal.UpdateActivity(session.ID)
 
-			conn.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			// A failed deadline set surfaces immediately as a write error
+			// below, which is already handled.
+			_ = conn.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := conn.Conn.WriteMessage(websocket.BinaryMessage, buffer[:n]); err != nil {
 				slog.Debug("WebSocket write error", "error", err)
 				return

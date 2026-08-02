@@ -1,0 +1,95 @@
+version: "2"
+
+# Conservative, deliberately chosen linter set (agent-os-far). The default
+# govet/errcheck/staticcheck/unused/ineffassign/gosimple set is extended
+# with:
+#   - misspell: catches typos in comments/strings, near-zero false positives.
+#   - bodyclose: this service does a lot of outbound HTTP (Docker Hub,
+#     registries, webhooks); an unclosed response body leaks a connection.
+#   - contextcheck: catches context.Background()/TODO() used where a request
+#     or caller context should propagate — the failure mode is a cancelled
+#     request that keeps working anyway.
+#   - gosec: security-focused static analysis. Exclusions are prepared below
+#     (G104/G301/G306 by text, reasons on each) but gosec itself is added to
+#     `enable` in a follow-up commit, once the ~60-finding residual (G204's
+#     deliberate subprocess sites plus G304/G101/G118/G703/G202/G115/G706/
+#     G504) is triaged and each one carries a cited nolint or a fix —
+#     reviewable separately from "add the gate".
+#
+# Note on the requested set vs. this list: golangci-lint v2 folds gosimple
+# and stylecheck into the staticcheck linter binary (single `staticcheck`
+# analyzer, S/SA/ST/QF check groups) — `golangci-lint linters` doesn't list
+# gosimple as a separate name in v2. So "staticcheck" here already covers
+# what an earlier v1-era request might list as two entries; nothing was
+# dropped.
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - bodyclose
+    - contextcheck
+    # gosec: added in a follow-up commit once the residual is triaged and
+    # annotated. See the comment above and the prepared exclusion rules
+    # below (SA1019/G104/G301/G306).
+  exclusions:
+    generated: lax
+    # Deliberately NOT using the common-false-positives/legacy presets: they
+    # silently swallow gosec findings with no nolint trail — verified by
+    # testing each preset in isolation, common-false-positives alone drops
+    # G204 (the deliberate subprocess sites, the whole reason gosec is here)
+    # from 20 to 1 and G304 from 15 to 0, and legacy drops G104/G301 to 0 —
+    # all without a single comment marking why. That defeats the point of
+    # gating on gosec: a new careless subprocess call would be exempted by
+    # the same preset a deliberate one is. comments/std-error-handling were
+    # checked the same way and don't touch gosec; every gosec exclusion
+    # below is explicit and reasoned instead.
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # SA1019: deprecated Docker SDK types (types.ContainerJSON,
+      # ImageInspectWithRaw, BuildCache*) mid-migration to the SDK's newer
+      # replacement types. Real work, tracked separately as agent-os-9zi
+      # (SDK type migration) rather than done as a side effect of adding a
+      # linter. Scoped to only the files that reference the old SDK types,
+      # not a blanket staticcheck exclusion, so new issues in these files
+      # still gate normally.
+      - path: 'internal/services/docker\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      - path: 'internal/services/docker_resources\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      - path: 'internal/services/docker_update\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      - path: 'internal/truth/image_inspect\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      - path: 'internal/truth/image_inspect_test\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      - path: 'internal/truth/verify\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      # G104 duplicates errcheck (which is enabled, better-configured, and
+      # already gates unchecked errors) with a wider, noisier net.
+      - linters: [gosec]
+        text: 'G104'
+      # G301/G306: file-permission opinions (dir/file mode bits) on a
+      # self-hosted admin tool that already runs as root by design — see
+      # README.md. Not a meaningful signal here.
+      - linters: [gosec]
+        text: 'G301'
+      - linters: [gosec]
+        text: 'G306'
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

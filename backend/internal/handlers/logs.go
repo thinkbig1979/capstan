@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
-	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 )
 
 type LogLine struct {
@@ -171,7 +171,9 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 				return
 			case <-ticker.C:
 				writeMu.Lock()
-				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				// A failed deadline set surfaces immediately as a write
+				// error on the next line, which is already handled below.
+				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				err := conn.WriteMessage(websocket.PingMessage, nil)
 				writeMu.Unlock()
 				if err != nil {
@@ -241,8 +243,11 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 cleanup:
 	cancel()
 	if cmd.Process != nil {
-		cmd.Process.Kill()
-		cmd.Wait()
+		// Best-effort teardown: Kill fails harmlessly if the process already
+		// exited, and Wait's error (an expected non-zero exit from the kill
+		// signal) isn't actionable here.
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 	}
 
 	slog.Debug("Log streaming connection closed", "stackID", id, "userID", wsConn.UserID)

@@ -3,8 +3,8 @@ package handlers
 import (
 	"testing"
 
-	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/stretchr/testify/assert"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 // ctr is a small helper for building container snapshots in tests.
@@ -22,12 +22,12 @@ func ctr(project, state string) models.DashboardContainerInfo {
 // any subprocess. running + stopped must always equal the total stack count.
 func TestCountLiveStackStatuses(t *testing.T) {
 	stacks := []models.Stack{
-		{ProjectName: "docker"},    // shares project with the next stack
-		{ProjectName: "docker"},    // same project -> both count running
-		{ProjectName: "ptnextjs"},  // its own running project
-		{ProjectName: "idle"},      // has only a stopped container
-		{ProjectName: "gone"},      // no containers at all
-		{ProjectName: ""},          // unregistered project -> never running
+		{ProjectName: "docker"},   // shares project with the next stack
+		{ProjectName: "docker"},   // same project -> both count running
+		{ProjectName: "ptnextjs"}, // its own running project
+		{ProjectName: "idle"},     // has only a stopped container
+		{ProjectName: "gone"},     // no containers at all
+		{ProjectName: ""},         // unregistered project -> never running
 	}
 	containers := []models.DashboardContainerInfo{
 		ctr("docker", "running"),
