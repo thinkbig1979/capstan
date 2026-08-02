@@ -283,7 +283,7 @@ func TestSweepInterruptedBackupRuns_OpenedAtStartup_ReachesTerminalState(t *test
 
 	got, err := restarted.GetBackupRunByID("run-stuck")
 	require.NoError(t, err)
-	assert.Equal(t, "failed", got.Status, "a run still 'running' at startup must reach a terminal state")
+	assert.Equal(t, "interrupted", got.Status, "a run still 'running' at startup must reach a terminal state")
 	require.NotNil(t, got.FinishedAt, "finished_at must be set, not left null")
 	assert.NotEmpty(t, *got.FinishedAt)
 	assert.NotEmpty(t, got.ErrorMessage, "an operator needs to know why the run never completed")
@@ -331,9 +331,9 @@ func TestSweepInterruptedBackupRuns_Idempotent_PreservesTerminalRows(t *testing.
 	require.NotNil(t, stillDone.FinishedAt)
 	assert.Equal(t, finishedAt, *stillDone.FinishedAt, "an already-terminal row's finished_at must not be overwritten")
 
-	nowFailed, err := db.GetBackupRunByID("run-stuck")
+	nowInterrupted, err := db.GetBackupRunByID("run-stuck")
 	require.NoError(t, err)
-	assert.Equal(t, "failed", nowFailed.Status)
+	assert.Equal(t, "interrupted", nowInterrupted.Status)
 }
 
 // TestSweepInterruptedBackupRuns_NeverTouchesTerminalRows asserts the sweep's

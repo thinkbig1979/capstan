@@ -312,15 +312,23 @@ export interface BackupStreamState {
  * deal with frontend-level status names.
  */
 function doneFrameToStatus(msg: {
-  outcome?: 'success' | 'no_change' | 'partial' | 'failed'
+  outcome?: 'success' | 'no_change' | 'partial' | 'failed' | 'interrupted'
   success?: boolean
 }): BackupStreamStatus {
   if (msg.outcome) {
     switch (msg.outcome) {
-      case 'success':   return 'success'
-      case 'no_change': return 'success'  // treat no_change as success for backup ops
-      case 'partial':   return 'partial'
-      case 'failed':    return 'error'
+      case 'success':     return 'success'
+      case 'no_change':   return 'success'  // treat no_change as success for backup ops
+      case 'partial':     return 'partial'
+      case 'failed':      return 'error'
+      // 'interrupted' (agent-os-pid): a run swept to this status by a
+      // previous-process crash or restore, reported via Attach's DB fallback
+      // when a client reconnects after a restart. The live-stream widget has
+      // no dedicated "interrupted" bucket (only success/partial/error/idle/
+      // running) and doesn't need one -- this is edge-case reconnect
+      // territory, not the primary status surface (that's the dashboard
+      // badge, which does get its own state). 'error' is the closest bucket.
+      case 'interrupted': return 'error'
     }
   }
   // Legacy fallback: key off success boolean.

@@ -215,3 +215,124 @@ func TestActionLog_AnonymousAndSystemLabels_PersistWithFKEnforcementOn(t *testin
 	require.Contains(t, byID, "al-sys")
 	assert.Equal(t, "system", byID["al-sys"].UserID)
 }
+
+// TestMigration_BackupRunsInterruptedStatus_PreservesDataAndFK exercises the
+// real upgrade path for migration v12 (agent-os-pid): it builds the pre-v12
+// backup_runs/backup_run_items shape (mirrors migration v8, CHECK constraint
+// without 'interrupted'), seeds a parent row with a child item row -- exactly
+// what a real database contains going into the upgrade -- then runs the full
+// migration set and asserts:
+//   - the seeded rows survive the rebuild verbatim
+//   - the child item's FK to the rebuilt parent is still live (insert +
+//     cascade delete both still work), which is the exact failure mode ruled
+//     out empirically before this migration was written: a naive
+//     rename-old/create-new-under-the-old-name/drop-old rebuild (the pattern
+//     migration v9 uses for action_log, which has no incoming FK) leaves
+//     backup_run_items' FK pointing at a table name that no longer exists
+//   - 'interrupted' is rejected before the migration and accepted after
+func TestMigration_BackupRunsInterruptedStatus_PreservesDataAndFK(t *testing.T) {
+	db, err := New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	// Build the exact pre-v12 schema shape (mirrors migration v8).
+	_, err = db.db.Exec(`
+CREATE TABLE backup_runs (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL CHECK (kind IN ('backup','sync','restore','dr_restore','prune')),
+    trigger       TEXT NOT NULL CHECK (trigger IN ('manual','scheduled')),
+    status        TEXT NOT NULL CHECK (status IN ('running','success','partial','failed')),
+    started_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at   DATETIME,
+    stacks_total  INTEGER NOT NULL DEFAULT 0,
+    stacks_ok     INTEGER NOT NULL DEFAULT 0,
+    stacks_failed INTEGER NOT NULL DEFAULT 0,
+    bytes_added   INTEGER,
+    error_message TEXT
+);
+CREATE TABLE backup_run_items (
+    id            TEXT PRIMARY KEY,
+    run_id        TEXT NOT NULL,
+    stack_id      TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('skipped','success','failed')),
+    snapshot_id   TEXT,
+    stop_applied  BOOLEAN NOT NULL DEFAULT FALSE,
+    duration_ms   INTEGER,
+    error_message TEXT,
+    FOREIGN KEY (run_id) REFERENCES backup_runs(id) ON DELETE CASCADE
+);
+`)
+	require.NoError(t, err)
+
+	// Seed a pre-migration parent row and a child item row.
+	_, err = db.db.Exec(`INSERT INTO backup_runs (id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed)
+	                      VALUES ('run-legacy', 'backup', 'manual', 'success', '2026-01-01T00:00:00Z', '2026-01-01T00:05:00Z', 2, 2, 0)`)
+	require.NoError(t, err)
+	_, err = db.db.Exec(`INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id)
+	                      VALUES ('item-legacy', 'run-legacy', 'stacks~a', 'success', 'abc123')`)
+	require.NoError(t, err)
+
+	// Precondition: 'interrupted' must be rejected by the pre-migration CHECK.
+	_, err = db.db.Exec(`INSERT INTO backup_runs (id, kind, trigger, status, started_at) VALUES ('run-pre', 'backup', 'manual', 'interrupted', '2026-01-01T00:00:00Z')`)
+	require.Error(t, err, "'interrupted' must be rejected before the migration widens the CHECK constraint")
+
+	// Run the full migration set (1 through the latest, including v12).
+	require.NoError(t, RunMigrations(db))
+
+	// The legacy parent row must survive the rebuild verbatim.
+	var status string
+	var finishedAt sql.NullString
+	require.NoError(t, db.db.QueryRow(`SELECT status, finished_at FROM backup_runs WHERE id = 'run-legacy'`).Scan(&status, &finishedAt))
+	assert.Equal(t, "success", status)
+	require.True(t, finishedAt.Valid)
+	assert.Equal(t, "2026-01-01T00:05:00Z", finishedAt.String)
+
+	// The legacy child row must still be there, still linked to its parent.
+	var itemCount int
+	require.NoError(t, db.db.QueryRow(`SELECT COUNT(*) FROM backup_run_items WHERE id = 'item-legacy' AND run_id = 'run-legacy'`).Scan(&itemCount))
+	assert.Equal(t, 1, itemCount, "the child item row must survive the parent table rebuild")
+
+	// 'interrupted' must now be accepted.
+	_, err = db.db.Exec(`INSERT INTO backup_runs (id, kind, trigger, status, started_at) VALUES ('run-int', 'backup', 'manual', 'interrupted', '2026-02-01T00:00:00Z')`)
+	require.NoError(t, err, "'interrupted' must be accepted after the migration widens the CHECK constraint")
+
+	// The FK must still be live post-migration against the REBUILT parent: a
+	// new child insert must succeed (this is what fails with "no such table"
+	// under the naive rename-based rebuild), and ON DELETE CASCADE must fire.
+	_, err = db.db.Exec(`INSERT INTO backup_run_items (id, run_id, stack_id, status) VALUES ('item-new', 'run-int', 'stacks~a', 'success')`)
+	require.NoError(t, err, "a new backup_run_items insert against the rebuilt parent must succeed")
+
+	_, err = db.db.Exec(`DELETE FROM backup_runs WHERE id = 'run-int'`)
+	require.NoError(t, err)
+	var cascadeCount int
+	require.NoError(t, db.db.QueryRow(`SELECT COUNT(*) FROM backup_run_items WHERE id = 'item-new'`).Scan(&cascadeCount))
+	assert.Equal(t, 0, cascadeCount, "ON DELETE CASCADE must still fire against the rebuilt parent")
+
+	// Indexes must be recreated, not silently dropped by the rebuild.
+	rows, err := db.db.Query(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'backup_runs'`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		names = append(names, name)
+	}
+	assert.Contains(t, names, "idx_backup_runs_started_at")
+	assert.Contains(t, names, "idx_backup_runs_kind")
+
+	// backup_run_items is also rebuilt (to detach it from backup_runs before
+	// the parent is dropped, see the migration's comment) so its indexes must
+	// be recreated too.
+	itemRows, err := db.db.Query(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'backup_run_items'`)
+	require.NoError(t, err)
+	defer itemRows.Close()
+	var itemNames []string
+	for itemRows.Next() {
+		var name string
+		require.NoError(t, itemRows.Scan(&name))
+		itemNames = append(itemNames, name)
+	}
+	assert.Contains(t, itemNames, "idx_backup_run_items_run_id")
+	assert.Contains(t, itemNames, "idx_backup_run_items_stack_id")
+}

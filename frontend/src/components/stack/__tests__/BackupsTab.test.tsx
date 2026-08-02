@@ -79,7 +79,7 @@ function makeSnapshot(overrides: Partial<{
 
 function makeRun(overrides: Partial<{
   id: string
-  status: 'success' | 'failed' | 'partial' | 'running'
+  status: 'success' | 'failed' | 'partial' | 'running' | 'interrupted'
   kind: 'backup' | 'sync' | 'restore' | 'dr_restore' | 'prune'
 }> = {}) {
   return {
@@ -396,6 +396,19 @@ describe('BackupsTab — recent runs table', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Failed')).toBeInTheDocument()
+    })
+  })
+
+  it('renders an interrupted status badge (not "Failed") for an interrupted run', async () => {
+    // agent-os-pid: a swept run never reported a real outcome and may have
+    // succeeded on the original instance, so it must get its own label.
+    mockGetHistory.mockResolvedValue({ runs: [makeRun({ status: 'interrupted' })] })
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText('Interrupted')).toBeInTheDocument()
+      expect(screen.queryByText('Failed')).not.toBeInTheDocument()
     })
   })
 })

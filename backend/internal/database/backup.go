@@ -145,9 +145,13 @@ const interruptedRunErrorMessage = "process stopped before this run completed"
 // a non-null finished_at, so history stops showing a backup as perpetually
 // in progress.
 //
-// 'failed' is reused rather than adding a new status value: the backup_runs
-// CHECK constraint already permits it, so this needs no schema migration, and
-// the row's own error_message says why a plain "failed" read wouldn't.
+// 'interrupted' (migration 12) is used rather than reusing 'failed': the run
+// never reported a real outcome and may well have succeeded on the original
+// instance before a restore captured it mid-flight, so labelling it "failed"
+// would actively mislead an operator reading the dashboard right after
+// recovering from an outage — a different, louder wrong answer than the
+// "perpetually running" bug this fixes, in exactly the scenario this exists
+// for (agent-os-pid review).
 //
 // The single UPDATE is naturally idempotent — once a row's status leaves
 // 'running' it no longer matches the WHERE clause, so calling this again
@@ -155,7 +159,7 @@ const interruptedRunErrorMessage = "process stopped before this run completed"
 func (d *DB) SweepInterruptedBackupRuns() (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	result, err := d.db.Exec(
-		`UPDATE backup_runs SET status = 'failed', finished_at = ?, error_message = ?
+		`UPDATE backup_runs SET status = 'interrupted', finished_at = ?, error_message = ?
 		 WHERE status = 'running'`,
 		now, interruptedRunErrorMessage,
 	)

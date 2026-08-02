@@ -296,6 +296,96 @@ INSERT OR IGNORE INTO settings (key, value) VALUES ('max_backup_history_retentio
 CREATE INDEX IF NOT EXISTS idx_update_history_completed_at ON update_history(completed_at);
 `,
 	},
+	{
+		Version: 12,
+		Name:    "backup_runs_interrupted_status",
+		SQL: `
+-- backup_runs.status gains 'interrupted', distinct from 'failed' (agent-os-pid).
+-- A run whose process crashed, or whose database was restored from a snapshot
+-- taken mid-run, never reported a real outcome -- it may well have SUCCEEDED
+-- on the original instance. Reusing 'failed' would tell an operator who just
+-- recovered from an outage, in the dashboard's most prominent badge, that
+-- their backup failed when it did not. SQLite has no ALTER COLUMN for CHECK
+-- constraints, so widening the allowed set means rebuilding the table.
+--
+-- This rebuild is more involved than migration 9's (action_log, which has no
+-- incoming foreign key). backup_run_items.run_id is
+-- FOREIGN KEY (run_id) REFERENCES backup_runs(id) ON DELETE CASCADE, and two
+-- separate hazards were found and verified empirically before writing this:
+--
+--  1. Renaming backup_runs itself (migration 9's rename-old / create-new-
+--     under-the-old-name / drop-old pattern) makes SQLite rewrite
+--     backup_run_items' stored FK text to point at the renamed name; dropping
+--     that renamed table then leaves the FK referencing a name that no
+--     longer exists, so every subsequent INSERT into backup_run_items fails
+--     with "no such table". Avoided here by renaming the NEW table INTO the
+--     original "backup_runs" name instead, so backup_run_items' FK text
+--     never changes.
+--  2. Even with that fixed, DROP TABLE backup_runs while backup_run_items
+--     still exists and still holds rows referencing it CASCADE-DELETES those
+--     rows during the drop -- but only when the DROP runs inside an explicit
+--     transaction with foreign_keys enforcement on, which is exactly how
+--     RunMigrations executes every migration (one multi-statement Exec
+--     inside a tx). Auto-committing statement-by-statement, as in an ad hoc
+--     shell/probe, does NOT reproduce this; it only shows up under the real
+--     migration-runner execution path, which is why it is called out here
+--     explicitly and pinned by a test that runs migrations for real rather
+--     than only inspecting the resulting schema.
+--
+-- The fix for #2: detach backup_run_items' data into a plain, constraint-free
+-- table BEFORE backup_runs is touched at all, then drop backup_run_items
+-- itself (dropping a CHILD table is never a cascade hazard) before dropping
+-- backup_runs. By the time backup_runs is dropped, no table with a live FK
+-- to it exists, so there is nothing to cascade into.
+CREATE TABLE backup_run_items_v11 AS SELECT * FROM backup_run_items;
+
+CREATE TABLE backup_runs_new (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL CHECK (kind IN ('backup','sync','restore','dr_restore','prune')),
+    trigger       TEXT NOT NULL CHECK (trigger IN ('manual','scheduled')),
+    status        TEXT NOT NULL CHECK (status IN ('running','success','partial','failed','interrupted')),
+    started_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at   DATETIME,
+    stacks_total  INTEGER NOT NULL DEFAULT 0,
+    stacks_ok     INTEGER NOT NULL DEFAULT 0,
+    stacks_failed INTEGER NOT NULL DEFAULT 0,
+    bytes_added   INTEGER,
+    error_message TEXT
+);
+
+INSERT INTO backup_runs_new (id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message)
+SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message
+FROM backup_runs;
+
+DROP TABLE backup_run_items;
+DROP TABLE backup_runs;
+
+ALTER TABLE backup_runs_new RENAME TO backup_runs;
+
+CREATE TABLE backup_run_items (
+    id            TEXT PRIMARY KEY,
+    run_id        TEXT NOT NULL,
+    stack_id      TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('skipped','success','failed')),
+    snapshot_id   TEXT,
+    stop_applied  BOOLEAN NOT NULL DEFAULT FALSE,
+    duration_ms   INTEGER,
+    error_message TEXT,
+    FOREIGN KEY (run_id) REFERENCES backup_runs(id) ON DELETE CASCADE
+);
+
+INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message)
+SELECT id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message
+FROM backup_run_items_v11;
+
+DROP TABLE backup_run_items_v11;
+
+CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_backup_runs_kind ON backup_runs(kind);
+CREATE INDEX IF NOT EXISTS idx_backup_run_items_run_id ON backup_run_items(run_id);
+CREATE INDEX IF NOT EXISTS idx_backup_run_items_stack_id ON backup_run_items(stack_id);
+`,
+	},
 }
 
 func RunMigrations(db *DB) error {

@@ -496,7 +496,13 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 	outcome := dbRun.Status
 	reason := dbRun.ErrorMessage
 
-	isTerminal := outcome == "success" || outcome == "partial" || outcome == "failed"
+	// 'interrupted' (agent-os-pid) is the startup sweep's own terminal status
+	// for a run that was 'running' when this process started — reached via
+	// exactly this fallback (registry is process-local, so it's empty for
+	// every run from before a restart). It must count as terminal here, or
+	// the sweep's specific error_message gets discarded in favour of the
+	// generic "operation state lost" reason below.
+	isTerminal := outcome == "success" || outcome == "partial" || outcome == "failed" || outcome == "interrupted"
 	if !isTerminal {
 		// DB says "running" but no in-memory entry — likely a server restart.
 		outcome = "failed"

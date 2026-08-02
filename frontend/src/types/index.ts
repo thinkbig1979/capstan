@@ -346,7 +346,10 @@ export interface BackupRun {
   id: string
   kind: 'backup' | 'sync' | 'restore' | 'dr_restore' | 'prune'
   trigger: 'manual' | 'scheduled'
-  status: 'running' | 'success' | 'partial' | 'failed'
+  // 'interrupted' (agent-os-pid): a run left 'running' by a crash or a
+  // restore from a mid-run snapshot. Distinct from 'failed' -- it never
+  // reported a real outcome and may have succeeded on the original instance.
+  status: 'running' | 'success' | 'partial' | 'failed' | 'interrupted'
   startedAt: string
   finishedAt?: string | null
   stacksTotal: number
