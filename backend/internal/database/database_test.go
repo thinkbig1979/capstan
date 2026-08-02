@@ -336,6 +336,41 @@ func TestSweepInterruptedBackupRuns_Idempotent_PreservesTerminalRows(t *testing.
 	assert.Equal(t, "failed", nowFailed.Status)
 }
 
+// TestSweepInterruptedBackupRuns_NeverTouchesTerminalRows asserts the sweep's
+// WHERE clause — not just repeated calls — is what protects history. This is a
+// different property from idempotency: a database that never had a 'running'
+// row to begin with must come through a single pass byte-identical. If the
+// WHERE clause were ever widened (e.g. to match on kind or a date range
+// instead of status), this is what would catch it; the idempotency test above
+// would not, since after one correct sweep there is nothing left at 'running'
+// for a second call to expose.
+func TestSweepInterruptedBackupRuns_NeverTouchesTerminalRows(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+
+	finishedAt := "2026-05-30T10:05:00Z"
+	completed := &models.BackupRun{
+		ID:         "run-done-only",
+		Kind:       "backup",
+		Trigger:    "manual",
+		Status:     "success",
+		StartedAt:  "2026-05-30T10:00:00Z",
+		FinishedAt: &finishedAt,
+	}
+	require.NoError(t, db.CreateBackupRun(completed))
+
+	n, err := db.SweepInterruptedBackupRuns()
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "there is no 'running' row for the sweep to touch")
+
+	got, err := db.GetBackupRunByID("run-done-only")
+	require.NoError(t, err)
+	assert.Equal(t, "success", got.Status, "status must be untouched")
+	require.NotNil(t, got.FinishedAt)
+	assert.Equal(t, finishedAt, *got.FinishedAt, "finished_at must be byte-identical to what was written")
+	assert.Empty(t, got.ErrorMessage, "a successful run must not gain an error_message")
+}
+
 // --- Backup Run Item tests ---
 
 func TestAddBackupRunItem_AndGetBackupRunItems(t *testing.T) {
