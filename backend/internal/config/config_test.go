@@ -15,6 +15,7 @@ func newValidConfig() *Config {
 		JWTSecret: strings.Repeat("k", 32),
 		StacksDir: "/opt/stacks",
 		DataDir:   "/app/data",
+		Port:      "5001",
 		LogLevel:  "info",
 		LogFormat: "text",
 	}
@@ -78,10 +79,69 @@ func TestLoad_DefaultsAreValid(t *testing.T) {
 		JWTSecret: strings.Repeat("k", 32),
 		StacksDir: "/opt/stacks",
 		DataDir:   "/app/data",
+		Port:      "5001", // must match Load's default
 		LogLevel:  "info", // must match Load's default
 		LogFormat: "text", // must match Load's default
 	}
 	if err := validate(defaults); err != nil {
 		t.Errorf("Load's defaults do not pass validation: %v", err)
+	}
+}
+
+// PORT used to be dead configuration in the same way LOG_LEVEL was: documented,
+// defaulted, and logged back out at startup, but never read from the
+// environment, so the server always listened on 5001 regardless of PORT
+// (agent-os-o6q).
+
+func TestValidate_RejectsNonNumericPort(t *testing.T) {
+	cfg := newValidConfig()
+	cfg.Port = "not-a-port"
+
+	err := validate(cfg)
+	if err == nil {
+		t.Fatal("expected PORT=not-a-port to be rejected, got nil")
+	}
+	if !strings.Contains(err.Error(), "PORT") {
+		t.Errorf("error should name the offending variable, got: %v", err)
+	}
+}
+
+func TestValidate_RejectsOutOfRangePort(t *testing.T) {
+	for _, port := range []string{"0", "-1", "65536", "999999"} {
+		cfg := newValidConfig()
+		cfg.Port = port
+
+		err := validate(cfg)
+		if err == nil {
+			t.Errorf("expected PORT=%s to be rejected, got nil", port)
+			continue
+		}
+		if !strings.Contains(err.Error(), "PORT") {
+			t.Errorf("PORT=%s: error should name the offending variable, got: %v", port, err)
+		}
+	}
+}
+
+func TestValidate_AcceptsPlausiblePorts(t *testing.T) {
+	for _, port := range []string{"1", "80", "5001", "8080", "65535"} {
+		cfg := newValidConfig()
+		cfg.Port = port
+
+		if err := validate(cfg); err != nil {
+			t.Errorf("PORT=%s rejected: %v", port, err)
+		}
+	}
+}
+
+// TestLoad_DefaultPortIsValid guards against Load's hardcoded default drifting
+// away from what validate accepts, which would make the server refuse to start
+// with no PORT env var set at all — the same regression class as
+// TestLoad_DefaultsAreValid above, isolated to PORT.
+func TestLoad_DefaultPortIsValid(t *testing.T) {
+	cfg := newValidConfig()
+	cfg.Port = "5001" // must match Load's default
+
+	if err := validate(cfg); err != nil {
+		t.Errorf("Load's default PORT does not pass validation: %v", err)
 	}
 }
