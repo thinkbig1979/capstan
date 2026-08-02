@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { LayoutDashboard, Layers, Settings } from 'lucide-react'
 import { stacksApi } from '@/lib/api'

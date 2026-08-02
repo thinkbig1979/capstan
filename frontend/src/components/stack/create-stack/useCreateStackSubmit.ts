@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { useCreateStack, extractStack } from '@/hooks/useCreateStack'
 import type { LintResult } from '@/types'

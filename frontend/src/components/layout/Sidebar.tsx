@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation } from "react-router";
 import { useUIStore } from "@/stores/uiStore";
 import { CollapsedRail } from "./sidebar/CollapsedRail";
 import { SidebarBody } from "./sidebar/SidebarBody";

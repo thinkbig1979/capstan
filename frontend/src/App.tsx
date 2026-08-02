@@ -1,5 +1,5 @@
 import { useEffect, useState, Suspense, lazy } from 'react'
-import { Routes, Route, Navigate, useLocation, Outlet } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation, Outlet } from 'react-router'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
 import { queryClient } from '@/lib/query-client'

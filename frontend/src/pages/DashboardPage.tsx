@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, Suspense, lazy } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { directoriesApi, stacksApi, dashboardApi, settingsApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
