@@ -34,7 +34,8 @@ func (d *DB) UpsertDirectory(dir models.Directory) error {
 // straight from ciphertext (it is never decrypted here) and only tested for
 // emptiness before being blanked into HasHTTPSToken. That test is valid
 // without decrypting because Encrypt is only ever invoked on a non-empty
-// plaintext (UpsertDirectory, UpdateDirectoryCredentials), so the ciphertext
+// plaintext, and UpdateDirectoryCredentials is the only writer that ever
+// touches this column (UpsertDirectory no longer does), so the ciphertext
 // column is empty if and only if the plaintext token was empty. Callers that
 // need the real token must use GetDirectoryCredentials instead.
 func (d *DB) ListDirectories() ([]models.Directory, error) {
