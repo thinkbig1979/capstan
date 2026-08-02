@@ -243,8 +243,19 @@ func (rl *RateLimiter) check(key string) bool {
 		ur = &userRequests{timestamps: []time.Time{}}
 		rl.requests[key] = ur
 		rl.accessIndex[key] = rl.accessOrder.PushBack(key)
+	} else if el, ok := rl.accessIndex[key]; ok {
+		rl.accessOrder.MoveToBack(el)
 	} else {
-		rl.accessOrder.MoveToBack(rl.accessIndex[key])
+		// requests and accessIndex are written together above and removed
+		// together by removeKey, so this branch is unreachable today. But
+		// insertion, unlike removal, is still two adjacent statements rather
+		// than one call site — nothing structural stops a future edit from
+		// separating them. list.MoveToBack dereferences its argument's
+		// internal list pointer, so a nil *list.Element there would panic on
+		// the login path rather than silently miss a refresh. Re-inserting
+		// instead heals the mirror and degrades a future bug to a missed LRU
+		// refresh, not a crash.
+		rl.accessIndex[key] = rl.accessOrder.PushBack(key)
 	}
 
 	cutoff := now.Add(-rl.window)
