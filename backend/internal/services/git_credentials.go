@@ -1,6 +1,7 @@
 package services
 
 import (
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -61,6 +62,15 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 				user, token = cred.GitHTTPSUser, cred.GitHTTPSToken
 				if user == "" {
 					user = defaultGitHTTPSUser
+				}
+				if token == "" {
+					// Otherwise this state is indistinguishable from "everything is
+					// fine" until the pull fails with a generic auth error: the UI
+					// reports the directory as configured for its own HTTPS
+					// credential, but no token was ever saved. The log line carries
+					// only the directory path, never a token value or any other
+					// directory's state, so nothing here reaches action-log details.
+					slog.Warn("directory is configured for https git auth but has no stored credential; not falling back to a different (global) credential", "path", dirPath)
 				}
 				return user, token
 			case "ssh":

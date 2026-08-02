@@ -1,6 +1,8 @@
 package services
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
@@ -267,6 +269,61 @@ func TestHTTPSCredentials_SSHAuthType_NoHTTPSCredentialApplies(t *testing.T) {
 	user, token := svc.httpsCredentials(dirPath)
 	if user != "" || token != "" {
 		t.Errorf("got user=%q token=%q, want no HTTPS credential for an ssh-authType directory", user, token)
+	}
+}
+
+// captureSlog redirects the process-wide slog default to a buffer for the
+// duration of the test and restores the previous default on cleanup.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// TestHTTPSCredentials_DirectoryHTTPSEmptyToken_LogsWarning gives the silent
+// failure covered by TestPull_DirectoryHTTPSAuthType_EmptyTokenDoesNotFallBackToGlobal
+// an operator-visible trail. Without this, "authType=https configured but no
+// token saved" fails a pull with nothing beyond a generic auth error — exactly
+// the kind of invisible failure agent-os-qll is about, just moved one step
+// over from "wiped on scan" to "never explained on pull".
+func TestHTTPSCredentials_DirectoryHTTPSEmptyToken_LogsWarning(t *testing.T) {
+	dirPath := "/stacks/half-configured"
+	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, "")
+	buf := captureSlog(t)
+
+	user, token := svc.httpsCredentials(dirPath)
+	if token != "" {
+		t.Fatalf("expected an empty token, got %q", token)
+	}
+	_ = user
+
+	out := buf.String()
+	if !strings.Contains(out, dirPath) {
+		t.Errorf("warning does not name the affected directory: %s", out)
+	}
+	if !strings.Contains(out, "no stored credential") {
+		t.Errorf("warning does not explain the missing token: %s", out)
+	}
+	if strings.Contains(out, testGitToken) || strings.Contains(out, "wrong-global-token") {
+		t.Errorf("warning leaked a token value: %s", out)
+	}
+}
+
+// TestHTTPSCredentials_DirectoryHTTPSWithToken_NoWarning is the negative case:
+// a directory that IS fully configured must not log anything, so the warning
+// above stays a meaningful signal instead of routine noise on every pull.
+func TestHTTPSCredentials_DirectoryHTTPSWithToken_NoWarning(t *testing.T) {
+	dirPath := "/stacks/fully-configured"
+	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, testGitToken)
+	buf := captureSlog(t)
+
+	svc.httpsCredentials(dirPath)
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no warning for a fully-configured directory credential, got: %s", buf.String())
 	}
 }
 

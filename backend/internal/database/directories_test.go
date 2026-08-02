@@ -17,6 +17,17 @@ var dirTestTime = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 // and rewrote the row, wiping any credential UpdateDirectoryCredentials had
 // saved. A directory-only upsert (what a rescan performs) must leave a
 // previously-saved credential in place.
+//
+// This is the test that holds the invariant, not the ON CONFLICT column list
+// in UpsertDirectory: that list is a set of names a future column addition can
+// silently forget to omit, reintroducing this exact bug in a new column. This
+// test asserts the invariant directly and is mutation-tested against a
+// reverted INSERT OR REPLACE (see the commit message / PR description for the
+// verbatim failure), so a regression here fails a test, not just a review.
+//
+// All four credential columns are exercised (auth type, SSH key path, HTTPS
+// user, HTTPS token) so a future column that the UPDATE SET list forgets is
+// caught here too.
 func TestUpsertDirectory_ScanDoesNotClobberCredentials(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
@@ -24,10 +35,11 @@ func TestUpsertDirectory_ScanDoesNotClobberCredentials(t *testing.T) {
 	require.NoError(t, db.UpsertDirectory(models.Directory{
 		Path: "/stacks/app", Name: "app", ScannedAt: dirTestTime,
 	}))
-	require.NoError(t, db.UpdateDirectoryCredentials("/stacks/app", "https", "", "git-user", "s3cr3t-token"))
+	require.NoError(t, db.UpdateDirectoryCredentials("/stacks/app", "https", "/home/op/.ssh/app_key", "git-user", "s3cr3t-token"))
 
-	// Simulate a rescan: a bare Directory with only the scan-owned fields set,
-	// exactly as scanner.ScanDirectoryWithRoot builds it.
+	// Simulate a rescan: a bare Directory with only the scan-owned fields set
+	// (all credential fields at their zero value), exactly as
+	// scanner.ScanDirectoryWithRoot builds it.
 	require.NoError(t, db.UpsertDirectory(models.Directory{
 		Path: "/stacks/app", Name: "app", IsGitRepo: true, GitRemote: "origin", GitBranch: "main", ScannedAt: dirTestTime,
 	}))
@@ -35,6 +47,7 @@ func TestUpsertDirectory_ScanDoesNotClobberCredentials(t *testing.T) {
 	cred, err := db.GetDirectoryCredentials("/stacks/app")
 	require.NoError(t, err)
 	assert.Equal(t, "https", cred.GitAuthType)
+	assert.Equal(t, "/home/op/.ssh/app_key", cred.GitSSHKeyPath)
 	assert.Equal(t, "git-user", cred.GitHTTPSUser)
 	assert.Equal(t, "s3cr3t-token", cred.GitHTTPSToken)
 
