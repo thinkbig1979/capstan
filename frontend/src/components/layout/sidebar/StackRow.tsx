@@ -1,4 +1,4 @@
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation } from 'react-router'
 import { Badge } from '@/components/ui/badge'
 import { CheckSquare, Square as SquareIcon, Star } from 'lucide-react'
 import type { Stack } from '@/types'

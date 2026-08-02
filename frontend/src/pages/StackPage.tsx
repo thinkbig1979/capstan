@@ -7,7 +7,7 @@ import { AlertCircle, RefreshCw, Home, Trash2, ChevronDown, ChevronRight } from 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { classifyError } from '@/lib/error-handler'
-import { useParams, useNavigate, useLocation } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router'
 import { toast } from 'sonner'
 import { useConfirm } from '@/hooks/useConfirm'
 import { useStackStore } from '@/stores/stackStore'
