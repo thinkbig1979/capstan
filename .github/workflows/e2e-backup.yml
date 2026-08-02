@@ -187,7 +187,20 @@ jobs:
           CAPSTAN_API_URL: http://localhost:5001
           AUTH_DISABLED: 'true'
           CAPSTAN_TEST_STACK: test-app
-        run: npx playwright test testing/tests/playwright/backup-flow.spec.ts --reporter=list
+        # No --reporter flag: it REPLACES playwright.config.ts's reporter
+        # array wholesale, including each reporter's options — so even
+        # `--reporter=list,html,json` silently drops the config's custom
+        # outputFolder/outputFile and falls back to the html reporter's
+        # default 'playwright-report/' and the json reporter's default
+        # (stdout), leaving the "Upload Playwright HTML report" step below
+        # with nothing at the path it expects. Verified empirically: with the
+        # flag, `--list` still prints a JSON summary to stdout instead of
+        # writing testing/reports/playwright-results.json. Omitting the flag
+        # entirely lets the config's list+html+json array (with its custom
+        # paths) apply as configured — confirmed against a deliberately
+        # broken run during agent-os-5y9, where the upload step had
+        # previously reported success on 0 files rather than failing loudly.
+        run: npx playwright test testing/tests/playwright/backup-flow.spec.ts
 
       # A scheduled job whose failures cannot be inspected gets ignored —
       # upload the HTML report (configured in playwright.config.ts) whenever
