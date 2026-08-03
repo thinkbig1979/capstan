@@ -97,6 +97,18 @@ export function classifyError(error: unknown): AppError {
     }
   }
 
+  if (status === 409) {
+    return {
+      message: message || 'This conflicts with an operation already in progress. Wait for it to finish and try again.',
+      type: 'server',
+      status,
+      retryable: false,
+      originalError: error,
+      context: details?.resource as string,
+      action: 'Refresh',
+    }
+  }
+
   if (status === 422 || status === 400) {
     const fieldErrors = details as Record<string, string> | undefined
     const fieldMessage = fieldErrors 

@@ -400,7 +400,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	if _, err := h.opLock.Acquire(id); err != nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
-			"OPERATION_IN_PROGRESS",
+			models.ErrOperationInProgress,
 			err.Error(),
 		))
 		return
