@@ -440,9 +440,18 @@ func (f *fakeStackStore) ListStacks() ([]models.Stack, error)                 { 
 func (f *fakeStackStore) GetStack(string) (*models.Stack, error)              { return f.stack, nil }
 func (f *fakeStackStore) GetStackByProjectName(string) (*models.Stack, error) { return nil, nil }
 
-// ListStacksByDirectory reports the configured stack as the only one registered
-// under its directory, so Delete takes the sole-stack path and removes the whole
-// directory — the behaviour these fixtures assert.
+// ListStacksByDirectory is inert for every fixture in this file: it can only
+// return either an empty slice or a slice containing solely the stack under
+// test, and Delete's survivor computation (listSurvivors, stack_crud.go)
+// filters that same stack out by ID either way, leaving zero survivors on
+// both paths. Mutating this to `return nil, nil` unconditionally still
+// leaves the package green — verified 2026-08-03 against
+// TestStacksHandler_Delete_DBDeleteErrorSurfaced and the rest of this file.
+// It exists only so GetStack's preconfigured stack has a directory listing
+// to answer with; it cannot express a sibling scenario. Tests that need
+// Delete's sibling/collateral/race behaviour use a real *database.DB instead
+// — see stack_delete_siblings_test.go, stack_delete_collateral_test.go, and
+// stack_delete_race_test.go.
 func (f *fakeStackStore) ListStacksByDirectory(path string) ([]models.Stack, error) {
 	if f.stack == nil || f.stack.Directory != path {
 		return nil, nil
