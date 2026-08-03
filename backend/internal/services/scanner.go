@@ -392,7 +392,10 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 		"docker-compose*.yml",
 	}
 
-	seenNames := make(map[string]bool)
+	// seenNames tracks, per extracted stack name, the filename that already
+	// claimed it — so a later file mapping to the same name can be skipped
+	// with a warning that names both files (see the guard below).
+	seenNames := make(map[string]string)
 
 	for _, pattern := range patterns {
 		matches, err := filepath.Glob(filepath.Join(path, pattern))
@@ -413,12 +416,29 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 
 			name := extractStackName(filename)
 
-			if seenNames[name] && name == "default" {
-				slog.Warn("Duplicate default stack, skipping", "directory", path, "file", filename)
+			// extractStackName strips both the "compose." and
+			// "docker-compose." prefixes, so e.g. compose.api.yaml and
+			// docker-compose.api.yml both yield "api". Without this guard the
+			// second file's UpsertStack (INSERT OR REPLACE) would silently
+			// overwrite the first file's row, leaving the other compose file
+			// on disk but untracked: invisible in the UI, never brought
+			// down, and left behind on delete (agent-os-4yy). This mirrors
+			// the "default" handling that already existed here, generalized
+			// to every stack name.
+			//
+			// The winner is whichever file the patterns loop above reaches
+			// first, which is deterministic and NOT directory-read order:
+			// the patterns slice fixes compose*.yaml > compose*.yml >
+			// docker-compose*.yaml > docker-compose*.yml (Docker Compose's
+			// own file precedence), and filepath.Glob sorts each pattern's
+			// matches alphabetically. So the outcome is stable across
+			// filesystems.
+			if winner, seen := seenNames[name]; seen {
+				slog.Warn("Duplicate stack name, skipping", "directory", path, "name", name, "kept", winner, "skipped", filename)
 				continue
 			}
 
-			seenNames[name] = true
+			seenNames[name] = filename
 
 			envFile := determineEnvFile(path, name)
 
