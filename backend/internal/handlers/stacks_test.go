@@ -77,6 +77,95 @@ func TestStacksHandler_Create_Success(t *testing.T) {
 	assert.FileExists(t, filepath.Join(tempDir, "my-stack", ".env"))
 }
 
+// TestStacksHandler_Create_UnindexedDirectory_FKEnforced is the regression
+// test for agent-os-jcu: POST /api/v1/stacks 500'd for every stack directory
+// the scanner had never indexed, because UpsertStack ran before any
+// directories row existed for stackDir, and stacks.directory has an FK to
+// directories(path) (migrations.go) enforced pool-wide for every connection
+// database.NewWithMigrations opens (database.go's DSN _pragma=foreign_keys(1)).
+//
+// Unlike TestStacksHandler_Create_Success, this test deliberately does NOT
+// call createTestDirectory for the new stack's directory first — that helper
+// call is exactly what was masking the bug in the existing success test, by
+// pre-satisfying the FK the handler itself was supposed to satisfy. This test
+// reproduces the UI's actual common-case Create flow: a new subdirectory
+// under an already-monitored root, which the scanner has never seen.
+func TestStacksHandler_Create_UnindexedDirectory_FKEnforced(t *testing.T) {
+	tempDir := t.TempDir()
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+
+	// Precondition: foreign_keys enforcement must be genuinely active on this
+	// exact *database.DB, or this test would pass for the wrong reason. Probe
+	// it directly (handlers can't reach the private db.db.QueryRow("PRAGMA
+	// foreign_keys") migrations_test.go/pragma_test.go use from inside the
+	// database package) by inserting a stack row against a directory that has
+	// no row: that must fail with an FK violation if enforcement is on.
+	probeErr := db.UpsertStack(models.Stack{
+		ID: "fkprobe~no-such-dir:default", Directory: filepath.Join(tempDir, "does-not-exist"),
+		ComposeFile: "compose.yaml", ProjectName: "fkprobe",
+	})
+	require.Error(t, probeErr, "test precondition: foreign_keys must be ON (insert against a nonexistent directory must fail)")
+	require.NoError(t, db.DeleteStack("fkprobe~no-such-dir:default")) // no-op if the insert above didn't persist; keeps state clean either way
+
+	cfg := &config.Config{StacksDir: tempDir}
+	linter := services.NewLinterService()
+	scanner := services.NewScannerService(cfg, db)
+	handler := NewStacksHandler(nil, scanner, linter, db, cfg, services.NewActionLogger(db), services.NewOperationLock())
+
+	router := gin.New()
+	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+
+	user := models.User{
+		ID:        "test-user-id",
+		Username:  "testuser",
+		Password:  "",
+		CreatedAt: testTime,
+		UpdatedAt: testTime,
+	}
+	require.NoError(t, db.CreateUser(user))
+
+	// Deliberately NOT calling createTestDirectory(t, db, stackDir): the
+	// directory for "new-stack" has never been scanned or otherwise
+	// registered, which is exactly the state a brand-new stack directory is
+	// in when a real user creates it through the UI.
+	reqBody := map[string]interface{}{
+		"name":           "new-stack",
+		"composeContent": "services:\n  web:\n    image: nginx:1.21\n    restart: unless-stopped",
+		"envContent":     "PORT=8080",
+		"deploy":         false,
+	}
+	reqBytes, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/stacks", bytes.NewReader(reqBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code, "response body: %s", w.Body.String())
+
+	var response map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, "success", response["outcome"])
+
+	expectedID := filepath.Base(tempDir) + "~new-stack:default"
+	details := response["details"].(map[string]interface{})
+	stack := details["stack"].(map[string]interface{})
+	assert.Equal(t, expectedID, stack["id"])
+
+	// Both rows must exist: the directory (satisfying the FK) and the stack.
+	stackDir := filepath.Join(tempDir, "new-stack")
+	dir, err := db.GetDirectory(stackDir)
+	require.NoError(t, err)
+	require.NotNil(t, dir)
+	assert.Equal(t, stackDir, dir.Path)
+
+	persisted, err := db.GetStack(expectedID)
+	require.NoError(t, err)
+	require.NotNil(t, persisted)
+	assert.Equal(t, stackDir, persisted.Directory)
+}
+
 func TestStacksHandler_Create_ValidationError(t *testing.T) {
 	tempDir := t.TempDir()
 	db, err := database.NewWithMigrations(":memory:")

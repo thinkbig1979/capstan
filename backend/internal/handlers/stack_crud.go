@@ -184,7 +184,29 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		Status:      "stopped",
 	}
 
+	// stacks.directory has an FK to directories(path) (migrations.go), enforced
+	// pool-wide since e4e8c3f. stackDir is a brand-new subdirectory the scanner
+	// has never indexed (the UI's DirectorySelect only offers already-monitored
+	// PARENT roots, so this is the common case, not an edge case), so no
+	// directories row exists for it yet. Register it before UpsertStack or every
+	// such Create 500s with a FK violation (agent-os-jcu).
+	if err := h.scanner.RegisterDirectory(stackDir, targetDir); err != nil {
+		os.RemoveAll(stackDir)
+		c.JSON(http.StatusInternalServerError, models.NewAppError(
+			http.StatusInternalServerError,
+			"DB_ERROR",
+			"Failed to register stack directory in database",
+		))
+		return
+	}
+
 	if err := h.db.UpsertStack(stack); err != nil {
+		// Roll back the directory registration too, so a failed create never
+		// leaves a directories row with no stack behind it.
+		if unregErr := h.scanner.UnregisterDirectory(stackDir); unregErr != nil {
+			slog.Warn("failed to roll back directory registration after UpsertStack failure",
+				"directory", stackDir, "error", unregErr)
+		}
 		os.RemoveAll(stackDir)
 		c.JSON(http.StatusInternalServerError, models.NewAppError(
 			http.StatusInternalServerError,
