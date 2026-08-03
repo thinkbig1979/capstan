@@ -89,7 +89,7 @@ updates:
           - patch
 
   # ---------------------------------------------------------------------------
-  # Covers the Dockerfile's pinned bases: node:22-alpine, golang:1.25.12-alpine,
+  # Covers the Dockerfile's pinned bases: node:22-alpine, golang:1.26.5-alpine,
   # and alpine:3.21.
   #
   # NOTE for reviewers of these PRs: the Go base image is pinned in lockstep with
