@@ -87,12 +87,16 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	// contend. That distinction matters because Acquire is a try-lock that fails
 	// fast rather than queueing: a broader key (the target directory, or a global
 	// one) would turn unrelated concurrent creates into spurious conflicts.
+	// Two configured roots sharing a basename used to mint the SAME id, which
+	// made this lock key collide too: concurrent same-name creates into two such
+	// roots conflicted with each other and one caller got a spurious 409. They
+	// now get distinct ids, so they no longer share a key (agent-os-elo).
 	//
-	// services.StackID is shared with the scanner, which must derive the same ID
-	// for this stack when it next walks the disk. targetDir is already resolved:
-	// isValidStacksDir accepted it only by exact match against a configured root
-	// (agent-os-elo).
-	stackID := services.StackID(targetDir, h.config.GetAllStacksDirs(), req.Name, "default")
+	// services.StackID is shared with the scanner, which must derive the same id
+	// for this stack when it next walks the disk. targetDir is passed as an
+	// already-resolved root: isValidStacksDir accepted it only by exact match
+	// against a configured root.
+	stackID := services.StackID(targetDir, h.config.StacksDir, h.config.ExtraStacksDirs, req.Name, "default")
 
 	// DUPLICATE_STACK rather than a new code: losing this race is the same
 	// user-visible situation as the sequential duplicate below — the name is

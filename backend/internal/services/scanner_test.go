@@ -386,6 +386,60 @@ func TestScannerService_ScanAll_SameBasenameRootsGetDistinctIDs(t *testing.T) {
 		byDir[s.Directory] = s.ID
 	}
 	assert.NotEqual(t, byDir[filepath.Join(rootA, "my-stack")], byDir[filepath.Join(rootB, "my-stack")])
+
+	// rootA is the PRIMARY root and keeps the ID it had before rootB existed.
+	assert.Equal(t, "stacks~my-stack:default", byDir[filepath.Join(rootA, "my-stack")])
+	assert.Regexp(t, `^stacks\.[0-9a-f]{8}~my-stack:default$`, byDir[filepath.Join(rootB, "my-stack")])
+}
+
+// The scenario the primary-root exemption exists for, end to end: an operator
+// runs with one root, later adds a second root that happens to share its
+// basename, and rescans. The primary root's stack must keep its exact ID and
+// must not gain a second row.
+//
+// The duplicate matters more than the rename. pruneStaleStacks removes rows by
+// DIRECTORY existence, never by ID, so a re-IDed stack whose directory still
+// exists leaves its old row behind while the scan upserts a new one — and the
+// six unenforced TEXT columns holding stack ids would still point at the old.
+func TestScannerService_AddingCollidingExtraRootDoesNotReIDPrimary(t *testing.T) {
+	base := t.TempDir()
+	primary := filepath.Join(base, "srv", "stacks")
+	extra := filepath.Join(base, "opt", "stacks")
+	for _, r := range []string{primary, extra} {
+		dir := filepath.Join(r, "web")
+		require.NoError(t, os.MkdirAll(dir, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644))
+	}
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+
+	// Before: the primary root alone.
+	cfg := &config.Config{StacksDir: primary}
+	_, err = NewScannerService(cfg, db).ScanAll()
+	require.NoError(t, err)
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+	require.Equal(t, "stacks~web:default", stacks[0].ID, "setup: the pre-existing ID")
+
+	// After: a colliding extra root is configured and everything is rescanned.
+	cfg.ExtraStacksDirs = []string{extra}
+	_, err = NewScannerService(cfg, db).ScanAll()
+	require.NoError(t, err)
+
+	stacks, err = db.ListStacks()
+	require.NoError(t, err)
+
+	byDir := map[string]string{}
+	for _, st := range stacks {
+		byDir[st.Directory] = st.ID
+	}
+	assert.Len(t, stacks, 2, "one row per stack; a re-ID of the primary would leave a stale third row behind")
+	assert.Equal(t, "stacks~web:default", byDir[filepath.Join(primary, "web")],
+		"the pre-existing stack was re-IDed by a config change it had nothing to do with")
+	assert.Regexp(t, `^stacks\.[0-9a-f]{8}~web:default$`, byDir[filepath.Join(extra, "web")])
 }
 
 // Direct coverage of the shared ID producer. The byte-for-byte cases are the
@@ -394,42 +448,85 @@ func TestScannerService_ScanAll_SameBasenameRootsGetDistinctIDs(t *testing.T) {
 // columns and every bookmarked frontend URL.
 func TestStackID_PrefixIsBasenameWhenNoCollision(t *testing.T) {
 	tests := []struct {
-		name     string
-		root     string
-		allRoots []string
-		want     string
+		name        string
+		root        string
+		primaryRoot string
+		extraRoots  []string
+		want        string
 	}{
 		{
-			name:     "single configured root",
-			root:     "/srv/stacks",
-			allRoots: []string{"/srv/stacks"},
-			want:     "stacks~my-stack:default",
+			name:        "single configured root",
+			root:        "/srv/stacks",
+			primaryRoot: "/srv/stacks",
+			want:        "stacks~my-stack:default",
 		},
 		{
-			name:     "several roots, all basenames distinct",
-			root:     "/srv/stacks",
-			allRoots: []string{"/srv/stacks", "/mnt/media", "/opt/apps"},
-			want:     "stacks~my-stack:default",
+			name:        "several roots, all basenames distinct",
+			root:        "/srv/stacks",
+			primaryRoot: "/srv/stacks",
+			extraRoots:  []string{"/mnt/media", "/opt/apps"},
+			want:        "stacks~my-stack:default",
 		},
 		{
-			name:     "root spelled with a trailing separator still matches itself",
-			root:     "/srv/stacks/",
-			allRoots: []string{"/srv/stacks"},
-			want:     "stacks~my-stack:default",
+			name:        "root spelled with a trailing separator still matches itself",
+			root:        "/srv/stacks/",
+			primaryRoot: "/srv/stacks",
+			want:        "stacks~my-stack:default",
+		},
+		{
+			name:        "extra root whose basename is unique",
+			root:        "/opt/apps",
+			primaryRoot: "/srv/stacks",
+			extraRoots:  []string{"/opt/apps"},
+			want:        "apps~my-stack:default",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, StackID(tt.root, tt.allRoots, "my-stack", "default"))
+			assert.Equal(t, tt.want, StackID(tt.root, tt.primaryRoot, tt.extraRoots, "my-stack", "default"))
 		})
 	}
 }
 
-func TestStackID_CollidingRootsGetDistinctPrefixes(t *testing.T) {
-	roots := []string{"/a/stacks", "/b/stacks"}
+// THE guard for the primary-root exemption. Because the prefix depends on the
+// set of configured roots, adding a root could otherwise re-ID stacks that
+// already exist — and pruneStaleStacks keys on directory existence, not on ID,
+// so the old row would survive alongside the new one. The primary root is
+// exempt unconditionally: the colliding EXTRA root takes the suffix instead.
+func TestStackID_PrimaryRootKeepsBareBasenameWhenExtraCollides(t *testing.T) {
+	const primary = "/srv/stacks"
+	extras := []string{"/opt/stacks"}
 
-	idA := StackID(roots[0], roots, "my-stack", "default")
-	idB := StackID(roots[1], roots, "my-stack", "default")
+	primaryID := StackID(primary, primary, extras, "web", "default")
+	extraID := StackID(extras[0], primary, extras, "web", "default")
+
+	assert.Equal(t, "stacks~web:default", primaryID,
+		"adding a colliding extra root must not change an ID under the primary root")
+	assert.Regexp(t, `^stacks\.[0-9a-f]{8}~web:default$`, extraID)
+	assert.NotEqual(t, primaryID, extraID)
+}
+
+// Adding extra roots must leave the primary root's ID untouched whether they
+// collide or not — the single-root deployment is the overwhelming majority and
+// must never be re-IDed by a config edit elsewhere.
+func TestStackID_PrimaryRootIDIsStableAcrossConfigGrowth(t *testing.T) {
+	const primary = "/srv/stacks"
+	const want = "stacks~web:default"
+
+	assert.Equal(t, want, StackID(primary, primary, nil, "web", "default"))
+	assert.Equal(t, want, StackID(primary, primary, []string{"/opt/apps"}, "web", "default"))
+	assert.Equal(t, want, StackID(primary, primary, []string{"/opt/stacks"}, "web", "default"))
+	assert.Equal(t, want, StackID(primary, primary, []string{"/opt/stacks", "/mnt/stacks"}, "web", "default"))
+}
+
+// Two EXTRA roots colliding with each other are both suffixed; neither is
+// privileged, so both must move off the bare basename to stay distinct.
+func TestStackID_CollidingExtraRootsGetDistinctPrefixes(t *testing.T) {
+	const primary = "/srv/apps"
+	extras := []string{"/a/stacks", "/b/stacks"}
+
+	idA := StackID(extras[0], primary, extras, "my-stack", "default")
+	idB := StackID(extras[1], primary, extras, "my-stack", "default")
 
 	assert.NotEqual(t, idA, idB)
 	assert.Regexp(t, `^stacks\.[0-9a-f]{8}~my-stack:default$`, idA)
@@ -439,8 +536,9 @@ func TestStackID_CollidingRootsGetDistinctPrefixes(t *testing.T) {
 // A colliding root's disambiguated ID must not depend on where the root sits in
 // EXTRA_STACKS_DIRS, or editing config order would re-ID stacks.
 func TestStackID_DisambiguatorIsIndependentOfRootOrder(t *testing.T) {
-	forward := StackID("/a/stacks", []string{"/a/stacks", "/b/stacks"}, "my-stack", "default")
-	reversed := StackID("/a/stacks", []string{"/b/stacks", "/a/stacks"}, "my-stack", "default")
+	const primary = "/srv/apps"
+	forward := StackID("/a/stacks", primary, []string{"/a/stacks", "/b/stacks"}, "my-stack", "default")
+	reversed := StackID("/a/stacks", primary, []string{"/b/stacks", "/a/stacks"}, "my-stack", "default")
 
 	assert.Equal(t, forward, reversed)
 }
@@ -448,13 +546,13 @@ func TestStackID_DisambiguatorIsIndependentOfRootOrder(t *testing.T) {
 // Only the colliding basename is disambiguated; a unique root sharing the
 // config with colliding ones keeps its plain prefix.
 func TestStackID_NonCollidingRootUnaffectedByOtherCollisions(t *testing.T) {
-	roots := []string{"/a/stacks", "/b/stacks", "/srv/compose"}
+	const primary = "/srv/apps"
+	extras := []string{"/a/stacks", "/b/stacks", "/srv/compose"}
 
-	assert.Equal(t, "compose~my-stack:default", StackID("/srv/compose", roots, "my-stack", "default"))
+	assert.Equal(t, "compose~my-stack:default", StackID("/srv/compose", primary, extras, "my-stack", "default"))
 }
 
 func TestStackID_NestedPathAndProfile(t *testing.T) {
-	roots := []string{"/srv/stacks"}
-
-	assert.Equal(t, "stacks~group-my-stack:testing", StackID("/srv/stacks", roots, "group-my-stack", "testing"))
+	assert.Equal(t, "stacks~group-my-stack:testing",
+		StackID("/srv/stacks", "/srv/stacks", nil, "group-my-stack", "testing"))
 }

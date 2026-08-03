@@ -595,6 +595,11 @@ func TestStacksHandler_Create_SameBasenameRootsGetDistinctIDs(t *testing.T) {
 	assert.Contains(t, byDir, filepath.Join(rootA, "my-stack"))
 	assert.Contains(t, byDir, filepath.Join(rootB, "my-stack"))
 	assert.NotEqual(t, byDir[filepath.Join(rootA, "my-stack")], byDir[filepath.Join(rootB, "my-stack")])
+
+	// rootA is the PRIMARY root, so it is the extra root that moves. Configuring
+	// a colliding extra root must never re-ID a stack under the primary one.
+	assert.Equal(t, "stacks~my-stack:default", byDir[filepath.Join(rootA, "my-stack")])
+	assert.Regexp(t, `^stacks\.[0-9a-f]{8}~my-stack:default$`, byDir[filepath.Join(rootB, "my-stack")])
 }
 
 // Load-bearing guard: for a single configured root the ID Create mints is
@@ -641,9 +646,9 @@ func TestStacksHandler_Create_SingleRootIDIsUnchanged(t *testing.T) {
 // validator rejects, which would 400 every request for a stack under a
 // same-basename root.
 func TestStackID_DisambiguatedIDPassesRouteValidation(t *testing.T) {
-	roots := []string{"/a/stacks", "/b/stacks"}
+	extras := []string{"/opt/stacks"}
 
-	id := services.StackID(roots[0], roots, "my-stack", "default")
+	id := services.StackID(extras[0], "/srv/stacks", extras, "my-stack", "default")
 
 	require.NotEqual(t, "stacks~my-stack:default", id, "guard is only meaningful for a disambiguated ID")
 	assert.True(t, middleware.ValidateStackID(id), "disambiguated stack ID %q is rejected by ValidateStackID", id)
