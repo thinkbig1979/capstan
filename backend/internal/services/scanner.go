@@ -211,27 +211,39 @@ func (s *ScannerService) buildDirectoryRecord(path string, rootDir string) direc
 	}
 }
 
-// RegisterDirectory upserts the directories row for path without scanning it
-// for compose files or touching the stacks table. It exists so a caller that
+// RegisterDirectory ensures a directories row exists for path without scanning
+// it for compose files or touching the stacks table. It exists so a caller that
 // is about to insert a stacks row referencing this path (stacks.directory has
 // an FK to directories.path, ON DELETE CASCADE — see migrations.go) can
 // satisfy that FK first, without paying for a full ScanDirectoryWithRoot pass
 // (agent-os-jcu: POST /api/v1/stacks was inserting the stack row for a
 // brand-new directory before any row for that directory existed, which
 // 500'd under pool-wide foreign_keys enforcement).
-func (s *ScannerService) RegisterDirectory(path string, rootDir string) error {
+//
+// created reports whether this call inserted the row, so the caller can undo
+// its own registration via UnregisterDirectory without touching a row that was
+// already there. That distinction matters because UnregisterDirectory cascades:
+// see its doc comment.
+func (s *ScannerService) RegisterDirectory(path string, rootDir string) (created bool, err error) {
 	if _, err := os.ReadDir(path); err != nil {
-		return err
+		return false, err
 	}
 	rec := s.buildDirectoryRecord(path, rootDir)
-	return s.db.UpsertDirectory(rec.directory)
+	return s.db.InsertDirectoryIfAbsent(rec.directory)
 }
 
 // UnregisterDirectory removes the directories row for path. It is the
-// rollback counterpart to RegisterDirectory: if a caller registers the
-// directory to satisfy the stacks FK and then fails to insert the stack row,
-// this undoes the registration so a partial Create does not leave a
-// directory row with no stack behind it.
+// rollback counterpart to RegisterDirectory in ONE case only: where that call
+// reported created == true. If a caller registers the directory to satisfy the
+// stacks FK, inserts it itself, and then fails to insert the stack row, this
+// undoes the registration so a partial Create does not leave a directory row
+// with no stack behind it.
+//
+// It is NOT a general undo, and calling it for a row this caller did not insert
+// is a data-loss bug. stacks.directory has ON DELETE CASCADE onto
+// directories.path, so removing the row also removes EVERY stacks row whose
+// directory equals path — and one directory legitimately holds several stacks,
+// one per compose file (agent-os-w8o).
 func (s *ScannerService) UnregisterDirectory(path string) error {
 	return s.db.DeleteDirectory(path)
 }

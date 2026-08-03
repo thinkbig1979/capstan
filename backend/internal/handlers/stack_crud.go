@@ -190,7 +190,8 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	// PARENT roots, so this is the common case, not an edge case), so no
 	// directories row exists for it yet. Register it before UpsertStack or every
 	// such Create 500s with a FK violation (agent-os-jcu).
-	if err := h.scanner.RegisterDirectory(stackDir, targetDir); err != nil {
+	registeredDir, err := h.scanner.RegisterDirectory(stackDir, targetDir)
+	if err != nil {
 		os.RemoveAll(stackDir)
 		c.JSON(http.StatusInternalServerError, models.NewAppError(
 			http.StatusInternalServerError,
@@ -202,10 +203,32 @@ func (h *StacksHandler) Create(c *gin.Context) {
 
 	if err := h.db.UpsertStack(stack); err != nil {
 		// Roll back the directory registration too, so a failed create never
-		// leaves a directories row with no stack behind it.
-		if unregErr := h.scanner.UnregisterDirectory(stackDir); unregErr != nil {
-			slog.Warn("failed to roll back directory registration after UpsertStack failure",
-				"directory", stackDir, "error", unregErr)
+		// leaves a directories row with no stack behind it — but ONLY when this
+		// request is the one that inserted that row.
+		//
+		// UnregisterDirectory cascades: stacks.directory is an FK onto
+		// directories.path with ON DELETE CASCADE (migrations.go), so removing
+		// the row removes every stacks row sharing that exact directory, and one
+		// directory legitimately holds several stacks (one per compose file).
+		// The os.Stat guard above does not protect us here — it is a filesystem
+		// check, and a directories row can outlive its directory: Delete removes
+		// the directory from disk and its own stacks row but never unregisters
+		// the directory, so a re-Create of that path sails past the 409 with
+		// siblings still registered underneath.
+		//
+		// registeredDir comes from the INSERT's own RowsAffected rather than a
+		// read-before-write, so a transient DB error cannot masquerade as
+		// "absent" and re-arm the cascade.
+		//
+		// This closes the stale-row case only. Create takes no lock, so two
+		// concurrent Creates of the same fresh name can both see the row as
+		// absent and the loser will still cascade; fixing that needs a lock
+		// Create does not currently have.
+		if registeredDir {
+			if unregErr := h.scanner.UnregisterDirectory(stackDir); unregErr != nil {
+				slog.Warn("failed to roll back directory registration after UpsertStack failure",
+					"directory", stackDir, "error", unregErr)
+			}
 		}
 		os.RemoveAll(stackDir)
 		c.JSON(http.StatusInternalServerError, models.NewAppError(

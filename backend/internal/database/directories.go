@@ -30,6 +30,36 @@ func (d *DB) UpsertDirectory(dir models.Directory) error {
 	return err
 }
 
+// InsertDirectoryIfAbsent inserts the directories row for dir and reports
+// whether THIS call created it. It exists so a caller that registers a
+// directory only to satisfy the stacks FK can tell its own row apart from one
+// that was already there, and roll back only the former.
+//
+// The discriminator has to come from the write itself. UpsertDirectory's
+// ON CONFLICT DO UPDATE reports nothing about insert-vs-update, and answering
+// the question with a GetDirectory read beforehand is unsafe: any transient
+// error on that read looks like "absent", which would tell the caller it owns a
+// row it does not own. ON CONFLICT DO NOTHING plus RowsAffected cannot lie that
+// way — a failed statement returns an error instead of a false negative.
+//
+// Like UpsertDirectory this never touches the credential columns. Unlike it,
+// it never refreshes an existing row's scan metadata either; callers that need
+// that call ScanDirectoryWithRoot, which upserts on the success path anyway.
+func (d *DB) InsertDirectoryIfAbsent(dir models.Directory) (bool, error) {
+	query := `INSERT INTO directories (path, name, root_dir, is_git_repo, git_remote, git_branch, scanned_at)
+	          VALUES (?, ?, ?, ?, ?, ?, ?)
+	          ON CONFLICT(path) DO NOTHING`
+	res, err := d.db.Exec(query, dir.Path, dir.Name, dir.RootDir, dir.IsGitRepo, dir.GitRemote, dir.GitBranch, dir.ScannedAt)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 // ListDirectories never returns a usable token: git_https_token is scanned
 // straight from ciphertext (it is never decrypted here) and only tested for
 // emptiness before being blanked into HasHTTPSToken. That test is valid
