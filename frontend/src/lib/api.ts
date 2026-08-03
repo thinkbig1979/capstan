@@ -98,7 +98,16 @@ apiClient.interceptors.response.use(
         logout()
       }
     }
-    const safeError = error.response?.data || { error: 'Unknown error', code: 'UNKNOWN' }
+    // The interceptor used to reject with the bare response body, which has
+    // no `status` field — every status-specific branch in classifyError()
+    // was dead code (agent-os-yj0). Inject the status onto a fresh object
+    // (never mutate error.response.data) so classifyError can read it.
+    // When there's no response at all (network/timeout failure), preserve
+    // axios's own `code`/`message` instead of discarding them — they're the
+    // only signal classifyError has for the network/timeout branches.
+    const safeError = error.response
+      ? { ...error.response.data, status: error.response.status }
+      : { error: 'Unknown error', code: error.code || 'UNKNOWN', message: error.message }
     return Promise.reject(safeError)
   },
 )

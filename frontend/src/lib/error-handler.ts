@@ -33,12 +33,16 @@ export function classifyError(error: unknown): AppError {
     }
   }
 
-  const err = error as { 
-    response?: { status?: number; data?: { error?: string; message?: string; details?: Record<string, unknown> } }; 
-    code?: string; 
-    message?: string 
+  const err = error as {
+    status?: number;
+    response?: { status?: number; data?: { error?: string; message?: string; details?: Record<string, unknown> } };
+    code?: string;
+    message?: string
   }
-  const status = err.response?.status
+  // The interceptor (api.ts) rejects with a flat object carrying `status` at
+  // the top level, not nested under `.response` (agent-os-yj0). Read both so
+  // existing test fixtures built as `{response:{status,data}}` still work.
+  const status = err.status ?? err.response?.status
   const message = err.response?.data?.error || err.response?.data?.message || err.message || 'An error occurred'
   const details = err.response?.data?.details
 
