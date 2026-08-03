@@ -31,10 +31,23 @@ type BackupSchedulerService struct {
 	db     *database.DB
 	logger *slog.Logger
 
-	mu           sync.Mutex
-	ticker       *time.Ticker
-	done         chan struct{}
-	running      bool // single-flight guard: true while a cycle is executing
+	mu      sync.Mutex
+	ticker  *time.Ticker
+	done    chan struct{}
+	running bool // single-flight guard: true while a cycle is executing
+	// stopped is set under mu by Stop() before it ever calls s.wg.Wait(), and
+	// checked under the same mu by the tick handler before it calls
+	// s.wg.Add(1). Without this, Add (called from the ticker goroutine,
+	// outside of any lock Stop() also takes before its own Wait) is
+	// unsynchronized with Stop's Wait from the race detector's point of view:
+	// sync.WaitGroup deliberately instruments Add's first-increment and
+	// Wait's first-waiter transitions as a modelled read/write on the same
+	// location specifically to catch "Add concurrent with Wait" (see
+	// sync/waitgroup.go), and that is exactly what could happen here — a tick
+	// landing while Stop() is unwinding. Routing both Add and the stopped
+	// check through mu gives them the real happens-before edge that was
+	// missing (agent-os-o26).
+	stopped      bool
 	wg           sync.WaitGroup
 	parentCtx    context.Context
 	parentCancel context.CancelFunc
@@ -80,6 +93,7 @@ func (s *BackupSchedulerService) Start(interval time.Duration) {
 
 	s.ticker = time.NewTicker(interval)
 	s.done = make(chan struct{})
+	s.stopped = false
 
 	// Capture locals so the goroutine does not race with Stop() zeroing struct fields.
 	ticker := s.ticker
@@ -92,15 +106,30 @@ func (s *BackupSchedulerService) Start(interval time.Duration) {
 			select {
 			case <-ticker.C:
 				s.mu.Lock()
+				if s.stopped {
+					// Stop() has already committed to shutting down (and is
+					// about to, or already did, call s.wg.Wait()). Starting a
+					// new cycle now would call s.wg.Add outside of Stop's
+					// knowledge, racing Wait — see the stopped field's doc
+					// comment. Skip the tick instead; the <-done case below
+					// will fire on the next loop iteration.
+					s.mu.Unlock()
+					continue
+				}
 				if s.running {
 					s.mu.Unlock()
 					s.logger.Warn("Backup cycle still running; skipping tick")
 					continue
 				}
 				s.running = true
+				// Add while still holding mu, not after releasing it: Stop()
+				// also takes mu (to set stopped) before it ever calls
+				// s.wg.Wait(), so this ordering gives Add and Wait a real
+				// happens-before edge through the mutex instead of racing
+				// (agent-os-o26).
+				s.wg.Add(1)
 				s.mu.Unlock()
 
-				s.wg.Add(1)
 				go func() {
 					defer s.wg.Done()
 					defer func() {
@@ -122,6 +151,13 @@ func (s *BackupSchedulerService) Start(interval time.Duration) {
 // to finish. Mirrors SchedulerService.Stop exactly.
 func (s *BackupSchedulerService) Stop() {
 	s.mu.Lock()
+
+	// Commit to shutdown before releasing mu (and long before the s.wg.Wait()
+	// call below). Any tick handler that acquires mu after this point sees
+	// stopped and skips s.wg.Add entirely, so Add can never be invoked
+	// concurrently with Wait — see the stopped field's doc comment
+	// (agent-os-o26).
+	s.stopped = true
 
 	if s.ticker != nil {
 		s.ticker.Stop()
