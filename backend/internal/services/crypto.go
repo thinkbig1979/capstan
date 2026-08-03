@@ -73,13 +73,61 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// NewTokenEncryptorOrDefault constructs a TokenEncryptor, returning nil (with a
-// warning) if construction fails so the caller degrades gracefully.
-func NewTokenEncryptorOrDefault(storageSecret, jwtSecret string) *TokenEncryptor {
+// Encryptor is the interface satisfied by both *TokenEncryptor and the
+// null-object noEncryptor below. database.DB depends on this shape
+// structurally (it declares its own identical TokenEncryptor interface), so
+// returning it here does not require the database package to import services.
+type Encryptor interface {
+	Encrypt(plaintext string) (string, error)
+	Decrypt(encoded string) (string, error)
+}
+
+// ErrEncryptionUnavailable is returned by noEncryptor's Encrypt/Decrypt (check
+// with errors.Is) when no STORAGE_KEY or JWT_SECRET was configured at
+// startup.
+//
+// Background (agent-os-16m): NewTokenEncryptorOrDefault used to return a nil
+// *TokenEncryptor in this case. A nil concrete pointer assigned to an
+// interface-typed parameter (database.NewWithMigrationsAndEncryptor's
+// `encryptor TokenEncryptor` argument) produces a NON-nil interface value —
+// so every "if d.encryptor != nil" guard downstream (database/settings.go,
+// database/directories.go) evaluated true anyway, and Encrypt/Decrypt then
+// ran on a nil receiver: a panic on the first write of an encryptable setting
+// (e.g. PUT /api/v1/settings/backup with a restic password). noEncryptor is a
+// genuine non-nil value, so those guards now correctly delegate to it instead
+// of being silently bypassed.
+var ErrEncryptionUnavailable = errors.New("no encryption key configured: set STORAGE_KEY or JWT_SECRET")
+
+// noEncryptor is the null-object Encryptor returned when construction fails.
+// It deliberately does NOT silently pass plaintext through: skipping
+// encryption because no key is configured would violate the "never persist
+// secrets in plaintext" invariant (L1), so it fails loudly with
+// ErrEncryptionUnavailable instead, and callers map that to a clear,
+// actionable API error.
+type noEncryptor struct{}
+
+func (noEncryptor) Encrypt(string) (string, error) { return "", ErrEncryptionUnavailable }
+func (noEncryptor) Decrypt(string) (string, error) { return "", ErrEncryptionUnavailable }
+
+// NewTokenEncryptorOrDefault constructs a TokenEncryptor, returning a
+// null-object noEncryptor (with a WARN logged) if construction fails, so the
+// caller degrades gracefully instead of receiving a nil pointer.
+//
+// DECISION (agent-os-16m, recorded here per the tracker's acceptance
+// criteria): a missing encryption key is deliberately NOT made fatal at
+// startup. AUTH_DISABLED=true is a documented no-config mode, and requiring
+// STORAGE_KEY/JWT_SECRET at startup would break that mode outright. The
+// tradeoff this accepts: encryptable settings (restic_password,
+// git_https_token) become unwritable — with a clear, actionable error
+// surfaced at the point of use — until one of those env vars is set. This
+// WARN is the only startup-time signal of that; see ErrEncryptionUnavailable
+// above for where the gap becomes visible later, and cleanly, instead of as
+// a panic.
+func NewTokenEncryptorOrDefault(storageSecret, jwtSecret string) Encryptor {
 	enc, err := NewTokenEncryptor(storageSecret, jwtSecret)
 	if err != nil {
 		slog.Warn("Failed to create token encryptor, tokens will not be encrypted at rest", "error", err)
-		return nil
+		return noEncryptor{}
 	}
 	return enc
 }

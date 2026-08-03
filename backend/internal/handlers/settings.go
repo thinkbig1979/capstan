@@ -601,6 +601,9 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 
 	if req.HTTPSToken != "" {
 		if err := h.db.SetSetting("git_https_token", req.HTTPSToken); err != nil {
+			if respondIfEncryptionUnavailable(c, err) {
+				return
+			}
 			slog.Error("Failed to update git HTTPS token setting", "error", err)
 			c.JSON(http.StatusInternalServerError, models.NewAppError(
 				http.StatusInternalServerError,
