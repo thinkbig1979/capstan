@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -449,6 +450,47 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		}
 	}
 
+	survivors, survErr := h.listSurvivors(*stack)
+	if survErr != nil {
+		renderResult(c, truth.Failed("failed to list stacks registered under stack directory", survErr,
+			truth.KV("id", id),
+			truth.KV("directory", stack.Directory),
+		))
+		return
+	}
+
+	// When stack is the sole one registered under its directory, deleting it
+	// removes the whole directory (removeStackFiles below) rather than just its
+	// own compose/env file. Anything else sitting there — a bind-mounted data
+	// directory, .git, operator notes — goes with it. Refuse and enumerate what
+	// would be destroyed before touching containers or files, unless the caller
+	// has explicitly acknowledged the loss. When a sibling survives, the
+	// per-file removal path never touches anything but this stack's own two
+	// files, so nothing here is ever at risk and no prompt is needed.
+	if len(survivors) == 0 {
+		collateral, colErr := collateralEntries(*stack, absStackDir)
+		if colErr != nil {
+			renderResult(c, truth.Failed("failed to inspect stack directory for non-stack files", colErr,
+				truth.KV("id", id),
+				truth.KV("directory", stack.Directory),
+			))
+			return
+		}
+
+		if len(collateral) > 0 && c.Query("confirmCollateral") != "true" {
+			c.JSON(http.StatusPreconditionRequired, models.NewAppErrorWithDetails(
+				http.StatusPreconditionRequired,
+				"STACK_DELETE_COLLATERAL",
+				"Deleting this stack will also remove other files in its directory; add ?confirmCollateral=true to proceed",
+				map[string]any{
+					"directory":  stack.Directory,
+					"collateral": collateral,
+				},
+			))
+			return
+		}
+	}
+
 	// Bring the stack down (compose down -v) and verify the containers are
 	// actually gone before touching the filesystem or DB — a compose exit code
 	// of 0 does not guarantee the containers stopped (same reasoning as
@@ -475,7 +517,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	// removing the whole directory would destroy every sibling stack's compose
 	// file while their containers keep running: DeleteVerified composes down only
 	// this stack's project, and their stacks rows survive the delete.
-	if rmErr := h.removeStackFiles(*stack, absStackDir); rmErr != nil {
+	if rmErr := h.removeStackFiles(*stack, absStackDir, survivors); rmErr != nil {
 		renderResult(c, truth.Failed("stack compose down succeeded but file removal failed", rmErr,
 			truth.KV("id", id),
 			truth.KV("directory", stack.Directory),
@@ -497,22 +539,17 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	))
 }
 
-// removeStackFiles deletes from disk only what belongs to stack. When no other
-// stack is still registered under its directory the whole directory goes, which
-// is the single-stack case and matches the behaviour before siblings were
-// considered. When siblings remain, only this stack's own compose file (and env
-// file, if no survivor shares it) is removed and the directory stays.
-//
-// absStackDir has already been proven inside a configured stacks root by
-// Delete's path-traversal guard; every per-file path derived here is proven
-// inside absStackDir by the same helper, so a malformed compose_file or env_file
-// value cannot reach outside the stack's own directory.
-func (h *StacksHandler) removeStackFiles(stack models.Stack, absStackDir string) error {
+// listSurvivors returns the other stacks still registered under stack's
+// directory (every row under the same directory except stack.ID itself). Both
+// the collateral check and removeStackFiles need to know whether stack is the
+// sole one registered there, so Delete computes this once and threads it
+// through rather than querying the DB twice.
+func (h *StacksHandler) listSurvivors(stack models.Stack) ([]models.Stack, error) {
 	registered, err := h.db.ListStacksByDirectory(stack.Directory)
 	if err != nil {
 		// Without the sibling list we cannot tell a sole stack from one of
 		// several, and guessing wrong destroys another stack's files. Refuse.
-		return fmt.Errorf("failed to list stacks registered under %s: %w", stack.Directory, err)
+		return nil, fmt.Errorf("failed to list stacks registered under %s: %w", stack.Directory, err)
 	}
 
 	survivors := make([]models.Stack, 0, len(registered))
@@ -521,7 +558,58 @@ func (h *StacksHandler) removeStackFiles(stack models.Stack, absStackDir string)
 			survivors = append(survivors, s)
 		}
 	}
+	return survivors, nil
+}
 
+// collateralEntries lists what a sole-stack delete would destroy beyond the
+// stack's own files: everything in absStackDir other than stack.ComposeFile
+// and stack.EnvFile — bind-mounted data directories, .git, operator notes.
+// It only matters when stack has no surviving sibling (removeStackFiles takes
+// the whole directory in that case); when a sibling remains, removeStackFiles
+// never touches anything but the stack's own two files, so nothing here is
+// ever at risk. Returned names are basenames, not full paths — the caller
+// already has absStackDir / stack.Directory if it needs the rest.
+func collateralEntries(stack models.Stack, absStackDir string) ([]string, error) {
+	entries, err := os.ReadDir(absStackDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read stack directory %s: %w", absStackDir, err)
+	}
+
+	own := map[string]bool{}
+	if stack.ComposeFile != "" {
+		own[stack.ComposeFile] = true
+	}
+	if stack.EnvFile != "" {
+		own[stack.EnvFile] = true
+	}
+
+	var collateral []string
+	for _, e := range entries {
+		if own[e.Name()] {
+			continue
+		}
+		collateral = append(collateral, e.Name())
+	}
+	sort.Strings(collateral)
+	return collateral, nil
+}
+
+// removeStackFiles deletes from disk only what belongs to stack. When no other
+// stack is still registered under its directory the whole directory goes, which
+// is the single-stack case and matches the behaviour before siblings were
+// considered — Delete has already required acknowledgement of any collateral
+// that removal would take with it. When siblings remain, only this stack's own
+// compose file (and env file, if no survivor shares it) is removed and the
+// directory stays.
+//
+// absStackDir has already been proven inside a configured stacks root by
+// Delete's path-traversal guard; every per-file path derived here is proven
+// inside absStackDir by the same helper, so a malformed compose_file or env_file
+// value cannot reach outside the stack's own directory. survivors is the result
+// of listSurvivors, computed once by Delete and threaded through here so the
+// sole-stack-vs-siblings decision is made from the same data as the collateral
+// check.
+func (h *StacksHandler) removeStackFiles(stack models.Stack, absStackDir string, survivors []models.Stack) error {
 	if len(survivors) == 0 {
 		return os.RemoveAll(absStackDir)
 	}
