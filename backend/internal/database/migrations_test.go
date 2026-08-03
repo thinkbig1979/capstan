@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,6 +10,44 @@ import (
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
+
+// assertRebuildForeignKeyIntact is the reusable regression assertion for any
+// migration that rebuilds a table with an incoming foreign key (see the
+// "Table rebuilds in SQLite" comment at the top of migrations.go).
+// foreign_key_check alone is not sufficient -- a dangling reference can pass
+// depending on how SQLite resolves it at check time -- so this also reads
+// childTable's FK text straight out of sqlite_master and asserts it still
+// names parentTable, which is what catches a rebuild that reintroduces
+// migration 9's rename-out pattern and leaves the FK pointing at a
+// transient rename-target name (e.g. "<parent>_old", "<parent>_new") that no
+// longer exists once the migration finishes. Must be called after the
+// migration under test has actually run through RunMigrations -- the FK
+// text is only ever wrong to begin with under real transactional execution
+// (see the same file-header comment), so a hand-assembled probe would not
+// exercise the hazard this guards against.
+func assertRebuildForeignKeyIntact(t *testing.T, db *DB, childTable, parentTable string, forbiddenNames ...string) {
+	t.Helper()
+
+	var childSchemaSQL string
+	require.NoError(t, db.db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, childTable,
+	).Scan(&childSchemaSQL))
+	assert.Contains(t, childSchemaSQL, fmt.Sprintf("REFERENCES %s(", parentTable),
+		fmt.Sprintf("%s's FK must reference the final %q table by name, not a transient rebuild name", childTable, parentTable))
+	for _, forbidden := range forbiddenNames {
+		assert.NotContains(t, childSchemaSQL, forbidden,
+			fmt.Sprintf("the FK must not be left pointing at the transient rebuild name %q", forbidden))
+	}
+
+	fkRows, err := db.db.Query(`PRAGMA foreign_key_check`)
+	require.NoError(t, err)
+	var fkViolations int
+	for fkRows.Next() {
+		fkViolations++
+	}
+	require.NoError(t, fkRows.Close())
+	assert.Equal(t, 0, fkViolations, "the rebuild must leave zero foreign_key_check violations")
+}
 
 // TestMigration_ActionLogDenormalized_PreservesDataVerbatim exercises the
 // real upgrade path for migration v9: it builds the pre-v9 action_log shape
@@ -295,25 +334,11 @@ CREATE TABLE backup_run_items (
 	// Belt and braces on the FK, per review: validity (foreign_key_check) is
 	// not sufficient on its own -- a dangling reference can pass depending on
 	// how SQLite resolves it at check time. Assert the FK's stored TEXT too,
-	// read straight out of sqlite_master, so a future migration that
-	// reintroduces migration 9's rename-out pattern (leaving this pointing at
-	// "backup_runs_v11" or "backup_runs_new") is caught even if
-	// foreign_key_check somehow does not flag it.
-	var childSchemaSQL string
-	require.NoError(t, db.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'backup_run_items'`).Scan(&childSchemaSQL))
-	assert.Contains(t, childSchemaSQL, `REFERENCES backup_runs(id)`,
-		"backup_run_items' FK must reference the final \"backup_runs\" table by name, not a transient rebuild name")
-	assert.NotContains(t, childSchemaSQL, "backup_runs_v11", "the FK must not be left pointing at the dropped detach-table name")
-	assert.NotContains(t, childSchemaSQL, "backup_runs_new", "the FK must not be left pointing at the transient rebuild name")
-
-	fkRows, err := db.db.Query(`PRAGMA foreign_key_check`)
-	require.NoError(t, err)
-	var fkViolations int
-	for fkRows.Next() {
-		fkViolations++
-	}
-	require.NoError(t, fkRows.Close())
-	assert.Equal(t, 0, fkViolations, "the rebuild must leave zero foreign_key_check violations")
+	// so a future migration that reintroduces migration 9's rename-out
+	// pattern (leaving this pointing at "backup_runs_v11" or
+	// "backup_runs_new") is caught even if foreign_key_check somehow does not
+	// flag it.
+	assertRebuildForeignKeyIntact(t, db, "backup_run_items", "backup_runs", "backup_runs_v11", "backup_runs_new")
 
 	// ON DELETE CASCADE must still fire for a row that was carried over from
 	// the OLD table by the migration itself, not only for a fresh one -- the
