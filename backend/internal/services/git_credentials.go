@@ -1,6 +1,8 @@
 package services
 
 import (
+	"database/sql"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -49,14 +51,40 @@ const defaultGitHTTPSUser = "oauth2"
 //  3. directory authType "" or "inherit" (or no directory row at all) — the
 //     value stored (encrypted) in global settings, then GIT_HTTPS_TOKEN.
 //
+// A directory row that exists but cannot be READ is none of those three: it
+// returns no credential at all rather than falling through (agent-os-2au). See
+// the comment on the error branch below.
+//
 // It returns an empty token when none is configured, in which case git runs
 // exactly as before.
 func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 	if s.db != nil {
-		// A lookup failure (no row for dirPath, or a decrypt failure from a
-		// wrong STORAGE_KEY) is treated as "no directory-specific credential"
-		// and falls through to the global resolution below.
-		if cred, err := s.db.GetDirectoryCredentials(dirPath); err == nil {
+		cred, err := s.db.GetDirectoryCredentials(dirPath)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// No row for dirPath: this directory was never configured with a
+			// credential of its own, so inheriting the global one below is the
+			// intended behaviour.
+		case err != nil:
+			// The row exists but is unreadable — a decrypt failure from a rotated
+			// STORAGE_KEY, or the database itself failing. Falling through here
+			// would not mean "no credential", it would mean authenticating this
+			// directory's remote with a DIFFERENT credential, silently: the exact
+			// failure mode this function exists to prevent. It also discards
+			// cred.GitAuthType, so an "ssh" directory would receive an HTTPS token
+			// in violation of case 2 above.
+			//
+			// No error is propagated: httpsCredentials feeds gitCmd, which every
+			// git invocation goes through, including purely local ones like
+			// `git log` and `git diff` that never contact a remote. gitCmd attaches
+			// a credential helper only for a non-empty token, so those keep working
+			// and remote operations fail with git's own auth error instead.
+			//
+			// As with the warning below, the log line carries only the directory
+			// path — never a token value, and never any other directory's state.
+			slog.Error("cannot read the stored git credential for this directory; not falling back to a different (global) credential", "path", dirPath, "error", err)
+			return "", ""
+		default:
 			switch strings.ToLower(cred.GitAuthType) {
 			case "https":
 				user, token = cred.GitHTTPSUser, cred.GitHTTPSToken
