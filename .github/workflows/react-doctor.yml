@@ -75,7 +75,7 @@ jobs:
         # the baseline the next review should compare against.
         with:
           directory: frontend        # The React app lives here, not at the repo root.
-          version: "0.9.3"           # Pinned so this action, frontend/package.json, and the root doctor script can't drift to different react-doctor versions independently.
+          version: "0.9.1"           # Pinned so this action, frontend/package.json, and the root doctor script can't drift to different react-doctor versions independently. Held at 0.9.1 rather than the newer 0.9.3 (agent-os-uw1, 2026-08-03): frontend/pnpm-workspace.yaml's minimumReleaseAge (10080min/7d) rejects 0.9.3 and its just-published transitive deps until they age past the floor (~2026-08-08); 0.9.1 is the version the policy already allows and the one actually installed. Follow-up filed to bump all four references once 0.9.3 clears that floor.
         #   blocking: error          # Gate level: "none" (advisory, the default) | "warning" | "error"
         #   scope: full              # On PRs, scan the whole project instead of just changed files
         #   comment: false           # Disable the sticky PR summary comment
