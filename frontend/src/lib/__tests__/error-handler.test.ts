@@ -116,6 +116,24 @@ describe('classifyError', () => {
     expect(result.retryable).toBe(true)
   })
 
+  it('classifies 409 as a distinct non-retryable conflict, not Contact Support', () => {
+    // Backend AppError shape (models/errors.go) is {code, message}, not {error} —
+    // no "error" key, so classifyError's data.error||data.message falls through
+    // to the human-readable data.message here, same as a real 409 response.
+    const result = classifyError({
+      response: {
+        status: 409,
+        data: { code: 'DUPLICATE_STACK', message: "Stack 'myapp' is already being created or modified by another operation" },
+      },
+      message: "Stack 'myapp' is already being created or modified by another operation",
+    })
+    expect(result.type).not.toBe('unknown')
+    expect(result.action).not.toBe('Contact Support')
+    expect(result.retryable).toBe(false)
+    expect(result.status).toBe(409)
+    expect(result.message).toBe("Stack 'myapp' is already being created or modified by another operation")
+  })
+
   it('extracts context from 404 details', () => {
     const result = classifyError({
       response: {

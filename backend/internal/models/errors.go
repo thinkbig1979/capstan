@@ -19,6 +19,7 @@ const (
 	ErrSetupAlreadyDone      = "SETUP_ALREADY_DONE"
 	ErrRateLimited           = "RATE_LIMITED"
 	ErrEncryptionUnavailable = "ENCRYPTION_KEY_MISSING"
+	ErrOperationInProgress   = "OPERATION_IN_PROGRESS"
 )
 
 type AppError struct {
