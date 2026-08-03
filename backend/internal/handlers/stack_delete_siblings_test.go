@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -236,4 +238,58 @@ func TestStacksHandler_Delete_RemovesOwnEnvFile(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(stackDir, "compose.api.yaml"))
 	assert.FileExists(t, filepath.Join(stackDir, "compose.yaml"), "the surviving stack's compose file must stay")
 	assert.FileExists(t, filepath.Join(stackDir, ".env"), "the surviving stack's env file must stay")
+}
+
+// TestStacksHandler_Delete_LastStackRemovesDirectoryRow is the regression guard
+// for agent-os-660: deleting the sole stack under a directory used to remove
+// the directory from disk and its own stacks row, but left the directories row
+// behind — orphaned, since nothing referenced it and the path no longer
+// existed. ListDirectories (the directories API) surfaced that orphan forever,
+// since nothing but a full Rescan (pruneStaleStacks, ScanAll-only) ever cleaned
+// it up.
+func TestStacksHandler_Delete_LastStackRemovesDirectoryRow(t *testing.T) {
+	f := newDeleteSiblingFixture(t)
+	stackDir := filepath.Join(f.tempDir, "solo-stack")
+
+	f.create(t, "solo-stack", "")
+	_, err := f.db.GetDirectory(stackDir)
+	require.NoError(t, err, "setup: Create must register a directories row")
+
+	id := f.stackIDFor(t, stackDir, "compose.yaml")
+	w := f.delete(t, id)
+	require.Equal(t, http.StatusOK, w.Code, "delete must succeed, body=%s", w.Body.String())
+
+	_, err = f.db.GetDirectory(stackDir)
+	assert.Error(t, err, "the directories row for a directory with no remaining stacks must be removed")
+	assert.True(t, errors.Is(err, sql.ErrNoRows), "expected sql.ErrNoRows, got %v", err)
+}
+
+// TestStacksHandler_Delete_SiblingPresent_DirectoryRowSurvives guards the other
+// side of agent-os-660: an unconditional directories-row delete on every Delete
+// would reintroduce the agent-os-w8o cascade from the other end, since
+// stacks.directory has ON DELETE CASCADE onto directories.path — removing the
+// row for a directory that still holds a sibling stack would take that
+// sibling's row down with it. The directories row must survive as long as any
+// stack remains registered under it.
+func TestStacksHandler_Delete_SiblingPresent_DirectoryRowSurvives(t *testing.T) {
+	f := newDeleteSiblingFixture(t)
+	stackDir := filepath.Join(f.tempDir, "my-stack")
+
+	f.create(t, "my-stack", "")
+	f.addSiblingStack(t, stackDir, "compose.api.yaml")
+
+	siblingID := f.stackIDFor(t, stackDir, "compose.api.yaml")
+
+	w := f.delete(t, f.stackIDFor(t, stackDir, "compose.yaml"))
+	require.Equal(t, http.StatusOK, w.Code, "delete must succeed, body=%s", w.Body.String())
+
+	_, err := f.db.GetDirectory(stackDir)
+	assert.NoError(t, err, "the directories row must survive while a sibling stack is still registered under it")
+
+	// The sibling's own row must be untouched too — not just present, but
+	// still resolvable to the same stack ID (a cascade would have taken it
+	// down along with the directories row).
+	sibling, err := f.db.GetStack(siblingID)
+	require.NoError(t, err)
+	assert.Equal(t, siblingID, sibling.ID)
 }

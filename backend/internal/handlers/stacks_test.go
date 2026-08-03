@@ -466,6 +466,11 @@ func (f *fakeStackStore) DeleteStack(string) error {
 	return f.deleteErr
 }
 
+// DeleteDirectoryIfOrphaned is a no-op success: none of fakeStackStore's
+// current callers assert on directory-row cleanup, and the handler treats
+// this call as best-effort regardless.
+func (f *fakeStackStore) DeleteDirectoryIfOrphaned(string) (bool, error) { return false, nil }
+
 // TestStacksHandler_Delete_DBDeleteErrorSurfaced proves the handler surfaces a
 // db.DeleteStack failure that occurs AFTER the stack is brought down and its
 // directory removed, rather than reporting a false success. Docker and the store

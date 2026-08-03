@@ -83,6 +83,35 @@ func (d *DB) DeleteStack(id string) error {
 	return err
 }
 
+// DeleteDirectoryIfOrphaned removes the directories row for path, but only
+// when no stacks row still references it. One directory legitimately holds
+// several stacks (one per compose file), so an unconditional delete here
+// would risk taking a live sibling's row with it via the ON DELETE CASCADE on
+// stacks.directory (migrations.go) — the same data loss agent-os-w8o already
+// guards against, reintroduced from the delete side.
+//
+// The existence check and the delete are one SQL statement, not a
+// count-then-delete pair of Go calls, so there is no window for a concurrent
+// Create or directory scan to insert a sibling stacks row between them:
+// SQLite evaluates the whole statement atomically. A Go-level "count stacks,
+// then delete if zero" was considered and rejected for exactly this reason.
+//
+// deleted reports whether this call removed the row, for callers that want to
+// log or assert on it; a row that survives (because a sibling still
+// references it, or because it was already gone) is not an error either way.
+func (d *DB) DeleteDirectoryIfOrphaned(path string) (deleted bool, err error) {
+	query := `DELETE FROM directories WHERE path = ? AND NOT EXISTS (SELECT 1 FROM stacks WHERE directory = ?)`
+	res, err := d.db.Exec(query, path, path)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 func (d *DB) ClearStacks() error {
 	query := `DELETE FROM stacks`
 	_, err := d.db.Exec(query)

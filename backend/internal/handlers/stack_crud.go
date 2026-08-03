@@ -542,6 +542,23 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// Clean up the directories row too, but only once it is actually orphaned:
+	// this MUST run after DeleteStack above, never before — otherwise the
+	// stack row being deleted is itself still counted as a reference and the
+	// guard can never fire. DeleteDirectoryIfOrphaned re-checks for surviving
+	// siblings atomically in SQL (see its doc comment), so it is safe even
+	// though a concurrent Create could have registered a new sibling here
+	// since removeStackFiles' own survivor check above.
+	//
+	// This is best-effort: the stack itself is already fully deleted (files,
+	// containers, and its own row) by this point, so a failure here must not
+	// fail the request — it would just leave the orphan for the next Rescan
+	// (pruneStaleStacks) to clean up, same as before this fix existed.
+	if _, dirErr := h.db.DeleteDirectoryIfOrphaned(stack.Directory); dirErr != nil {
+		slog.Warn("failed to clean up orphaned directory row after stack delete",
+			"directory", stack.Directory, "error", dirErr)
+	}
+
 	renderResult(c, truth.Success("stack deleted",
 		truth.KV("id", id),
 		truth.KV("output", deleteOutput),

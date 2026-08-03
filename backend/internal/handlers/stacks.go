@@ -43,6 +43,10 @@ type stackStore interface {
 	UpsertStack(stack models.Stack) error
 	UpdateStackStatus(id, status string) error
 	DeleteStack(id string) error
+	// DeleteDirectoryIfOrphaned is how Delete cleans up the directories row
+	// left behind once no stack references it any longer, without risking a
+	// live sibling's row (see the method's doc comment in database/stacks.go).
+	DeleteDirectoryIfOrphaned(path string) (bool, error)
 }
 
 type StacksHandler struct {
