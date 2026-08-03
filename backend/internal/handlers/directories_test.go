@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -120,6 +121,59 @@ func TestDirectoriesHandler_Get_Success(t *testing.T) {
 	assert.Equal(t, dir.Path, response["path"])
 	stacks := response["stacks"].([]interface{})
 	assert.Len(t, stacks, 1)
+}
+
+// TestDirectoriesHandler_UpdateCredentials_Success exercises the full route
+// table via RegisterRoutes (not a hand-picked single route like the tests
+// above) with an absolute, slash-containing directory path — the shape every
+// real deployment uses. Bug agent-os-p7r: the frontend previously tried to
+// PUT /directories/:path/credentials, which 404s for any path with slashes
+// because gin's decoded-path matching can't route a "/" through a single
+// wildcard segment. The fix keeps the path out of the URL entirely: it goes
+// in the JSON body of the existing static PUT /directories/credentials route.
+func TestDirectoriesHandler_UpdateCredentials_Success(t *testing.T) {
+	enc := services.NewTokenEncryptorOrDefault("", "test-secret-key-32-chars-long!!!")
+	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
+	require.NoError(t, err)
+
+	cfg := &config.Config{StacksDir: "/tmp/test"}
+	scanner := services.NewScannerService(cfg, db)
+	handler := NewDirectoriesHandler(scanner, db)
+
+	dir := models.Directory{
+		Path:      "/opt/stacks/app",
+		Name:      "app",
+		IsGitRepo: true,
+		ScannedAt: testTime,
+	}
+	err = db.UpsertDirectory(dir)
+	require.NoError(t, err)
+
+	router := gin.New()
+	group := router.Group("/directories")
+	handler.RegisterRoutes(group)
+
+	body := `{"path":"/opt/stacks/app","authType":"https","httpsUser":"git","httpsToken":"ghp_secret"}`
+	req := httptest.NewRequest(http.MethodPut, "/directories/credentials", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var response map[string]interface{}
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	updatedDir, ok := response["directory"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "https", updatedDir["gitAuthType"])
+	assert.Equal(t, "git", updatedDir["gitHttpsUser"])
+
+	stored, err := db.GetDirectory("/opt/stacks/app")
+	require.NoError(t, err)
+	assert.Equal(t, "https", stored.GitAuthType)
+	assert.True(t, stored.HasHTTPSToken)
 }
 
 func TestDirectoriesHandler_Get_NotFound(t *testing.T) {

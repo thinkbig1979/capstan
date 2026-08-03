@@ -441,8 +441,12 @@ export const directoriesApi = {
     return response.data
   },
 
+  // The path travels in the JSON body, not the URL: the backend registers a
+  // single static PUT /directories/credentials route (see directories.go),
+  // and gin's decoded-path matching can't route an absolute, slash-containing
+  // directory path through one URL segment. See agent-os-p7r.
   updateCredentials: async (directoryPath: string, credentials: { authType?: string; sshKeyPath?: string; httpsUser?: string; httpsToken?: string }) => {
-    const response = await apiClient.put<void>(`/directories/${encodeURIComponent(directoryPath)}/credentials`, credentials)
+    const response = await apiClient.put<void>('/directories/credentials', { path: directoryPath, ...credentials })
     return response.data
   },
 }
