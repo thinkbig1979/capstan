@@ -67,6 +67,44 @@ func (h *StacksHandler) Create(c *gin.Context) {
 
 	stackDir := filepath.Join(targetDir, req.Name)
 
+	// The stack ID is fully determined by targetDir and req.Name, so it is minted
+	// here — before anything touches the filesystem — and used as this create's
+	// operation-lock key.
+	//
+	// The lock MUST be taken before the os.Stat guard below, not after it.
+	// Placing it after (the natural spot, since that is where the duplicate check
+	// lives) still loses the race: both requests clear the stat, the loser then
+	// waits, and resumes holding a stale stat result — overwriting the winner's
+	// compose file while still reporting 201. Holding the lock across the stat
+	// means the loser either fails to acquire (409 here) or re-runs the stat with
+	// the winner's directory already on disk (409 below), the same answer either
+	// way (agent-os-0br).
+	//
+	// Keying on the stack ID rather than on stackDir puts Create in the same
+	// keyspace as Delete and the lifecycle handlers, so a create and a delete of
+	// the same stack interlock, while two creates of DIFFERENT names never
+	// contend. That distinction matters because Acquire is a try-lock that fails
+	// fast rather than queueing: a broader key (the target directory, or a global
+	// one) would turn unrelated concurrent creates into spurious conflicts.
+	// Inherited caveat: two configured roots sharing a basename mint the same ID
+	// (agent-os-elo), so until that is fixed, same-name creates into two such
+	// roots conflict with each other.
+	rootPrefix := filepath.Base(targetDir)
+	stackID := fmt.Sprintf("%s~%s:default", rootPrefix, req.Name)
+
+	// DUPLICATE_STACK rather than a new code: losing this race is the same
+	// user-visible situation as the sequential duplicate below — the name is
+	// taken — and the sequential path already answers 409 DUPLICATE_STACK for it.
+	if _, err := h.opLock.Acquire(stackID); err != nil {
+		c.JSON(http.StatusConflict, models.NewAppError(
+			http.StatusConflict,
+			models.ErrDuplicateStack,
+			fmt.Sprintf("Stack '%s' is already being created or modified by another operation", req.Name),
+		))
+		return
+	}
+	defer h.opLock.Release(stackID)
+
 	if _, err := os.Stat(stackDir); err == nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
@@ -171,8 +209,6 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		envFile = ".env"
 	}
 
-	rootPrefix := filepath.Base(targetDir)
-	stackID := fmt.Sprintf("%s~%s:default", rootPrefix, req.Name)
 	projectName := fmt.Sprintf("%s-default", req.Name)
 
 	stack := models.Stack{
@@ -220,10 +256,11 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		// read-before-write, so a transient DB error cannot masquerade as
 		// "absent" and re-arm the cascade.
 		//
-		// This closes the stale-row case only. Create takes no lock, so two
-		// concurrent Creates of the same fresh name can both see the row as
-		// absent and the loser will still cascade; fixing that needs a lock
-		// Create does not currently have.
+		// The in-process concurrent case is now covered too: Create holds the
+		// operation lock for this stack ID from before the os.Stat guard through
+		// this rollback, so a second Create for the same name cannot be inside
+		// this block at the same time (agent-os-0br). The lock is per-process, so
+		// an external writer or a second replica still can be.
 		if registeredDir {
 			if unregErr := h.scanner.UnregisterDirectory(stackDir); unregErr != nil {
 				slog.Warn("failed to roll back directory registration after UpsertStack failure",
