@@ -67,6 +67,36 @@ describe('classifyError', () => {
     expect(result.message).toBe('Invalid password')
   })
 
+  // classifyError reads every other field from BOTH the flat interceptor shape
+  // and the nested {response:{status,data}} shape (see its `status`/`message`/
+  // `details` reads). The backend code must be read the same way, or the same
+  // 401 classifies two different ways depending on which shape it arrives in.
+  it('surfaces the backend message for a rejected-credential 401 in the nested response shape', () => {
+    const result = classifyError({
+      response: {
+        status: 401,
+        data: { code: 'UNAUTHORIZED', message: 'Current password is incorrect' },
+      },
+      message: 'Request failed with status code 401',
+    })
+    expect(result.message).toBe('Current password is incorrect')
+    expect(result.action).not.toBe('Log In')
+  })
+
+  it('reads the backend code ahead of axios own top-level code on a 401', () => {
+    // A raw AxiosError for a 4xx carries code 'ERR_BAD_REQUEST' at the top
+    // level (axios settle.js:21 -> AxiosError.js:182), which sits in the same
+    // field the backend's code would occupy in the flat shape. Reading the
+    // nested body first keeps it from masking a genuine session expiry.
+    const result = classifyError({
+      code: 'ERR_BAD_REQUEST',
+      response: { status: 401, data: { code: 'SESSION_EXPIRED', message: 'Session expired' } },
+      message: 'Request failed with status code 401',
+    })
+    expect(result.message).toBe('Log in again to continue')
+    expect(result.action).toBe('Log In')
+  })
+
   it('keeps the canned log-in-again message for a genuine SESSION_EXPIRED 401', () => {
     const result = classifyError({
       status: 401,

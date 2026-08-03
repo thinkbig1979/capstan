@@ -345,11 +345,14 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		return
 	}
 
+	// Same reasoning as VerifyPassword and settings.ChangePassword below: a
+	// valid session pointing at a user row that no longer exists is session
+	// loss, not a bad credential, and can never resolve.
 	user, err := h.db.GetUserByID(userID.(string))
 	if err != nil || user == nil {
 		c.JSON(http.StatusUnauthorized, models.NewAppError(
 			http.StatusUnauthorized,
-			models.ErrUnauthorized,
+			models.ErrSessionExpired,
 			"User not found",
 		))
 		return

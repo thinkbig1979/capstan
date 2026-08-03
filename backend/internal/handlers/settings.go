@@ -82,7 +82,7 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 	if !exists {
 		c.JSON(http.StatusUnauthorized, models.NewAppError(
 			http.StatusUnauthorized,
-			"UNAUTHORIZED",
+			models.ErrUnauthorized,
 			"Not authenticated",
 		))
 		return
@@ -130,7 +130,7 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, models.NewAppError(
 			http.StatusUnauthorized,
-			"UNAUTHORIZED",
+			models.ErrUnauthorized,
 			"Current password is incorrect",
 		))
 		return

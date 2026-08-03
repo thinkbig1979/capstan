@@ -4,9 +4,14 @@ package models
 // interceptor (frontend/src/lib/api.ts) branches on the difference:
 //
 //   - ErrSessionExpired means "this session cannot be used" — no token, an
-//     unusable token, or a session row that is gone or past its expiry. The
-//     frontend logs the user out and navigates to /login on this code.
-//     Only middleware.AuthMiddleware mints it.
+//     unusable token, a session row that is gone or past its expiry, or a
+//     session whose user row no longer exists. The frontend logs the user out
+//     and navigates to /login on this code. It is minted by
+//     middleware.AuthMiddleware and by the handlers that discover the
+//     session's user is gone (handlers/settings.go, handlers/auth.go).
+//     handlers/ws.go is currently inconsistent with this contract and is
+//     tracked separately as agent-os-2zq; nothing consumes its handshake
+//     body today.
 //   - ErrUnauthorized means "the credential you just supplied is wrong", with
 //     the session itself untouched: a wrong login password, a wrong current
 //     password on change-password, a wrong password at the env-unlock prompt.
