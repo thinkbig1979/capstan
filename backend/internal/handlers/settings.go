@@ -111,16 +111,21 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 
+	// Reaching here means a valid session pointing at a user row that no longer
+	// exists (deleted admin, DB restored from an older snapshot). That session
+	// can never resolve a user, so it is session loss, not a bad credential.
 	user, err := h.db.GetUserByID(userID.(string))
 	if err != nil || user == nil {
 		c.JSON(http.StatusUnauthorized, models.NewAppError(
 			http.StatusUnauthorized,
-			"UNAUTHORIZED",
+			models.ErrSessionExpired,
 			"User not found",
 		))
 		return
 	}
 
+	// The wrong-current-password 401 keeps ErrUnauthorized: the session is
+	// still valid and the user must stay on this page to retype (agent-os-318).
 	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.CurrentPassword))
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, models.NewAppError(

@@ -119,9 +119,12 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 			return
 		}
 
+		// Every 401 below is session loss, so all of them carry
+		// ErrSessionExpired — this guard is the sole source of that code, and
+		// the frontend logs out on it and nothing else. See models/errors.go.
 		token := extractBearerToken(c)
 		if token == "" {
-			c.JSON(401, models.NewAppError(401, models.ErrUnauthorized, "Missing authorization token"))
+			c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Missing authorization token"))
 			c.Abort()
 			return
 		}
@@ -131,7 +134,7 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 			if strings.Contains(err.Error(), "expired") {
 				c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Session expired"))
 			} else {
-				c.JSON(401, models.NewAppError(401, models.ErrUnauthorized, "Invalid authorization token"))
+				c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Invalid authorization token"))
 			}
 			c.Abort()
 			return

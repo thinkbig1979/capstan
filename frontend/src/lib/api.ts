@@ -1,5 +1,6 @@
 import axios, { AxiosError, type AxiosInstance } from 'axios'
 import type { ActionResult } from '@/lib/action-result'
+import { isSessionLoss } from '@/lib/error-handler'
 import type {
   User,
   AuthResponse,
@@ -85,16 +86,23 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ApiError>) => {
     if (error.response?.status === 401 && logout) {
-      const url = error.config?.url
-      // /auth/me is the boot-time session probe; a 401 just means "not
-      // logged in" and is handled by the store, not a session-expiry signal.
-      // /auth/status and /auth/login also routinely 401 without meaning
-      // the user was logged out mid-session.
-      const isAuthEndpoint =
-        url?.includes('/auth/status') ||
-        url?.includes('/auth/login') ||
-        url?.includes('/auth/me')
-      if (!isAuthEndpoint) {
+      // Not every 401 is session loss. A wrong current password on
+      // change-password, or a wrong password at the env-unlock prompt, 401s
+      // with the session still perfectly valid — redirecting on those threw
+      // the user out to /login mid-session (agent-os-318). isSessionLoss()
+      // holds the rule; backend/internal/models/errors.go holds the contract.
+      const code = (error.response.data as ApiError | undefined)?.code
+      // /auth/me is the boot-time session probe and IS behind AuthMiddleware,
+      // so a logged-out boot returns a genuine SESSION_EXPIRED. Redirecting on
+      // it would reload /login forever: App.tsx probes on every boot and the
+      // logout callback it registers navigates with window.location.href. The
+      // auth store handles this 401 itself.
+      //
+      // /auth/status and /auth/login need no exemption: both are in
+      // middleware.PublicPaths, so the session guard never runs on them and
+      // their 401s are handler-minted with UNAUTHORIZED.
+      const isBootProbe = error.config?.url?.includes('/auth/me')
+      if (isSessionLoss(code) && !isBootProbe) {
         logout()
       }
     }

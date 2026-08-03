@@ -40,6 +40,43 @@ describe('classifyError', () => {
     expect(result.status).toBe(401)
   })
 
+  // agent-os-318: a 401 is not automatically "log in again". The backend sends
+  // UNAUTHORIZED when the credential the user just typed was rejected while the
+  // session is still valid, and SESSION_EXPIRED when the session itself is gone.
+  // Discarding the backend's message left both fix sites (SettingsPage.tsx:183,
+  // EnvUnlockDialog.tsx:42) telling a logged-in user to log in again.
+  it('surfaces the backend message for a rejected-credential 401, not the canned log-in-again string', () => {
+    // Verified on the wire: PUT /auth/password with a wrong current password.
+    const result = classifyError({
+      status: 401,
+      code: 'UNAUTHORIZED',
+      message: 'Current password is incorrect',
+    })
+    expect(result.message).toBe('Current password is incorrect')
+    expect(result.type).toBe('auth')
+    expect(result.action).not.toBe('Log In')
+  })
+
+  it('surfaces the backend message for a rejected env-unlock password', () => {
+    // Verified on the wire: POST /auth/verify-password with a wrong password.
+    const result = classifyError({
+      status: 401,
+      code: 'UNAUTHORIZED',
+      message: 'Invalid password',
+    })
+    expect(result.message).toBe('Invalid password')
+  })
+
+  it('keeps the canned log-in-again message for a genuine SESSION_EXPIRED 401', () => {
+    const result = classifyError({
+      status: 401,
+      code: 'SESSION_EXPIRED',
+      message: 'Session expired',
+    })
+    expect(result.message).toBe('Log in again to continue')
+    expect(result.action).toBe('Log In')
+  })
+
   it('classifies 403 as auth', () => {
     const result = classifyError({
       response: { status: 403, data: { error: 'Forbidden' } },

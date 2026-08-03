@@ -24,6 +24,27 @@ export interface AppError {
   action?: string
 }
 
+/**
+ * Which 401s mean "your session is gone" (agent-os-318).
+ *
+ * The backend splits the two meanings of 401 by code — see
+ * backend/internal/models/errors.go, which carries the contract.
+ * SESSION_EXPIRED is minted only by the session guard; UNAUTHORIZED means a
+ * credential the user just supplied was rejected while the session stayed
+ * valid. A 401 with no code did not come from this backend at all (every 401
+ * it mints carries one), so it is a proxy or gateway rejecting us — also
+ * session loss. Fail closed there: the alternative silently stops logging
+ * anyone out behind an auth proxy.
+ *
+ * Both the api.ts interceptor ("log out?") and the 401 branch below ("say log
+ * in again, or show what the backend said?") ask this same question, and a
+ * disagreement between them IS the bug: the user was redirected to /login for
+ * mistyping their own password.
+ */
+export function isSessionLoss(code: string | null | undefined): boolean {
+  return code === 'SESSION_EXPIRED' || code == null
+}
+
 export function classifyError(error: unknown): AppError {
   if (!error) {
     return {
@@ -73,13 +94,21 @@ export function classifyError(error: unknown): AppError {
   }
 
   if (status === 401) {
+    // `err.code` is the backend's code here, not an axios one: status === 401
+    // implies a response existed, so the axios-code branches above (which only
+    // fire when there is no response) have already been passed.
+    const sessionLoss = isSessionLoss(err.code)
     return {
-      message: 'Log in again to continue',
+      // Telling a user with a valid session to "log in again" because they
+      // mistyped their current password is the visible half of agent-os-318.
+      message: sessionLoss ? 'Log in again to continue' : message,
       type: 'auth',
       status,
       retryable: false,
       originalError: error,
-      action: 'Log In',
+      // The session is fine on the non-expiry path — the recovery is to retype
+      // the credential, not to log in.
+      action: sessionLoss ? 'Log In' : 'Fix',
     }
   }
 

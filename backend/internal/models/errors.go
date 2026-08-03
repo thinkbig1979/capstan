@@ -1,5 +1,19 @@
 package models
 
+// The two 401 codes are not interchangeable, and the frontend response
+// interceptor (frontend/src/lib/api.ts) branches on the difference:
+//
+//   - ErrSessionExpired means "this session cannot be used" — no token, an
+//     unusable token, or a session row that is gone or past its expiry. The
+//     frontend logs the user out and navigates to /login on this code.
+//     Only middleware.AuthMiddleware mints it.
+//   - ErrUnauthorized means "the credential you just supplied is wrong", with
+//     the session itself untouched: a wrong login password, a wrong current
+//     password on change-password, a wrong password at the env-unlock prompt.
+//     The frontend shows the message and leaves the user where they are.
+//
+// Reaching for ErrSessionExpired on a credential path recreates agent-os-318,
+// where mistyping your own password bounced you to /login mid-session.
 const (
 	ErrUnauthorized          = "UNAUTHORIZED"
 	ErrForbidden             = "FORBIDDEN"
