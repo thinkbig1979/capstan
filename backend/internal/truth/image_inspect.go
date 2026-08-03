@@ -11,9 +11,9 @@ import (
 )
 
 // ImageInspector is the subset of the Docker client required by the image
-// inspection helpers. It extends ContainerInspector with the ability to
-// inspect image metadata so both the update and lifecycle domains can share
-// identical image-identity and image-advancement checks.
+// inspection helpers, covering both container inspection and image metadata
+// so both the update and lifecycle domains can share identical
+// image-identity and image-advancement checks.
 //
 // ImageInspect's variadic opts parameter exists only so *client.Client
 // satisfies this interface directly with its real method signature (no
