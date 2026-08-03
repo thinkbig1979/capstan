@@ -177,5 +177,18 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 		}
 
 		slog.Info("Streaming operation completed", "stack_id", stackID, "action", action)
+
+		// Release the stack lock now, before the deferred conn.Conn.Close()
+		// (registered above) unwinds. Defers run LIFO, so without this
+		// explicit call Release would be the LAST thing to run on return —
+		// after the socket is already closed — which lets a client that
+		// observed the close redial the same stack and hit a spurious 409
+		// ("operation already in progress") because this goroutine had not
+		// finished unwinding yet (agent-os-o26). Release is idempotent
+		// (operation_lock.go:59-64 no-ops once the slot is already free), so
+		// the deferred Release below still runs harmlessly; it remains the
+		// correctness net for the early returns between Acquire and here,
+		// and for panics.
+		h.opLock.Release(stackID)
 	}
 }

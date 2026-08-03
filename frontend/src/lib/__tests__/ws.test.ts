@@ -83,6 +83,15 @@ describe('WSClient reconnect behavior', () => {
     MockWebSocket.instance!.onclose!()
 
     expect(onReconnecting).toHaveBeenCalledWith(1)
+
+    // scheduleReconnect just armed a real (non-fake-timer) setTimeout since
+    // this test does not use vi.useFakeTimers(). Without this close(), that
+    // timer survives the test, fires later against the real WebSocket that
+    // afterEach restores, and reconnects for real — surfacing as an
+    // "Unhandled Rejection: invalid onError method" from undici/jsdom well
+    // after this test reported passing (agent-os-o26). close() cancels the
+    // pending reconnectTimeout and detaches the recovery listeners.
+    client.close()
   })
 })
 
@@ -108,6 +117,14 @@ describe('WSClient reconnect jitter', () => {
         expect(delay).toBeLessThanOrEqual(base)
         vi.advanceTimersByTime(delay)
       }
+
+      // The last advanceTimersByTime above already fired one more reconnect,
+      // leaving client.ws set to a fresh (never-closed) MockWebSocket and the
+      // window/document recovery listeners still attached from connect()'s
+      // attachRecoveryListeners(). Without close() those listeners leak past
+      // this test (agent-os-o26) — attachRecoveryListeners()/detachRecoveryListeners()
+      // are the only place they are ever removed.
+      client.close()
     } finally {
       vi.useRealTimers()
     }
