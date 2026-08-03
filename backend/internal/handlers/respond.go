@@ -62,6 +62,26 @@ func respondDockerErr(c *gin.Context, err error, status int, code, message strin
 	handleError(c, models.NewAppError(status, code, message))
 }
 
+// EncryptionUnavailableMessage is the operator-facing text for a missing
+// at-rest encryption key (agent-os-16m). Startup logs a WARN and continues —
+// AUTH_DISABLED is a deliberately usable no-config mode — so the first
+// attempt to store an encryptable secret (restic_password, git_https_token)
+// is where the gap becomes visible.
+const EncryptionUnavailableMessage = "Cannot store this value: no encryption key is configured. Set STORAGE_KEY (or JWT_SECRET) in the environment and restart Capstan, then try again."
+
+// respondIfEncryptionUnavailable writes a clear 422 ENCRYPTION_KEY_MISSING
+// response and returns true when err is (or wraps)
+// services.ErrEncryptionUnavailable. Callers must return immediately when
+// this returns true. This is the settings-write analogue of
+// respondDockerErr/renderDockerResult above.
+func respondIfEncryptionUnavailable(c *gin.Context, err error) bool {
+	if !errors.Is(err, services.ErrEncryptionUnavailable) {
+		return false
+	}
+	handleError(c, models.NewAppError(http.StatusUnprocessableEntity, models.ErrEncryptionUnavailable, EncryptionUnavailableMessage))
+	return true
+}
+
 // userIDFrom extracts the authenticated userID from the gin context,
 // defaulting to "anonymous" when unset.
 func userIDFrom(c *gin.Context) string {

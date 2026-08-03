@@ -374,6 +374,52 @@ func TestUpdateSettings_EmptyPasswordIsNoOp(t *testing.T) {
 	assert.Equal(t, "original", gotPwd, "empty password in request must not overwrite existing password")
 }
 
+// TestUpdateSettings_NoEncryptionKey_ReturnsClearErrorNotPanic drives the
+// exact scenario reported in agent-os-16m: AUTH_DISABLED=true with neither
+// STORAGE_KEY nor JWT_SECRET set (services.NewTokenEncryptorOrDefault("", "")
+// mirrors that startup path), then PUT /api/v1/settings/backup with a
+// password. Before the fix this panicked with a nil-pointer dereference
+// inside TokenEncryptor.Encrypt; it must instead come back as a clear,
+// actionable 422 the operator can map to "set STORAGE_KEY" — not a panic and
+// not an opaque 500.
+func TestUpdateSettings_NoEncryptionKey_ReturnsClearErrorNotPanic(t *testing.T) {
+	t.Parallel()
+
+	// No storage secret and no JWT secret: NewTokenEncryptorOrDefault fails to
+	// build a real TokenEncryptor and degrades to its null-object default,
+	// exactly as cmd/server/main.go does at startup when both env vars are
+	// unset.
+	enc := services.NewTokenEncryptorOrDefault("", "")
+	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	req := jsonReq(t, http.MethodPut, "/api/settings/backup", map[string]interface{}{
+		"password": "a-restic-password",
+	})
+	w := httptest.NewRecorder()
+
+	require.NotPanics(t, func() {
+		r.ServeHTTP(w, req)
+	}, "PUT /settings/backup must not panic when no encryption key is configured")
+
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	body := decodeBody(t, w)
+	assert.Equal(t, models.ErrEncryptionUnavailable, body["code"])
+	assert.Contains(t, body["message"], "STORAGE_KEY")
+
+	// The password must never have been persisted at all (GetSetting errors
+	// with "no rows" because SetSetting never got past the encryption
+	// failure to INSERT anything).
+	stored, err := db.GetSetting("restic_password")
+	assert.Error(t, err)
+	assert.Empty(t, stored)
+}
+
 func TestUpdateSettings_ScheduleChangeTriggersStopStart(t *testing.T) {
 	t.Parallel()
 

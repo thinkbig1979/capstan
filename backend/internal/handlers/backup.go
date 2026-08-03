@@ -186,6 +186,9 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 	}
 	if req.Password != nil && *req.Password != "" {
 		if err := db.SetSetting("restic_password", *req.Password); err != nil {
+			if respondIfEncryptionUnavailable(c, err) {
+				return
+			}
 			h.internalError(c, "Failed to save password setting", err)
 			return
 		}

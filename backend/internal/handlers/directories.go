@@ -158,6 +158,9 @@ func (h *DirectoriesHandler) UpdateCredentials(c *gin.Context) {
 	}
 
 	if err := h.db.UpdateDirectoryCredentials(directory.Path, authType, req.SSHKeyPath, req.HTTPSUser, req.HTTPSToken); err != nil {
+		if respondIfEncryptionUnavailable(c, err) {
+			return
+		}
 		slog.Error("Failed to update directory credentials", "path", directory.Path, "error", err)
 		c.JSON(http.StatusInternalServerError, models.NewAppError(
 			http.StatusInternalServerError,
