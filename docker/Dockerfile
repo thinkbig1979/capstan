@@ -177,7 +177,7 @@ EXPOSE 5001
 # every HEAD falls through to the SPA catch-all and returns 200 — the check
 # passed even when GET /health returned 503, making it a bare port check.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:5001/health || exit 1
+    CMD wget --no-verbose --tries=1 -O /dev/null http://localhost:${PORT:-5001}/health || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/app/server"]

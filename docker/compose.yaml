@@ -6,7 +6,7 @@ services:
     container_name: capstan
     restart: unless-stopped
     ports:
-      - "5001:5001"
+      - "${PORT:-5001}:${PORT:-5001}"
     volumes:
       # The Docker socket. Capstan joins its group automatically at runtime,
       # so no host changes are needed. (:ro is not used — it would not block
@@ -22,7 +22,7 @@ services:
       # Setting AUTH_DISABLED=true bypasses authentication (development only)
       - STACKS_DIR=/opt/stacks
       - DATA_DIR=/app/data
-      - PORT=5001
+      - PORT=${PORT:-5001}
       - JWT_SECRET=${JWT_SECRET}
       - STORAGE_KEY=${STORAGE_KEY:-}
       - LOG_LEVEL=info
@@ -44,15 +44,20 @@ services:
         limits:
           cpus: '1.0'
           memory: 2G
+          # Compose spec nests the pids cap under deploy.resources.limits.pids
+          # (key "pids", not "pids_limit") — pre-existing misplacement/typo
+          # (unrelated to agent-os-rjc) that made `docker compose config` fail
+          # schema validation; corrected here only because that command is a
+          # required gate for this task.
+          pids: 100
         reservations:
           cpus: '0.5'
           memory: 512M
-      pids_limit: 100
     healthcheck:
       # Liveness (no Docker call), and a real GET rather than --spider: --spider
       # sends HEAD, which has no route and falls through to the SPA catch-all,
       # so it returned 200 even when GET /health returned 503 (agent-os-69a).
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:5001/health"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 -O /dev/null http://localhost:$${PORT:-5001}/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
