@@ -338,3 +338,123 @@ func TestScannerService_ScanAll_NonDirectoryEntries(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, dirs)
 }
+
+// The scanner is the second stack-ID producer. For a single configured root it
+// must keep minting exactly the ID it always has (agent-os-elo is
+// collision-only), and two roots sharing a basename must not collapse into one
+// row.
+func TestScannerService_ScanAll_SingleRootIDIsUnchanged(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "srv", "stacks")
+	stackDir := filepath.Join(root, "my-stack")
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644))
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	_, err = NewScannerService(&config.Config{StacksDir: root}, db).ScanAll()
+	require.NoError(t, err)
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+	assert.Equal(t, "stacks~my-stack:default", stacks[0].ID)
+}
+
+func TestScannerService_ScanAll_SameBasenameRootsGetDistinctIDs(t *testing.T) {
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a", "stacks")
+	rootB := filepath.Join(base, "b", "stacks")
+	for _, r := range []string{rootA, rootB} {
+		dir := filepath.Join(r, "my-stack")
+		require.NoError(t, os.MkdirAll(dir, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644))
+	}
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	cfg := &config.Config{StacksDir: rootA, ExtraStacksDirs: []string{rootB}}
+	_, err = NewScannerService(cfg, db).ScanAll()
+	require.NoError(t, err)
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 2, "same-basename roots must not collapse into one stacks row")
+
+	byDir := map[string]string{}
+	for _, s := range stacks {
+		byDir[s.Directory] = s.ID
+	}
+	assert.NotEqual(t, byDir[filepath.Join(rootA, "my-stack")], byDir[filepath.Join(rootB, "my-stack")])
+}
+
+// Direct coverage of the shared ID producer. The byte-for-byte cases are the
+// load-bearing ones: agent-os-elo's disambiguator is collision-only, and
+// re-IDing a root that does not collide would strand six unenforced TEXT
+// columns and every bookmarked frontend URL.
+func TestStackID_PrefixIsBasenameWhenNoCollision(t *testing.T) {
+	tests := []struct {
+		name     string
+		root     string
+		allRoots []string
+		want     string
+	}{
+		{
+			name:     "single configured root",
+			root:     "/srv/stacks",
+			allRoots: []string{"/srv/stacks"},
+			want:     "stacks~my-stack:default",
+		},
+		{
+			name:     "several roots, all basenames distinct",
+			root:     "/srv/stacks",
+			allRoots: []string{"/srv/stacks", "/mnt/media", "/opt/apps"},
+			want:     "stacks~my-stack:default",
+		},
+		{
+			name:     "root spelled with a trailing separator still matches itself",
+			root:     "/srv/stacks/",
+			allRoots: []string{"/srv/stacks"},
+			want:     "stacks~my-stack:default",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, StackID(tt.root, tt.allRoots, "my-stack", "default"))
+		})
+	}
+}
+
+func TestStackID_CollidingRootsGetDistinctPrefixes(t *testing.T) {
+	roots := []string{"/a/stacks", "/b/stacks"}
+
+	idA := StackID(roots[0], roots, "my-stack", "default")
+	idB := StackID(roots[1], roots, "my-stack", "default")
+
+	assert.NotEqual(t, idA, idB)
+	assert.Regexp(t, `^stacks\.[0-9a-f]{8}~my-stack:default$`, idA)
+	assert.Regexp(t, `^stacks\.[0-9a-f]{8}~my-stack:default$`, idB)
+}
+
+// A colliding root's disambiguated ID must not depend on where the root sits in
+// EXTRA_STACKS_DIRS, or editing config order would re-ID stacks.
+func TestStackID_DisambiguatorIsIndependentOfRootOrder(t *testing.T) {
+	forward := StackID("/a/stacks", []string{"/a/stacks", "/b/stacks"}, "my-stack", "default")
+	reversed := StackID("/a/stacks", []string{"/b/stacks", "/a/stacks"}, "my-stack", "default")
+
+	assert.Equal(t, forward, reversed)
+}
+
+// Only the colliding basename is disambiguated; a unique root sharing the
+// config with colliding ones keeps its plain prefix.
+func TestStackID_NonCollidingRootUnaffectedByOtherCollisions(t *testing.T) {
+	roots := []string{"/a/stacks", "/b/stacks", "/srv/compose"}
+
+	assert.Equal(t, "compose~my-stack:default", StackID("/srv/compose", roots, "my-stack", "default"))
+}
+
+func TestStackID_NestedPathAndProfile(t *testing.T) {
+	roots := []string{"/srv/stacks"}
+
+	assert.Equal(t, "stacks~group-my-stack:testing", StackID("/srv/stacks", roots, "group-my-stack", "testing"))
+}

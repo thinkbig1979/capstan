@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
@@ -542,4 +543,108 @@ func TestStacksHandler_Delete_VerificationFailureLeavesDirAndDBIntact(t *testing
 	// The handler must have returned before os.RemoveAll and before DeleteStack.
 	assert.DirExists(t, stackDir, "verification failure must leave the stack directory on disk")
 	assert.False(t, store.deleteCalled, "verification failure must NOT reach db.DeleteStack")
+}
+
+// Two configured roots that share a basename must not mint the same stack ID.
+// Before the fix both Creates produced "stacks~my-stack:default" and
+// UpsertStack's INSERT OR REPLACE silently repointed the first row at the
+// second directory, leaving the first stack unreachable by ID (agent-os-elo).
+func TestStacksHandler_Create_SameBasenameRootsGetDistinctIDs(t *testing.T) {
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a", "stacks")
+	rootB := filepath.Join(base, "b", "stacks")
+	require.NoError(t, os.MkdirAll(rootA, 0755))
+	require.NoError(t, os.MkdirAll(rootB, 0755))
+
+	cfg := &config.Config{StacksDir: rootA, ExtraStacksDirs: []string{rootB}}
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	scanner := services.NewScannerService(cfg, db)
+	handler := NewStacksHandler(nil, scanner, services.NewLinterService(), db, cfg, services.NewActionLogger(db), services.NewOperationLock())
+
+	router := gin.New()
+	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	require.NoError(t, db.CreateUser(models.User{
+		ID: "test-user-id", Username: "testuser", CreatedAt: testTime, UpdatedAt: testTime,
+	}))
+
+	create := func(dir, compose string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]interface{}{
+			"name": "my-stack", "directory": dir, "composeContent": compose, "deploy": false,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/stacks", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	wa := create(rootA, "services:\n  a:\n    image: nginx:1.21\n    restart: unless-stopped")
+	require.Equal(t, http.StatusCreated, wa.Code, "create under root A: %s", wa.Body.String())
+	wb := create(rootB, "services:\n  b:\n    image: redis:7\n    restart: unless-stopped")
+	require.Equal(t, http.StatusCreated, wb.Code, "create under root B: %s", wb.Body.String())
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 2, "both stacks must survive; a collision collapses them into one row")
+
+	byDir := map[string]string{}
+	for _, s := range stacks {
+		byDir[s.Directory] = s.ID
+	}
+	assert.Contains(t, byDir, filepath.Join(rootA, "my-stack"))
+	assert.Contains(t, byDir, filepath.Join(rootB, "my-stack"))
+	assert.NotEqual(t, byDir[filepath.Join(rootA, "my-stack")], byDir[filepath.Join(rootB, "my-stack")])
+}
+
+// Load-bearing guard: for a single configured root the ID Create mints is
+// byte-for-byte what it has always been. The agent-os-elo disambiguator is
+// collision-only; silently re-IDing every existing stack would orphan six
+// unenforced TEXT columns plus every bookmarked frontend URL.
+func TestStacksHandler_Create_SingleRootIDIsUnchanged(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "srv", "stacks")
+	require.NoError(t, os.MkdirAll(root, 0755))
+
+	cfg := &config.Config{StacksDir: root}
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	scanner := services.NewScannerService(cfg, db)
+	handler := NewStacksHandler(nil, scanner, services.NewLinterService(), db, cfg, services.NewActionLogger(db), services.NewOperationLock())
+
+	router := gin.New()
+	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	require.NoError(t, db.CreateUser(models.User{
+		ID: "test-user-id", Username: "testuser", CreatedAt: testTime, UpdatedAt: testTime,
+	}))
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"name":           "my-stack",
+		"composeContent": "services:\n  web:\n    image: nginx:1.21\n    restart: unless-stopped",
+		"deploy":         false,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/stacks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, "create: %s", w.Body.String())
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+	assert.Equal(t, "stacks~my-stack:default", stacks[0].ID)
+}
+
+// A disambiguated ID travels in the :id path segment of every stack route, so
+// it has to survive the request validator. stackIDRegex permits "." — this test
+// is what fails if the agent-os-elo joiner is ever changed to a character the
+// validator rejects, which would 400 every request for a stack under a
+// same-basename root.
+func TestStackID_DisambiguatedIDPassesRouteValidation(t *testing.T) {
+	roots := []string{"/a/stacks", "/b/stacks"}
+
+	id := services.StackID(roots[0], roots, "my-stack", "default")
+
+	require.NotEqual(t, "stacks~my-stack:default", id, "guard is only meaningful for a disambiguated ID")
+	assert.True(t, middleware.ValidateStackID(id), "disambiguated stack ID %q is rejected by ValidateStackID", id)
 }

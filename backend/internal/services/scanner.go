@@ -1,6 +1,8 @@
 package services
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,6 +14,73 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
+
+// StackID is the single producer of stack IDs. Both the scanner (discovering a
+// compose file on disk) and POST /api/v1/stacks (creating one) must mint the
+// same ID for the same stack, or a create is immediately shadowed by the next
+// scan. They agreed by coincidence of two independent format strings until
+// agent-os-elo; they agree by construction now.
+//
+// root MUST already be resolved to one of the configured stacks roots. This
+// helper deliberately does NOT work out which root a path belongs to: that
+// resolution is done with an unanchored strings.HasPrefix (scanner.go's
+// effectiveRoot fallback), so /srv/stacks matches paths under /srv/stacks-extra
+// — tracked as agent-os-509. Taking the root as a parameter keeps that defect
+// from flowing through ID minting.
+//
+// pathID is the stack's path relative to root with separators flattened to "-";
+// name is the compose profile ("default" for compose.yaml).
+func StackID(root string, allRoots []string, pathID, name string) string {
+	return fmt.Sprintf("%s~%s:%s", StackIDRootPrefix(root, allRoots), pathID, name)
+}
+
+// StackIDRootPrefix returns the root component of a stack ID.
+//
+// Normally that is just the root's basename, which is what every stack ID in
+// the field already carries. Two configured roots CAN share a basename
+// (/a/stacks and /b/stacks), and then the basename alone collides: UpsertStack
+// is an INSERT OR REPLACE, so the second stack silently repoints the first's
+// row at its own directory and the first becomes unreachable by ID.
+//
+// The disambiguator is therefore applied to colliding roots ONLY, and every
+// other root keeps its prefix byte-for-byte. Re-IDing unconditionally would be
+// far more expensive than it looks: stack IDs are copied into six plain TEXT
+// columns with no foreign key to keep them honest (action_log.stack_id,
+// cached_updates.stack_id, update_history.stack_id, backup_run_items.stack_id,
+// auto_update_policies.target_id, backup_policies.target_id) and into frontend
+// URLs users bookmark. Collision-only touches none of that, and needs no
+// migration.
+//
+// The suffix is a fingerprint of the root's own path rather than its position
+// in the config, so reordering EXTRA_STACKS_DIRS does not re-ID anything. "."
+// joins it because it is already legal in this ID's charset, is safe unescaped
+// in a URL path, and sits before the final "~" that the frontend splits on to
+// recover a display name.
+func StackIDRootPrefix(root string, allRoots []string) string {
+	base := filepath.Base(root)
+	canonical := canonicalRoot(root)
+
+	for _, other := range allRoots {
+		if filepath.Base(other) != base || canonicalRoot(other) == canonical {
+			continue
+		}
+		sum := sha256.Sum256([]byte(canonical))
+		return base + "." + hex.EncodeToString(sum[:4])
+	}
+
+	return base
+}
+
+// canonicalRoot puts a root in a comparable form. It intentionally stops at
+// filepath.Abs: resolving symlinks would let a root compare equal to a
+// configured root it is not spelled the same as, and the callers' own
+// validation (handlers.isValidStacksDir) matches on Abs too.
+func canonicalRoot(root string) string {
+	if abs, err := filepath.Abs(root); err == nil {
+		return abs
+	}
+	return filepath.Clean(root)
+}
 
 type ScannerService struct {
 	config *config.Config
@@ -312,9 +381,8 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 
 			envFile := determineEnvFile(path, name)
 
-			rootPrefix := filepath.Base(effectiveRoot)
 			stackPathID := strings.ReplaceAll(relPath, string(filepath.Separator), "-")
-			stackID := fmt.Sprintf("%s~%s:%s", rootPrefix, stackPathID, name)
+			stackID := StackID(effectiveRoot, s.config.GetAllStacksDirs(), stackPathID, name)
 
 			var projectName string
 			if name == "default" {
