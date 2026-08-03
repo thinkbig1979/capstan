@@ -11,10 +11,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { KeyRound, ChevronDown, ChevronRight } from 'lucide-react'
+import { KeyRound, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react'
 import { directoriesApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { queryKeys } from '@/lib/query-keys'
+import type { DirectoryCredentialStatusValue } from '@/types'
 
 interface GitSettingsSectionProps {
   directoryPath: string
@@ -36,6 +37,7 @@ export function GitSettingsSection({
   const [httpsToken, setHttpsToken] = useState('')
   const [hasToken, setHasToken] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [credentialStatus, setCredentialStatus] = useState<DirectoryCredentialStatusValue | null>(null)
 
   const isSSH = remoteURL?.startsWith('git@') || remoteURL?.startsWith('ssh://')
   const isHTTPS = remoteURL?.startsWith('https://') || remoteURL?.startsWith('http://')
@@ -52,6 +54,15 @@ export function GitSettingsSection({
       }
       setLoaded(true)
     })
+    // A separate probe rather than a field on ConfiguredDir: it decrypts the
+    // stored token to tell "unreadable" (rotated STORAGE_KEY) apart from
+    // "none", which directoriesApi.list()/ConfiguredDir deliberately never
+    // does. Kept inside this same open-gated effect so it fires once per
+    // disclosure expansion, not on every page load or per stack. See
+    // agent-os-8a5.
+    directoriesApi.credentialStatus(directoryPath)
+      .then((result) => setCredentialStatus(result.status))
+      .catch(() => setCredentialStatus(null))
   }, [open, loaded, directoryPath])
 
   const saveMutation = useMutation({
@@ -107,6 +118,20 @@ export function GitSettingsSection({
                 </p>
               )}
             </div>
+
+            {credentialStatus === 'unreadable' && (
+              <div className="col-span-2 flex items-center gap-1.5 text-xs text-destructive">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                Stored credential can&apos;t be decrypted (the encryption key may have changed). Re-enter the token below.
+              </div>
+            )}
+
+            {credentialStatus === 'empty' && (
+              <div className="col-span-2 flex items-center gap-1.5 text-xs text-warning">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                HTTPS auth is selected but no token is saved. Git operations against this remote will fail until one is added.
+              </div>
+            )}
 
             {authType === 'ssh' && (
               <>
