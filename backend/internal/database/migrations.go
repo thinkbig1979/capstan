@@ -26,6 +26,74 @@ type Migration struct {
 	PreCheck func(tx *sql.Tx) error
 }
 
+// Table rebuilds in SQLite: safe ordering (agent-os-xzq)
+//
+// SQLite has no ALTER COLUMN, ALTER CONSTRAINT, or DROP CONSTRAINT: widening
+// a CHECK constraint, changing a column's type, or altering a foreign key
+// definition all require rebuilding the table under a new CREATE TABLE and
+// copying the data across. The obvious-looking approach --
+//
+//	ALTER TABLE parent RENAME TO parent_old;
+//	CREATE TABLE parent (...);          -- new definition, original name
+//	INSERT INTO parent SELECT ... FROM parent_old;
+//	DROP TABLE parent_old;
+//
+// -- is what migration 9 (action_log_denormalized, below) uses, and it is
+// safe THERE ONLY because nothing holds a foreign key referencing
+// action_log. It is NOT safe for any table that has an incoming FK, and it
+// fails silently at migration time, not loudly:
+//
+//   - ALTER TABLE parent RENAME TO parent_old makes SQLite automatically
+//     rewrite the stored FK text of every CHILD table to follow the rename.
+//     A child's `FOREIGN KEY (x) REFERENCES parent(id)` silently becomes
+//     `FOREIGN KEY (x) REFERENCES "parent_old"(id)`.
+//   - Creating a fresh `parent` (the new definition, under the original
+//     name) and dropping `parent_old` then succeeds with NO ERROR, but the
+//     child's FK now points at a table name that no longer exists.
+//   - The first symptom is the next INSERT into the child table failing
+//     with "no such table: main.parent_old" -- in production, on the first
+//     write after the upgrade, naming a table nobody recognises.
+//
+// The safe ordering never renames OUT of the name a child FK refers to --
+// it only ever renames INTO it:
+//
+//	CREATE TABLE parent_new (...);
+//	INSERT INTO parent_new (explicit column list) SELECT ... FROM parent;
+//	DROP TABLE parent;
+//	ALTER TABLE parent_new RENAME TO parent;
+//
+// The child's FK text keeps pointing at "parent" throughout and resolves
+// correctly the moment the rename lands.
+//
+// A second, easy-to-miss hazard applies even with the safe ordering: DROP
+// TABLE parent while a child table still exists and still holds rows
+// referencing it CASCADE-DELETES those rows during the drop -- but only
+// when the DROP runs inside an explicit transaction with foreign_keys
+// enforcement on, which is exactly how RunMigrations executes every
+// migration (one multi-statement Exec inside a tx). An ad hoc probe run
+// statement-by-statement and auto-committing does NOT reproduce this and
+// will report a false "safe" verdict (agent-os-pid: this is exactly what
+// happened on the first diagnostic attempt at migration 12, before the real
+// runner was used). If the child table itself must also change shape,
+// detach its data into a plain, FK-free table BEFORE the parent is touched
+// at all, then drop the child (dropping a CHILD table is never a cascade
+// hazard) before dropping the parent, rebuild+rename the parent, then
+// rebuild the child from the detached copy.
+//
+// Migration 12 (backup_runs_interrupted_status, below) is the worked
+// example of both hazards and their fix -- read its comment for the
+// concrete SQL. TestMigration_BackupRunsInterruptedStatus_PreservesDataAndFK
+// in migrations_test.go pins the result through the real migration runner,
+// not a hand-assembled probe; assertRebuildForeignKeyIntact in that file is
+// a reusable assertion any future rebuild migration's regression test
+// should call.
+//
+// Decision on migration 9: left as-is. action_log has no incoming foreign
+// key, so the rename-old/create-new-under-the-old-name/drop-old ordering it
+// uses is correct as shipped. Rewriting a migration that has already run in
+// the field is a strictly worse risk than a comment, so the fix here is
+// documentation, not a schema change -- see the note at migration 9 itself,
+// below.
 var migrations = []Migration{
 	{
 		Version: 1,
@@ -260,6 +328,15 @@ CREATE INDEX IF NOT EXISTS idx_backup_run_items_stack_id ON backup_run_items(sta
 -- Sentinel actor labels such as "anonymous" (AUTH_DISABLED mode) or "system"
 -- (background jobs) are legitimate values here, not placeholders that need
 -- to resolve to a real row, so existing data is copied verbatim.
+--
+-- NOTE (agent-os-xzq): the rename-old/create-new-under-the-old-name/drop-old
+-- ordering below is UNSAFE for any table with an incoming foreign key -- see
+-- the "Table rebuilds in SQLite" comment at the top of this file for why
+-- (SQLite silently rewrites the child's FK text on the rename, then the drop
+-- leaves it pointing at a table that no longer exists). It is safe HERE, and
+-- only here, because nothing references action_log. DECISION: left as-is;
+-- rewriting a migration that has already run in the field is a strictly
+-- worse risk than a comment.
 ALTER TABLE action_log RENAME TO action_log_v8;
 
 CREATE TABLE action_log (
