@@ -46,7 +46,7 @@ services:
       # Liveness (no Docker call), and a real GET rather than --spider: --spider
       # sends HEAD, which has no route and falls through to the SPA catch-all,
       # so it returned 200 even when GET /health returned 503 (agent-os-69a).
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:5001/health"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 -O /dev/null http://localhost:$${PORT:-5001}/health || exit 1"]
       interval: 30s
       timeout: 10s
       start_period: 5s
