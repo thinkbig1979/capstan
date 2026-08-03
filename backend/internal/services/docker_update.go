@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -313,7 +312,7 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 
 // updateStandaloneContainer pulls the image, decoding the stream via
 // truth.DrainPullStream so that auth/manifest errors are surfaced (finding #3).
-func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect types.ContainerJSON, wasRunning bool) error {
+func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect container.InspectResponse, wasRunning bool) error {
 	imageRef := inspect.Config.Image
 
 	reader, err := s.client.ImagePull(ctx, imageRef, image.PullOptions{})
@@ -552,7 +551,7 @@ func (s *DockerService) updateComposeContainerStreaming(
 // recreates the container.
 func (s *DockerService) updateStandaloneContainerStreaming(
 	ctx context.Context,
-	inspect types.ContainerJSON,
+	inspect container.InspectResponse,
 	wasRunning bool,
 	emit func(LogLine),
 	setStatus func(Status),

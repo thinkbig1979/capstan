@@ -681,9 +681,9 @@ func (s *DockerService) StopContainer(ctx context.Context, containerID string) e
 	return s.client.ContainerStop(ctx, containerID, container.StopOptions{})
 }
 
-func (s *DockerService) InspectContainer(ctx context.Context, containerID string) (types.ContainerJSON, error) {
+func (s *DockerService) InspectContainer(ctx context.Context, containerID string) (container.InspectResponse, error) {
 	if s == nil {
-		return types.ContainerJSON{}, ErrDockerUnavailable
+		return container.InspectResponse{}, ErrDockerUnavailable
 	}
 
 	return s.client.ContainerInspect(ctx, containerID)

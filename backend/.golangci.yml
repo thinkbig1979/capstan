@@ -59,19 +59,13 @@ linters:
       - comments
       - std-error-handling
     rules:
-      # SA1019: deprecated Docker SDK types (types.ContainerJSON,
-      # ImageInspectWithRaw, BuildCache*) mid-migration to the SDK's newer
-      # replacement types. Real work, tracked separately as agent-os-9zi
-      # (SDK type migration) rather than done as a side effect of adding a
-      # linter. Scoped to only the files that reference the old SDK types,
-      # not a blanket staticcheck exclusion, so new issues in these files
-      # still gate normally.
-      - path: 'internal/services/docker\.go'
-        linters: [staticcheck]
-        text: 'SA1019'
-      - path: 'internal/services/docker_resources\.go'
-        linters: [staticcheck]
-        text: 'SA1019'
+      # SA1019: deprecated Docker SDK types, mid-migration (agent-os-9zi).
+      # docker.go and docker_resources.go are done (types.ContainerJSON,
+      # BuildCache*  were pure Go type aliases for the replacement types —
+      # zero behavior change) and no longer need an exclusion. The remaining
+      # exclusions below cover the ImageInspectWithRaw sites and the
+      # truth.ImageInspector/ContainerInspector interfaces, landing in a
+      # follow-up commit in this same PR.
       - path: 'internal/services/docker_update\.go'
         linters: [staticcheck]
         text: 'SA1019'

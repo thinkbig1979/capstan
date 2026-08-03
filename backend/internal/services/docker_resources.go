@@ -7,6 +7,7 @@ import (
 	"time"
 
 	dockertypes "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -273,7 +274,7 @@ func (s *DockerService) PruneContainers(ctx context.Context, opts PruneOptions) 
 	return s.client.ContainersPrune(ctx, f)
 }
 
-func (s *DockerService) ListBuildCache(ctx context.Context) ([]*dockertypes.BuildCache, error) {
+func (s *DockerService) ListBuildCache(ctx context.Context) ([]*build.CacheRecord, error) {
 	if s == nil {
 		return nil, ErrDockerUnavailable
 	}
@@ -285,7 +286,7 @@ func (s *DockerService) ListBuildCache(ctx context.Context) ([]*dockertypes.Buil
 	return du.BuildCache, nil
 }
 
-func (s *DockerService) PruneBuildCache(ctx context.Context, opts PruneOptions) (*dockertypes.BuildCachePruneReport, error) {
+func (s *DockerService) PruneBuildCache(ctx context.Context, opts PruneOptions) (*build.CachePruneReport, error) {
 	if s == nil {
 		return nil, ErrDockerUnavailable
 	}
@@ -294,5 +295,5 @@ func (s *DockerService) PruneBuildCache(ctx context.Context, opts PruneOptions) 
 	if opts.Until != "" {
 		f.Add("until", opts.Until)
 	}
-	return s.client.BuildCachePrune(ctx, dockertypes.BuildCachePruneOptions{All: opts.All, Filters: f})
+	return s.client.BuildCachePrune(ctx, build.CachePruneOptions{All: opts.All, Filters: f})
 }
