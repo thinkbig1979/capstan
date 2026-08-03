@@ -241,7 +241,131 @@ func (s *ScannerService) pruneStaleStacks() error {
 		}
 	}
 
+	return s.pruneStaleIDStacks(directories, activeDirs)
+}
+
+// pruneStaleIDStacks removes rows left behind when a stack's computed ID
+// changes while its directory stays put (agent-os-ufv). StackIDRootPrefix's
+// "Known residual" comment above explains when this happens: two EXTRA roots
+// that collide with each other, or an extra that starts colliding once a
+// later extra is added. The directory-existence pass above does not catch
+// this — the directory is still active — so the OLD row (minted under the
+// previous ID) survives while ScanDirectoryWithRoot upserts a NEW row under
+// the current ID: one stack, two rows.
+//
+// THE HAZARD this guards against: mistaking "the scanner didn't visit this
+// directory on this pass" (temporarily unreadable compose file, a scan_depth
+// change, a permission error skipping a subtree) for "this row's ID is
+// stale". Recomputing an expected ID and deleting any row that fails to match
+// it would delete live stacks the scan simply hadn't reached yet.
+//
+// The safe predicate: only delete a row when another row for the exact same
+// (Directory, ComposeFile) pair already carries the ID the scanner would mint
+// right now. That pairing is unique per logical stack — ComposeFile fixes
+// extractStackName, and the directory's current root fixes the rest of
+// StackID — so two rows sharing it can only come from an ID change, never
+// from an unrelated multi-compose-file directory (agent-os-w8o), which has
+// distinct ComposeFile values and therefore never shares the key. And a
+// "currently correct" sibling row only exists if THIS scan (or a prior one)
+// actually wrote it, which only happens for directories the scanner visited —
+// so a not-yet-visited directory's lone row is left alone, never treated as
+// stale on recomputation alone.
+//
+// ACCEPTED COST (agent-os-ufv, deliberately not solved here): the six
+// unenforced TEXT columns holding a stack ID (action_log.stack_id,
+// cached_updates.stack_id, update_history.stack_id, backup_run_items.stack_id,
+// auto_update_policies.target_id, backup_policies.target_id — see
+// StackIDRootPrefix's doc comment) still reference the deleted row's old ID
+// and are orphaned, not carried across. The MigrateStackIDsToRootPrefixed
+// re-ID-plus-carry-across approach was considered and not chosen.
+func (s *ScannerService) pruneStaleIDStacks(directories []models.Directory, activeDirs map[string]bool) error {
+	dirRoots := make(map[string]string, len(directories))
+	for _, dir := range directories {
+		if activeDirs[dir.Path] {
+			dirRoots[dir.Path] = dir.RootDir
+		}
+	}
+
+	stacks, err := s.db.ListStacks()
+	if err != nil {
+		return err
+	}
+
+	type dirFileKey struct {
+		dir  string
+		file string
+	}
+	byDirFile := make(map[dirFileKey][]models.Stack)
+	for _, stack := range stacks {
+		if !activeDirs[stack.Directory] {
+			continue
+		}
+		key := dirFileKey{stack.Directory, stack.ComposeFile}
+		byDirFile[key] = append(byDirFile[key], stack)
+	}
+
+	for key, group := range byDirFile {
+		if len(group) < 2 {
+			continue
+		}
+
+		effectiveRoot, ok := dirRoots[key.dir]
+		if !ok || effectiveRoot == "" {
+			continue
+		}
+
+		expectedID := s.expectedStackID(key.dir, effectiveRoot, key.file)
+
+		hasExpected := false
+		for _, st := range group {
+			if st.ID == expectedID {
+				hasExpected = true
+				break
+			}
+		}
+		if !hasExpected {
+			// No row in this group is proven current yet — the scan may not
+			// have visited this directory this pass. Leave every row alone.
+			continue
+		}
+
+		for _, st := range group {
+			if st.ID == expectedID {
+				continue
+			}
+			if delErr := s.db.DeleteStack(st.ID); delErr != nil {
+				slog.Warn("Failed to delete stale-ID stack row", "stackID", st.ID, "directory", st.Directory, "error", delErr)
+			}
+		}
+	}
+
 	return nil
+}
+
+// expectedStackID recomputes the ID the scanner would mint right now for a
+// stack, given the directory's currently-recorded effective root and a
+// compose filename. It duplicates, rather than shares, the relPath/
+// stackPathID derivation in ScanDirectoryWithRoot (scanner.go:373-382,
+// 445-446) — a considered tradeoff, not an oversight: if the two ever drift
+// apart, this function computes an ID matching no row in the group, so
+// pruneStaleIDStacks's hasExpected check comes back false and nothing gets
+// deleted. Drift therefore fails closed (rows survive, at worst stranding a
+// stale one a little longer) rather than open (rows get wrongly deleted),
+// which is why the duplication is acceptable here even though DRY is the
+// default elsewhere in this file.
+func (s *ScannerService) expectedStackID(dirPath, effectiveRoot, composeFile string) string {
+	relPath := ""
+	if effectiveRoot != "" {
+		if rel, err := filepath.Rel(effectiveRoot, dirPath); err == nil {
+			relPath = rel
+		}
+	}
+	if relPath == "" {
+		relPath = filepath.Base(dirPath)
+	}
+	stackPathID := strings.ReplaceAll(relPath, string(filepath.Separator), "-")
+	name := extractStackName(composeFile)
+	return StackID(effectiveRoot, s.config.StacksDir, s.config.ExtraStacksDirs, stackPathID, name)
 }
 
 func collectActiveDirs(path string, maxDepth int, currentDepth int, active map[string]bool) {
