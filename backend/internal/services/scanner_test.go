@@ -3,12 +3,14 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 func TestNewScannerService(t *testing.T) {
@@ -182,6 +184,50 @@ func TestScannerService_ScanAll_MultipleComposeFiles(t *testing.T) {
 	rootPrefix := filepath.Base(tempDir)
 	assert.True(t, stackNames[rootPrefix+"~multi-stack:default"])
 	assert.True(t, stackNames[rootPrefix+"~multi-stack:testing"])
+}
+
+// Regression test for agent-os-4yy: extractStackName strips both "compose."
+// and "docker-compose." prefixes, so compose.api.yaml and
+// docker-compose.api.yml both extract to the stack name "api". Before this
+// fix, the duplicate-name guard at scanner.go only fired for name=="default",
+// so the second file's UpsertStack (INSERT OR REPLACE) silently overwrote the
+// first's row, leaving the other compose file on disk but untracked. There
+// must be exactly one row for "api", and the winner must be deterministic
+// (pinned to compose.api.yaml, per the scan's fixed pattern order — compose*
+// before docker-compose* — which is Docker Compose's own file precedence, not
+// directory-read order) rather than merely "some row survives".
+func TestScannerService_ScanAll_DuplicateStackName_SkipsSecondFileDeterministically(t *testing.T) {
+	tempDir := t.TempDir()
+
+	stackDir := filepath.Join(tempDir, "my-stack")
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
+
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "compose.api.yaml"),
+		[]byte("services:\n  api:\n    image: api-v1\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "docker-compose.api.yml"),
+		[]byte("services:\n  api:\n    image: api-v2\n"), 0644))
+
+	cfg := &config.Config{StacksDir: tempDir}
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+
+	service := NewScannerService(cfg, db)
+
+	_, err = service.ScanAll()
+	assert.NoError(t, err)
+
+	stacks, err := db.ListStacks()
+	assert.NoError(t, err)
+
+	var apiStacks []models.Stack
+	for _, s := range stacks {
+		if strings.HasSuffix(s.ID, ":api") {
+			apiStacks = append(apiStacks, s)
+		}
+	}
+	require.Len(t, apiStacks, 1, "two compose files mapping to the same stack name must produce exactly one row")
+	assert.Equal(t, "compose.api.yaml", apiStacks[0].ComposeFile,
+		"the winner must be deterministic (compose.* precedes docker-compose.* in scan order), not whichever file the directory walk reached last")
 }
 
 func TestScannerService_ScanAll_WithGitRepo(t *testing.T) {
