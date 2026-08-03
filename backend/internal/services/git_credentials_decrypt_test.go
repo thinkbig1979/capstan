@@ -201,3 +201,102 @@ func TestHTTPSCredentials_NoDirectoryRow_StillFallsBackToGlobal(t *testing.T) {
 		t.Errorf("user = %q, want the global user", user)
 	}
 }
+
+// gitServiceWithUndecryptableGlobalCredential builds a DB whose GLOBAL
+// git_https_token setting was written under one STORAGE_KEY and is then read
+// under a different one, so GetSetting("git_https_token") fails to decrypt
+// instead of returning sql.ErrNoRows. No directory row exists at all, which
+// keeps the directory-credential branch (agent-os-2au) out of the picture:
+// this fixture isolates the GLOBAL read (agent-os-2tt).
+func gitServiceWithUndecryptableGlobalCredential(t *testing.T, cfg *config.Config) *GitService {
+	t.Helper()
+	dataDir := t.TempDir()
+
+	db1, err := database.NewWithMigrationsAndEncryptor(dataDir, NewTokenEncryptorOrDefault(decryptTestKeyOne, ""))
+	if err != nil {
+		t.Fatalf("open database under key one: %v", err)
+	}
+	if err := db1.SetSetting("git_https_token", decryptTestGlobalToken); err != nil {
+		t.Fatalf("store git_https_token: %v", err)
+	}
+	if err := db1.Close(); err != nil {
+		t.Fatalf("close database under key one: %v", err)
+	}
+
+	db2, err := database.NewWithMigrationsAndEncryptor(dataDir, NewTokenEncryptorOrDefault(decryptTestKeyTwo, ""))
+	if err != nil {
+		t.Fatalf("reopen database under key two: %v", err)
+	}
+	t.Cleanup(func() { db2.Close() })
+
+	// Guard the fixture itself: without a genuine decrypt failure the tests
+	// below would pass for the wrong reason.
+	if _, err := db2.GetSetting("git_https_token"); err == nil {
+		t.Fatal("fixture is not discriminating: the global token still decrypts under the rotated key")
+	}
+
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	return NewGitService(cfg, db2)
+}
+
+// TestHTTPSCredentials_GlobalDecryptFailure_LogsError is the regression test
+// for agent-os-2tt: an undecryptable GLOBAL credential used to be discarded
+// silently (`if v, err := s.db.GetSetting("git_https_token"); err == nil {
+// token = v }`), the same swallow agent-os-2au already fixed for the
+// per-directory read. An operator who rotates STORAGE_KEY without re-saving
+// the global token got no log line explaining why every remote git operation
+// started failing auth.
+func TestHTTPSCredentials_GlobalDecryptFailure_LogsError(t *testing.T) {
+	svc := gitServiceWithUndecryptableGlobalCredential(t, nil)
+	buf := captureSlog(t)
+
+	svc.httpsCredentials("/stacks/no-directory-row")
+
+	out := buf.String()
+	if !strings.Contains(out, "level=ERROR") {
+		t.Errorf("expected an ERROR-level log for an unreadable global credential, got: %s", out)
+	}
+	if !strings.Contains(out, "git_https_token") {
+		t.Errorf("log does not name the affected setting: %s", out)
+	}
+	if strings.Contains(out, decryptTestGlobalToken) {
+		t.Error("log leaked the token value")
+	}
+}
+
+// TestHTTPSCredentials_NoGlobalCredential_DoesNotLogError is the negative
+// case an unconditional `slog.Error` on every GetSetting error would fail:
+// sql.ErrNoRows for "no global credential configured at all" is the default,
+// healthy state of a fresh install and must stay silent.
+func TestHTTPSCredentials_NoGlobalCredential_DoesNotLogError(t *testing.T) {
+	db := newTestDBWithEncryptor(t)
+	svc := NewGitService(&config.Config{}, db)
+	buf := captureSlog(t)
+
+	svc.httpsCredentials("/stacks/no-directory-row-either")
+
+	if buf.Len() != 0 {
+		t.Errorf("no global credential is configured; expected no log at all, got: %s", buf.String())
+	}
+}
+
+// TestHTTPSCredentials_GlobalDecryptFailure_StillFallsBackToConfig pins
+// control flow (adversary point B): logging the decrypt failure must not
+// short-circuit the GIT_HTTPS_TOKEN/GIT_HTTPS_USER fallback that follows the
+// global settings read at git_credentials.go:121-128, nor the
+// defaultGitHTTPSUser fallback.
+func TestHTTPSCredentials_GlobalDecryptFailure_StillFallsBackToConfig(t *testing.T) {
+	cfg := &config.Config{GitHTTPSUser: "env-user", GitHTTPSToken: "env-token"}
+	svc := gitServiceWithUndecryptableGlobalCredential(t, cfg)
+
+	user, token := svc.httpsCredentials("/stacks/no-directory-row-config-fallback")
+
+	if token != "env-token" {
+		t.Errorf("token = %q, want the GIT_HTTPS_TOKEN fallback", token)
+	}
+	if user != "env-user" {
+		t.Errorf("user = %q, want the GIT_HTTPS_USER fallback", user)
+	}
+}
