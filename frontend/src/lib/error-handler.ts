@@ -33,14 +33,22 @@ export function classifyError(error: unknown): AppError {
     }
   }
 
-  const err = error as { 
-    response?: { status?: number; data?: { error?: string; message?: string; details?: Record<string, unknown> } }; 
-    code?: string; 
-    message?: string 
+  const err = error as {
+    status?: number;
+    details?: Record<string, unknown>;
+    response?: { status?: number; data?: { error?: string; message?: string; details?: Record<string, unknown> } };
+    code?: string;
+    message?: string
   }
-  const status = err.response?.status
+  // The interceptor (api.ts) rejects with a flat object carrying `status` AND
+  // `details` at the top level, not nested under `.response` (agent-os-yj0).
+  // Read both so existing test fixtures built as `{response:{status,data}}`
+  // still work. `details` feeds the 404/409/428 `context` fields and the 422
+  // field-level validation messages below — missing it silently degrades
+  // those to their generic fallback text.
+  const status = err.status ?? err.response?.status
   const message = err.response?.data?.error || err.response?.data?.message || err.message || 'An error occurred'
-  const details = err.response?.data?.details
+  const details = err.details ?? err.response?.data?.details
 
   if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT' || status === 408) {
     return {
