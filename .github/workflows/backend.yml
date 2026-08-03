@@ -81,7 +81,7 @@ jobs:
       # expressed it and nothing enforced it — GOTOOLCHAIN=local anywhere would
       # have reverted CI to the older stdlib with no failing check.
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
@@ -128,7 +128,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
@@ -157,7 +157,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum

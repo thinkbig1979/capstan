@@ -85,7 +85,7 @@ jobs:
       # `grep '^go '` step that matched that same wrong line. Full note in
       # backend.yml.
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
