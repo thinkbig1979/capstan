@@ -132,6 +132,10 @@ export function DashboardPage() {
     onError: (action) => {
       if (action === 'delete') setDeletingStackId(null)
     },
+    // Lets a 428 STACK_DELETE_COLLATERAL response re-confirm with the user
+    // (via the same dialog as the initial delete confirmation) instead of
+    // surfacing as a generic failure. See deleteStackWithCollateralConfirm.
+    confirmCollateral: confirm,
   })
 
   const runningCount = stacks?.filter((s) => s.status === 'running').length || 0

@@ -353,10 +353,21 @@ export const stacksApi = {
     return response.data
   },
 
-  delete: async (id: string) => {
-    // The backend requires ?confirm=true (it 400s otherwise). The UI already
-    // gates this behind its own confirmation dialog, so the intent is confirmed.
-    const response = await apiClient.delete<StackDeleteResult>(`/stacks/${encodeURIComponent(id)}?confirm=true`)
+  /**
+   * The backend requires ?confirm=true (it 400s otherwise). The UI already
+   * gates this behind its own confirmation dialog, so the intent is confirmed.
+   *
+   * `confirmCollateral` must be passed only after a SECOND, explicit user
+   * confirmation of the specific files the backend reported it would also
+   * destroy (a 428 STACK_DELETE_COLLATERAL response — see stack-delete.ts).
+   * It must never be sent unconditionally: that would silently defeat the
+   * backend's guard against destroying collateral files (agent-os-lg2).
+   */
+  delete: async (id: string, confirmCollateral = false) => {
+    const collateralParam = confirmCollateral ? '&confirmCollateral=true' : ''
+    const response = await apiClient.delete<StackDeleteResult>(
+      `/stacks/${encodeURIComponent(id)}?confirm=true${collateralParam}`,
+    )
     return response.data
   },
 
