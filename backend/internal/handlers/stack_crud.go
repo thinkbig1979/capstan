@@ -427,9 +427,13 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// Remove the stack directory from disk.
-	if rmErr := os.RemoveAll(absStackDir); rmErr != nil {
-		renderResult(c, truth.Failed("stack compose down succeeded but directory removal failed", rmErr,
+	// Remove the stack's files from disk. One directory legitimately holds
+	// several stacks (one per compose file — IDs are root~path:project), so
+	// removing the whole directory would destroy every sibling stack's compose
+	// file while their containers keep running: DeleteVerified composes down only
+	// this stack's project, and their stacks rows survive the delete.
+	if rmErr := h.removeStackFiles(*stack, absStackDir); rmErr != nil {
+		renderResult(c, truth.Failed("stack compose down succeeded but file removal failed", rmErr,
 			truth.KV("id", id),
 			truth.KV("directory", stack.Directory),
 		))
@@ -448,4 +452,70 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		truth.KV("id", id),
 		truth.KV("output", deleteOutput),
 	))
+}
+
+// removeStackFiles deletes from disk only what belongs to stack. When no other
+// stack is still registered under its directory the whole directory goes, which
+// is the single-stack case and matches the behaviour before siblings were
+// considered. When siblings remain, only this stack's own compose file (and env
+// file, if no survivor shares it) is removed and the directory stays.
+//
+// absStackDir has already been proven inside a configured stacks root by
+// Delete's path-traversal guard; every per-file path derived here is proven
+// inside absStackDir by the same helper, so a malformed compose_file or env_file
+// value cannot reach outside the stack's own directory.
+func (h *StacksHandler) removeStackFiles(stack models.Stack, absStackDir string) error {
+	registered, err := h.db.ListStacksByDirectory(stack.Directory)
+	if err != nil {
+		// Without the sibling list we cannot tell a sole stack from one of
+		// several, and guessing wrong destroys another stack's files. Refuse.
+		return fmt.Errorf("failed to list stacks registered under %s: %w", stack.Directory, err)
+	}
+
+	survivors := make([]models.Stack, 0, len(registered))
+	for _, s := range registered {
+		if s.ID != stack.ID {
+			survivors = append(survivors, s)
+		}
+	}
+
+	if len(survivors) == 0 {
+		return os.RemoveAll(absStackDir)
+	}
+
+	if err := removeStackFile(absStackDir, stack.ComposeFile); err != nil {
+		return err
+	}
+
+	// The env file goes only when no survivor references the same one:
+	// determineEnvFile (services/scanner.go) falls back to .env for a named stack
+	// that has no .env.<name>, so two stacks legitimately share one env file.
+	for _, s := range survivors {
+		if s.EnvFile != "" && s.EnvFile == stack.EnvFile {
+			return nil
+		}
+	}
+	return removeStackFile(absStackDir, stack.EnvFile)
+}
+
+// removeStackFile removes name from absStackDir after proving the resolved path
+// is inside it. An absent file is not an error: a stack row can outlive the file
+// it points at. os.Remove rather than os.RemoveAll, so a name that resolves to a
+// directory cannot take a subtree with it.
+func removeStackFile(absStackDir, name string) error {
+	if name == "" {
+		return nil
+	}
+
+	absFile, err := filepath.Abs(filepath.Join(absStackDir, name))
+	if err != nil {
+		return fmt.Errorf("failed to resolve %q inside %s: %w", name, absStackDir, err)
+	}
+	if !stackDirIsInsideRoot(absFile, absStackDir) {
+		return fmt.Errorf("refusing to remove %q: it resolves outside the stack directory %s", name, absStackDir)
+	}
+	if err := os.Remove(absFile); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

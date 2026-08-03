@@ -37,6 +37,9 @@ type stackStore interface {
 	ListStacks() ([]models.Stack, error)
 	GetStack(id string) (*models.Stack, error)
 	GetStackByProjectName(projectName string) (*models.Stack, error)
+	// ListStacksByDirectory is how Delete learns whether other stacks are still
+	// registered under the directory it is about to remove files from.
+	ListStacksByDirectory(path string) ([]models.Stack, error)
 	UpsertStack(stack models.Stack) error
 	UpdateStackStatus(id, status string) error
 	DeleteStack(id string) error
