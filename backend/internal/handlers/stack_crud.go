@@ -450,7 +450,16 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		}
 	}
 
-	survivors, survErr := h.listSurvivors(*stack)
+	// This survivor check is for the collateral PROMPT only — it must not be
+	// reused to decide the destructive branch below. DeleteVerified (compose
+	// down -v) runs between here and removeStackFiles and can take seconds, long
+	// enough for a directory-watcher scan or a concurrent Create to register a
+	// new sibling under this same directory. removeStackFiles re-queries for
+	// itself immediately before it acts, so that decision is always made on
+	// fresh data; a stale answer here is harmless, since the worst case is an
+	// unnecessary prompt or a skipped one followed by the (always safe) per-file
+	// removal path.
+	survivorsBeforePrompt, survErr := h.listSurvivors(*stack)
 	if survErr != nil {
 		renderResult(c, truth.Failed("failed to list stacks registered under stack directory", survErr,
 			truth.KV("id", id),
@@ -467,7 +476,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	// has explicitly acknowledged the loss. When a sibling survives, the
 	// per-file removal path never touches anything but this stack's own two
 	// files, so nothing here is ever at risk and no prompt is needed.
-	if len(survivors) == 0 {
+	if len(survivorsBeforePrompt) == 0 {
 		collateral, colErr := collateralEntries(*stack, absStackDir)
 		if colErr != nil {
 			renderResult(c, truth.Failed("failed to inspect stack directory for non-stack files", colErr,
@@ -517,7 +526,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	// removing the whole directory would destroy every sibling stack's compose
 	// file while their containers keep running: DeleteVerified composes down only
 	// this stack's project, and their stacks rows survive the delete.
-	if rmErr := h.removeStackFiles(*stack, absStackDir, survivors); rmErr != nil {
+	if rmErr := h.removeStackFiles(*stack, absStackDir); rmErr != nil {
 		renderResult(c, truth.Failed("stack compose down succeeded but file removal failed", rmErr,
 			truth.KV("id", id),
 			truth.KV("directory", stack.Directory),
@@ -605,11 +614,22 @@ func collateralEntries(stack models.Stack, absStackDir string) ([]string, error)
 // absStackDir has already been proven inside a configured stacks root by
 // Delete's path-traversal guard; every per-file path derived here is proven
 // inside absStackDir by the same helper, so a malformed compose_file or env_file
-// value cannot reach outside the stack's own directory. survivors is the result
-// of listSurvivors, computed once by Delete and threaded through here so the
-// sole-stack-vs-siblings decision is made from the same data as the collateral
-// check.
-func (h *StacksHandler) removeStackFiles(stack models.Stack, absStackDir string, survivors []models.Stack) error {
+// value cannot reach outside the stack's own directory.
+//
+// This re-queries listSurvivors itself rather than accepting Delete's earlier
+// result: DeleteVerified (compose down -v) runs between Delete's collateral
+// prompt and this call and can take seconds, long enough for a directory-watcher
+// scan or a concurrent Create to register a new sibling here. The destructive
+// os.RemoveAll branch must be chosen on the freshest possible answer — reusing a
+// pre-compose-down capture reintroduces the agent-os-xa7 data loss (destroying a
+// newly-registered sibling's compose file) through a widened race instead of
+// through the logic xa7 already guards against.
+func (h *StacksHandler) removeStackFiles(stack models.Stack, absStackDir string) error {
+	survivors, err := h.listSurvivors(stack)
+	if err != nil {
+		return err
+	}
+
 	if len(survivors) == 0 {
 		return os.RemoveAll(absStackDir)
 	}
