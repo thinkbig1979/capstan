@@ -2,13 +2,13 @@ package database
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	_ "modernc.org/sqlite"
 )
 
@@ -20,12 +20,18 @@ type TokenEncryptor interface {
 // ErrEncryptionUnavailable is returned by noEncryptor when the DB was built
 // without an encryption key. Check with errors.Is.
 //
-// This deliberately duplicates services.ErrEncryptionUnavailable rather than
-// reusing it: internal/services imports internal/database (scanner, backup_*,
-// actionlog, scheduler), so the reverse import would be a cycle. The coupling
-// between the two packages is structural only — services.Encryptor and
-// TokenEncryptor above are the same shape by construction, never by import.
-var ErrEncryptionUnavailable = errors.New("no encryption key configured: set STORAGE_KEY or JWT_SECRET")
+// This aliases errdefs.ErrEncryptionUnavailable (agent-os-2fb) rather than
+// declaring its own errors.New: internal/services imports internal/database
+// (scanner, backup_*, actionlog, scheduler), so the reverse import would be a
+// cycle, and this package used to declare its own distinct sentinel with
+// identical text to work around that. Two distinct values meant
+// errors.Is(this, services.ErrEncryptionUnavailable) was false, so a DB built
+// directly via database.New/NewWithMigrations (bypassing
+// services.NewTokenEncryptorOrDefault) surfaced its encryption failures as a
+// generic 500 in handlers/respond.go instead of the actionable 422. errdefs is
+// a leaf package with no internal imports, so both sides can alias the same
+// identity without either importing the other.
+var ErrEncryptionUnavailable = errdefs.ErrEncryptionUnavailable
 
 // noEncryptor is the fail-closed null object installed when a DB is built with
 // no encryptor (agent-os-dgj).
