@@ -581,6 +581,7 @@ func TestGetStatusCLI_ResolvedTokenReachesEveryInvocation(t *testing.T) {
 		t.Fatalf("getStatusCLI: %v", err)
 	}
 
+	//nolint:gosec // logPath is built a few lines above from filepath.Join(wrapperDir, "env.log"), where wrapperDir is this test's own t.TempDir() — never attacker- or environment-influenced, so the "variable path" this rule warns about is a path this test constructed itself, not external input
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("read wrapper log (wrapper never ran — the real git was invoked directly instead of via PATH): %v", err)
