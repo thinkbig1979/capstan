@@ -695,4 +695,110 @@ func TestScannerService_ScanDirectory_NestedRootResolvesToLongestMatch(t *testin
 	dir, err := db.GetDirectory(webDir)
 	require.NoError(t, err)
 	assert.Equal(t, nestedRoot, dir.RootDir, "root_dir must resolve to the nested root, not the outer stacksRoot")
+// Regression test for agent-os-ufv: two EXTRA roots that collide with each
+// other (agent-os-elo's residual, documented at StackIDRootPrefix's "Known
+// residual" comment) both flip from a bare basename to a suffixed one the
+// moment the second one is added. pruneStaleStacks removed rows only by
+// directory existence, never by ID, so extraA's directory — still on disk,
+// still active — kept its stale bare-ID row alongside the freshly-minted
+// suffixed one: one stack, two rows.
+//
+// Step 1 scans with extraA alone (no collision, bare "stacks~web:default").
+// Step 2 adds extraB, which shares extraA's basename, and rescans. Only the
+// freshly-computed suffixed row for extraA/web must remain.
+func TestScannerService_TwoCollidingExtraRootsIDChange_PruneRemovesStaleRow(t *testing.T) {
+	base := t.TempDir()
+	primary := filepath.Join(base, "primary", "apps") // basename "apps": collides with neither extra
+	extraA := filepath.Join(base, "groupA", "stacks")
+	extraB := filepath.Join(base, "groupB", "stacks") // same basename as extraA, different path
+
+	require.NoError(t, os.MkdirAll(primary, 0755))
+
+	webA := filepath.Join(extraA, "web")
+	require.NoError(t, os.MkdirAll(webA, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(webA, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644))
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+
+	cfg := &config.Config{StacksDir: primary, ExtraStacksDirs: []string{extraA}}
+
+	// Step 1: extraA alone, no collision.
+	_, err = NewScannerService(cfg, db).ScanAll()
+	require.NoError(t, err)
+
+	preStacks, err := db.ListStacksByDirectory(webA)
+	require.NoError(t, err)
+	require.Len(t, preStacks, 1)
+	require.Equal(t, "stacks~web:default", preStacks[0].ID, "setup: the pre-collision ID")
+
+	// Step 2: extraB is configured, sharing extraA's basename. extraA's ID
+	// must now change (see StackIDRootPrefix), and the old row must not
+	// survive alongside the new one.
+	webB := filepath.Join(extraB, "web")
+	require.NoError(t, os.MkdirAll(webB, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(webB, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644))
+
+	cfg.ExtraStacksDirs = []string{extraA, extraB}
+	_, err = NewScannerService(cfg, db).ScanAll()
+	require.NoError(t, err)
+
+	postStacksA, err := db.ListStacksByDirectory(webA)
+	require.NoError(t, err)
+	require.Len(t, postStacksA, 1, "extraA's directory must have exactly one row after its ID changed, not a stale row plus a fresh one")
+	assert.Regexp(t, `^stacks\.[0-9a-f]{8}~web:default$`, postStacksA[0].ID)
+	assert.NotEqual(t, "stacks~web:default", postStacksA[0].ID, "extraA's ID must actually have changed for this test to be meaningful")
+
+	postStacksB, err := db.ListStacksByDirectory(webB)
+	require.NoError(t, err)
+	require.Len(t, postStacksB, 1)
+	assert.Regexp(t, `^stacks\.[0-9a-f]{8}~web:default$`, postStacksB[0].ID)
+	assert.NotEqual(t, postStacksA[0].ID, postStacksB[0].ID)
+
+	allStacks, err := db.ListStacks()
+	require.NoError(t, err)
+	assert.Len(t, allStacks, 2, "one row per stack directory; no stale leftover from the ID change")
+}
+
+// Negative counterpart to the test above: pruneStaleStacks must not delete a
+// row just because it shares a directory with another stack, or just because
+// a rescan happened. Two distinct compose files in one directory is a
+// legitimate, unrelated multi-stack layout (agent-os-w8o) — not a stale-ID
+// pair — and neither row's ID changes across the rescan, so both must survive
+// untouched.
+func TestScannerService_RescanWithMultipleStacksInDirectory_AllSurvivePrune(t *testing.T) {
+	tempDir := t.TempDir()
+	stackDir := filepath.Join(tempDir, "multi-stack")
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "compose.api.yaml"), []byte("services:\n  api:\n    image: api\n"), 0644))
+
+	cfg := &config.Config{StacksDir: tempDir}
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+
+	service := NewScannerService(cfg, db)
+
+	_, err = service.ScanAll()
+	require.NoError(t, err)
+
+	before, err := db.ListStacksByDirectory(stackDir)
+	require.NoError(t, err)
+	require.Len(t, before, 2)
+	idsBefore := map[string]string{}
+	for _, s := range before {
+		idsBefore[s.ComposeFile] = s.ID
+	}
+
+	// Rescan with nothing changed: both rows' IDs are still exactly what the
+	// scanner would mint, so pruneStaleStacks must leave them both alone.
+	_, err = service.ScanAll()
+	require.NoError(t, err)
+
+	after, err := db.ListStacksByDirectory(stackDir)
+	require.NoError(t, err)
+	require.Len(t, after, 2, "a correct-ID row sharing a directory with another stack must survive a prune")
+	for _, s := range after {
+		assert.Equal(t, idsBefore[s.ComposeFile], s.ID, "unrelated stack's ID must not change across an uneventful rescan")
+	}
 }
