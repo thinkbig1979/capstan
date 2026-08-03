@@ -695,6 +695,8 @@ func TestScannerService_ScanDirectory_NestedRootResolvesToLongestMatch(t *testin
 	dir, err := db.GetDirectory(webDir)
 	require.NoError(t, err)
 	assert.Equal(t, nestedRoot, dir.RootDir, "root_dir must resolve to the nested root, not the outer stacksRoot")
+}
+
 // Regression test for agent-os-ufv: two EXTRA roots that collide with each
 // other (agent-os-elo's residual, documented at StackIDRootPrefix's "Known
 // residual" comment) both flip from a bare basename to a suffixed one the
@@ -801,4 +803,65 @@ func TestScannerService_RescanWithMultipleStacksInDirectory_AllSurvivePrune(t *t
 	for _, s := range after {
 		assert.Equal(t, idsBefore[s.ComposeFile], s.ID, "unrelated stack's ID must not change across an uneventful rescan")
 	}
+}
+
+// Pins the not-visited-this-pass guard in pruneStaleIDStacks (the
+// `!hasExpected { continue }` check). Two rows share (Directory, ComposeFile)
+// but NEITHER carries the ID the scanner would mint right now -- exactly the
+// state a directory is left in when a pass does not visit it (a temporarily
+// unreadable compose file, a scan_depth change, a permission error skipping a
+// subtree): whatever row existed before stays, and nothing fresh gets
+// written, so no row in the group is "proven current".
+//
+// Neither TestScannerService_TwoCollidingExtraRootsIDChange_PruneRemovesStaleRow
+// nor TestScannerService_RescanWithMultipleStacksInDirectory_AllSurvivePrune
+// exercises this branch: the former's group always contains a row with the
+// expected ID (that's what makes deletion provably safe there), and the
+// latter's two rows never share a ComposeFile, so they never reach a group of
+// size > 1 in the first place. Without this test, deleting the `!hasExpected`
+// guard -- which reads like a redundant early-continue -- passes every other
+// test in this file while turning the prune into "delete every row whose ID
+// isn't the expected one", live stacks included.
+//
+// Constructed directly against the DB rather than through ScanAll: a real
+// scan would visit stackDir and write the correct-ID row itself, which is
+// exactly the state this test must NOT be in.
+func TestScannerService_PruneStaleIDStacks_NeitherRowMatchesExpected_BothSurvive(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "srv", "stacks")
+	stackDir := filepath.Join(root, "mystack")
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
+
+	cfg := &config.Config{StacksDir: root}
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+
+	// The directory row a prior (visited) scan would have left behind.
+	require.NoError(t, db.UpsertDirectory(models.Directory{
+		Path:    stackDir,
+		Name:    "mystack",
+		RootDir: root,
+	}))
+
+	// The ID the scanner would mint right now is StackID(root, root, nil,
+	// "mystack", "default") == "stacks~mystack:default" (root is its own
+	// primary root, bare basename, no collision). Neither seeded row is that
+	// ID -- standing in for two leftovers from before, with no scan pass
+	// having (re)written the correct one.
+	staleA := "stacks~mystack:default.old-a"
+	staleB := "stacks~mystack:default.old-b"
+	require.NoError(t, db.UpsertStack(models.Stack{ID: staleA, Directory: stackDir, ComposeFile: "compose.yaml", ProjectName: "mystack"}))
+	require.NoError(t, db.UpsertStack(models.Stack{ID: staleB, Directory: stackDir, ComposeFile: "compose.yaml", ProjectName: "mystack"}))
+
+	service := NewScannerService(cfg, db)
+	require.NoError(t, service.pruneStaleStacks())
+
+	stacks, err := db.ListStacksByDirectory(stackDir)
+	require.NoError(t, err)
+	ids := make([]string, 0, len(stacks))
+	for _, s := range stacks {
+		ids = append(ids, s.ID)
+	}
+	assert.ElementsMatch(t, []string{staleA, staleB}, ids,
+		"neither row carries the ID the scanner would currently mint, so this reads as 'not visited this pass', not 'stale' -- both must survive")
 }

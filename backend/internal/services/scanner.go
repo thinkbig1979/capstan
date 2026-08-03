@@ -344,10 +344,15 @@ func (s *ScannerService) pruneStaleIDStacks(directories []models.Directory, acti
 
 // expectedStackID recomputes the ID the scanner would mint right now for a
 // stack, given the directory's currently-recorded effective root and a
-// compose filename. It mirrors the relPath/stackPathID derivation in
-// ScanDirectoryWithRoot exactly (see below), factored out so
-// pruneStaleIDStacks can ask "is this row still what the scanner would
-// produce" without duplicating that logic or re-deriving root resolution.
+// compose filename. It duplicates, rather than shares, the relPath/
+// stackPathID derivation in ScanDirectoryWithRoot (scanner.go:373-382,
+// 445-446) — a considered tradeoff, not an oversight: if the two ever drift
+// apart, this function computes an ID matching no row in the group, so
+// pruneStaleIDStacks's hasExpected check comes back false and nothing gets
+// deleted. Drift therefore fails closed (rows survive, at worst stranding a
+// stale one a little longer) rather than open (rows get wrongly deleted),
+// which is why the duplication is acceptable here even though DRY is the
+// default elsewhere in this file.
 func (s *ScannerService) expectedStackID(dirPath, effectiveRoot, composeFile string) string {
 	relPath := ""
 	if effectiveRoot != "" {
