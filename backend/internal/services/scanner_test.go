@@ -602,3 +602,97 @@ func TestStackID_NestedPathAndProfile(t *testing.T) {
 	assert.Equal(t, "stacks~group-my-stack:testing",
 		StackID("/srv/stacks", "/srv/stacks", nil, "group-my-stack", "testing"))
 }
+
+// agent-os-509: ScanDirectory(rootDir="") is the watcher's entry point
+// (services/watcher.go performRescan -> ScanDirectory), and it resolves which
+// configured root a path belongs to itself, via buildDirectoryRecord's
+// effectiveRoot fallback. That fallback used to be a bare
+// strings.HasPrefix(path, stacksDir) with no path-separator boundary, so a
+// primary root of ".../stacks" matched paths under ".../stacks-extra" too —
+// the same class of bug the path-traversal guard in stack_crud.go's Create
+// (filepath.Rel + ".." check) exists to prevent.
+//
+// Each test first seeds the CORRECT row via an explicit-root scan (the state
+// a prior correct ScanAll or Create would have left), then fires the
+// watcher's rootDir="" rescan on the exact same path and asserts it does not
+// double-mint a second stacks row under the wrong root, nor corrupt the
+// shared directories row's root_dir.
+func TestScannerService_ScanDirectory_SiblingPrefixRootIsNotConflated(t *testing.T) {
+	base := t.TempDir()
+	stacksRoot := filepath.Join(base, "stacks")
+	extraRoot := filepath.Join(base, "stacks-extra") // textually prefixed by stacksRoot, NOT a child of it
+	webDir := filepath.Join(extraRoot, "web")
+	require.NoError(t, os.MkdirAll(stacksRoot, 0755))
+	require.NoError(t, os.MkdirAll(webDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(webDir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644))
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	cfg := &config.Config{StacksDir: stacksRoot, ExtraStacksDirs: []string{extraRoot}}
+	service := NewScannerService(cfg, db)
+
+	// Seed the correct row, as an explicit-root scan of extraRoot would leave it.
+	require.NoError(t, service.ScanDirectoryWithRoot(webDir, extraRoot))
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+	correctID := stacks[0].ID
+	require.Equal(t, "stacks-extra~web:default", correctID, "setup: the pre-existing correct ID")
+
+	// The watcher's debounced rescan calls ScanDirectory with no rootDir
+	// (services/watcher.go performRescan), which is the only path that
+	// exercises the effectiveRoot fallback this test targets.
+	require.NoError(t, service.ScanDirectory(webDir))
+
+	stacks, err = db.ListStacks()
+	require.NoError(t, err)
+	assert.Len(t, stacks, 1, "a watcher rescan of a path under stacks-extra must not double-mint a stacks row keyed on the sibling-prefix root stacks")
+	if len(stacks) > 0 {
+		assert.Equal(t, correctID, stacks[0].ID, "the watcher rescan must not change the stack's ID")
+	}
+
+	dir, err := db.GetDirectory(webDir)
+	require.NoError(t, err)
+	assert.Equal(t, extraRoot, dir.RootDir, "root_dir must not be rewritten to the sibling-prefix root")
+}
+
+func TestScannerService_ScanDirectory_NestedRootResolvesToLongestMatch(t *testing.T) {
+	base := t.TempDir()
+	stacksRoot := filepath.Join(base, "stacks")
+	nestedRoot := filepath.Join(stacksRoot, "team") // a child of stacksRoot, ALSO independently configured
+	webDir := filepath.Join(nestedRoot, "web")
+	require.NoError(t, os.MkdirAll(webDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(webDir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644))
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	cfg := &config.Config{StacksDir: stacksRoot, ExtraStacksDirs: []string{nestedRoot}}
+	service := NewScannerService(cfg, db)
+
+	// Seed the correct row: nestedRoot is the more specific containing root,
+	// so this is the ID a correct resolution assigns.
+	require.NoError(t, service.ScanDirectoryWithRoot(webDir, nestedRoot))
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+	correctID := stacks[0].ID
+	require.Equal(t, "team~web:default", correctID, "setup: the pre-existing correct ID")
+
+	// Watcher-style rescan with no rootDir: both stacksRoot and nestedRoot
+	// contain webDir, so the fallback must pick the LONGEST (most specific)
+	// match — nestedRoot — not whichever root sorts first in config.
+	require.NoError(t, service.ScanDirectory(webDir))
+
+	stacks, err = db.ListStacks()
+	require.NoError(t, err)
+	assert.Len(t, stacks, 1, "a watcher rescan under a nested root must not double-mint a stacks row keyed on the outer root")
+	if len(stacks) > 0 {
+		assert.Equal(t, correctID, stacks[0].ID, "the watcher rescan must resolve to the longest (most specific) matching root")
+	}
+
+	dir, err := db.GetDirectory(webDir)
+	require.NoError(t, err)
+	assert.Equal(t, nestedRoot, dir.RootDir, "root_dir must resolve to the nested root, not the outer stacksRoot")
+}

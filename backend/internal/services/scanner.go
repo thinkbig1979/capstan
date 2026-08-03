@@ -23,10 +23,11 @@ import (
 //
 // root MUST already be resolved to one of the configured stacks roots. This
 // helper deliberately does NOT work out which root a path belongs to: that
-// resolution is done with an unanchored strings.HasPrefix (scanner.go's
-// effectiveRoot fallback), so /srv/stacks matches paths under /srv/stacks-extra
-// — tracked as agent-os-509. Taking the root as a parameter keeps that defect
-// from flowing through ID minting.
+// resolution is a separate concern (see resolveEffectiveRoot below, used by
+// buildDirectoryRecord's effectiveRoot fallback for the rootDir="" case).
+// Taking the root as a parameter keeps that resolution logic from flowing
+// through ID minting, so a future change to how roots are resolved cannot
+// silently change what StackID does with an already-resolved one.
 //
 // primaryRoot and extraRoots are config.StacksDir and config.ExtraStacksDirs.
 // They are passed as separate parameters rather than as one GetAllStacksDirs
@@ -276,6 +277,59 @@ type directoryRecord struct {
 	gitBranch string
 }
 
+// resolveEffectiveRoot picks which configured root contains path, for the
+// rootDir="" case: ScanDirectory (and through it, watcher.go's performRescan
+// on every debounced file change) does not know which configured root it was
+// called for and must work it out itself.
+//
+// Containment is tested with filepath.Rel plus a ".." check — the same idiom
+// handlers/stack_crud.go's Create path-traversal guard uses — rather than a
+// bare strings.HasPrefix, which has no path-separator boundary and so would
+// match a root like ".../stacks" against an unrelated sibling directory like
+// ".../stacks-extra" (agent-os-509).
+//
+// Multiple configured roots can legitimately contain the same path when one
+// root is nested inside another (e.g. ".../stacks" and ".../stacks/team" are
+// both configured). The LONGEST matching root wins, since it is always the
+// most specific one regardless of the order roots appear in config — a first-
+// match rule would make the outcome depend on GetAllStacksDirs' order, which
+// is config-file order, not path specificity.
+func resolveEffectiveRoot(path string, roots []string) string {
+	best := ""
+	for _, root := range roots {
+		if root == "" || !rootContainsPath(root, path) {
+			continue
+		}
+		if len(root) > len(best) {
+			best = root
+		}
+	}
+	return best
+}
+
+// rootContainsPath reports whether path is root itself or lies strictly
+// beneath it, using filepath.Abs + filepath.Rel so relative and
+// trailing-separator spellings of root compare correctly (mirrors
+// handlers/stack_crud.go's Create guard).
+func rootContainsPath(root, path string) bool {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	if absRoot == absPath {
+		return true
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func (s *ScannerService) buildDirectoryRecord(path string, rootDir string) directoryRecord {
 	dirName := filepath.Base(path)
 	isGitRepo := false
@@ -299,12 +353,7 @@ func (s *ScannerService) buildDirectoryRecord(path string, rootDir string) direc
 
 	effectiveRoot := rootDir
 	if effectiveRoot == "" {
-		for _, stacksDir := range s.config.GetAllStacksDirs() {
-			if strings.HasPrefix(path, stacksDir) {
-				effectiveRoot = stacksDir
-				break
-			}
-		}
+		effectiveRoot = resolveEffectiveRoot(path, s.config.GetAllStacksDirs())
 	}
 
 	return directoryRecord{
