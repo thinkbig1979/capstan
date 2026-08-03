@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // Environment variable names the credential helper below reads. They are set
@@ -110,9 +112,28 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 	if s.db != nil {
 		// A decrypt failure (wrong STORAGE_KEY) surfaces as an error here; treat
 		// it as "no credential" and let git report the auth failure, rather than
-		// failing every git command including the ones that need no remote.
-		if v, err := s.db.GetSetting("git_https_token"); err == nil {
+		// failing every git command including the ones that need no remote. Unlike
+		// the per-directory read above, no dirPath applies here — this setting is
+		// global — so the log line names the setting instead of a path.
+		//
+		// sql.ErrNoRows is the healthy default state (no global credential ever
+		// configured) and must stay silent; only a genuinely unreadable stored
+		// value is worth an operator's attention (agent-os-2tt).
+		v, err := s.db.GetSetting("git_https_token")
+		switch {
+		case err == nil:
 			token = v
+		case errors.Is(err, sql.ErrNoRows):
+			// No global credential configured at all — nothing to report.
+		case errors.Is(err, errdefs.ErrEncryptionUnavailable):
+			slog.Error("cannot read the global git credential: no encryption key is configured", "setting", "git_https_token", "error", err)
+		default:
+			// database/settings.go returns the decrypt error unwrapped, so this
+			// covers both a genuine decrypt failure (rotated STORAGE_KEY) and any
+			// other unreadable-database error; the message says "may have been
+			// rotated" rather than asserting it, since a closed-database error
+			// would otherwise be described inaccurately.
+			slog.Error("cannot read the global git credential: the stored value could not be read; STORAGE_KEY may have been rotated", "setting", "git_https_token", "error", err)
 		}
 		if v, err := s.db.GetSetting("git_https_user"); err == nil {
 			user = v
