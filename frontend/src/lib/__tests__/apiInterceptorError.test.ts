@@ -101,6 +101,40 @@ describe('api response interceptor error handling (agent-os-yj0)', () => {
     expect(classified.type).not.toBe('unknown')
     expect(classified.action).toBe('Confirm')
     expect(classified.retryable).toBe(false)
+    // `details` must survive the interceptor too, not just `status` — this is
+    // the STACK_DELETE_COLLATERAL directory from agent-os-lg2's backend payload.
+    expect(classified.context).toBe('/opt/stacks/my-stack')
+  })
+
+  it('propagates `details` through the interceptor so the 422 branch produces field-level validation messages, not the generic fallback', async () => {
+    const onRejected = getRegisteredRejectedHandler()
+
+    const fakeAxiosError = {
+      response: {
+        status: 422,
+        data: {
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          details: { name: 'is required', directory: 'must be an absolute path' },
+        },
+      },
+      config: { url: '/stacks' },
+      message: 'Request failed with status code 422',
+      isAxiosError: true,
+    }
+
+    let rejected: unknown
+    await onRejected(fakeAxiosError).catch((e) => {
+      rejected = e
+    })
+
+    const classified = classifyError(rejected)
+    expect(classified.status).toBe(422)
+    expect(classified.type).toBe('validation')
+    // Field-level messages assembled from `details` — proves `details` is not
+    // silently dropped the same way `status` was (agent-os-yj0 follow-up).
+    expect(classified.message).toContain('name: is required')
+    expect(classified.message).toContain('directory: must be an absolute path')
   })
 
   it('preserves the axios code and message for a no-response network failure, instead of stomping them with a generic UNKNOWN', async () => {
