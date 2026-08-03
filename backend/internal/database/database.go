@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,16 +17,59 @@ type TokenEncryptor interface {
 	Decrypt(encoded string) (string, error)
 }
 
+// ErrEncryptionUnavailable is returned by noEncryptor when the DB was built
+// without an encryption key. Check with errors.Is.
+//
+// This deliberately duplicates services.ErrEncryptionUnavailable rather than
+// reusing it: internal/services imports internal/database (scanner, backup_*,
+// actionlog, scheduler), so the reverse import would be a cycle. The coupling
+// between the two packages is structural only — services.Encryptor and
+// TokenEncryptor above are the same shape by construction, never by import.
+var ErrEncryptionUnavailable = errors.New("no encryption key configured: set STORAGE_KEY or JWT_SECRET")
+
+// noEncryptor is the fail-closed null object installed when a DB is built with
+// no encryptor (agent-os-dgj).
+//
+// The alternative — leaving the field literal-nil — is what made this a bug.
+// Every reader/writer of a sensitive column guards on `d.encryptor != nil`, and
+// a nil encryptor made that guard mean "skip encryption": SetSetting read it as
+// "fail closed" (settings.go) while UpdateDirectoryCredentials read it as
+// "store the token in cleartext" (directories.go). Those two readings cannot
+// both be right, and the plaintext one loses. Refusing loudly here makes the
+// guards agree, and makes the dangerous state unconstructible rather than
+// merely unused.
+//
+// Note this is NOT the same as passing plaintext through: a null object that
+// silently returned its input would reintroduce the exact defect behind a
+// tidier name.
+type noEncryptor struct{}
+
+func (noEncryptor) Encrypt(string) (string, error) { return "", ErrEncryptionUnavailable }
+func (noEncryptor) Decrypt(string) (string, error) { return "", ErrEncryptionUnavailable }
+
 type DB struct {
 	db        *sql.DB
 	encryptor TokenEncryptor
 }
 
 func New(dataDir string) (*DB, error) {
-	return NewWithEncryptor(dataDir, nil)
+	return NewWithEncryptor(dataDir, noEncryptor{})
 }
 
+// NewWithEncryptor is the single funnel every constructor in this file passes
+// through, which is why the nil normalisation lives here as well as at the
+// callers above: it closes the explicit-nil argument path too, so no caller
+// inside or outside this package can produce a DB with a literal-nil encryptor.
+//
+// It cannot catch a typed nil (a nil *T stored in the interface), which is a
+// non-nil interface value; see the agent-os-16m note in services/crypto.go for
+// that separate hazard and why NewTokenEncryptorOrDefault returns a null object
+// rather than a nil pointer.
 func NewWithEncryptor(dataDir string, encryptor TokenEncryptor) (*DB, error) {
+	if encryptor == nil {
+		encryptor = noEncryptor{}
+	}
+
 	var dbPath string
 	if dataDir == ":memory:" {
 		dbPath = ":memory:"
@@ -77,7 +121,7 @@ func NewWithEncryptor(dataDir string, encryptor TokenEncryptor) (*DB, error) {
 }
 
 func NewWithMigrations(dataDir string) (*DB, error) {
-	return NewWithMigrationsAndEncryptor(dataDir, nil)
+	return NewWithMigrationsAndEncryptor(dataDir, noEncryptor{})
 }
 
 func NewWithMigrationsAndEncryptor(dataDir string, encryptor TokenEncryptor) (*DB, error) {

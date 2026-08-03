@@ -26,6 +26,54 @@ func newTestDB(t *testing.T) *DB {
 	return db
 }
 
+// newTestDBWithEncryptor creates an in-memory DB with migrations applied and a
+// real AES-GCM encryptor installed. Tests that exercise a sensitive column
+// (git_https_token, restic_password) must use this rather than newTestDB: with
+// no encryptor those writes fail closed by design (agent-os-dgj), so newTestDB
+// would only ever prove the refusal path.
+func newTestDBWithEncryptor(t *testing.T) *DB {
+	t.Helper()
+	enc := newTestEncryptor(t, "test-aes-gcm-key-32chars-padding")
+	db, err := NewWithMigrationsAndEncryptor(":memory:", enc)
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+// TestConstructors_NeverLeaveEncryptorNil is the constructor-level half of the
+// agent-os-dgj regression (the behavioural half lives in
+// TestUpdateDirectoryCredentials_NoEncryptorNeverStoresPlaintext). A literal-nil
+// encryptor is the state that made `d.encryptor != nil` guards mean "skip
+// encryption", so the fix is to make that state unconstructible — including via
+// an explicit nil passed to the encryptor-taking constructors, which is why all
+// four entry points are covered here and not just New/NewWithMigrations.
+func TestConstructors_NeverLeaveEncryptorNil(t *testing.T) {
+	t.Parallel()
+
+	ctors := map[string]func() (*DB, error){
+		"New":                          func() (*DB, error) { return New(":memory:") },
+		"NewWithMigrations":            func() (*DB, error) { return NewWithMigrations(":memory:") },
+		"NewWithEncryptor(nil)":        func() (*DB, error) { return NewWithEncryptor(":memory:", nil) },
+		"NewWithMigrationsAndEnc(nil)": func() (*DB, error) { return NewWithMigrationsAndEncryptor(":memory:", nil) },
+	}
+
+	for name, ctor := range ctors {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			db, err := ctor()
+			require.NoError(t, err)
+			defer db.Close()
+			require.NotNil(t, db.encryptor, "constructor must install a fail-closed encryptor, never a literal nil")
+
+			// The installed null object must refuse, not pass plaintext through.
+			_, err = db.encryptor.Encrypt("some-secret")
+			assert.ErrorIs(t, err, ErrEncryptionUnavailable)
+			_, err = db.encryptor.Decrypt("some-ciphertext")
+			assert.ErrorIs(t, err, ErrEncryptionUnavailable)
+		})
+	}
+}
+
 // --- Backup Policy tests ---
 
 func TestGetBackupPolicies_Empty(t *testing.T) {

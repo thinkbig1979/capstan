@@ -226,6 +226,12 @@ func TestScannerService_ScanAll_WithGitRepo(t *testing.T) {
 // columns — deleting and rewriting the row, wiping any credential an
 // operator had saved. A rescan must leave a previously-saved per-directory
 // credential intact.
+//
+// It uses newTestDBWithEncryptor (agent-os-dgj). It previously used
+// database.NewWithMigrations, whose nil encryptor stored the token as cleartext
+// and read it straight back, so the token assertion below passed without any
+// encryption happening. The real path is encrypt-on-write then decrypt-on-read,
+// and that is what a rescan has to leave intact.
 func TestScannerService_ScanAll_PreservesCredentialsAcrossRescan(t *testing.T) {
 	tempDir := t.TempDir()
 	stackDir := filepath.Join(tempDir, "my-stack")
@@ -233,12 +239,11 @@ func TestScannerService_ScanAll_PreservesCredentialsAcrossRescan(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "compose.yaml"), []byte("services: {}\n"), 0644))
 
 	cfg := &config.Config{StacksDir: tempDir}
-	db, err := database.NewWithMigrations(":memory:")
-	require.NoError(t, err)
+	db := newTestDBWithEncryptor(t)
 
 	service := NewScannerService(cfg, db)
 
-	_, err = service.ScanAll()
+	_, err := service.ScanAll()
 	require.NoError(t, err)
 
 	require.NoError(t, db.UpdateDirectoryCredentials(stackDir, "https", "", "git-user", "s3cr3t-token"))
