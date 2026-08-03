@@ -37,4 +37,24 @@ describe('stacksApi.delete', () => {
     // The stack id must still be encoded into the path.
     expect(url).toContain(encodeURIComponent('stacks~dokemon:default'))
   })
+
+  // Regression: agent-os-7et. The second, distinct confirmation (after a 428
+  // STACK_DELETE_COLLATERAL refusal) must add confirmCollateral=true, and only
+  // then — an unconditional confirmCollateral=true would silently defeat lg2's
+  // guard against destroying collateral files.
+  it('adds confirmCollateral=true only when the caller explicitly passes it', async () => {
+    await stacksApi.delete('my-stack', true)
+
+    expect(instance.delete).toHaveBeenCalledTimes(1)
+    const url = instance.delete.mock.calls[0][0] as string
+    expect(url).toContain('confirm=true')
+    expect(url).toContain('confirmCollateral=true')
+  })
+
+  it('omits confirmCollateral by default', async () => {
+    await stacksApi.delete('my-stack')
+
+    const url = instance.delete.mock.calls[0][0] as string
+    expect(url).not.toContain('confirmCollateral')
+  })
 })

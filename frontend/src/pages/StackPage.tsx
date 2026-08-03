@@ -7,6 +7,7 @@ import { AlertCircle, RefreshCw, Home, Trash2, ChevronDown, ChevronRight } from 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { classifyError } from '@/lib/error-handler'
+import { deleteStackWithCollateralConfirm, StackDeleteCancelledError } from '@/lib/stack-delete'
 import { useParams, useNavigate, useLocation } from 'react-router'
 import { toast } from 'sonner'
 import { useConfirm } from '@/hooks/useConfirm'
@@ -55,14 +56,21 @@ export function StackPage() {
   })
 
   const deleteMutation = useMutation({
-    mutationFn: (stackId: string) => stacksApi.delete(stackId),
+    // Re-confirms with `confirm` (the same dialog as the initial delete
+    // confirmation) when the backend refuses with 428 STACK_DELETE_COLLATERAL.
+    // See deleteStackWithCollateralConfirm.
+    mutationFn: (stackId: string) => deleteStackWithCollateralConfirm(stackId, confirm),
     onSuccess: () => {
       toast.success('Stack deleted successfully')
       queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
       navigate('/')
     },
-    onError: () => {
-      toast.error('Failed to delete stack')
+    onError: (err) => {
+      // A declined collateral confirmation is a user cancel, not a failure —
+      // no error toast, just re-enable the Delete button.
+      if (!(err instanceof StackDeleteCancelledError)) {
+        toast.error('Failed to delete stack')
+      }
       setIsDeleting(false)
     },
   })

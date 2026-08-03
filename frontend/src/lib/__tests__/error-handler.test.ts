@@ -134,6 +134,29 @@ describe('classifyError', () => {
     expect(result.message).toBe("Stack 'myapp' is already being created or modified by another operation")
   })
 
+  it('classifies 428 as a distinct precondition, not retryable, not Contact Support', () => {
+    // Backend AppError shape (models/errors.go) for STACK_DELETE_COLLATERAL:
+    // {code, message, details:{directory, collateral}} — Status is `json:"-"`.
+    const result = classifyError({
+      response: {
+        status: 428,
+        data: {
+          code: 'STACK_DELETE_COLLATERAL',
+          message: 'Deleting this stack will also remove other files in its directory; add ?confirmCollateral=true to proceed',
+          details: { directory: '/opt/stacks/my-stack', collateral: ['data', '.git'] },
+        },
+      },
+      message: 'Deleting this stack will also remove other files in its directory; add ?confirmCollateral=true to proceed',
+    })
+    expect(result.type).not.toBe('unknown')
+    expect(result.action).not.toBe('Contact Support')
+    expect(result.retryable).toBe(false)
+    expect(result.status).toBe(428)
+    expect(result.message).toBe(
+      'Deleting this stack will also remove other files in its directory; add ?confirmCollateral=true to proceed',
+    )
+  })
+
   it('extracts context from 404 details', () => {
     const result = classifyError({
       response: {

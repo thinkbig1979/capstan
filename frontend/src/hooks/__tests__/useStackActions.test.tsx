@@ -247,6 +247,58 @@ describe('useStackActions — delete routes through toastForResult', () => {
 
 // ─── onSuccess / onResult callbacks ───────────────────────────────────────────
 
+// ─── delete: 428 STACK_DELETE_COLLATERAL re-confirmation (agent-os-7et) ──────
+
+describe('useStackActions — delete re-confirms on 428 STACK_DELETE_COLLATERAL', () => {
+  const collateralError = {
+    code: 'STACK_DELETE_COLLATERAL',
+    message: 'Deleting this stack will also remove other files in its directory; add ?confirmCollateral=true to proceed',
+    details: { directory: '/opt/stacks/my-stack', collateral: ['data', '.git'] },
+  }
+
+  it('retries with confirmCollateral=true and succeeds when the user confirms', async () => {
+    const qc = makeClient()
+    mockDelete
+      .mockRejectedValueOnce(collateralError)
+      .mockResolvedValueOnce({ outcome: 'success', reason: 'stack deleted' })
+    const confirmCollateral = vi.fn().mockResolvedValue(true)
+
+    const { result: hook } = renderHook(
+      () => useStackActions({ confirmCollateral }),
+      { wrapper: wrapper(qc) },
+    )
+
+    await act(async () => { hook.current.delete.mutate('my-stack') })
+    await waitFor(() => expect(hook.current.delete.isSuccess).toBe(true))
+
+    expect(mockDelete).toHaveBeenNthCalledWith(1, 'my-stack')
+    expect(mockDelete).toHaveBeenNthCalledWith(2, 'my-stack', true)
+    expect(toast.success).toHaveBeenCalledWith('Stack deleted')
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('does not retry and does not toast an error when the user declines', async () => {
+    const qc = makeClient()
+    mockDelete.mockRejectedValueOnce(collateralError)
+    const confirmCollateral = vi.fn().mockResolvedValue(false)
+    const onError = vi.fn()
+
+    const { result: hook } = renderHook(
+      () => useStackActions({ confirmCollateral, onError }),
+      { wrapper: wrapper(qc) },
+    )
+
+    await act(async () => { hook.current.delete.mutate('my-stack') })
+    await waitFor(() => expect(hook.current.delete.isError).toBe(true))
+
+    // Exactly the first attempt — a decline must never trigger the retry.
+    expect(mockDelete).toHaveBeenCalledTimes(1)
+    expect(toast.error).not.toHaveBeenCalled()
+    // The caller's onError still fires so it can reset local "deleting" state.
+    expect(onError).toHaveBeenCalledWith('delete', 'my-stack')
+  })
+})
+
 describe('useStackActions — onSuccess callback', () => {
   it('calls onSuccess after a successful mutation', async () => {
     const qc = makeClient()

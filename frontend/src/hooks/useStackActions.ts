@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { toastForResult, isActionResult } from '@/lib/action-result'
 import { classifyError } from '@/lib/error-handler'
 import { queryKeys } from '@/lib/query-keys'
+import { deleteStackWithCollateralConfirm, StackDeleteCancelledError, type ConfirmFn } from '@/lib/stack-delete'
 
 const INVALIDATE_KEYS = [
   queryKeys.stacks(),
@@ -30,6 +31,13 @@ interface UseStackActionsOptions {
   onError?: (action: StackAction, id: string) => void
   /** Called after toastForResult when the backend returns a typed ActionResult. */
   onResult?: (action: StackAction, id: string) => void
+  /**
+   * Re-confirmation surface for a delete the backend refuses with 428
+   * STACK_DELETE_COLLATERAL (see deleteStackWithCollateralConfirm). Pass the
+   * `confirm` from useConfirm(). Without it, delete falls back to the plain
+   * single-confirmation call and a 428 surfaces as a normal error toast.
+   */
+  confirmCollateral?: ConfirmFn
 }
 
 /** Union of all possible return types from the lifecycle + delete mutations. */
@@ -73,7 +81,11 @@ function useStackActionMutation(
 ) {
   return useMutation<AnyLifecycleResult, unknown, string>({
     mutationFn: (id: string): Promise<AnyLifecycleResult> => {
-      if (action === 'delete') return stacksApi.delete(id)
+      if (action === 'delete') {
+        return options?.confirmCollateral
+          ? deleteStackWithCollateralConfirm(id, options.confirmCollateral)
+          : stacksApi.delete(id)
+      }
       return stacksApi[action](id)
     },
     onSuccess: (data, id) => {
@@ -92,11 +104,16 @@ function useStackActionMutation(
       }
     },
     onError: (err, id) => {
-      // A 500 `failed` ActionResult body is the rejected value directly
-      // (the axios interceptor strips the AxiosError wrapper). Surface the
-      // server-authored reason when available so the user sees a specific
-      // message rather than the generic fallback.
-      toast.error(errorMessage(action, err))
+      // A declined collateral confirmation is a user cancel, not a failure —
+      // no error toast, but the caller's onError still fires so it can reset
+      // local "deleting" state (see DashboardPage/StackPage).
+      if (!(err instanceof StackDeleteCancelledError)) {
+        // A 500 `failed` ActionResult body is the rejected value directly
+        // (the axios interceptor strips the AxiosError wrapper). Surface the
+        // server-authored reason when available so the user sees a specific
+        // message rather than the generic fallback.
+        toast.error(errorMessage(action, err))
+      }
       options?.onError?.(action, id)
     },
   })

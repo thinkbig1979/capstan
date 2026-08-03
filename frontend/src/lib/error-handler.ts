@@ -125,6 +125,18 @@ export function classifyError(error: unknown): AppError {
     }
   }
 
+  if (status === 428) {
+    return {
+      message: message || 'Deleting this would also remove other files. Confirm to proceed.',
+      type: 'server',
+      status,
+      retryable: false,
+      originalError: error,
+      context: details?.directory as string,
+      action: 'Confirm',
+    }
+  }
+
   if (status === 429) {
     return {
       message: 'Too many requests. Please wait a moment and try again',
