@@ -5,25 +5,26 @@ import (
 	"errors"
 	"testing"
 
-	dockertypes "github.com/docker/docker/api/types"
 	containertypes "github.com/docker/docker/api/types/container"
+	imagetypes "github.com/docker/docker/api/types/image"
+	dockerclient "github.com/docker/docker/client"
 )
 
 // fakeImageInspector is a hand-rolled stub that satisfies ImageInspector
 // without requiring a real Docker daemon.
 type fakeImageInspector struct {
-	containerJSON dockertypes.ContainerJSON
+	containerJSON containertypes.InspectResponse
 	containerErr  error
-	imageInspect  dockertypes.ImageInspect
+	imageInspect  imagetypes.InspectResponse
 	imageErr      error
 }
 
-func (f *fakeImageInspector) ContainerInspect(_ context.Context, _ string) (dockertypes.ContainerJSON, error) {
+func (f *fakeImageInspector) ContainerInspect(_ context.Context, _ string) (containertypes.InspectResponse, error) {
 	return f.containerJSON, f.containerErr
 }
 
-func (f *fakeImageInspector) ImageInspectWithRaw(_ context.Context, _ string) (dockertypes.ImageInspect, []byte, error) {
-	return f.imageInspect, nil, f.imageErr
+func (f *fakeImageInspector) ImageInspect(_ context.Context, _ string, _ ...dockerclient.ImageInspectOption) (imagetypes.InspectResponse, error) {
+	return f.imageInspect, f.imageErr
 }
 
 // --- ResolveContainerImage ---
@@ -46,13 +47,13 @@ func TestResolveContainerImage(t *testing.T) {
 		{
 			name: "picks first valid RepoTag",
 			cli: &fakeImageInspector{
-				containerJSON: dockertypes.ContainerJSON{
-					ContainerJSONBase: &dockertypes.ContainerJSONBase{
+				containerJSON: containertypes.InspectResponse{
+					ContainerJSONBase: &containertypes.ContainerJSONBase{
 						Image: imageID,
 					},
 					Config: &containertypes.Config{Image: configRef},
 				},
-				imageInspect: dockertypes.ImageInspect{
+				imageInspect: imagetypes.InspectResponse{
 					ID:          imageID,
 					RepoTags:    []string{"nginx:1.25", "nginx:latest"},
 					RepoDigests: []string{"nginx@sha256:aabbccdd"},
@@ -65,13 +66,13 @@ func TestResolveContainerImage(t *testing.T) {
 		{
 			name: "skips <none>:<none> tags and falls back to next valid tag",
 			cli: &fakeImageInspector{
-				containerJSON: dockertypes.ContainerJSON{
-					ContainerJSONBase: &dockertypes.ContainerJSONBase{
+				containerJSON: containertypes.InspectResponse{
+					ContainerJSONBase: &containertypes.ContainerJSONBase{
 						Image: imageID,
 					},
 					Config: &containertypes.Config{Image: configRef},
 				},
-				imageInspect: dockertypes.ImageInspect{
+				imageInspect: imagetypes.InspectResponse{
 					ID:          imageID,
 					RepoTags:    []string{"<none>:<none>", "nginx:stable"},
 					RepoDigests: []string{"nginx@sha256:ffff0000"},
@@ -84,13 +85,13 @@ func TestResolveContainerImage(t *testing.T) {
 		{
 			name: "falls back to Config.Image when all RepoTags are <none>",
 			cli: &fakeImageInspector{
-				containerJSON: dockertypes.ContainerJSON{
-					ContainerJSONBase: &dockertypes.ContainerJSONBase{
+				containerJSON: containertypes.InspectResponse{
+					ContainerJSONBase: &containertypes.ContainerJSONBase{
 						Image: imageID,
 					},
 					Config: &containertypes.Config{Image: configRef},
 				},
-				imageInspect: dockertypes.ImageInspect{
+				imageInspect: imagetypes.InspectResponse{
 					ID:          imageID,
 					RepoTags:    []string{"<none>:<none>"},
 					RepoDigests: []string{"ghcr.io/foo/bar@sha256:cafecafe"},
@@ -103,13 +104,13 @@ func TestResolveContainerImage(t *testing.T) {
 		{
 			name: "falls back to Config.Image when RepoTags is empty",
 			cli: &fakeImageInspector{
-				containerJSON: dockertypes.ContainerJSON{
-					ContainerJSONBase: &dockertypes.ContainerJSONBase{
+				containerJSON: containertypes.InspectResponse{
+					ContainerJSONBase: &containertypes.ContainerJSONBase{
 						Image: imageID,
 					},
 					Config: &containertypes.Config{Image: configRef},
 				},
-				imageInspect: dockertypes.ImageInspect{
+				imageInspect: imagetypes.InspectResponse{
 					ID:          imageID,
 					RepoTags:    nil,
 					RepoDigests: []string{"nginx@sha256:00001111"},
@@ -122,13 +123,13 @@ func TestResolveContainerImage(t *testing.T) {
 		{
 			name: "returns RepoDigests and imageID even when Config is nil",
 			cli: &fakeImageInspector{
-				containerJSON: dockertypes.ContainerJSON{
-					ContainerJSONBase: &dockertypes.ContainerJSONBase{
+				containerJSON: containertypes.InspectResponse{
+					ContainerJSONBase: &containertypes.ContainerJSONBase{
 						Image: imageID,
 					},
 					Config: nil,
 				},
-				imageInspect: dockertypes.ImageInspect{
+				imageInspect: imagetypes.InspectResponse{
 					ID:          imageID,
 					RepoTags:    []string{"alpine:3.20"},
 					RepoDigests: []string{"alpine@sha256:12345678"},
@@ -148,8 +149,8 @@ func TestResolveContainerImage(t *testing.T) {
 		{
 			name: "propagates image inspect error",
 			cli: &fakeImageInspector{
-				containerJSON: dockertypes.ContainerJSON{
-					ContainerJSONBase: &dockertypes.ContainerJSONBase{
+				containerJSON: containertypes.InspectResponse{
+					ContainerJSONBase: &containertypes.ContainerJSONBase{
 						Image: imageID,
 					},
 					Config: &containertypes.Config{Image: configRef},
@@ -209,8 +210,8 @@ func TestContainerImageAdvanced(t *testing.T) {
 		{
 			name: "advanced when image ID changed",
 			cli: &fakeImageInspector{
-				containerJSON: dockertypes.ContainerJSON{
-					ContainerJSONBase: &dockertypes.ContainerJSONBase{
+				containerJSON: containertypes.InspectResponse{
+					ContainerJSONBase: &containertypes.ContainerJSONBase{
 						Image: "sha256:newimage",
 					},
 				},
@@ -222,8 +223,8 @@ func TestContainerImageAdvanced(t *testing.T) {
 		{
 			name: "not advanced when image ID unchanged",
 			cli: &fakeImageInspector{
-				containerJSON: dockertypes.ContainerJSON{
-					ContainerJSONBase: &dockertypes.ContainerJSONBase{
+				containerJSON: containertypes.InspectResponse{
+					ContainerJSONBase: &containertypes.ContainerJSONBase{
 						Image: "sha256:sameimage",
 					},
 				},
@@ -235,8 +236,8 @@ func TestContainerImageAdvanced(t *testing.T) {
 		{
 			name: "reports new image ID even when not advanced",
 			cli: &fakeImageInspector{
-				containerJSON: dockertypes.ContainerJSON{
-					ContainerJSONBase: &dockertypes.ContainerJSONBase{
+				containerJSON: containertypes.InspectResponse{
+					ContainerJSONBase: &containertypes.ContainerJSONBase{
 						Image: "sha256:stableimage",
 					},
 				},

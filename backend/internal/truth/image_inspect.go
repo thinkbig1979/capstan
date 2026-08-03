@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	dockertypes "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/client"
 )
 
 // ImageInspector is the subset of the Docker client required by the image
@@ -13,11 +15,13 @@ import (
 // inspect image metadata so both the update and lifecycle domains can share
 // identical image-identity and image-advancement checks.
 //
-// *client.Client satisfies this interface directly; tests use a hand-rolled
-// stub.
+// ImageInspect's variadic opts parameter exists only so *client.Client
+// satisfies this interface directly with its real method signature (no
+// adapter type) — none of the call sites in this package pass any options.
+// Tests use a hand-rolled stub.
 type ImageInspector interface {
-	ContainerInspect(ctx context.Context, containerID string) (dockertypes.ContainerJSON, error)
-	ImageInspectWithRaw(ctx context.Context, imageID string) (dockertypes.ImageInspect, []byte, error)
+	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
+	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (image.InspectResponse, error)
 }
 
 // ResolveContainerImage inspects a container and its underlying image, then
@@ -39,16 +43,16 @@ func ResolveContainerImage(ctx context.Context, cli ImageInspector, containerID 
 		return "", nil, "", fmt.Errorf("inspecting container %s: %w", containerID, err)
 	}
 
-	// ContainerJSONBase.Image holds the content-addressable image ID.
+	// container.ContainerJSONBase.Image holds the content-addressable image ID.
 	imageID = ctr.Image
 
-	// ContainerJSON.Config.Image holds the symbolic ref used at create time.
+	// container.InspectResponse.Config.Image holds the symbolic ref used at create time.
 	configRef := ""
 	if ctr.Config != nil {
 		configRef = ctr.Config.Image
 	}
 
-	img, _, err := cli.ImageInspectWithRaw(ctx, imageID)
+	img, err := cli.ImageInspect(ctx, imageID)
 	if err != nil {
 		return "", nil, "", fmt.Errorf("inspecting image %s (container %s): %w", imageID, containerID, err)
 	}

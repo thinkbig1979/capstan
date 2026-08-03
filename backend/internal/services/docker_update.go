@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -74,7 +73,7 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
 
-		imgInspect, _, err := s.client.ImageInspectWithRaw(ctx, c.ImageID)
+		imgInspect, err := s.client.ImageInspect(ctx, c.ImageID)
 		if err != nil {
 			continue
 		}
@@ -239,7 +238,7 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 
 	if advanced {
 		// Resolve new digest for details (best-effort).
-		newImg, _, imgErr := s.client.ImageInspectWithRaw(ctx, newImageID)
+		newImg, imgErr := s.client.ImageInspect(ctx, newImageID)
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)
@@ -313,7 +312,7 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 
 // updateStandaloneContainer pulls the image, decoding the stream via
 // truth.DrainPullStream so that auth/manifest errors are surfaced (finding #3).
-func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect types.ContainerJSON, wasRunning bool) error {
+func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect container.InspectResponse, wasRunning bool) error {
 	imageRef := inspect.Config.Image
 
 	reader, err := s.client.ImagePull(ctx, imageRef, image.PullOptions{})
@@ -480,7 +479,7 @@ func (s *DockerService) UpdateContainerStreaming(
 	}
 
 	if advanced {
-		newImg, _, imgErr := s.client.ImageInspectWithRaw(ctx, newImageID)
+		newImg, imgErr := s.client.ImageInspect(ctx, newImageID)
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)
@@ -552,7 +551,7 @@ func (s *DockerService) updateComposeContainerStreaming(
 // recreates the container.
 func (s *DockerService) updateStandaloneContainerStreaming(
 	ctx context.Context,
-	inspect types.ContainerJSON,
+	inspect container.InspectResponse,
 	wasRunning bool,
 	emit func(LogLine),
 	setStatus func(Status),
@@ -689,7 +688,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	}
 
 	if advanced {
-		newImg, _, imgErr := s.client.ImageInspectWithRaw(ctx, newImgID)
+		newImg, imgErr := s.client.ImageInspect(ctx, newImgID)
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)
