@@ -155,12 +155,18 @@ func (s *ScannerService) ScanDirectory(path string) error {
 	return s.ScanDirectoryWithRoot(path, "")
 }
 
-func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) error {
-	_, err := os.ReadDir(path)
-	if err != nil {
-		return err
-	}
+// directoryRecord is what RegisterDirectory and ScanDirectoryWithRoot both
+// derive from a path on disk: the models.Directory row plus the git fields
+// ScanDirectoryWithRoot also needs when it builds any stack it discovers
+// underneath. Extracted so the two callers share one source of truth instead
+// of two copies of the same git/root-path probing drifting apart.
+type directoryRecord struct {
+	directory models.Directory
+	isGitRepo bool
+	gitBranch string
+}
 
+func (s *ScannerService) buildDirectoryRecord(path string, rootDir string) directoryRecord {
 	dirName := filepath.Base(path)
 	isGitRepo := false
 	gitRemote := ""
@@ -191,6 +197,57 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 		}
 	}
 
+	return directoryRecord{
+		directory: models.Directory{
+			Path:      path,
+			Name:      dirName,
+			RootDir:   effectiveRoot,
+			IsGitRepo: isGitRepo,
+			GitRemote: gitRemote,
+			GitBranch: gitBranch,
+		},
+		isGitRepo: isGitRepo,
+		gitBranch: gitBranch,
+	}
+}
+
+// RegisterDirectory upserts the directories row for path without scanning it
+// for compose files or touching the stacks table. It exists so a caller that
+// is about to insert a stacks row referencing this path (stacks.directory has
+// an FK to directories.path, ON DELETE CASCADE — see migrations.go) can
+// satisfy that FK first, without paying for a full ScanDirectoryWithRoot pass
+// (agent-os-jcu: POST /api/v1/stacks was inserting the stack row for a
+// brand-new directory before any row for that directory existed, which
+// 500'd under pool-wide foreign_keys enforcement).
+func (s *ScannerService) RegisterDirectory(path string, rootDir string) error {
+	if _, err := os.ReadDir(path); err != nil {
+		return err
+	}
+	rec := s.buildDirectoryRecord(path, rootDir)
+	return s.db.UpsertDirectory(rec.directory)
+}
+
+// UnregisterDirectory removes the directories row for path. It is the
+// rollback counterpart to RegisterDirectory: if a caller registers the
+// directory to satisfy the stacks FK and then fails to insert the stack row,
+// this undoes the registration so a partial Create does not leave a
+// directory row with no stack behind it.
+func (s *ScannerService) UnregisterDirectory(path string) error {
+	return s.db.DeleteDirectory(path)
+}
+
+func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) error {
+	_, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
+
+	rec := s.buildDirectoryRecord(path, rootDir)
+	dirName := rec.directory.Name
+	isGitRepo := rec.isGitRepo
+	gitBranch := rec.gitBranch
+	effectiveRoot := rec.directory.RootDir
+
 	relPath := ""
 	if effectiveRoot != "" {
 		rel, err := filepath.Rel(effectiveRoot, path)
@@ -202,16 +259,7 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 		relPath = dirName
 	}
 
-	directory := models.Directory{
-		Path:      path,
-		Name:      dirName,
-		RootDir:   effectiveRoot,
-		IsGitRepo: isGitRepo,
-		GitRemote: gitRemote,
-		GitBranch: gitBranch,
-	}
-
-	if err := s.db.UpsertDirectory(directory); err != nil {
+	if err := s.db.UpsertDirectory(rec.directory); err != nil {
 		return err
 	}
 
