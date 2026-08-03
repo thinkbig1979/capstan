@@ -61,15 +61,16 @@ func createStackRequest(t *testing.T, handler *StacksHandler, name string) *http
 // Create's duplicate guard is a filesystem check (os.Stat on stackDir) but the
 // rollback it guards is a DATABASE cascade: stacks.directory has an FK to
 // directories(path) ON DELETE CASCADE, so deleting the directories row deletes
-// every stack row whose directory equals that path. The two can disagree, and
-// the Delete handler is what makes them disagree in ordinary operation: it
-// os.RemoveAll's the directory and deletes its own stacks row, but never
-// unregisters the directory. That leaves a directories row whose directory is
-// gone from disk, so the next Create for the same path sails past the 409 and
-// re-arms the cascade against any sibling stack still registered there.
+// every stack row whose directory equals that path. The two can disagree: the
+// Delete handler deletes its own stacks row but never unregisters the directory,
+// so a directories row outlives every stack under it, and the directory itself
+// can then vanish from disk out-of-band (an operator rm, a git-driven flow) with
+// the sibling's row still registered. The next Create for that path sails past
+// the 409 and re-arms the cascade against that sibling.
 //
 // The whole sequence below runs through real handler calls; only UpsertStack's
-// failure is injected, because the rollback branch has no other trigger.
+// failure and the out-of-band directory removal are injected, because the
+// rollback branch has no other trigger.
 func TestStacksHandler_Create_RollbackDoesNotCascadeSiblingStacks(t *testing.T) {
 	tempDir := t.TempDir()
 	db, err := database.NewWithMigrations(":memory:")
@@ -112,20 +113,30 @@ func TestStacksHandler_Create_RollbackDoesNotCascadeSiblingStacks(t *testing.T) 
 	require.NotEmpty(t, defaultID)
 	require.NotEmpty(t, siblingID)
 
-	// 3. Delete the default stack through the real handler. It removes the whole
-	//    directory from disk and its own stacks row, but leaves the directories
-	//    row behind — DeleteStack touches only the stacks table and the handler
-	//    never calls UnregisterDirectory.
+	// 3. Delete the default stack through the real handler. It removes that
+	//    stack's own files and its stacks row, leaves the sibling's files and row
+	//    alone (agent-os-xa7), and leaves the directories row behind —
+	//    DeleteStack touches only the stacks table and the handler never calls
+	//    UnregisterDirectory.
 	delRouter := gin.New()
 	delRouter.DELETE("/stacks/:id", authContextMiddleware("test-user-id"), realHandler.Delete)
 	delReq := httptest.NewRequest(http.MethodDelete, "/stacks/"+defaultID+"?confirm=true", nil)
 	delW := httptest.NewRecorder()
 	delRouter.ServeHTTP(delW, delReq)
 	require.Equal(t, http.StatusOK, delW.Code, "setup: Delete must succeed, body=%s", delW.Body.String())
+	require.NoFileExists(t, filepath.Join(stackDir, "compose.yaml"), "setup: the deleted stack's file must go")
+
+	// 4. The directory then vanishes from disk OUT-OF-BAND — a manual rm, a failed
+	//    restore, external tooling — while the sibling's row stays registered.
+	//    This is injected rather than driven through a handler because since
+	//    agent-os-xa7 nothing in capstan removes a directory another stack is
+	//    still using. The sibling MUST survive this step: it is the row the
+	//    cascade would take, so without it the assertion below is vacuous.
+	require.NoError(t, os.RemoveAll(stackDir))
 
 	// The disagreement now exists: directory gone from disk, directories row live.
 	_, statErr := os.Stat(stackDir)
-	require.True(t, os.IsNotExist(statErr), "setup: Delete must remove %s from disk", stackDir)
+	require.True(t, os.IsNotExist(statErr), "setup: %s must be gone from disk", stackDir)
 	staleDir, err := db.GetDirectory(stackDir)
 	require.NoError(t, err, "setup: the directories row must outlive its directory")
 	require.Equal(t, stackDir, staleDir.Path)
@@ -135,7 +146,7 @@ func TestStacksHandler_Create_RollbackDoesNotCascadeSiblingStacks(t *testing.T) 
 	require.Len(t, survivors, 1, "setup: the sibling stack must still be registered")
 	require.Equal(t, siblingID, survivors[0].ID)
 
-	// 4. Re-create the same stack. os.Stat finds nothing, so the 409 guard does
+	// 5. Re-create the same stack. os.Stat finds nothing, so the 409 guard does
 	//    not fire; RegisterDirectory upserts the row that was already there; then
 	//    UpsertStack fails and the rollback runs against a row it did not create.
 	failing := &upsertFailingStore{DB: db, err: errors.New("database is locked")}

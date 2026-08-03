@@ -438,8 +438,19 @@ type fakeStackStore struct {
 func (f *fakeStackStore) ListStacks() ([]models.Stack, error)                 { return nil, nil }
 func (f *fakeStackStore) GetStack(string) (*models.Stack, error)              { return f.stack, nil }
 func (f *fakeStackStore) GetStackByProjectName(string) (*models.Stack, error) { return nil, nil }
-func (f *fakeStackStore) UpsertStack(models.Stack) error                      { return nil }
-func (f *fakeStackStore) UpdateStackStatus(string, string) error              { return nil }
+
+// ListStacksByDirectory reports the configured stack as the only one registered
+// under its directory, so Delete takes the sole-stack path and removes the whole
+// directory — the behaviour these fixtures assert.
+func (f *fakeStackStore) ListStacksByDirectory(path string) ([]models.Stack, error) {
+	if f.stack == nil || f.stack.Directory != path {
+		return nil, nil
+	}
+	return []models.Stack{*f.stack}, nil
+}
+
+func (f *fakeStackStore) UpsertStack(models.Stack) error         { return nil }
+func (f *fakeStackStore) UpdateStackStatus(string, string) error { return nil }
 func (f *fakeStackStore) DeleteStack(string) error {
 	f.deleteCalled = true
 	return f.deleteErr
