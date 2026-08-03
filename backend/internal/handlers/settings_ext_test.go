@@ -346,6 +346,52 @@ func TestSettingsHandler_GetGitSettings_Default(t *testing.T) {
 	assert.Equal(t, false, response["hasHttpsToken"])
 }
 
+// TestSettingsHandler_GetGitSettings_UndecryptableToken drives the actual
+// GET /settings/git handler (not a helper called in isolation — see
+// httpsCredentials' analogous fix in git_credentials.go for why that
+// distinction matters) for a global git_https_token that is stored but
+// cannot be decrypted, e.g. after a STORAGE_KEY rotation. Before this fix,
+// GetGitSettings discarded the GetSetting error (`httpsToken, _ :=
+// h.db.GetSetting(...)`) and so reported hasHttpsToken=false, indistinguishable
+// from "never configured" — even though a token row exists on disk
+// (agent-os-oyj).
+//
+// Reproducing a genuine decrypt failure needs the SAME database FILE reopened
+// under a DIFFERENT key, which is why this doesn't use the :memory: DB that
+// newTestSettingsHandler uses for the rest of this file.
+func TestSettingsHandler_GetGitSettings_UndecryptableToken(t *testing.T) {
+	dataDir := t.TempDir()
+
+	encA := services.NewTokenEncryptorOrDefault("", "storage-key-AAAA-32-chars-long-x1")
+	dbA, err := database.NewWithMigrationsAndEncryptor(dataDir, encA)
+	require.NoError(t, err)
+	require.NoError(t, dbA.SetSetting("git_https_token", "the-real-stored-token"))
+	require.NoError(t, dbA.Close())
+
+	// Reopen the same file under a different key: the row is still there, but
+	// decrypting it with the wrong key now fails.
+	encB := services.NewTokenEncryptorOrDefault("", "storage-key-BBBB-32-chars-long-x2")
+	dbB, err := database.NewWithMigrationsAndEncryptor(dataDir, encB)
+	require.NoError(t, err)
+	t.Cleanup(func() { dbB.Close() })
+
+	cfg := &config.Config{DataDir: dataDir}
+	handler := NewSettingsHandler(dbB, "/opt/stacks", "test-secret-key-32-chars-long!!!", false, nil, cfg)
+	router := setupSettingsFullRouter(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/settings/git", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	assert.Equal(t, true, response["hasHttpsToken"], "a stored-but-unreadable token must not report hasHttpsToken=false")
+	assert.Equal(t, true, response["httpsTokenUnreadable"], "the UI needs an honest signal that the stored value could not be read")
+}
+
 func TestSettingsHandler_UpdateGitSettings(t *testing.T) {
 	_, router := newTestSettingsHandler(t)
 

@@ -619,3 +619,11 @@ func TestHTTPSCredentials_SettingsBeatEnvironment(t *testing.T) {
 		t.Errorf("got %q/%q, want the environment values", user, token)
 	}
 }
+
+// The global-token analogue of this precedence test — an undecryptable
+// git_https_token must not fall through to GIT_HTTPS_TOKEN — lives in
+// git_credentials_decrypt_test.go as
+// TestHTTPSCredentials_GlobalDecryptFailure_FailsClosed, alongside the
+// existing gitServiceWithUndecryptableGlobalCredential fixture that already
+// does the same reopen-under-a-different-key setup this would otherwise
+// duplicate (agent-os-oyj).
