@@ -11,7 +11,7 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
-    "doctor": "npx react-doctor@0.9.3"
+    "doctor": "react-doctor"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
@@ -75,7 +75,7 @@
     "eslint-plugin-react-refresh": "^0.5.3",
     "globals": "^16.5.0",
     "jsdom": "^28.0.0",
-    "react-doctor": "^0.9.1",
+    "react-doctor": "0.9.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.65.0",

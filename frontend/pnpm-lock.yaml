@@ -190,7 +190,7 @@ importers:
         specifier: ^28.0.0
         version: 28.0.0
       react-doctor:
-        specifier: ^0.9.1
+        specifier: 0.9.1
         version: 0.9.1(@opentelemetry/core@2.10.0(@opentelemetry/api@1.9.1))(@types/react@19.2.17)(eslint@9.39.2(jiti@2.7.0))
       tailwindcss:
         specifier: ^4.3.3
@@ -4139,7 +4139,7 @@ snapshots:
   '@babel/helper-module-imports@7.28.6':
     dependencies:
       '@babel/traverse': 7.29.0
-      '@babel/types': 7.29.0
+      '@babel/types': 7.29.7
     transitivePeerDependencies:
       - supports-color
 
