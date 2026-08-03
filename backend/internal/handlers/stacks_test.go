@@ -449,8 +449,8 @@ func (f *fakeStackStore) ListStacksByDirectory(path string) ([]models.Stack, err
 	return []models.Stack{*f.stack}, nil
 }
 
-func (f *fakeStackStore) UpsertStack(models.Stack) error                      { return nil }
-func (f *fakeStackStore) UpdateStackStatus(string, string) error              { return nil }
+func (f *fakeStackStore) UpsertStack(models.Stack) error         { return nil }
+func (f *fakeStackStore) UpdateStackStatus(string, string) error { return nil }
 func (f *fakeStackStore) DeleteStack(string) error {
 	f.deleteCalled = true
 	return f.deleteErr
