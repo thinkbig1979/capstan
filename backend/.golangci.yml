@@ -59,25 +59,19 @@ linters:
       - comments
       - std-error-handling
     rules:
-      # SA1019: deprecated Docker SDK types, mid-migration (agent-os-9zi).
-      # docker.go and docker_resources.go are done (types.ContainerJSON,
-      # BuildCache*  were pure Go type aliases for the replacement types —
-      # zero behavior change) and no longer need an exclusion. The remaining
-      # exclusions below cover the ImageInspectWithRaw sites and the
-      # truth.ImageInspector/ContainerInspector interfaces, landing in a
-      # follow-up commit in this same PR.
-      - path: 'internal/services/docker_update\.go'
-        linters: [staticcheck]
-        text: 'SA1019'
-      - path: 'internal/truth/image_inspect\.go'
-        linters: [staticcheck]
-        text: 'SA1019'
-      - path: 'internal/truth/image_inspect_test\.go'
-        linters: [staticcheck]
-        text: 'SA1019'
-      - path: 'internal/truth/verify\.go'
-        linters: [staticcheck]
-        text: 'SA1019'
+      # SA1019 (deprecated Docker SDK types) had a blanket per-file exclusion
+      # here; agent-os-9zi migrated every site instead of excluding them, so
+      # this rule is gone. Two things worth recording for whoever reads this
+      # next: the exclusion this replaced was scoped by file path rather than
+      # a whole-rule exclusion, specifically so new SA1019 issues in these
+      # files would still gate — but a per-file exclusion still hides
+      # existing issues from the count. The exclusion's own comment claimed
+      # 16 findings; the real number, read straight from an unexcluded run,
+      # was 36 — golangci-lint's default max-same-issues:3 and
+      # max-issues-per-linter:50 caps had silently dropped the rest (see
+      # issues: below). Neither cap is a sign anything here was deliberately
+      # hidden; they're upstream defaults nobody had reason to look at until
+      # this migration needed the true count.
       # G104 duplicates errcheck (which is enabled, better-configured, and
       # already gates unchecked errors) with a wider, noisier net.
       - linters: [gosec]
@@ -103,6 +97,22 @@ linters:
       - path: 'internal/services/git_credentials\.go'
         linters: [gosec]
         text: 'G101'
+
+# Uncap issue reporting. golangci-lint's own defaults are max-same-issues: 3
+# and max-issues-per-linter: 50 — silent truncation, not a config choice we
+# made. Discovered while enumerating the SA1019 findings above: the capped
+# default run reported 18; the uncapped run reported 36. Every reported issue
+# still fails the build either way (CI was never blind to these — it still
+# went red on the 3 or so it did see), but a capped count is a wrong
+# enumeration, and 36 alone is within reach of the max-issues-per-linter
+# default — a future sweep of any single linter could silently lose findings
+# past the 50th. Set to 0 (disabled) so a scan's reported count is always the
+# true count. Re-running the full suite uncapped after this migration
+# surfaced nothing new beyond the 36 SA1019 findings already fixed — no other
+# linter had anything hiding behind either cap.
+issues:
+  max-same-issues: 0
+  max-issues-per-linter: 0
 
 formatters:
   enable:

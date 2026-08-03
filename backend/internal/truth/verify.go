@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	dockertypes "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 )
 
 // ContainerInspector is the subset of the Docker client used by the verify
 // helpers. Defined as an interface so tests can stub it without a real daemon.
 type ContainerInspector interface {
-	ContainerInspect(ctx context.Context, containerID string) (dockertypes.ContainerJSON, error)
+	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
 }
 
 // ContainerRunning reports whether the container with the given ID is currently
@@ -45,10 +45,10 @@ func ContainerHealthy(ctx context.Context, cli ContainerInspector, id string) (h
 		return false, false, nil
 	}
 	status := info.State.Health.Status
-	if status == dockertypes.NoHealthcheck || status == "" {
+	if status == container.NoHealthcheck || status == "" {
 		return false, false, nil
 	}
-	return status == dockertypes.Healthy, true, nil
+	return status == container.Healthy, true, nil
 }
 
 // ResourceAbsent calls checkExists and returns true when the resource no

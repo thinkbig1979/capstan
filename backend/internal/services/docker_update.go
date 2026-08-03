@@ -73,7 +73,7 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
 
-		imgInspect, _, err := s.client.ImageInspectWithRaw(ctx, c.ImageID)
+		imgInspect, err := s.client.ImageInspect(ctx, c.ImageID)
 		if err != nil {
 			continue
 		}
@@ -238,7 +238,7 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 
 	if advanced {
 		// Resolve new digest for details (best-effort).
-		newImg, _, imgErr := s.client.ImageInspectWithRaw(ctx, newImageID)
+		newImg, imgErr := s.client.ImageInspect(ctx, newImageID)
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)
@@ -479,7 +479,7 @@ func (s *DockerService) UpdateContainerStreaming(
 	}
 
 	if advanced {
-		newImg, _, imgErr := s.client.ImageInspectWithRaw(ctx, newImageID)
+		newImg, imgErr := s.client.ImageInspect(ctx, newImageID)
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)
@@ -688,7 +688,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	}
 
 	if advanced {
-		newImg, _, imgErr := s.client.ImageInspectWithRaw(ctx, newImgID)
+		newImg, imgErr := s.client.ImageInspect(ctx, newImgID)
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)
