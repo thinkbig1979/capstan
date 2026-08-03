@@ -4,6 +4,7 @@ import type {
   User,
   AuthResponse,
   ConfiguredDir,
+  DirectoryCredentialStatus,
   Stack,
   CommandResult,
   ApiError,
@@ -458,6 +459,16 @@ export const directoriesApi = {
   // directory path through one URL segment. See agent-os-p7r.
   updateCredentials: async (directoryPath: string, credentials: { authType?: string; sshKeyPath?: string; httpsUser?: string; httpsToken?: string }) => {
     const response = await apiClient.put<void>('/directories/credentials', { path: directoryPath, ...credentials })
+    return response.data
+  },
+
+  // Same reasoning as updateCredentials above: the path travels as a query
+  // parameter, not a URL segment, so an absolute path with slashes routes
+  // correctly. See agent-os-8a5.
+  credentialStatus: async (directoryPath: string) => {
+    const response = await apiClient.get<DirectoryCredentialStatus>('/directories/credential-status', {
+      params: { path: directoryPath },
+    })
     return response.data
   },
 }

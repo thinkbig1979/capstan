@@ -28,6 +28,19 @@ export interface ConfiguredDir {
   scannedAt?: string
 }
 
+// DirectoryCredentialStatusValue mirrors the fixed enum returned by
+// GET /directories/credential-status (backend/internal/handlers/directories.go).
+// It is deliberately its own type, not a field on ConfiguredDir: the probe
+// decrypts the stored token to determine it, which directoriesApi.list()
+// (backed by ListDirectories) never does and must not start doing — see the
+// comment on ListDirectories in backend/internal/database/directories.go.
+export type DirectoryCredentialStatusValue = 'none' | 'ok' | 'unreadable' | 'empty'
+
+export interface DirectoryCredentialStatus {
+  path: string
+  status: DirectoryCredentialStatusValue
+}
+
 export interface Directory {
   path: string
   name: string
