@@ -127,6 +127,23 @@ func authenticatedHTTPRepo(t *testing.T) (local string, advance func() string) {
 	return local, advance
 }
 
+// realLocalRepo creates a real, minimal git repository on disk: no remote, one
+// commit. getStatusCLI's nine internal `git` invocations need an actual repo to
+// reach past the first `rev-parse` — a non-existent repo bails out after one
+// call — so the credential-amplification tests (agent-os-9ha) need this rather
+// than a bare path string.
+func realLocalRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "initial")
+	return dir
+}
+
 // gitServiceWithStoredToken returns a GitService whose database holds the git
 // HTTPS credential exactly as the settings handler stores it: encrypted at rest
 // under the git_https_token key.
@@ -496,6 +513,28 @@ func TestGitCommand_RedactsTokenFromOutput(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "***") {
 		t.Errorf("expected the token to be replaced by a placeholder, got: %v", err)
+	}
+}
+
+// TestGetStatusCLI_DirectoryHTTPSEmptyToken_LogsWarnOnce is the WARN sibling of
+// TestGetStatusCLI_UnreadableDirectoryCredential_LogsErrorOnce (git_credentials_decrypt_test.go):
+// a directory configured for https auth with no stored token warns at
+// git_credentials.go:103, on the SAME nine-internal-call getStatusCLI path
+// (git.go:134,141,146,147,148,149,158,168,176), and amplified identically to
+// nine before the fix (agent-os-9ha) because every one of those nine calls
+// re-resolved credentials independently through httpsCredentials.
+func TestGetStatusCLI_DirectoryHTTPSEmptyToken_LogsWarnOnce(t *testing.T) {
+	dirPath := realLocalRepo(t)
+	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, "")
+	buf := captureSlog(t)
+
+	if _, err := svc.getStatusCLI(dirPath); err != nil {
+		t.Fatalf("getStatusCLI: %v", err)
+	}
+
+	got := strings.Count(buf.String(), "no stored credential")
+	if got != 1 {
+		t.Errorf("got %d WARN lines for the empty stored https token, want exactly 1\nlog:\n%s", got, buf.String())
 	}
 }
 
