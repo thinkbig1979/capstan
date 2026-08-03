@@ -39,6 +39,7 @@ func NewSchedulerService(docker updateChecker, db *database.DB, logger *slog.Log
 	if logger == nil {
 		logger = slog.Default()
 	}
+	//nolint:gosec // stored on the struct as parentCancel; called by Stop() at scheduler.go:113 (or replaced by the next Start(), which cancels the old one before creating a new one)
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SchedulerService{
 		docker:       docker,
@@ -65,6 +66,7 @@ func (s *SchedulerService) Start(interval time.Duration) {
 	if s.parentCancel != nil {
 		s.parentCancel()
 	}
+	//nolint:gosec // stored on the struct as parentCancel; called by Stop() at scheduler.go:113 (or replaced by the next Start(), which cancels the old one before creating a new one, as above)
 	s.parentCtx, s.parentCancel = context.WithCancel(context.Background())
 
 	s.ticker = time.NewTicker(interval)

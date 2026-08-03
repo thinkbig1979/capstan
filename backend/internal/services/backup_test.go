@@ -636,6 +636,7 @@ func TestRunBackup_ContextCancel_DefensiveRestart(t *testing.T) {
 	db := newBackupTestDB(t)
 	docker := &fakeDocker{statusStr: "running"}
 
+	//nolint:gosec // cancel is invoked by the onRun callback below once the backup reaches the restic "backup" invocation; the test's own assertions on run.Status/docker.stopped/docker.started require that path to have executed, and a real leak here is bounded by the test process's lifetime regardless
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Cancel the context as soon as the backup starts running.

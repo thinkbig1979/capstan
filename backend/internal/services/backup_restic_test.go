@@ -122,6 +122,7 @@ func TestResticManager_PasswordFile_ContentsCorrect(t *testing.T) {
 	require.NoError(t, err)
 	defer cleanup()
 
+	//nolint:gosec // pwFile is a test fixture created by withPasswordFile() under the test's config DataDir (t.TempDir())
 	data, err := os.ReadFile(pwFile)
 	require.NoError(t, err)
 	assert.Equal(t, cfg.ResticPassword, string(data))

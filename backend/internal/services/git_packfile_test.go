@@ -30,6 +30,7 @@ func gitPackedRepo(t *testing.T) (local, remote string) {
 
 	run := func(dir string, args ...string) string {
 		t.Helper()
+		//nolint:gosec // test helper, explicit argv, not a shell string
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
@@ -232,6 +233,7 @@ func TestGetStatusGoGit_PackedRepoBehindAcrossMerge(t *testing.T) {
 
 	run := func(dir string, args ...string) string {
 		t.Helper()
+		//nolint:gosec // test helper, explicit argv, not a shell string
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),

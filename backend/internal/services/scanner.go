@@ -171,6 +171,7 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 		isGitRepo = true
 
 		headPath := filepath.Join(gitPath, "HEAD")
+		//nolint:gosec // path is reached only by recursing from the configured stacks directories (ScanAll -> scanDirectoryRecursive), never external input
 		if content, err := os.ReadFile(headPath); err == nil {
 			headContent := string(content)
 			if strings.HasPrefix(headContent, "ref: refs/heads/") {

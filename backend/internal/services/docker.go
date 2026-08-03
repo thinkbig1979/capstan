@@ -107,6 +107,7 @@ func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
 
 	args := s.buildComposeArgs(stack, "logs", []string{"--tail", fmt.Sprintf("%d", tail), "--timestamps"})
 
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory
 

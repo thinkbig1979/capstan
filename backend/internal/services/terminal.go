@@ -81,6 +81,7 @@ func (s *TerminalService) CreateSession(stackID, containerName string) (*Termina
 	var ptyFile *os.File
 
 	for _, shell := range shells {
+		//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 		cmd := exec.Command("docker", "exec", "-it", "--", containerName, shell)
 
 		ptyFile, err = pty.Start(cmd)

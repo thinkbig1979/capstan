@@ -9,12 +9,14 @@ version: "2"
 #   - contextcheck: catches context.Background()/TODO() used where a request
 #     or caller context should propagate — the failure mode is a cancelled
 #     request that keeps working anyway.
-#   - gosec: security-focused static analysis. Exclusions are prepared below
-#     (G104/G301/G306 by text, reasons on each) but gosec itself is added to
-#     `enable` in a follow-up commit, once the ~60-finding residual (G204's
-#     deliberate subprocess sites plus G304/G101/G118/G703/G202/G115/G706/
-#     G504) is triaged and each one carries a cited nolint or a fix —
-#     reviewable separately from "add the gate".
+#   - gosec: security-focused static analysis. G104/G301/G306/G101 are
+#     excluded below (reasons on each rule) for being noisy on this codebase
+#     specifically, not gosec as a whole. Every other finding — G204's
+#     deliberate subprocess sites, G304/G703's bounded file/path reads,
+#     G118's stored-cancel-func lifecycle, G115's impractical overflow,
+#     G202/G504's traced-safe call sites — carries a cited nolint at the
+#     call site instead of a config exclusion, because each of those is a
+#     property of that specific call, not of a whole rule.
 #
 # Note on the requested set vs. this list: golangci-lint v2 folds gosimple
 # and stylecheck into the staticcheck linter binary (single `staticcheck`
@@ -33,21 +35,26 @@ linters:
     - misspell
     - bodyclose
     - contextcheck
-    # gosec: added in a follow-up commit once the residual is triaged and
-    # annotated. See the comment above and the prepared exclusion rules
-    # below (SA1019/G104/G301/G306).
+    - gosec
   exclusions:
     generated: lax
-    # Deliberately NOT using the common-false-positives/legacy presets: they
-    # silently swallow gosec findings with no nolint trail — verified by
-    # testing each preset in isolation, common-false-positives alone drops
-    # G204 (the deliberate subprocess sites, the whole reason gosec is here)
-    # from 20 to 1 and G304 from 15 to 0, and legacy drops G104/G301 to 0 —
-    # all without a single comment marking why. That defeats the point of
-    # gating on gosec: a new careless subprocess call would be exempted by
-    # the same preset a deliberate one is. comments/std-error-handling were
-    # checked the same way and don't touch gosec; every gosec exclusion
-    # below is explicit and reasoned instead.
+    # Deliberately NOT using the common-false-positives/legacy presets.
+    # Verified by testing each preset in isolation against gosec alone
+    # (golangci-lint run --config <preset-only> ./..., counting findings by
+    # rule before/after):
+    #   - common-false-positives suppresses G204 (20 -> 1) and G304
+    #     (15 -> 0) ENTIRELY, with no nolint trail. G204 and G304 are the
+    #     two rules this config exists to enforce (the deliberate
+    #     docker/git/compose argv sites and the bounded file reads) — a
+    #     preset silently exempting them, and every future careless
+    #     subprocess call or unbounded file read along with them, defeats
+    #     the point of gating on gosec at all.
+    #   - legacy suppresses G104 (52 -> 0) and G301 (31 -> 0) entirely —
+    #     redundant with, and no more informative than, the explicit rules
+    #     below, so no loss dropping it.
+    # comments/std-error-handling were checked the same way (178 -> 178,
+    # unaffected either way) and are kept. Every gosec exclusion below is
+    # explicit and reasoned instead of inherited from a preset.
     presets:
       - comments
       - std-error-handling
@@ -88,6 +95,20 @@ linters:
         text: 'G301'
       - linters: [gosec]
         text: 'G306'
+      # G101 matches identifier NAMES containing PASSWORD/SECRET/TOKEN, not
+      # values. Every current instance (verified individually, agent-os-far)
+      # is either a test fixture literally named test-*/do-not-log, or —
+      # in git_credentials.go — an env var NAME constant
+      # (CAPSTAN_GIT_USERNAME/CAPSTAN_GIT_PASSWORD), never a credential
+      # value. Scoped to _test.go and git_credentials.go specifically,
+      # rather than a blanket G101 exclusion, so a real hardcoded secret
+      # introduced anywhere else still gates normally.
+      - path: '_test\.go'
+        linters: [gosec]
+        text: 'G101'
+      - path: 'internal/services/git_credentials\.go'
+        linters: [gosec]
+        text: 'G101'
 
 formatters:
   enable:

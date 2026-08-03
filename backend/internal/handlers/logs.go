@@ -134,6 +134,7 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 
 	args := h.buildComposeArgs(*stack, "logs", []string{"-f", "--tail=100", "--timestamps"})
 
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = stack.Directory
 

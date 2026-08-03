@@ -139,6 +139,7 @@ func TestComposeHandler_Put_Success(t *testing.T) {
 
 	assert.True(t, response["saved"].(bool))
 
+	//nolint:gosec // composePath is a test fixture under t.TempDir()
 	savedContent, err := os.ReadFile(composePath)
 	require.NoError(t, err)
 	assert.Equal(t, newContent, string(savedContent))
@@ -187,6 +188,7 @@ func TestComposeHandler_Put_ValidationError(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 
+	//nolint:gosec // composePath is a test fixture under t.TempDir()
 	savedContent, err := os.ReadFile(composePath)
 	require.NoError(t, err)
 	assert.Equal(t, composeContent, string(savedContent))

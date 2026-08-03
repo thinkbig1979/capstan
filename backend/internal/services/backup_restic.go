@@ -51,6 +51,7 @@ type execRunner struct{}
 // Run starts the process in its own process group (Setpgid) so that a context
 // cancellation can kill the entire process tree, not just the parent PID.
 func (r *execRunner) Run(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
+	//nolint:gosec // name is always a hardcoded literal ("restic"/"rclone") at every call site, args is explicit argv — see README.md "Command execution and file access"
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = append(os.Environ(), env...)
@@ -99,6 +100,7 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 
 // Output runs the process and captures stdout only.
 func (r *execRunner) Output(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+	//nolint:gosec // name is always a hardcoded literal ("restic"/"rclone") at every call site, args is explicit argv — see README.md "Command execution and file access"
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = append(os.Environ(), env...)
@@ -582,6 +584,7 @@ func (m *ResticManager) Stats(ctx context.Context) (int64, error) {
 	if jsonErr := json.Unmarshal(bytes.TrimSpace(raw), &out); jsonErr != nil {
 		return 0, fmt.Errorf("parse restic stats JSON: %w", jsonErr)
 	}
+	//nolint:gosec // TotalSize overflowing int64 needs a backup past ~9.2 exabytes, not a realistic size for this class of tool
 	return int64(out.TotalSize), nil
 }
 

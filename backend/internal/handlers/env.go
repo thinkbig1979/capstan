@@ -95,6 +95,7 @@ func (h *EnvHandler) Get(c *gin.Context) {
 		return
 	}
 
+	//nolint:gosec // envPath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
 	content, err := os.ReadFile(envPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -362,6 +363,7 @@ func writeEnvFileAtomic(envPath, content string) error {
 // verifyEnvRoundTrip re-reads envPath and confirms the persisted bytes equal
 // the intended content. Returns a Failed ActionResult on mismatch, nil on success.
 func verifyEnvRoundTrip(envPath, intended string) *truth.ActionResult {
+	//nolint:gosec // callers validate envPath against the configured stacks directories before calling this (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
 	persisted, err := os.ReadFile(envPath)
 	if err != nil {
 		ar := truth.Failed("could not re-read env file for round-trip verification", err)

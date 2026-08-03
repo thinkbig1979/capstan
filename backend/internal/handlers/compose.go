@@ -83,6 +83,7 @@ func (h *ComposeHandler) Get(c *gin.Context) {
 		return
 	}
 
+	//nolint:gosec // composePath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
 	content, err := os.ReadFile(composePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -260,7 +261,8 @@ func restoreEnv(envPath string, originalBytes []byte) {
 		return
 	}
 	// Best-effort restore of original content.
-	os.WriteFile(envPath, originalBytes, 0644) //nolint:errcheck
+	//nolint:errcheck,gosec // errcheck: best-effort, nothing further to do on failure. gosec: every caller validates envPath against the configured stacks directories before it reaches here — see README.md "Command execution and file access"
+	os.WriteFile(envPath, originalBytes, 0644)
 }
 
 // ComposeEnvRequest is the body for the atomic PUT /api/v1/stacks/:id/compose-env
@@ -361,6 +363,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	}
 
 	// ── Snapshot current compose content for rollback ──────────────────────
+	//nolint:gosec // composePath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
 	originalCompose, readErr := os.ReadFile(composePath)
 	if readErr != nil && !os.IsNotExist(readErr) {
 		renderResult(c, truth.Failed("failed to read existing compose file for rollback snapshot", readErr))
@@ -385,6 +388,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		}
 
 		// Snapshot original .env content so we can restore it on rollback.
+		//nolint:gosec // envPath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
 		if snapshot, rerr := os.ReadFile(envPath); rerr == nil {
 			originalEnv = snapshot
 		} else if !os.IsNotExist(rerr) {
@@ -424,10 +428,12 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	}
 
 	// ── Verify compose was written ─────────────────────────────────────────
+	//nolint:gosec // composePath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
 	if writtenCompose, rerr := os.ReadFile(composePath); rerr != nil || string(writtenCompose) != req.ComposeContent {
 		// Compose verification failed — roll back both files.
 		rollbackErr := ""
 		if originalCompose != nil {
+			//nolint:gosec // composePath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
 			if rErr := os.WriteFile(composePath, originalCompose, 0644); rErr != nil {
 				rollbackErr = rErr.Error()
 			}

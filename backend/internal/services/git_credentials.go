@@ -131,6 +131,7 @@ func (s *GitService) gitCmd(dirPath string, args ...string) (*exec.Cmd, string) 
 		)
 	}
 
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := exec.Command("git", append(gitArgs, args...)...)
 	cmd.Dir = dirPath
 	cmd.Env = env

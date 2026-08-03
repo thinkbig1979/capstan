@@ -286,6 +286,7 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 }
 
 func parseEnvFile(path string) ([]map[string]string, error) {
+	//nolint:gosec // path's only caller passes h.cfg.DataDir + "/global.env", config-derived, never request input
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return []map[string]string{}, nil
