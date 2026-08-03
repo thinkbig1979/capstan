@@ -260,7 +260,15 @@ func (h *DirectoriesHandler) CredentialStatus(c *gin.Context) {
 	cred, err := h.db.GetDirectoryCredentials(path)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// No credentials row for this path: never configured, not a failure.
+		// NOT the ordinary "never configured" case — that is handled by the
+		// authType=="" fall-through below, since GetDirectory just above
+		// already confirmed a row exists at this path. GetDirectory and
+		// GetDirectoryCredentials query the same table by the same key
+		// (database/directories.go), so the only way THIS call can still see
+		// sql.ErrNoRows is a TOCTOU race: the row was deleted between the two
+		// queries. Kept as defence rather than deleted, but deliberately
+		// untested — a test would have to win a race against this handler's
+		// own two DB calls, which costs more than the branch is worth.
 		c.JSON(http.StatusOK, gin.H{"path": path, "status": credentialStatusNone})
 		return
 	case err != nil:
