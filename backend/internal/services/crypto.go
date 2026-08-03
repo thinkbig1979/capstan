@@ -10,6 +10,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // storageKeyInfo is the HKDF "info" label that domain-separates the at-rest
@@ -96,7 +98,13 @@ type Encryptor interface {
 // (e.g. PUT /api/v1/settings/backup with a restic password). noEncryptor is a
 // genuine non-nil value, so those guards now correctly delegate to it instead
 // of being silently bypassed.
-var ErrEncryptionUnavailable = errors.New("no encryption key configured: set STORAGE_KEY or JWT_SECRET")
+//
+// This aliases errdefs.ErrEncryptionUnavailable (agent-os-2fb) rather than
+// declaring its own errors.New: database.ErrEncryptionUnavailable used to be a
+// second, distinct sentinel with identical text, so errors.Is comparisons
+// against this one failed for errors that originated in the database
+// package's own noEncryptor. See errdefs' doc comment for the full story.
+var ErrEncryptionUnavailable = errdefs.ErrEncryptionUnavailable
 
 // noEncryptor is the null-object Encryptor returned when construction fails.
 // It deliberately does NOT silently pass plaintext through: skipping

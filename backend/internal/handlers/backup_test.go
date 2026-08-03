@@ -411,6 +411,44 @@ func TestUpdateSettings_NoEncryptionKey_ReturnsClearErrorNotPanic(t *testing.T) 
 	body := decodeBody(t, w)
 	assert.Equal(t, models.ErrEncryptionUnavailable, body["code"])
 	assert.Contains(t, body["message"], "STORAGE_KEY")
+}
+
+// TestUpdateSettings_DatabaseConstructedNoEncryptor_Returns422NotInternalError
+// (agent-os-2fb) covers the sibling path to the test above: a DB built via
+// database.New/NewWithMigrations rather than through
+// services.NewTokenEncryptorOrDefault. Both constructors install a
+// package-local noEncryptor whose Encrypt/Decrypt return that package's own
+// ErrEncryptionUnavailable sentinel. respondIfEncryptionUnavailable only
+// checked errors.Is against services.ErrEncryptionUnavailable, so — before
+// the two sentinels were unified — this path fell through to a generic 500
+// INTERNAL_ERROR instead of the actionable 422 ENCRYPTION_KEY_MISSING.
+func TestUpdateSettings_DatabaseConstructedNoEncryptor_Returns422NotInternalError(t *testing.T) {
+	t.Parallel()
+
+	// database.NewWithMigrations (no encryptor argument) mirrors any caller
+	// that builds a DB directly from the database package rather than via
+	// services.NewTokenEncryptorOrDefault.
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	r := newBackupRouter(h)
+
+	req := jsonReq(t, http.MethodPut, "/api/settings/backup", map[string]interface{}{
+		"password": "a-restic-password",
+	})
+	w := httptest.NewRecorder()
+
+	require.NotPanics(t, func() {
+		r.ServeHTTP(w, req)
+	}, "PUT /settings/backup must not panic when the DB has no encryptor")
+
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	body := decodeBody(t, w)
+	assert.Equal(t, models.ErrEncryptionUnavailable, body["code"])
+	assert.Contains(t, body["message"], "STORAGE_KEY")
 
 	// The password must never have been persisted at all (GetSetting errors
 	// with "no rows" because SetSetting never got past the encryption
