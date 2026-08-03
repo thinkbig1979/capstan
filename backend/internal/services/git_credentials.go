@@ -163,10 +163,23 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 // omission from such a list is exactly the failure mode being fixed here. git
 // only runs the helper when a remote actually challenges it.
 func (s *GitService) gitCmd(dirPath string, args ...string) (*exec.Cmd, string) {
+	user, token := s.httpsCredentials(dirPath)
+	return s.gitCmdWithCreds(dirPath, user, token, args...)
+}
+
+// gitCmdWithCreds is gitCmd with credential resolution factored out: it takes
+// an already-resolved (user, token) pair instead of calling httpsCredentials
+// itself. A single logical git operation (status, pull, log, diff) issues
+// several of these; resolving once at the top of that operation and passing
+// the result to every call here — instead of letting each one re-resolve via
+// gitCmd — is what turns N DB reads/decrypt attempts and N duplicate log lines
+// per operation into one (agent-os-9ha). It intentionally carries no memoizing
+// state of its own: see the doc comment on GitService for why a shared cache
+// was rejected.
+func (s *GitService) gitCmdWithCreds(dirPath, user, token string, args ...string) (*exec.Cmd, string) {
 	gitArgs := []string{"-c", "safe.directory=" + dirPath}
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 
-	user, token := s.httpsCredentials(dirPath)
 	if token != "" {
 		// The empty assignment first clears any helper inherited from system or
 		// global config, so ours is the only one consulted.

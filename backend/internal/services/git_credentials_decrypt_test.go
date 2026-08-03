@@ -142,6 +142,54 @@ func TestHTTPSCredentials_DirectoryDecryptFailure_SSHGetsNoHTTPSToken(t *testing
 	}
 }
 
+// TestGetStatusCLI_UnreadableDirectoryCredential_LogsErrorOnce is the
+// regression test for agent-os-9ha: getStatusCLI issues nine internal git
+// invocations (git.go:134,141,146,147,148,149,158,168,176), and before the fix
+// each one re-resolved credentials through httpsCredentials independently, so
+// a single unreadable directory credential produced nine identical ERROR lines
+// (git_credentials.go:87) and nine redundant DB reads/decrypt attempts for one
+// logical operation. Resolving once per operation and threading the result
+// through every gitCommandWithCreds call collapses that to one.
+func TestGetStatusCLI_UnreadableDirectoryCredential_LogsErrorOnce(t *testing.T) {
+	dirPath := realLocalRepo(t)
+	svc := gitServiceWithUndecryptableDirectoryCredential(t, dirPath, "https")
+	buf := captureSlog(t)
+
+	if _, err := svc.getStatusCLI(dirPath); err != nil {
+		t.Fatalf("getStatusCLI: %v", err)
+	}
+
+	got := strings.Count(buf.String(), "cannot read the stored git credential")
+	if got != 1 {
+		t.Errorf("got %d ERROR lines for the unreadable directory credential, want exactly 1\nlog:\n%s", got, buf.String())
+	}
+}
+
+// TestGetStatusCLI_UnreadableDirectoryCredential_ErrorRecursOnSecondCall proves
+// the fix is "resolve once per LOGICAL OPERATION", not "log once ever". A
+// memoizing/suppression map keyed by directory path (the rejected approach —
+// see the task comment on GitService) would silence this after the first call;
+// resolving fresh on every call to getStatusCLI must not. This assertion is
+// satisfied by both the unmodified code (which logs nine ERROR lines on every
+// call) and the fix (one line on every call) — it is a guard against a
+// different, wrong fix shape, not a reproduction of the amplification bug.
+func TestGetStatusCLI_UnreadableDirectoryCredential_ErrorRecursOnSecondCall(t *testing.T) {
+	dirPath := realLocalRepo(t)
+	svc := gitServiceWithUndecryptableDirectoryCredential(t, dirPath, "https")
+
+	if _, err := svc.getStatusCLI(dirPath); err != nil {
+		t.Fatalf("getStatusCLI (first call): %v", err)
+	}
+
+	buf := captureSlog(t)
+	if _, err := svc.getStatusCLI(dirPath); err != nil {
+		t.Fatalf("getStatusCLI (second call): %v", err)
+	}
+	if !strings.Contains(buf.String(), "cannot read the stored git credential") {
+		t.Error("the ERROR did not recur on a second call to the same GitService instance — credentials must be resolved fresh per operation, not suppressed after the first sighting (a set-once memo would fail this)")
+	}
+}
+
 // TestHTTPSCredentials_DecryptFailure_PositiveControl_MatchingKeyWins is the
 // control the regression test needs: "no global token returned" is equally
 // satisfied by breaking directory credentials outright, so the same fixture

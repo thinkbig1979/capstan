@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/cgi" //nolint:gosec // hosts git-http-backend as a local, non-network-exposed httptest server for the credential regression harness (agent-os-qqw) below — the Httpoxy CVE this rule flags needs an actual exposed proxy, not a local test double
@@ -125,6 +126,23 @@ func authenticatedHTTPRepo(t *testing.T) (local string, advance func() string) {
 	}
 
 	return local, advance
+}
+
+// realLocalRepo creates a real, minimal git repository on disk: no remote, one
+// commit. getStatusCLI's nine internal `git` invocations need an actual repo to
+// reach past the first `rev-parse` — a non-existent repo bails out after one
+// call — so the credential-amplification tests (agent-os-9ha) need this rather
+// than a bare path string.
+func realLocalRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "initial")
+	return dir
 }
 
 // gitServiceWithStoredToken returns a GitService whose database holds the git
@@ -496,6 +514,87 @@ func TestGitCommand_RedactsTokenFromOutput(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "***") {
 		t.Errorf("expected the token to be replaced by a placeholder, got: %v", err)
+	}
+}
+
+// TestGetStatusCLI_DirectoryHTTPSEmptyToken_LogsWarnOnce is the WARN sibling of
+// TestGetStatusCLI_UnreadableDirectoryCredential_LogsErrorOnce (git_credentials_decrypt_test.go):
+// a directory configured for https auth with no stored token warns at
+// git_credentials.go:103, on the SAME nine-internal-call getStatusCLI path
+// (git.go:134,141,146,147,148,149,158,168,176), and amplified identically to
+// nine before the fix (agent-os-9ha) because every one of those nine calls
+// re-resolved credentials independently through httpsCredentials.
+func TestGetStatusCLI_DirectoryHTTPSEmptyToken_LogsWarnOnce(t *testing.T) {
+	dirPath := realLocalRepo(t)
+	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, "")
+	buf := captureSlog(t)
+
+	if _, err := svc.getStatusCLI(dirPath); err != nil {
+		t.Fatalf("getStatusCLI: %v", err)
+	}
+
+	got := strings.Count(buf.String(), "no stored credential")
+	if got != 1 {
+		t.Errorf("got %d WARN lines for the empty stored https token, want exactly 1\nlog:\n%s", got, buf.String())
+	}
+}
+
+// TestGetStatusCLI_ResolvedTokenReachesEveryInvocation is the auth-still-works
+// counterpart to the log-count tests above. Those only assert on how many
+// times a message was logged; none of them would notice a bug that threads an
+// unresolved (empty) credential through the converted getStatusCLI path while
+// still logging correctly — that would break private-remote auth silently,
+// which is worse than the log noise agent-os-9ha set out to fix.
+//
+// A wrapper script stands in for `git` on PATH: it appends the credential
+// environment variables it received to a shared log file on every invocation,
+// then execs the real git binary so getStatusCLI still completes normally.
+// gitCmdWithCreds sets CAPSTAN_GIT_USERNAME/CAPSTAN_GIT_PASSWORD in the child
+// environment on every invocation once a token is configured (regardless of
+// whether that particular git subcommand needs to contact a remote — see
+// gitCmd's doc comment), so this observes the resolved credential landing on
+// each of getStatusCLI's nine internal git processes directly, rather than
+// inferring it from a log line.
+func TestGetStatusCLI_ResolvedTokenReachesEveryInvocation(t *testing.T) {
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not on PATH")
+	}
+
+	dirPath := realLocalRepo(t)
+	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, testGitToken)
+
+	wrapperDir := t.TempDir()
+	logPath := filepath.Join(wrapperDir, "env.log")
+	wrapperScript := "#!/bin/sh\n" +
+		"printf 'user=%s token=%s\\n' \"$" + credentialEnvUser + "\" \"$" + credentialEnvToken + "\" >> \"" + logPath + "\"\n" +
+		"exec \"" + realGit + "\" \"$@\"\n"
+	wrapperPath := filepath.Join(wrapperDir, "git")
+	//nolint:gosec // test-owned wrapper script under t.TempDir(), not user input
+	if err := os.WriteFile(wrapperPath, []byte(wrapperScript), 0o755); err != nil {
+		t.Fatalf("write git wrapper: %v", err)
+	}
+
+	t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, err := svc.getStatusCLI(dirPath); err != nil {
+		t.Fatalf("getStatusCLI: %v", err)
+	}
+
+	//nolint:gosec // logPath is built a few lines above from filepath.Join(wrapperDir, "env.log"), where wrapperDir is this test's own t.TempDir() — never attacker- or environment-influenced, so the "variable path" this rule warns about is a path this test constructed itself, not external input
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read wrapper log (wrapper never ran — the real git was invoked directly instead of via PATH): %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
+	if len(lines) != 9 {
+		t.Fatalf("wrapper observed %d git invocations, want 9 (one per getStatusCLI internal call): %v", len(lines), lines)
+	}
+	want := fmt.Sprintf("user=%s token=%s", testGitUser, testGitToken)
+	for i, line := range lines {
+		if line != want {
+			t.Errorf("invocation %d: git child process env = %q, want %q — the resolved credential did not reach this invocation", i, line, want)
+		}
 	}
 }
 

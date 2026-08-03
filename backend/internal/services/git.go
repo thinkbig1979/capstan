@@ -30,6 +30,16 @@ type RedeployFailure struct {
 // PullResult is the raw outcome of a git pull (no redeploy logic).
 // The Redeploy path is handled separately via PullVerified on the DockerService.
 
+// GitService is two pointer fields, immutable after construction, and built
+// once at startup (main.go); it is reached concurrently from request handlers
+// on gin's per-request goroutines. It deliberately carries no cache of
+// resolved credentials or of what has already been logged: a shared map would
+// need synchronization to avoid a data race, would suppress a credential
+// error for the life of the process once logged once (an operator fixing a
+// rotated key in-process via PUT /settings would never see the error clear),
+// and would treat a transient DB error as permanent. Per-operation resolution
+// (gitCmdWithCreds/gitCommandWithCreds) avoids all three by resolving fresh on
+// every call to a public entry point instead of caching across calls.
 type GitService struct {
 	config *config.Config
 	db     *database.DB
@@ -131,22 +141,28 @@ func (s *GitService) getStatusGoGit(dirPath string) (result *models.GitStatusRes
 }
 
 func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, error) {
-	branch, err := s.gitCommand(dirPath, "rev-parse", "--abbrev-ref", "HEAD")
+	// Resolved once for the whole operation and threaded through every call
+	// below via gitCommandWithCreds, instead of each of the nine calls
+	// re-resolving (and re-logging) independently through gitCommand
+	// (agent-os-9ha).
+	user, token := s.httpsCredentials(dirPath)
+
+	branch, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		// Typed 404 (not generic) so the handler returns "not a git repo" rather
 		// than a 500 when go-git fell back to here for a non-repo directory.
 		return nil, models.NewAppError(404, models.ErrGitNotRepo, "Not a git repository")
 	}
 
-	commitHash, err := s.gitCommand(dirPath, "rev-parse", "HEAD")
+	commitHash, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
-	subject, _ := s.gitCommand(dirPath, "log", "-1", "--format=%s")
-	author, _ := s.gitCommand(dirPath, "log", "-1", "--format=%an")
-	email, _ := s.gitCommand(dirPath, "log", "-1", "--format=%ae")
-	dateStr, _ := s.gitCommand(dirPath, "log", "-1", "--format=%aI")
+	subject, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%s")
+	author, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%an")
+	email, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%ae")
+	dateStr, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%aI")
 
 	shortHash := commitHash
 	if len(shortHash) > 7 {
@@ -155,7 +171,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 
 	dirty := false
 	dirtyCount := 0
-	if output, err := s.gitCommand(dirPath, "status", "--porcelain"); err == nil {
+	if output, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain"); err == nil {
 		trimmed := strings.TrimSpace(output)
 		dirty = trimmed != ""
 		if dirty {
@@ -165,7 +181,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 
 	ahead := 0
 	behind := 0
-	if output, err := s.gitCommand(dirPath, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"); err == nil {
+	if output, err := s.gitCommandWithCreds(dirPath, user, token, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"); err == nil {
 		parts := strings.Fields(output)
 		if len(parts) == 2 {
 			behind, _ = strconv.Atoi(parts[0])
@@ -173,7 +189,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		}
 	}
 
-	remoteURL, _ := s.gitCommand(dirPath, "remote", "get-url", "origin")
+	remoteURL, _ := s.gitCommandWithCreds(dirPath, user, token, "remote", "get-url", "origin")
 
 	return &models.GitStatusResult{
 		Branch: branch,
@@ -194,7 +210,15 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 }
 
 func (s *GitService) gitCommand(dirPath string, args ...string) (string, error) {
-	cmd, token := s.gitCmd(dirPath, args...)
+	user, token := s.httpsCredentials(dirPath)
+	return s.gitCommandWithCreds(dirPath, user, token, args...)
+}
+
+// gitCommandWithCreds is gitCommand with credential resolution factored out,
+// mirroring gitCmdWithCreds: callers that issue several git invocations for
+// one logical operation resolve once and pass the result to every call here.
+func (s *GitService) gitCommandWithCreds(dirPath, user, token string, args ...string) (string, error) {
+	cmd, _ := s.gitCmdWithCreds(dirPath, user, token, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w (%s)", args[0], err,
@@ -210,7 +234,11 @@ func (s *GitService) Pull(dirPath string) (*models.PullResult, error) {
 func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 	slog.Debug("Pulling git changes (CLI)", "path", dirPath)
 
-	dirtyOutput, err := s.gitCommand(dirPath, "status", "--porcelain")
+	// Resolved once for the whole pull and threaded through every call below
+	// (agent-os-9ha) — see getStatusCLI for why.
+	user, token := s.httpsCredentials(dirPath)
+
+	dirtyOutput, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain")
 	if err != nil {
 		return nil, fmt.Errorf("failed to check status: %w", err)
 	}
@@ -218,12 +246,12 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		return nil, models.NewAppError(400, models.ErrGitDirty, "Working directory has uncommitted changes")
 	}
 
-	previousCommit, err := s.gitCommand(dirPath, "rev-parse", "HEAD")
+	previousCommit, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
-	_, err = s.gitCommand(dirPath, "pull", "--ff-only")
+	_, err = s.gitCommandWithCreds(dirPath, user, token, "pull", "--ff-only")
 	if err != nil {
 		if strings.Contains(err.Error(), "Already up to date") || strings.Contains(err.Error(), "Already up-to-date") {
 			return &models.PullResult{
@@ -235,11 +263,11 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		return nil, models.NewAppErrorWithDetails(500, models.ErrGitConflict, "Failed to pull", err.Error())
 	}
 
-	currentCommit, _ := s.gitCommand(dirPath, "rev-parse", "HEAD")
+	currentCommit, _ := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
 
 	changedFiles := []string{}
 	if previousCommit != currentCommit {
-		diffOutput, err := s.gitCommand(dirPath, "diff", "--name-only", previousCommit, currentCommit)
+		diffOutput, err := s.gitCommandWithCreds(dirPath, user, token, "diff", "--name-only", previousCommit, currentCommit)
 		if err == nil && diffOutput != "" {
 			changedFiles = strings.Split(diffOutput, "\n")
 		}
@@ -353,7 +381,11 @@ func (s *GitService) GetLog(dirPath string, limit, offset int) (*models.LogResul
 }
 
 func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogResult, error) {
-	totalStr, err := s.gitCommand(dirPath, "rev-list", "--count", "HEAD")
+	// Resolved once for the whole log request (agent-os-9ha) — see
+	// getStatusCLI for why.
+	user, token := s.httpsCredentials(dirPath)
+
+	totalStr, err := s.gitCommandWithCreds(dirPath, user, token, "rev-list", "--count", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to count commits: %w", err)
 	}
@@ -362,7 +394,7 @@ func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogRe
 	skip := offset
 	fetchCount := limit
 	logFormat := "%H%n%h%n%an%n%ae%n%s%n%aI%n---COMMIT_SEP---"
-	output, err := s.gitCommand(dirPath, "log", fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("--max-count=%d", fetchCount), fmt.Sprintf("--format=%s", logFormat))
+	output, err := s.gitCommandWithCreds(dirPath, user, token, "log", fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("--max-count=%d", fetchCount), fmt.Sprintf("--format=%s", logFormat))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get log: %w", err)
 	}
@@ -402,7 +434,11 @@ func (s *GitService) GetDiff(dirPath string, commitHash string) (*models.DiffRes
 }
 
 func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.DiffResult, error) {
-	logOutput, err := s.gitCommand(dirPath, "log", "-1", "--format=%H%n%h%n%an%n%ae%n%s%n%aI", commitHash)
+	// Resolved once for the whole diff request (agent-os-9ha) — see
+	// getStatusCLI for why.
+	user, token := s.httpsCredentials(dirPath)
+
+	logOutput, err := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%H%n%h%n%an%n%ae%n%s%n%aI", commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get commit: %w", err)
 	}
@@ -420,12 +456,12 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 		Date:    strings.TrimSpace(lines[5]),
 	}
 
-	diffOutput, err := s.gitCommand(dirPath, "show", "--format=", commitHash)
+	diffOutput, err := s.gitCommandWithCreds(dirPath, user, token, "show", "--format=", commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get diff: %w", err)
 	}
 
-	filesOutput, _ := s.gitCommand(dirPath, "diff-tree", "--no-commit-id", "--name-only", "-r", commitHash)
+	filesOutput, _ := s.gitCommandWithCreds(dirPath, user, token, "diff-tree", "--no-commit-id", "--name-only", "-r", commitHash)
 	var files []string
 	if filesOutput != "" {
 		files = strings.Split(filesOutput, "\n")
