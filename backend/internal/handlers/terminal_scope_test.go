@@ -104,9 +104,10 @@ func dialTerminal(t *testing.T, f *terminalFixture, stackID, container string) (
 	t.Helper()
 
 	url := "ws" + strings.TrimPrefix(f.server.URL, "http") + "/api/ws/terminal/" + stackID + "/" + container
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
 	require.NoError(t, err, "dialing %s", url)
 	defer conn.Close()
+	defer resp.Body.Close()
 
 	closeCode := 0
 	closeText := ""
@@ -115,7 +116,7 @@ func dialTerminal(t *testing.T, f *terminalFixture, stackID, container string) (
 		return nil
 	})
 
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			if ce, ok := err.(*websocket.CloseError); ok && closeCode == 0 {

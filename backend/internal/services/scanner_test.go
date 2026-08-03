@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/thinkbig1979/capstan/backend/internal/config"
-	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
 )
 
 func TestNewScannerService(t *testing.T) {

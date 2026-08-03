@@ -129,7 +129,12 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				db.DeleteExpiredSessions()
+				// A single failed sweep just means expired sessions linger
+				// until the next tick, but a sweep that keeps failing every
+				// hour, forever, would otherwise never surface anywhere.
+				if err := db.DeleteExpiredSessions(); err != nil {
+					slog.Warn("Failed to delete expired sessions", "error", err)
+				}
 			case <-ctx.Done():
 				return
 			}

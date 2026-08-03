@@ -46,6 +46,7 @@ func NewBackupScheduler(runner backupRunner, db *database.DB, logger *slog.Logge
 	if logger == nil {
 		logger = slog.Default()
 	}
+	//nolint:gosec // stored on the struct as parentCancel; called by Stop() (see the parentCancel() call in this file's Stop method), same lifecycle pattern as SchedulerService
 	ctx, cancel := context.WithCancel(context.Background())
 	return &BackupSchedulerService{
 		runner:       runner,
@@ -74,6 +75,7 @@ func (s *BackupSchedulerService) Start(interval time.Duration) {
 	if s.parentCancel != nil {
 		s.parentCancel()
 	}
+	//nolint:gosec // stored on the struct as parentCancel; called by Stop() (or replaced by the next Start(), which cancels the old one before creating a new one, as above)
 	s.parentCtx, s.parentCancel = context.WithCancel(context.Background())
 
 	s.ticker = time.NewTicker(interval)

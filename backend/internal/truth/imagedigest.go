@@ -104,6 +104,7 @@ func imageRefRepository(ref string) string {
 // Never uses --format; never relies on --format's output.
 var RemoteRegistryDigest = func(ctx context.Context, ref string) (string, error) {
 	// Primary: hash the raw manifest bytes.
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	rawOut, err := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", ref, "--raw").Output()
 	if err == nil && len(rawOut) > 0 {
 		sum := sha256.Sum256(rawOut)
@@ -111,6 +112,7 @@ var RemoteRegistryDigest = func(ctx context.Context, ref string) (string, error)
 	}
 
 	// Fallback: parse the top-level Digest line from verbose output.
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	verboseOut, verboseErr := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", ref).Output()
 	if verboseErr != nil {
 		// Return the original error for better diagnostics.

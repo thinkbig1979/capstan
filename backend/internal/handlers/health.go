@@ -116,8 +116,8 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 	dockerCheck := gin.H{"status": "ok"}
 	var degraded []string
 
-	switch {
-	case h.docker == nil:
+	switch h.docker {
+	case nil:
 		degraded = append(degraded, "docker")
 		dockerCheck = gin.H{"status": "unavailable", "error": "docker service not initialized at startup"}
 	default:

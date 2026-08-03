@@ -282,18 +282,16 @@ func (s *MonitorService) ListenEvents(ctx context.Context) (<-chan models.StackE
 					Timestamp:   time.Unix(event.Time, 0),
 				}
 
-				if action == "start" || action == "restart" {
+				switch action {
+				case "start", "restart", "unpause":
 					stackEvent.Type = "stack_status"
 					stackEvent.Status = "running"
-				} else if action == "stop" || action == "die" || action == "kill" {
+				case "stop", "die", "kill":
 					stackEvent.Type = "stack_status"
 					stackEvent.Status = "stopped"
-				} else if action == "pause" {
+				case "pause":
 					stackEvent.Type = "stack_status"
 					stackEvent.Status = "paused"
-				} else if action == "unpause" {
-					stackEvent.Type = "stack_status"
-					stackEvent.Status = "running"
 				}
 
 				select {

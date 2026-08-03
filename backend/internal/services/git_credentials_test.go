@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"log/slog"
 	"net/http"
-	"net/http/cgi"
+	"net/http/cgi" //nolint:gosec // hosts git-http-backend as a local, non-network-exposed httptest server for the credential regression harness (agent-os-qqw) below — the Httpoxy CVE this rule flags needs an actual exposed proxy, not a local test double
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -32,6 +32,7 @@ const (
 // runGit executes git in dir and fails the test on a non-zero exit.
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	//nolint:gosec // test helper, explicit argv, not a shell string
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
@@ -184,6 +185,7 @@ func TestPull_UsesDirectoryHTTPSToken(t *testing.T) {
 
 	// Same leak check as TestPull_TokenNeverPersistsToGitConfig, for the
 	// directory-scoped path.
+	//nolint:gosec // local is a test fixture clone under t.TempDir()
 	cfg, err := os.ReadFile(filepath.Join(local, ".git", "config"))
 	if err != nil {
 		t.Fatalf("read .git/config: %v", err)
@@ -405,6 +407,7 @@ func TestPull_TokenNeverPersistsToGitConfig(t *testing.T) {
 		t.Fatalf("Pull with a stored HTTPS token failed: %v", err)
 	}
 
+	//nolint:gosec // local is a test fixture clone under t.TempDir()
 	cfg, err := os.ReadFile(filepath.Join(local, ".git", "config"))
 	if err != nil {
 		t.Fatalf("read .git/config: %v", err)

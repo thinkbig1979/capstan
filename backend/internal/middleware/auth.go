@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/database"
-	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 var PublicPaths = []string{

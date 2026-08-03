@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"runtime/debug"
 
-	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/gin-gonic/gin"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 func RecoveryMiddleware() gin.HandlerFunc {

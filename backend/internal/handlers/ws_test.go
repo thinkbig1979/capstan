@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/database"
-	"github.com/thinkbig1979/capstan/backend/internal/middleware"
-	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 func TestConnectionManager_Add(t *testing.T) {
@@ -89,7 +89,7 @@ func TestConnectionManager_CloseAll(t *testing.T) {
 			ID:     uuid.New().String(),
 			UserID: "user1",
 		}
-		cm.Add(conn.ID, conn)
+		require.NoError(t, cm.Add(conn.ID, conn))
 	}
 
 	assert.Equal(t, 3, cm.Count())

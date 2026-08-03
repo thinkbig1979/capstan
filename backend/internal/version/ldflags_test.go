@@ -23,10 +23,14 @@ var ldflagsX = regexp.MustCompile(`-X\s+'?([^\s'"=]+)\.([A-Za-z_][A-Za-z0-9_]*)=
 // package or mistyping the path breaks this comparison.
 func TestDockerfileLdflagsResolveToThisPackage(t *testing.T) {
 	// Compile-time proof that these symbols exist with these names and are
-	// settable strings. -X only works on string vars.
-	var _ string = Version
-	var _ string = Commit
-	var _ string = BuildDate
+	// settable strings. -X only works on string vars. The explicit `string`
+	// type is load-bearing here, not redundant: dropping it (per staticcheck
+	// QF1011) would infer the type from Version/Commit/BuildDate themselves
+	// and silently accept a defined type with underlying type string,
+	// weakening exactly the assertion this test exists to make.
+	var _ string = Version   //nolint:staticcheck // explicit type is the assertion under test
+	var _ string = Commit    //nolint:staticcheck // explicit type is the assertion under test
+	var _ string = BuildDate //nolint:staticcheck // explicit type is the assertion under test
 
 	pkgPath := reflect.TypeFor[Info]().PkgPath()
 	if pkgPath == "" {

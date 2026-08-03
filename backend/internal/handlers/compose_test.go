@@ -9,13 +9,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
-	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestComposeHandler_Get_Success(t *testing.T) {
@@ -24,7 +24,7 @@ func TestComposeHandler_Get_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
-	os.MkdirAll(stackDir, 0755)
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
 
 	composePath := filepath.Join(stackDir, "compose.yaml")
 	composeContent := "services:\n  web:\n    image: nginx:1.21"
@@ -96,7 +96,7 @@ func TestComposeHandler_Put_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
-	os.MkdirAll(stackDir, 0755)
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
 
 	composePath := filepath.Join(stackDir, "compose.yaml")
 	composeContent := "services:\n  web:\n    image: nginx:1.21"
@@ -139,6 +139,7 @@ func TestComposeHandler_Put_Success(t *testing.T) {
 
 	assert.True(t, response["saved"].(bool))
 
+	//nolint:gosec // composePath is a test fixture under t.TempDir()
 	savedContent, err := os.ReadFile(composePath)
 	require.NoError(t, err)
 	assert.Equal(t, newContent, string(savedContent))
@@ -150,7 +151,7 @@ func TestComposeHandler_Put_ValidationError(t *testing.T) {
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
-	os.MkdirAll(stackDir, 0755)
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
 
 	composePath := filepath.Join(stackDir, "compose.yaml")
 	composeContent := "services:\n  web:\n    image: nginx:1.21"
@@ -187,6 +188,7 @@ func TestComposeHandler_Put_ValidationError(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 
+	//nolint:gosec // composePath is a test fixture under t.TempDir()
 	savedContent, err := os.ReadFile(composePath)
 	require.NoError(t, err)
 	assert.Equal(t, composeContent, string(savedContent))

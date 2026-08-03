@@ -146,16 +146,19 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	//nolint:gosec // cfg.StacksDir is read from the STACKS_DIR env var at process startup, set by whoever deploys the container — never request input
 	if err := os.MkdirAll(cfg.StacksDir, 0755); err != nil {
 		return nil, err
 	}
 
+	//nolint:gosec // cfg.DataDir is read from the DATA_DIR env var at process startup, set by whoever deploys the container — never request input
 	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
 		return nil, err
 	}
 
 	validateVolumePathIdentity(cfg)
 
+	//nolint:gosec // slog's structured key-value logging stores each field separately rather than concatenating into the message text, so a value can't forge a new log line the way string-built log messages can
 	slog.Info("Configuration loaded",
 		"stacks_dir", cfg.StacksDir,
 		"data_dir", cfg.DataDir,

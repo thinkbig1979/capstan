@@ -316,7 +316,13 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	claims, err := parseJWT(token, h.jwtSecret)
 	if err == nil {
 		if jti, ok := claims["jti"].(string); ok {
-			h.db.DeleteSession(jti)
+			// Logout still succeeds client-side even if the revoke fails —
+			// the session expires on its own regardless — but a failed
+			// revoke leaves the session valid in the DB until then, which
+			// is worth an operator's attention, not silent discard.
+			if delErr := h.db.DeleteSession(jti); delErr != nil {
+				slog.Warn("Failed to revoke session on logout", "error", delErr)
+			}
 		}
 	}
 

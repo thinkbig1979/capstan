@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/database"
-	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"golang.org/x/crypto/bcrypt"
 )
 

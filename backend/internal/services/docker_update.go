@@ -275,6 +275,7 @@ func (s *DockerService) findComposeContainer(ctx context.Context, projectName, s
 
 func (s *DockerService) updateComposeContainer(ctx context.Context, stack models.Stack, serviceName string, wasRunning bool) error {
 	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	pullCmd := exec.CommandContext(ctx, "docker", pullArgs...)
 	pullCmd.Dir = stack.Directory
 	if output, err := pullCmd.CombinedOutput(); err != nil {
@@ -282,6 +283,7 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 	}
 
 	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	upCmd := exec.CommandContext(ctx, "docker", upArgs...)
 	upCmd.Dir = stack.Directory
 	if output, err := upCmd.CombinedOutput(); err != nil {
@@ -362,6 +364,7 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect t
 // via emit. Both stdout and stderr are merged. Returns the combined output for
 // error messages.
 func streamComposeCmd(ctx context.Context, args []string, dir string, stream LogLineStream, emit func(LogLine)) error {
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = dir
 

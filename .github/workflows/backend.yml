@@ -25,12 +25,16 @@
 #   filter on the base branch.
 #
 # NO PATH FILTER EITHER, SINCE agent-os-x8n:
-#   Both jobs here are required status checks on main. A workflow-level
-#   `paths:` filter does not make a required check pass on an unrelated PR —
-#   it makes the check never report at all, so the PR sits on "Expected —
-#   waiting for status" and can never merge. That is a merge deadlock on every
-#   docs-only or frontend-only PR, which is why the filters were removed
-#   rather than kept.
+#   The jobs here are required status checks on main (or are meant to become
+#   one — see the lint job below). A workflow-level `paths:` filter does not
+#   make a required check pass on an unrelated PR — it makes the check never
+#   report at all, so the PR sits on "Expected — waiting for status" and can
+#   never merge. That is a merge deadlock on every docs-only or
+#   frontend-only PR, which is why the filters were removed rather than
+#   kept. The lint job added by agent-os-far follows the same reasoning:
+#   "runs on PRs touching backend/**" is satisfied by running on all PRs,
+#   which is a superset, without the deadlock risk a literal `paths:` filter
+#   would carry as a required check.
 #
 #   The alternative was a change-detection job fanning out to `if:`-gated jobs
 #   (skipped jobs DO report a conclusion and so satisfy a required check).
@@ -136,3 +140,35 @@ jobs:
       - name: Unit tests with -race
         working-directory: backend
         run: go test ./... -count=1 -race
+
+  # golangci-lint (agent-os-far). Its own job, not folded into `unit`: a
+  # failing build/vet/test signal and a failing lint signal are different
+  # kinds of red, and splitting them means a PR that only trips lint doesn't
+  # block on re-running the whole unit job to see if the fix worked. Needs no
+  # Docker daemon or registry access, same as the rest of this workflow —
+  # deliberately not added to integration.yml (see the file header).
+  lint:
+    name: Lint (golangci-lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      # Pin the golangci-lint version so a new release can't turn `main` red
+      # without a code change — the same reasoning as the pnpm 11.5.1 pin in
+      # frontend.yml. Matches the version installed and verified locally
+      # (2.11.1); bump both together. The action itself is SHA-pinned, same
+      # convention as react-doctor.yml's millionco/react-doctor pin.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.11.1
+          working-directory: backend

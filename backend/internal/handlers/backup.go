@@ -906,7 +906,9 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 
 		go safePingLoop(wsCtx, conn, DefaultPingInterval)
 
-		safeWriteJSON(conn, gin.H{"type": "start", "action": action})
+		// Best-effort notification; a write failure here surfaces on the
+		// next read/ping and the connection is torn down there.
+		_ = safeWriteJSON(conn, gin.H{"type": "start", "action": action})
 
 		// Real attach: pass wsCtx.Done() so forwardLive exits promptly on
 		// client disconnect instead of blocking on a full buffer (Fix #2).

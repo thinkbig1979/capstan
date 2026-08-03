@@ -41,7 +41,8 @@ func TestForeignKeysEnforced_PoolWide(t *testing.T) {
 			defer wg.Done()
 			tx, err := db.db.Begin()
 			require.NoError(t, err)
-			defer tx.Rollback()
+			// No-op once Commit succeeds; safety net for early returns only.
+			defer func() { _ = tx.Rollback() }()
 
 			ready <- struct{}{}
 			<-release
@@ -55,6 +56,7 @@ func TestForeignKeysEnforced_PoolWide(t *testing.T) {
 			// (action_log intentionally has no FKs as of migration v9 — see
 			// agent-os-z4v — so sessions.user_id -> users.id is used here
 			// instead as the enforcement probe.)
+			//nolint:gosec // i ranges over const n = 8 (see above); nowhere near rune overflow
 			_, insertErrs[i] = tx.Exec(
 				`INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 				"fkprobe-"+string(rune('a'+i)), "does-not-exist-user",

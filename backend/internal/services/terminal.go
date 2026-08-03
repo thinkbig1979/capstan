@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/google/uuid"
 	"github.com/kr/pty"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
 )
 
 var validContainerNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
@@ -81,6 +81,7 @@ func (s *TerminalService) CreateSession(stackID, containerName string) (*Termina
 	var ptyFile *os.File
 
 	for _, shell := range shells {
+		//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 		cmd := exec.Command("docker", "exec", "-it", "--", containerName, shell)
 
 		ptyFile, err = pty.Start(cmd)
@@ -140,7 +141,9 @@ func (s *TerminalService) CloseSession(sessionID string) {
 	}
 
 	if session.Cmd != nil && session.Cmd.Process != nil {
-		session.Cmd.Process.Kill()
+		// Best-effort; the session is being torn down regardless, and a
+		// failed kill here (process already exited) isn't actionable.
+		_ = session.Cmd.Process.Kill()
 	}
 	if session.Pty != nil {
 		session.Pty.Close()
@@ -182,7 +185,10 @@ func (s *TerminalService) reapExpiredSessions() {
 		if now.Sub(session.lastActivity) > SessionTimeout {
 			slog.Info("Reaping inactive terminal session", "session_id", id, "stack_id", session.StackID)
 			if session.Cmd != nil && session.Cmd.Process != nil {
-				session.Cmd.Process.Kill()
+				// Best-effort; the session is being torn down regardless,
+				// and a failed kill here (process already exited) isn't
+				// actionable.
+				_ = session.Cmd.Process.Kill()
 			}
 			if session.Pty != nil {
 				session.Pty.Close()

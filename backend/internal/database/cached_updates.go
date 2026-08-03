@@ -48,7 +48,9 @@ func (d *DB) SetCachedUpdates(updates []models.CachedUpdate) error {
 	}
 
 	if _, err := tx.Exec("DELETE FROM cached_updates"); err != nil {
-		tx.Rollback()
+		// Rollback error is secondary to the exec error already being
+		// returned; the tx is abandoned either way.
+		_ = tx.Rollback()
 		return fmt.Errorf("clear cached updates: %w", err)
 	}
 
@@ -60,7 +62,9 @@ func (d *DB) SetCachedUpdates(updates []models.CachedUpdate) error {
 			u.StackID, u.ProjectName, u.ServiceName, u.IsCompose,
 			u.LocalDigest, u.RemoteDigest, u.ScannedAt)
 		if err != nil {
-			tx.Rollback()
+			// Rollback error is secondary to the exec error already being
+			// returned; the tx is abandoned either way.
+			_ = tx.Rollback()
 			return fmt.Errorf("insert cached update: %w", err)
 		}
 	}

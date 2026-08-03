@@ -350,6 +350,7 @@ func (s *DockerService) StartVerified(stack models.Stack) (truth.ActionResult, s
 	}
 
 	args := s.buildComposeArgs(stack, "up", []string{"-d"})
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory
 
@@ -371,6 +372,7 @@ func (s *DockerService) StopVerified(stack models.Stack) (truth.ActionResult, st
 	}
 
 	args := s.buildComposeArgs(stack, "down", nil)
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory
 
@@ -433,6 +435,7 @@ func (s *DockerService) PullVerified(stack models.Stack) (truth.ActionResult, st
 	}
 
 	args := s.buildComposeArgs(stack, "pull", nil)
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory
 
@@ -452,6 +455,7 @@ func (s *DockerService) DeleteVerified(stack models.Stack) (truth.ActionResult, 
 	}
 
 	args := s.buildComposeArgs(stack, "down", []string{"-v"})
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory
 
@@ -477,6 +481,7 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 
 	args := s.buildComposeArgs(stack, "ps", []string{"--format", "json"})
 
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := exec.Command("docker", args...)
 	cmd.Dir = stack.Directory
 
@@ -568,6 +573,7 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 		defer close(out)
 
 		args := s.buildComposeArgs(stack, subcommand, extraArgs)
+		//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 		cmd := exec.CommandContext(ctx, "docker", args...)
 		cmd.Dir = stack.Directory
 

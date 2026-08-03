@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
 )
 
 func TestAuthHandler_Status_NeedsSetup(t *testing.T) {

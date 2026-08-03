@@ -1,0 +1,116 @@
+version: "2"
+
+# Conservative, deliberately chosen linter set (agent-os-far). The default
+# govet/errcheck/staticcheck/unused/ineffassign/gosimple set is extended
+# with:
+#   - misspell: catches typos in comments/strings, near-zero false positives.
+#   - bodyclose: this service does a lot of outbound HTTP (Docker Hub,
+#     registries, webhooks); an unclosed response body leaks a connection.
+#   - contextcheck: catches context.Background()/TODO() used where a request
+#     or caller context should propagate — the failure mode is a cancelled
+#     request that keeps working anyway.
+#   - gosec: security-focused static analysis. G104/G301/G306/G101 are
+#     excluded below (reasons on each rule) for being noisy on this codebase
+#     specifically, not gosec as a whole. Every other finding — G204's
+#     deliberate subprocess sites, G304/G703's bounded file/path reads,
+#     G118's stored-cancel-func lifecycle, G115's impractical overflow,
+#     G202/G504's traced-safe call sites — carries a cited nolint at the
+#     call site instead of a config exclusion, because each of those is a
+#     property of that specific call, not of a whole rule.
+#
+# Note on the requested set vs. this list: golangci-lint v2 folds gosimple
+# and stylecheck into the staticcheck linter binary (single `staticcheck`
+# analyzer, S/SA/ST/QF check groups) — `golangci-lint linters` doesn't list
+# gosimple as a separate name in v2. So "staticcheck" here already covers
+# what an earlier v1-era request might list as two entries; nothing was
+# dropped.
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - bodyclose
+    - contextcheck
+    - gosec
+  exclusions:
+    generated: lax
+    # Deliberately NOT using the common-false-positives/legacy presets.
+    # Verified by testing each preset in isolation against gosec alone
+    # (golangci-lint run --config <preset-only> ./..., counting findings by
+    # rule before/after):
+    #   - common-false-positives suppresses G204 (20 -> 1) and G304
+    #     (15 -> 0) ENTIRELY, with no nolint trail. G204 and G304 are the
+    #     two rules this config exists to enforce (the deliberate
+    #     docker/git/compose argv sites and the bounded file reads) — a
+    #     preset silently exempting them, and every future careless
+    #     subprocess call or unbounded file read along with them, defeats
+    #     the point of gating on gosec at all.
+    #   - legacy suppresses G104 (52 -> 0) and G301 (31 -> 0) entirely —
+    #     redundant with, and no more informative than, the explicit rules
+    #     below, so no loss dropping it.
+    # comments/std-error-handling were checked the same way (178 -> 178,
+    # unaffected either way) and are kept. Every gosec exclusion below is
+    # explicit and reasoned instead of inherited from a preset.
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # SA1019: deprecated Docker SDK types (types.ContainerJSON,
+      # ImageInspectWithRaw, BuildCache*) mid-migration to the SDK's newer
+      # replacement types. Real work, tracked separately as agent-os-9zi
+      # (SDK type migration) rather than done as a side effect of adding a
+      # linter. Scoped to only the files that reference the old SDK types,
+      # not a blanket staticcheck exclusion, so new issues in these files
+      # still gate normally.
+      - path: 'internal/services/docker\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      - path: 'internal/services/docker_resources\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      - path: 'internal/services/docker_update\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      - path: 'internal/truth/image_inspect\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      - path: 'internal/truth/image_inspect_test\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      - path: 'internal/truth/verify\.go'
+        linters: [staticcheck]
+        text: 'SA1019'
+      # G104 duplicates errcheck (which is enabled, better-configured, and
+      # already gates unchecked errors) with a wider, noisier net.
+      - linters: [gosec]
+        text: 'G104'
+      # G301/G306: file-permission opinions (dir/file mode bits) on a
+      # self-hosted admin tool that already runs as root by design — see
+      # README.md. Not a meaningful signal here.
+      - linters: [gosec]
+        text: 'G301'
+      - linters: [gosec]
+        text: 'G306'
+      # G101 matches identifier NAMES containing PASSWORD/SECRET/TOKEN, not
+      # values. Every current instance (verified individually, agent-os-far)
+      # is either a test fixture literally named test-*/do-not-log, or —
+      # in git_credentials.go — an env var NAME constant
+      # (CAPSTAN_GIT_USERNAME/CAPSTAN_GIT_PASSWORD), never a credential
+      # value. Scoped to _test.go and git_credentials.go specifically,
+      # rather than a blanket G101 exclusion, so a real hardcoded secret
+      # introduced anywhere else still gates normally.
+      - path: '_test\.go'
+        linters: [gosec]
+        text: 'G101'
+      - path: 'internal/services/git_credentials\.go'
+        linters: [gosec]
+        text: 'G101'
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

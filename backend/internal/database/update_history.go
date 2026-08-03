@@ -171,6 +171,7 @@ func (d *DB) UpdateUpdateHistory(id string, updates map[string]interface{}) erro
 
 	args = append(args, id)
 
+	//nolint:gosec // setClauses is built only from keys present in the allowedColumns allowlist above (6 fixed names); values are bound parameters via args, never concatenated
 	query := "UPDATE update_history SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
 	_, err := d.db.Exec(query, args...)
 	return err

@@ -134,6 +134,7 @@ func (d *DB) VacuumInto(dest string) error {
 	// user input; the quote-doubling keeps a path containing a single quote from
 	// terminating the literal.
 	quoted := "'" + strings.ReplaceAll(dest, "'", "''") + "'"
+	//nolint:gosec // dest traces to BackupService.DatabaseSnapshotPath(), built from cfg.DataDir plus two hardcoded constants — never request input. quote-doubling above is the correct SQLite literal-escaping for the single-quote case, since VACUUM INTO's target does not accept parameter binding.
 	if _, err := d.db.Exec("VACUUM INTO " + quoted); err != nil {
 		return fmt.Errorf("vacuum into %s: %w", dest, err)
 	}

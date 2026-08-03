@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/thinkbig1979/capstan/backend/internal/config"
-	"github.com/thinkbig1979/capstan/backend/internal/database"
-	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 func TestEnvHandler_Get_Success(t *testing.T) {
@@ -23,7 +23,7 @@ func TestEnvHandler_Get_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
-	os.MkdirAll(stackDir, 0755)
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
 
 	envPath := filepath.Join(stackDir, ".env")
 	envContent := "DATABASE_URL=postgres://localhost:5432/mydb\nPORT=8080"
@@ -69,7 +69,7 @@ func TestEnvHandler_Get_NoEnvFile(t *testing.T) {
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
-	os.MkdirAll(stackDir, 0755)
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
 
 	createTestDirectory(t, db, stackDir)
 
@@ -108,7 +108,7 @@ func TestEnvHandler_Put_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
-	os.MkdirAll(stackDir, 0755)
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
 
 	envPath := filepath.Join(stackDir, ".env")
 	envContent := "DATABASE_URL=postgres://localhost:5432/mydb\nPORT=8080"
@@ -154,6 +154,7 @@ func TestEnvHandler_Put_Success(t *testing.T) {
 	require.NotNil(t, details)
 	assert.Equal(t, ".env", details["filename"])
 
+	//nolint:gosec // envPath is a test fixture under t.TempDir()
 	savedContent, err := os.ReadFile(envPath)
 	require.NoError(t, err)
 	assert.Equal(t, newContent, string(savedContent))
@@ -165,7 +166,7 @@ func TestEnvHandler_Put_WithEntries(t *testing.T) {
 	require.NoError(t, err)
 
 	stackDir := filepath.Join(tempDir, "stack1")
-	os.MkdirAll(stackDir, 0755)
+	require.NoError(t, os.MkdirAll(stackDir, 0755))
 
 	envPath := filepath.Join(stackDir, ".env")
 	envContent := "DATABASE_URL=postgres://localhost:5432/mydb\nPORT=8080"
@@ -204,6 +205,7 @@ func TestEnvHandler_Put_WithEntries(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
+	//nolint:gosec // envPath is a test fixture under t.TempDir()
 	savedContent, err := os.ReadFile(envPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(savedContent), "PORT=9090")
