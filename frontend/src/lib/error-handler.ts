@@ -24,6 +24,27 @@ export interface AppError {
   action?: string
 }
 
+/**
+ * Which 401s mean "your session is gone" (agent-os-318).
+ *
+ * The backend splits the two meanings of 401 by code — see
+ * backend/internal/models/errors.go, which carries the contract.
+ * SESSION_EXPIRED means the session itself cannot be used; UNAUTHORIZED means
+ * a credential the user just supplied was rejected while the session stayed
+ * valid. A 401 with no code did not come from this backend at all (every 401
+ * it mints carries one), so it is a proxy or gateway rejecting us — also
+ * session loss. Fail closed there: the alternative silently stops logging
+ * anyone out behind an auth proxy.
+ *
+ * Both the api.ts interceptor ("log out?") and the 401 branch below ("say log
+ * in again, or show what the backend said?") ask this same question, and a
+ * disagreement between them IS the bug: the user was redirected to /login for
+ * mistyping their own password.
+ */
+export function isSessionLoss(code: string | null | undefined): boolean {
+  return code === 'SESSION_EXPIRED' || code == null
+}
+
 export function classifyError(error: unknown): AppError {
   if (!error) {
     return {
@@ -36,7 +57,7 @@ export function classifyError(error: unknown): AppError {
   const err = error as {
     status?: number;
     details?: Record<string, unknown>;
-    response?: { status?: number; data?: { error?: string; message?: string; details?: Record<string, unknown> } };
+    response?: { status?: number; data?: { error?: string; message?: string; code?: string; details?: Record<string, unknown> } };
     code?: string;
     message?: string
   }
@@ -49,6 +70,14 @@ export function classifyError(error: unknown): AppError {
   const status = err.status ?? err.response?.status
   const message = err.response?.data?.error || err.response?.data?.message || err.message || 'An error occurred'
   const details = err.details ?? err.response?.data?.details
+  // Nested FIRST, unlike `status` and `details` above, and deliberately so:
+  // axios stamps its OWN code at the top level on a 4xx — settle.js:21 rejects
+  // with AxiosError.ERR_BAD_REQUEST for status 400-499 (AxiosError.js:182) —
+  // so on a raw AxiosError `err.code` is 'ERR_BAD_REQUEST', not the backend's.
+  // The response body is the only place the backend's code ever appears, so it
+  // wins whenever there is a body. The flat fallback serves the interceptor's
+  // own shape, which hoists the body's `code` to the top level.
+  const backendCode = err.response?.data?.code ?? err.code
 
   if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT' || status === 408) {
     return {
@@ -73,13 +102,18 @@ export function classifyError(error: unknown): AppError {
   }
 
   if (status === 401) {
+    const sessionLoss = isSessionLoss(backendCode)
     return {
-      message: 'Log in again to continue',
+      // Telling a user with a valid session to "log in again" because they
+      // mistyped their current password is the visible half of agent-os-318.
+      message: sessionLoss ? 'Log in again to continue' : message,
       type: 'auth',
       status,
       retryable: false,
       originalError: error,
-      action: 'Log In',
+      // The session is fine on the non-expiry path — the recovery is to retype
+      // the credential, not to log in.
+      action: sessionLoss ? 'Log In' : 'Fix',
     }
   }
 

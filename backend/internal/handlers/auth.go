@@ -345,11 +345,14 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		return
 	}
 
+	// Same reasoning as VerifyPassword and settings.ChangePassword below: a
+	// valid session pointing at a user row that no longer exists is session
+	// loss, not a bad credential, and can never resolve.
 	user, err := h.db.GetUserByID(userID.(string))
 	if err != nil || user == nil {
 		c.JSON(http.StatusUnauthorized, models.NewAppError(
 			http.StatusUnauthorized,
-			models.ErrUnauthorized,
+			models.ErrSessionExpired,
 			"User not found",
 		))
 		return
@@ -391,16 +394,21 @@ func (h *AuthHandler) VerifyPassword(c *gin.Context) {
 		return
 	}
 
+	// Reaching here means a valid session pointing at a user row that no longer
+	// exists (deleted admin, DB restored from an older snapshot). That session
+	// can never resolve a user, so it is session loss, not a bad credential.
 	user, err := h.db.GetUserByID(userID.(string))
 	if err != nil || user == nil {
 		c.JSON(http.StatusUnauthorized, models.NewAppError(
 			http.StatusUnauthorized,
-			models.ErrUnauthorized,
+			models.ErrSessionExpired,
 			"User not found",
 		))
 		return
 	}
 
+	// The wrong-password 401 below keeps ErrUnauthorized: the session is still
+	// valid and the unlock dialog must stay open to retype (agent-os-318).
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
 		slog.Warn("Failed env unlock attempt",
 			"ip", c.ClientIP(),
