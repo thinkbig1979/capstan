@@ -3,10 +3,14 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -197,4 +201,120 @@ func TestStacksHandler_Create_ConcurrentDifferentNames_BothSucceed(t *testing.T)
 	stacks, err := db.ListStacks()
 	require.NoError(t, err)
 	require.Len(t, stacks, 2, "both stacks must be registered, got %+v", stacks)
+}
+
+// TestCreate_LockAcquiredBeforeDuplicateStat is a STRUCTURAL regression test
+// for agent-os-0br's lock ordering (agent-os-zpg).
+//
+// It deliberately does NOT try to drive the race behaviourally. Two
+// independent mutation sweeps established that with a try-lock the loser is
+// rejected either way: at Acquire if the two requests are simultaneous, or at
+// the os.Stat guard below if they happen to serialise. A barrier-based test
+// (see raceCreates above) makes the two requests simultaneous, so it cannot
+// tell "lock before stat" from "lock after stat" apart — both placements pass
+// it. A symmetric delay inserted between stat and acquire does not help
+// either: it still leaves both requests contending at the same instant, so
+// one still loses the try-lock the same way. Separating the two placements
+// behaviourally would need request B descheduled between ITS stat and ITS
+// acquire for longer than request A's entire create (lint + file writes + DB
+// insert + scan) — an asymmetric deschedule that cannot be driven from
+// outside without a test-only seam in production code, which was considered
+// and rejected as not worth the cost for this one property. See the comment
+// above the Acquire call in Create (stack_crud.go) for the full account.
+//
+// What DOES differ, provably, between the two placements: which statement
+// comes first in the source. This test parses stack_crud.go, locates the
+// h.opLock.Acquire(...) call and the os.Stat(stackDir) duplicate-check call
+// inside Create, and asserts Acquire's line comes before the stat's. Moving
+// Acquire below the stat — the natural-looking refactor, since that is where
+// the duplicate check lives — fails this test immediately and requires no
+// interleaving to be reproduced.
+//
+// Verified against three mutations of Create, each reverted afterward
+// (agent-os-zpg):
+//   - Acquire and the stat swapped (the reordering this test exists to catch):
+//     FAILS with an exact line-number message, e.g. "112 is not less than 103".
+//   - The Acquire call deleted from Create entirely: package still compiles
+//     (stackID stays referenced later in Create), and this test FAILS with
+//     "did not find an h.opLock.Acquire(...) call inside Create" — not a
+//     silent pass on a stale zero-value comparison.
+//   - The os.Stat call deleted from Create entirely: package still compiles,
+//     and this test FAILS with "did not find an os.Stat(...) call inside
+//     Create", for the same reason.
+//
+// The explicit require.NotZero checks below exist specifically so the "call
+// not found" case reports its own clear message instead of falling through
+// to require.Less and comparing 0 against a real line (which would read as a
+// passing or confusingly-failing ordering check rather than "I stopped
+// finding what I was looking for").
+//
+// File resolution: srcPath is built from runtime.Caller(0), i.e. this test
+// file's own path as recorded in the compiled binary — not the process's
+// working directory, so it is unaffected by where `go test` is invoked from.
+// If stack_crud.go is ever renamed, parser.ParseFile fails to open it and
+// require.NoError below fails loudly with that filesystem error — it does
+// not silently stop finding its subject. If Create is ever split so the
+// Acquire/Stat calls move into a helper function, ast.Inspect only walks
+// Create's own body, so this test would fail with the same "did not find"
+// messages above and need a human to point it at the new location — a loud
+// break on refactor, not a silent one, which is the failure mode this test
+// is designed to avoid.
+func TestCreate_LockAcquiredBeforeDuplicateStat(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "runtime.Caller must resolve this test file's own path")
+	srcPath := filepath.Join(filepath.Dir(thisFile), "stack_crud.go")
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, srcPath, nil, 0)
+	require.NoError(t, err, "stack_crud.go must parse as valid Go")
+
+	var createFn *ast.FuncDecl
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Name.Name == "Create" && fn.Recv != nil {
+			createFn = fn
+			break
+		}
+	}
+	require.NotNil(t, createFn, "method Create not found in stack_crud.go")
+
+	var acquireLine, statLine int
+	ast.Inspect(createFn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+
+		switch sel.Sel.Name {
+		// h.opLock.Acquire(...)
+		case "Acquire":
+			if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "opLock" {
+				require.Zero(t, acquireLine,
+					"Create must call opLock.Acquire exactly once; found a second call at %s",
+					fset.Position(call.Pos()))
+				acquireLine = fset.Position(call.Pos()).Line
+			}
+		// os.Stat(...)
+		case "Stat":
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "os" {
+				require.Zero(t, statLine,
+					"Create must call os.Stat exactly once; found a second call at %s",
+					fset.Position(call.Pos()))
+				statLine = fset.Position(call.Pos()).Line
+			}
+		}
+		return true
+	})
+
+	require.NotZero(t, acquireLine, "did not find an h.opLock.Acquire(...) call inside Create")
+	require.NotZero(t, statLine, "did not find an os.Stat(...) call inside Create")
+	require.Less(t, acquireLine, statLine,
+		"h.opLock.Acquire (line %d) must be called before the os.Stat duplicate-check guard (line %d) — "+
+			"see the comment above the Acquire call in Create for why this ordering is not, and cannot be, "+
+			"enforced by a behavioural test (agent-os-zpg)",
+		acquireLine, statLine)
 }
