@@ -1,6 +1,8 @@
 package services
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,6 +14,114 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
+
+// StackID is the single producer of stack IDs. Both the scanner (discovering a
+// compose file on disk) and POST /api/v1/stacks (creating one) must mint the
+// same ID for the same stack, or a create is immediately shadowed by the next
+// scan. They agreed by coincidence of two independent format strings until
+// agent-os-elo; they agree by construction now.
+//
+// root MUST already be resolved to one of the configured stacks roots. This
+// helper deliberately does NOT work out which root a path belongs to: that
+// resolution is done with an unanchored strings.HasPrefix (scanner.go's
+// effectiveRoot fallback), so /srv/stacks matches paths under /srv/stacks-extra
+// — tracked as agent-os-509. Taking the root as a parameter keeps that defect
+// from flowing through ID minting.
+//
+// primaryRoot and extraRoots are config.StacksDir and config.ExtraStacksDirs.
+// They are passed as separate parameters rather than as one GetAllStacksDirs
+// slice because the primary root is privileged (see StackIDRootPrefix) and
+// inferring which entry is primary from its position in a combined slice would
+// make that guarantee depend on a caller's slice-building order.
+//
+// pathID is the stack's path relative to root with separators flattened to "-";
+// name is the compose profile ("default" for compose.yaml).
+func StackID(root, primaryRoot string, extraRoots []string, pathID, name string) string {
+	return fmt.Sprintf("%s~%s:%s", StackIDRootPrefix(root, primaryRoot, extraRoots), pathID, name)
+}
+
+// StackIDRootPrefix returns the root component of a stack ID.
+//
+// Normally that is just the root's basename, which is what every stack ID in
+// the field already carries. Two configured roots CAN share a basename
+// (/a/stacks and /b/stacks), and then the basename alone collides: UpsertStack
+// is an INSERT OR REPLACE, so the second stack silently repoints the first's
+// row at its own directory and the first becomes unreachable by ID.
+//
+// The disambiguator is therefore applied to colliding roots ONLY, and every
+// other root keeps its prefix byte-for-byte. Re-IDing unconditionally would be
+// far more expensive than it looks: stack IDs are copied into six plain TEXT
+// columns with no foreign key to keep them honest (action_log.stack_id,
+// cached_updates.stack_id, update_history.stack_id, backup_run_items.stack_id,
+// auto_update_policies.target_id, backup_policies.target_id) and into frontend
+// URLs users bookmark. Collision-only touches none of that, and needs no
+// migration.
+//
+// The suffix is a fingerprint of the root's own path rather than its position
+// in the config, so reordering EXTRA_STACKS_DIRS does not re-ID anything. "."
+// joins it because it is already legal in this ID's charset (see
+// middleware.ValidateStackID), is safe unescaped in a URL path, and sits before
+// the final "~" that the frontend splits on to recover a display name.
+//
+// # The primary root is never suffixed
+//
+// Because the prefix depends on the SET of configured roots, adding a root can
+// in principle change the ID of a stack that already exists. primaryRoot
+// (config.StacksDir) is therefore exempt unconditionally: it keeps the bare
+// basename even when an extra root collides with it, and the extra takes the
+// suffix instead. Adding, removing or reordering extra roots consequently never
+// re-IDs anything under the primary root, which is where single-root
+// deployments — the overwhelming majority — keep everything.
+//
+// # Known residual: extra roots are not stable under config changes
+//
+// Two EXTRA roots that collide with each other, or an extra root that only
+// starts colliding once a LATER extra root is added, still flip from a bare
+// prefix to a suffixed one. Changing the set of configured roots can therefore
+// change the ID of stacks under a non-primary root.
+//
+// That is worse than a rename, because nothing cleans up after it: the ID is
+// not what pruning keys on. pruneStaleStacks removes rows by DIRECTORY
+// existence, and the directory is still there, so the old row survives while
+// the scan upserts a second row under the new ID — one stack, two rows, with
+// all six TEXT columns above still referencing the old ID. Filed separately;
+// deliberately not solved here, because solving it means either persisting the
+// root->prefix mapping or a migration, both out of scope for the collision fix.
+func StackIDRootPrefix(root, primaryRoot string, extraRoots []string) string {
+	base := filepath.Base(root)
+	canonical := canonicalRoot(root)
+
+	if canonical == canonicalRoot(primaryRoot) {
+		return base
+	}
+
+	if filepath.Base(primaryRoot) == base {
+		return base + "." + rootFingerprint(canonical)
+	}
+	for _, other := range extraRoots {
+		if filepath.Base(other) == base && canonicalRoot(other) != canonical {
+			return base + "." + rootFingerprint(canonical)
+		}
+	}
+
+	return base
+}
+
+func rootFingerprint(canonicalRoot string) string {
+	sum := sha256.Sum256([]byte(canonicalRoot))
+	return hex.EncodeToString(sum[:4])
+}
+
+// canonicalRoot puts a root in a comparable form. It intentionally stops at
+// filepath.Abs: resolving symlinks would let a root compare equal to a
+// configured root it is not spelled the same as, and the callers' own
+// validation (handlers.isValidStacksDir) matches on Abs too.
+func canonicalRoot(root string) string {
+	if abs, err := filepath.Abs(root); err == nil {
+		return abs
+	}
+	return filepath.Clean(root)
+}
 
 type ScannerService struct {
 	config *config.Config
@@ -312,9 +422,8 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 
 			envFile := determineEnvFile(path, name)
 
-			rootPrefix := filepath.Base(effectiveRoot)
 			stackPathID := strings.ReplaceAll(relPath, string(filepath.Separator), "-")
-			stackID := fmt.Sprintf("%s~%s:%s", rootPrefix, stackPathID, name)
+			stackID := StackID(effectiveRoot, s.config.StacksDir, s.config.ExtraStacksDirs, stackPathID, name)
 
 			var projectName string
 			if name == "default" {

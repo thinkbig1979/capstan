@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -86,11 +87,16 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	// contend. That distinction matters because Acquire is a try-lock that fails
 	// fast rather than queueing: a broader key (the target directory, or a global
 	// one) would turn unrelated concurrent creates into spurious conflicts.
-	// Inherited caveat: two configured roots sharing a basename mint the same ID
-	// (agent-os-elo), so until that is fixed, same-name creates into two such
-	// roots conflict with each other.
-	rootPrefix := filepath.Base(targetDir)
-	stackID := fmt.Sprintf("%s~%s:default", rootPrefix, req.Name)
+	// Two configured roots sharing a basename used to mint the SAME id, which
+	// made this lock key collide too: concurrent same-name creates into two such
+	// roots conflicted with each other and one caller got a spurious 409. They
+	// now get distinct ids, so they no longer share a key (agent-os-elo).
+	//
+	// services.StackID is shared with the scanner, which must derive the same id
+	// for this stack when it next walks the disk. targetDir is passed as an
+	// already-resolved root: isValidStacksDir accepted it only by exact match
+	// against a configured root.
+	stackID := services.StackID(targetDir, h.config.StacksDir, h.config.ExtraStacksDirs, req.Name, "default")
 
 	// DUPLICATE_STACK rather than a new code: losing this race is the same
 	// user-visible situation as the sequential duplicate below — the name is
