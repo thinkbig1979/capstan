@@ -230,10 +230,35 @@ func TestStacksHandler_Create_ConcurrentDifferentNames_BothSucceed(t *testing.T)
 // the duplicate check lives — fails this test immediately and requires no
 // interleaving to be reproduced.
 //
-// Verified failing: temporarily swapping the Acquire block and the os.Stat
-// block in Create (so Acquire runs after the stat) made this test fail with
-// "h.opLock.Acquire must be called before the os.Stat duplicate-check guard
-// (acquire at line 96, stat at line 79)" before the swap was reverted.
+// Verified against three mutations of Create, each reverted afterward
+// (agent-os-zpg):
+//   - Acquire and the stat swapped (the reordering this test exists to catch):
+//     FAILS with an exact line-number message, e.g. "112 is not less than 103".
+//   - The Acquire call deleted from Create entirely: package still compiles
+//     (stackID stays referenced later in Create), and this test FAILS with
+//     "did not find an h.opLock.Acquire(...) call inside Create" — not a
+//     silent pass on a stale zero-value comparison.
+//   - The os.Stat call deleted from Create entirely: package still compiles,
+//     and this test FAILS with "did not find an os.Stat(...) call inside
+//     Create", for the same reason.
+//
+// The explicit require.NotZero checks below exist specifically so the "call
+// not found" case reports its own clear message instead of falling through
+// to require.Less and comparing 0 against a real line (which would read as a
+// passing or confusingly-failing ordering check rather than "I stopped
+// finding what I was looking for").
+//
+// File resolution: srcPath is built from runtime.Caller(0), i.e. this test
+// file's own path as recorded in the compiled binary — not the process's
+// working directory, so it is unaffected by where `go test` is invoked from.
+// If stack_crud.go is ever renamed, parser.ParseFile fails to open it and
+// require.NoError below fails loudly with that filesystem error — it does
+// not silently stop finding its subject. If Create is ever split so the
+// Acquire/Stat calls move into a helper function, ast.Inspect only walks
+// Create's own body, so this test would fail with the same "did not find"
+// messages above and need a human to point it at the new location — a loud
+// break on refactor, not a silent one, which is the failure mode this test
+// is designed to avoid.
 func TestCreate_LockAcquiredBeforeDuplicateStat(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	require.True(t, ok, "runtime.Caller must resolve this test file's own path")
