@@ -495,6 +495,43 @@ func TestGitCmd_NoCredentialWhenNoneConfigured(t *testing.T) {
 	}
 }
 
+// TestGitCmdWithCreds_StripsCapstanSecrets is the git sibling of
+// TestLogs_DoesNotLeakCapstanSecrets (exec_env_test.go): gitCmdWithCreds must
+// not forward Capstan's own secrets (JWT_SECRET, STORAGE_KEY, ...) into the
+// git child's environment, while still carrying GIT_TERMINAL_PROMPT=0 and,
+// when a token is configured, the credential helper's env pair. This is
+// hygiene consistent with stripCapstanSecrets' other call sites
+// (exec_env.go, backup_restic.go), not a response to a confirmed exploit.
+func TestGitCmdWithCreds_StripsCapstanSecrets(t *testing.T) {
+	t.Setenv("JWT_SECRET", "sentinel-jwt-secret")
+
+	svc := gitServiceWithStoredToken(t)
+	cmd, _ := svc.gitCmd(t.TempDir(), "status", "--porcelain")
+
+	var sawSecret, sawPrompt, sawUser, sawToken bool
+	for _, kv := range cmd.Env {
+		switch {
+		case strings.HasPrefix(kv, "JWT_SECRET="):
+			sawSecret = true
+		case kv == "GIT_TERMINAL_PROMPT=0":
+			sawPrompt = true
+		case kv == credentialEnvUser+"="+testGitUser:
+			sawUser = true
+		case kv == credentialEnvToken+"="+testGitToken:
+			sawToken = true
+		}
+	}
+	if sawSecret {
+		t.Errorf("git child environment carries JWT_SECRET: %v", cmd.Env)
+	}
+	if !sawPrompt {
+		t.Errorf("git child environment missing GIT_TERMINAL_PROMPT=0: %v", cmd.Env)
+	}
+	if !sawUser || !sawToken {
+		t.Errorf("credential missing from the child environment (user=%v token=%v)", sawUser, sawToken)
+	}
+}
+
 // TestGitCommand_RedactsTokenFromOutput proves the redaction is wired into the
 // real error path, not just available as a helper. git's error text flows into
 // AppError.Details, the action log and the API response, so a token that

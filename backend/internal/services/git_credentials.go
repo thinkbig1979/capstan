@@ -198,7 +198,13 @@ func (s *GitService) gitCmd(dirPath string, args ...string) (*exec.Cmd, string) 
 // was rejected.
 func (s *GitService) gitCmdWithCreds(dirPath, user, token string, args ...string) (*exec.Cmd, string) {
 	gitArgs := []string{"-c", "safe.directory=" + dirPath}
-	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	// stripCapstanSecrets removes Capstan's own secrets (JWT_SECRET,
+	// STORAGE_KEY, GIT_HTTPS_TOKEN, RESTIC_PASSWORD) before the process
+	// environment is forwarded to the git child; see exec_env.go's
+	// stripCapstanSecrets for why this is a denylist rather than an
+	// allowlist. Hygiene, consistent with this package's other child-process
+	// call sites (exec_env.go, backup_restic.go).
+	env := append(stripCapstanSecrets(os.Environ()), "GIT_TERMINAL_PROMPT=0")
 
 	if token != "" {
 		// The empty assignment first clears any helper inherited from system or
