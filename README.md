@@ -835,6 +835,24 @@ Pin a specific version (e.g. `ghcr.io/thinkbig1979/capstan:0.11.0`) for
 reproducible deployments; `:latest` always tracks the most recent stable
 release.
 
+### Rolling back
+
+Recovering from a bad release usually means re-pinning an older image tag (or
+letting watchtower revert one). Capstan's database schema is versioned and
+guards against this: on startup it logs the database's schema version
+alongside the version this binary understands, and if the database was
+already migrated by a **newer** binary than the one now starting, startup
+refuses with a fatal error naming both versions rather than running against a
+schema it doesn't fully understand — rolling back across a migration can
+corrupt data.
+
+If you've checked the specific rollback is safe (e.g. the migrations added
+between the two versions are additive and don't change data the older binary
+writes to), set `CAPSTAN_ALLOW_SCHEMA_DOWNGRADE=1` to downgrade the refusal to
+a warning and continue startup anyway. This variable only affects the
+forward-version check; it does not run any down-migration, and it does not by
+itself make an unsafe rollback safe.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
