@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -888,6 +889,65 @@ func TestRunRestore_StopsAndRestartsRunningStack(t *testing.T) {
 
 	assert.Equal(t, 1, docker.stopped())
 	assert.Equal(t, 1, docker.started())
+}
+
+// restoreFailingRunner fails only the `restic restore` invocation, delegating
+// everything else (notably the snapshot-validation `snapshots` Output call) to
+// the embedded fakeRunner. This drives RunRestore to its failure path AFTER the
+// stack has already been stopped, which is the exact state N13 (agent-os-4pa.7)
+// is about.
+type restoreFailingRunner struct {
+	fakeRunner
+}
+
+func (f *restoreFailingRunner) Run(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
+	if len(args) > 0 && args[0] == "restore" {
+		f.calls = append(f.calls, fakeCall{Binary: name, Args: args, Env: env})
+		return errors.New("injected restore failure")
+	}
+	return f.fakeRunner.Run(ctx, name, args, env, out)
+}
+
+// TestRunRestore_FailedRestoreLeavesStackStopped pins N13 (agent-os-4pa.7): when
+// the restore itself fails after the stack was stopped, the stack must be left
+// stopped so the operator can inspect a possibly half-restored directory and
+// retry. Auto-restarting containers over a partial restore can destroy the
+// ability to retry cleanly. Seen failing first against the pre-fix code, which
+// restarted unconditionally (started() == 1).
+func TestRunRestore_FailedRestoreLeavesStackStopped(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	docker := &fakeDocker{statusStr: "running"}
+
+	runner := &restoreFailingRunner{
+		fakeRunner: fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")},
+	}
+	svc := buildSvc(t, db, docker, runner, runner)
+	seedStack(t, db, "myapp", "stop")
+
+	out := make(chan StreamLine, 128)
+	err := svc.RunRestore(context.Background(), "myapp", "abc123", "/opt/stacks/myapp", out)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "restic restore")
+
+	// The stack was stopped for the restore...
+	assert.Equal(t, 1, docker.stopped(), "stack must be stopped before restore")
+	// ...and must NOT be restarted over a possibly half-restored directory.
+	assert.Equal(t, 0, docker.started(),
+		"a failed restore must leave the stack stopped, not auto-restart it")
+
+	// The operator must be told the stack was left stopped deliberately.
+	lines := drainChannel(out)
+	found := false
+	for _, l := range lines {
+		if strings.Contains(l.Line, "left stopped") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"stream must tell the operator the stack was left stopped for inspection; got %v", lines)
 }
 
 func TestRunRestore_BusyReturns409Sentinel(t *testing.T) {
