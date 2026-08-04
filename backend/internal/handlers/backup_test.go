@@ -155,6 +155,11 @@ func TestGetSettings_PasswordNeverInResponse(t *testing.T) {
 
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
@@ -184,6 +189,11 @@ func TestGetSettings_HasPasswordFalseWhenNotSet(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
@@ -204,6 +214,11 @@ func TestGetSettings_ShapeContainsExpectedFields(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, true)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
@@ -234,6 +249,11 @@ func TestGetSettings_RepositorySource_DB(t *testing.T) {
 
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
@@ -256,6 +276,11 @@ func TestGetSettings_RepositorySource_Default(t *testing.T) {
 	// buildBackupSvc uses a config.Config with DataDir = t.TempDir() and empty
 	// ResticRepository, so the default path is computed from DataDir.
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
@@ -279,6 +304,11 @@ func TestGetSettings_PasswordSource_DB(t *testing.T) {
 
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
@@ -300,6 +330,11 @@ func TestGetSettings_PasswordSource_Default(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false) // cfg.ResticPassword is ""
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
@@ -324,6 +359,11 @@ func TestUpdateSettings_WritesSettings(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	repo := "/data/my-repo"
@@ -356,6 +396,11 @@ func TestUpdateSettings_EmptyPasswordIsNoOp(t *testing.T) {
 
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	// Send update with empty password — must be a no-op.
@@ -396,6 +441,11 @@ func TestUpdateSettings_NoEncryptionKey_ReturnsClearErrorNotPanic(t *testing.T) 
 
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPut, "/api/settings/backup", map[string]interface{}{
@@ -434,6 +484,11 @@ func TestUpdateSettings_DatabaseConstructedNoEncryptor_Returns422NotInternalErro
 
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPut, "/api/settings/backup", map[string]interface{}{
@@ -464,6 +519,11 @@ func TestUpdateSettings_ScheduleChangeTriggersStopStart(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	sched := &handlerFakeScheduler{}
@@ -489,6 +549,11 @@ func TestUpdateSettings_ScheduleZeroOnlyStops(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	sched := &handlerFakeScheduler{}
@@ -531,6 +596,11 @@ func TestListPolicies_EmptyList(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/backups/policies", nil)
@@ -554,6 +624,11 @@ func TestPreviewSnapshot_RejectsMalformedID(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	for _, badID := range []string{"--no-lock", "deadbeefZZ", "nothex", "abc"} {
@@ -573,6 +648,11 @@ func TestUpsertPolicy_StackNotFound_Returns404(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPut, "/api/backups/policies/stack/nonexistent-stack", map[string]interface{}{
@@ -594,6 +674,11 @@ func TestUpsertPolicy_Success(t *testing.T) {
 	seedHandlerStack(t, db, "myapp")
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPut, "/api/backups/policies/stack/myapp", map[string]interface{}{
@@ -616,6 +701,11 @@ func TestDeletePolicy_Returns204(t *testing.T) {
 	seedHandlerStack(t, db, "myapp")
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	// First create a policy.
@@ -644,6 +734,11 @@ func TestGetStatus_Shape(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, true)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/backups/status", nil)
@@ -669,6 +764,11 @@ func TestGetStatus_NextRunAtNilWhenSchedulerOff(t *testing.T) {
 	svc := buildBackupSvc(t, db, true, false)
 	// Scheduler is not started → NextRunAt must be nil → JSON null.
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/backups/status", nil)
@@ -692,6 +792,11 @@ func TestGetStatus_RepoSizeBytesNilWhenRepoUnreachable(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/backups/status", nil)
@@ -712,6 +817,11 @@ func TestGetHistory_Shape(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/backups/history", nil)
@@ -736,6 +846,11 @@ func TestGetRunDetail_NotFound(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/backups/runs/unknown-run-id", nil)
@@ -757,6 +872,11 @@ func TestRunBackup_Kickoff_Returns202WithRunIdAndWsUrl(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false) // restic present → available
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/run", map[string]interface{}{
@@ -783,6 +903,11 @@ func TestRunBackup_Kickoff_PersistsDurableRunRecord(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/run", map[string]interface{}{
@@ -813,6 +938,11 @@ func TestRunBackup_EngineUnavailable_Returns409(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, false, false) // neither binary present → unavailable
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/run", map[string]interface{}{})
@@ -831,6 +961,11 @@ func TestRunBackup_Busy_Returns409(t *testing.T) {
 	svc := buildBackupSvc(t, db, true, false)
 	svc.ForceSetBusy(true) // mark busy
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/run", map[string]interface{}{})
@@ -854,6 +989,11 @@ func TestRunSync_Kickoff_Returns202(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/backups/sync", nil)
@@ -886,6 +1026,11 @@ func TestRunRestore_Kickoff_Returns202(t *testing.T) {
 	seedHandlerStack(t, db, "myapp")
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/restore", map[string]interface{}{
@@ -918,6 +1063,11 @@ func TestRunRestore_StackNotFound_Returns404(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/restore", map[string]interface{}{
@@ -940,6 +1090,11 @@ func TestRunRestore_NoConfirm_Returns400(t *testing.T) {
 	seedHandlerStack(t, db, "myapp")
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	// confirm omitted (defaults false) — restore is destructive and must be gated.
@@ -961,6 +1116,11 @@ func TestRunRestore_MissingFields_Returns400(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	// Missing snapshotId.
@@ -985,6 +1145,11 @@ func TestRunDRRestore_NoConfirm_Returns400(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, true)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/dr-restore", map[string]interface{}{
@@ -1004,6 +1169,11 @@ func TestRunDRRestore_Kickoff_Returns202(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, false, true) // rclone present (dr-restore checks rclone)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	// localRepoPath is a removed/ignored field: the destination is derived
@@ -1036,6 +1206,11 @@ func TestRunDRRestore_Busy_Returns409(t *testing.T) {
 	svc := buildBackupSvc(t, db, false, true)
 	svc.ForceSetBusy(true)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/dr-restore", map[string]interface{}{
@@ -1061,6 +1236,11 @@ func TestRunPrune_NoConfirmNoDryRun_Returns400(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/prune", map[string]interface{}{
@@ -1081,6 +1261,11 @@ func TestRunPrune_WithConfirm_Returns202(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/prune", map[string]interface{}{
@@ -1108,6 +1293,11 @@ func TestRunPrune_WithDryRunOnly_Returns202(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, true, false)
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/prune", map[string]interface{}{
@@ -1135,6 +1325,11 @@ func TestRunPrune_EngineUnavailable_Returns409(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	svc := buildBackupSvc(t, db, false, false) // no binaries
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/prune", map[string]interface{}{
@@ -1442,6 +1637,11 @@ func TestRepoInit_InitialisesRepositoryUnderDataDir(t *testing.T) {
 	})
 
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	w := httptest.NewRecorder()
@@ -1475,6 +1675,11 @@ func TestSnapshotListing_ResolvesRepositoryUnderDataDir(t *testing.T) {
 	})
 
 	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine this test kicked off has
+	// finished (including its DB write), so it must run BEFORE db.Close() and the
+	// t.TempDir() cleanup registered above — t.Cleanup runs LIFO, and this is
+	// registered last, so it runs first. See agent-os-80n.
+	t.Cleanup(h.Stop)
 	r := newBackupRouter(h)
 
 	w := httptest.NewRecorder()
