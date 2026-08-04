@@ -198,6 +198,18 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, authAl
 		}
 		c.Set("userID", userID)
 
+		// Publish the session id this request authenticated against, so handlers
+		// that need to act on the session itself do not have to re-derive it from
+		// the transport. Logout is the one that does: it used to re-read the JWT
+		// from the Authorization header, which the browser never sends (App.tsx
+		// registers `() => null` as getToken, so api.ts never sets the header),
+		// so its revoke silently did nothing for every cookie-authenticated
+		// logout while still returning 204 (agent-os-h9o). The jti is already
+		// parsed and its session row already validated above, so republishing it
+		// here is the single-source-of-truth fix — no second parse, and no way
+		// for header-vs-cookie to change the outcome.
+		c.Set("jti", jti)
+
 		if username, ok := claims["username"].(string); ok {
 			c.Set("username", username)
 		}

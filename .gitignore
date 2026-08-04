@@ -39,7 +39,7 @@ backend/bin/
 *.test
 
 # Dependencies
-node_modules/
+node_modules
 vendor/
 
 # Dolt database files (added by bd init)
