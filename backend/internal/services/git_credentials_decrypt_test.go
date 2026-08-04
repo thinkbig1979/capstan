@@ -330,21 +330,29 @@ func TestHTTPSCredentials_NoGlobalCredential_DoesNotLogError(t *testing.T) {
 	}
 }
 
-// TestHTTPSCredentials_GlobalDecryptFailure_StillFallsBackToConfig pins
-// control flow (adversary point B): logging the decrypt failure must not
-// short-circuit the GIT_HTTPS_TOKEN/GIT_HTTPS_USER fallback that follows the
-// global settings read at git_credentials.go:121-128, nor the
-// defaultGitHTTPSUser fallback.
-func TestHTTPSCredentials_GlobalDecryptFailure_StillFallsBackToConfig(t *testing.T) {
+// TestHTTPSCredentials_GlobalDecryptFailure_FailsClosed supersedes what was
+// TestHTTPSCredentials_GlobalDecryptFailure_StillFallsBackToConfig: that
+// version pinned the GIT_HTTPS_TOKEN/GIT_HTTPS_USER fallback as *intended*
+// control flow for an undecryptable global token. It was not intended, it was
+// the bug (agent-os-oyj): logging the decrypt failure (agent-os-2tt) told the
+// operator something was wrong, but the credential resolution kept going and
+// authenticated with a DIFFERENT credential anyway — an env token that may
+// belong to a different account or carry different scopes than the one
+// actually configured. That is structurally the same "different credential,
+// silently" defect agent-os-2au fixed one level up for the per-directory
+// read (see git_credentials.go:70-88), and the global path now matches it:
+// an unreadable stored token returns no credential at all rather than
+// falling through to config/env.
+func TestHTTPSCredentials_GlobalDecryptFailure_FailsClosed(t *testing.T) {
 	cfg := &config.Config{GitHTTPSUser: "env-user", GitHTTPSToken: "env-token"}
 	svc := gitServiceWithUndecryptableGlobalCredential(t, cfg)
 
 	user, token := svc.httpsCredentials("/stacks/no-directory-row-config-fallback")
 
-	if token != "env-token" {
-		t.Errorf("token = %q, want the GIT_HTTPS_TOKEN fallback", token)
+	if token != "" {
+		t.Errorf("token = %q, want \"\" — must not fall through to GIT_HTTPS_TOKEN", token)
 	}
-	if user != "env-user" {
-		t.Errorf("user = %q, want the GIT_HTTPS_USER fallback", user)
+	if user != "" {
+		t.Errorf("user = %q, want \"\" — no credential means no credential, not env-user paired with no token", user)
 	}
 }

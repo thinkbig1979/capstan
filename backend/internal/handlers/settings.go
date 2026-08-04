@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -539,18 +541,42 @@ func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
 	if httpsUser == "" {
 		httpsUser = h.cfg.GitHTTPSUser
 	}
+
+	// hasHttpsToken must distinguish "no row" (never configured) from "row
+	// present but unreadable" (a decrypt failure, e.g. after a STORAGE_KEY
+	// rotation). The old `httpsToken, _ := h.db.GetSetting(...)` discarded
+	// that distinction and reported hasHttpsToken=false in both cases —
+	// telling the operator no credential was configured when one was, in
+	// fact, stored and merely unreadable (agent-os-oyj). This mirrors the
+	// fail-closed fix to httpsCredentials in git_credentials.go: both places
+	// now treat "unreadable" as its own state instead of silently folding it
+	// into "absent".
 	hasToken := false
-	httpsToken, _ := h.db.GetSetting("git_https_token")
-	if httpsToken == "" && h.cfg.GitHTTPSToken != "" {
+	httpsTokenUnreadable := false
+	httpsToken, err := h.db.GetSetting("git_https_token")
+	switch {
+	case err == nil:
+		hasToken = httpsToken != "" || h.cfg.GitHTTPSToken != ""
+	case errors.Is(err, sql.ErrNoRows):
+		// The healthy "never configured" state — GIT_HTTPS_TOKEN is still a
+		// legitimate source of a credential, so report based on that alone.
+		hasToken = h.cfg.GitHTTPSToken != ""
+	default:
+		// A row exists but could not be decrypted. A credential IS configured
+		// from the operator's point of view — it just can't be read right
+		// now — so hasHttpsToken stays true rather than reporting "not
+		// configured". httpsTokenUnreadable is additive (the frontend ignores
+		// unknown JSON keys) and gives the UI an honest reason to prompt for
+		// the token to be re-entered.
 		hasToken = true
-	} else if httpsToken != "" {
-		hasToken = true
+		httpsTokenUnreadable = true
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"sshKey":        sshKey,
-		"httpsUser":     httpsUser,
-		"hasHttpsToken": hasToken,
+		"sshKey":               sshKey,
+		"httpsUser":            httpsUser,
+		"hasHttpsToken":        hasToken,
+		"httpsTokenUnreadable": httpsTokenUnreadable,
 	})
 }
 

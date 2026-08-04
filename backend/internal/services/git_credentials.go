@@ -57,6 +57,11 @@ const defaultGitHTTPSUser = "oauth2"
 // returns no credential at all rather than falling through (agent-os-2au). See
 // the comment on the error branch below.
 //
+// The same applies one level up, to the global settings value in step 3: if
+// git_https_token is stored but cannot be decrypted, that is not "no global
+// credential configured" either, and it does not fall through to
+// GIT_HTTPS_TOKEN (agent-os-oyj). See the comment on that error branch below.
+//
 // It returns an empty token when none is configured, in which case git runs
 // exactly as before.
 func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
@@ -126,14 +131,29 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 		case errors.Is(err, sql.ErrNoRows):
 			// No global credential configured at all — nothing to report.
 		case errors.Is(err, errdefs.ErrEncryptionUnavailable):
+			// A row exists but there is no key to decrypt it with. Falling
+			// through to the env/config token below (agent-os-oyj) would mean
+			// authenticating with a DIFFERENT credential than the one an
+			// operator believes is configured — the same failure mode 2au
+			// fixed for the per-directory read above (see the comment on that
+			// error branch). Returning "", "" here, rather than letting token
+			// stay empty and fall through further down, is what makes this
+			// fail closed instead of open.
+			//
+			// The git_https_user read and defaultGitHTTPSUser are skipped too:
+			// a bare username with no token is a `false`-configured state that
+			// doesn't correspond to anything the operator actually stored.
 			slog.Error("cannot read the global git credential: no encryption key is configured", "setting", "git_https_token", "error", err)
+			return "", ""
 		default:
 			// database/settings.go returns the decrypt error unwrapped, so this
 			// covers both a genuine decrypt failure (rotated STORAGE_KEY) and any
 			// other unreadable-database error; the message says "may have been
 			// rotated" rather than asserting it, since a closed-database error
-			// would otherwise be described inaccurately.
+			// would otherwise be described inaccurately. Fails closed for the
+			// same reason as the ErrEncryptionUnavailable branch above.
 			slog.Error("cannot read the global git credential: the stored value could not be read; STORAGE_KEY may have been rotated", "setting", "git_https_token", "error", err)
+			return "", ""
 		}
 		if v, err := s.db.GetSetting("git_https_user"); err == nil {
 			user = v
