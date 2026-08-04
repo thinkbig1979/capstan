@@ -16,8 +16,9 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Path Alias */
-    "baseUrl": ".",
+    /* Path Alias — no baseUrl: `paths` entries resolve against this file's own
+       directory since TypeScript 5.0, and `baseUrl` is an error under TS 6.0
+       (TS5101) and stops functioning in TS 7. */
     "paths": {
       "@/*": ["./src/*"]
     },
