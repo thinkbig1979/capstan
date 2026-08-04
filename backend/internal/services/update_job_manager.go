@@ -189,11 +189,16 @@ func (m *UpdateJobManager) Enqueue(spec JobSpec, run func(ctx context.Context, j
 	m.jobs[id] = js
 	m.mu.Unlock()
 
-	m.queue <- queuedItem{id: id, run: run}
-
+	// Snapshot before publishing to the worker: runJob sets StartedAt as its
+	// first action, so publishing first can let the worker dequeue and start
+	// the job before this snapshot is taken, making Enqueue's return value
+	// non-deterministic (agent-os-9oe).
 	js.mu.Lock()
 	cp := js.deepCopyLocked()
 	js.mu.Unlock()
+
+	m.queue <- queuedItem{id: id, run: run}
+
 	return cp
 }
 
