@@ -78,6 +78,66 @@ func SecurityHeaders(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
+// registerStaticAssets wires the Vite-built, content-hashed asset routes
+// with long-lived immutable caching: a new build ships under a new
+// filename, so a cached copy of an old filename is simply never requested
+// again (agent-os-k6k). /vite.svg is NOT content-hashed — it keeps whatever
+// default caching http.FileServer applies rather than being marked
+// immutable, since an unhashed filename can legitimately change content.
+func registerStaticAssets(r *gin.Engine) {
+	immutable := func(c *gin.Context) {
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	}
+	assets := r.Group("/assets")
+	assets.Use(immutable)
+	assets.Static("", "./frontend/assets")
+
+	fonts := r.Group("/fonts")
+	fonts.Use(immutable)
+	fonts.Static("", "./frontend/fonts")
+
+	r.StaticFile("/vite.svg", "./frontend/vite.svg")
+}
+
+// registerIndexRoute wires the SPA fallback that serves index.html with a
+// per-request CSP nonce spliced into its <script>/<link> tags (see
+// SecurityHeaders above). That splice makes the response body unique on
+// every request, so it is served with Cache-Control: no-store and
+// deliberately NO ETag or Last-Modified validator (agent-os-k6k):
+//   - An ETag over the response body would change every request, so it
+//     could never produce a 304 — pure overhead.
+//   - An ETag over the source file WOULD be stable and WOULD 304. That is
+//     the dangerous case: a 304 tells the browser to reuse its cached body
+//     (old nonce) while the 304's own headers carry SecurityHeaders'
+//     freshly-minted nonce. The nonces mismatch, 'strict-dynamic' trusts
+//     nothing, and every script on the page is blocked — a blank app, not
+//     a stale one. no-store is the honest policy for a body that cannot be
+//     cached by construction, and it is what keeps a stale bundle from
+//     outliving a rollback.
+//
+// Do not add an ETag/Last-Modified validator back to this route.
+func registerIndexRoute(r *gin.Engine, indexHTML string) {
+	r.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		if indexHTML == "" {
+			c.File("./frontend/index.html")
+			return
+		}
+		nonce, exists := c.Get("csp_nonce")
+		if !exists {
+			c.File("./frontend/index.html")
+			return
+		}
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		html := strings.ReplaceAll(indexHTML, "<script", fmt.Sprintf("<script nonce=\"%s\"", nonce))
+		html = strings.ReplaceAll(html, "<link", fmt.Sprintf("<link nonce=\"%s\"", nonce))
+		c.String(http.StatusOK, html)
+	})
+}
+
 func main() {
 	// Bootstrap the logger from the environment before config.Load, so that
 	// config's own startup lines — including the volume-path-identity warning —
@@ -340,9 +400,7 @@ func main() {
 		go handlers.StartEventBroadcaster(ctx, monitorService, eventBus)
 	}
 
-	r.Static("/assets", "./frontend/assets")
-	r.Static("/fonts", "./frontend/fonts")
-	r.StaticFile("/vite.svg", "./frontend/vite.svg")
+	registerStaticAssets(r)
 
 	timeoutMiddleware := func(timeout time.Duration) gin.HandlerFunc {
 		return func(c *gin.Context) {
@@ -412,24 +470,7 @@ func main() {
 	}
 	indexHTML := string(indexHTMLBytes)
 
-	r.NoRoute(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
-			return
-		}
-		if indexHTML == "" {
-			c.File("./frontend/index.html")
-			return
-		}
-		nonce, exists := c.Get("csp_nonce")
-		if !exists {
-			c.File("./frontend/index.html")
-			return
-		}
-		c.Header("Content-Type", "text/html; charset=utf-8")
-		html := strings.ReplaceAll(indexHTML, "<script", fmt.Sprintf("<script nonce=\"%s\"", nonce))
-		html = strings.ReplaceAll(html, "<link", fmt.Sprintf("<link nonce=\"%s\"", nonce))
-		c.String(http.StatusOK, html)
-	})
+	registerIndexRoute(r, indexHTML)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
