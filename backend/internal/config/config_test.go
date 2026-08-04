@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -247,5 +249,90 @@ func TestLoad_HonoursAuthDisabledAllowedNetworksFromEnvironment(t *testing.T) {
 	}
 	if cfg.AuthDisabledAllowedNetworks != "10.1.0.0/16" {
 		t.Errorf("expected Load() to honour AUTH_DISABLED_ALLOWED_NETWORKS=10.1.0.0/16, got %q", cfg.AuthDisabledAllowedNetworks)
+	}
+}
+
+// captureSlog redirects the process-wide slog default to a buffer for the
+// duration of the test and restores the previous default on cleanup. Mirrors
+// internal/services/git_credentials_test.go's helper of the same name.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// STORAGE_KEY derives the at-rest encryption key (crypto.go's HKDF expansion)
+// but, unlike JWT_SECRET, was never held to any length floor: a 3-character
+// STORAGE_KEY silently produced a structurally valid but near-zero-entropy
+// AES-256 key with no operator warning (agent-os-yqf). The fix is a loud
+// startup warning, not a hard failure — see warnWeakStorageKey's comment for
+// why a hard failure would strand already-encrypted deployments.
+
+func TestLoad_ShortStorageKeyWarnsAtStartup(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("STORAGE_KEY", "short")
+
+	buf := captureSlog(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error for a short STORAGE_KEY: %v — a short key must warn, not block boot", err)
+	}
+	if cfg.StorageKey != "short" {
+		t.Fatalf("expected cfg.StorageKey to be %q, got %q", "short", cfg.StorageKey)
+	}
+
+	if !strings.Contains(buf.String(), "STORAGE_KEY") {
+		t.Errorf("expected a startup warning naming STORAGE_KEY for a short key, got log output: %s", buf.String())
+	}
+}
+
+// TestLoad_ShortStorageKeyDoesNotBlockBoot pins the "warn, don't block boot"
+// decision structurally: a future change to hard-fail on a short STORAGE_KEY
+// breaks this test rather than silently stranding deployments whose already-
+// encrypted data would become unreadable if STORAGE_KEY had to change.
+func TestLoad_ShortStorageKeyDoesNotBlockBoot(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("STORAGE_KEY", "x")
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("a short STORAGE_KEY must not block boot, got error: %v", err)
+	}
+}
+
+func TestLoad_AdequateStorageKeyDoesNotWarn(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("STORAGE_KEY", strings.Repeat("k", 32))
+
+	buf := captureSlog(t)
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+
+	if strings.Contains(buf.String(), "STORAGE_KEY") {
+		t.Errorf("did not expect a STORAGE_KEY warning for a 32-character key, got: %s", buf.String())
+	}
+}
+
+// An unset STORAGE_KEY is not warned about: NewTokenEncryptor (crypto.go)
+// falls back to JWT_SECRET, which validate() already holds to the same
+// minSecretLength floor as a hard startup failure, so the inherited key is
+// never weak by omission.
+func TestLoad_UnsetStorageKeyDoesNotWarn(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("STORAGE_KEY", "")
+
+	buf := captureSlog(t)
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+
+	if strings.Contains(buf.String(), "STORAGE_KEY") {
+		t.Errorf("did not expect a STORAGE_KEY warning when unset, got: %s", buf.String())
 	}
 }

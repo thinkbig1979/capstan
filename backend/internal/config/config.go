@@ -156,6 +156,8 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	warnWeakStorageKey(cfg)
+
 	//nolint:gosec // cfg.StacksDir is read from the STACKS_DIR env var at process startup, set by whoever deploys the container — never request input
 	if err := os.MkdirAll(cfg.StacksDir, 0755); err != nil {
 		return nil, err
@@ -182,12 +184,17 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// minSecretLength is the length floor JWT_SECRET enforces as a hard startup
+// failure. warnWeakStorageKey reuses it for STORAGE_KEY below rather than
+// inventing a second number.
+const minSecretLength = 32
+
 func validate(cfg *Config) error {
 	if !cfg.AuthDisabled {
 		if cfg.JWTSecret == "" {
 			return &ConfigError{Field: "JWT_SECRET", Message: "required when AUTH_DISABLED is not set"}
 		}
-		if len(cfg.JWTSecret) < 32 {
+		if len(cfg.JWTSecret) < minSecretLength {
 			return &ConfigError{Field: "JWT_SECRET", Message: "must be at least 32 characters"}
 		}
 		if cfg.JWTSecret == "change-this-secret-in-production" {
@@ -226,6 +233,36 @@ func validate(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// warnWeakStorageKey warns, but does not block boot, when STORAGE_KEY is set
+// but shorter than minSecretLength — the same floor JWT_SECRET enforces as a
+// hard failure.
+//
+// STORAGE_KEY is deliberately NOT held to that same hard-failure floor.
+// STORAGE_KEY already encrypts existing deployments' stored git tokens
+// (crypto.go's HKDF expansion into an AES-256 key). A server that refuses to
+// boot on a short key strands that data: the operator cannot simply lengthen
+// the key, because changing STORAGE_KEY changes the HKDF-derived AES key and
+// makes everything already encrypted unreadable. A hard failure would
+// therefore turn a weak-key warning into data loss. JWT_SECRET does not have
+// this problem — it only signs sessions, so rotating it just logs everyone
+// out. So: a prominent startup warning, boot continues (agent-os-yqf).
+//
+// An unset STORAGE_KEY is not warned about here: NewTokenEncryptor
+// (crypto.go) falls back to JWTSecret when StorageKey is empty, and
+// JWTSecret is already held to minSecretLength as a hard failure above, so
+// an unset STORAGE_KEY inherits a key of adequate strength rather than a
+// weak one.
+func warnWeakStorageKey(cfg *Config) {
+	if cfg.StorageKey == "" || len(cfg.StorageKey) >= minSecretLength {
+		return
+	}
+
+	slog.Warn("WARNING: STORAGE_KEY is short and provides little effective encryption strength for at-rest secrets (git tokens, restic passwords). Boot continues because rotating STORAGE_KEY makes previously encrypted data unreadable.",
+		"storage_key_length", len(cfg.StorageKey),
+		"minimum_recommended", minSecretLength,
+		"hint", "Set STORAGE_KEY to a random string at least 32 characters long for new deployments; existing deployments should plan a coordinated rotation.")
 }
 
 func validateVolumePathIdentity(cfg *Config) {

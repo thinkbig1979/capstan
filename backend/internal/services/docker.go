@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -108,8 +107,9 @@ func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
 	args := s.buildComposeArgs(stack, "logs", []string{"--tail", fmt.Sprintf("%d", tail), "--timestamps"})
 
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	cmd := exec.Command("docker", args...)
+	cmd := execCommand("docker", args...)
 	cmd.Dir = stack.Directory
+	cmd.Env = dockerEnv()
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
