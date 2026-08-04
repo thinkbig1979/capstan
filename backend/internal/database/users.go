@@ -19,6 +19,29 @@ func (d *DB) CreateUser(user models.User) error {
 	return err
 }
 
+// CreateFirstUser inserts the bootstrap admin only if no user exists yet, and
+// reports whether it did. The insert and the "no users exist" test are one
+// statement, so sqlite evaluates the WHERE NOT EXISTS while holding the write
+// lock for that statement — two concurrent /auth/setup calls cannot both insert.
+// This closes the TOCTOU that a UserCount()-then-CreateUser() sequence leaves
+// open, where both callers read count==0 before either writes (agent-os-iut).
+// A false return means someone else completed setup first; the caller should
+// treat it as "setup already done", not an error.
+func (d *DB) CreateFirstUser(user models.User) (bool, error) {
+	query := `INSERT INTO users (id, username, password, created_at, updated_at)
+	          SELECT ?, ?, ?, ?, ?
+	          WHERE NOT EXISTS (SELECT 1 FROM users)`
+	res, err := d.db.Exec(query, user.ID, user.Username, user.Password, user.CreatedAt, user.UpdatedAt)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 // GetUserByUsername looks up a user case-insensitively (agent-os-tmo): the
 // COLLATE NOCASE predicate matches the unique index migration 13 creates
 // (idx_users_username_nocase), so "Admin" and "admin" resolve to the same
