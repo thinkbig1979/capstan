@@ -93,6 +93,23 @@ on:
   # Allow manual one-off runs from the Actions tab.
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# Groups PR runs by PR number and push-to-main runs by ref, cancelling a
+# superseded run the moment a newer commit lands — same pattern as
+# security.yml and react-doctor.yml. The scheduled nightly run gets its OWN
+# group ('nightly', not ref-keyed) instead of sharing the push-to-main group:
+# cancel-in-progress is evaluated on the INCOMING run, not the one already
+# running, so if schedule and push shared a group, an ordinary push arriving
+# while the nightly is in-flight would still cancel it (the push's own
+# cancel-in-progress is true) even though the schedule run's cancel-in-progress
+# is false. Isolating the schedule group closes that regardless of arrival
+# order — nothing else can ever land in the 'nightly' group to cancel it.
+concurrency:
+  group: e2e-backup-${{ github.event_name == 'schedule' && 'nightly' || (github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
 jobs:
   backup-flow:
     name: Playwright backup-flow suite
