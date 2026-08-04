@@ -54,7 +54,12 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 	//nolint:gosec // name is always a hardcoded literal ("restic"/"rclone") at every call site, args is explicit argv — see README.md "Command execution and file access"
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Env = append(os.Environ(), env...)
+	// stripCapstanSecrets removes Capstan's own secrets (JWT_SECRET,
+	// STORAGE_KEY, GIT_HTTPS_TOKEN, RESTIC_PASSWORD) before the rest of the
+	// inherited environment is handed to restic/rclone (agent-os-iey). See
+	// stripCapstanSecrets for why this is a denylist rather than the allowlist
+	// used for docker/compose.
+	cmd.Env = append(stripCapstanSecrets(os.Environ()), env...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -103,7 +108,7 @@ func (r *execRunner) Output(ctx context.Context, name string, args []string, env
 	//nolint:gosec // name is always a hardcoded literal ("restic"/"rclone") at every call site, args is explicit argv — see README.md "Command execution and file access"
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(stripCapstanSecrets(os.Environ()), env...)
 
 	pgid := -1
 	go func() {
