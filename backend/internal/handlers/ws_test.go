@@ -219,8 +219,12 @@ func TestAuthenticateToken_MalformedTokenReturnsSessionExpired(t *testing.T) {
 // TestAuthenticateToken_MissingSubReturnsSessionExpired covers the
 // missing-"sub"-claim branch (ws.go:210-217 before the fix): a structurally
 // valid but unusable token ("no usable token" per models/errors.go) minted
-// UNAUTHORIZED instead of SESSION_EXPIRED. No "jti" claim is set so the
-// session lookup is skipped and the sub check is reached directly.
+// UNAUTHORIZED instead of SESSION_EXPIRED. A real, unexpired session is
+// seeded and its ID set as "jti" so the token clears the jti guard
+// (agent-os-gm5) and reaches the sub check on its own merits — without a
+// live session behind "jti", the jti guard would reject the token first and
+// this test would no longer isolate the missing-sub defect it exists to
+// catch (mirrors middleware/auth_test.go's TestAuthMiddleware_MissingSubIsSessionExpired).
 func TestAuthenticateToken_MissingSubReturnsSessionExpired(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "test-db-*")
 	require.NoError(t, err)
@@ -230,11 +234,33 @@ func TestAuthenticateToken_MissingSubReturnsSessionExpired(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
+	now := time.Now()
+	userID := uuid.New().String()
+	user := models.User{
+		ID:        userID,
+		Username:  "subless-token-user",
+		Password:  "irrelevant-hash",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	require.NoError(t, db.CreateUser(user))
+
+	sessionID := uuid.New().String()
+	session := models.Session{
+		ID:        sessionID,
+		UserID:    userID,
+		ExpiresAt: now.Add(24 * time.Hour),
+		CreatedAt: now,
+	}
+	require.NoError(t, db.CreateSession(session))
+
 	secret := "test-secret-key-32-chars-long!!"
 	claims := jwt.MapClaims{
 		"iss": jwtIssuer,
-		"iat": time.Now().Unix(),
-		"exp": time.Now().Add(time.Hour).Unix(),
+		// Deliberately no "sub" claim — this is the defect under test.
+		"jti": sessionID,
+		"iat": now.Unix(),
+		"exp": now.Add(time.Hour).Unix(),
 	}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
 	require.NoError(t, err)
