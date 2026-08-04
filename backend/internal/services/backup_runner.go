@@ -97,6 +97,22 @@ type BackupRunnerRegistry struct {
 	svc    *BackupService
 
 	gcStop chan struct{}
+
+	// wg tracks every in-flight execX goroutine (execBackup, execRestore,
+	// execSync, execDRRestore, execPrune). Add(1) happens in the LaunchX method
+	// before the goroutine starts; Done() is the LAST deferred call in execX (see
+	// its defer ordering comment), so Wait() only returns once a run's
+	// finaliseRunStatus DB write (or recoverExec's, on panic) has completed.
+	//
+	// This exists because execX goroutines run on context.Background(), detached
+	// from any request/WS lifecycle by design (so a WS disconnect can't cancel
+	// them) — which means nothing else joins them. Without wg, a test that closes
+	// its DB handle or removes its TempDir right after asserting the kickoff
+	// response races a still-running goroutine, which then fails with
+	// "sql: database is closed" (or, if it still holds files open under a
+	// t.TempDir(), a "directory not empty" cleanup error) attributed to whichever
+	// unlucky test happens to be running at that moment. See agent-os-80n.
+	wg sync.WaitGroup
 }
 
 const retentionTTL = 30 * time.Minute
@@ -119,9 +135,16 @@ func NewBackupRunnerRegistry(
 	return reg
 }
 
-// Stop halts the background GC goroutine. Call on application shutdown.
+// Stop halts the background GC goroutine and blocks until every in-flight
+// execX goroutine (execBackup/execRestore/execSync/execDRRestore/execPrune)
+// has fully finished, including its terminal DB write. Call on application
+// shutdown, and MUST be called by tests (via t.Cleanup) before the test tears
+// down anything an execX goroutine still writes to — the DB handle or a
+// t.TempDir() the service writes into — since execX runs detached on
+// context.Background() and nothing else joins it. See agent-os-80n.
 func (reg *BackupRunnerRegistry) Stop() {
 	close(reg.gcStop)
+	reg.wg.Wait()
 }
 
 func (reg *BackupRunnerRegistry) gcLoop() {
@@ -187,11 +210,16 @@ func (reg *BackupRunnerRegistry) LaunchBackup(stackIDs []string, dryRun bool) (s
 
 	dr := &durableRun{runID: runID, kind: RunKindBackup, done: make(chan struct{})}
 	reg.register(dr)
+	reg.wg.Add(1)
 	go reg.execBackup(dr, stackIDs, dryRun)
 	return runID, nil
 }
 
 func (reg *BackupRunnerRegistry) execBackup(dr *durableRun, stackIDs []string, dryRun bool) {
+	// wg.Done() is declared FIRST, so in LIFO order it runs LAST — after
+	// recoverExec and close(dr.done) below — so reg.Stop()'s Wait() only
+	// unblocks once this run's DB write is truly finished.
+	defer reg.wg.Done()
 	// close(dr.done) runs last (LIFO), so clients see the outcome before unblocking.
 	defer close(dr.done)
 	// recover() runs before close(dr.done): sets outcome+DB before unblocking clients.
@@ -245,11 +273,14 @@ func (reg *BackupRunnerRegistry) LaunchRestore(stackID, snapshotID, target strin
 
 	dr := &durableRun{runID: runID, kind: RunKindRestore, done: make(chan struct{})}
 	reg.register(dr)
+	reg.wg.Add(1)
 	go reg.execRestore(dr, stackID, snapshotID, target)
 	return runID, nil
 }
 
 func (reg *BackupRunnerRegistry) execRestore(dr *durableRun, stackID, snapshotID, target string) {
+	// See execBackup's defer ordering comment: declared first so it runs last.
+	defer reg.wg.Done()
 	defer close(dr.done)
 	defer reg.recoverExec(dr)
 
@@ -292,11 +323,14 @@ func (reg *BackupRunnerRegistry) LaunchSync() (string, error) {
 
 	dr := &durableRun{runID: runID, kind: RunKindSync, done: make(chan struct{})}
 	reg.register(dr)
+	reg.wg.Add(1)
 	go reg.execSync(dr)
 	return runID, nil
 }
 
 func (reg *BackupRunnerRegistry) execSync(dr *durableRun) {
+	// See execBackup's defer ordering comment: declared first so it runs last.
+	defer reg.wg.Done()
 	defer close(dr.done)
 	defer reg.recoverExec(dr)
 
@@ -341,11 +375,14 @@ func (reg *BackupRunnerRegistry) LaunchDRRestore() (string, error) {
 
 	dr := &durableRun{runID: runID, kind: RunKindDRRestore, done: make(chan struct{})}
 	reg.register(dr)
+	reg.wg.Add(1)
 	go reg.execDRRestore(dr)
 	return runID, nil
 }
 
 func (reg *BackupRunnerRegistry) execDRRestore(dr *durableRun) {
+	// See execBackup's defer ordering comment: declared first so it runs last.
+	defer reg.wg.Done()
 	defer close(dr.done)
 	defer reg.recoverExec(dr)
 
@@ -388,11 +425,14 @@ func (reg *BackupRunnerRegistry) LaunchPrune(dryRun bool) (string, error) {
 
 	dr := &durableRun{runID: runID, kind: RunKindPrune, done: make(chan struct{})}
 	reg.register(dr)
+	reg.wg.Add(1)
 	go reg.execPrune(dr, dryRun)
 	return runID, nil
 }
 
 func (reg *BackupRunnerRegistry) execPrune(dr *durableRun, dryRun bool) {
+	// See execBackup's defer ordering comment: declared first so it runs last.
+	defer reg.wg.Done()
 	defer close(dr.done)
 	defer reg.recoverExec(dr)
 
