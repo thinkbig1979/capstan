@@ -85,6 +85,9 @@ func (h *AuthHandler) Status(c *gin.Context) {
 }
 
 func (h *AuthHandler) Setup(c *gin.Context) {
+	// Fast path only: reject an obviously-already-setup instance before hashing.
+	// This is NOT the race guard — two concurrent callers can both read count==0
+	// here. The authoritative check is the atomic CreateFirstUser below.
 	userCount, _ := h.db.UserCount()
 	if userCount > 0 {
 		c.JSON(http.StatusConflict, models.NewAppError(
@@ -140,11 +143,23 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 		UpdatedAt: now,
 	}
 
-	if err := h.db.CreateUser(user); err != nil {
+	created, err := h.db.CreateFirstUser(user)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.NewAppError(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to create user",
+		))
+		return
+	}
+	// A concurrent setup won the race and created the first admin between our
+	// fast-path check and this insert. Report the same 409 as the fast path
+	// rather than pretending to have bootstrapped this request (agent-os-iut).
+	if !created {
+		c.JSON(http.StatusConflict, models.NewAppError(
+			http.StatusConflict,
+			models.ErrSetupAlreadyDone,
+			"Setup has already been completed",
 		))
 		return
 	}
