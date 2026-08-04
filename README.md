@@ -519,30 +519,33 @@ network you don't fully control, and the session token and CSRF cookie travel
 in cleartext. Terminate TLS at a reverse proxy and forward
 `X-Forwarded-Proto: https` (see [Production Deployment](#production-deployment)).
 
-**`AUTH_DISABLED` trusts whoever `TRUSTED_NETWORKS` says is trusted, based on
-a client IP that a reverse proxy can control.** With `AUTH_DISABLED=true`,
-any request from a trusted IP is admitted without a login. That IP comes from
-`X-Forwarded-For`, honored under Gin's trusted-proxy list, which defaults to
-the same `TRUSTED_NETWORKS` value (`backend/internal/middleware/auth.go`,
-`backend/cmd/server/main.go:193-212`). If a reverse proxy in front of Capstan
-forwards a client-supplied `X-Forwarded-For` instead of overwriting it with
-the real client IP, every request can appear to originate from a trusted
-address and skip authentication entirely. Don't run `AUTH_DISABLED=true`
-behind a reverse proxy unless you've confirmed it always overwrites
-`X-Forwarded-For`.
+**`AUTH_DISABLED` trusts whoever `AUTH_DISABLED_ALLOWED_NETWORKS` says is
+trusted, based on the real socket peer — never a header a proxy could
+forward.** With `AUTH_DISABLED=true`, any request whose *actual* TCP peer
+address is loopback or falls in `AUTH_DISABLED_ALLOWED_NETWORKS` is admitted
+without a login (`backend/internal/middleware/auth.go`). Unset, that variable
+defaults to loopback only. It is deliberately **not** `TRUSTED_NETWORKS` and
+the check deliberately ignores `X-Forwarded-For` even from a trusted proxy:
+those two used to be the same value and the same resolved-client-IP check,
+which meant adding a reverse proxy's subnet to `TRUSTED_NETWORKS` for correct
+client-IP attribution silently widened who could skip authentication, and a
+proxy that forwarded a client-supplied `X-Forwarded-For: 127.0.0.1` could
+reach the bypass too (agent-os-0s4). Widening the `AUTH_DISABLED` bypass
+beyond loopback is now a separate, explicit opt-in via
+`AUTH_DISABLED_ALLOWED_NETWORKS`.
 
 **A reverse proxy must overwrite `X-Forwarded-For`, and its address must be in
-`TRUSTED_NETWORKS`.** The same client IP that decides `AUTH_DISABLED` also keys
-the login rate limiter, so both misconfigurations show up there too. If the
-proxy's address is missing from `TRUSTED_NETWORKS`, Capstan ignores
-`X-Forwarded-For` and sees every request as coming from the proxy: all users
-then share one per-IP login budget, and one person mistyping a password can
-start returning `429` to everybody. If the proxy forwards a client-supplied
-`X-Forwarded-For` instead of overwriting it, a caller picks their own apparent
-address and rotates past the per-IP limit at will. Capstan logs its effective
-trusted-proxy list at startup, and warns once per peer when a forwarding header
-arrives from an address it does not trust — check that log after any proxy
-change.
+`TRUSTED_NETWORKS`.** The resolved client IP keys the login rate limiter (not
+`AUTH_DISABLED`, which is peer-address-only as above), so a proxy
+misconfiguration shows up there. If the proxy's address is missing from
+`TRUSTED_NETWORKS`, Capstan ignores `X-Forwarded-For` and sees every request as
+coming from the proxy: all users then share one per-IP login budget, and one
+person mistyping a password can start returning `429` to everybody. If the
+proxy forwards a client-supplied `X-Forwarded-For` instead of overwriting it, a
+caller picks their own apparent address and rotates past the per-IP limit at
+will. Capstan logs its effective trusted-proxy list at startup, and warns once
+per peer when a forwarding header arrives from an address it does not trust —
+check that log after any proxy change.
 
 Login attempts are limited in three layers, so a shared proxy address degrades
 the limiter rather than collapsing it
@@ -637,10 +640,10 @@ its network in `HEALTH_ALLOWED_NETWORKS`:
 HEALTH_ALLOWED_NETWORKS=10.1.0.0/16,192.168.50.7
 ```
 
-This is deliberately **not** `TRUSTED_NETWORKS`. That value is Gin's
-trusted-proxy list *and* the `AUTH_DISABLED` bypass list, so reusing it would
-mean granting an uptime monitor `X-Forwarded-For` spoofing and authentication
-bypass just to let it read a health endpoint.
+This is deliberately **not** `TRUSTED_NETWORKS` (Gin's trusted-proxy list) or
+`AUTH_DISABLED_ALLOWED_NETWORKS` (the `AUTH_DISABLED` bypass list) — reusing
+either would mean granting an uptime monitor `X-Forwarded-For` spoofing or
+authentication bypass just to let it read a health endpoint.
 
 ### Version
 - `GET /api/v1/version` — build identity of the running binary. Public, so an
@@ -751,7 +754,10 @@ leaked `JWT_SECRET` alone can't decrypt stored secrets.
 - **Keep `AUTH_DISABLED=false`** for anything reachable off localhost.
 - **Terminate TLS** at a reverse proxy (nginx, Traefik, Caddy) and forward
   `X-Forwarded-Proto: https` — Capstan uses it to set `Secure` cookies and HSTS.
-- **Configure `TRUSTED_NETWORKS`** for access control.
+- **Configure `TRUSTED_NETWORKS`** for correct client-IP attribution (rate
+  limiting) and reverse-proxy trust. If you must run `AUTH_DISABLED=true`
+  beyond loopback, set `AUTH_DISABLED_ALLOWED_NETWORKS` explicitly — it is a
+  separate list, not implied by `TRUSTED_NETWORKS`.
 - **Set up and test backups** (Settings → Backup).
 - For least-privilege Docker access, front the socket with a proxy (see
   [Docker Socket & Security](#docker-socket--security)).

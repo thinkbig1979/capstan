@@ -37,6 +37,102 @@ func newSessionGuardRouter(t *testing.T) *gin.Engine {
 	return r
 }
 
+// TestAuthMiddleware_AuthDisabledBypassIsSeparateFromTrustedProxies guards
+// agent-os-0s4: TRUSTED_NETWORKS (Gin's trusted-proxy list) and the
+// AUTH_DISABLED allowlist used to be the same value, which opened two
+// vectors once an operator added a reverse proxy's subnet to
+// TRUSTED_NETWORKS for correct client-IP attribution:
+//
+//   - Vector 1: every host inside TRUSTED_NETWORKS was itself allow-listed,
+//     no header trickery needed — the peer address alone satisfied the
+//     shared list.
+//   - Vector 2: a request relayed through a trusted proxy could forge
+//     X-Forwarded-For: 127.0.0.1, which Gin's ClientIP() honors from a
+//     trusted peer, and IsTrustedIP treats loopback as trusted
+//     unconditionally.
+//
+// The fix passes AuthMiddleware a distinct, independently-configured
+// allowlist (defaulting to loopback only) instead of TrustedNetworks, and
+// switches the bypass check from c.ClientIP() to c.RemoteIP() so a forwarded
+// header can never influence it. This test wires the same
+// gin.New()+SetTrustedProxies("10.0.0.0/24") shape as main.go:274-291 to
+// reproduce the exact matrix from the confirmed experiment in the bead.
+func TestAuthMiddleware_AuthDisabledBypassIsSeparateFromTrustedProxies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	newRouter := func(authAllowedNetworks string) *gin.Engine {
+		r := gin.New()
+		if err := r.SetTrustedProxies([]string{"10.0.0.0/24"}); err != nil {
+			t.Fatalf("failed to set trusted proxies: %v", err)
+		}
+		r.Use(AuthMiddleware(nil, "test-secret", true, authAllowedNetworks))
+		r.GET("/api/v1/dashboard/stats", func(c *gin.Context) { c.Status(http.StatusOK) })
+		return r
+	}
+
+	do := func(r *gin.Engine, remoteAddr, xff string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/stats", nil)
+		req.RemoteAddr = remoteAddr
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	// Vector 1 positive control: with the allowlist correctly wired to its own
+	// default ("", loopback only, as main.go now passes AuthDisabledAllowedNetworks
+	// rather than TrustedNetworks — see main.go:329), a plain request from a
+	// host merely inside the trusted-proxy subnet is refused. This alone does
+	// not reproduce vector 1 red-first, since AuthMiddleware has always
+	// honored whatever list it is handed correctly — the defect was the
+	// *wiring* choice of which list to hand it, which
+	// config.TestLoad_AuthDisabledAllowedNetworksIsIndependentOfTrustedNetworks
+	// covers red-first (that field did not exist pre-fix).
+	t.Run("vector1_trusted_proxy_subnet_peer_is_not_auto_allowlisted", func(t *testing.T) {
+		r := newRouter("") // default: loopback only
+		w := do(r, "10.0.0.5:12345", "")
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for a peer inside the trusted-proxy subnet but outside the auth-disabled allowlist, got %d (%s)", w.Code, w.Body.String())
+		}
+	})
+
+	// Vector 2: relayed through a trusted proxy peer, with a forged
+	// X-Forwarded-For: 127.0.0.1. Gin's ClientIP() would resolve this to
+	// "127.0.0.1" and IsTrustedIP would trust it unconditionally; RemoteIP()
+	// must be used instead so the forged header never reaches that check.
+	t.Run("vector2_spoofed_xff_loopback_through_trusted_proxy_is_refused", func(t *testing.T) {
+		r := newRouter("") // default: loopback only
+		w := do(r, "10.0.0.5:12345", "127.0.0.1")
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for a spoofed X-Forwarded-For: 127.0.0.1 via a trusted proxy, got %d (%s)", w.Code, w.Body.String())
+		}
+	})
+
+	// Positive control: genuine loopback (the real socket peer, no proxy
+	// relay involved) must still pass — the fix narrows the bypass, it does
+	// not remove it.
+	t.Run("genuine_loopback_peer_still_allowed", func(t *testing.T) {
+		r := newRouter("") // default: loopback only
+		w := do(r, "127.0.0.1:9999", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for a genuine loopback peer, got %d (%s)", w.Code, w.Body.String())
+		}
+	})
+
+	// An explicitly configured allowlist still grants access to a host on
+	// that list — the split doesn't just delete the feature, it separates it
+	// from TrustedNetworks and requires an operator to opt in deliberately.
+	t.Run("explicit_allowlist_entry_still_allowed", func(t *testing.T) {
+		r := newRouter("10.0.0.0/24")
+		w := do(r, "10.0.0.5:12345", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for a peer inside an explicitly configured auth-disabled allowlist, got %d (%s)", w.Code, w.Body.String())
+		}
+	})
+}
+
 func decodeErrorBody(t *testing.T, body []byte) map[string]any {
 	t.Helper()
 	var payload map[string]any

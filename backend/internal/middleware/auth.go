@@ -40,9 +40,22 @@ func IsPublicPath(path string) bool {
 // allowed, and an empty list means loopback only.
 //
 // Two callers with deliberately different lists: the AUTH_DISABLED bypass uses
-// TRUSTED_NETWORKS, the health endpoints use HEALTH_ALLOWED_NETWORKS. Only the
-// matching logic is shared — see config.Config.HealthNetworks for why the lists
-// are not.
+// AUTH_DISABLED_ALLOWED_NETWORKS, the health endpoints use
+// HEALTH_ALLOWED_NETWORKS. Only the matching logic is shared — see
+// config.Config.HealthNetworks and config.Config.AuthDisabledAllowedNetworks
+// for why the lists are not.
+//
+// The two callers also deliberately disagree on where clientIP comes from.
+// health.go passes gin's resolved c.ClientIP(), which honors X-Forwarded-For
+// from a trusted proxy — fine for a read-only liveness/readiness check.
+// AuthMiddleware instead passes c.RemoteIP(), the raw socket peer, ignoring
+// X-Forwarded-For entirely: this loopback check is the AUTH_DISABLED admin
+// bypass, and a resolved ClientIP() can be walked to "127.0.0.1" by an
+// attacker forging X-Forwarded-For through a trusted proxy, which would
+// satisfy the hardcoded loopback rule below unconditionally regardless of
+// the networks list (agent-os-0s4, vector 2). RemoteIP() cannot be spoofed
+// that way — see proxytrust.go for the same ClientIP()-vs-RemoteIP() split
+// used to detect proxy misconfiguration.
 func IsTrustedIP(clientIP string, networks string) bool {
 	if clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" {
 		return true
@@ -94,16 +107,22 @@ func extractBearerToken(c *gin.Context) string {
 	return ""
 }
 
-func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, trustedNetworks string) gin.HandlerFunc {
+// authAllowedNetworks is the AUTH_DISABLED bypass allowlist
+// (config.Config.AuthDisabledAllowedNetworks) — deliberately not
+// TrustedNetworks/Gin's trusted-proxy list, see IsTrustedIP (agent-os-0s4).
+func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, authAllowedNetworks string) gin.HandlerFunc {
 	if authDisabled {
 		slog.Warn("WARNING: AUTHENTICATION DISABLED - Only safe on trusted networks!")
 	}
 
 	return func(c *gin.Context) {
 		if authDisabled {
-			clientIP := c.ClientIP()
-			if !IsTrustedIP(clientIP, trustedNetworks) {
-				slog.Warn("Untrusted IP attempt with auth disabled", "ip", clientIP, "trusted_networks", trustedNetworks)
+			// RemoteIP(), not ClientIP(): this is the security-critical bypass
+			// decision, so it must not be swayed by a spoofed X-Forwarded-For
+			// even from a peer Gin otherwise trusts as a proxy. See IsTrustedIP.
+			clientIP := c.RemoteIP()
+			if !IsTrustedIP(clientIP, authAllowedNetworks) {
+				slog.Warn("Untrusted IP attempt with auth disabled", "ip", clientIP, "auth_disabled_allowed_networks", authAllowedNetworks)
 				c.JSON(403, models.NewAppError(403, "FORBIDDEN", "Authentication disabled - only local connections allowed"))
 				c.Abort()
 				return

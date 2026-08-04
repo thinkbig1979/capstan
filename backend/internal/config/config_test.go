@@ -201,6 +201,57 @@ func TestLoad_RejectsImplausiblePort(t *testing.T) {
 	}
 }
 
+// TestLoad_AuthDisabledAllowedNetworksIsIndependentOfTrustedNetworks guards
+// agent-os-0s4 vector 1: AuthDisabledAllowedNetworks and TrustedNetworks used
+// to be the same field (Load only ever set TrustedNetworks, and main.go fed
+// that single value to both Gin's SetTrustedProxies and the AUTH_DISABLED
+// bypass allowlist). That meant every host an operator added to
+// TRUSTED_NETWORKS for correct client-IP attribution was automatically
+// allow-listed for the AUTH_DISABLED bypass too, no header spoofing required.
+//
+// AuthDisabledAllowedNetworks did not exist on Config before this fix, so
+// this test fails to even compile against the pre-fix source — the closest
+// "seen failing" state available for a defect whose root cause is "one config
+// value answers two different trust questions" rather than a bad conditional.
+// Once the field exists, it must default to loopback-only (empty) regardless
+// of TrustedNetworks, and must not silently mirror it.
+func TestLoad_AuthDisabledAllowedNetworksIsIndependentOfTrustedNetworks(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("TRUSTED_NETWORKS", "10.0.0.0/24")
+	t.Setenv("AUTH_DISABLED_ALLOWED_NETWORKS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if cfg.TrustedNetworks != "10.0.0.0/24" {
+		t.Fatalf("expected TrustedNetworks to be loaded from TRUSTED_NETWORKS, got %q", cfg.TrustedNetworks)
+	}
+	if cfg.AuthDisabledAllowedNetworks != "" {
+		t.Errorf("expected an unset AUTH_DISABLED_ALLOWED_NETWORKS to default to loopback-only (empty) even though TRUSTED_NETWORKS is set, got %q", cfg.AuthDisabledAllowedNetworks)
+	}
+	if cfg.AuthDisabledAllowedNetworks == cfg.TrustedNetworks {
+		t.Errorf("AuthDisabledAllowedNetworks must never silently mirror TrustedNetworks — that is exactly the defect agent-os-0s4 closes")
+	}
+}
+
+// TestLoad_HonoursAuthDisabledAllowedNetworksFromEnvironment is the positive
+// half: an operator who deliberately widens the AUTH_DISABLED bypass beyond
+// loopback must be able to, via a variable that is not TRUSTED_NETWORKS.
+func TestLoad_HonoursAuthDisabledAllowedNetworksFromEnvironment(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("TRUSTED_NETWORKS", "")
+	t.Setenv("AUTH_DISABLED_ALLOWED_NETWORKS", "10.1.0.0/16")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if cfg.AuthDisabledAllowedNetworks != "10.1.0.0/16" {
+		t.Errorf("expected Load() to honour AUTH_DISABLED_ALLOWED_NETWORKS=10.1.0.0/16, got %q", cfg.AuthDisabledAllowedNetworks)
+	}
+}
+
 // captureSlog redirects the process-wide slog default to a buffer for the
 // duration of the test and restores the previous default on cleanup. Mirrors
 // internal/services/git_credentials_test.go's helper of the same name.

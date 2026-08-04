@@ -325,8 +325,22 @@ func main() {
 
 	settingsHandler := handlers.NewSettingsHandler(db, cfg.StacksDir, cfg.JWTSecret, cfg.AuthDisabled, schedulerService, cfg)
 
+	// AuthDisabledAllowedNetworks, not TrustedNetworks: that value is Gin's
+	// trusted-proxy list, and reusing it here would mean an operator adding a
+	// reverse proxy for correct client-IP attribution silently widens who can
+	// skip authentication (agent-os-0s4). An operator who relied on the old
+	// shared behaviour loses access after upgrading, so warn rather than fail
+	// silently: unset AuthDisabledAllowedNetworks defaults to loopback only,
+	// which is narrower than a non-empty TrustedNetworks used to grant here.
+	if cfg.AuthDisabled && cfg.AuthDisabledAllowedNetworks == "" && cfg.TrustedNetworks != "" {
+		slog.Warn("AUTH_DISABLED bypass is now restricted to loopback only",
+			"reason", "AUTH_DISABLED_ALLOWED_NETWORKS is unset while TRUSTED_NETWORKS is set; these are separate lists as of agent-os-0s4",
+			"trusted_networks", cfg.TrustedNetworks,
+			"fix", "set AUTH_DISABLED_ALLOWED_NETWORKS explicitly if hosts beyond loopback need the AUTH_DISABLED bypass")
+	}
+
 	protected := api.Group("")
-	protected.Use(middleware.AuthMiddleware(db, cfg.JWTSecret, cfg.AuthDisabled, cfg.TrustedNetworks))
+	protected.Use(middleware.AuthMiddleware(db, cfg.JWTSecret, cfg.AuthDisabled, cfg.AuthDisabledAllowedNetworks))
 	protected.Use(middleware.RateLimitByUser())
 	protected.Use(middleware.CSRFMiddleware())
 	authHandler.RegisterProtectedRoutes(protected)
