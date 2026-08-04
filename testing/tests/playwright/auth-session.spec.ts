@@ -179,21 +179,28 @@ test.describe('Auth session E2E', () => {
     // checks a REQUEST COOKIE against the X-CSRF-Token header
     // (csrf.go:52-65), not just the header value in isolation — a request
     // fired from the standalone `request` fixture's own (empty) cookie jar
-    // 403s with CSRF_COOKIE_MISSING even with the right header value
-    // (OBSERVED: first attempt at this test did exactly that). The logout
-    // call below is therefore issued through `sharedPage.request` instead,
-    // whose cookie jar already holds the `capstan_csrf` cookie
-    // AUTH-PW-SESSION-001's setup response set. This is still an
-    // out-of-band revocation in the sense that matters for
-    // AUTH-PW-SESSION-005: `page.request` is Playwright's own network
-    // client, never the SPA's axios instance/Zustand store, so nothing in
-    // the running React app observes or reacts to this call — only the
-    // explicit `Authorization: Bearer` header (not the coexisting
-    // `capstan_token` cookie, which extractBearerToken() (middleware/auth.go
-    // :100-108) checks second) does the authenticating, per the constraint
+    // with only the header set 403s with CSRF_COOKIE_MISSING (OBSERVED: an
+    // earlier draft of this test did exactly that). Manually setting the
+    // Cookie header alongside it (OBSERVED via a scratch script against a
+    // live instance: this reaches the server and satisfies the double-submit
+    // check) supplies the missing half without needing any browser context
+    // at all — deliberately NOT issued via `sharedPage.request`: that would
+    // process this response's Set-Cookie (clearAuthCookies,
+    // handlers/auth.go:351/518-535, clears both capstan_token and
+    // capstan_csrf with Max-Age=-1) into `sharedPage`'s own cookie jar,
+    // which would make AUTH-PW-SESSION-005 exercise "browser has no cookie
+    // at all" instead of the intended "browser still holds a cookie it
+    // believes is good" — the realistic case this spec exists to cover.
+    // Only the explicit `Authorization: Bearer` header (not the manually-set
+    // `capstan_token`-shaped cookie this request never even sends — only
+    // capstan_csrf is set here) does the authenticating, per the constraint
     // that this must be a real Bearer-authenticated revocation.
-    const logoutResp = await sharedPage.request.post(`${API_URL}/api/v1/auth/logout`, {
-      headers: { ...authHeaders(), 'X-CSRF-Token': csrfToken },
+    const logoutResp = await request.post(`${API_URL}/api/v1/auth/logout`, {
+      headers: {
+        ...authHeaders(),
+        'X-CSRF-Token': csrfToken,
+        Cookie: `capstan_csrf=${csrfToken}`,
+      },
     })
     expect(logoutResp.status()).toBe(204)
 
@@ -238,6 +245,27 @@ test.describe('Auth session E2E', () => {
     const revokedBody = await revokedResp.json()
     expect(revokedBody.code).toBe('SESSION_EXPIRED')
 
+    // Browser-realistic path: a real browser's WS handshake authenticates
+    // via the `capstan_token` COOKIE, not an Authorization header — App.tsx
+    // registers `() => null` as the token getter, so api.ts never sets one
+    // (api.ts:71-83), and extractBearerToken() (middleware/auth.go:100-108)
+    // only reads the cookie once the header is absent. This constructs that
+    // cookie manually with the token captured in AUTH-PW-SESSION-001 rather
+    // than reading it from `sharedPage`'s own jar, because
+    // AUTH-PW-SESSION-003's logout call cleared it there already
+    // (clearAuthCookies — see the comment on that test); a manually-built
+    // Cookie header reproduces the credential a browser tab would still
+    // present if it simply hadn't processed that clearing response yet
+    // (multiple tabs, a stale cached page) — same revoked session, same
+    // expected rejection, no Authorization header involved at all.
+    const revokedCookieResp = await request.get(
+      `${API_URL}/api/v1/ws/logs/nonexistent-stack-id`,
+      { headers: { Cookie: `capstan_token=${bearerToken}` } },
+    )
+    expect(revokedCookieResp.status()).toBe(401)
+    const revokedCookieBody = await revokedCookieResp.json()
+    expect(revokedCookieBody.code).toBe('SESSION_EXPIRED')
+
     const noCredsResp = await request.get(`${API_URL}/api/v1/ws/logs/nonexistent-stack-id`)
     expect(noCredsResp.status()).toBe(401)
     const noCredsBody = await noCredsResp.json()
@@ -273,6 +301,14 @@ test.describe('Auth session E2E', () => {
     // than the one this test is verifying).
     await sharedPage.getByRole('link', { name: 'Settings', exact: true }).click()
     await sharedPage.waitForURL((u) => u.pathname === '/settings', { timeout: 15_000 })
+    // Let the default 'account-security' section finish rendering before the
+    // next click — mirrors backup-flow.spec.ts's expandBackupSection()
+    // pattern (same click-then-settle shape) and avoids the second click
+    // racing the page's own post-navigation settling (OBSERVED: an
+    // instrumented run confirmed the trigger below, GET /settings/backup, is
+    // the first 401 this page sees — nothing on the default section fires
+    // one first).
+    await sharedPage.waitForLoadState('networkidle')
 
     // Clicking into the Backup section mounts BackupSettingsContent, whose
     // useBackupSettings() query (hooks/useBackup.ts:11-16) fires
