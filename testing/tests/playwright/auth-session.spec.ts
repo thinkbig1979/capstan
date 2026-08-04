@@ -88,6 +88,59 @@ test.describe('Auth session E2E', () => {
 
   test.beforeAll(async ({ browser }) => {
     sharedContext = await browser.newContext()
+
+    // Neutralize AppShell's Sidebar background polling for the WHOLE shared
+    // context, for the whole file. useSidebarData.ts:16-48 fires four
+    // queries on mount (stacks, settings/config, resources/updates,
+    // backups/status); only backups/status carries a refetchInterval (60s,
+    // useSidebarData.ts:46) — the other three only have staleTime and would
+    // refetch on remount or react-query's default refetchOnWindowFocus
+    // (query-client.ts:8), not on a timer. Left unstubbed, ANY of these can
+    // 401 once the session is revoked and independently trigger the exact
+    // interceptor redirect AUTH-PW-SESSION-005 exists to test — which cuts
+    // both ways: with a slow/cold environment inflating elapsed time past
+    // that 60s mark, a background 401 can race the deliberate UI trigger and
+    // either (a) redirect before the precondition at 005's top even reads
+    // the URL, turning it red for a reason unrelated to what it names, or
+    // (b) redirect through a broken/renamed/deleted trigger element and go
+    // green for the wrong reason — the assertion would no longer test what
+    // its own title claims. Stubbing these four makes the whole file's
+    // browser session deterministic: no background request can ever 401, so
+    // AUTH-PW-SESSION-005's redirect can only come from its own deliberate
+    // click, restoring it as a real, load-bearing assertion.
+    //
+    // route() only intercepts traffic from pages/requests made through THIS
+    // context — AUTH-PW-SESSION-002/003/004 use the `request` fixture (a
+    // separate APIRequestContext Playwright creates per test), which never
+    // goes through these routes, so they're unaffected. AUTH-PW-SESSION-001
+    // doesn't depend on any of these four endpoints' data either (its
+    // assertions are the URL and the Settings link's visibility).
+    const emptyStacks = { stacks: [] }
+    const emptyConfig = { stacksDir: '', stacksDirectories: [] }
+    const emptyUpdates = { updates: [] }
+    const idleBackupStatus = {
+      resticAvailable: false,
+      rcloneAvailable: false,
+      repositoryInitialized: false,
+      enabledStackCount: 0,
+      lastRun: null,
+      nextRunAt: null,
+      repoSizeBytes: null,
+      schedulerRunning: false,
+    }
+    await sharedContext.route('**/api/v1/stacks', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyStacks) }),
+    )
+    await sharedContext.route('**/api/v1/settings/config', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyConfig) }),
+    )
+    await sharedContext.route('**/api/v1/resources/updates', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyUpdates) }),
+    )
+    await sharedContext.route('**/api/v1/backups/status', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(idleBackupStatus) }),
+    )
+
     sharedPage = await sharedContext.newPage()
   })
 
@@ -209,11 +262,19 @@ test.describe('Auth session E2E', () => {
     // all — to prove the session is dead server-side, not merely evicted
     // from one particular client. middleware/auth.go:176-181: the session
     // row is gone, so every request with this token now 401s with
-    // SESSION_EXPIRED specifically (not just any 401 — assert the code).
+    // SESSION_EXPIRED specifically. Every AuthMiddleware 401 branch shares
+    // that one code (auth.go:144-193 — six distinct rejection reasons, one
+    // code), so code alone only proves "the middleware rejected this"; the
+    // message text is what discriminates the actual reason ("Session not
+    // found or expired" is the db.GetSession-returned-nil branch a
+    // DeleteSession-backed revocation hits specifically, auth.go:178) from
+    // every other 401 this same test could otherwise pass for the wrong
+    // reason (e.g. a malformed-token or missing-token 401).
     const meReplay = await request.get(`${API_URL}/api/v1/auth/me`, { headers: authHeaders() })
     expect(meReplay.status()).toBe(401)
     const meReplayBody = await meReplay.json()
     expect(meReplayBody.code).toBe('SESSION_EXPIRED')
+    expect(meReplayBody.message).toMatch(/session not found or expired/i)
 
     const stacksReplay = await request.get(`${API_URL}/api/v1/stacks`, {
       headers: authHeaders(),
@@ -221,6 +282,7 @@ test.describe('Auth session E2E', () => {
     expect(stacksReplay.status()).toBe(401)
     const stacksReplayBody = await stacksReplay.json()
     expect(stacksReplayBody.code).toBe('SESSION_EXPIRED')
+    expect(stacksReplayBody.message).toMatch(/session not found or expired/i)
   })
 
   // ── 004: A revoked WS handshake is refused at HTTP level, never upgrades ───
@@ -228,9 +290,11 @@ test.describe('Auth session E2E', () => {
   test('AUTH-PW-SESSION-004: a WS handshake with revoked or missing credentials is refused with HTTP 401 and never upgrades', async ({
     request,
   }) => {
-    // WS routes sit under the exact same `protected` group as REST routes
-    // (main.go:435 wsGroup := protected.Group(""); main.go:475 backup WS
-    // routes; logs.go:55 registers GET /ws/logs/:id the same way), so
+    // WS routes sit under the same `protected` group as REST routes.
+    // /ws/logs/:id specifically is registered directly on `protected`
+    // (main.go:387 logsHandler.RegisterRoutes(protected); logs.go:55) —
+    // NOT via the separate `wsGroup` sub-group main.go:435 defines for
+    // terminal/operations/update-job/backup WS routes. Either way,
     // AuthMiddleware runs and rejects BEFORE any upgrade attempt — a plain
     // HTTP GET (no Upgrade header) is enough to observe the rejection; the
     // gorilla websocket Upgrader in the handler is never reached, so this is
@@ -244,6 +308,9 @@ test.describe('Auth session E2E', () => {
     expect(revokedResp.status()).toBe(401)
     const revokedBody = await revokedResp.json()
     expect(revokedBody.code).toBe('SESSION_EXPIRED')
+    // See AUTH-PW-SESSION-003 for why the message, not just the code,
+    // matters: every AuthMiddleware 401 branch shares SESSION_EXPIRED.
+    expect(revokedBody.message).toMatch(/session not found or expired/i)
 
     // Browser-realistic path: a real browser's WS handshake authenticates
     // via the `capstan_token` COOKIE, not an Authorization header — App.tsx
@@ -251,12 +318,15 @@ test.describe('Auth session E2E', () => {
     // (api.ts:71-83), and extractBearerToken() (middleware/auth.go:100-108)
     // only reads the cookie once the header is absent. This constructs that
     // cookie manually with the token captured in AUTH-PW-SESSION-001 rather
-    // than reading it from `sharedPage`'s own jar, because
-    // AUTH-PW-SESSION-003's logout call cleared it there already
-    // (clearAuthCookies — see the comment on that test); a manually-built
-    // Cookie header reproduces the credential a browser tab would still
-    // present if it simply hadn't processed that clearing response yet
-    // (multiple tabs, a stale cached page) — same revoked session, same
+    // than reading it from `sharedPage`'s own jar — NOT because that jar was
+    // ever cleared (it wasn't: AUTH-PW-SESSION-003's logout deliberately
+    // goes through the standalone `request` fixture, never `sharedPage`,
+    // specifically so `sharedPage`'s cookie stays live for
+    // AUTH-PW-SESSION-005 — see that test's comment), but simply because
+    // this `request` fixture is a separate client that never held any
+    // cookie for this session at all, same reasoning as AUTH-PW-SESSION-003.
+    // A manually-built Cookie header reproduces the same revoked credential
+    // regardless of which client presents it — same revoked session, same
     // expected rejection, no Authorization header involved at all.
     const revokedCookieResp = await request.get(
       `${API_URL}/api/v1/ws/logs/nonexistent-stack-id`,
@@ -265,6 +335,11 @@ test.describe('Auth session E2E', () => {
     expect(revokedCookieResp.status()).toBe(401)
     const revokedCookieBody = await revokedCookieResp.json()
     expect(revokedCookieBody.code).toBe('SESSION_EXPIRED')
+    // Discriminates from the no-creds case below, which also 401s
+    // SESSION_EXPIRED-adjacent but with a different message (missing vs.
+    // revoked token) — confirms the Cookie header was actually read, not
+    // silently dropped and coincidentally rejected via the missing-token path.
+    expect(revokedCookieBody.message).toMatch(/session not found or expired/i)
 
     const noCredsResp = await request.get(`${API_URL}/api/v1/ws/logs/nonexistent-stack-id`)
     expect(noCredsResp.status()).toBe(401)
@@ -305,39 +380,29 @@ test.describe('Auth session E2E', () => {
     // Clicking into the Backup section mounts BackupSettingsContent, whose
     // useBackupSettings() query (hooks/useBackup.ts:11-16) fires
     // GET /settings/backup on mount — a normal authenticated request, NOT
-    // /auth/me, so api.ts's isBootProbe exemption does not apply.
+    // /auth/me, so api.ts's isBootProbe exemption does not apply. The
+    // backend 401s SESSION_EXPIRED; the interceptor (api.ts:88-107) calls
+    // the logout callback registered in App.tsx:58-63, which does a hard
+    // `window.location.href = '/login'`.
     //
-    // This is deliberately NOT the only trigger in play, and the test does
-    // not require it to win. AppShell's Sidebar (mounted continuously since
-    // AUTH-PW-SESSION-001, present on every authenticated route) polls
-    // several endpoints itself via a 60s `refetchInterval`
-    // (useSidebarData.ts:46, covering stacks/config/resources-updates/
-    // backups-status) and react-query's default `refetchOnWindowFocus:true`
-    // (query-client.ts:8) can trigger the same set on a focus event. OBSERVED
-    // on a cold-vite run (slow lazy-chunk compilation inflating the elapsed
-    // time since AUTH-PW-SESSION-001's mount): that 60s poll fired FIRST,
-    // 401ing on `/stacks`, `/settings/config`, `/resources/updates` and
-    // `/backups/status` before this click could complete, which raced the
-    // click against a redirect already in flight and timed it out — the
-    // exact class of race the orchestrator's bead comment already flagged
-    // for the (deliberately dropped) WS-reconnect-ladder assertion, just via
-    // REST polling instead of WS reconnects. Both paths funnel into the
-    // identical interceptor-driven redirect (api.ts:88-107 -> App.tsx:58-63),
-    // so which one wins is not this test's concern — only that ONE of them
-    // does. The click is therefore best-effort: if a background poll's
-    // redirect beats it here, the element it was waiting for no longer
-    // exists and the click throws, which is swallowed rather than failing
-    // the test; the outcome is judged solely by the final /login assertion
-    // below, which succeeds either way.
-    await sharedPage
-      .getByRole('link', { name: 'Backup', exact: true })
-      .click()
-      .catch(() => {
-        /* a competing background poll may have already redirected the page
-           away before this element could be located — see comment above */
-      })
+    // This click is the ONLY possible trigger for that redirect: the
+    // beforeAll above stubs every background-polling endpoint AppShell's
+    // Sidebar touches (stacks/settings-config/resources-updates/
+    // backups-status) to always 200, so nothing else in this browser
+    // session can ever 401. Without that neutralization this assertion was
+    // racy in both directions — a slow/cold environment could let a
+    // background poll redirect before this click even ran (failing for a
+    // reason unrelated to what this test names), or let it redirect through
+    // a broken/renamed Backup link and still go green (passing without
+    // having tested anything) — see git history on this test for the full
+    // diagnosis. With the race removed, the click is load-bearing again:
+    // assert the link is actually there before clicking, so a broken/
+    // renamed/removed Backup link fails LOUDLY here.
+    const backupLink = sharedPage.getByRole('link', { name: 'Backup', exact: true })
+    await expect(backupLink).toBeVisible({ timeout: 10_000 })
+    await backupLink.click()
 
-    await sharedPage.waitForURL((u) => u.pathname === '/login', { timeout: 30_000 })
+    await sharedPage.waitForURL((u) => u.pathname === '/login', { timeout: 15_000 })
     expect(new URL(sharedPage.url()).pathname).toBe('/login')
   })
 })

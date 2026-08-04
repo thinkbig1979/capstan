@@ -235,12 +235,18 @@ jobs:
         # --grep-invert "auth-session" (agent-os-lyx): this job boots the
         # backend with AUTH_DISABLED=true and cannot run
         # auth-session.spec.ts, which needs a real, revocable session.
-        # --grep matches against the full test title INCLUDING its file path
-        # (OBSERVED: `--grep "backup-flow" --list` selects all 7 tests here
-        # though no test title contains that string), so this reliably
-        # excludes only that one file. Playwright exits 1 on a total
-        # zero-match, so a renamed/deleted auth-session spec would fail this
-        # step loudly rather than silently selecting nothing extra.
+        # --grep-invert matches against the full test title INCLUDING its
+        # file path (OBSERVED: `--grep "backup-flow" --list` selects all 7
+        # tests here though no test title contains that string), so this
+        # reliably excludes only auth-session.spec.ts's tests. Renaming or
+        # deleting that file changes nothing here — inverting an exclusion
+        # of a pattern nothing matches still selects all 7 backup-flow tests
+        # (OBSERVED: `--grep-invert "auth-session" --list` with the spec
+        # absent still selects 7, EXIT 0). The zero-match tripwire this
+        # workflow relies on lives in the OTHER job instead: Playwright
+        # exits 1 on a total zero-match, so it's the auth-session job's
+        # `--grep "auth-session"` (a positive selection) that fails loudly
+        # if that spec is ever renamed or deleted, not this step.
         #
         # No --reporter flag: it REPLACES playwright.config.ts's reporter
         # array wholesale, including each reporter's options — so even
@@ -382,11 +388,25 @@ jobs:
         # --grep "auth-session" selects only auth-session.spec.ts (matched
         # against the full test title including its file path — see the
         # --grep-invert comment in the backup-flow job above for the
-        # observed behaviour this relies on). AUTH_DISABLED is deliberately
-        # left unset: the spec's own default (AUTH_DISABLED=false) matches
-        # this job's backend, and no test.skip(AUTH_DISABLED) guard exists in
-        # the spec to key off it — under path-based routing this job must
-        # always run these tests, never skip them silently.
+        # observed behaviour this relies on, and the zero-match tripwire
+        # this specific flag is what actually provides). AUTH_DISABLED is
+        # deliberately left unset: auth-session.spec.ts never reads that env
+        # var at all (unlike backup-flow.spec.ts, which branches its login
+        # flow on it) — its every assertion already assumes a real,
+        # revocable session, matching this job's backend unconditionally.
+        # There is no test.skip(AUTH_DISABLED) guard to key off either —
+        # under path-based routing this job must always run these tests,
+        # never skip them silently.
+        #
+        # This job assumes a VIRGIN backend (needsSetup:true) and is
+        # single-spec-by-design: auth-session.spec.ts's first test performs
+        # the one-and-only POST /auth/setup itself and asserts needsSetup
+        # was true beforehand. A second spec file whose title also happened
+        # to match "auth-session" would run against this SAME backend
+        # process and break that bootstrap assertion on its second run — if
+        # a future spec ever needs this same AUTH_DISABLED=false backend,
+        # give it its own job (or its own isolated backend instance) rather
+        # than adding it here.
         #
         # No --reporter flag, for the same reason as the backup-flow job:
         # it would replace playwright.config.ts's list+html+json reporter
