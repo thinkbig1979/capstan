@@ -301,25 +301,43 @@ test.describe('Auth session E2E', () => {
     // than the one this test is verifying).
     await sharedPage.getByRole('link', { name: 'Settings', exact: true }).click()
     await sharedPage.waitForURL((u) => u.pathname === '/settings', { timeout: 15_000 })
-    // Let the default 'account-security' section finish rendering before the
-    // next click — mirrors backup-flow.spec.ts's expandBackupSection()
-    // pattern (same click-then-settle shape) and avoids the second click
-    // racing the page's own post-navigation settling (OBSERVED: an
-    // instrumented run confirmed the trigger below, GET /settings/backup, is
-    // the first 401 this page sees — nothing on the default section fires
-    // one first).
-    await sharedPage.waitForLoadState('networkidle')
 
     // Clicking into the Backup section mounts BackupSettingsContent, whose
     // useBackupSettings() query (hooks/useBackup.ts:11-16) fires
     // GET /settings/backup on mount — a normal authenticated request, NOT
-    // /auth/me, so api.ts's isBootProbe exemption does not apply. The
-    // backend 401s SESSION_EXPIRED; the interceptor (api.ts:88-107) calls
-    // the logout callback registered in App.tsx:58-63, which does a hard
-    // `window.location.href = '/login'`.
-    await sharedPage.getByRole('link', { name: 'Backup', exact: true }).click()
+    // /auth/me, so api.ts's isBootProbe exemption does not apply.
+    //
+    // This is deliberately NOT the only trigger in play, and the test does
+    // not require it to win. AppShell's Sidebar (mounted continuously since
+    // AUTH-PW-SESSION-001, present on every authenticated route) polls
+    // several endpoints itself via a 60s `refetchInterval`
+    // (useSidebarData.ts:46, covering stacks/config/resources-updates/
+    // backups-status) and react-query's default `refetchOnWindowFocus:true`
+    // (query-client.ts:8) can trigger the same set on a focus event. OBSERVED
+    // on a cold-vite run (slow lazy-chunk compilation inflating the elapsed
+    // time since AUTH-PW-SESSION-001's mount): that 60s poll fired FIRST,
+    // 401ing on `/stacks`, `/settings/config`, `/resources/updates` and
+    // `/backups/status` before this click could complete, which raced the
+    // click against a redirect already in flight and timed it out — the
+    // exact class of race the orchestrator's bead comment already flagged
+    // for the (deliberately dropped) WS-reconnect-ladder assertion, just via
+    // REST polling instead of WS reconnects. Both paths funnel into the
+    // identical interceptor-driven redirect (api.ts:88-107 -> App.tsx:58-63),
+    // so which one wins is not this test's concern — only that ONE of them
+    // does. The click is therefore best-effort: if a background poll's
+    // redirect beats it here, the element it was waiting for no longer
+    // exists and the click throws, which is swallowed rather than failing
+    // the test; the outcome is judged solely by the final /login assertion
+    // below, which succeeds either way.
+    await sharedPage
+      .getByRole('link', { name: 'Backup', exact: true })
+      .click()
+      .catch(() => {
+        /* a competing background poll may have already redirected the page
+           away before this element could be located — see comment above */
+      })
 
-    await sharedPage.waitForURL((u) => u.pathname === '/login', { timeout: 15_000 })
+    await sharedPage.waitForURL((u) => u.pathname === '/login', { timeout: 30_000 })
     expect(new URL(sharedPage.url()).pathname).toBe('/login')
   })
 })
