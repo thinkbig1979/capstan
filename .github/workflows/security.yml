@@ -363,7 +363,7 @@ jobs:
       # but the OS packages and vendored binaries are the same on both arches, so
       # scanning amd64 covers the same advisory surface at half the build cost.
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
