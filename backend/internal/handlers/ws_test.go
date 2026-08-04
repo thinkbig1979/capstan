@@ -165,6 +165,13 @@ func TestValidateJWT_ExpiredTokenErrorFormat(t *testing.T) {
 // the generic UNAUTHORIZED branch instead of SESSION_EXPIRED. AuthMiddleware
 // (middleware/auth.go:134-142) sends SESSION_EXPIRED for the same condition;
 // models/errors.go documents that ws.go must match (agent-os-2zq).
+//
+// A real, unexpired session is seeded and its ID set as "jti" (agent-os-gm5)
+// so the token clears the jti guard and is rejected for its own expiry, not
+// for lacking jti. Without this, a jti-less-but-otherwise-valid token would
+// be rejected with the same SESSION_EXPIRED code regardless of whether it
+// was actually expired, and this test could no longer tell the two apart —
+// it would keep passing even if real expiry detection broke.
 func TestAuthenticateToken_ExpiredTokenReturnsSessionExpired(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "test-db-*")
 	require.NoError(t, err)
@@ -174,12 +181,33 @@ func TestAuthenticateToken_ExpiredTokenReturnsSessionExpired(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
+	now := time.Now()
+	userID := uuid.New().String()
+	user := models.User{
+		ID:        userID,
+		Username:  "expired-token-user",
+		Password:  "irrelevant-hash",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	require.NoError(t, db.CreateUser(user))
+
+	sessionID := uuid.New().String()
+	session := models.Session{
+		ID:        sessionID,
+		UserID:    userID,
+		ExpiresAt: now.Add(24 * time.Hour),
+		CreatedAt: now,
+	}
+	require.NoError(t, db.CreateSession(session))
+
 	secret := "test-secret-key-32-chars-long!!"
 	claims := jwt.MapClaims{
 		"iss": jwtIssuer,
-		"sub": "user123",
-		"iat": time.Now().Add(-2 * time.Hour).Unix(),
-		"exp": time.Now().Add(-1 * time.Hour).Unix(),
+		"sub": userID,
+		"jti": sessionID,
+		"iat": now.Add(-2 * time.Hour).Unix(),
+		"exp": now.Add(-1 * time.Hour).Unix(),
 	}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
 	require.NoError(t, err)
@@ -219,9 +247,68 @@ func TestAuthenticateToken_MalformedTokenReturnsSessionExpired(t *testing.T) {
 // TestAuthenticateToken_MissingSubReturnsSessionExpired covers the
 // missing-"sub"-claim branch (ws.go:210-217 before the fix): a structurally
 // valid but unusable token ("no usable token" per models/errors.go) minted
-// UNAUTHORIZED instead of SESSION_EXPIRED. No "jti" claim is set so the
-// session lookup is skipped and the sub check is reached directly.
+// UNAUTHORIZED instead of SESSION_EXPIRED. A real, unexpired session is
+// seeded and its ID set as "jti" so the token clears the jti guard
+// (agent-os-gm5) and reaches the sub check on its own merits — without a
+// live session behind "jti", the jti guard would reject the token first and
+// this test would no longer isolate the missing-sub defect it exists to
+// catch (mirrors middleware/auth_test.go's TestAuthMiddleware_MissingSubIsSessionExpired).
 func TestAuthenticateToken_MissingSubReturnsSessionExpired(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "test-db-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	db, err := database.NewWithMigrations(tempDir)
+	require.NoError(t, err)
+	defer db.Close()
+
+	now := time.Now()
+	userID := uuid.New().String()
+	user := models.User{
+		ID:        userID,
+		Username:  "subless-token-user",
+		Password:  "irrelevant-hash",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	require.NoError(t, db.CreateUser(user))
+
+	sessionID := uuid.New().String()
+	session := models.Session{
+		ID:        sessionID,
+		UserID:    userID,
+		ExpiresAt: now.Add(24 * time.Hour),
+		CreatedAt: now,
+	}
+	require.NoError(t, db.CreateSession(session))
+
+	secret := "test-secret-key-32-chars-long!!"
+	claims := jwt.MapClaims{
+		"iss": jwtIssuer,
+		// Deliberately no "sub" claim — this is the defect under test.
+		"jti": sessionID,
+		"iat": now.Unix(),
+		"exp": now.Add(time.Hour).Unix(),
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	require.NoError(t, err)
+
+	_, authErr := authenticateToken(token, db, secret)
+	require.Error(t, authErr)
+
+	appErr, ok := authErr.(*models.AppError)
+	require.True(t, ok, "expected *models.AppError, got %T", authErr)
+	assert.Equal(t, models.ErrSessionExpired, appErr.Code,
+		"a token missing its sub claim must carry SESSION_EXPIRED, not UNAUTHORIZED")
+}
+
+// TestAuthenticateToken_MissingJtiReturnsSessionExpired guards agent-os-gm5:
+// a structurally valid token with a real "sub" but no "jti" claim must not
+// skip the session/revocation lookup. Before this fix, claims["jti"].(string)
+// failing its type assertion had no else branch, so the token fell straight
+// through to the sub check and authenticated with no session row ever
+// checked — meaning it could never be revoked by logout.
+func TestAuthenticateToken_MissingJtiReturnsSessionExpired(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "test-db-*")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
@@ -233,6 +320,8 @@ func TestAuthenticateToken_MissingSubReturnsSessionExpired(t *testing.T) {
 	secret := "test-secret-key-32-chars-long!!"
 	claims := jwt.MapClaims{
 		"iss": jwtIssuer,
+		"sub": "user123",
+		// Deliberately no "jti" claim — this is the defect under test.
 		"iat": time.Now().Unix(),
 		"exp": time.Now().Add(time.Hour).Unix(),
 	}
@@ -245,7 +334,64 @@ func TestAuthenticateToken_MissingSubReturnsSessionExpired(t *testing.T) {
 	appErr, ok := authErr.(*models.AppError)
 	require.True(t, ok, "expected *models.AppError, got %T", authErr)
 	assert.Equal(t, models.ErrSessionExpired, appErr.Code,
-		"a token missing its sub claim must carry SESSION_EXPIRED, not UNAUTHORIZED")
+		"a token missing its jti claim must carry SESSION_EXPIRED, not skip the session lookup")
+}
+
+// TestAuthenticateToken_RevokedSessionRejectsToken is the positive control
+// for agent-os-gm5: a normal token WITH jti must still authenticate, and
+// deleting its session row (what logout does) must revoke it — proving the
+// jti guard isn't just rejecting everything.
+func TestAuthenticateToken_RevokedSessionRejectsToken(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "test-db-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	db, err := database.NewWithMigrations(tempDir)
+	require.NoError(t, err)
+	defer db.Close()
+
+	userID := uuid.New().String()
+	user := models.User{
+		ID:        userID,
+		Username:  "testuser",
+		Password:  "hashedpassword",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, db.CreateUser(user))
+
+	sessionID := uuid.New().String()
+	session := models.Session{
+		ID:        sessionID,
+		UserID:    userID,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+		CreatedAt: time.Now(),
+	}
+	require.NoError(t, db.CreateSession(session))
+
+	claims := map[string]interface{}{
+		"sub":      userID,
+		"username": "testuser",
+		"jti":      sessionID,
+		"iat":      time.Now().Unix(),
+		"exp":      time.Now().Add(24 * time.Hour).Unix(),
+	}
+	token, err := generateJWTForTest(claims, "test-secret-key-32-chars-long!!")
+	require.NoError(t, err)
+
+	resultUserID, err := authenticateToken(token, db, "test-secret-key-32-chars-long!!")
+	require.NoError(t, err)
+	assert.Equal(t, userID, resultUserID)
+
+	// Logout: delete the session the jti points at.
+	require.NoError(t, db.DeleteSession(sessionID))
+
+	_, authErr := authenticateToken(token, db, "test-secret-key-32-chars-long!!")
+	require.Error(t, authErr)
+	appErr, ok := authErr.(*models.AppError)
+	require.True(t, ok, "expected *models.AppError, got %T", authErr)
+	assert.Equal(t, models.ErrSessionExpired, appErr.Code,
+		"the same token must be rejected once its session is revoked")
 }
 
 func TestAuthenticateToken_EmptyToken(t *testing.T) {
