@@ -128,3 +128,79 @@ func TestLaunchSync_RunRowCreatedRunningBeforeFinalisation(t *testing.T) {
 	assert.NotEqual(t, "running", final.status,
 		"finalisation must move the row to a terminal status, not leave it (or re-write it) as running")
 }
+
+// TestLaunchBackup_CreatesRunningRowBeforeFinalisation_ResticMissingFastFail is
+// the agent-os-14f counterpart to TestLaunchSync_RunRowCreatedRunningBeforeFinalisation
+// above, for the BACKUP kind — but ONLY for the branch named in the test:
+// RunBackupWithRunID failing at its resticBin-missing guard.
+//
+// SCOPE, READ BEFORE EXTENDING THIS TEST: the backup kind's normal
+// finalisation path is NOT covered here and is NOT observable through this
+// seam. RunBackupWithRunID (backup.go:558) builds its own in-memory
+// *models.BackupRun, accumulates per-stack stats into it, and — on the
+// restic-present path — writes it once via BackupService.finaliseRun
+// (backup.go:1127), which uses svc.db directly, never reg.db. spyRunStore
+// only substitutes for BackupRunnerRegistry.db, so that write is invisible
+// to it (OBSERVED: a throwaway probe — LaunchBackup with resticBin left at
+// buildSvc's default "/usr/bin/restic" — logged spy.snapshot() containing
+// only the initial CreateBackupRun call while db.GetBackupRunByID(runID)
+// showed the real row finalised to status "success"; not committed, see
+// agent-os-14f report for the exact log lines). BackupService.db also can't
+// be narrowed to the same backupRunStore interface without splitting it,
+// since it's used for far more than run status (e.g. resolveBackupConfig at
+// backup.go:575, AddBackupRunItem at backup.go:1121).
+//
+// What IS covered: when RunBackupWithRunID fails at its very first check
+// (resticBin == "", backup.go:571-573) it returns a nil *models.BackupRun
+// before ever touching svc.db. execBackup (backup_runner.go:373-379)
+// special-cases exactly that — "if run == nil" — falling back to
+// reg.finaliseRunStatus, the same registry-owned, spy-observable path
+// RunSync/RunRestore/RunDRRestore/RunPrune always use. This test drives that
+// branch via the existing SetBins("", "") setter (mirroring how
+// TestLaunchSync_* above leaves RcloneRemote unset to force its own
+// fast-fail), so create-then-finalise ordering is asserted through a real,
+// existing production code path on this one branch — no seam widening was
+// needed to write it, and none should be inferred for the restic-present
+// path from this test passing.
+func TestLaunchBackup_CreatesRunningRowBeforeFinalisation_ResticMissingFastFail(t *testing.T) {
+	db := newBackupTestDB(t)
+	spy := &spyRunStore{real: db}
+
+	svc := buildSvc(t, db, &fakeDocker{}, &fakeRunner{}, &fakeRunner{})
+	// Force RunBackupWithRunID's very first check (resticBin == "") to fail,
+	// so it returns before constructing its run struct or touching svc.db at
+	// all — the only branch of the backup kind whose finalisation still
+	// routes through reg.finaliseRunStatus (and hence through spy).
+	svc.SetBins("", "")
+
+	reg := NewBackupRunnerRegistry(spy, svc, slog.Default())
+
+	runID, err := reg.LaunchBackup(nil, false)
+	require.NoError(t, err)
+
+	// Blocks until execBackup (and its finalising DB write) has fully
+	// completed.
+	reg.Stop()
+
+	calls := spy.snapshot()
+	require.NotEmpty(t, calls, "expected at least one DB write for this run")
+
+	require.Equal(t, "CreateBackupRun", calls[0].method,
+		"the run row's creation must be the first DB write for this run")
+	assert.Equal(t, runID, calls[0].runID)
+	assert.Equal(t, "running", calls[0].status,
+		"the row must be created with status running, before the exec goroutine can finalise it")
+
+	for i, c := range calls[1:] {
+		assert.NotEqual(t, "CreateBackupRun", c.method,
+			"the run row must be created exactly once, at position 0 (found a second CreateBackupRun at index %d)", i+1)
+	}
+
+	require.Greater(t, len(calls), 1,
+		"expected a finalising write after creation (this test's fixture makes RunBackupWithRunID fail fast)")
+	final := calls[len(calls)-1]
+	assert.Equal(t, "UpdateBackupRun", final.method,
+		"the run must be finalised via UpdateBackupRun after creation")
+	assert.NotEqual(t, "running", final.status,
+		"finalisation must move the row to a terminal status, not leave it (or re-write it) as running")
+}
