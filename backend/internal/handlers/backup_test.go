@@ -1696,3 +1696,25 @@ func TestSnapshotListing_ResolvesRepositoryUnderDataDir(t *testing.T) {
 	assert.Equal(t, filepath.Join(svc.Config().DataDir, "restic-repo"), repo,
 		"restic snapshots must target <DataDir>/restic-repo")
 }
+
+// TestBackupHandler_StopWithTimeout_DelegatesAndIsIdempotent is the
+// agent-os-7a5 regression test for wiring BackupHandler.Stop into main.go's
+// shutdown path: main.go calls StopWithTimeout, so the handler must expose
+// it and forward to the registry, and — because main.go's call is a second
+// real caller alongside every test's t.Cleanup(h.Stop) — mixing StopWithTimeout
+// and Stop on the same handler must not panic.
+func TestBackupHandler_StopWithTimeout_DelegatesAndIsIdempotent(t *testing.T) {
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+
+	// No runs in flight, so this must complete well within the bound.
+	completed := h.StopWithTimeout(2 * time.Second)
+	assert.True(t, completed, "StopWithTimeout must report completion when nothing is in flight")
+
+	// A second call (StopWithTimeout again, and Stop) must not panic — this is
+	// the idempotence guarantee agent-os-7a5 adds via BackupRunnerRegistry's
+	// stopOnce.
+	assert.True(t, h.StopWithTimeout(2*time.Second))
+	h.Stop()
+}

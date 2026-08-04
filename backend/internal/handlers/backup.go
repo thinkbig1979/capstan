@@ -59,14 +59,28 @@ func NewBackupHandler(
 }
 
 // Stop stops the handler's durable-run registry: its GC loop and, critically,
-// blocks until every in-flight exec goroutine (backup/restore/sync/dr-restore/
-// prune) has fully finished, including its terminal DB write. Callers that own
-// a BackupHandler's lifecycle — main.go on graceful shutdown, tests via
-// t.Cleanup — must call this before releasing anything those goroutines still
-// write to (the DB handle, a t.TempDir()), since they run detached on
-// context.Background() and nothing else joins them. See agent-os-80n.
+// blocks — with no bound — until every in-flight exec goroutine (backup/
+// restore/sync/dr-restore/prune) has fully finished, including its terminal
+// DB write. Callers that own a BackupHandler's lifecycle via t.Cleanup must
+// call this before releasing anything those goroutines still write to (the
+// DB handle, a t.TempDir()), since they run detached on context.Background()
+// and nothing else joins them. See agent-os-80n.
+//
+// main.go's graceful shutdown uses StopWithTimeout instead — see its doc
+// comment for why an unbounded wait is not appropriate there.
 func (h *BackupHandler) Stop() {
 	h.registry.Stop()
+}
+
+// StopWithTimeout is Stop, bounded: it returns true if every in-flight exec
+// goroutine finished within timeout, false if the bound expired first. See
+// BackupRunnerRegistry.StopWithTimeout for what happens on expiry (nothing is
+// stranded — the startup sweeper reconciles any row still "running"). This is
+// the method main.go's graceful shutdown calls, after srv.Shutdown has
+// stopped the HTTP server from accepting the requests that start new runs.
+// See agent-os-7a5.
+func (h *BackupHandler) StopWithTimeout(timeout time.Duration) bool {
+	return h.registry.StopWithTimeout(timeout)
 }
 
 // RegisterRoutes registers all backup REST routes under the authenticated

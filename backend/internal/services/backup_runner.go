@@ -114,7 +114,8 @@ type BackupRunnerRegistry struct {
 	logger *slog.Logger
 	svc    *BackupService
 
-	gcStop chan struct{}
+	gcStop   chan struct{}
+	stopOnce sync.Once
 
 	// wg tracks every in-flight execX goroutine (execBackup, execRestore,
 	// execSync, execDRRestore, execPrune). Add(1) happens in the LaunchX method
@@ -156,16 +157,56 @@ func NewBackupRunnerRegistry(
 	return reg
 }
 
-// Stop halts the background GC goroutine and blocks until every in-flight
-// execX goroutine (execBackup/execRestore/execSync/execDRRestore/execPrune)
-// has fully finished, including its terminal DB write. Call on application
-// shutdown, and MUST be called by tests (via t.Cleanup) before the test tears
-// down anything an execX goroutine still writes to — the DB handle or a
+// Stop halts the background GC goroutine and blocks — with no bound — until
+// every in-flight execX goroutine (execBackup/execRestore/execSync/
+// execDRRestore/execPrune) has fully finished, including its terminal DB
+// write. MUST be called by tests (via t.Cleanup) before the test tears down
+// anything an execX goroutine still writes to — the DB handle or a
 // t.TempDir() the service writes into — since execX runs detached on
 // context.Background() and nothing else joins it. See agent-os-80n.
+//
+// Safe to call more than once (idempotent, via stopOnce guarding the
+// channel close) and safe to call concurrently with StopWithTimeout — both
+// close the same gcStop channel through the same sync.Once and then wait on
+// the same wg.
+//
+// Production shutdown (main.go) uses StopWithTimeout instead: this method's
+// unbounded wait is only appropriate for tests, where runs are fast because
+// restic/rclone are unconfigured. See agent-os-7a5.
 func (reg *BackupRunnerRegistry) Stop() {
-	close(reg.gcStop)
+	reg.stopOnce.Do(func() { close(reg.gcStop) })
 	reg.wg.Wait()
+}
+
+// StopWithTimeout behaves like Stop but bounds the wait: it returns true if
+// every in-flight execX goroutine finished within timeout, or false if the
+// bound expired first. On expiry, any goroutines still running keep running
+// (detached on context.Background(), as always) — StopWithTimeout does not
+// cancel them, it just stops waiting.
+//
+// Callers that time out must NOT treat that as data loss: a run still
+// "running" in the DB when the process exits is picked up by the startup
+// sweeper (database.SweepInterruptedBackupRuns, called on every boot) and
+// marked "interrupted", so no row is stranded — see agent-os-7a5's revised
+// premise. This is the method main.go's graceful shutdown calls.
+//
+// Idempotent and safe to call concurrently with Stop or another
+// StopWithTimeout, for the same reason Stop is (shared stopOnce + wg).
+func (reg *BackupRunnerRegistry) StopWithTimeout(timeout time.Duration) bool {
+	reg.stopOnce.Do(func() { close(reg.gcStop) })
+
+	done := make(chan struct{})
+	go func() {
+		reg.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 func (reg *BackupRunnerRegistry) gcLoop() {

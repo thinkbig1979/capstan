@@ -26,6 +26,12 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/version"
 )
 
+// backupDrainTimeout bounds how long graceful shutdown waits for in-flight
+// durable backup/restore/sync/dr-restore/prune runs to finish after
+// srv.Shutdown returns. 15s (srv.Shutdown's own bound, below) + this stays
+// well under systemd's default TimeoutStopSec of 90s. See agent-os-7a5.
+const backupDrainTimeout = 30 * time.Second
+
 // buildConnectSrc constructs the CSP connect-src directive from the configured
 // CORS origins so a cross-origin (reverse-proxy) deployment is not silently
 // blocked by a localhost-only policy (M6). localhost ws/wss variants are only
@@ -533,6 +539,26 @@ func main() {
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("Server forced to shutdown", "error", err)
+	}
+
+	// Drain in-flight durable backup/restore/sync/dr-restore/prune runs only
+	// AFTER srv.Shutdown has returned: LaunchX methods don't consult the
+	// registry's stop signal, so draining first would race a request that
+	// starts a brand-new run in the window between the drain and the server
+	// actually refusing new requests. By the time srv.Shutdown returns, no new
+	// HTTP request — and therefore no new LaunchX call — can reach this
+	// server instance.
+	//
+	// Bounded rather than unbounded: an in-flight run is not fast, and an
+	// unbounded wait here would make graceful shutdown hang indefinitely. If
+	// the bound expires, any still-running goroutines are left running
+	// detached (as by design) and the process proceeds to exit; nothing is
+	// stranded because the startup sweeper (database.SweepInterruptedBackupRuns,
+	// called on every boot) marks any row still "running" as "interrupted".
+	// See agent-os-7a5.
+	if !backupHandler.StopWithTimeout(backupDrainTimeout) {
+		slog.Warn("Timed out waiting for in-flight backup runs to finish; exiting anyway",
+			"timeout", backupDrainTimeout)
 	}
 
 	slog.Info("Server exited")
