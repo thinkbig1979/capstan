@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+
+	"github.com/thinkbig1979/capstan/backend/internal/dockerenv"
 )
 
 // reDigestLine matches the top-level "Digest: sha256:<hex>" line that
@@ -89,6 +91,32 @@ func imageRefRepository(ref string) string {
 	return ref
 }
 
+// buildImagetoolsRawCmd and buildImagetoolsVerboseCmd build (without
+// starting) the two `docker buildx imagetools inspect` child processes
+// RemoteRegistryDigest runs. Split out so tests can build and run each
+// *exec.Cmd directly (see imagedigest_test.go) without a real docker binary.
+//
+// Unlike the docker/compose sites in package services, these two calls do
+// not parse a compose file, so they carry no ${VAR} interpolation vector for
+// an attacker-controlled compose file to exploit. cmd.Env is still scrubbed
+// here as hygiene: a nil Env would otherwise still hand Capstan's own
+// JWT_SECRET/STORAGE_KEY/GIT_HTTPS_TOKEN to a docker child process for no
+// reason, which is the class of leak agent-os-iey and this bead both close
+// (agent-os-3ux).
+func buildImagetoolsRawCmd(ctx context.Context, ref string) *exec.Cmd {
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
+	cmd := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", ref, "--raw")
+	cmd.Env = dockerenv.Env()
+	return cmd
+}
+
+func buildImagetoolsVerboseCmd(ctx context.Context, ref string) *exec.Cmd {
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
+	cmd := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", ref)
+	cmd.Env = dockerenv.Env()
+	return cmd
+}
+
 // RemoteRegistryDigest fetches the registry's current manifest-list (index)
 // digest for the given image reference. It is a package-level var so tests can
 // stub it.
@@ -104,16 +132,14 @@ func imageRefRepository(ref string) string {
 // Never uses --format; never relies on --format's output.
 var RemoteRegistryDigest = func(ctx context.Context, ref string) (string, error) {
 	// Primary: hash the raw manifest bytes.
-	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	rawOut, err := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", ref, "--raw").Output()
+	rawOut, err := buildImagetoolsRawCmd(ctx, ref).Output()
 	if err == nil && len(rawOut) > 0 {
 		sum := sha256.Sum256(rawOut)
 		return "sha256:" + hex.EncodeToString(sum[:]), nil
 	}
 
 	// Fallback: parse the top-level Digest line from verbose output.
-	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	verboseOut, verboseErr := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", ref).Output()
+	verboseOut, verboseErr := buildImagetoolsVerboseCmd(ctx, ref).Output()
 	if verboseErr != nil {
 		// Return the original error for better diagnostics.
 		if err != nil {
