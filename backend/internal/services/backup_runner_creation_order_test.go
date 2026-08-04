@@ -129,35 +129,40 @@ func TestLaunchSync_RunRowCreatedRunningBeforeFinalisation(t *testing.T) {
 		"finalisation must move the row to a terminal status, not leave it (or re-write it) as running")
 }
 
-// TestLaunchBackup_RunRowCreatedRunningBeforeFinalisation is the agent-os-14f
-// counterpart to TestLaunchSync_RunRowCreatedRunningBeforeFinalisation above,
-// for the BACKUP kind specifically.
+// TestLaunchBackup_CreatesRunningRowBeforeFinalisation_ResticMissingPath is
+// the agent-os-14f counterpart to TestLaunchSync_RunRowCreatedRunningBeforeFinalisation
+// above, for the BACKUP kind — but ONLY for the branch named in the test:
+// RunBackupWithRunID failing at its resticBin-missing guard.
 //
-// Unlike sync/restore/dr_restore/prune, most of BackupService's backup
-// finalisation does NOT go through BackupRunnerRegistry.finaliseRunStatus:
-// RunBackupWithRunID (backup.go) builds its own in-memory *models.BackupRun,
-// accumulates per-stack stats into it, and writes it once via
-// BackupService.finaliseRun, which uses svc.db directly — not reg.db. That
-// path is invisible to spyRunStore, because spyRunStore only substitutes for
-// BackupRunnerRegistry's db field, not BackupService's (see agent-os-14f:
-// BackupService.db is a concrete *database.DB used for far more than run
-// status — e.g. resolveBackupConfig and AddBackupRunItem — so it isn't a
-// narrow, spyable seam the way BackupRunnerRegistry.db is).
+// SCOPE, READ BEFORE EXTENDING THIS TEST: the backup kind's normal
+// finalisation path is NOT covered here and is NOT observable through this
+// seam. RunBackupWithRunID (backup.go:558) builds its own in-memory
+// *models.BackupRun, accumulates per-stack stats into it, and — on the
+// restic-present path — writes it once via BackupService.finaliseRun
+// (backup.go:1127), which uses svc.db directly, never reg.db. spyRunStore
+// only substitutes for BackupRunnerRegistry.db, so that write is invisible
+// to it (OBSERVED: a throwaway probe — LaunchBackup with resticBin left at
+// buildSvc's default "/usr/bin/restic" — logged spy.snapshot() containing
+// only the initial CreateBackupRun call while db.GetBackupRunByID(runID)
+// showed the real row finalised to status "success"; not committed, see
+// agent-os-14f report for the exact log lines). BackupService.db also can't
+// be narrowed to the same backupRunStore interface without splitting it,
+// since it's used for far more than run status (e.g. resolveBackupConfig at
+// backup.go:575, AddBackupRunItem at backup.go:1121).
 //
-// There IS one branch of the backup kind that stays observable: when
-// RunBackupWithRunID fails before it ever constructs its run struct (here,
-// because resticBin is unset, so BackupService.Available() reports
-// ErrBackupUnavailable — see backup.go's "if s.resticBin == {"" }" guard,
-// which is the very first check in RunBackupWithRunID), it returns a nil
-// *models.BackupRun. execBackup (backup_runner.go) special-cases exactly
-// that: "if run == nil" it falls back to reg.finaliseRunStatus — the same
-// registry-owned, spy-observable path RunSync/RunRestore/RunDRRestore/
-// RunPrune always use. This test drives that branch (SetBins("", "") forces
-// the fast-fail, mirroring how TestLaunchSync_* above leaves RcloneRemote
-// unset to force RunSync's fast-fail) so create-then-finalise ordering is
-// asserted through a real, existing production code path — no widening of
-// any seam was needed to write this test.
-func TestLaunchBackup_RunRowCreatedRunningBeforeFinalisation(t *testing.T) {
+// What IS covered: when RunBackupWithRunID fails at its very first check
+// (resticBin == "", backup.go:571-573) it returns a nil *models.BackupRun
+// before ever touching svc.db. execBackup (backup_runner.go:373-379)
+// special-cases exactly that — "if run == nil" — falling back to
+// reg.finaliseRunStatus, the same registry-owned, spy-observable path
+// RunSync/RunRestore/RunDRRestore/RunPrune always use. This test drives that
+// branch via the existing SetBins("", "") setter (mirroring how
+// TestLaunchSync_* above leaves RcloneRemote unset to force its own
+// fast-fail), so create-then-finalise ordering is asserted through a real,
+// existing production code path on this one branch — no seam widening was
+// needed to write it, and none should be inferred for the restic-present
+// path from this test passing.
+func TestLaunchBackup_CreatesRunningRowBeforeFinalisation_ResticMissingPath(t *testing.T) {
 	db := newBackupTestDB(t)
 	spy := &spyRunStore{real: db}
 
