@@ -321,6 +321,127 @@ func TestAuthMiddleware_MissingJtiIsSessionExpired(t *testing.T) {
 	}
 }
 
+// TestAuthMiddleware_AlgNoneTokenRejected pins the security property that an
+// unsigned (alg=none) token is rejected, even when it carries a fully valid
+// iss/sub/jti pointing at a live session — so ONLY the signature/alg check
+// stands between it and authentication. golang-jwt rejects alg=none by default,
+// and ValidateJWT adds an explicit `token.Method must be *SigningMethodHMAC`
+// guard on top. This test guards against a future refactor reintroducing the
+// classic footgun (a keyfunc that returns jwt.UnsafeAllowNoneSignatureType):
+// control-verified 2026-08-04 by temporarily making the keyfunc return that
+// sentinel, which made this test fail (the token authenticated, 200).
+func TestAuthMiddleware_AlgNoneTokenRejected(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db, err := database.NewWithMigrations(":memory:")
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Now()
+	user := models.User{ID: "victim-id", Username: "victim", Password: "hash", CreatedAt: now, UpdatedAt: now}
+	if err := db.CreateUser(user); err != nil {
+		t.Fatalf("failed to seed user: %v", err)
+	}
+	session := models.Session{ID: "victim-session", UserID: user.ID, ExpiresAt: now.Add(24 * time.Hour), CreatedAt: now}
+	if err := db.CreateSession(session); err != nil {
+		t.Fatalf("failed to seed session: %v", err)
+	}
+
+	secret := "test-secret-key-32-chars"
+	claims := jwt.MapClaims{
+		"iss":      jwtIssuer,
+		"sub":      user.ID,
+		"username": user.Username,
+		"jti":      session.ID,
+		"iat":      now.Unix(),
+		"exp":      now.Add(24 * time.Hour).Unix(),
+	}
+	// Forge an UNSIGNED token that is otherwise fully valid.
+	token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
+	signed, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	if err != nil {
+		t.Fatalf("failed to build alg=none token: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(AuthMiddleware(db, secret, false, ""))
+	r.GET("/api/v1/dashboard/stats", func(c *gin.Context) {
+		userID, _ := c.Get("userID")
+		t.Errorf("handler reached with alg=none token; userID=%v", userID)
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+signed)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for an alg=none token, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// TestAuthMiddleware_WrongSecretTokenRejected pins signature verification: a
+// token minted with the correct algorithm and fully valid claims (including a
+// live session) but signed with the WRONG secret must be rejected. This
+// isolates the signature check from the claim checks — the only difference from
+// a working token is the signing key. Control-verified 2026-08-04: making the
+// keyfunc return the attacker's secret made this test fail.
+func TestAuthMiddleware_WrongSecretTokenRejected(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db, err := database.NewWithMigrations(":memory:")
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Now()
+	user := models.User{ID: "victim-id", Username: "victim", Password: "hash", CreatedAt: now, UpdatedAt: now}
+	if err := db.CreateUser(user); err != nil {
+		t.Fatalf("failed to seed user: %v", err)
+	}
+	session := models.Session{ID: "victim-session", UserID: user.ID, ExpiresAt: now.Add(24 * time.Hour), CreatedAt: now}
+	if err := db.CreateSession(session); err != nil {
+		t.Fatalf("failed to seed session: %v", err)
+	}
+
+	serverSecret := "test-secret-key-32-chars"
+	attackerSecret := "attacker-secret-key-32-chars-xx"
+	claims := jwt.MapClaims{
+		"iss":      jwtIssuer,
+		"sub":      user.ID,
+		"username": user.Username,
+		"jti":      session.ID,
+		"iat":      now.Unix(),
+		"exp":      now.Add(24 * time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString([]byte(attackerSecret))
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(AuthMiddleware(db, serverSecret, false, ""))
+	r.GET("/api/v1/dashboard/stats", func(c *gin.Context) {
+		userID, _ := c.Get("userID")
+		t.Errorf("handler reached with wrong-secret token; userID=%v", userID)
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+signed)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for a wrong-secret token, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
 // TestAuthMiddleware_ValidTokenWithJtiAuthenticatesAndIsRevocable is the
 // positive control for agent-os-gm5: a normal token that DOES carry jti must
 // still authenticate, and — the whole point of the jti/session lookup —
