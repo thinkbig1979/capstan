@@ -3,8 +3,70 @@ package truth
 import (
 	"context"
 	"errors"
+	"os/exec"
+	"strings"
 	"testing"
 )
+
+// --- buildImagetoolsRawCmd / buildImagetoolsVerboseCmd ---
+
+// TestBuildImagetoolsCmds_DoNotLeakCapstanSecrets covers RemoteRegistryDigest's
+// two `docker buildx imagetools inspect` children. Before the fix, cmd.Env
+// was left nil on both, so each child inherited Capstan's full os.Environ()
+// — including JWT_SECRET, STORAGE_KEY, GIT_HTTPS_TOKEN — for no reason: these
+// two calls never parse a compose file, so unlike the sites agent-os-iey and
+// agent-os-3ux's logs.go fix cover, there is no ${VAR} interpolation vector
+// here. This is hygiene, not a demonstrated exfil path (agent-os-3ux).
+//
+// cmd.Env is nil until Start()/Run() populates it from os.Environ() at that
+// time, so asserting on the field directly without running anything would
+// not distinguish "nil Env" from "Env deliberately left empty" — confirmed
+// by first writing this test as a plain field-inspection and watching it
+// fail on the wrong assertion (missing PATH=, not the leaked secret) against
+// the unfixed code. Redirecting each constructed *exec.Cmd at `sh -c env`
+// and running it observes the actual environment the real docker child
+// would receive.
+func TestBuildImagetoolsCmds_DoNotLeakCapstanSecrets(t *testing.T) {
+	t.Setenv("JWT_SECRET", "sentinel-value-imagedigest-jwt")
+	t.Setenv("STORAGE_KEY", "sentinel-value-imagedigest-storage")
+	t.Setenv("GIT_HTTPS_TOKEN", "sentinel-value-imagedigest-git")
+
+	shPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatalf("could not locate sh: %v", err)
+	}
+
+	ref := "ghcr.io/example/app:latest"
+
+	cmds := map[string]*exec.Cmd{
+		"raw":     buildImagetoolsRawCmd(context.Background(), ref),
+		"verbose": buildImagetoolsVerboseCmd(context.Background(), ref),
+	}
+
+	for name, cmd := range cmds {
+		cmd.Path = shPath
+		cmd.Args = []string{"sh", "-c", "env"}
+
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s cmd failed: %v", name, err)
+		}
+
+		output := string(out)
+		if strings.Contains(output, "sentinel-value-imagedigest-jwt") {
+			t.Errorf("%s cmd leaked JWT_SECRET into child env: %s", name, output)
+		}
+		if strings.Contains(output, "sentinel-value-imagedigest-storage") {
+			t.Errorf("%s cmd leaked STORAGE_KEY into child env: %s", name, output)
+		}
+		if strings.Contains(output, "sentinel-value-imagedigest-git") {
+			t.Errorf("%s cmd leaked GIT_HTTPS_TOKEN into child env: %s", name, output)
+		}
+		if !strings.Contains(output, "PATH=") {
+			t.Errorf("%s cmd missing PATH, docker binary would not be found: %s", name, output)
+		}
+	}
+}
 
 // --- LocalRepoDigest ---
 
