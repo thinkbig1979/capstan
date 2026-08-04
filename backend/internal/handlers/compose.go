@@ -260,9 +260,12 @@ func restoreEnv(envPath string, originalBytes []byte) {
 		os.Remove(envPath)
 		return
 	}
-	// Best-effort restore of original content.
-	//nolint:errcheck,gosec // errcheck: best-effort, nothing further to do on failure. gosec: every caller validates envPath against the configured stacks directories before it reaches here — see README.md "Command execution and file access"
-	os.WriteFile(envPath, originalBytes, 0644)
+	// Best-effort restore of original content via the same atomic 0600 writer
+	// used for the primary write below and by env.go's Put, so there is one
+	// implementation that must stay in sync with the 0600 mode requirement
+	// instead of two that can drift apart (agent-os-i94).
+	//nolint:errcheck // best-effort restore; nothing further to do on failure
+	_ = writeEnvFileAtomic(envPath, string(originalBytes))
 }
 
 // ComposeEnvRequest is the body for the atomic PUT /api/v1/stacks/:id/compose-env
@@ -396,15 +399,12 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 			return
 		}
 
-		tmpEnvPath := envPath + ".tmp"
-		if err := os.WriteFile(tmpEnvPath, []byte(envContent), 0644); err != nil {
-			renderResult(c, truth.Failed("failed to write env to temp file; compose unchanged", err))
-			return
-		}
-		if err := os.Rename(tmpEnvPath, envPath); err != nil {
-			// Clean up temp file; compose was never written.
-			os.Remove(tmpEnvPath)
-			renderResult(c, truth.Failed("failed to atomically replace env file; compose unchanged", err))
+		// Write via the same atomic 0600 writer env.go's Put uses (agent-os-i94)
+		// instead of a hand-rolled WriteFile+Rename at 0644 — the previous
+		// version here downgraded the file's mode on every save because
+		// os.Rename replaces the destination inode wholesale.
+		if err := writeEnvFileAtomic(envPath, envContent); err != nil {
+			renderResult(c, truth.Failed("failed to write env file; compose unchanged", err))
 			return
 		}
 
