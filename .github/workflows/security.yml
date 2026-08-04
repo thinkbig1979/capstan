@@ -67,7 +67,7 @@ jobs:
 
       # setup-go@v6 or later is load-bearing: v5 reads only go.mod's `go`
       # directive, and backend/go.mod carries both `go 1.25.0` and
-      # `toolchain go1.25.12`. See backend.yml for the full explanation.
+      # `toolchain go1.26.5`. See backend.yml for the full explanation.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
@@ -374,7 +374,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ADVISORY, for now. This is the only check covering the Alpine 3.21
+      # ADVISORY, for now. This is the only check covering the Alpine 3.24
       # runtime base and the pinned restic 0.19.1 / rclone 1.74.4 static
       # binaries — nothing else in CI looks at them at all. Starting advisory is
       # a deliberate choice about sequencing, not about importance: this scan
@@ -398,6 +398,11 @@ jobs:
       # agent-os-9e1. That baseline is the reason this job starts advisory:
       # turning it blocking today would red-X every unrelated PR until 9e1
       # lands.
+      #
+      # STALE (agent-os-4pa.2, 2026-08-04): the runtime base has since moved to
+      # alpine 3.24, so the 3.21.7 line above is no longer the current base and
+      # the "clean" observation is not re-confirmed here. Re-take this baseline
+      # against 3.24 before graduating the gate to `exit-code: '1'`.
       #
       # READING THE `Fixed Version` COLUMN: it is the *product* version, which
       # is not always a Go module version. Trivy reports CVE-2026-34040 in

@@ -38,7 +38,13 @@ fi
 # 3. Capstan owns its own data dir (SQLite db, state) — align it to appuser.
 #    The stacks dir is intentionally NOT chowned: PUID/PGID match its owner
 #    instead, so we never rewrite ownership of your existing compose projects.
-chown -R appuser:appuser /app/data 2>/dev/null || true
+#    /app/data also holds the default restic-repo (RESTIC_REPOSITORY), so the
+#    recursive chown grows with backup volume. Skip it when the top-level dir is
+#    already owned by the target user, so an already-aligned (possibly large)
+#    tree is not rewalked on every container start.
+if [ "$(stat -c '%u:%g' /app/data 2>/dev/null)" != "$PUID:$PGID" ]; then
+  chown -R appuser:appuser /app/data 2>/dev/null || true
+fi
 
 # 4. Drop privileges and run the server (CMD) as the non-root user.
 exec su-exec appuser "$@"

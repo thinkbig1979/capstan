@@ -115,6 +115,7 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 
 	dockerCheck := gin.H{"status": "ok"}
 	var degraded []string
+	var dockerErr error
 
 	switch h.docker {
 	case nil:
@@ -123,7 +124,12 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 	default:
 		if err := h.docker.Ping(ctx); err != nil {
 			degraded = append(degraded, "docker")
-			dockerCheck = gin.H{"status": "unavailable", "error": err.Error()}
+			// N12 (agent-os-4pa.6): return a fixed operator-facing string, not the
+			// raw Docker client error. The raw error can carry socket paths and
+			// internal detail, and this body is returned to the caller. The detail
+			// is logged below instead, where it is retained for diagnosis.
+			dockerCheck = gin.H{"status": "unavailable", "error": "Docker daemon unreachable"}
+			dockerErr = err
 		}
 	}
 
@@ -135,7 +141,7 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 	if len(degraded) > 0 {
 		body["status"] = "degraded"
 		body["degraded"] = degraded
-		slog.Warn("Readiness probe degraded", "degraded", degraded)
+		slog.Warn("Readiness probe degraded", "degraded", degraded, "error", dockerErr)
 		c.JSON(http.StatusServiceUnavailable, body)
 		return
 	}
