@@ -3,7 +3,6 @@ package handlers
 import (
 	"log/slog"
 	"net/http"
-	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,8 +14,6 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"golang.org/x/crypto/bcrypt"
 )
-
-var bearerPrefixRegex = regexp.MustCompile(`^Bearer\s+`)
 
 // jwtIssuer is set as the "iss" claim on issued tokens and required by the
 // validators, so tokens are bound to this application (L2). Must match
@@ -310,19 +307,26 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		return
 	}
 
-	token := c.GetHeader("Authorization")
-	token = bearerPrefixRegex.ReplaceAllString(token, "")
-
-	claims, err := parseJWT(token, h.jwtSecret)
-	if err == nil {
-		if jti, ok := claims["jti"].(string); ok {
-			// Logout still succeeds client-side even if the revoke fails —
-			// the session expires on its own regardless — but a failed
-			// revoke leaves the session valid in the DB until then, which
-			// is worth an operator's attention, not silent discard.
-			if delErr := h.db.DeleteSession(jti); delErr != nil {
-				slog.Warn("Failed to revoke session on logout", "error", delErr)
-			}
+	// Take the session id from the context, where AuthMiddleware published it
+	// after parsing the token and validating the session row (middleware/auth.go).
+	// This deliberately does NOT re-read the Authorization header: that is what
+	// this handler used to do, and the browser never sends that header — App.tsx
+	// registers `() => null` as getToken so api.ts never sets it — so parseJWT("")
+	// errored and DeleteSession was never reached, leaving every UI logout
+	// client-side only while still returning 204 (agent-os-h9o). Reading the
+	// already-validated jti removes the second parse and makes the transport
+	// (header vs cookie) irrelevant to whether revocation happens.
+	//
+	// A missing jti is normal under AUTH_DISABLED, where the bypass sets userID
+	// without minting a session — there is no row to revoke, so skipping is
+	// correct rather than an error.
+	if jti := c.GetString("jti"); jti != "" {
+		// Logout still succeeds client-side even if the revoke fails —
+		// the session expires on its own regardless — but a failed
+		// revoke leaves the session valid in the DB until then, which
+		// is worth an operator's attention, not silent discard.
+		if delErr := h.db.DeleteSession(jti); delErr != nil {
+			slog.Warn("Failed to revoke session on logout", "error", delErr)
 		}
 	}
 
