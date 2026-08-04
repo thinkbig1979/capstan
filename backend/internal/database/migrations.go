@@ -3,8 +3,19 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
+	"os"
 	"strings"
 )
+
+// allowSchemaDowngradeEnv is the documented escape hatch for the forward-
+// version guard in RunMigrations (agent-os-99j). Rollback is the operator's
+// documented recovery move for a bad release (see README's Rollback
+// section), so refusing outright with no way through would turn a
+// rollback-safety feature into a dead end. Set to "1" only once the operator
+// has confirmed the specific rollback is safe for the migrations involved --
+// the guard cannot know that, it only knows the version numbers don't match.
+const allowSchemaDowngradeEnv = "CAPSTAN_ALLOW_SCHEMA_DOWNGRADE"
 
 type Migration struct {
 	Version int
@@ -569,6 +580,58 @@ func RunMigrations(db *DB) error {
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to create schema_migrations table: %w", err)
+	}
+
+	// Forward-version guard (agent-os-99j): detect a database that was
+	// migrated by a NEWER binary than this one -- the situation created when
+	// an operator rolls back to an older image/tag to recover from a bad
+	// release, which the :latest tag and watchtower both actively invite.
+	// Rolling back across a migration can corrupt data, so an unrecognized
+	// future version must not be applied against silently.
+	//
+	// MAX(version) over an empty schema_migrations table scans NULL, which
+	// Scan below reads as appliedVersion == 0 via sql.NullInt64's zero value.
+	// That 0 is indistinguishable from -- and must be treated the same as --
+	// a genuinely fresh database that has never been migrated: 0 is never
+	// greater than latestKnownVersion, so neither a brand-new database nor a
+	// database created before version-stamping existed trips the guard. Both
+	// fall through to "assume current, migrate forward from scratch", not
+	// "unknown, refuse" -- refusing here would convert a rollback-safety
+	// feature into a first-run outage.
+	var appliedVersion sql.NullInt64
+	if err := db.db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&appliedVersion); err != nil {
+		return fmt.Errorf("failed to read schema_migrations max version: %w", err)
+	}
+	dbVersion := int(appliedVersion.Int64)
+	latestKnownVersion := migrations[len(migrations)-1].Version
+
+	// Logged unconditionally, on every startup, not just when the guard
+	// trips -- the schema version being invisible in normal operation is
+	// half of why this went unnoticed in the first place.
+	slog.Info("database schema version", "database_version", dbVersion, "binary_version", latestKnownVersion)
+
+	if dbVersion > latestKnownVersion {
+		if os.Getenv(allowSchemaDowngradeEnv) == "1" {
+			// Safe, not just permissive: the apply loop below only ever
+			// runs a migration when its own version scans sql.ErrNoRows,
+			// and every version up to dbVersion is already recorded here
+			// by definition. So letting a newer database through does not
+			// re-run or re-apply anything against it -- every one of this
+			// binary's known migrations is skipped as already-applied,
+			// and the loop falls straight through to returning nil.
+			slog.Warn(
+				"database schema is newer than this binary understands; continuing because "+allowSchemaDowngradeEnv+"=1",
+				"database_version", dbVersion, "binary_version", latestKnownVersion,
+			)
+		} else {
+			return fmt.Errorf(
+				"FATAL: database schema version %d is newer than this binary understands (%d).\n"+
+					"This image is older than the one that last migrated the database.\n"+
+					"Rolling back across a migration can corrupt data.\n"+
+					"If you know this rollback is safe, set: %s=1",
+				dbVersion, latestKnownVersion, allowSchemaDowngradeEnv,
+			)
+		}
 	}
 
 	for _, migration := range migrations {

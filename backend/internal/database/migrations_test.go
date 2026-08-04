@@ -486,3 +486,109 @@ func TestMigration_UsernameNocase_NoCollision_EnforcesGoingForward(t *testing.T)
 	require.NoError(t, db.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 13`).Scan(&recorded))
 	assert.Equal(t, 1, recorded, "migration 13 must be recorded as applied when there is no collision")
 }
+
+// TestRunMigrations_NewerSchemaVersion_Refuses is the regression pin for the
+// forward-version guard (agent-os-99j). This is the state left behind when
+// an operator rolls back to an older image/tag to recover from a bad
+// release -- the deployment story's :latest tag and watchtower label
+// actively invite exactly this move -- and RunMigrations must not proceed
+// as if nothing is wrong: rolling back across a migration can corrupt data.
+func TestRunMigrations_NewerSchemaVersion_Refuses(t *testing.T) {
+	db, err := New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	require.NoError(t, RunMigrations(db))
+
+	latest := migrations[len(migrations)-1].Version
+	future := latest + 1
+	_, err = db.db.Exec(
+		"INSERT INTO schema_migrations (version, applied_at) VALUES (?, CURRENT_TIMESTAMP)", future,
+	)
+	require.NoError(t, err)
+
+	err = RunMigrations(db)
+	require.Error(t, err, "must refuse to start against a schema version newer than this binary understands")
+	assert.Contains(t, err.Error(), fmt.Sprintf("%d", future), "error must name the database's (newer) version")
+	assert.Contains(t, err.Error(), fmt.Sprintf("%d", latest), "error must name the binary's (older) version")
+}
+
+// TestRunMigrations_NewerSchemaVersion_AllowDowngradeEnv_ContinuesWithWarning
+// covers the documented escape hatch: rollback is the operator's documented
+// recovery move for a bad release, so the refusal above must not be a dead
+// end once the operator has confirmed the specific rollback is safe.
+func TestRunMigrations_NewerSchemaVersion_AllowDowngradeEnv_ContinuesWithWarning(t *testing.T) {
+	db, err := New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	require.NoError(t, RunMigrations(db))
+
+	latest := migrations[len(migrations)-1].Version
+	future := latest + 1
+	_, err = db.db.Exec(
+		"INSERT INTO schema_migrations (version, applied_at) VALUES (?, CURRENT_TIMESTAMP)", future,
+	)
+	require.NoError(t, err)
+
+	t.Setenv(allowSchemaDowngradeEnv, "1")
+
+	err = RunMigrations(db)
+	require.NoError(t, err, "the override must downgrade the refusal to a warning and let startup continue")
+}
+
+// TestRunMigrations_FreshDatabase_DoesNotTripGuard pins the fresh-install
+// case the guard must never break (agent-os-99j): a brand-new database has
+// no schema_migrations rows at all on the first RunMigrations call, and that
+// must migrate forward normally -- not be misread as "newer than the
+// binary" and refused, which would turn a rollback-safety feature into a
+// first-run outage.
+func TestRunMigrations_FreshDatabase_DoesNotTripGuard(t *testing.T) {
+	db, err := New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	require.NoError(t, RunMigrations(db))
+
+	latest := migrations[len(migrations)-1].Version
+	var recorded int
+	require.NoError(t, db.db.QueryRow(
+		"SELECT COUNT(*) FROM schema_migrations WHERE version = ?", latest,
+	).Scan(&recorded))
+	assert.Equal(t, 1, recorded, "a fresh database must migrate all the way to the binary's latest version")
+}
+
+// TestRunMigrations_PreVersionStampDatabase_DoesNotTripGuard covers the other
+// half of the "must not brick" requirement: a schema_migrations table that
+// already exists but holds zero rows -- the shape a database created by a
+// binary predating any version stamp would have, since the table itself is
+// (re)created idempotently by "CREATE TABLE IF NOT EXISTS" on every
+// RunMigrations call regardless of what else the database already contains.
+// MAX(version) over zero rows scans NULL, read as appliedVersion 0 -- the
+// same value the brand-new case produces -- so this must also migrate
+// forward normally, not refuse. The guard cannot and must not distinguish
+// "unstamped legacy database" from "fresh database"; both are treated as
+// "assume current, stamp it going forward".
+func TestRunMigrations_PreVersionStampDatabase_DoesNotTripGuard(t *testing.T) {
+	db, err := New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.db.Exec(`
+		CREATE TABLE schema_migrations (
+			version INTEGER PRIMARY KEY,
+			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	require.NoError(t, err)
+
+	err = RunMigrations(db)
+	require.NoError(t, err, "a pre-existing empty schema_migrations table must not be treated as newer than the binary")
+
+	latest := migrations[len(migrations)-1].Version
+	var recorded int
+	require.NoError(t, db.db.QueryRow(
+		"SELECT COUNT(*) FROM schema_migrations WHERE version = ?", latest,
+	).Scan(&recorded))
+	assert.Equal(t, 1, recorded, "an unstamped legacy database must migrate all the way to the binary's latest version")
+}
