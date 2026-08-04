@@ -1054,7 +1054,12 @@ func TestRunRestore_Kickoff_Returns202(t *testing.T) {
 	run, err := db.GetBackupRunByID(runID)
 	require.NoError(t, err, "restore run record must be persisted at kickoff")
 	assert.Equal(t, "restore", run.Kind)
-	assert.Equal(t, "running", run.Status)
+	// Status is "running" at kickoff, but the execRestore goroutine races this
+	// read and finalises the row to "failed" the moment snapshot validation
+	// rejects the unconfigured restic password — so the exact value here is
+	// scheduler-dependent, not an invariant. Asserting it flaked in CI twice.
+	// Matches TestRunBackup_Kickoff_PersistsDurableRunRecord. See agent-os-icp.
+	assert.NotEmpty(t, run.Status)
 }
 
 func TestRunRestore_StackNotFound_Returns404(t *testing.T) {
