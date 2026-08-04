@@ -11,10 +11,11 @@ import (
 
 // Proxy trust decides which address Capstan treats as the client, and getting it
 // wrong is silent in both directions: a proxy that is not trusted collapses every
-// user onto one address (shared rate limit bucket, shared AUTH_DISABLED verdict),
-// and a proxy that forwards a client-supplied X-Forwarded-For instead of
-// overwriting it lets a caller choose their own apparent address. This file makes
-// both states visible in the log.
+// user onto one address (shared rate limit bucket), and a proxy that forwards a
+// client-supplied X-Forwarded-For instead of overwriting it lets a caller choose
+// their own apparent address. This file makes both states visible in the log.
+// AUTH_DISABLED is unaffected by any of this — it checks the real socket peer,
+// never a forwarded header (agent-os-0s4, see middleware/auth.go).
 
 // untrustedProxyWarnLimit caps how many distinct peers are remembered for
 // warn-once purposes. Beyond it, warnings stop rather than the map growing on
@@ -93,6 +94,6 @@ func warnUntrustedProxy(remoteIP, header string) {
 	slog.Warn("Forwarding header received from an untrusted peer - it is being ignored",
 		"peer", remoteIP,
 		"header", header,
-		"effect", "all clients behind this proxy share one apparent IP for rate limiting and AUTH_DISABLED",
+		"effect", "all clients behind this proxy share one apparent IP for rate limiting",
 		"fix", "add this address to TRUSTED_NETWORKS, and make sure the proxy overwrites the header rather than forwarding a client-supplied value")
 }
