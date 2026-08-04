@@ -194,22 +194,35 @@ func authenticateToken(token string, db *database.DB, jwtSecret string) (string,
 		}
 	}
 
-	if jti, ok := claims["jti"].(string); ok {
-		session, err := db.GetSession(jti)
-		if err != nil || session == nil {
-			return "", &models.AppError{
-				Code:    models.ErrSessionExpired,
-				Message: "Session not found or expired",
-				Status:  http.StatusUnauthorized,
-			}
+	// A validly-signed token with no "jti" (or a non-string one) names no
+	// session row, so it can never be found and revoked by logout. Before this
+	// fix the type assertion had no else branch and simply skipped the
+	// session/revocation lookup, admitting an unrevocable token — same shape
+	// as the missing-"sub" gap below. Reject with SESSION_EXPIRED instead,
+	// matching middleware.AuthMiddleware (agent-os-gm5).
+	jti, ok := claims["jti"].(string)
+	if !ok {
+		return "", &models.AppError{
+			Code:    models.ErrSessionExpired,
+			Message: "Invalid token",
+			Status:  http.StatusUnauthorized,
 		}
+	}
 
-		if time.Now().After(session.ExpiresAt) {
-			return "", &models.AppError{
-				Code:    models.ErrSessionExpired,
-				Message: "Session has expired",
-				Status:  http.StatusUnauthorized,
-			}
+	session, err := db.GetSession(jti)
+	if err != nil || session == nil {
+		return "", &models.AppError{
+			Code:    models.ErrSessionExpired,
+			Message: "Session not found or expired",
+			Status:  http.StatusUnauthorized,
+		}
+	}
+
+	if time.Now().After(session.ExpiresAt) {
+		return "", &models.AppError{
+			Code:    models.ErrSessionExpired,
+			Message: "Session has expired",
+			Status:  http.StatusUnauthorized,
 		}
 	}
 

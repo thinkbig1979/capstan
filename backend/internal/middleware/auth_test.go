@@ -255,3 +255,152 @@ func TestAuthMiddleware_MissingSubIsSessionExpired(t *testing.T) {
 		t.Fatalf("expected code SESSION_EXPIRED for a token with no sub claim, got %v (%s)", payload["code"], w.Body.String())
 	}
 }
+
+// TestAuthMiddleware_MissingJtiIsSessionExpired guards agent-os-gm5: a token
+// that is validly signed, carries the right "iss", and points at a real "sub"
+// but has no "jti" claim must not fall through c.Next(). Before this fix,
+// claims["jti"].(string) failing its type assertion had no else branch, so
+// the session/revocation lookup was skipped entirely — the token could never
+// be found in the sessions table and so could never be invalidated by
+// logout. Same shape as the missing-sub gap above (agent-os-bm6).
+func TestAuthMiddleware_MissingJtiIsSessionExpired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db, err := database.NewWithMigrations(":memory:")
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Now()
+	user := models.User{
+		ID:        "test-user-id",
+		Username:  "jtiless-token-user",
+		Password:  "irrelevant-hash",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := db.CreateUser(user); err != nil {
+		t.Fatalf("failed to seed user: %v", err)
+	}
+
+	secret := "test-secret-key-32-chars"
+	claims := jwt.MapClaims{
+		"iss":      jwtIssuer,
+		"sub":      user.ID,
+		"username": user.Username,
+		// Deliberately no "jti" claim — this is the defect under test.
+		"iat": now.Unix(),
+		"exp": now.Add(24 * time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString([]byte(secret))
+	if err != nil {
+		t.Fatalf("failed to sign test token: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(AuthMiddleware(db, secret, false, ""))
+	r.GET("/api/v1/dashboard/stats", func(c *gin.Context) {
+		userID, _ := c.Get("userID")
+		t.Errorf("handler reached with jti-less token; userID=%v", userID)
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+signed)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for a token with no jti claim, got %d (%s)", w.Code, w.Body.String())
+	}
+	payload := decodeErrorBody(t, w.Body.Bytes())
+	if payload["code"] != "SESSION_EXPIRED" {
+		t.Fatalf("expected code SESSION_EXPIRED for a token with no jti claim, got %v (%s)", payload["code"], w.Body.String())
+	}
+}
+
+// TestAuthMiddleware_ValidTokenWithJtiAuthenticatesAndIsRevocable is the
+// positive control for agent-os-gm5: a normal token that DOES carry jti must
+// still authenticate, and — the whole point of the jti/session lookup —
+// deleting its session row (what logout does) must revoke it immediately. A
+// guard that rejected every token would pass the negative test above but
+// break the product; this proves it doesn't.
+func TestAuthMiddleware_ValidTokenWithJtiAuthenticatesAndIsRevocable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db, err := database.NewWithMigrations(":memory:")
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Now()
+	user := models.User{
+		ID:        "test-user-id",
+		Username:  "normal-token-user",
+		Password:  "irrelevant-hash",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := db.CreateUser(user); err != nil {
+		t.Fatalf("failed to seed user: %v", err)
+	}
+
+	session := models.Session{
+		ID:        "test-session-id",
+		UserID:    user.ID,
+		ExpiresAt: now.Add(24 * time.Hour),
+		CreatedAt: now,
+	}
+	if err := db.CreateSession(session); err != nil {
+		t.Fatalf("failed to seed session: %v", err)
+	}
+
+	secret := "test-secret-key-32-chars"
+	claims := jwt.MapClaims{
+		"iss":      jwtIssuer,
+		"sub":      user.ID,
+		"username": user.Username,
+		"jti":      session.ID,
+		"iat":      now.Unix(),
+		"exp":      now.Add(24 * time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString([]byte(secret))
+	if err != nil {
+		t.Fatalf("failed to sign test token: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(AuthMiddleware(db, secret, false, ""))
+	r.GET("/api/v1/dashboard/stats", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+signed)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for a normal token with a live session, got %d (%s)", w.Code, w.Body.String())
+	}
+
+	// Logout: delete the session row the jti points at.
+	if err := db.DeleteSession(session.ID); err != nil {
+		t.Fatalf("failed to delete session: %v", err)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/stats", nil)
+	req2.Header.Set("Authorization", "Bearer "+signed)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for the same token after its session was revoked, got %d (%s)", w2.Code, w2.Body.String())
+	}
+	payload := decodeErrorBody(t, w2.Body.Bytes())
+	if payload["code"] != "SESSION_EXPIRED" {
+		t.Fatalf("expected code SESSION_EXPIRED after revocation, got %v (%s)", payload["code"], w2.Body.String())
+	}
+}

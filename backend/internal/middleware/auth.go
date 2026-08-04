@@ -160,18 +160,29 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, authAl
 			return
 		}
 
-		if jti, ok := claims["jti"].(string); ok {
-			session, err := db.GetSession(jti)
-			if err != nil || session == nil {
-				c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Session not found or expired"))
-				c.Abort()
-				return
-			}
-			if session.ExpiresAt.Before(time.Now()) {
-				c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Session expired"))
-				c.Abort()
-				return
-			}
+		// A validly-signed token with no "jti" (or a non-string one) names no
+		// session row, so it can never be found and revoked by logout. Before
+		// this fix the type assertion had no else branch and simply skipped the
+		// session/revocation lookup, admitting an unrevocable token exactly like
+		// the missing-"sub" gap below (agent-os-bm6). Same treatment: reject
+		// with SESSION_EXPIRED rather than silently bypassing the check
+		// (agent-os-gm5).
+		jti, ok := claims["jti"].(string)
+		if !ok {
+			c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Invalid authorization token"))
+			c.Abort()
+			return
+		}
+		session, err := db.GetSession(jti)
+		if err != nil || session == nil {
+			c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Session not found or expired"))
+			c.Abort()
+			return
+		}
+		if session.ExpiresAt.Before(time.Now()) {
+			c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Session expired"))
+			c.Abort()
+			return
 		}
 
 		// A validly-signed token with no "sub" (or a non-string one) names no
@@ -199,13 +210,19 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, authAl
 // "iss" claim (L2).
 const jwtIssuer = "capstan"
 
+// WithExpirationRequired: without it, a token that omits "exp" entirely
+// parses as valid and never expires (the library only checks expiry when the
+// claim is present). Every minting site in this repo already sets "exp"
+// (handlers/auth.go:450, and every test fixture — verified by grepping every
+// "MapClaims{" construction site in backend/, agent-os-gm5), so this closes
+// the gap without changing behavior for any real token.
 func ValidateJWT(token, secret string) (jwt.MapClaims, error) {
 	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, jwt.ErrSignatureInvalid
 		}
 		return []byte(secret), nil
-	}, jwt.WithIssuer(jwtIssuer))
+	}, jwt.WithIssuer(jwtIssuer), jwt.WithExpirationRequired())
 
 	if err != nil {
 		return nil, err
