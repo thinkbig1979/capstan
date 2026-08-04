@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -78,6 +77,25 @@ func (r *durableRun) snapshot() (lines []StreamLine, isDone bool) {
 	return lines, isDone
 }
 
+// backupRunStore is the subset of *database.DB that BackupRunnerRegistry uses
+// to persist BackupRun rows. *database.DB satisfies it implicitly (Go's
+// structural typing), so this is a pure test seam: no change to database.DB
+// and no change to any production call site (see NewBackupRunnerRegistry).
+//
+// It exists because *database.DB is a concrete struct with no injection
+// point, so the only way to observe the exact status and ordering of the
+// row-creation call versus the row-finalisation call is to substitute a spy
+// here. Asserting on the row's value via a real DB read is NOT a substitute:
+// the exec goroutine finalises the row within microseconds when the backend
+// binaries are unconfigured (as they are in tests), so a read-back races the
+// scheduler — see agent-os-icp, where exactly that assertion had to be
+// weakened to assert.NotEmpty because it could observe either state.
+type backupRunStore interface {
+	CreateBackupRun(r *models.BackupRun) error
+	UpdateBackupRun(r *models.BackupRun) error
+	GetBackupRunByID(id string) (*models.BackupRun, error)
+}
+
 // BackupRunnerRegistry manages all in-flight (and recently completed) durable
 // backup/restore operations. It is the authoritative runtime store for running
 // ops; the database is the persistent store for terminal state.
@@ -92,7 +110,7 @@ func (r *durableRun) snapshot() (lines []StreamLine, isDone bool) {
 type BackupRunnerRegistry struct {
 	mu     sync.Mutex
 	runs   map[string]*durableRun
-	db     *database.DB
+	db     backupRunStore
 	logger *slog.Logger
 	svc    *BackupService
 
@@ -118,9 +136,12 @@ type BackupRunnerRegistry struct {
 const retentionTTL = 30 * time.Minute
 
 // NewBackupRunnerRegistry constructs the registry and starts the background
-// GC goroutine.
+// GC goroutine. db is typed as the narrow backupRunStore interface purely as
+// a test seam (see its doc comment); every production caller passes a
+// *database.DB, which satisfies it implicitly, so this is source-compatible
+// with every existing call site.
 func NewBackupRunnerRegistry(
-	db *database.DB,
+	db backupRunStore,
 	svc *BackupService,
 	logger *slog.Logger,
 ) *BackupRunnerRegistry {
