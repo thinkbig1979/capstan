@@ -1,7 +1,7 @@
 # Backup-flow E2E — Playwright suite against a real Capstan instance
 # (agent-os-5y9).
 #
-# WHY SCHEDULED, NOT PER-PR:
+# WHY BOTH PER-PR AND NIGHTLY (agent-os-h9r):
 #   The suite is `workers: 1`, sequential (tests share stack/snapshot state
 #   within the describe block — see backup-flow.spec.ts), with a 120s
 #   per-test timeout, and drives real restic I/O plus WebSocket streaming
@@ -9,9 +9,25 @@
 #   run backup -> verify snapshot -> restore -> verify post-restore state.
 #   That is exactly the coverage unit tests cannot give — backup is the
 #   highest-risk subsystem in this codebase (the DR drill that found
-#   agent-os-pid lived here). But it needs a live frontend + backend + restic
-#   binary and is too slow for PR feedback, so it runs nightly plus on-demand
-#   instead.
+#   agent-os-pid lived here). It previously ran nightly plus on-demand only,
+#   on the theory that it was too slow for PR feedback — but a suite that
+#   never runs on a PR gates nothing: it emits no signal a reviewer or branch
+#   protection can act on, which is worse than an admittedly-missing gate
+#   because the green state elsewhere reads as coverage that isn't there
+#   (agent-os-h9r). It now also runs on every `pull_request` (see the trigger
+#   below), matching backend.yml's and security.yml's `pull_request:` +
+#   `push: branches: [main]` block — deliberately unfiltered, not a `paths:`
+#   filter, for the reason those two files document: a paths-filtered
+#   workflow that is also a required status check stays permanently pending
+#   on PRs that don't touch a matching path (agent-os-x8n).
+#
+#   The nightly cron stays alongside the PR run rather than being replaced by
+#   it, for the same reason security.yml keeps its weekly scan next to its
+#   PR run: a PR-triggered run only catches what *that PR* changes, not
+#   environmental rot — a restic release going bad, a Playwright/Chromium
+#   update breaking headless launch, backend behaviour drifting under a
+#   dependency bump nobody's PR touched. Nightly is what catches that class
+#   of failure independent of any single change landing.
 #
 # WHAT AGENT-OS-5Y9 PHASE 1 FOUND (2026-08-02/03):
 #   The suite had rotted — 2 of 7 tests failed — but both failures were
@@ -50,6 +66,15 @@
 name: E2E - Backup flow
 
 on:
+  # Deliberately unfiltered — see the WHY BOTH PER-PR AND NIGHTLY note above.
+  # No `paths:` filter: agent-os-x8n showed that a paths-filtered workflow
+  # that is also a required status check stays permanently pending on PRs
+  # that don't touch a matching path, so this follows backend.yml's and
+  # security.yml's pattern of running on every PR instead.
+  pull_request:
+  push:
+    branches:
+      - main
   schedule:
     # 03:17 UTC daily — off the top of the hour to avoid the scheduling
     # stampede every workflow with a bare `0 * * * *`-style cron competes in.
@@ -181,12 +206,21 @@ jobs:
           cat /tmp/capstan-e2e/frontend.log
           exit 1
 
-      - name: Run Playwright backup-flow suite
+      - name: Run Playwright e2e suite
         env:
           CAPSTAN_BASE_URL: http://localhost:3001
           CAPSTAN_API_URL: http://localhost:5001
           AUTH_DISABLED: 'true'
           CAPSTAN_TEST_STACK: test-app
+        # No spec path argument: a hardcoded path
+        # (testing/tests/playwright/backup-flow.spec.ts) only ever selected
+        # that one file — a newly added spec under testDir was silently never
+        # run, and CI stayed green because nothing had failed, it just hadn't
+        # executed (agent-os-h9r). Bare `npx playwright test` discovers every
+        # spec via playwright.config.ts's `testDir: './testing/tests/playwright'`
+        # + `testMatch: '**/*.spec.ts'`, so new coverage is picked up
+        # automatically instead of requiring a matching edit to this workflow.
+        #
         # No --reporter flag: it REPLACES playwright.config.ts's reporter
         # array wholesale, including each reporter's options — so even
         # `--reporter=list,html,json` silently drops the config's custom
@@ -200,7 +234,7 @@ jobs:
         # paths) apply as configured — confirmed against a deliberately
         # broken run during agent-os-5y9, where the upload step had
         # previously reported success on 0 files rather than failing loudly.
-        run: npx playwright test testing/tests/playwright/backup-flow.spec.ts
+        run: npx playwright test
 
       # A scheduled job whose failures cannot be inspected gets ignored —
       # upload the HTML report (configured in playwright.config.ts) whenever
