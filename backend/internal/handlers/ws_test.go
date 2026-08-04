@@ -165,6 +165,13 @@ func TestValidateJWT_ExpiredTokenErrorFormat(t *testing.T) {
 // the generic UNAUTHORIZED branch instead of SESSION_EXPIRED. AuthMiddleware
 // (middleware/auth.go:134-142) sends SESSION_EXPIRED for the same condition;
 // models/errors.go documents that ws.go must match (agent-os-2zq).
+//
+// A real, unexpired session is seeded and its ID set as "jti" (agent-os-gm5)
+// so the token clears the jti guard and is rejected for its own expiry, not
+// for lacking jti. Without this, a jti-less-but-otherwise-valid token would
+// be rejected with the same SESSION_EXPIRED code regardless of whether it
+// was actually expired, and this test could no longer tell the two apart —
+// it would keep passing even if real expiry detection broke.
 func TestAuthenticateToken_ExpiredTokenReturnsSessionExpired(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "test-db-*")
 	require.NoError(t, err)
@@ -174,12 +181,33 @@ func TestAuthenticateToken_ExpiredTokenReturnsSessionExpired(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
+	now := time.Now()
+	userID := uuid.New().String()
+	user := models.User{
+		ID:        userID,
+		Username:  "expired-token-user",
+		Password:  "irrelevant-hash",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	require.NoError(t, db.CreateUser(user))
+
+	sessionID := uuid.New().String()
+	session := models.Session{
+		ID:        sessionID,
+		UserID:    userID,
+		ExpiresAt: now.Add(24 * time.Hour),
+		CreatedAt: now,
+	}
+	require.NoError(t, db.CreateSession(session))
+
 	secret := "test-secret-key-32-chars-long!!"
 	claims := jwt.MapClaims{
 		"iss": jwtIssuer,
-		"sub": "user123",
-		"iat": time.Now().Add(-2 * time.Hour).Unix(),
-		"exp": time.Now().Add(-1 * time.Hour).Unix(),
+		"sub": userID,
+		"jti": sessionID,
+		"iat": now.Add(-2 * time.Hour).Unix(),
+		"exp": now.Add(-1 * time.Hour).Unix(),
 	}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
 	require.NoError(t, err)
