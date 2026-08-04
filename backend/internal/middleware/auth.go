@@ -155,9 +155,18 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, truste
 			}
 		}
 
-		if userID, ok := claims["sub"].(string); ok {
-			c.Set("userID", userID)
+		// A validly-signed token with no "sub" (or a non-string one) names no
+		// user. It is not the "wrong credential" case ErrUnauthorized means —
+		// it's a token that cannot authenticate any session, so it gets the
+		// same ErrSessionExpired treatment as every other guard failure above
+		// rather than silently reaching handlers with userID unset (agent-os-bm6).
+		userID, ok := claims["sub"].(string)
+		if !ok {
+			c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Invalid authorization token"))
+			c.Abort()
+			return
 		}
+		c.Set("userID", userID)
 
 		if username, ok := claims["username"].(string); ok {
 			c.Set("username", username)
