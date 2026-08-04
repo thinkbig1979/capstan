@@ -47,10 +47,17 @@ on:
 permissions:
   contents: read
 
-# A scan of an older commit tells you nothing once a newer one exists.
+# A scan of an older commit tells you nothing once a newer one exists, so PR and
+# push runs cancel superseded runs. The weekly scheduled scan gets its OWN group
+# ('weekly', not ref-keyed): cancel-in-progress is evaluated on the INCOMING run,
+# so if schedule and push shared a group a push arriving during the weekly scan
+# would cancel it (the push's own cancel-in-progress is true) even though the
+# schedule run's is false. Isolating the schedule group keeps the weekly advisory
+# scan from being cancelled by a routine push (agent-os-eyc; same pattern as
+# e2e-backup.yml).
 concurrency:
-  group: security-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: security-${{ github.event_name == 'schedule' && 'weekly' || (github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
   # ---------------------------------------------------------------------------
