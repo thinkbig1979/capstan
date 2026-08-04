@@ -1,8 +1,55 @@
 package handlers
 
 import (
+	"context"
+	"os/exec"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
+
+// TestBuildLogsCmd_DoesNotLeakCapstanSecrets covers StreamLogs' `docker
+// compose logs` child (buildLogsCmd, extracted from StreamLogs so this test
+// can inspect the command it builds without a real docker binary). Before
+// the fix, cmd.Env was left nil, so the child inherited Capstan's full
+// os.Environ() — including JWT_SECRET — which a user-authored compose.yaml
+// (handlers/compose.go, handlers/stack_crud.go) can interpolate via ${VAR}
+// (agent-os-3ux, the sibling of agent-os-iey's fix in package services).
+//
+// cmd.Env is nil until Start()/Run() populates it from os.Environ() at that
+// time (Go's os/exec defers the lookup), so asserting on the field directly
+// without running anything would not distinguish "nil Env" from "Env
+// deliberately left empty" — it would only catch that Env was never
+// assigned, not that the assignment scrubs secrets. Redirecting the
+// constructed *exec.Cmd at `sh -c env` and running it observes the actual
+// environment the real docker child would receive.
+func TestBuildLogsCmd_DoesNotLeakCapstanSecrets(t *testing.T) {
+	t.Setenv("JWT_SECRET", "sentinel-value-logs-handler")
+	t.Setenv("STORAGE_KEY", "sentinel-value-storage-handler")
+	t.Setenv("GIT_HTTPS_TOKEN", "sentinel-value-git-handler")
+
+	h := &LogsHandler{}
+	stack := models.Stack{Directory: t.TempDir(), ComposeFile: "compose.yaml", ProjectName: "p"}
+
+	cmd := h.buildLogsCmd(context.Background(), stack)
+
+	shPath, err := exec.LookPath("sh")
+	require.NoError(t, err)
+	cmd.Path = shPath
+	cmd.Args = []string{"sh", "-c", "env"}
+
+	out, err := cmd.Output()
+	require.NoError(t, err)
+
+	output := string(out)
+	assert.NotContains(t, output, "sentinel-value-logs-handler")
+	assert.NotContains(t, output, "sentinel-value-storage-handler")
+	assert.NotContains(t, output, "sentinel-value-git-handler")
+	assert.Contains(t, output, "PATH=")
+}
 
 func TestParseLogLine(t *testing.T) {
 	tests := []struct {

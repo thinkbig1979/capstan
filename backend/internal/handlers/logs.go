@@ -132,11 +132,7 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 	filterContainers := make(map[string]bool)
 	filterMutex := sync.Mutex{}
 
-	args := h.buildComposeArgs(*stack, "logs", []string{"-f", "--tail=100", "--timestamps"})
-
-	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Dir = stack.Directory
+	cmd := h.buildLogsCmd(ctx, *stack)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -252,6 +248,28 @@ cleanup:
 	}
 
 	slog.Debug("Log streaming connection closed", "stackID", id, "userID", wsConn.UserID)
+}
+
+// buildLogsCmd builds the `docker compose logs` child process for
+// StreamLogs, without starting it. Split out from StreamLogs so tests can
+// build and run the constructed *exec.Cmd directly (see logs_test.go) rather
+// than only through the full websocket flow (agent-os-3ux).
+func (h *LogsHandler) buildLogsCmd(ctx context.Context, stack models.Stack) *exec.Cmd {
+	args := h.buildComposeArgs(stack, "logs", []string{"-f", "--tail=100", "--timestamps"})
+
+	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Dir = stack.Directory
+	// Scrub Capstan's own secrets (JWT_SECRET, STORAGE_KEY, GIT_HTTPS_TOKEN)
+	// out of the child's environment. A nil Env here would let `docker
+	// compose logs` inherit Capstan's full os.Environ(), and the compose file
+	// it reads is user-authored content (any authenticated user can write it
+	// verbatim — handlers/compose.go, handlers/stack_crud.go) that `docker
+	// compose` interpolates ${VAR} from the process environment into
+	// (agent-os-3ux, following agent-os-iey's fix for the sibling sites in
+	// package services).
+	cmd.Env = services.DockerEnv()
+	return cmd
 }
 
 func (h *LogsHandler) buildComposeArgs(stack models.Stack, subcommand string, extraArgs []string) []string {
