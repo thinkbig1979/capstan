@@ -842,7 +842,7 @@ func (s *BackupService) RunRestore(
 	snapshotID string,
 	targetDir string,
 	out chan<- StreamLine,
-) error {
+) (err error) {
 	if !s.tryAcquireGlobal() {
 		return ErrBackupBusy
 	}
@@ -921,19 +921,31 @@ func (s *BackupService) RunRestore(
 	stopApplied := false
 
 	defer func() {
-		if stopApplied && wasRunning {
-			stream(out, "info", fmt.Sprintf("[%s] restarting stack after restore", stackID))
-			ar, _ := s.dockerSvc().StartVerified(stack)
-			switch ar.Outcome {
-			case truth.OutcomeFailed:
-				startErr := ar.Err
-				if startErr == nil {
-					startErr = errors.New(ar.Reason)
-				}
-				stream(out, "error", fmt.Sprintf("[%s] restart failed: %v", stackID, startErr))
-			case truth.OutcomePartial:
-				s.logger.Warn("restart after restore partially succeeded", "stack", stackID, "reason", ar.Reason)
+		if !stopApplied || !wasRunning {
+			return
+		}
+		// N13 (agent-os-4pa.7): only restart when the restore SUCCEEDED. A failed
+		// restore may have left the stack directory half-written; starting
+		// containers over it can corrupt state and destroy the ability to retry
+		// the restore cleanly. Leave the stack stopped so the operator can inspect
+		// and retry.
+		if err != nil {
+			stream(out, "error", fmt.Sprintf(
+				"[%s] restore failed; stack left stopped deliberately so you can inspect %s and retry (not auto-restarting over a possibly partial restore)",
+				stackID, restoreTarget))
+			return
+		}
+		stream(out, "info", fmt.Sprintf("[%s] restarting stack after restore", stackID))
+		ar, _ := s.dockerSvc().StartVerified(stack)
+		switch ar.Outcome {
+		case truth.OutcomeFailed:
+			startErr := ar.Err
+			if startErr == nil {
+				startErr = errors.New(ar.Reason)
 			}
+			stream(out, "error", fmt.Sprintf("[%s] restart failed: %v", stackID, startErr))
+		case truth.OutcomePartial:
+			s.logger.Warn("restart after restore partially succeeded", "stack", stackID, "reason", ar.Reason)
 		}
 	}()
 
