@@ -69,7 +69,7 @@ jobs:
       # directive, and backend/go.mod carries both `go 1.25.0` and
       # `toolchain go1.25.12`. See backend.yml for the full explanation.
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
