@@ -612,6 +612,13 @@ func RunMigrations(db *DB) error {
 
 	if dbVersion > latestKnownVersion {
 		if os.Getenv(allowSchemaDowngradeEnv) == "1" {
+			// Safe, not just permissive: the apply loop below only ever
+			// runs a migration when its own version scans sql.ErrNoRows,
+			// and every version up to dbVersion is already recorded here
+			// by definition. So letting a newer database through does not
+			// re-run or re-apply anything against it -- every one of this
+			// binary's known migrations is skipped as already-applied,
+			// and the loop falls straight through to returning nil.
 			slog.Warn(
 				"database schema is newer than this binary understands; continuing because "+allowSchemaDowngradeEnv+"=1",
 				"database_version", dbVersion, "binary_version", latestKnownVersion,
