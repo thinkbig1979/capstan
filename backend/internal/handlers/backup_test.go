@@ -1714,7 +1714,34 @@ func TestBackupHandler_StopWithTimeout_DelegatesAndIsIdempotent(t *testing.T) {
 
 	// A second call (StopWithTimeout again, and Stop) must not panic — this is
 	// the idempotence guarantee agent-os-7a5 adds via BackupRunnerRegistry's
-	// stopOnce.
+	// stopped flag (set once, under mu, by beginStop).
 	assert.True(t, h.StopWithTimeout(2*time.Second))
 	h.Stop()
+}
+
+// TestRunBackup_AfterShutdownBegun_Returns503 is the handler-level half of
+// agent-os-7a5's WaitGroup-safety fix: a launch request arriving after the
+// registry has committed to shutting down (h.registry.Stop/StopWithTimeout
+// already called) must surface as 503 Service Unavailable — an availability
+// condition a client can retry post-restart — not the generic 500
+// internalError previously returned for every LaunchX failure.
+func TestRunBackup_AfterShutdownBegun_Returns503(t *testing.T) {
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+
+	h.registry.Stop() // commit to shutdown; nothing in flight, returns immediately
+
+	r := newBackupRouter(h)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, jsonReq(t, http.MethodPost, "/api/backups/run", map[string]interface{}{
+		"stackIds": []string{},
+		"dryRun":   true,
+	}))
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "SERVER_SHUTTING_DOWN", body["code"])
 }

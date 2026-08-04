@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -595,7 +596,7 @@ func (h *BackupHandler) runBackup(c *gin.Context) {
 
 	runID, err := h.registry.LaunchBackup(req.StackIDs, req.DryRun)
 	if err != nil {
-		h.internalError(c, "Failed to start backup run", err)
+		h.respondForLaunchError(c, "backup run", err)
 		return
 	}
 
@@ -612,7 +613,7 @@ func (h *BackupHandler) runSync(c *gin.Context) {
 
 	runID, err := h.registry.LaunchSync()
 	if err != nil {
-		h.internalError(c, "Failed to start sync", err)
+		h.respondForLaunchError(c, "sync", err)
 		return
 	}
 
@@ -680,7 +681,7 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 
 	runID, err := h.registry.LaunchRestore(req.StackID, req.SnapshotID, req.Target)
 	if err != nil {
-		h.internalError(c, "Failed to start restore", err)
+		h.respondForLaunchError(c, "restore", err)
 		return
 	}
 
@@ -741,7 +742,7 @@ func (h *BackupHandler) runDRRestore(c *gin.Context) {
 
 	runID, err := h.registry.LaunchDRRestore()
 	if err != nil {
-		h.internalError(c, "Failed to start DR restore", err)
+		h.respondForLaunchError(c, "DR restore", err)
 		return
 	}
 
@@ -783,7 +784,7 @@ func (h *BackupHandler) runPrune(c *gin.Context) {
 
 	runID, err := h.registry.LaunchPrune(req.DryRun)
 	if err != nil {
-		h.internalError(c, "Failed to start prune", err)
+		h.respondForLaunchError(c, "prune", err)
 		return
 	}
 
@@ -1057,6 +1058,24 @@ func (h *BackupHandler) internalError(c *gin.Context, msg string, err error) {
 		"INTERNAL_ERROR",
 		msg,
 	))
+}
+
+// respondForLaunchError writes the response for a failed registry.LaunchX
+// call. services.ErrRegistryStopping means the server has already begun
+// graceful shutdown (see BackupRunnerRegistry.beginStop / agent-os-7a5): that
+// is an availability condition a client can retry after the next restart,
+// not a server bug, so it gets 503 rather than internalError's 500. Any
+// other error (e.g. a DB write failure) keeps the existing 500 behaviour.
+func (h *BackupHandler) respondForLaunchError(c *gin.Context, action string, err error) {
+	if errors.Is(err, services.ErrRegistryStopping) {
+		c.JSON(http.StatusServiceUnavailable, models.NewAppError(
+			http.StatusServiceUnavailable,
+			"SERVER_SHUTTING_DOWN",
+			"Server is shutting down; "+action+" cannot be started",
+		))
+		return
+	}
+	h.internalError(c, "Failed to start "+action, err)
 }
 
 // listSnapshotsViaRestic builds a ResticManager and returns all snapshots for

@@ -114,8 +114,26 @@ type BackupRunnerRegistry struct {
 	logger *slog.Logger
 	svc    *BackupService
 
-	gcStop   chan struct{}
-	stopOnce sync.Once
+	gcStop chan struct{}
+
+	// stopped is set under mu by beginStop() (called from Stop and
+	// StopWithTimeout) BEFORE it ever calls wg.Wait(), and checked under the
+	// same mu by registerAndAdd() before it calls wg.Add(1). Without this, Add
+	// (called from a LaunchX method, outside any lock beginStop also takes
+	// before its own Wait) is unsynchronized with Stop's Wait from the race
+	// detector's point of view: sync.WaitGroup deliberately instruments Add's
+	// first-increment and Wait's first-waiter transitions as a modelled
+	// read/write on the same location specifically to catch "Add concurrent
+	// with Wait" (see sync/waitgroup.go) — and that panic is NOT gated behind
+	// race-detector builds, it fires in production too. A LaunchX call can
+	// race a shutdown's Stop/StopWithTimeout for real: srv.Shutdown in
+	// main.go has its own 15s bound, and an HTTP handler still executing past
+	// that bound keeps running after srv.Shutdown returns, exactly when
+	// StopWithTimeout is called next. Routing both Add and the stopped check
+	// through mu gives them the real happens-before edge that was missing.
+	// Mirrors BackupSchedulerService's identical fix, agent-os-o26; this gap
+	// in the registry is agent-os-7a5.
+	stopped bool
 
 	// wg tracks every in-flight execX goroutine (execBackup, execRestore,
 	// execSync, execDRRestore, execPrune). Add(1) happens in the LaunchX method
@@ -165,16 +183,16 @@ func NewBackupRunnerRegistry(
 // t.TempDir() the service writes into — since execX runs detached on
 // context.Background() and nothing else joins it. See agent-os-80n.
 //
-// Safe to call more than once (idempotent, via stopOnce guarding the
-// channel close) and safe to call concurrently with StopWithTimeout — both
-// close the same gcStop channel through the same sync.Once and then wait on
-// the same wg.
+// Safe to call more than once, and safe to call concurrently with
+// StopWithTimeout: both go through beginStop, which commits reg.stopped and
+// closes gcStop exactly once (see beginStop's doc comment), and wg.Wait()
+// itself is safe to call from multiple goroutines.
 //
 // Production shutdown (main.go) uses StopWithTimeout instead: this method's
 // unbounded wait is only appropriate for tests, where runs are fast because
 // restic/rclone are unconfigured. See agent-os-7a5.
 func (reg *BackupRunnerRegistry) Stop() {
-	reg.stopOnce.Do(func() { close(reg.gcStop) })
+	reg.beginStop()
 	reg.wg.Wait()
 }
 
@@ -191,9 +209,15 @@ func (reg *BackupRunnerRegistry) Stop() {
 // premise. This is the method main.go's graceful shutdown calls.
 //
 // Idempotent and safe to call concurrently with Stop or another
-// StopWithTimeout, for the same reason Stop is (shared stopOnce + wg).
+// StopWithTimeout (see beginStop). Safe to call even after it has already
+// timed out once: beginStop's stopped=true is permanent, so registerAndAdd
+// keeps refusing new launches — which is what makes it safe that the
+// goroutine spawned below to run wg.Wait() stays parked forever on a timeout
+// (nothing after this point can call wg.Add again). Do not remove the
+// stopped guard in registerAndAdd thinking it is redundant with the timeout:
+// it is the reason a timed-out wait here can never observe a later Add.
 func (reg *BackupRunnerRegistry) StopWithTimeout(timeout time.Duration) bool {
-	reg.stopOnce.Do(func() { close(reg.gcStop) })
+	reg.beginStop()
 
 	done := make(chan struct{})
 	go func() {
@@ -207,6 +231,25 @@ func (reg *BackupRunnerRegistry) StopWithTimeout(timeout time.Duration) bool {
 	case <-time.After(timeout):
 		return false
 	}
+}
+
+// beginStop commits the registry to shutting down: it sets stopped under mu
+// — so registerAndAdd sees it and refuses further wg.Add calls, giving Add
+// and Wait a real happens-before edge instead of racing (see stopped's doc
+// comment) — and closes gcStop to end the background GC loop. Safe to call
+// more than once: the close is guarded by a non-blocking select so a second
+// call is a no-op instead of a close-of-closed-channel panic. Mirrors
+// BackupSchedulerService.Stop's identical pattern (agent-os-o26).
+func (reg *BackupRunnerRegistry) beginStop() {
+	reg.mu.Lock()
+	reg.stopped = true
+	select {
+	case <-reg.gcStop:
+		// already closed by a previous Stop/StopWithTimeout call
+	default:
+		close(reg.gcStop)
+	}
+	reg.mu.Unlock()
 }
 
 func (reg *BackupRunnerRegistry) gcLoop() {
@@ -244,11 +287,41 @@ func (reg *BackupRunnerRegistry) evictFinished() {
 	}
 }
 
-// register inserts a durableRun and returns it.
-func (reg *BackupRunnerRegistry) register(dr *durableRun) {
+// ErrRegistryStopping is returned by LaunchX methods when a shutdown
+// (Stop/StopWithTimeout) has already committed via beginStop. Exported so
+// callers — specifically handlers.BackupHandler — can map it to a 503
+// rather than a generic 500: a server that is shutting down and refuses a
+// new backup is an availability condition, not an internal error. See
+// registerAndAdd.
+var ErrRegistryStopping = errors.New("backup runner registry is shutting down")
+
+// registerAndAdd inserts dr into the registry and increments wg, atomically
+// with the stopped check, under reg.mu — mirroring
+// BackupSchedulerService.Start's tick handler, which likewise calls wg.Add
+// while still holding the same mutex Stop takes before its own wg.Wait()
+// (agent-os-o26). If a stop has already begun, it does neither and returns
+// ErrRegistryStopping instead: this is what makes wg.Add "concurrent with
+// Wait" from the race detector's perspective impossible, and what stops the
+// production-reachable sync.WaitGroup misuse panic (unconditional, not just
+// under -race — see sync/waitgroup.go) that an unguarded Add would otherwise
+// risk once main.go's shutdown path can call Stop/StopWithTimeout for real.
+// See agent-os-7a5.
+//
+// Callers reach this after already persisting the run's DB row via
+// CreateBackupRun (status="running"). If registerAndAdd refuses because a
+// stop is in progress, that row is left unfinalised — this is safe, not a
+// leak: it is reconciled by the startup sweeper
+// (database.SweepInterruptedBackupRuns) on the next boot exactly like any
+// other run that was "running" when the process exited.
+func (reg *BackupRunnerRegistry) registerAndAdd(dr *durableRun) error {
 	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	if reg.stopped {
+		return ErrRegistryStopping
+	}
 	reg.runs[dr.runID] = dr
-	reg.mu.Unlock()
+	reg.wg.Add(1)
+	return nil
 }
 
 // --- LaunchX methods ---
@@ -271,8 +344,9 @@ func (reg *BackupRunnerRegistry) LaunchBackup(stackIDs []string, dryRun bool) (s
 	}
 
 	dr := &durableRun{runID: runID, kind: RunKindBackup, done: make(chan struct{})}
-	reg.register(dr)
-	reg.wg.Add(1)
+	if err := reg.registerAndAdd(dr); err != nil {
+		return "", err
+	}
 	go reg.execBackup(dr, stackIDs, dryRun)
 	return runID, nil
 }
@@ -334,8 +408,9 @@ func (reg *BackupRunnerRegistry) LaunchRestore(stackID, snapshotID, target strin
 	}
 
 	dr := &durableRun{runID: runID, kind: RunKindRestore, done: make(chan struct{})}
-	reg.register(dr)
-	reg.wg.Add(1)
+	if err := reg.registerAndAdd(dr); err != nil {
+		return "", err
+	}
 	go reg.execRestore(dr, stackID, snapshotID, target)
 	return runID, nil
 }
@@ -384,8 +459,9 @@ func (reg *BackupRunnerRegistry) LaunchSync() (string, error) {
 	}
 
 	dr := &durableRun{runID: runID, kind: RunKindSync, done: make(chan struct{})}
-	reg.register(dr)
-	reg.wg.Add(1)
+	if err := reg.registerAndAdd(dr); err != nil {
+		return "", err
+	}
 	go reg.execSync(dr)
 	return runID, nil
 }
@@ -436,8 +512,9 @@ func (reg *BackupRunnerRegistry) LaunchDRRestore() (string, error) {
 	}
 
 	dr := &durableRun{runID: runID, kind: RunKindDRRestore, done: make(chan struct{})}
-	reg.register(dr)
-	reg.wg.Add(1)
+	if err := reg.registerAndAdd(dr); err != nil {
+		return "", err
+	}
 	go reg.execDRRestore(dr)
 	return runID, nil
 }
@@ -486,8 +563,9 @@ func (reg *BackupRunnerRegistry) LaunchPrune(dryRun bool) (string, error) {
 	}
 
 	dr := &durableRun{runID: runID, kind: RunKindPrune, done: make(chan struct{})}
-	reg.register(dr)
-	reg.wg.Add(1)
+	if err := reg.registerAndAdd(dr); err != nil {
+		return "", err
+	}
 	go reg.execPrune(dr, dryRun)
 	return runID, nil
 }

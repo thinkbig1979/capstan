@@ -5,6 +5,12 @@ services:
       dockerfile: docker/Dockerfile
     container_name: capstan
     restart: unless-stopped
+    # See docker-compose.prod.yaml's stop_grace_period comment: Docker's 10s
+    # default is shorter than the server's own graceful-shutdown budget
+    # (up to 15s HTTP drain + up to 30s backup drain — backupDrainTimeout in
+    # backend/cmd/server/main.go). 60s covers the ~45s worst case with margin
+    # (agent-os-7a5).
+    stop_grace_period: 60s
     ports:
       - "${PORT:-5001}:${PORT:-5001}"
     volumes:

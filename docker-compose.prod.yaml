@@ -10,6 +10,14 @@ services:
     # or Settings → About.
     image: ghcr.io/thinkbig1979/capstan:latest
     restart: unless-stopped
+    # Docker's default is 10s before SIGKILL, which is shorter than the
+    # server's own graceful-shutdown budget (up to 15s for in-flight HTTP
+    # requests + up to 30s draining an in-flight backup/restore/sync run —
+    # see backend/cmd/server/main.go's backupDrainTimeout). Without this, a
+    # `docker stop`/compose down mid-backup gets SIGKILLed before the process
+    # ever reaches its own bounded drain. 60s covers the ~45s worst case with
+    # margin (agent-os-7a5).
+    stop_grace_period: 60s
     ports:
       - "5001:5001"
     volumes:
