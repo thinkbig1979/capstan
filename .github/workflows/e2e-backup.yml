@@ -62,6 +62,17 @@
 #   currently 500s on a brand-new stack directory once FK enforcement went
 #   pool-wide (agent-os-jcu, a real backend bug found during agent-os-5y9
 #   Phase 1 and filed separately — out of scope for this workflow).
+#
+# AUTH-SESSION SPLIT (agent-os-lyx, 2026-08-04):
+#   This file also runs testing/tests/playwright/auth-session.spec.ts, but in
+#   a SEPARATE job (`auth-session`) against a SEPARATE backend booted with
+#   AUTH_DISABLED=false — the backup-flow job above runs AUTH_DISABLED=true
+#   throughout and never exercises real sessions. The two jobs route by test
+#   PATH via --grep/--grep-invert, not by tag: backup-flow keeps
+#   `--grep-invert "auth-session"` so it never spends time on a backend it
+#   can't use, and auth-session gets `--grep "auth-session"`. The
+#   auth-session job needs neither restic nor the test-app fixture (its spec
+#   touches neither), so both are skipped for it entirely.
 
 name: E2E - Backup flow
 
@@ -221,6 +232,22 @@ jobs:
         # + `testMatch: '**/*.spec.ts'`, so new coverage is picked up
         # automatically instead of requiring a matching edit to this workflow.
         #
+        # --grep-invert "auth-session" (agent-os-lyx): this job boots the
+        # backend with AUTH_DISABLED=true and cannot run
+        # auth-session.spec.ts, which needs a real, revocable session.
+        # --grep-invert matches against the full test title INCLUDING its
+        # file path (OBSERVED: `--grep "backup-flow" --list` selects all 7
+        # tests here though no test title contains that string), so this
+        # reliably excludes only auth-session.spec.ts's tests. Renaming or
+        # deleting that file changes nothing here — inverting an exclusion
+        # of a pattern nothing matches still selects all 7 backup-flow tests
+        # (OBSERVED: `--grep-invert "auth-session" --list` with the spec
+        # absent still selects 7, EXIT 0). The zero-match tripwire this
+        # workflow relies on lives in the OTHER job instead: Playwright
+        # exits 1 on a total zero-match, so it's the auth-session job's
+        # `--grep "auth-session"` (a positive selection) that fails loudly
+        # if that spec is ever renamed or deleted, not this step.
+        #
         # No --reporter flag: it REPLACES playwright.config.ts's reporter
         # array wholesale, including each reporter's options — so even
         # `--reporter=list,html,json` silently drops the config's custom
@@ -234,7 +261,7 @@ jobs:
         # paths) apply as configured — confirmed against a deliberately
         # broken run during agent-os-5y9, where the upload step had
         # previously reported success on 0 files rather than failing loudly.
-        run: npx playwright test
+        run: npx playwright test --grep-invert "auth-session"
 
       # A scheduled job whose failures cannot be inspected gets ignored —
       # upload the HTML report (configured in playwright.config.ts) whenever
@@ -255,4 +282,151 @@ jobs:
           path: |
             /tmp/capstan-e2e/backend.log
             /tmp/capstan-e2e/frontend.log
+          retention-days: 14
+
+  auth-session:
+    name: Playwright auth-session suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.5.1 --activate
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Install root dependencies (Playwright)
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # No restic install and no test-app fixture seed here — unlike the
+      # backup-flow job above, auth-session.spec.ts never touches backups or
+      # stacks beyond an authenticated GET /stacks, so it needs neither.
+      - name: Build backend
+        working-directory: backend
+        run: go build -o server ./cmd/server
+
+      # A FRESH, isolated DATA_DIR is load-bearing: auth-session.spec.ts's
+      # first test asserts needsSetup:true and performs the one-and-only
+      # POST /auth/setup itself. A dir shared with the backup-flow job (or
+      # reused across re-runs) would carry over a user from a previous run
+      # and make that assertion false.
+      - name: Start backend (AUTH_DISABLED=false)
+        working-directory: backend
+        run: |
+          set -eu
+          mkdir -p /tmp/capstan-e2e-auth/stacks /tmp/capstan-e2e-auth/data
+          PORT=5001 \
+          STACKS_DIR=/tmp/capstan-e2e-auth/stacks \
+          DATA_DIR=/tmp/capstan-e2e-auth/data \
+          AUTH_DISABLED=false \
+          JWT_SECRET=e2e-ci-secret-32-characters-min-pad \
+          LOG_LEVEL=info \
+          LOG_FORMAT=text \
+          CORS_ORIGINS=http://localhost:3001 \
+          nohup ./server > /tmp/capstan-e2e-auth/backend.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5001/health > /dev/null; then
+              echo "backend healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "backend did not become healthy within 30s" >&2
+          cat /tmp/capstan-e2e-auth/backend.log
+          exit 1
+
+      # Same rationale as the backup-flow job: frontend/vite.config.ts
+      # hardcodes the /api proxy to http://localhost:5001, so no override is
+      # needed or possible; --port/--strictPort pin 3001 to match
+      # playwright.config.ts's CAPSTAN_BASE_URL default. Separate runner from
+      # the backup-flow job, so both using 5001/3001 is not a conflict.
+      - name: Start frontend dev server
+        working-directory: frontend
+        run: |
+          set -eu
+          nohup npx vite --port 3001 --strictPort > /tmp/capstan-e2e-auth/frontend.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3001/ > /dev/null; then
+              echo "frontend healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "frontend did not become healthy within 30s" >&2
+          cat /tmp/capstan-e2e-auth/frontend.log
+          exit 1
+
+      - name: Run Playwright auth-session suite
+        env:
+          CAPSTAN_BASE_URL: http://localhost:3001
+          CAPSTAN_API_URL: http://localhost:5001
+        # --grep "auth-session" selects only auth-session.spec.ts (matched
+        # against the full test title including its file path — see the
+        # --grep-invert comment in the backup-flow job above for the
+        # observed behaviour this relies on, and the zero-match tripwire
+        # this specific flag is what actually provides). AUTH_DISABLED is
+        # deliberately left unset: auth-session.spec.ts never reads that env
+        # var at all (unlike backup-flow.spec.ts, which branches its login
+        # flow on it) — its every assertion already assumes a real,
+        # revocable session, matching this job's backend unconditionally.
+        # There is no test.skip(AUTH_DISABLED) guard to key off either —
+        # under path-based routing this job must always run these tests,
+        # never skip them silently.
+        #
+        # This job assumes a VIRGIN backend (needsSetup:true) and is
+        # single-spec-by-design: auth-session.spec.ts's first test performs
+        # the one-and-only POST /auth/setup itself and asserts needsSetup
+        # was true beforehand. A second spec file whose title also happened
+        # to match "auth-session" would run against this SAME backend
+        # process and break that bootstrap assertion on its second run — if
+        # a future spec ever needs this same AUTH_DISABLED=false backend,
+        # give it its own job (or its own isolated backend instance) rather
+        # than adding it here.
+        #
+        # No --reporter flag, for the same reason as the backup-flow job:
+        # it would replace playwright.config.ts's list+html+json reporter
+        # array wholesale and break the HTML report upload below.
+        run: npx playwright test --grep "auth-session"
+
+      - name: Upload Playwright HTML report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-html-report-auth-session
+          path: testing/reports/playwright-html
+          retention-days: 14
+
+      - name: Upload backend/frontend logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: capstan-e2e-auth-session-logs
+          path: |
+            /tmp/capstan-e2e-auth/backend.log
+            /tmp/capstan-e2e-auth/frontend.log
           retention-days: 14
