@@ -129,7 +129,7 @@ func TestLaunchSync_RunRowCreatedRunningBeforeFinalisation(t *testing.T) {
 		"finalisation must move the row to a terminal status, not leave it (or re-write it) as running")
 }
 
-// TestLaunchBackup_CreatesRunningRowBeforeFinalisation_ResticMissingPath is
+// TestLaunchBackup_CreatesRunningRowBeforeFinalisation_ResticMissingFastFail is
 // the agent-os-14f counterpart to TestLaunchSync_RunRowCreatedRunningBeforeFinalisation
 // above, for the BACKUP kind — but ONLY for the branch named in the test:
 // RunBackupWithRunID failing at its resticBin-missing guard.
@@ -162,7 +162,7 @@ func TestLaunchSync_RunRowCreatedRunningBeforeFinalisation(t *testing.T) {
 // existing production code path on this one branch — no seam widening was
 // needed to write it, and none should be inferred for the restic-present
 // path from this test passing.
-func TestLaunchBackup_CreatesRunningRowBeforeFinalisation_ResticMissingPath(t *testing.T) {
+func TestLaunchBackup_CreatesRunningRowBeforeFinalisation_ResticMissingFastFail(t *testing.T) {
 	db := newBackupTestDB(t)
 	spy := &spyRunStore{real: db}
 
