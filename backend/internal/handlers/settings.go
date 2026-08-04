@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	jwtv5 "github.com/golang-jwt/jwt/v5"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
@@ -186,24 +185,15 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 	slog.Info("Password changed", "userID", userID)
 	logActionFromContext(h.actionLog, c, nil, services.ActionChangePassword, gin.H{})
 
-	currentSessionID := ""
-	authToken := c.GetHeader("Authorization")
-	if authToken != "" {
-		tokenStr := strings.TrimPrefix(authToken, "Bearer ")
-		if parsedToken, err := jwtv5.Parse(tokenStr, func(token *jwtv5.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwtv5.SigningMethodHMAC); !ok {
-				return nil, jwtv5.ErrSignatureInvalid
-			}
-			return []byte(h.jwtSecret), nil
-		}); err == nil {
-			if claims, ok := parsedToken.Claims.(jwtv5.MapClaims); ok {
-				if jti, ok := claims["jti"].(string); ok {
-					currentSessionID = jti
-				}
-			}
-		}
-	}
+	// The validated session id is published on the context by AuthMiddleware
+	// (middleware/auth.go:211). Read it here rather than re-parsing the
+	// Authorization header, which the browser never sends (App.tsx:58-63
+	// registers `() => null` as getToken), so header-only derivation left this
+	// empty for every real UI password change and skipped revocation (agent-os-xdn).
+	currentSessionID := c.GetString("jti")
 
+	// Keep this guard: DeleteSessionsByUserExcluding(userID, "") matches id != ""
+	// and would delete EVERY session for the user, including the caller's own.
 	if currentSessionID != "" {
 		if err := h.db.DeleteSessionsByUserExcluding(userID.(string), currentSessionID); err != nil {
 			slog.Error("Failed to invalidate other sessions after password change", "error", err, "userID", userID)
