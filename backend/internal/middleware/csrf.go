@@ -75,16 +75,20 @@ func CSRFMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// N10 (agent-os-4pa.4): this compare is intentionally NOT constant-time,
-		// and must not be "fixed" to subtle.ConstantTimeCompare. The timing channel
-		// is unreachable here: there is no CORS middleware in this service, so a
-		// cross-origin request carrying a custom CSRF header never survives
-		// preflight; the session cookies are SameSite=Lax; and the CSRF cookie is
-		// deliberately HttpOnly:false (double-submit) so a same-origin attacker who
-		// can vary the header already reads the cookie directly. Neither side of the
-		// compare is a secret the attacker lacks. EqualFold is used on purpose: the
-		// token is lowercase hex, so accepting case variants of the same token loses
-		// no entropy, and subtle.ConstantTimeCompare would instead make the compare
+		// N10 (agent-os-4pa.4 / agent-os-bns): this compare is intentionally NOT
+		// constant-time, and must not be "fixed" to subtle.ConstantTimeCompare.
+		// This is a double-submit check: both the cookie and the header are supplied
+		// by the client on the same request, so neither side is a server-held secret
+		// an attacker is trying to guess — there is nothing for a timing oracle to
+		// leak. Cross-origin forgery is blocked upstream of this line regardless: the
+		// session and CSRF cookies are SameSite=Lax (not sent on cross-site
+		// subrequests), and the CSRF cookie, though HttpOnly:false so the same-origin
+		// SPA can read it for the double-submit, cannot be read by cross-origin JS
+		// (same-origin policy). A CORS middleware DOES exist (CORSMiddleware in this
+		// package), but it is an exact-match origin allowlist, empty by default, and
+		// does not weaken any of the above. EqualFold is used on purpose: the token
+		// is lowercase hex, so accepting case variants of the same token loses no
+		// entropy, whereas subtle.ConstantTimeCompare would make the compare
 		// case-sensitive — a behaviour change for zero security gain.
 		if !strings.EqualFold(csrfCookie, csrfHeader) {
 			slog.Warn("CSRF token mismatch", "path", c.Request.URL.Path, "method", c.Request.Method)
