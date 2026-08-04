@@ -465,11 +465,6 @@ export const directoriesApi = {
     return response.data
   },
 
-  get: async (path: string) => {
-    const response = await apiClient.get<ConfiguredDir>(`/directories/${encodeURIComponent(path)}`)
-    return response.data
-  },
-
   // The path travels in the JSON body, not the URL: the backend registers a
   // single static PUT /directories/credentials route (see directories.go),
   // and gin's decoded-path matching can't route an absolute, slash-containing

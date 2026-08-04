@@ -87,52 +87,6 @@ func TestDirectoriesHandler_Scan_Success(t *testing.T) {
 	assert.NotNil(t, response["scannedAt"])
 }
 
-func TestDirectoriesHandler_Get_Success(t *testing.T) {
-	db, err := database.NewWithMigrations(":memory:")
-	require.NoError(t, err)
-
-	cfg := &config.Config{StacksDir: "/tmp/test"}
-	scanner := services.NewScannerService(cfg, db)
-	handler := NewDirectoriesHandler(scanner, db)
-
-	dir := models.Directory{
-		Path:      "stack1",
-		Name:      "stack1",
-		IsGitRepo: false,
-		ScannedAt: testTime,
-	}
-	err = db.UpsertDirectory(dir)
-	require.NoError(t, err)
-
-	stack := models.Stack{
-		ID:          "stack1:default",
-		Directory:   "stack1",
-		ComposeFile: "compose.yaml",
-		EnvFile:     ".env",
-		ProjectName: "stack1-default",
-		Status:      "running",
-	}
-	err = db.UpsertStack(stack)
-	require.NoError(t, err)
-
-	router := gin.New()
-	router.GET("/directories/:path", handler.Get)
-
-	req := httptest.NewRequest(http.MethodGet, "/directories/stack1", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response map[string]interface{}
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.Equal(t, dir.Path, response["path"])
-	stacks := response["stacks"].([]interface{})
-	assert.Len(t, stacks, 1)
-}
-
 // TestDirectoriesHandler_UpdateCredentials_Success exercises the full route
 // table via RegisterRoutes (not a hand-picked single route like the tests
 // above) with an absolute, slash-containing directory path — the shape every
@@ -337,28 +291,4 @@ func TestDirectoriesHandler_CredentialStatus_Unreadable(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	assert.Equal(t, "unreadable", response["status"])
 	assert.NotContains(t, w.Body.String(), "ghp_secret", "the token/ciphertext must never appear in the probe response")
-}
-
-func TestDirectoriesHandler_Get_NotFound(t *testing.T) {
-	db, err := database.NewWithMigrations(":memory:")
-	require.NoError(t, err)
-
-	cfg := &config.Config{StacksDir: "/tmp/test"}
-	scanner := services.NewScannerService(cfg, db)
-	handler := NewDirectoriesHandler(scanner, db)
-
-	router := gin.New()
-	router.GET("/directories/:path", handler.Get)
-
-	req := httptest.NewRequest(http.MethodGet, "/directories/nonexistent", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
-
-	var response map[string]interface{}
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.Equal(t, "NOT_FOUND", response["code"])
 }
