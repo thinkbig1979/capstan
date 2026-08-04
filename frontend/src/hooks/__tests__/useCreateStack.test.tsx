@@ -108,6 +108,42 @@ describe('useCreateStack — create call, lint differentiation, failure paths', 
     expect(mockToastSuccess).not.toHaveBeenCalled()
     expect(mockToastWarning).not.toHaveBeenCalled()
   })
+
+  it('shows the backend message for a duplicate-name create (code, not the phantom .error field)', async () => {
+    // Real backend body (stack_crud.go:105-121) as the axios interceptor
+    // flattens it (api.ts:116-119). The backend never sends `.error` — only
+    // `code`/`message`/`details` — so classifying on `.error` never fires
+    // (agent-os-m2x).
+    mockCreate.mockRejectedValue({
+      code: 'DUPLICATE_STACK',
+      message: "Stack directory 'test-stack' already exists",
+      status: 409,
+    })
+    const { wrapper } = createWrapper()
+    const { result } = renderHook(() => useCreateStack(), { wrapper })
+
+    result.current.mutate(SAMPLE_INPUT)
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('A stack with this name already exists'))
+  })
+
+  it('detects lint errors nested under details, not a bare top-level lintResults', async () => {
+    // Real backend body (stack_crud.go:172-181) — lintResults live under
+    // `details`, matching the COMPOSE_VALIDATION_ERROR shape sent for the
+    // create-lint-fail path.
+    mockCreate.mockRejectedValue({
+      code: 'COMPOSE_VALIDATION_ERROR',
+      message: 'Compose file validation failed',
+      details: { lintResults: [{ level: 'error', message: 'bad indentation', line: 5 }] },
+      status: 422,
+    })
+    const { wrapper } = createWrapper()
+    const { result } = renderHook(() => useCreateStack(), { wrapper })
+
+    result.current.mutate(SAMPLE_INPUT)
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Lint errors detected'))
+  })
 })
 
 // ─── Action Truth Contract path: success outcome ──────────────────────────────

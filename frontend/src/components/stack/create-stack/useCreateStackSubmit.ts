@@ -138,9 +138,12 @@ export function useCreateStackSubmit({
 
           // Genuine create failure: show inline lint errors if present.
           // The hook's onError already fired the appropriate error toast.
-          const err = error as { error?: string; lintResults?: LintResult[] }
-          if (err.lintResults && err.lintResults.length > 0) {
-            setLintResults(err.lintResults)
+          // lintResults live under `details` in the backend's AppError body,
+          // not a bare top-level `.lintResults` (agent-os-m2x).
+          const err = error as { details?: { lintResults?: LintResult[] } }
+          const lintResults = err.details?.lintResults
+          if (lintResults && lintResults.length > 0) {
+            setLintResults(lintResults)
           }
         },
       },

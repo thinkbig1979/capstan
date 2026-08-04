@@ -209,6 +209,36 @@ describe('ComposeEditor — save/lint decision logic', () => {
     expect(screen.queryByText('Save with Lint Errors?')).not.toBeInTheDocument()
   })
 
+  it('shows the inline lint panel when the save itself is rejected with details-nested lintResults', async () => {
+    mockApiPost.mockResolvedValue({
+      data: { lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }] },
+    })
+    // Real backend body (compose.go:164-175) as the axios interceptor
+    // flattens it (api.ts:116-119): lintResults live under `details`, and
+    // there is no `.response` wrapper on the rejected value — not
+    // `error.response.data.lintResults` (agent-os-m2x).
+    mockApiPut.mockRejectedValue({
+      code: 'COMPOSE_VALIDATION_ERROR',
+      message: 'Compose file validation failed',
+      details: {
+        saved: false,
+        lintResults: [{ level: 'error', message: 'Service key must be a string', line: 3, rule: 'service-key' }],
+      },
+      status: 422,
+    })
+
+    const user = userEvent.setup()
+    renderWithProviders(<ComposeEditor stackId="test-stack" />)
+    await waitFor(() => expect(capturedOnSave).toBeDefined())
+    await triggerCtrlSSave()
+    await waitFor(() => expect(screen.getByText('Save with Lint Errors?')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'Save anyway' }))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Lint errors detected'))
+    await waitFor(() => expect(screen.getByText('Service key must be a string')).toBeInTheDocument())
+  })
+
   it('clicking Lint runs the lint mutation and toasts success when clean', async () => {
     mockApiPost.mockResolvedValue({ data: { lintResults: [] } })
 
