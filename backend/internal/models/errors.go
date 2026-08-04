@@ -9,9 +9,10 @@ package models
 //     and navigates to /login on this code. It is minted by
 //     middleware.AuthMiddleware and by the handlers that discover the
 //     session's user is gone (handlers/settings.go, handlers/auth.go).
-//     handlers/ws.go is currently inconsistent with this contract and is
-//     tracked separately as agent-os-2zq; nothing consumes its handshake
-//     body today.
+//     handlers/ws.go follows it too as of agent-os-2zq, though nothing
+//     consumes its handshake body today: a browser cannot read a failed
+//     handshake, and frontend/src/lib/ws.ts keys reconnect policy on the
+//     close codes (4401/4429) rather than on these JSON codes.
 //   - ErrUnauthorized means "the credential you just supplied is wrong", with
 //     the session itself untouched: a wrong login password, a wrong current
 //     password on change-password, a wrong password at the env-unlock prompt.

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -174,7 +176,11 @@ func (cm *ConnectionManager) CloseAll() {
 func authenticateToken(token string, db *database.DB, jwtSecret string) (string, error) {
 	claims, err := middleware.ValidateJWT(token, jwtSecret)
 	if err != nil {
-		if err.Error() == "token is expired by" {
+		// Every failure here is session loss (no usable token), matching the
+		// AuthMiddleware contract documented in models/errors.go: SESSION_EXPIRED,
+		// not UNAUTHORIZED. The message still distinguishes "expired" from
+		// "otherwise invalid" for logging; the code does not.
+		if errors.Is(err, jwt.ErrTokenExpired) {
 			return "", &models.AppError{
 				Code:    models.ErrSessionExpired,
 				Message: "Token has expired",
@@ -182,7 +188,7 @@ func authenticateToken(token string, db *database.DB, jwtSecret string) (string,
 			}
 		}
 		return "", &models.AppError{
-			Code:    models.ErrUnauthorized,
+			Code:    models.ErrSessionExpired,
 			Message: "Invalid token",
 			Status:  http.StatusUnauthorized,
 		}
@@ -210,7 +216,7 @@ func authenticateToken(token string, db *database.DB, jwtSecret string) (string,
 	userID, ok := claims["sub"].(string)
 	if !ok || userID == "" {
 		return "", &models.AppError{
-			Code:    models.ErrUnauthorized,
+			Code:    models.ErrSessionExpired,
 			Message: "Invalid user ID in token",
 			Status:  http.StatusUnauthorized,
 		}
@@ -306,13 +312,13 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 			if err := conn.ReadJSON(&authMsg); err != nil {
 				writeCloseMessage(conn, CloseCodeAuthFailure, "Auth timeout")
 				conn.Close()
-				return nil, &models.AppError{Code: models.ErrUnauthorized, Message: "No auth message received", Status: 401}
+				return nil, &models.AppError{Code: models.ErrSessionExpired, Message: "No auth message received", Status: 401}
 			}
 
 			if authMsg.Type != "auth" || authMsg.Token == "" {
 				writeCloseMessage(conn, CloseCodeAuthFailure, "Invalid auth message")
 				conn.Close()
-				return nil, &models.AppError{Code: models.ErrUnauthorized, Message: "Invalid auth message", Status: 401}
+				return nil, &models.AppError{Code: models.ErrSessionExpired, Message: "Invalid auth message", Status: 401}
 			}
 
 			userID, err = authenticateToken(authMsg.Token, db, jwtSecret)

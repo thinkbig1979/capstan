@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -123,6 +125,127 @@ func TestValidateJWT(t *testing.T) {
 
 	_, err = middleware.ValidateJWT(token, "wrong-secret")
 	assert.Error(t, err)
+}
+
+// TestValidateJWT_ExpiredTokenErrorFormat pins what golang-jwt/jwt/v5 actually
+// returns for an expired token (measured against v5.3.1, go.mod:14):
+// Error() == "token has invalid claims: token is expired", and
+// errors.Is(err, jwt.ErrTokenExpired) == true. ws.go used to string-match
+// err.Error() == "token is expired by" — not even a substring of the real
+// message — which left its SESSION_EXPIRED branch permanently dead
+// (agent-os-2zq). If this test starts failing on a future jwt upgrade, the
+// fix at ws.go (errors.Is against jwt.ErrTokenExpired) needs to be
+// re-verified against whatever the library returns now, rather than assumed
+// to still work.
+func TestValidateJWT_ExpiredTokenErrorFormat(t *testing.T) {
+	secret := "test-secret-key-32-chars-long!!"
+	claims := jwt.MapClaims{
+		"iss": jwtIssuer,
+		"sub": "user123",
+		"jti": "session123",
+		"iat": time.Now().Add(-2 * time.Hour).Unix(),
+		"exp": time.Now().Add(-1 * time.Hour).Unix(),
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	require.NoError(t, err)
+
+	_, valErr := middleware.ValidateJWT(token, secret)
+	require.Error(t, valErr)
+
+	assert.True(t, errors.Is(valErr, jwt.ErrTokenExpired),
+		"expected errors.Is(err, jwt.ErrTokenExpired) to hold for an expired token, got: %v", valErr)
+	assert.NotEqual(t, "token is expired by", valErr.Error(),
+		"the dead string literal from ws.go must not equal the real message")
+}
+
+// TestAuthenticateToken_ExpiredTokenReturnsSessionExpired is the direct
+// regression for the dead branch: with the string-literal check at ws.go:177
+// ("token is expired by", which the library never returns — see
+// TestValidateJWT_ExpiredTokenErrorFormat), an expired token fell through to
+// the generic UNAUTHORIZED branch instead of SESSION_EXPIRED. AuthMiddleware
+// (middleware/auth.go:134-142) sends SESSION_EXPIRED for the same condition;
+// models/errors.go documents that ws.go must match (agent-os-2zq).
+func TestAuthenticateToken_ExpiredTokenReturnsSessionExpired(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "test-db-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	db, err := database.NewWithMigrations(tempDir)
+	require.NoError(t, err)
+	defer db.Close()
+
+	secret := "test-secret-key-32-chars-long!!"
+	claims := jwt.MapClaims{
+		"iss": jwtIssuer,
+		"sub": "user123",
+		"iat": time.Now().Add(-2 * time.Hour).Unix(),
+		"exp": time.Now().Add(-1 * time.Hour).Unix(),
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	require.NoError(t, err)
+
+	_, authErr := authenticateToken(token, db, secret)
+	require.Error(t, authErr)
+
+	appErr, ok := authErr.(*models.AppError)
+	require.True(t, ok, "expected *models.AppError, got %T", authErr)
+	assert.Equal(t, models.ErrSessionExpired, appErr.Code,
+		"an expired WS token must carry SESSION_EXPIRED per models/errors.go, matching AuthMiddleware")
+}
+
+// TestAuthenticateToken_MalformedTokenReturnsSessionExpired covers the other
+// half of the same branch: a JWT validation failure that is NOT expiry (bad
+// signature, malformed token) fell into ws.go's generic UNAUTHORIZED branch
+// too. AuthMiddleware sends SESSION_EXPIRED unconditionally for any JWT
+// validation failure (middleware/auth.go:134-142); ws.go must match.
+func TestAuthenticateToken_MalformedTokenReturnsSessionExpired(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "test-db-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	db, err := database.NewWithMigrations(tempDir)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, authErr := authenticateToken("not-a-valid-token", db, "test-secret-key-32-chars-long!!")
+	require.Error(t, authErr)
+
+	appErr, ok := authErr.(*models.AppError)
+	require.True(t, ok, "expected *models.AppError, got %T", authErr)
+	assert.Equal(t, models.ErrSessionExpired, appErr.Code,
+		"a malformed WS token must carry SESSION_EXPIRED, not UNAUTHORIZED")
+}
+
+// TestAuthenticateToken_MissingSubReturnsSessionExpired covers the
+// missing-"sub"-claim branch (ws.go:210-217 before the fix): a structurally
+// valid but unusable token ("no usable token" per models/errors.go) minted
+// UNAUTHORIZED instead of SESSION_EXPIRED. No "jti" claim is set so the
+// session lookup is skipped and the sub check is reached directly.
+func TestAuthenticateToken_MissingSubReturnsSessionExpired(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "test-db-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	db, err := database.NewWithMigrations(tempDir)
+	require.NoError(t, err)
+	defer db.Close()
+
+	secret := "test-secret-key-32-chars-long!!"
+	claims := jwt.MapClaims{
+		"iss": jwtIssuer,
+		"iat": time.Now().Unix(),
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	require.NoError(t, err)
+
+	_, authErr := authenticateToken(token, db, secret)
+	require.Error(t, authErr)
+
+	appErr, ok := authErr.(*models.AppError)
+	require.True(t, ok, "expected *models.AppError, got %T", authErr)
+	assert.Equal(t, models.ErrSessionExpired, appErr.Code,
+		"a token missing its sub claim must carry SESSION_EXPIRED, not UNAUTHORIZED")
 }
 
 func TestAuthenticateToken_EmptyToken(t *testing.T) {
