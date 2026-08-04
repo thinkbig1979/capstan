@@ -542,12 +542,16 @@ func main() {
 	}
 
 	// Drain in-flight durable backup/restore/sync/dr-restore/prune runs only
-	// AFTER srv.Shutdown has returned: LaunchX methods don't consult the
-	// registry's stop signal, so draining first would race a request that
-	// starts a brand-new run in the window between the drain and the server
-	// actually refusing new requests. By the time srv.Shutdown returns, no new
-	// HTTP request — and therefore no new LaunchX call — can reach this
-	// server instance.
+	// AFTER srv.Shutdown has returned. LaunchX methods DO refuse a new run
+	// once this drain has begun (BackupRunnerRegistry.registerAndAdd checks
+	// reg.stopped, set by beginStop before StopWithTimeout ever waits — see
+	// agent-os-7a5), so the guard alone would tolerate either placement. The
+	// reason for placing it here rather than before srv.Shutdown is
+	// different: draining first would reject legitimate in-flight requests
+	// with 503 while the server is still meant to be serving them. After
+	// srv.Shutdown returns, no new HTTP request can arrive at all, so nothing
+	// legitimate is lost by refusing launches from this point on — the guard
+	// is belt-and-braces here, not the thing doing the work.
 	//
 	// Bounded rather than unbounded: an in-flight run is not fast, and an
 	// unbounded wait here would make graceful shutdown hang indefinitely. If
