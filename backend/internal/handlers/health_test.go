@@ -156,6 +156,30 @@ func TestReadinessNamesDockerWhenDegraded(t *testing.T) {
 	}
 }
 
+// TestReadinessRedactsRawDockerError pins N12 (agent-os-4pa.6): the readiness
+// body must carry a fixed operator-facing string, never the raw Docker client
+// error — which can leak socket paths and internal detail — and the raw error
+// belongs in the log instead. Seen failing first against the pre-fix code, which
+// echoed err.Error() straight into the response body.
+func TestReadinessRedactsRawDockerError(t *testing.T) {
+	raw := "cannot connect to the Docker daemon at unix:///run/secret-internal/docker.sock"
+	docker := &fakePinger{err: errors.New(raw)}
+	w := requestFrom(healthRouter(NewHealthHandler(docker, "")), "/health/ready", "127.0.0.1")
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+	if strings.Contains(w.Body.String(), "secret-internal") {
+		t.Errorf("readiness body leaked the raw Docker error: %s", w.Body.String())
+	}
+	body := decodeHealthBody(t, w)
+	checks, _ := body["checks"].(map[string]any)
+	dockerCheck, _ := checks["docker"].(map[string]any)
+	if msg, _ := dockerCheck["error"].(string); msg != "Docker daemon unreachable" {
+		t.Errorf("checks.docker.error = %q, want the fixed operator-facing string", msg)
+	}
+}
+
 // TestReadinessDegradesWhenDockerServiceIsAbsent covers the nil-service branch.
 // A nil *DockerService stored in an interface is a non-nil interface value, so
 // this is also the regression guard against pinging through it and panicking.

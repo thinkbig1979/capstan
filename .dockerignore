@@ -53,3 +53,6 @@ scorecard.png
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Stray restic repository skeletons (agent-os-4pa.1)
+restic-repo/

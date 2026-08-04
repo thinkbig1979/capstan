@@ -93,3 +93,7 @@ Supporting-Docs/
 AGENTS.md
 PLAN.md
 Dockge_Replacement_App_Plan
+
+# Stray restic repository skeletons (a relative-path restic init bug once
+# created one in a package dir during tests; agent-os-4pa.1)
+restic-repo/

@@ -75,6 +75,17 @@ func CSRFMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		// N10 (agent-os-4pa.4): this compare is intentionally NOT constant-time,
+		// and must not be "fixed" to subtle.ConstantTimeCompare. The timing channel
+		// is unreachable here: there is no CORS middleware in this service, so a
+		// cross-origin request carrying a custom CSRF header never survives
+		// preflight; the session cookies are SameSite=Lax; and the CSRF cookie is
+		// deliberately HttpOnly:false (double-submit) so a same-origin attacker who
+		// can vary the header already reads the cookie directly. Neither side of the
+		// compare is a secret the attacker lacks. EqualFold is used on purpose: the
+		// token is lowercase hex, so accepting case variants of the same token loses
+		// no entropy, and subtle.ConstantTimeCompare would instead make the compare
+		// case-sensitive — a behaviour change for zero security gain.
 		if !strings.EqualFold(csrfCookie, csrfHeader) {
 			slog.Warn("CSRF token mismatch", "path", c.Request.URL.Path, "method", c.Request.Method)
 			c.JSON(http.StatusForbidden, gin.H{

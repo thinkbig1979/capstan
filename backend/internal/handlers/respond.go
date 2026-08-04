@@ -21,7 +21,8 @@ func renderResult(c *gin.Context, r truth.ActionResult) {
 // handleError writes err as a JSON error response, using the AppError's
 // status and code when available and falling back to a generic 500.
 func handleError(c *gin.Context, err error) {
-	if appErr, ok := err.(*models.AppError); ok {
+	var appErr *models.AppError
+	if errors.As(err, &appErr) {
 		c.JSON(appErr.Status, appErr)
 		return
 	}
