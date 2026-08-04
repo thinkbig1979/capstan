@@ -431,9 +431,15 @@ describe('CreateStackDialog', () => {
 
   it('surfaces inline lint errors from a genuine create failure without navigating', async () => {
     const user = userEvent.setup()
+    // Real backend body (stack_crud.go:172-181) as the axios interceptor
+    // flattens it (api.ts:116-119): `code`/`message`/`details` at the top
+    // level, lintResults nested under `details` — not a bare top-level
+    // `.lintResults`/`.error` (agent-os-m2x).
     mockCreate.mockRejectedValue({
-      error: 'compose invalid',
-      lintResults: [{ level: 'error', message: 'bad indentation', line: 5 }],
+      code: 'COMPOSE_VALIDATION_ERROR',
+      message: 'Compose file validation failed',
+      details: { lintResults: [{ level: 'error', message: 'bad indentation', line: 5 }] },
+      status: 422,
     })
     renderDialog()
     const nameInput = await screen.findByLabelText('Stack Name')
@@ -442,6 +448,27 @@ describe('CreateStackDialog', () => {
 
     await waitFor(() =>
       expect(screen.getByText('1 error(s) found - fix before creating')).toBeInTheDocument(),
+    )
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('shows the backend message and the DUPLICATE_STACK toast on a duplicate-name create', async () => {
+    const user = userEvent.setup()
+    // Real backend body (stack_crud.go:105-121) — 409 DUPLICATE_STACK, no
+    // `details` (NewAppError, not NewAppErrorWithDetails), and no top-level
+    // `.error` field: the backend never sends one (models/errors.go:44-49).
+    mockCreate.mockRejectedValue({
+      code: 'DUPLICATE_STACK',
+      message: "Stack directory 'my-stack' already exists",
+      status: 409,
+    })
+    renderDialog()
+    const nameInput = await screen.findByLabelText('Stack Name')
+    await user.type(nameInput, 'my-stack')
+    await user.click(screen.getByRole('button', { name: /Create Stack/ }))
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith('A stack with this name already exists'),
     )
     expect(mockNavigate).not.toHaveBeenCalled()
   })

@@ -187,9 +187,27 @@ export interface CommandResult {
   duration: number
 }
 
+/**
+ * The shape of `error.response.data` — the raw HTTP response BODY the
+ * backend serializes for an AppError (models/errors.go:44-49): `code`/
+ * `message`/`details` only. There is no `error` field on this body; the
+ * backend never sends one, so a consumer reading `.error` off it was
+ * permanently dead code (agent-os-m2x). This is the ONLY thing this type
+ * models — see api.ts:87,94.
+ *
+ * It does NOT model the value api.ts's response interceptor ultimately
+ * rejects with, which is a different, untyped object:
+ *   - on an HTTP error response: this body flattened with `status` injected
+ *     (api.ts:117) — still no `.error`.
+ *   - on a network/timeout failure with no HTTP response at all: a
+ *     synthesized `{ error: 'Unknown error', code, message }` (api.ts:118),
+ *     where `.error` IS real. error-handler.ts's `data?.error` arm exists
+ *     for that path (and for the older bare `gin.H{"error":...}` handlers),
+ *     not for this type.
+ */
 export interface ApiError {
-  error: string
   code: string
+  message: string
   details?: Record<string, unknown>
 }
 

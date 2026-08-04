@@ -117,14 +117,20 @@ export function useCreateStack() {
       }
 
       // Genuine create failure (validation, mkdir, db — HTTP 4xx/5xx without a stack).
-      const err = error as { error?: string; code?: string; lintResults?: LintResult[] }
+      // api.ts's interceptor rejects with the backend's AppError body
+      // flattened to the top level (`code`/`message`/`details`/`status`).
+      // There is no `.error` field — the backend only ever sends `message`
+      // (models/errors.go:44-49) — and lintResults live under `details`,
+      // matching stack_crud.go:172-181 (agent-os-m2x).
+      const err = error as { message?: string; code?: string; details?: { lintResults?: LintResult[] } }
+      const lintResults = err.details?.lintResults
 
-      if (err.lintResults && err.lintResults.length > 0) {
+      if (lintResults && lintResults.length > 0) {
         toast.error('Lint errors detected')
-      } else if (err.error?.includes('already exists')) {
+      } else if (err.code === 'DUPLICATE_STACK') {
         toast.error('A stack with this name already exists')
       } else {
-        toast.error(err.error || 'Failed to create stack')
+        toast.error(err.message || 'Failed to create stack')
       }
     },
   })

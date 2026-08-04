@@ -49,10 +49,16 @@ export function useComposeSaveAndLint({
       }
       queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(stackId) })
     },
-    onError: (error: { response?: { data?: { lintResults?: LintResult[] } } }) => {
+    onError: (error: unknown) => {
       const appError = classifyError(error)
-      if (error.response?.data?.lintResults) {
-        setLintResults(error.response.data.lintResults)
+      // api.ts's interceptor rejects with the backend's AppError body
+      // flattened to the top level (`code`/`message`/`details`/`status`),
+      // not an axios `{response:{data}}` wrapper — and lintResults live
+      // under `details`, matching the COMPOSE_VALIDATION_ERROR shape sent by
+      // compose.go:164-175 (agent-os-m2x).
+      const details = (error as { details?: { lintResults?: LintResult[] } } | null | undefined)?.details
+      if (details?.lintResults && details.lintResults.length > 0) {
+        setLintResults(details.lintResults)
         toast.error('Lint errors detected')
       } else {
         toast.error(appError.message)
