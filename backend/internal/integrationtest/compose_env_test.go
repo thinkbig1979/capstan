@@ -570,7 +570,12 @@ func TestComposeEnv_Atomic_EnvRestoredOnComposeWriteFailure(t *testing.T) {
 	composePath := filepath.Join(stackDir, "compose.yaml")
 	envPath := filepath.Join(stackDir, ".env")
 	writeFileRaw(t, composePath, composeOrig)
-	writeFileRaw(t, envPath, envOrig)
+	// Pre-existing env file at the correct, tightened 0600 mode, as it would
+	// be after stack creation or a Put via env.go — agent-os-i94 asserts the
+	// restore path (compose.go's restoreEnv) doesn't leave it at 0644.
+	if err := os.WriteFile(envPath, []byte(envOrig), 0600); err != nil {
+		t.Fatalf("writeFile: %v", err)
+	}
 
 	db, err := database.NewWithMigrations(":memory:")
 	if err != nil {
@@ -620,6 +625,72 @@ func TestComposeEnv_Atomic_EnvRestoredOnComposeWriteFailure(t *testing.T) {
 	if string(envAfter) != envOrig {
 		t.Errorf("FAIL (.env rollback): .env was not restored to original content after compose write failure\nwant: %q\ngot:  %q",
 			envOrig, string(envAfter))
+	}
+
+	// agent-os-i94: the restore path (compose.go's restoreEnv, called after
+	// the compose write failure above) must not leave the file at 0644.
+	envInfo, statErr := os.Stat(envPath)
+	if statErr != nil {
+		t.Fatalf("Stat after restore: %v", statErr)
+	}
+	if got := envInfo.Mode().Perm(); got != 0600 {
+		t.Errorf("FAIL: restored env file mode is %o, want 0600 (agent-os-i94)", got)
+	}
+}
+
+// ── agent-os-i94: PUT /compose-env must not downgrade .env to 0644 ─────────
+//
+// agent-os-gfd fixed this exact class of bug for PUT /stacks/:id/env (Put in
+// env.go), but PutComposeAndEnv in compose.go hand-rolled its own
+// WriteFile+Rename instead of reusing env.go's writeEnvFileAtomic, so the
+// hole reopened on this parallel path. The gfd regression test
+// (TestEnv_Put_SetsFileMode0600 above) only drives Put, not this endpoint.
+
+func TestComposeEnv_Atomic_EnvKeeps0600Mode(t *testing.T) {
+	// A pre-existing, correctly-secured 0600 env file must still be 0600 after
+	// a successful PUT /compose-env — not downgraded to 0644 by the
+	// os.Rename that replaces its inode.
+	stacksDir := t.TempDir()
+	stackDir := filepath.Join(stacksDir, "modetest")
+	if err := os.MkdirAll(stackDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	composeOrig := "services:\n  web:\n    image: alpine:3.21\n"
+	envPath := filepath.Join(stackDir, ".env")
+	writeFileRaw(t, filepath.Join(stackDir, "compose.yaml"), composeOrig)
+	if err := os.WriteFile(envPath, []byte("PORT=8080\n"), 0600); err != nil {
+		t.Fatalf("writeFile: %v", err)
+	}
+
+	db, err := database.NewWithMigrations(":memory:")
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+
+	stack := insertTestStack(t, db, stackDir, stacksDir, ".env")
+	router, _ := setupComposeHandlerRouter(t, stacksDir, db)
+
+	reqBody := map[string]interface{}{
+		"composeContent": composeOrig,
+		"envRaw":         "PORT=9090\n",
+	}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPut, "/stacks/"+stack.ID+"/compose-env", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	info, err := os.Stat(envPath)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Errorf("FAIL: env file mode is %o after PUT /compose-env, want 0600 (agent-os-i94)", got)
 	}
 }
 
