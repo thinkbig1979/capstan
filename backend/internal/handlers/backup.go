@@ -58,6 +58,17 @@ func NewBackupHandler(
 	}
 }
 
+// Stop stops the handler's durable-run registry: its GC loop and, critically,
+// blocks until every in-flight exec goroutine (backup/restore/sync/dr-restore/
+// prune) has fully finished, including its terminal DB write. Callers that own
+// a BackupHandler's lifecycle — main.go on graceful shutdown, tests via
+// t.Cleanup — must call this before releasing anything those goroutines still
+// write to (the DB handle, a t.TempDir()), since they run detached on
+// context.Background() and nothing else joins them. See agent-os-80n.
+func (h *BackupHandler) Stop() {
+	h.registry.Stop()
+}
+
 // RegisterRoutes registers all backup REST routes under the authenticated
 // protected group.
 func (h *BackupHandler) RegisterRoutes(group *gin.RouterGroup) {
