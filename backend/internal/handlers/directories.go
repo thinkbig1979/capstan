@@ -29,7 +29,6 @@ func NewDirectoriesHandler(scanner *services.ScannerService, db *database.DB) *D
 func (h *DirectoriesHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("", h.List)
 	group.POST("/scan", h.Scan)
-	group.GET("/:path", h.Get)
 	group.PUT("/credentials", h.UpdateCredentials)
 	group.GET("/credential-status", h.CredentialStatus)
 }
@@ -86,40 +85,6 @@ func (h *DirectoriesHandler) Scan(c *gin.Context) {
 		"directories":  redactedDirs,
 		"hasGlobalEnv": hasGlobalEnv,
 		"scannedAt":    time.Now(),
-	})
-}
-
-func (h *DirectoriesHandler) Get(c *gin.Context) {
-	path := c.Param("path")
-
-	directory, err := h.db.GetDirectory(path)
-	if err != nil || directory == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrNotFound,
-			"Directory not found",
-		))
-		return
-	}
-
-	stacks, err := h.db.ListStacksByDirectory(path)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to list stacks",
-		))
-		return
-	}
-
-	type DirWithStacks struct {
-		models.Directory
-		Stacks []models.Stack `json:"stacks"`
-	}
-
-	c.JSON(http.StatusOK, DirWithStacks{
-		Directory: *directory,
-		Stacks:    stacks,
 	})
 }
 
