@@ -308,6 +308,11 @@ func TestAuthHandler_Login_SecureCookieFromForwardedProto(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Forwarded-Proto", "https")
+	// Loopback: always trusted per middleware.IsTrustedIP, so this test stays
+	// about the Secure-flag derivation it names, not peer trust — the
+	// untrusted-peer path is agent-os-ab9's own gate, covered in
+	// internal/middleware/secure_request_trust_test.go.
+	req.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -375,6 +380,9 @@ func TestAuthHandler_SecureCookieFlag_AllDirections(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
 		req.Header.Set("Authorization", authHeader(token))
 		req.Header.Set("X-Forwarded-Proto", "https")
+		// Loopback: always trusted per middleware.IsTrustedIP (agent-os-ab9
+		// gate) — see the comment on the sibling test above.
+		req.RemoteAddr = "127.0.0.1:54321"
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		require.Equal(t, http.StatusNoContent, w.Code)

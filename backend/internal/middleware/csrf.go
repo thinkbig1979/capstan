@@ -110,6 +110,18 @@ func CSRFMiddleware() gin.HandlerFunc {
 // replaces the previous fragile Host-substring heuristic which could be tricked
 // by a Host like "localhost.evil.com" into dropping Secure (M3).
 //
+// X-Forwarded-Proto is honoured ONLY when the request's real socket peer
+// (c.RemoteIP(), not c.ClientIP() — ClientIP() returns the FORWARDED address
+// once a peer is trusted, so using it here would be circular) is in the
+// trusted-proxy list set at startup via InitTrustedProxyNetworks (see
+// proxytrust.go). From any other peer the header is ignored entirely and the
+// result falls back to the real connection (c.Request.TLS != nil), with a
+// once-per-peer warning so a misconfigured deployment is visible in logs
+// rather than silently downgrading cookies (agent-os-ab9). Before this gate,
+// any peer whatsoever could set "X-Forwarded-Proto: https" over a plaintext
+// connection and receive Secure cookies and a plaintext HSTS header (OBSERVED
+// 2026-08-05 against a6e0a29).
+//
 // The protocol is taken from the last NON-EMPTY X-Forwarded-Proto value, not
 // the first: a reverse proxy that appends to an existing header (rather than
 // overwriting it) can leave a client-forged value ahead of its own genuine
@@ -133,7 +145,16 @@ func IsSecureRequest(c *gin.Context) bool {
 	if c.Request.TLS != nil {
 		return true
 	}
-	return strings.EqualFold(lastForwardedProto(c.Request.Header.Values("X-Forwarded-Proto")), "https")
+	values := c.Request.Header.Values("X-Forwarded-Proto")
+	if len(values) == 0 {
+		return false
+	}
+	remoteIP := c.RemoteIP()
+	if !isTrustedProxyPeer(remoteIP) {
+		warnUntrustedForwardedProto(remoteIP)
+		return false
+	}
+	return strings.EqualFold(lastForwardedProto(values), "https")
 }
 
 // lastForwardedProto returns the last non-empty (after TrimSpace) value
