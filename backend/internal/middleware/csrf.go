@@ -109,11 +109,35 @@ func CSRFMiddleware() gin.HandlerFunc {
 // X-Forwarded-Proto. It is the basis for the Secure cookie flag and HSTS, and
 // replaces the previous fragile Host-substring heuristic which could be tricked
 // by a Host like "localhost.evil.com" into dropping Secure (M3).
+//
+// The protocol is taken from the LAST X-Forwarded-Proto value, not the
+// first: a reverse proxy that appends to an existing header (rather than
+// overwriting it) can leave a client-forged value ahead of its own genuine
+// one, either as a second header line or comma-joined onto the same line.
+// http.Header.Get/gin's GetHeader return only the first value/line, which an
+// attacker-controlled leading value would then win in both directions -
+// forging "http" ahead of a real "https" would drop Secure/HSTS on a
+// genuinely-encrypted deployment, and forging "https" ahead of a real "http"
+// would fabricate Secure/HSTS on a plaintext connection. Taking the last
+// value (and, within that value, the last comma-separated element) reflects
+// what the terminating proxy actually appended (agent-os-qru.9, OBSERVED
+// 2026-08-05: see TestIsSecureRequest_TrustsLastForwardedProtoValue).
 func IsSecureRequest(c *gin.Context) bool {
+	if c.Request == nil {
+		return false
+	}
 	if c.Request.TLS != nil {
 		return true
 	}
-	return strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+	values := c.Request.Header.Values("X-Forwarded-Proto")
+	if len(values) == 0 {
+		return false
+	}
+	last := values[len(values)-1]
+	if idx := strings.LastIndex(last, ","); idx != -1 {
+		last = last[idx+1:]
+	}
+	return strings.EqualFold(strings.TrimSpace(last), "https")
 }
 
 func setCSRFCookie(c *gin.Context, token string) {
