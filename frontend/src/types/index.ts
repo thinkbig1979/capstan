@@ -9,9 +9,7 @@ export interface AuthResponse {
   user: User
 }
 
-export type ContainerState = 'created' | 'running' | 'paused' | 'restarting' | 'removing' | 'exited' | 'dead'
-
-export type StackTab = 'overview' | 'compose' | 'env' | 'git' | 'logs' | 'terminal'
+type ContainerState = 'created' | 'running' | 'paused' | 'restarting' | 'removing' | 'exited' | 'dead'
 
 export interface ConfiguredDir {
   path: string
@@ -41,23 +39,6 @@ export interface DirectoryCredentialStatus {
   status: DirectoryCredentialStatusValue
 }
 
-export interface Directory {
-  path: string
-  name: string
-  rootDir?: string
-  stackCount: number
-  isGitRepo: boolean
-  gitBranch?: string
-  gitRemote?: string
-  gitAuthType?: string
-  gitSshKeyPath?: string
-  gitHttpsUser?: string
-  hasHttpsToken?: boolean
-  scannedAt: string
-  gitAhead?: number
-  gitBehind?: number
-}
-
 export type StackStatus = 'running' | 'stopped' | 'partial' | 'unknown' | 'error'
 
 export interface Container {
@@ -70,25 +51,10 @@ export interface Container {
   health?: string
 }
 
-export interface PortBinding {
+interface PortBinding {
   host: string
   container: string
   protocol: string
-}
-
-export interface ContainerMetrics {
-  containerId: string
-  name: string
-  cpuPercent: number
-  memUsage: number
-  memLimit: number
-  memPercent: number
-  netRx: number
-  netTx: number
-  blockRead: number
-  blockWrite: number
-  memSwap: number
-  pids: number
 }
 
 export interface DashboardContainerInfo {
@@ -108,7 +74,7 @@ export interface DashboardContainerInfo {
   imageSize: number
 }
 
-export interface DiskUsageBreakdown {
+interface DiskUsageBreakdown {
   images: number
   containers: number
   volumes: number
@@ -211,12 +177,6 @@ export interface ApiError {
   details?: Record<string, unknown>
 }
 
-export interface ScanResult {
-  directories: Directory[]
-  scannedAt: string
-  hasGlobalEnv: boolean
-}
-
 export interface DockerImage {
   id: string
   repoTags: string[]
@@ -259,14 +219,6 @@ export interface BuildCacheEntry {
   LastUsedAt: string | null
   UsageCount: number
   Parents?: string[]
-}
-
-export interface HealthResponse {
-  status: string
-  docker: string
-  database: string
-  version: string
-  uptime_seconds: number
 }
 
 export interface ContainerUpdateInfo {

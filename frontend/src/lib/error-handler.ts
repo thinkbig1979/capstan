@@ -12,7 +12,7 @@
  * When a mutation both has an inline surface AND navigates/runs in the background,
  * prefer inline for the validation phase and a toast only for the async result.
  */
-export type ErrorType = 'network' | 'auth' | 'validation' | 'server' | 'timeout' | 'unknown'
+type ErrorType = 'network' | 'auth' | 'validation' | 'server' | 'timeout' | 'unknown'
 
 export interface AppError {
   message: string

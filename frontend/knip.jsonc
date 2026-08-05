@@ -9,7 +9,13 @@
   // public/ is served verbatim by Vite and referenced by URL, not by import —
   // knip cannot see index.html's <link href="/fonts/fonts.css">, so anything
   // in public/ is a guaranteed false positive.
-  "ignore": ["public/**"],
+  //
+  // src/components/ui/ holds vendored shadcn-style primitives that keep their
+  // full canonical export surface (sub-components, cva variant exports) even
+  // where the app imports only a subset — trimming them would make future
+  // shadcn updates diff against upstream noisily. Reviewed agent-os-693:
+  // ignore the folder rather than each of its ~26 deliberate exports.
+  "ignore": ["public/**", "src/components/ui/**"],
   "ignoreDependencies": [
     // Not imported directly by src (only vi.mock'd in ComposeEditor tests),
     // but kept as a direct dependency on purpose: the @codemirror/* family is

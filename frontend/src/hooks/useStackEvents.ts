@@ -23,7 +23,7 @@ export interface ContainerEvent {
   timestamp: string
 }
 
-export interface ScanCompleteEvent {
+interface ScanCompleteEvent {
   type: 'scan_complete'
   added: number
   removed: number
@@ -37,7 +37,7 @@ export interface ResourceChangedEvent {
   timestamp: string
 }
 
-export interface UpdateScanCompleteEvent {
+interface UpdateScanCompleteEvent {
   type: 'update_scan_complete'
   timestamp: string
 }
@@ -66,23 +66,23 @@ export interface UpdateJobCompleteStackEvent {
 }
 
 /** Emitted by the backend when the updates cache has changed (row evicted after apply). */
-export interface UpdatesChangedEvent {
+interface UpdatesChangedEvent {
   type: 'updates_changed'
   timestamp: string
 }
 
-export interface UpdatePolicyChangedEvent {
+interface UpdatePolicyChangedEvent {
   type: 'update_policy_changed'
   timestamp: string
 }
 
-export interface UpdateCompletedEvent {
+interface UpdateCompletedEvent {
   type: 'update_completed'
   containerId?: string
   timestamp: string
 }
 
-export interface UpdateScanFailedEvent {
+interface UpdateScanFailedEvent {
   type: 'update_scan_failed'
   timestamp: string
 }

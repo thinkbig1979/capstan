@@ -6,12 +6,12 @@ export interface DiffFile {
   hunks: DiffHunk[]
 }
 
-export interface DiffHunk {
+interface DiffHunk {
   header: string
   lines: DiffLine[]
 }
 
-export interface DiffLine {
+interface DiffLine {
   type: 'added' | 'removed' | 'context' | 'header'
   content: string
   oldLine?: number
