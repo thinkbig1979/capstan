@@ -126,3 +126,53 @@ func TestIsTrustedProxyPeer_DefaultsToLoopbackOnly(t *testing.T) {
 		t.Error("isTrustedProxyPeer(10.0.0.35) = true, want false (nothing configured, not loopback)")
 	}
 }
+
+// TestIsSecureRequest_UnparseableRemoteAddrFailsClosed pins agent-os-ab9's
+// fail-closed requirement flagged in review: nothing in IsTrustedIP or
+// isTrustedProxyPeer may special-case an empty/unparseable clientIP as
+// trusted. Adding a `clientIP == ""` short-circuit returning true would keep
+// every other test in this package green while opening exactly this hole.
+//
+// Two distinct ways RemoteAddr can fail to resolve to a real IP, both via
+// gin's actual c.RemoteIP() (net.SplitHostPort over Request.RemoteAddr, see
+// gin's context.go):
+//   - no host:port shape at all -> SplitHostPort errors -> RemoteIP()
+//     returns "" outright.
+//   - a zone-scoped IPv6 literal, SplitHostPort succeeds but the result
+//     doesn't net.ParseIP -> IsTrustedIP's final ParseIP(clientIP) call
+//     returns nil and the loop can never match. Same shape already pinned
+//     for the rate limiter in ratelimit_test.go's
+//     TestAuthLimit_UnparseableClientAddressIsRejectedNotKeyed (zone-scoped
+//     RemoteAddr "[fe80::1%eth0]:1234").
+//
+// Both must be treated as an untrusted peer, i.e. X-Forwarded-Proto ignored,
+// falling back to the real (absent) TLS state.
+func TestIsSecureRequest_UnparseableRemoteAddrFailsClosed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name       string
+		remoteAddr string
+	}{
+		{"no host:port shape at all", "not-an-address"},
+		{"zone-scoped IPv6 literal", "[fe80::1%eth0]:1234"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			InitTrustedProxyNetworks([]string{"127.0.0.1", "::1"})
+			defer InitTrustedProxyNetworks(nil)
+
+			req := httptest.NewRequest("GET", "/", nil)
+			req.RemoteAddr = tc.remoteAddr
+			req.Header.Set("X-Forwarded-Proto", "https")
+
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = req
+
+			if got := IsSecureRequest(c); got != false {
+				t.Errorf("IsSecureRequest() with RemoteAddr=%q = %v, want false (fail closed, not trusted)", tc.remoteAddr, got)
+			}
+		})
+	}
+}

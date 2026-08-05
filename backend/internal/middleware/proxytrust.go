@@ -34,8 +34,19 @@ var untrustedProxyWarned struct {
 // to gin's SetTrustedProxies in main.go — gin's trusted-proxy machinery only
 // governs X-Forwarded-For/X-Real-IP (RemoteIPHeaders), it never touches
 // X-Forwarded-Proto, so without this the header was honoured from any peer
-// whatsoever. Feeding both from one computed list means the two "which peers
-// do we trust" answers cannot disagree.
+// whatsoever. Feeding both from one computed list is meant to keep the two
+// "which peers do we trust" answers in agreement, but it does NOT guarantee
+// that on a malformed TRUSTED_NETWORKS entry: gin's own trusted-proxy parser
+// (prepareTrustedCIDRs) returns on the FIRST invalid entry and drops
+// everything after it, while IsTrustedIP (auth.go) skips a bad entry with
+// `continue` and keeps evaluating the rest of the list. A config like
+// "garbage,10.0.0.0/24" therefore leaves gin trusting NOBODY for
+// X-Forwarded-For while this gate still trusts the whole 10.0.0.0/24 range
+// for X-Forwarded-Proto — VERIFIED 2026-08-05 by the orchestrator (adversary
+// pass on this bead). main.go only warns on SetTrustedProxies' error rather
+// than refusing to start, so a single typo in TRUSTED_NETWORKS can ship this
+// divergence silently. Not fixed here — see the comment at the
+// InitTrustedProxyNetworks call site in main.go.
 var trustedProxyNetworks struct {
 	mu       sync.RWMutex
 	networks string
@@ -118,7 +129,11 @@ func LogTrustedProxies(proxies []string, fromConfig bool) {
 	slog.Info("Trusted proxy configuration",
 		"source", source,
 		"proxies", strings.Join(proxies, ","),
-		"note", "X-Forwarded-For is only honored from these addresses")
+		// Updated agent-os-ab9: this list now also gates X-Forwarded-Proto,
+		// which decides the Secure cookie flag and HSTS, not just
+		// X-Forwarded-For/client-IP attribution — say so, since this is the
+		// line an operator reads at boot.
+		"note", "X-Forwarded-For and X-Forwarded-Proto are only honored from these addresses")
 }
 
 // TrustedProxyWarning warns when a request arrives with a forwarding header from
