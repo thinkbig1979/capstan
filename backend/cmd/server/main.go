@@ -32,6 +32,47 @@ import (
 // well under systemd's default TimeoutStopSec of 90s. See agent-os-7a5.
 const backupDrainTimeout = 30 * time.Second
 
+// timeoutMiddleware bounds the request context to timeout, guarding a slow
+// dependency (a hung Docker daemon, for instance) from letting a request run
+// forever. Callers MUST attach it via group.Use(timeoutMiddleware(...)) BEFORE
+// registering routes on that group: gin@v1.12.0's RouterGroup.combineHandlers
+// (routergroup.go:88) snapshots the middleware chain at ROUTE REGISTRATION
+// time, so a Use() added after a group's routes are registered never applies
+// to them. Hoisted to package scope (was a local closure in main()) so
+// wireStacksGroup below can share it without capturing main()'s locals
+// (agent-os-qru.1).
+func timeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+		defer cancel()
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
+}
+
+// wireStacksGroup registers the /stacks route group's own routes (via
+// stacksHandler), its env and compose sub-routes, and its request timeout, all
+// through one call — so a future change can no longer separate the Use() from
+// the RegisterRoutes() calls it must precede the way agent-os-qru.1 found
+// them: the timeout was being registered AFTER the routes it was meant to
+// bound, so it silently never applied to them. Extracted out of main() (rather
+// than left inline) so a test can invoke the real wiring instead of a
+// hand-rolled replica of it.
+func wireStacksGroup(
+	protected *gin.RouterGroup,
+	stacksHandler *handlers.StacksHandler,
+	envHandler *handlers.EnvHandler,
+	composeHandler *handlers.ComposeHandler,
+	timeout time.Duration,
+) *gin.RouterGroup {
+	stacksGroup := protected.Group("/stacks")
+	stacksGroup.Use(timeoutMiddleware(timeout))
+	stacksHandler.RegisterRoutes(stacksGroup)
+	envHandler.RegisterRoutes(stacksGroup)
+	composeHandler.RegisterRoutes(stacksGroup)
+	return stacksGroup
+}
+
 // buildConnectSrc constructs the CSP connect-src directive from the configured
 // CORS origins so a cross-origin (reverse-proxy) deployment is not silently
 // blocked by a localhost-only policy (M6). localhost ws/wss variants are only
@@ -357,17 +398,12 @@ func main() {
 	directoriesHandler.RegisterRoutes(directoriesGroup)
 
 	stacksHandler := handlers.NewStacksHandler(dockerService, scannerService, services.NewLinterService(), db, cfg, services.NewActionLogger(db), opLock)
-	stacksGroup := protected.Group("/stacks")
-	stacksHandler.RegisterRoutes(stacksGroup)
+	envHandler := handlers.NewEnvHandler(db, cfg)
+	composeHandler := handlers.NewComposeHandler(services.NewLinterService(), db, cfg)
+	wireStacksGroup(protected, stacksHandler, envHandler, composeHandler, 120*time.Second)
 
 	composeGroup := protected.Group("/compose")
 	composeGroup.POST("/lint", stacksHandler.Lint)
-
-	envHandler := handlers.NewEnvHandler(db, cfg)
-	envHandler.RegisterRoutes(stacksGroup)
-
-	composeHandler := handlers.NewComposeHandler(services.NewLinterService(), db, cfg)
-	composeHandler.RegisterRoutes(stacksGroup)
 
 	gitHandler := handlers.NewGitHandler(services.NewGitService(cfg, db), dockerService, db, cfg)
 	gitGroup := protected.Group("/git")
@@ -422,16 +458,9 @@ func main() {
 
 	registerStaticAssets(r)
 
-	timeoutMiddleware := func(timeout time.Duration) gin.HandlerFunc {
-		return func(c *gin.Context) {
-			ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
-			defer cancel()
-			c.Request = c.Request.WithContext(ctx)
-			c.Next()
-		}
-	}
-
-	stacksGroup.Use(timeoutMiddleware(120 * time.Second))
+	// stacksGroup's own timeout is already wired by wireStacksGroup above, at
+	// the point the group and its routes were registered — not here, which is
+	// exactly the ordering mistake agent-os-qru.1 fixed.
 	wsGroup := protected.Group("")
 	wsGroup.Use(timeoutMiddleware(300 * time.Second))
 
