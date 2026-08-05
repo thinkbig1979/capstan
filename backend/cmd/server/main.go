@@ -336,6 +336,23 @@ func main() {
 		slog.Warn("Invalid trusted proxy configuration", "error", err, "proxies", trustedProxies)
 	}
 	middleware.LogTrustedProxies(trustedProxies, fromConfig)
+	// Feed the X-Forwarded-Proto trust gate the SAME effective list gin's
+	// trusted-proxy machinery just received: gin's SetTrustedProxies only
+	// governs X-Forwarded-For/X-Real-IP (RemoteIPHeaders), never
+	// X-Forwarded-Proto, so without this call that header was honoured from
+	// any peer whatsoever (agent-os-ab9). Feeding both from one computed list
+	// is meant to keep the two "which peers do we trust" answers in
+	// agreement, but does NOT guarantee it on a malformed TRUSTED_NETWORKS
+	// entry: gin's trusted-proxy parser drops everything after the FIRST bad
+	// entry, while IsTrustedIP (internal/middleware/auth.go) skips a bad
+	// entry and keeps evaluating the rest — VERIFIED 2026-08-05, see the
+	// comment on trustedProxyNetworks in proxytrust.go for the exact
+	// divergence this produces. TestTrustedProxyProtoGateIsWired (this
+	// package) pins that both calls below receive the identical identifier,
+	// which is the most this file does to keep them from silently diverging
+	// onto two different variables — it does not fix the parser-disagreement
+	// case above.
+	middleware.InitTrustedProxyNetworks(trustedProxies)
 
 	r.Use(middleware.RecoveryMiddleware())
 	r.Use(middleware.TrustedProxyWarning())

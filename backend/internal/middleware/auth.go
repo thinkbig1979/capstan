@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -77,7 +78,21 @@ func IsTrustedIP(clientIP string, networks string) bool {
 
 		_, network, err := net.ParseCIDR(networkStr)
 		if err != nil {
-			slog.Warn("Invalid trusted network CIDR", "network", networkStr, "error", err)
+			// A bare IP (e.g. "127.0.0.1") is valid configuration - it just
+			// isn't a range, and the exact-string comparison above already
+			// covers it. Only warn when the entry is neither a valid IP nor
+			// a valid CIDR, i.e. genuinely malformed, and only once per
+			// distinct entry rather than once per call (agent-os-ab9):
+			// networks is static config that doesn't change between
+			// requests, so warning here on every call turns any per-request
+			// caller (IsSecureRequest, via isTrustedProxyPeer in
+			// proxytrust.go) into a log-flood amplifier - OBSERVED, 50
+			// requests from one untrusted peer against the DEFAULT
+			// "127.0.0.1,::1" list produced 100 of these lines before this
+			// fix, one per bare-IP entry per call.
+			if net.ParseIP(networkStr) == nil {
+				warnInvalidTrustedNetworkOnce(networkStr, err)
+			}
 			continue
 		}
 
@@ -92,6 +107,41 @@ func IsTrustedIP(clientIP string, networks string) bool {
 	}
 
 	return false
+}
+
+// invalidTrustedNetworkWarnLimit caps how many distinct malformed entries are
+// remembered for warn-once purposes, mirroring the untrustedProxyWarnLimit /
+// untrustedForwardedProtoWarnLimit pattern in proxytrust.go. Generous
+// headroom rather than an attacker-facing budget: unlike those two, this
+// list comes from static operator config (TRUSTED_NETWORKS et al.), not
+// per-request client input.
+const invalidTrustedNetworkWarnLimit = 64
+
+var invalidTrustedNetworkWarned struct {
+	mu      sync.Mutex
+	entries map[string]struct{}
+}
+
+// warnInvalidTrustedNetworkOnce logs at most once per distinct malformed
+// networks entry. See the call site in IsTrustedIP for why a per-call
+// warning here was a log-flood defect (agent-os-ab9).
+func warnInvalidTrustedNetworkOnce(networkStr string, err error) {
+	invalidTrustedNetworkWarned.mu.Lock()
+	if invalidTrustedNetworkWarned.entries == nil {
+		invalidTrustedNetworkWarned.entries = make(map[string]struct{})
+	}
+	if _, seen := invalidTrustedNetworkWarned.entries[networkStr]; seen {
+		invalidTrustedNetworkWarned.mu.Unlock()
+		return
+	}
+	if len(invalidTrustedNetworkWarned.entries) >= invalidTrustedNetworkWarnLimit {
+		invalidTrustedNetworkWarned.mu.Unlock()
+		return
+	}
+	invalidTrustedNetworkWarned.entries[networkStr] = struct{}{}
+	invalidTrustedNetworkWarned.mu.Unlock()
+
+	slog.Warn("Invalid trusted network entry - neither a valid IP nor a valid CIDR", "network", networkStr, "error", err)
 }
 
 // extractBearerToken returns the JWT from either the Authorization header

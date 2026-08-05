@@ -519,6 +519,13 @@ network you don't fully control, and the session token and CSRF cookie travel
 in cleartext. Terminate TLS at a reverse proxy and forward
 `X-Forwarded-Proto: https` (see [Production Deployment](#production-deployment)).
 
+`X-Forwarded-Proto` is only honoured from a peer listed in `TRUSTED_NETWORKS`
+(default: loopback only) — otherwise any client could set it and choose the
+`Secure` flag and HSTS for itself. The practical consequence is that a proxy on
+a Docker bridge or LAN address must be added to `TRUSTED_NETWORKS`, or Capstan
+falls back to the real connection and issues cookies without `Secure`. It logs
+a warning naming the peer the first time it ignores the header.
+
 **`AUTH_DISABLED` trusts whoever `AUTH_DISABLED_ALLOWED_NETWORKS` says is
 trusted, based on the real socket peer — never a header a proxy could
 forward.** With `AUTH_DISABLED=true`, any request whose *actual* TCP peer
@@ -754,8 +761,13 @@ leaked `JWT_SECRET` alone can't decrypt stored secrets.
 - **Keep `AUTH_DISABLED=false`** for anything reachable off localhost.
 - **Terminate TLS** at a reverse proxy (nginx, Traefik, Caddy) and forward
   `X-Forwarded-Proto: https` — Capstan uses it to set `Secure` cookies and HSTS.
+  **The proxy's own address must be in `TRUSTED_NETWORKS` for that header to be
+  honoured**, otherwise it is ignored and cookies are not marked `Secure` even
+  on an HTTPS site. A warning naming the peer is logged the first time this
+  happens.
 - **Configure `TRUSTED_NETWORKS`** for correct client-IP attribution (rate
-  limiting) and reverse-proxy trust. If you must run `AUTH_DISABLED=true`
+  limiting), reverse-proxy trust, and — since it gates `X-Forwarded-Proto` —
+  whether `Secure` cookies and HSTS are issued at all. If you must run `AUTH_DISABLED=true`
   beyond loopback, set `AUTH_DISABLED_ALLOWED_NETWORKS` explicitly — it is a
   separate list, not implied by `TRUSTED_NETWORKS`.
 - **Set up and test backups** (Settings → Backup).

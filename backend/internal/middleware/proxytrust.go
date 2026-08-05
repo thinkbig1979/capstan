@@ -28,6 +28,95 @@ var untrustedProxyWarned struct {
 	peers map[string]struct{}
 }
 
+// trustedProxyNetworks holds the effective trusted-proxy network list used to
+// decide whether X-Forwarded-Proto is honoured (agent-os-ab9). It is set once
+// at startup by InitTrustedProxyNetworks from the SAME effective list handed
+// to gin's SetTrustedProxies in main.go — gin's trusted-proxy machinery only
+// governs X-Forwarded-For/X-Real-IP (RemoteIPHeaders), it never touches
+// X-Forwarded-Proto, so without this the header was honoured from any peer
+// whatsoever. Feeding both from one computed list is meant to keep the two
+// "which peers do we trust" answers in agreement, but it does NOT guarantee
+// that on a malformed TRUSTED_NETWORKS entry: gin's own trusted-proxy parser
+// (prepareTrustedCIDRs) returns on the FIRST invalid entry and drops
+// everything after it, while IsTrustedIP (auth.go) skips a bad entry with
+// `continue` and keeps evaluating the rest of the list. A config like
+// "garbage,10.0.0.0/24" therefore leaves gin trusting NOBODY for
+// X-Forwarded-For while this gate still trusts the whole 10.0.0.0/24 range
+// for X-Forwarded-Proto — VERIFIED 2026-08-05 by the orchestrator (adversary
+// pass on this bead). main.go only warns on SetTrustedProxies' error rather
+// than refusing to start, so a single typo in TRUSTED_NETWORKS can ship this
+// divergence silently. Not fixed here — see the comment at the
+// InitTrustedProxyNetworks call site in main.go.
+var trustedProxyNetworks struct {
+	mu       sync.RWMutex
+	networks string
+}
+
+// InitTrustedProxyNetworks records the effective trusted-proxy network list.
+// Call once at startup with the same []string passed to gin's
+// SetTrustedProxies (see middleware.LogTrustedProxies, an existing precedent
+// for startup-set middleware state). A nil or empty slice clears it, which
+// leaves only the unconditional loopback trust that IsTrustedIP already
+// grants.
+func InitTrustedProxyNetworks(networks []string) {
+	trustedProxyNetworks.mu.Lock()
+	trustedProxyNetworks.networks = strings.Join(networks, ",")
+	trustedProxyNetworks.mu.Unlock()
+}
+
+// isTrustedProxyPeer reports whether remoteIP is allowed to influence
+// IsSecureRequest via X-Forwarded-Proto. Delegates to IsTrustedIP
+// (internal/middleware/auth.go) rather than a second trust evaluator — two
+// implementations of "is this peer trusted" that can disagree is its own
+// defect.
+func isTrustedProxyPeer(remoteIP string) bool {
+	trustedProxyNetworks.mu.RLock()
+	networks := trustedProxyNetworks.networks
+	trustedProxyNetworks.mu.RUnlock()
+	return IsTrustedIP(remoteIP, networks)
+}
+
+// untrustedForwardedProtoWarnLimit mirrors untrustedProxyWarnLimit above: cap
+// distinct peers remembered so attacker-chosen input can't grow the map
+// without bound.
+const untrustedForwardedProtoWarnLimit = 64
+
+var untrustedForwardedProtoWarned struct {
+	mu    sync.Mutex
+	peers map[string]struct{}
+}
+
+// warnUntrustedForwardedProto logs at most once per peer when X-Forwarded-Proto
+// arrives from a peer outside the trusted-proxy list. This is a SEPARATE
+// warn-once map from untrustedProxyWarned above rather than a shared one:
+// TrustedProxyWarning fires only when ClientIP()==RemoteIP() (gin found no
+// trusted proxy to resolve XFF through), a check that doesn't apply here —
+// X-Forwarded-Proto isn't part of gin's RemoteIPHeaders at all, so this path
+// must evaluate peer trust independently of gin's resolution, and the two
+// warnings describe different consequences (rate-limit bucket collapse vs.
+// cookie/HSTS security) that are each worth their own message and own budget.
+func warnUntrustedForwardedProto(remoteIP string) {
+	untrustedForwardedProtoWarned.mu.Lock()
+	if untrustedForwardedProtoWarned.peers == nil {
+		untrustedForwardedProtoWarned.peers = make(map[string]struct{})
+	}
+	if _, seen := untrustedForwardedProtoWarned.peers[remoteIP]; seen {
+		untrustedForwardedProtoWarned.mu.Unlock()
+		return
+	}
+	if len(untrustedForwardedProtoWarned.peers) >= untrustedForwardedProtoWarnLimit {
+		untrustedForwardedProtoWarned.mu.Unlock()
+		return
+	}
+	untrustedForwardedProtoWarned.peers[remoteIP] = struct{}{}
+	untrustedForwardedProtoWarned.mu.Unlock()
+
+	slog.Warn("X-Forwarded-Proto received from an untrusted peer - it is being ignored",
+		"peer", remoteIP,
+		"effect", "Secure cookie flag and HSTS are decided from the real connection instead (TLS only)",
+		"fix", "add this address to TRUSTED_NETWORKS, and make sure the proxy overwrites the header rather than forwarding a client-supplied value")
+}
+
 // LogTrustedProxies records the effective trusted-proxy configuration at
 // startup. Whether the list came from TRUSTED_NETWORKS or from the localhost
 // default is the single most useful fact when diagnosing "logins are randomly
@@ -40,7 +129,11 @@ func LogTrustedProxies(proxies []string, fromConfig bool) {
 	slog.Info("Trusted proxy configuration",
 		"source", source,
 		"proxies", strings.Join(proxies, ","),
-		"note", "X-Forwarded-For is only honored from these addresses")
+		// Updated agent-os-ab9: this list now also gates X-Forwarded-Proto,
+		// which decides the Secure cookie flag and HSTS, not just
+		// X-Forwarded-For/client-IP attribution — say so, since this is the
+		// line an operator reads at boot.
+		"note", "X-Forwarded-For and X-Forwarded-Proto are only honored from these addresses")
 }
 
 // TrustedProxyWarning warns when a request arrives with a forwarding header from

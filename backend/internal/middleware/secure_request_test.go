@@ -25,6 +25,12 @@ import (
 // genuine "http" must not fabricate Secure/HSTS on a plaintext connection -
 // see main.go's SecurityHeaders handler, which would then emit
 // Strict-Transport-Security on plaintext (OBSERVED 2026-08-05).
+//
+// This table exercises the TRUSTED-peer path only (RemoteAddr is pinned to
+// loopback below, which IsTrustedIP always trusts unconditionally): as of
+// agent-os-ab9, IsSecureRequest gates X-Forwarded-Proto on peer trust before
+// reaching any of this last-value logic. The untrusted-peer path (the gate
+// itself) is covered separately in secure_request_trust_test.go.
 func TestIsSecureRequest_TrustsLastForwardedProtoValue(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -51,6 +57,10 @@ func TestIsSecureRequest_TrustsLastForwardedProtoValue(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/", nil)
+			// Loopback: always trusted per IsTrustedIP regardless of
+			// InitTrustedProxyNetworks state, so this table stays about the
+			// last-value logic, not peer trust (agent-os-ab9).
+			req.RemoteAddr = "127.0.0.1:12345"
 			if tc.tls {
 				req.TLS = &tls.ConnectionState{}
 			}
