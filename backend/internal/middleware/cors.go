@@ -27,6 +27,11 @@ func CORSMiddleware(allowedOrigins string) gin.HandlerFunc {
 		}
 
 		if isAllowed {
+			// The allowlist means the response varies per request based on the
+			// Origin header - without signaling that, a shared cache sitting in
+			// front of this service could serve one origin's ACAO-bearing
+			// response to a different origin.
+			c.Header("Vary", "Origin")
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Credentials", "true")
 			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
