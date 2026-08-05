@@ -494,7 +494,7 @@ func parseJWT(token, secret string) (jwtv5.MapClaims, error) {
 
 func setAuthCookies(c *gin.Context, token string, csrfToken string) {
 	secure := middleware.IsSecureRequest(c)
-	http.SetCookie(c.Writer, &http.Cookie{
+	http.SetCookie(c.Writer, &http.Cookie{ //nolint:gosec // G124: Secure is conditional, set above from middleware.IsSecureRequest, which gosec can't evaluate; HttpOnly:true and SameSite:Lax are both already set
 		Name:     "capstan_token",
 		Value:    token,
 		MaxAge:   86400,
@@ -503,7 +503,7 @@ func setAuthCookies(c *gin.Context, token string, csrfToken string) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.SetCookie(c.Writer, &http.Cookie{
+	http.SetCookie(c.Writer, &http.Cookie{ //nolint:gosec // G124: Secure is conditional (see above) and HttpOnly is deliberately false so the same-origin SPA can read this CSRF cookie for the double-submit check — see csrf.go:78-92
 		Name:     "capstan_csrf",
 		Value:    csrfToken,
 		MaxAge:   86400,
@@ -516,19 +516,22 @@ func setAuthCookies(c *gin.Context, token string, csrfToken string) {
 }
 
 func clearAuthCookies(c *gin.Context) {
-	http.SetCookie(c.Writer, &http.Cookie{
+	secure := middleware.IsSecureRequest(c)
+	http.SetCookie(c.Writer, &http.Cookie{ //nolint:gosec // G124: Secure is conditional, set above from middleware.IsSecureRequest, which gosec can't evaluate; HttpOnly:true and SameSite:Lax are both already set
 		Name:     "capstan_token",
 		Value:    "",
 		MaxAge:   -1,
 		Path:     "/",
+		Secure:   secure,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.SetCookie(c.Writer, &http.Cookie{
+	http.SetCookie(c.Writer, &http.Cookie{ //nolint:gosec // G124: Secure is conditional (see above) and HttpOnly is deliberately false so the same-origin SPA can read this CSRF cookie for the double-submit check — see csrf.go:78-92
 		Name:     "capstan_csrf",
 		Value:    "",
 		MaxAge:   -1,
 		Path:     "/",
+		Secure:   secure,
 		HttpOnly: false,
 		SameSite: http.SameSiteLaxMode,
 	})

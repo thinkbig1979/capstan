@@ -118,7 +118,7 @@ func IsSecureRequest(c *gin.Context) bool {
 
 func setCSRFCookie(c *gin.Context, token string) {
 	secure := IsSecureRequest(c)
-	http.SetCookie(c.Writer, &http.Cookie{
+	http.SetCookie(c.Writer, &http.Cookie{ //nolint:gosec // G124: Secure is conditional, set above from IsSecureRequest, which gosec can't evaluate; HttpOnly is deliberately false so the same-origin SPA can read this CSRF cookie for the double-submit check — see comment at line 78-92 above
 		Name:     csrfCookieName,
 		Value:    token,
 		MaxAge:   86400,
