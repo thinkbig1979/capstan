@@ -324,5 +324,3 @@ export function useLogStream({ stackId, initialContainer, hasRunningContainers }
     handleJumpToLatest,
   }
 }
-
-export type UseLogStreamResult = ReturnType<typeof useLogStream>

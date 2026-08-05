@@ -17,7 +17,7 @@ import { reconcileOnClose } from '@/lib/ws-reconcile'
  */
 export type OperationStatus = 'idle' | 'running' | 'success' | 'no_change' | 'partial' | 'error'
 
-export interface OperationLine {
+interface OperationLine {
   type: string
   line?: string
   /** @deprecated Use outcome instead — kept for backward compatibility with backends not yet migrated. */

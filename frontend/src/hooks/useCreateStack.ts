@@ -136,4 +136,4 @@ export function useCreateStack() {
   })
 }
 
-export { extractStack, extractLintResults }
+export { extractStack }

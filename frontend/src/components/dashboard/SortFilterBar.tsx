@@ -2,12 +2,12 @@ import { ArrowUpDown, ChevronsUpDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { TableSearch } from '@/components/ui/table-search'
 
-export interface SortOption {
+interface SortOption {
   key: string
   label: string
 }
 
-export interface FilterOption {
+interface FilterOption {
   key: string
   label: string
 }

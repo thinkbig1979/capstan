@@ -2,7 +2,6 @@ import { useMemo } from 'react'
 import { useMetricsBase, type ContainerMetric, type ContainerMetricHistory } from './useMetricsBase'
 
 export type { ContainerMetric as DashboardContainerMetric }
-export type { ContainerMetricHistory as DashboardContainerMetricHistory }
 
 export interface DashboardAggregateMetrics {
   totalCpuPercent: number

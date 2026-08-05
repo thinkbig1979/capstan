@@ -8,7 +8,7 @@ export type LogTimeRange = 'all' | '5m' | '15m' | '1h' | 'custom'
 // User-tweakable log viewer preferences, persisted so they survive reloads and
 // apply across every stack's log view (previously these were per-mount useState
 // that reset on navigation).
-export interface LogPrefs {
+interface LogPrefs {
   showTimestamps: boolean
   autoScroll: boolean
   /** Soft-wrap long lines (vs horizontal scroll). */

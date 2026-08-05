@@ -13,7 +13,7 @@
 // risk an unreadable shade against one of the themes. Non-SGR CSI sequences
 // (cursor moves, line erase) are stripped silently.
 
-export type AnsiColor =
+type AnsiColor =
   | 'black'
   | 'red'
   | 'green'

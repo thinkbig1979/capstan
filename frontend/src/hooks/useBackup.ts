@@ -125,23 +125,6 @@ export function useBackupStatus() {
   })
 }
 
-export function useBackupHistory(limit = 50) {
-  return useQuery({
-    queryKey: queryKeys.backup.history(limit),
-    queryFn: () => backupApi.getHistory(limit),
-    retry: 1,
-  })
-}
-
-export function useBackupRun(runId: string) {
-  return useQuery({
-    queryKey: queryKeys.backup.run(runId),
-    queryFn: () => backupApi.getRun(runId),
-    enabled: !!runId,
-    retry: 1,
-  })
-}
-
 // ─── Snapshots ───────────────────────────────────────────────────────────────
 
 export function useBackupSnapshots(stackId: string) {
@@ -167,17 +150,6 @@ export function useRunBackup() {
   })
 }
 
-export function useRunSync() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: () => backupApi.runSync(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
-    },
-  })
-}
-
 export function useRestore() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -191,17 +163,6 @@ export function useRestore() {
       queryClient.invalidateQueries({
         queryKey: queryKeys.backup.snapshots(variables.stackId),
       })
-    },
-  })
-}
-
-export function useDrRestore() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (data: { confirm: boolean }) => backupApi.drRestore(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
     },
   })
 }
@@ -220,31 +181,6 @@ export function useInitRepo() {
 export function useTestCloud() {
   return useMutation({
     mutationFn: () => backupApi.testCloud(),
-  })
-}
-
-export function usePrune() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (data?: { dryRun?: boolean }) => backupApi.prune(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.snapshots('') })
-    },
-  })
-}
-
-// ─── Policy deletion ─────────────────────────────────────────────────────────
-
-export function useDeleteBackupPolicy() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (stackId: string) => backupApi.deletePolicy(stackId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.policies() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
-    },
   })
 }
 
@@ -294,7 +230,7 @@ export function useStackBackupRuns(stackId: string, limit = 20) {
  * - error     : failed (maps from outcome:'failed', legacy success:false,
  *               or a genuine WS connection error — NOT a bare disconnect)
  */
-export type BackupStreamStatus = 'idle' | 'running' | 'success' | 'partial' | 'error'
+type BackupStreamStatus = 'idle' | 'running' | 'success' | 'partial' | 'error'
 
 export interface BackupStreamState {
   status: BackupStreamStatus

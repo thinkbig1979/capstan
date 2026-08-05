@@ -1,6 +1,6 @@
 import { toast } from 'sonner'
 
-export type ActionOutcome = 'success' | 'no_change' | 'partial' | 'failed'
+type ActionOutcome = 'success' | 'no_change' | 'partial' | 'failed'
 
 export interface ActionResult<D = Record<string, unknown>> {
   outcome: ActionOutcome
