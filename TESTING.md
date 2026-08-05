@@ -194,6 +194,11 @@ go test -tags=integration -count=1 -skip Test_Resource_ImagePrune_CountsUntagged
   ./internal/integrationtest/...
 ```
 
+CI opts in: `.github/workflows/integration.yml`'s "Run integration tests" step
+sets `CAPSTAN_ALLOW_DESTRUCTIVE_IMAGE_PRUNE: "1"` in its `env:` block, since
+the runner is ephemeral and single-use — the hazard this guards against
+doesn't apply there, so CI keeps full coverage of `PruneImages`.
+
 ### Frontend (Vitest)
 
 ```bash
