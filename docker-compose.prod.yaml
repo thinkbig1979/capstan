@@ -18,6 +18,46 @@ services:
     # ever reaches its own bounded drain. 60s covers the ~45s worst case with
     # margin (agent-os-7a5).
     stop_grace_period: 60s
+    # Memory ceiling. Capstan forks restic/rclone as children
+    # (services/backup_restic.go, backup_rclone.go) and restic's RAM use
+    # scales with repository index size, not raw data size, so a large
+    # backup/restore is the realistic path to exhausting host memory and
+    # inviting the kernel OOM killer (nothing here sets oom_score_adj).
+    # ASSUMED, not measured on this host: no production-scale restic
+    # repository was available to profile while making this change
+    # (agent-os-qru.4). The figure below is a documented community data
+    # point, not an observation from this deployment — restic users have
+    # reported index/RAM use of roughly 6-7GB for a ~1.2TB repository
+    # (https://forum.restic.net/t/memory-usage-oom-etc-on-a-big-repository/8758),
+    # i.e. on the order of 0.5% of repository size. 2g gives headroom for
+    # the Capstan server process plus a restic/rclone run against a
+    # repository up to roughly 200-300GB under that ratio. This is a
+    # starting point, NOT a substitute for sizing against your own
+    # repository — see README.md's "Resource limits" section (under
+    # Production Deployment) for how to do that.
+    #
+    # Set in two places on purpose. This stack is run with `docker compose
+    # up` (see README), never `docker stack deploy`/swarm. `mem_limit` is
+    # the Compose Specification's top-level, non-swarm key and is
+    # unambiguously honoured by `docker compose up` on a single Engine —
+    # it is the value actually enforced here. `deploy.resources.limits`
+    # is historically a swarm-only construct and its enforcement under
+    # plain `compose up` has been inconsistent across Compose
+    # versions/docs (see docker/compose#7307, docker/compose#10046), so it
+    # is NOT relied on for enforcement; it is kept in sync with mem_limit
+    # (the spec requires the two to be consistent when both are set) so
+    # tooling that only reads the `deploy` shape — and this bead's own
+    # acceptance check, `docker compose config | grep -E "memory|cpus"` —
+    # sees the real ceiling rather than nothing.
+    mem_limit: 2g
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    # No CPU limit: the risk this addresses (agent-os-qru.4) is memory
+    # exhaustion/OOM, not CPU contention, and no CPU measurement justifies
+    # a ceiling here. Add `cpus: <n>` following the same pattern if CPU
+    # contention is later observed.
     ports:
       - "5001:5001"
     volumes:
