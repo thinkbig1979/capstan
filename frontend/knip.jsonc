@@ -1,0 +1,28 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // Dead-code / unused-dependency baseline for the advisory "Dead code (knip)"
+  // CI job in .github/workflows/frontend.yml (agent-os-237). The job is
+  // deliberately NOT a required check — same posture as react-doctor — so a
+  // red run flags new dead code without blocking merges. Exit-code-relevant
+  // findings below each carry a reviewed reason; do not add entries without one.
+  //
+  // public/ is served verbatim by Vite and referenced by URL, not by import —
+  // knip cannot see index.html's <link href="/fonts/fonts.css">, so anything
+  // in public/ is a guaranteed false positive.
+  "ignore": ["public/**"],
+  "ignoreDependencies": [
+    // Not imported directly by src (only vi.mock'd in ComposeEditor tests),
+    // but kept as a direct dependency on purpose: the @codemirror/* family is
+    // declared together so the resolver keeps a single @codemirror/state
+    // instance — duplicate state instances silently break the editor.
+    "@codemirror/lint"
+  ],
+  "rules": {
+    // Unused exports/types are reported (visible in the CI log) but do not
+    // fail the run: the bulk are deliberate shadcn-style re-exports in
+    // src/components/ui/**, and the rest are cleanup candidates tracked on
+    // their own bead — not gate material for every PR.
+    "exports": "warn",
+    "types": "warn"
+  }
+}

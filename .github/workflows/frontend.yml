@@ -66,3 +66,38 @@ jobs:
       - name: Build
         working-directory: frontend
         run: pnpm build
+
+  # Advisory dead-code / unused-dependency gate (agent-os-237). Deliberately a
+  # SEPARATE job from "Lint, test, and build" above: that job is a required
+  # status check, and knip findings should flag — not block — a merge. This job
+  # is not in the branch-protection required list, matching react-doctor's
+  # advisory posture. Exit-code behaviour is defined by frontend/knip.jsonc:
+  # unused files/dependencies fail the job; unused exports/types are reported
+  # as warnings only.
+  knip:
+    name: Dead code (knip)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.5.1 --activate
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: knip
+        working-directory: frontend
+        run: pnpm knip
