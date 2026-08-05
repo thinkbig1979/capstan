@@ -211,6 +211,20 @@ func Test_Resource_ImageDelete_UntaggedOnly_NoChange(t *testing.T) {
 
 func Test_Resource_ImagePrune_CountsUntaggedEntries(t *testing.T) {
 	RequireDocker(t)
+
+	// svc.PruneImages(ctx, PruneOptions{All: false}) calls the Docker daemon's
+	// default image-prune endpoint with an empty filter set. That is host-wide:
+	// the Docker Engine API's image-prune filters are dangling/until/label —
+	// there is no filter that scopes a prune to a specific set of image IDs —
+	// so this test would delete EVERY dangling image already on the daemon,
+	// not just the two it builds below. On a developer workstation (as opposed
+	// to an ephemeral CI runner) that is someone else's data with no undo.
+	// Require explicit opt-in so the destructive path never runs by accident;
+	// see TESTING.md for what this does and how to opt in.
+	if os.Getenv("CAPSTAN_ALLOW_DESTRUCTIVE_IMAGE_PRUNE") == "" {
+		t.Skip("skipping: this test prunes ALL dangling images on the Docker daemon, not just its own fixtures — set CAPSTAN_ALLOW_DESTRUCTIVE_IMAGE_PRUNE=1 to opt in (see TESTING.md), or leave unset and run the rest of the suite with -skip Test_Resource_ImagePrune_CountsUntaggedEntries")
+	}
+
 	PullPinnedImage(t, "alpine:3.21")
 
 	// Strategy: build image A with tag T (adding a unique RUN layer), then

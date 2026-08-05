@@ -109,6 +109,14 @@ jobs:
       # -v produces per-test output, useful for CI log triage.
       - name: Run integration tests
         working-directory: backend
+        env:
+          # Test_Resource_ImagePrune_CountsUntaggedEntries prunes ALL dangling
+          # images on the daemon it targets (Docker's image-prune API has no
+          # filter that scopes to specific image IDs — see resources_test.go
+          # and TESTING.md). That's destructive on a developer workstation but
+          # harmless on this ephemeral, single-use runner, so CI opts in
+          # explicitly rather than losing coverage of PruneImages entirely.
+          CAPSTAN_ALLOW_DESTRUCTIVE_IMAGE_PRUNE: "1"
         run: |
           go test -tags=integration \
             -count=1 \

@@ -164,6 +164,41 @@ These run in CI via `.github/workflows/integration.yml`. Six
 test-helper bug (nil encryptor wired into the test DB), not an environment
 problem; tracked as a known issue.
 
+#### `Test_Resource_ImagePrune_CountsUntaggedEntries` is destructive and opt-in
+
+This test exercises `DockerService.PruneImages` with `All: false`, which maps
+to the Docker daemon's default image-prune filter (an empty filter set). The
+Docker Engine API's image-prune filters are `dangling`/`until`/`label` — none
+of them can scope a prune to a specific set of image IDs — so this call
+removes **every dangling image already on the daemon**, not just the two
+throwaway images the test builds. On an ephemeral CI runner that's harmless;
+on a developer workstation it silently deletes dangling images belonging to
+other work, with no prompt and no undo.
+
+Because of that, the test **skips itself by default**. To run it, opt in
+explicitly:
+
+```bash
+CAPSTAN_ALLOW_DESTRUCTIVE_IMAGE_PRUNE=1 \
+  go test -tags=integration -count=1 -run Test_Resource_ImagePrune_CountsUntaggedEntries \
+  ./internal/integrationtest/
+```
+
+Only do this on a machine where you don't mind losing dangling images (check
+`docker images --filter dangling=true` first). To run the rest of the
+integration suite without it (the default — no env var needed), or to
+exclude it explicitly from a wider run:
+
+```bash
+go test -tags=integration -count=1 -skip Test_Resource_ImagePrune_CountsUntaggedEntries \
+  ./internal/integrationtest/...
+```
+
+CI opts in: `.github/workflows/integration.yml`'s "Run integration tests" step
+sets `CAPSTAN_ALLOW_DESTRUCTIVE_IMAGE_PRUNE: "1"` in its `env:` block, since
+the runner is ephemeral and single-use — the hazard this guards against
+doesn't apply there, so CI keeps full coverage of `PruneImages`.
+
 ### Frontend (Vitest)
 
 ```bash
