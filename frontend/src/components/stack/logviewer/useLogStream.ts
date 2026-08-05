@@ -121,9 +121,6 @@ export function useLogStream({ stackId, initialContainer, hasRunningContainers }
     handleLogMessage,
     {
       skip: !hasRunningContainers,
-      onReconnecting: (attempt) => {
-        console.log(`Reconnecting... attempt ${attempt}`)
-      },
     }
   )
 
