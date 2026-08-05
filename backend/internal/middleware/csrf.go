@@ -109,11 +109,48 @@ func CSRFMiddleware() gin.HandlerFunc {
 // X-Forwarded-Proto. It is the basis for the Secure cookie flag and HSTS, and
 // replaces the previous fragile Host-substring heuristic which could be tricked
 // by a Host like "localhost.evil.com" into dropping Secure (M3).
+//
+// The protocol is taken from the last NON-EMPTY X-Forwarded-Proto value, not
+// the first: a reverse proxy that appends to an existing header (rather than
+// overwriting it) can leave a client-forged value ahead of its own genuine
+// one, either as a second header line or comma-joined onto the same line.
+// http.Header.Get/gin's GetHeader return only the first value/line, which an
+// attacker-controlled leading value would then win in both directions -
+// forging "http" ahead of a real "https" would drop Secure/HSTS on a
+// genuinely-encrypted deployment, and forging "https" ahead of a real "http"
+// would fabricate Secure/HSTS on a plaintext connection in the
+// separate-header-lines wire shape. Taking the last value (and, within that
+// value, the last comma-separated element) reflects what the terminating
+// proxy actually appended. A trailing empty element or instance - e.g. a
+// proxy that writes "https," or appends a blank header - is skipped rather
+// than treated as an authoritative empty override of a real value earlier
+// in the list (agent-os-qru.9, OBSERVED 2026-08-05: see
+// TestIsSecureRequest_TrustsLastForwardedProtoValue).
 func IsSecureRequest(c *gin.Context) bool {
+	if c.Request == nil {
+		return false
+	}
 	if c.Request.TLS != nil {
 		return true
 	}
-	return strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+	return strings.EqualFold(lastForwardedProto(c.Request.Header.Values("X-Forwarded-Proto")), "https")
+}
+
+// lastForwardedProto returns the last non-empty (after TrimSpace) value
+// across all X-Forwarded-Proto header instances, scanning each instance's
+// comma-separated elements from the end, and falling back to the previous
+// instance when an instance is entirely empty. Returns "" if every instance
+// and every element within them is empty.
+func lastForwardedProto(values []string) string {
+	for i := len(values) - 1; i >= 0; i-- {
+		parts := strings.Split(values[i], ",")
+		for j := len(parts) - 1; j >= 0; j-- {
+			if v := strings.TrimSpace(parts[j]); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 func setCSRFCookie(c *gin.Context, token string) {
