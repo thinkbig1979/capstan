@@ -15,6 +15,16 @@ func CORSMiddleware(allowedOrigins string) gin.HandlerFunc {
 			return
 		}
 
+		// Everything from here on depends on the request's Origin header: an
+		// allowlisted origin gets Access-Control-Allow-Origin echoed back, any
+		// other origin does not. That absence is itself origin-dependent
+		// content - a cache that stores the disallowed-origin miss keyed by
+		// URL alone could later replay that no-ACAO response to a
+		// legitimately allowlisted origin and break its cross-origin request.
+		// So Vary: Origin belongs to both outcomes below, not only the
+		// allowed one.
+		c.Header("Vary", "Origin")
+
 		allowedList := strings.Split(allowedOrigins, ",")
 		isAllowed := false
 
@@ -27,11 +37,6 @@ func CORSMiddleware(allowedOrigins string) gin.HandlerFunc {
 		}
 
 		if isAllowed {
-			// The allowlist means the response varies per request based on the
-			// Origin header - without signaling that, a shared cache sitting in
-			// front of this service could serve one origin's ACAO-bearing
-			// response to a different origin.
-			c.Header("Vary", "Origin")
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Credentials", "true")
 			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

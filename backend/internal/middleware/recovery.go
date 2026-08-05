@@ -25,9 +25,13 @@ func RecoveryMiddleware() gin.HandlerFunc {
 				// pointer/value identity (server.go:1940, "err != ErrAbortHandler"),
 				// not errors.Is. Detecting via errors.Is (to also catch a wrapped
 				// value) is fine, but the re-panic must carry the sentinel itself,
-				// never the recovered value, or that identity check fails upstream
-				// and net/http dumps a full stack trace instead of quietly
-				// aborting the connection.
+				// never the recovered value, or that identity check fails upstream.
+				// Note this only spares net/http's OWN panic log (its condition is
+				// false when the value matches, so it stays silent); our own
+				// slog.Error above has already logged the stack for every panic,
+				// ErrAbortHandler included, so re-panicking correctly here does not
+				// suppress logging on our side - it only stops net/http from
+				// logging a second, redundant 64KB trace of its own.
 				if err, ok := err.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(http.ErrAbortHandler)
 				}
