@@ -323,6 +323,67 @@ func TestAuthHandler_Login_SecureCookieFromForwardedProto(t *testing.T) {
 	assert.True(t, secure, "Secure flag must be set when X-Forwarded-Proto is https")
 }
 
+// TestAuthHandler_SecureCookieFlag_AllDirections covers the negative
+// directions the test above does not: Secure must be false over plain HTTP,
+// not just true over TLS, and clearAuthCookies (agent-os-qru.5) must derive
+// Secure the same way setAuthCookies does on both the login and logout
+// paths. Without this, hardcoding Secure: true at every cookie site would
+// pass both the lint gate and the full test suite while breaking login over
+// plain HTTP in a real browser.
+func TestAuthHandler_SecureCookieFlag_AllDirections(t *testing.T) {
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	user := createTestUser(t, db, "testuser", "password123")
+
+	handler := NewAuthHandler(db, "test-secret-key-32-chars", false)
+	router := setupTestRouterWithAuth(handler, "test-secret-key-32-chars")
+	token := generateTestToken(user.ID, user.Username, "session-123", "test-secret-key-32-chars")
+
+	secureFlag := func(w *httptest.ResponseRecorder) (found, secure bool) {
+		for _, ck := range w.Result().Cookies() {
+			if ck.Name == "capstan_token" {
+				return true, ck.Secure
+			}
+		}
+		return false, false
+	}
+
+	t.Run("login over plain HTTP", func(t *testing.T) {
+		body := `{"username": "testuser", "password": "password123"}`
+		req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		found, secure := secureFlag(w)
+		require.True(t, found, "expected capstan_token cookie")
+		assert.False(t, secure, "Secure must be false with no TLS and no X-Forwarded-Proto")
+	})
+
+	t.Run("logout over plain HTTP", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+		req.Header.Set("Authorization", authHeader(token))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNoContent, w.Code)
+		found, secure := secureFlag(w)
+		require.True(t, found, "expected capstan_token clear cookie")
+		assert.False(t, secure, "clearAuthCookies must derive Secure like setAuthCookies, not hardcode it")
+	})
+
+	t.Run("logout with X-Forwarded-Proto https", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+		req.Header.Set("Authorization", authHeader(token))
+		req.Header.Set("X-Forwarded-Proto", "https")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNoContent, w.Code)
+		found, secure := secureFlag(w)
+		require.True(t, found, "expected capstan_token clear cookie")
+		assert.True(t, secure, "clearAuthCookies must set Secure when X-Forwarded-Proto is https")
+	})
+}
+
 func TestLooksLikePrivateKey(t *testing.T) {
 	keyMaterial := []string{
 		"-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----",

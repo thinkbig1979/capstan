@@ -97,6 +97,18 @@ linters:
       - path: 'internal/services/git_credentials\.go'
         linters: [gosec]
         text: 'G101'
+      # G124 (http.Cookie missing/insecure Secure/HttpOnly/SameSite attribute,
+      # new in the gosec bundled with golangci-lint v2.12.2 — v2.11.1 reports
+      # 0 issues here) fires on every req.AddCookie(&http.Cookie{...}) in
+      # tests (agent-os-qru.5). These build an OUTBOUND http.Request to send
+      # to a test server, not a Set-Cookie response header — there is no
+      # Secure/HttpOnly/SameSite to set, the flags are meaningless on a
+      # client-supplied request cookie. Scoped to _test.go rather than the
+      # individual call sites since every current and future instance of this
+      # pattern is the same non-issue.
+      - path: '_test\.go'
+        linters: [gosec]
+        text: 'G124'
 
 # Uncap issue reporting. golangci-lint's own defaults are max-same-issues: 3
 # and max-issues-per-linter: 50 — silent truncation, not a config choice we
