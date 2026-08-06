@@ -445,7 +445,7 @@ func (s *BackupService) RunBackup(
 	stream(out, "info", fmt.Sprintf("Backup run %s started (dryRun=%v)", run.ID, dryRun))
 
 	// Determine which stacks to back up.
-	policies, err := s.resolveTargetPolicies(stackIDs)
+	policies, unresolved, err := s.resolveTargetPolicies(stackIDs)
 	if err != nil {
 		run.Status = "failed"
 		run.ErrorMessage = err.Error()
@@ -526,6 +526,28 @@ func (s *BackupService) RunBackup(
 		}
 	}
 
+	// A run asked for specific stacks that have no enabled policy backed up none
+	// of them, and the switch above still called it a success: StacksFailed stays
+	// 0 when there was nothing to fail. Name them and refuse that verdict
+	// (agent-os-6wr). Same principle as the database downgrade directly above —
+	// work that did not happen must not read as success.
+	if len(unresolved) > 0 {
+		msg := fmt.Sprintf("no enabled backup policy for requested stack(s): %s",
+			strings.Join(unresolved, ", "))
+		stream(out, "error", msg)
+		switch {
+		case run.StacksOK == 0:
+			// Nothing was backed up at all, which is a failed run whatever else
+			// happened — including a dbFailed downgrade to "partial" above.
+			run.Status = "failed"
+		case run.Status == "success":
+			run.Status = "partial"
+		}
+		if run.ErrorMessage == "" {
+			run.ErrorMessage = msg
+		}
+	}
+
 	s.finaliseRun(run)
 	stream(out, "info", fmt.Sprintf("Backup run finished: status=%s ok=%d failed=%d",
 		run.Status, run.StacksOK, run.StacksFailed))
@@ -587,7 +609,7 @@ func (s *BackupService) RunBackupWithRunID(
 	// Row was pre-created by the caller; skip CreateBackupRun.
 	stream(out, "info", fmt.Sprintf("Backup run %s started (dryRun=%v)", run.ID, dryRun))
 
-	policies, err := s.resolveTargetPolicies(stackIDs)
+	policies, unresolved, err := s.resolveTargetPolicies(stackIDs)
 	if err != nil {
 		run.Status = "failed"
 		run.ErrorMessage = err.Error()
@@ -657,6 +679,28 @@ func (s *BackupService) RunBackupWithRunID(
 		run.Status = "partial"
 		if run.ErrorMessage == "" {
 			run.ErrorMessage = "database snapshot failed; stack backups succeeded"
+		}
+	}
+
+	// A run asked for specific stacks that have no enabled policy backed up none
+	// of them, and the switch above still called it a success: StacksFailed stays
+	// 0 when there was nothing to fail. Name them and refuse that verdict
+	// (agent-os-6wr). Same principle as the database downgrade directly above —
+	// work that did not happen must not read as success.
+	if len(unresolved) > 0 {
+		msg := fmt.Sprintf("no enabled backup policy for requested stack(s): %s",
+			strings.Join(unresolved, ", "))
+		stream(out, "error", msg)
+		switch {
+		case run.StacksOK == 0:
+			// Nothing was backed up at all, which is a failed run whatever else
+			// happened — including a dbFailed downgrade to "partial" above.
+			run.Status = "failed"
+		case run.Status == "success":
+			run.Status = "partial"
+		}
+		if run.ErrorMessage == "" {
+			run.ErrorMessage = msg
 		}
 	}
 
@@ -1065,20 +1109,29 @@ func (s *BackupService) Prune(ctx context.Context, dryRun bool, out chan<- Strea
 // resolveTargetPolicies returns the set of BackupPolicies to run against.
 // When stackIDs is non-empty, only the listed stacks are included (and they
 // must have an enabled policy). When empty, all enabled policies are returned.
-func (s *BackupService) resolveTargetPolicies(stackIDs []string) ([]models.BackupPolicy, error) {
-	if len(stackIDs) == 0 {
-		return s.db.GetEnabledBackupPolicies()
+// It also returns the requested stack IDs that matched no enabled policy.
+// Those used to be dropped on the floor, which is how a run could back up
+// nothing and still report success (agent-os-6wr) — callers must surface them.
+func (s *BackupService) resolveTargetPolicies(stackIDs []string) ([]models.BackupPolicy, []string, error) {
+	all, err := s.db.GetEnabledBackupPolicies()
+	if err != nil {
+		return nil, nil, err
 	}
 
-	// Build a set for O(1) lookup.
+	// No explicit request means "every enabled policy", so nothing can be
+	// unresolved: the caller named no stack it could fail to get.
+	if len(stackIDs) == 0 {
+		return all, nil, nil
+	}
+
+	// Build sets for O(1) lookup in both directions.
 	wanted := make(map[string]bool, len(stackIDs))
 	for _, id := range stackIDs {
 		wanted[id] = true
 	}
-
-	all, err := s.db.GetEnabledBackupPolicies()
-	if err != nil {
-		return nil, err
+	enabled := make(map[string]bool, len(all))
+	for _, p := range all {
+		enabled[p.TargetID] = true
 	}
 
 	filtered := make([]models.BackupPolicy, 0, len(stackIDs))
@@ -1087,7 +1140,19 @@ func (s *BackupService) resolveTargetPolicies(stackIDs []string) ([]models.Backu
 			filtered = append(filtered, p)
 		}
 	}
-	return filtered, nil
+
+	// Walk stackIDs rather than the set so the reported order matches what the
+	// caller asked for, and de-duplicate so a repeated ID is named once.
+	var unresolved []string
+	seen := make(map[string]bool, len(stackIDs))
+	for _, id := range stackIDs {
+		if !enabled[id] && !seen[id] {
+			seen[id] = true
+			unresolved = append(unresolved, id)
+		}
+	}
+
+	return filtered, unresolved, nil
 }
 
 // validateSnapshotBelongsToStack checks that the given snapshot has a tag

@@ -582,6 +582,87 @@ func TestRunBackup_PerStackFailureIsolation_Partial(t *testing.T) {
 	assert.Equal(t, 2, run.StacksTotal)
 }
 
+// ============================================================
+// RunBackup — requested stacks that resolve to no enabled policy
+// ============================================================
+
+// TestRunBackup_RequestedStackWithoutPolicyIsNotSuccess pins agent-os-6wr:
+// resolveTargetPolicies filters the enabled policies by the requested IDs, so a
+// requested stack with no enabled policy silently drops out of the set. Before
+// the fix the run then backed up nothing and still reported status="success",
+// because the status switch reads "StacksFailed == 0" as success and zero
+// requested stacks means zero failures.
+//
+// This is the same family as the agent-os-36o dbFailed downgrade below that
+// switch: work that did not happen must not read as success. Asking for a stack
+// by name and being told "success" while no snapshot exists is the failure mode
+// that makes an operator believe they have backups they do not have.
+func TestRunBackup_RequestedStackWithoutPolicyIsNotSuccess(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	docker := &fakeDocker{statusStr: "stopped"}
+	runner := &fakeRunner{} // the database snapshot still succeeds
+
+	svc := buildSvc(t, db, docker, runner, runner)
+	// Deliberately seed NO stack and NO policy: the requested ID cannot resolve.
+
+	out := make(chan StreamLine, 128)
+	run, err := svc.RunBackup(context.Background(), []string{"stacks~absent:default"}, false, "manual", out)
+	require.NoError(t, err, "an unresolvable request is a run-level result, not a call error")
+
+	assert.NotEqual(t, "success", run.Status,
+		"a run that backed up none of the stacks it was asked for must not report success")
+	assert.Contains(t, run.ErrorMessage, "stacks~absent:default",
+		"the run must name the stack it could not back up, so the operator can act on it")
+}
+
+// TestRunBackup_RequestedStackWithPolicyStillSucceeds is the control for the
+// test above: the guard must fire only when a requested stack genuinely has no
+// enabled policy, never on the normal path. Without this, the fix could pass by
+// simply refusing to report success at all.
+func TestRunBackup_RequestedStackWithPolicyStillSucceeds(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	docker := &fakeDocker{statusStr: "stopped"}
+	runner := &fakeRunner{}
+
+	svc := buildSvc(t, db, docker, runner, runner)
+	seedStack(t, db, "stack-a", "hot")
+
+	out := make(chan StreamLine, 512)
+	run, err := svc.RunBackup(context.Background(), []string{"stack-a"}, false, "manual", out)
+	require.NoError(t, err)
+
+	assert.Equal(t, "success", run.Status)
+	assert.Equal(t, 1, run.StacksOK)
+	assert.Empty(t, run.ErrorMessage)
+}
+
+// TestRunBackup_NoRequestedIDsWithNoPoliciesIsUnchanged pins the deliberate
+// scope of the fix. A run with no stackIDs means "every enabled policy"; when
+// none are configured there is nothing the operator asked for and did not get,
+// and the database snapshot — the artifact agent-os-36o exists to protect —
+// still ran. That case keeps its existing status rather than being swept up by
+// the new guard.
+func TestRunBackup_NoRequestedIDsWithNoPoliciesIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	docker := &fakeDocker{statusStr: "stopped"}
+	runner := &fakeRunner{}
+
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	out := make(chan StreamLine, 128)
+	run, err := svc.RunBackup(context.Background(), nil, false, "manual", out)
+	require.NoError(t, err)
+
+	assert.Equal(t, "success", run.Status)
+	assert.Empty(t, run.ErrorMessage)
+}
+
 func TestRunBackup_AllFail_StatusFailed(t *testing.T) {
 	t.Parallel()
 
@@ -1181,9 +1262,10 @@ func TestResolveTargetPolicies_EmptyFilter_ReturnsAll(t *testing.T) {
 	seedStack(t, db, "a", "stop")
 	seedStack(t, db, "b", "hot")
 
-	policies, err := svc.resolveTargetPolicies(nil)
+	policies, unresolved, err := svc.resolveTargetPolicies(nil)
 	require.NoError(t, err)
 	assert.Len(t, policies, 2)
+	assert.Empty(t, unresolved, "an unfiltered run names no stack, so nothing can be unresolved")
 }
 
 func TestResolveTargetPolicies_FilterSubset(t *testing.T) {
@@ -1197,10 +1279,33 @@ func TestResolveTargetPolicies_FilterSubset(t *testing.T) {
 	seedStack(t, db, "a", "stop")
 	seedStack(t, db, "b", "hot")
 
-	policies, err := svc.resolveTargetPolicies([]string{"a"})
+	policies, unresolved, err := svc.resolveTargetPolicies([]string{"a"})
 	require.NoError(t, err)
 	require.Len(t, policies, 1)
 	assert.Equal(t, "a", policies[0].TargetID)
+	assert.Empty(t, unresolved)
+}
+
+// TestResolveTargetPolicies_ReportsUnresolved covers the reporting half of
+// agent-os-6wr at the unit level: a requested ID with no enabled policy must
+// come back named, not silently absent from the filtered set.
+func TestResolveTargetPolicies_ReportsUnresolved(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	docker := &fakeDocker{}
+	runner := &fakeRunner{}
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	seedStack(t, db, "a", "stop")
+
+	// "a" resolves; "ghost" has no policy at all; "a" repeated must not be
+	// reported twice, and order must follow the request.
+	policies, unresolved, err := svc.resolveTargetPolicies([]string{"ghost", "a", "ghost"})
+	require.NoError(t, err)
+	require.Len(t, policies, 1)
+	assert.Equal(t, "a", policies[0].TargetID)
+	assert.Equal(t, []string{"ghost"}, unresolved)
 }
 
 // ============================================================
