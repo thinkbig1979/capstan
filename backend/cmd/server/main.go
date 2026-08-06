@@ -186,6 +186,15 @@ func registerIndexRoute(r *gin.Engine, indexHTML string) {
 }
 
 func main() {
+	// Offline admin commands are dispatched before anything else, deliberately
+	// ahead of config.Load: config treats JWT_SECRET as a hard startup
+	// requirement, and resetting a password neither mints nor verifies tokens.
+	// Requiring a secret in order to recover an account would be a needless way
+	// for the recovery path to fail (agent-os-8pa). See admin.go.
+	if len(os.Args) > 1 && os.Args[1] == "admin" {
+		os.Exit(runAdminCommand(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
+
 	// Bootstrap the logger from the environment before config.Load, so that
 	// config's own startup lines — including the volume-path-identity warning —
 	// go through the configured handler instead of slog's default. An
