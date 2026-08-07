@@ -59,6 +59,14 @@ on:
 
 jobs:
   integration:
+    # Runner: stays GitHub-hosted. This job needs a real Docker daemon
+    # (docker compose + buildx), and the self-hosted runner has the docker CLI
+    # but NO daemon — `docker info` there fails with "Cannot connect to the
+    # Docker daemon at unix:///var/run/docker.sock". Verified 2026-08-07.
+    # It also sets CAPSTAN_ALLOW_DESTRUCTIVE_IMAGE_PRUNE=1 below, which prunes
+    # every dangling image on whatever daemon it targets — safe on a throwaway
+    # hosted VM, emphatically not on a shared host. Both reasons must be
+    # resolved before this moves.
     name: Real-Docker integration tests
     runs-on: ubuntu-latest
 

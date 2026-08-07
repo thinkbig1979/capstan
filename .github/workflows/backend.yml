@@ -60,7 +60,14 @@ on:
 jobs:
   unit:
     name: Build, vet, and unit tests
-    runs-on: ubuntu-latest
+    # Runner: self-hosted by default, EXCEPT for pull requests from forks.
+    # This repo is public with forking enabled, so a fork PR running on our own
+    # hardware would be arbitrary code execution on the runner host. Falling
+    # back to a disposable GitHub-hosted VM for fork PRs keeps that code off our
+    # box while still reporting the check — which matters because several of
+    # these are required by branch protection, and a skipped required check
+    # blocks a PR forever rather than failing it honestly.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
     # The suite takes well under a minute; this is a hang guard, not a budget.
     timeout-minutes: 10
 
@@ -120,7 +127,14 @@ jobs:
   # nightly and learn about a race up to a day after the commit that caused it.
   race:
     name: Race detector
-    runs-on: ubuntu-latest
+    # Runner: self-hosted by default, EXCEPT for pull requests from forks.
+    # This repo is public with forking enabled, so a fork PR running on our own
+    # hardware would be arbitrary code execution on the runner host. Falling
+    # back to a disposable GitHub-hosted VM for fork PRs keeps that code off our
+    # box while still reporting the check — which matters because several of
+    # these are required by branch protection, and a skipped required check
+    # blocks a PR forever rather than failing it honestly.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
     timeout-minutes: 20
 
     steps:
@@ -149,7 +163,14 @@ jobs:
   # deliberately not added to integration.yml (see the file header).
   lint:
     name: Lint (golangci-lint)
-    runs-on: ubuntu-latest
+    # Runner: self-hosted by default, EXCEPT for pull requests from forks.
+    # This repo is public with forking enabled, so a fork PR running on our own
+    # hardware would be arbitrary code execution on the runner host. Falling
+    # back to a disposable GitHub-hosted VM for fork PRs keeps that code off our
+    # box while still reporting the check — which matters because several of
+    # these are required by branch protection, and a skipped required check
+    # blocks a PR forever rather than failing it honestly.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
     timeout-minutes: 10
 
     steps:
