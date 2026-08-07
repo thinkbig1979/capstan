@@ -113,6 +113,13 @@ concurrency:
 jobs:
   backup-flow:
     name: Playwright backup-flow suite
+    # Runner: stays GitHub-hosted. Despite being a Playwright suite with no
+    # obvious Docker step, this exercises the real backup path, which STOPS the
+    # stack before snapshotting it — so it needs a Docker daemon. Observed on
+    # PR 147 when it moved to self-hosted: "stack stacks~test-app:default
+    # failed: stop stack: docker daemon unreachable", 3 of 7 tests failing.
+    # The auth-session job below has no such dependency and does run
+    # self-hosted.
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -122,6 +129,19 @@ jobs:
 
       # Pin the exact pnpm version declared in the repo root's and frontend's
       # "packageManager" fields, matching frontend.yml's rationale.
+      # Bootstrap a modern Node BEFORE the corepack step below. corepack ships
+      # with Node >=16.9; the self-hosted runner's baseline Node is v10, so
+      # `corepack enable` there fails with "command not found" (observed on
+      # PR 147). GitHub-hosted runners happen to preinstall a Node new enough
+      # that this never mattered, which is why the ordering was fine until the
+      # jobs moved. The `Set up Node` step further down still runs: this one
+      # only puts corepack on PATH, that one owns the pnpm cache — which needs
+      # pnpm to already be resolvable, hence the corepack step between them.
+      - name: Bootstrap Node for corepack
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Set up pnpm
         run: |
           corepack enable
@@ -303,12 +323,32 @@ jobs:
 
   auth-session:
     name: Playwright auth-session suite
-    runs-on: ubuntu-latest
+    # Runner: self-hosted by default, EXCEPT for pull requests from forks.
+    # This repo is public with forking enabled, so a fork PR running on our own
+    # hardware would be arbitrary code execution on the runner host. Falling
+    # back to a disposable GitHub-hosted VM for fork PRs keeps that code off our
+    # box while still reporting the check — which matters because several of
+    # these are required by branch protection, and a skipped required check
+    # blocks a PR forever rather than failing it honestly.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
     timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # Bootstrap a modern Node BEFORE the corepack step below. corepack ships
+      # with Node >=16.9; the self-hosted runner's baseline Node is v10, so
+      # `corepack enable` there fails with "command not found" (observed on
+      # PR 147). GitHub-hosted runners happen to preinstall a Node new enough
+      # that this never mattered, which is why the ordering was fine until the
+      # jobs moved. The `Set up Node` step further down still runs: this one
+      # only puts corepack on PATH, that one owns the pnpm cache — which needs
+      # pnpm to already be resolvable, hence the corepack step between them.
+      - name: Bootstrap Node for corepack
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
 
       - name: Set up pnpm
         run: |
@@ -356,6 +396,13 @@ jobs:
         working-directory: backend
         run: |
           set -eu
+          # Self-hosted runners are NOT ephemeral: /tmp survives between runs,
+          # so a previous run's capstan.db would satisfy the one-and-only
+          # POST /auth/setup and make AUTH-PW-SESSION-001's needsSetup:true
+          # assertion false. Observed on PR 147: the job passed on its first
+          # self-hosted run and failed on the second. Hosted runners hid this
+          # by giving every job a clean VM.
+          rm -rf /tmp/capstan-e2e-auth
           mkdir -p /tmp/capstan-e2e-auth/stacks /tmp/capstan-e2e-auth/data
           PORT=5001 \
           STACKS_DIR=/tmp/capstan-e2e-auth/stacks \

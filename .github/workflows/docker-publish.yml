@@ -29,6 +29,15 @@ jobs:
   # required set, and the E2E suite is precisely what was red — a gate that
   # mirrored branch protection would have let that through unchanged.
   verify-checks:
+    # Runner: deliberately GitHub-hosted, even though this job needs no local
+    # toolchain and would otherwise be a candidate for self-hosted.
+    #
+    # There is exactly one self-hosted runner and it takes one job at a time.
+    # This job WAITS for the tagged commit's other checks to finish — so if it
+    # held the only runner slot while the checks it is waiting on were queued
+    # behind it, it would deadlock until its own 15-minute timeout and fail
+    # every release tagged shortly after a merge. Keeping it hosted also means
+    # a release does not depend on the self-hosted runner being online.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -107,6 +116,9 @@ jobs:
             }
 
   build-and-push:
+    # Runner: stays GitHub-hosted. Needs a Docker daemon plus QEMU for the
+    # linux/arm64 leg; the self-hosted runner has no daemon (verified
+    # 2026-08-07).
     runs-on: ubuntu-latest
     needs: verify-checks
     permissions:

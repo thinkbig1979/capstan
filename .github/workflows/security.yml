@@ -65,7 +65,14 @@ jobs:
   # ---------------------------------------------------------------------------
   go-vulns:
     name: Go vulnerabilities (govulncheck)
-    runs-on: ubuntu-latest
+    # Runner: self-hosted by default, EXCEPT for pull requests from forks.
+    # This repo is public with forking enabled, so a fork PR running on our own
+    # hardware would be arbitrary code execution on the runner host. Falling
+    # back to a disposable GitHub-hosted VM for fork PRs keeps that code off our
+    # box while still reporting the check — which matters because several of
+    # these are required by branch protection, and a skipped required check
+    # blocks a PR forever rather than failing it honestly.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
     timeout-minutes: 15
 
     steps:
@@ -231,7 +238,14 @@ jobs:
   # ---------------------------------------------------------------------------
   frontend-audit:
     name: npm advisories (pnpm audit)
-    runs-on: ubuntu-latest
+    # Runner: self-hosted by default, EXCEPT for pull requests from forks.
+    # This repo is public with forking enabled, so a fork PR running on our own
+    # hardware would be arbitrary code execution on the runner host. Falling
+    # back to a disposable GitHub-hosted VM for fork PRs keeps that code off our
+    # box while still reporting the check — which matters because several of
+    # these are required by branch protection, and a skipped required check
+    # blocks a PR forever rather than failing it honestly.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
     timeout-minutes: 15
 
     steps:
@@ -247,6 +261,19 @@ jobs:
       # both manifests declare pnpm@11.5.1, so this is redundant-but-harmless
       # rather than load-bearing — see frontend.yml's corepack comment for the
       # full history.
+      # Bootstrap a modern Node BEFORE the corepack step below. corepack ships
+      # with Node >=16.9; the self-hosted runner's baseline Node is v10, so
+      # `corepack enable` there fails with "command not found" (observed on
+      # PR 147). GitHub-hosted runners happen to preinstall a Node new enough
+      # that this never mattered, which is why the ordering was fine until the
+      # jobs moved. The `Set up Node` step further down still runs: this one
+      # only puts corepack on PATH, that one owns the pnpm cache — which needs
+      # pnpm to already be resolvable, hence the corepack step between them.
+      - name: Bootstrap Node for corepack
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Set up pnpm
         run: |
           corepack enable
@@ -354,6 +381,9 @@ jobs:
   # Container image
   # ---------------------------------------------------------------------------
   image-scan:
+    # Runner: stays GitHub-hosted. Builds and scans a container image, so it
+    # needs a Docker daemon the self-hosted runner does not have (verified
+    # 2026-08-07).
     name: Image vulnerabilities (Trivy)
     runs-on: ubuntu-latest
     timeout-minutes: 30
