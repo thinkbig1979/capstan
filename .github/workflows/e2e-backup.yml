@@ -330,7 +330,27 @@ jobs:
     # box while still reporting the check — which matters because several of
     # these are required by branch protection, and a skipped required check
     # blocks a PR forever rather than failing it honestly.
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
+    #
+    # `capstan-e2e` narrows the self-hosted side to ONE runner process. There
+    # are now three (capstan, capstan-2, capstan-3) sharing a host, and this job
+    # is the only self-hosted one that binds ports — 5001 for the backend, 3001
+    # for the frontend — and writes a fixed path, /tmp/capstan-e2e-auth. Two
+    # copies on that host would fight over all three. The per-PR `concurrency`
+    # group does not save us: it stops one branch overlapping itself, not two
+    # different PRs running at once, which is exactly what three runners make
+    # possible for the first time.
+    #
+    # Pinning rather than parameterising is deliberate. Giving each runner its
+    # own port range means moving the backend off 5001, and
+    # frontend/vite.config.ts hardcodes its /api proxy target to
+    # http://localhost:5001 — shared with local development, so that is app
+    # config changing to suit CI. One label is the smaller change.
+    #
+    # The label lives on runner `capstan` only, in
+    # /home/dockge/stacks/github-actions-thinkbig/compose.yaml on the runner
+    # host. It must exist there BEFORE this line merges: a runs-on label that no
+    # runner carries does not fail, it queues forever.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","capstan-e2e"]') }}
     timeout-minutes: 15
 
     steps:
