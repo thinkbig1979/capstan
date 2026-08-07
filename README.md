@@ -612,40 +612,6 @@ control of the Docker socket, which is root-equivalent control of the host
 read-only or scoped-permission user; treat every login as administrative
 access, and don't expose an instance to anyone you wouldn't hand host root.
 
-## Project Structure
-
-```
-capstan/
-├── backend/                  # Go backend (Gin API, SQLite, Docker/Git services)
-│   ├── cmd/server/           # main entrypoint
-│   └── internal/             # handlers, services, middleware, models
-├── frontend/                 # React + Vite + Tailwind SPA
-│   └── src/                  # components, hooks, stores, lib
-├── docker/                   # production Dockerfile + compose
-├── docker-compose.yaml       # local dev (builds the all-in-one image)
-└── docker-compose.prod.yaml  # runs the published image
-```
-
-## Quick Commands
-
-```bash
-# Full stack (Docker)
-./start-local.sh           # build + start
-docker compose logs -f     # view logs
-docker compose down        # stop
-
-# Backend only
-cd backend
-./run-local.sh             # quick start
-make run                   # run the server
-make test                  # run tests
-
-# Frontend only
-cd frontend
-./run-dev.sh               # Vite dev server (:5173)
-npm run build              # production build
-```
-
 ## API Endpoints
 
 All routes are under `/api/v1` and require authentication (unless
@@ -849,92 +815,10 @@ production-scale repository. Size it for your own deployment:
   may not be safe at 1 TB — revisit sizing periodically or after adding
   large new backup sources.
 
-## Development
+## Contributing
 
-See [TESTING.md](TESTING.md) for local testing and development workflow. Example
-environment files: [`.env.example`](.env.example) (production) and
-[`backend/.env.example`](backend/.env.example) (local dev).
-
-### Backend
-- Language: Go 1.25
-- Database: SQLite
-- Framework: Gin
-- Docker SDK: docker/docker (Moby) client
-- Git library: go-git
-
-### Frontend
-- Language: TypeScript
-- Framework: React + Vite
-- UI: Tailwind CSS
-- State: TanStack Query
-- Editor: CodeMirror 6
-
-### Branch protection
-
-`main` requires these six checks to pass before a pull request can merge:
-
-| Check | Workflow |
-| --- | --- |
-| Go vulnerabilities (govulncheck) | `security.yml` |
-| npm advisories (pnpm audit) | `security.yml` |
-| Image vulnerabilities (Trivy) | `security.yml` |
-| Build, vet, and unit tests | `backend.yml` |
-| Race detector | `backend.yml` |
-| Lint, test, and build | `frontend.yml` |
-
-Force pushes and branch deletion are blocked. Reviews are not required, and
-administrators can bypass a stuck check — the rule is there to stop an
-accidental merge over a red check, not to lock the repository against its
-maintainer.
-
-Real-Docker integration tests run on every backend change but are deliberately
-**not** required: the job depends on Docker Hub being reachable, so requiring it
-would make `main` mergeable only while an external service is up. The reasoning
-is recorded in the header of `.github/workflows/integration.yml`.
-
-This is also why `backend.yml` and `frontend.yml` carry no `paths:` filters. A
-path-filtered workflow does not report a required check at all on an unrelated
-PR, which leaves it pending forever rather than passing.
-
-## Versioning
-
-Capstan follows [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`),
-published as git tags prefixed with `v` (e.g. `v0.1.0`).
-
-While in the **`0.x` range, Capstan is pre-stable**: it offers no
-backward-compatibility guarantees yet. During this phase, treat a `MINOR` bump
-(`0.1.x` → `0.2.0`) as potentially breaking and a `PATCH` bump (`0.1.0` →
-`0.1.1`) as fixes only. The first stable release will be `v1.0.0`, after which
-standard SemVer rules apply (`MAJOR` for breaking changes).
-
-Each release tag publishes the matching container image tags:
-
-| Git tag       | Image tags                                     |
-| ------------- | ---------------------------------------------- |
-| `v0.11.0`     | `:0.11.0`, `:0.11`, `:latest`                  |
-| `v0.12.0-rc.1`| `:0.12.0-rc.1` (pre-release; **not** `:latest`) |
-
-Pin a specific version (e.g. `ghcr.io/thinkbig1979/capstan:0.11.0`) for
-reproducible deployments; `:latest` always tracks the most recent stable
-release.
-
-### Rolling back
-
-Recovering from a bad release usually means re-pinning an older image tag (or
-letting watchtower revert one). Capstan's database schema is versioned and
-guards against this: on startup it logs the database's schema version
-alongside the version this binary understands, and if the database was
-already migrated by a **newer** binary than the one now starting, startup
-refuses with a fatal error naming both versions rather than running against a
-schema it doesn't fully understand — rolling back across a migration can
-corrupt data.
-
-If you've checked the specific rollback is safe (e.g. the migrations added
-between the two versions are additive and don't change data the older binary
-writes to), set `CAPSTAN_ALLOW_SCHEMA_DOWNGRADE=1` to downgrade the refusal to
-a warning and continue startup anyway. This variable only affects the
-forward-version check; it does not run any down-migration, and it does not by
-itself make an unsafe rollback safe.
+Project structure, local development, testing, branch protection, and the
+release process live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

@@ -1,8 +1,135 @@
-# Capstan - Local Testing Guide
+# Contributing to Capstan
 
-## Quick Start
+This covers the project layout, local development workflow, testing, branch
+protection, and release/versioning process. For running a Capstan instance as
+an operator, see [README.md](README.md).
 
-### Option 1: Docker Compose (Recommended)
+## Project Structure
+
+```
+capstan/
+├── backend/                  # Go backend (Gin API, SQLite, Docker/Git services)
+│   ├── cmd/server/           # main entrypoint
+│   └── internal/             # handlers, services, middleware, models
+├── frontend/                 # React + Vite + Tailwind SPA
+│   └── src/                  # components, hooks, stores, lib
+├── docker/                   # production Dockerfile + compose
+├── docker-compose.yaml       # local dev (builds the all-in-one image)
+└── docker-compose.prod.yaml  # runs the published image
+```
+
+## Quick Commands
+
+```bash
+# Full stack (Docker)
+./start-local.sh           # build + start
+docker compose logs -f     # view logs
+docker compose down        # stop
+
+# Backend only
+cd backend
+./run-local.sh             # quick start
+make run                   # run the server
+make test                  # run tests
+
+# Frontend only
+cd frontend
+./run-dev.sh               # Vite dev server (:5173)
+npm run build              # production build
+```
+
+## Development
+
+See [Testing](#testing) below for local testing and development workflow. Example
+environment files: [`.env.example`](.env.example) (production) and
+[`backend/.env.example`](backend/.env.example) (local dev).
+
+### Backend
+- Language: Go 1.25
+- Database: SQLite
+- Framework: Gin
+- Docker SDK: docker/docker (Moby) client
+- Git library: go-git
+
+### Frontend
+- Language: TypeScript
+- Framework: React + Vite
+- UI: Tailwind CSS
+- State: TanStack Query
+- Editor: CodeMirror 6
+
+### Branch protection
+
+`main` requires these six checks to pass before a pull request can merge:
+
+| Check | Workflow |
+| --- | --- |
+| Go vulnerabilities (govulncheck) | `security.yml` |
+| npm advisories (pnpm audit) | `security.yml` |
+| Image vulnerabilities (Trivy) | `security.yml` |
+| Build, vet, and unit tests | `backend.yml` |
+| Race detector | `backend.yml` |
+| Lint, test, and build | `frontend.yml` |
+
+Force pushes and branch deletion are blocked. Reviews are not required, and
+administrators can bypass a stuck check — the rule is there to stop an
+accidental merge over a red check, not to lock the repository against its
+maintainer.
+
+Real-Docker integration tests run on every backend change but are deliberately
+**not** required: the job depends on Docker Hub being reachable, so requiring it
+would make `main` mergeable only while an external service is up. The reasoning
+is recorded in the header of `.github/workflows/integration.yml`.
+
+This is also why `backend.yml` and `frontend.yml` carry no `paths:` filters. A
+path-filtered workflow does not report a required check at all on an unrelated
+PR, which leaves it pending forever rather than passing.
+
+## Versioning
+
+Capstan follows [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`),
+published as git tags prefixed with `v` (e.g. `v0.1.0`).
+
+While in the **`0.x` range, Capstan is pre-stable**: it offers no
+backward-compatibility guarantees yet. During this phase, treat a `MINOR` bump
+(`0.1.x` → `0.2.0`) as potentially breaking and a `PATCH` bump (`0.1.0` →
+`0.1.1`) as fixes only. The first stable release will be `v1.0.0`, after which
+standard SemVer rules apply (`MAJOR` for breaking changes).
+
+Each release tag publishes the matching container image tags:
+
+| Git tag       | Image tags                                     |
+| ------------- | ---------------------------------------------- |
+| `v0.11.0`     | `:0.11.0`, `:0.11`, `:latest`                  |
+| `v0.12.0-rc.1`| `:0.12.0-rc.1` (pre-release; **not** `:latest`) |
+
+Pin a specific version (e.g. `ghcr.io/thinkbig1979/capstan:0.11.0`) for
+reproducible deployments; `:latest` always tracks the most recent stable
+release.
+
+### Rolling back
+
+Recovering from a bad release usually means re-pinning an older image tag (or
+letting watchtower revert one). Capstan's database schema is versioned and
+guards against this: on startup it logs the database's schema version
+alongside the version this binary understands, and if the database was
+already migrated by a **newer** binary than the one now starting, startup
+refuses with a fatal error naming both versions rather than running against a
+schema it doesn't fully understand — rolling back across a migration can
+corrupt data.
+
+If you've checked the specific rollback is safe (e.g. the migrations added
+between the two versions are additive and don't change data the older binary
+writes to), set `CAPSTAN_ALLOW_SCHEMA_DOWNGRADE=1` to downgrade the refusal to
+a warning and continue startup anyway. This variable only affects the
+forward-version check; it does not run any down-migration, and it does not by
+itself make an unsafe rollback safe.
+
+## Testing
+
+### Quick Start
+
+#### Option 1: Docker Compose (Recommended)
 
 Start everything with a single command:
 
@@ -17,7 +144,7 @@ This will:
 
 **Access the application:** http://localhost:5001
 
-### Option 2: Backend Only (Native Go)
+#### Option 2: Backend Only (Native Go)
 
 Start just the backend (for development):
 
@@ -28,7 +155,7 @@ cd backend
 
 **Access the API:** http://localhost:5001
 
-### Option 3: Frontend Only (Native Node)
+#### Option 3: Frontend Only (Native Node)
 
 Start just the frontend dev server (requires backend running); Vite proxies
 `/api` requests to `http://localhost:5001`:
@@ -40,7 +167,7 @@ cd frontend
 
 **Access the UI:** http://localhost:5173
 
-## Directory Structure
+### Directory Structure
 
 ```
 capstan/
@@ -60,9 +187,9 @@ capstan/
 └── start-local.sh      # Quick start script
 ```
 
-## Configuration
+### Configuration
 
-### Backend Environment Variables
+#### Backend Environment Variables
 
 See `backend/.env.example` for all available options:
 
@@ -77,14 +204,14 @@ See `backend/.env.example` for all available options:
 | `GIT_SSH_KEY` | Path to SSH key for git | `/root/.ssh/id_rsa` |
 | `CORS_ORIGINS` | Comma-separated allowlist | empty = all origins |
 
-### Frontend
+#### Frontend
 
 The frontend has no build-time API URL to configure: in production it's
 served from the same origin as the API (single container), and in dev the
 Vite server proxies `/api` to `http://localhost:5001` (see
 `frontend/vite.config.ts`).
 
-## Docker Compose Commands
+### Docker Compose Commands
 
 ```bash
 # Start all services
@@ -106,7 +233,7 @@ docker compose down
 docker compose down -v
 ```
 
-## Manual Docker Build
+### Manual Docker Build
 
 ```bash
 docker build -f docker/Dockerfile -t capstan .
@@ -120,7 +247,7 @@ docker run -d \
   capstan
 ```
 
-## Testing the Backend
+### Testing the Backend
 
 ```bash
 # Health check
@@ -142,9 +269,9 @@ curl http://localhost:5001/api/v1/stacks
 curl http://localhost:5001/api/v1/stacks/nginx-test:default
 ```
 
-## Automated Tests
+### Automated Tests
 
-### Backend (Go)
+#### Backend (Go)
 
 ```bash
 cd backend
@@ -164,7 +291,7 @@ These run in CI via `.github/workflows/integration.yml`. Six
 test-helper bug (nil encryptor wired into the test DB), not an environment
 problem; tracked as a known issue.
 
-#### `Test_Resource_ImagePrune_CountsUntaggedEntries` is destructive and opt-in
+##### `Test_Resource_ImagePrune_CountsUntaggedEntries` is destructive and opt-in
 
 This test exercises `DockerService.PruneImages` with `All: false`, which maps
 to the Docker daemon's default image-prune filter (an empty filter set). The
@@ -199,7 +326,7 @@ sets `CAPSTAN_ALLOW_DESTRUCTIVE_IMAGE_PRUNE: "1"` in its `env:` block, since
 the runner is ephemeral and single-use — the hazard this guards against
 doesn't apply there, so CI keeps full coverage of `PruneImages`.
 
-### Frontend (Vitest)
+#### Frontend (Vitest)
 
 ```bash
 cd frontend
@@ -210,7 +337,7 @@ pnpm build
 
 Runs in CI via `.github/workflows/frontend.yml` (lint, unit tests, build).
 
-### End-to-end (Playwright)
+#### End-to-end (Playwright)
 
 A single backup/restore flow spec lives at
 `testing/tests/playwright/backup-flow.spec.ts`, driven by the root
@@ -223,13 +350,13 @@ npx playwright test
 See the header comment in `playwright.config.ts` for the environment
 variables it reads (base URL, test credentials, backup repo path, etc).
 
-### Bash-harness E2E suite
+#### Bash-harness E2E suite
 
 A broader smoke/core/regression suite driven by browser automation lives
 under `testing/` with its own orchestrator; see `testing/README.md` for how
 to run it (`./testing/test-orchestrator.sh`).
 
-## Stacks Directory
+### Stacks Directory
 
 When running locally, Docker Compose stacks are stored at:
 - **Docker Compose**: a bind mount of `${STACKS_DIR}` (host) to the same path
@@ -240,36 +367,36 @@ When running locally, Docker Compose stacks are stored at:
 
 You can add your own Docker Compose files here and they'll be detected automatically.
 
-## Troubleshooting
+### Troubleshooting
 
-### Backend won't start
+#### Backend won't start
 
 1. Check Docker is running: `docker info`
 2. Check logs: `docker compose logs app`
 3. Verify port 5001 isn't in use: `lsof -i :5001`
 
-### Frontend won't connect to backend
+#### Frontend won't connect to backend
 
 1. Verify backend is running: `curl http://localhost:5001/health`
 2. If running the Vite dev server standalone, confirm the proxy target in
    `frontend/vite.config.ts` matches where the backend is listening
 3. Check `CORS_ORIGINS` in `backend/.env`
 
-### Docker socket permission denied
+#### Docker socket permission denied
 
 The backend needs access to the Docker socket. Ensure:
 - The socket is mounted: `-v /var/run/docker.sock:/var/run/docker.sock`
 - The user has permission to access the Docker socket
 
-### Database errors
+#### Database errors
 
 The SQLite database is created automatically. If you see errors:
 1. Check `DATA_DIR` is writable
 2. Remove the database (back it up first) and restart the backend
 
-## Development
+### Development
 
-### Backend Development
+#### Backend Development
 
 ```bash
 cd backend
@@ -279,7 +406,7 @@ make build        # Build binary
 make lint         # go vet + staticcheck (if installed)
 ```
 
-### Frontend Development
+#### Frontend Development
 
 ```bash
 cd frontend
@@ -289,13 +416,13 @@ pnpm test         # Run tests (watch mode)
 pnpm lint         # Lint
 ```
 
-## Production Deployment
+### Production Deployment
 
 See the README's [Production Deployment](README.md#production-deployment)
 section for the full checklist (secrets, `AUTH_DISABLED`, TLS, trusted
 networks, backups).
 
-## Security Notes
+### Security Notes
 
 - For local testing, authentication is disabled (`AUTH_DISABLED=true`). Never
   expose an instance with authentication disabled beyond localhost/trusted
