@@ -129,8 +129,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # QEMU only emulates the lightweight runtime-stage steps (apk add, user
-      # setup) for arm64; the heavy Go/Node builds cross-compile on the host.
+      # QEMU only emulates the runtime-stage steps (apt-get install, user setup)
+      # for arm64; the heavy Go/Node builds cross-compile on the host. Note that
+      # since the move to Debian bases this leg is slower than it was under
+      # Alpine — dpkg/apt under emulation costs more than apk did.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 

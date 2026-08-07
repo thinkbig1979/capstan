@@ -411,9 +411,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ADVISORY, for now. This is the only check covering the Alpine 3.24
-      # runtime base and the pinned restic 0.19.1 / rclone 1.74.4 static
-      # binaries — nothing else in CI looks at them at all. Starting advisory is
+      # ADVISORY, for now. This is the only check covering the Debian trixie
+      # runtime base, the Docker CLI binaries lifted from docker:28-cli, and the
+      # pinned restic 0.19.1 / rclone 1.74.4 static binaries — nothing else in
+      # CI looks at any of them at all. Starting advisory is
       # a deliberate choice about sequencing, not about importance: this scan
       # has no observed baseline yet, and turning on an unknown number of
       # findings as a merge blocker on day one blocks work that has nothing to
@@ -428,18 +429,39 @@ jobs:
       # not something a PR can act on. It stays out of the report so the report
       # stays worth reading.
       #
-      # OBSERVED BASELINE, first run 2026-07-31: alpine 3.21.7 clean; the
-      # Capstan binary carrying one finding; rclone 39 and restic 35, which is
-      # 8 CRITICAL and 11 HIGH once filtered to fixable. Those two are pinned
-      # static binaries several releases behind upstream and are tracked as
-      # agent-os-9e1. That baseline is the reason this job starts advisory:
-      # turning it blocking today would red-X every unrelated PR until 9e1
-      # lands.
+      # SUPERSEDED BASELINE, first run 2026-07-31 (alpine 3.21.7): base clean,
+      # Capstan binary 1, rclone 39, restic 35 — 8 CRITICAL / 11 HIGH fixable.
+      # Kept only so the two baselines can be compared; the image it describes
+      # no longer exists. It went stale twice (alpine 3.24, agent-os-4pa.2) and
+      # then obsolete entirely when the runtime moved off Alpine.
       #
-      # STALE (agent-os-4pa.2, 2026-08-04): the runtime base has since moved to
-      # alpine 3.24, so the 3.21.7 line above is no longer the current base and
-      # the "clean" observation is not re-confirmed here. Re-take this baseline
-      # against 3.24 before graduating the gate to `exit-code: '1'`.
+      # OBSERVED BASELINE, PR #148 run on 2026-08-07, against the current
+      # debian:trixie-slim image. HIGH,CRITICAL, ignore-unfixed:
+      #
+      #   capstan:scan (debian 13.6)   debian      0     <-- base is clean
+      #   app/server                   gobinary    1
+      #   usr/local/bin/restic         gobinary    3
+      #   usr/local/bin/rclone         gobinary    4
+      #   usr/local/bin/docker         gobinary   15
+      #   .../cli-plugins/docker-buildx   gobinary  44
+      #   .../cli-plugins/docker-compose  gobinary  45
+      #
+      # Two things changed shape, and both matter for graduating the gate:
+      #
+      # 1. restic and rclone collapsed from 35/39 to 3/4 — the agent-os-9e1
+      #    version bumps landed. The original reason this job started advisory
+      #    is largely gone.
+      # 2. The Docker CLI is now three static Go binaries copied from
+      #    docker:28-cli instead of Alpine packages, so Trivy resolves their
+      #    module graphs and reports 104 findings that the apk packaging never
+      #    surfaced. These are upstream's own published binaries: nothing in
+      #    this repo can "fix" them short of waiting for a docker:28-cli rebuild
+      #    and bumping the pinned digest.
+      #
+      # So the blocker is no longer the backup tools, it is the Docker CLI. Do
+      # not graduate to `exit-code: '1'` until those 104 are triaged — most
+      # likely by scoping the gate to the base image and app/server, and
+      # tracking the CLI binaries by digest-bump cadence instead.
       #
       # READING THE `Fixed Version` COLUMN: it is the *product* version, which
       # is not always a Go module version. Trivy reports CVE-2026-34040 in

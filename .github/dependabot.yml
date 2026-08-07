@@ -89,8 +89,9 @@ updates:
           - patch
 
   # ---------------------------------------------------------------------------
-  # Covers the Dockerfile's pinned bases: node:22-alpine, golang:1.26.5-alpine,
-  # and alpine:3.21.
+  # Covers the Dockerfile's pinned bases: node:22-trixie-slim,
+  # golang:1.26.5-trixie, debian:trixie-slim, and the digest-pinned docker:28-cli
+  # stage the runtime lifts the Docker CLI binaries out of.
   #
   # NOTE for reviewers of these PRs: the Go base image is pinned in lockstep with
   # backend/go.mod's `toolchain` directive. Dependabot updates the Dockerfile
@@ -124,7 +125,8 @@ updates:
     # Version: 22 LTS" standard in CLAUDE.md. Dependabot's first run proposed
     # node:22-alpine -> node:25-alpine (PR #14), which is an odd-numbered, i.e.
     # non-LTS, line — and it would have moved one of those three without the
-    # other two.
+    # other two. The base has since moved to node:22-trixie-slim; the reasoning
+    # is unchanged.
     #
     # This encodes the existing policy rather than setting a new one. Moving to
     # the next LTS is a deliberate change across all three files, not a bot PR.
