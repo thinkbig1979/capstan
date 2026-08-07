@@ -264,53 +264,83 @@ check_links() {
   # Extraction is line-by-line (rather than grep over the whole file) so we
   # can track fence state: link-like syntax inside a ``` or ~~~ fenced code
   # block is example text, not a real markdown link, and must not be scanned.
-  local src line trimmed link def url
-  local in_fence=0 fence_char=""
+  #
+  # Trimming and matching use bash's builtin [[ =~ ]] / parameter expansion
+  # instead of a sed/grep subprocess per line: a ~1,000-line doc times
+  # several doc sources means thousands of forked processes if each line
+  # spawns one, which measured 6.6x slower than the whole-file grep this
+  # replaced. Builtins keep the per-line cost to zero forks.
+  local src line trimmed url rel_src marker rest match is_footnote
+  local in_fence=0 fence_char="" fence_open_line=0 lineno
+  # bash's own parser trips on a literal \( \) inside a [[ =~ <pattern> ]]
+  # written inline, so the patterns live in variables and are referenced
+  # unquoted (quoting here would make =~ match them as a literal string).
+  local inline_link_re='\[[^]]*\]\(([^)]+)\)'
+  local refdef_re='^\[[^]]+\]:[[:space:]]*<?([^[:space:]>]+)>?.*'
   for src in "${sources[@]}"; do
     in_fence=0
     fence_char=""
+    fence_open_line=0
+    lineno=0
+    rel_src="${src#"$REPO_ROOT"/}"
     while IFS= read -r line || [ -n "$line" ]; do
-      trimmed=$(printf '%s' "$line" | command sed -E 's/^[[:space:]]+//')
+      lineno=$((lineno + 1))
+
+      if [[ "$line" =~ ^[[:space:]]*(.*)$ ]]; then
+        trimmed="${BASH_REMATCH[1]}"
+      else
+        trimmed="$line"
+      fi
 
       # Fence delimiters: ``` or ~~~, 3+ chars, optionally indented, opening
       # may carry an info string (e.g. ```bash). A fence only closes against
       # its own character -- a ~~~ block is not closed by ```.
       if [[ "$trimmed" =~ ^(\`\`\`+|~~~+) ]]; then
-        local marker="${BASH_REMATCH[1]}"
+        marker="${BASH_REMATCH[1]}"
         if [ "$in_fence" -eq 1 ]; then
-          [ "${marker:0:1}" = "$fence_char" ] && { in_fence=0; fence_char=""; }
+          [ "${marker:0:1}" = "$fence_char" ] && { in_fence=0; fence_char=""; fence_open_line=0; }
         else
           in_fence=1
           fence_char="${marker:0:1}"
+          fence_open_line="$lineno"
         fi
         continue
       fi
       [ "$in_fence" -eq 1 ] && continue
 
-      # Footnote definitions ([^1]: prose...) are not links; the marker
-      # matches the reference-definition regex below and its body is prose,
-      # not a URL.
-      case "$line" in
-        '[^'*) continue ;;
-      esac
+      # Footnote definitions ([^1]: prose...) are not reference-style links --
+      # the marker matches that regex and its body is prose, not a URL -- but
+      # the prose can still hold a genuine inline link, so only the
+      # reference-definition pass below is skipped for these lines, not the
+      # inline pass. Matched against $trimmed so an indented footnote is
+      # still recognized.
+      is_footnote=0
+      [[ "$trimmed" =~ ^\[\^ ]] && is_footnote=1
 
-      # Inline links: [text](url)
-      while IFS= read -r link; do
-        [ -z "$link" ] && continue
+      # Inline links: [text](url). Looped so a line with more than one link
+      # is fully scanned, same as the old per-line grep -oE did.
+      rest="$line"
+      while [[ "$rest" =~ $inline_link_re ]]; do
+        url="${BASH_REMATCH[1]}"
+        match="${BASH_REMATCH[0]}"
         total_links=$((total_links + 1))
-        url=$(printf '%s\n' "$link" | command sed -E 's/^\[[^]]*\]\(([^)]+)\)$/\1/')
         resolve_link "$src" "$url"
-      done < <(printf '%s\n' "$line" | command grep -oE '\[[^]]*\]\([^)]+\)')
+        rest="${rest#*"$match"}"
+      done
 
       # Reference-style link definitions: [label]: url  (optionally <url>,
       # optionally followed by a "title" or 'title' -- title text is discarded).
-      def=$(printf '%s\n' "$line" | command grep -oE '^\[[^]]+\]:[[:space:]]*<?[^[:space:]>]+>?.*')
-      if [ -n "$def" ]; then
+      if [ "$is_footnote" -eq 0 ] && [[ "$line" =~ $refdef_re ]]; then
+        url="${BASH_REMATCH[1]}"
         total_links=$((total_links + 1))
-        url=$(printf '%s\n' "$def" | command sed -E 's/^\[[^]]+\]:[[:space:]]*<?([^[:space:]>]+)>?.*/\1/')
         resolve_link "$src" "$url"
       fi
     done < "$src"
+
+    if [ "$in_fence" -eq 1 ]; then
+      reasons="${reasons}${rel_src}: unterminated code fence opened at line $fence_open_line (rest of file not checked for links); "
+      ok=1
+    fi
   done
 
   if [ "$ok" -eq 0 ]; then
