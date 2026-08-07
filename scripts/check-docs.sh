@@ -82,10 +82,21 @@ line_count() {
 # self-links, e.g. "Docker Socket & Security" -> "docker-socket--security");
 # does not handle duplicate-heading disambiguation (-1, -2 suffixes) since
 # this repo's docs don't have duplicate headings within a file.
+#
+# The character filter is a bash pattern-removal expansion, not a sed
+# subprocess: heading_exists() below calls this once per heading in a file,
+# for every anchor link, so a per-call fork made link-checking cost
+# anchors x headings subprocesses. Note this makes the filter strict ASCII
+# (a-z0-9 space hyphen only), whereas the old sed version's behaviour for
+# non-ASCII input was locale-dependent (glibc collation under some UTF-8
+# locales keeps accented Latin letters that "[^a-z0-9 -]" looks like it
+# should strip) -- verified byte-identical to the old version across all
+# headings actually present in README.md/CONTRIBUTING.md, including the
+# arrow/en-dash ones.
 slugify() {
   local s="$1"
   s="${s,,}"
-  s=$(printf '%s' "$s" | command sed -E 's/[^a-z0-9 -]//g')
+  s="${s//[^a-z0-9 -]/}"
   s="${s// /-}"
   printf '%s' "$s"
 }
@@ -100,16 +111,25 @@ match_whole_token() {
   command grep -qE "(^|[^A-Za-z0-9_])${needle}([^A-Za-z0-9_]|\$)" "$file"
 }
 
+# Cache of $file -> newline-separated raw heading text, populated on first
+# heading_exists() lookup for that file. Multiple anchor links commonly
+# target the same file, so this avoids re-running the grep|sed heading
+# extraction once per anchor.
+declare -A _HEADING_CACHE
+
 # Does $2 (an already-slugified anchor, no leading '#') match a heading in file $1?
 heading_exists() {
   local file="$1" anchor="$2" heading slug
+  if [ -z "${_HEADING_CACHE[$file]+set}" ]; then
+    _HEADING_CACHE["$file"]=$(command grep -E '^#+[[:space:]]' "$file" | command sed -E 's/^#+[[:space:]]*//')
+  fi
   while IFS= read -r heading; do
     [ -z "$heading" ] && continue
     slug=$(slugify "$heading")
     if [ "$slug" = "$anchor" ]; then
       return 0
     fi
-  done < <(command grep -E '^#+[[:space:]]' "$file" | command sed -E 's/^#+[[:space:]]*//')
+  done <<< "${_HEADING_CACHE[$file]}"
   return 1
 }
 
