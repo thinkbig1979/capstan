@@ -264,3 +264,7 @@ via `swaggo` annotations or `huma`). This route list plus the coverage script
 catches drift at a fraction of the cost; a generated spec with request/response
 schemas would be a reasonable follow-up if the API grows a public/external
 consumer beyond the bundled web UI.
+
+---
+
+[← Documentation index](../../README.md#documentation)

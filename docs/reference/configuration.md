@@ -138,3 +138,7 @@ a remote.
 `HOME` is read (via `os.Getenv("HOME")`) only to build `GIT_SSH_KEY`'s default
 path; it is OS/container-provided, not a Capstan setting, and isn't listed as
 one above.
+
+---
+
+[← Documentation index](../../README.md#documentation)

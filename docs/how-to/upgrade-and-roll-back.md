@@ -36,3 +36,7 @@ writes to), set `CAPSTAN_ALLOW_SCHEMA_DOWNGRADE=1` to downgrade the refusal to
 a warning and continue startup anyway. This variable only affects the
 forward-version check; it does not run any down-migration, and it does not by
 itself make an unsafe rollback safe.
+
+---
+
+[← Documentation index](../../README.md#documentation)
