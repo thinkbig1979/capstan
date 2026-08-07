@@ -204,7 +204,7 @@ See `backend/.env.example` for all available options:
 | `GIT_SSH_KEY` | Path to SSH key for git | `/root/.ssh/id_rsa` |
 | `CORS_ORIGINS` | Comma-separated allowlist | empty = all origins |
 
-#### Frontend
+#### Frontend Environment Variables
 
 The frontend has no build-time API URL to configure: in production it's
 served from the same origin as the API (single container), and in dev the
@@ -394,7 +394,7 @@ The SQLite database is created automatically. If you see errors:
 1. Check `DATA_DIR` is writable
 2. Remove the database (back it up first) and restart the backend
 
-### Development
+### Development workflow
 
 #### Backend Development
 
