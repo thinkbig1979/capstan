@@ -110,11 +110,14 @@ func IsTrustedIP(clientIP string, networks string) bool {
 }
 
 // invalidTrustedNetworkWarnLimit caps how many distinct malformed entries are
-// remembered for warn-once purposes, mirroring the untrustedProxyWarnLimit /
-// untrustedForwardedProtoWarnLimit pattern in proxytrust.go. Generous
-// headroom rather than an attacker-facing budget: unlike those two, this
-// list comes from static operator config (TRUSTED_NETWORKS et al.), not
-// per-request client input.
+// remembered for warn-once purposes. It is a plain lifetime cap with generous
+// headroom, and it deliberately does NOT follow proxytrust.go's
+// untrustedWarnBudget: that one keys on the peer address, which is
+// attacker-chosen and unbounded, so it needs a per-window budget that refills
+// (agent-os-coi). This one keys on entries of static operator config
+// (TRUSTED_NETWORKS et al.), so its keyspace is bounded by the config file and
+// a never-resetting cap cannot be exhausted by traffic. The two used to share
+// a shape; since agent-os-coi they do not, and that divergence is intentional.
 const invalidTrustedNetworkWarnLimit = 64
 
 var invalidTrustedNetworkWarned struct {

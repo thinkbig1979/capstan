@@ -138,6 +138,29 @@ func CSRFMiddleware() gin.HandlerFunc {
 // than treated as an authoritative empty override of a real value earlier
 // in the list (agent-os-qru.9, OBSERVED 2026-08-05: see
 // TestIsSecureRequest_TrustsLastForwardedProtoValue).
+//
+// An X-Forwarded-Proto that carries no protocol claim is treated as ABSENT
+// rather than as a present-but-empty header (agent-os-coi). The guard is
+// lastForwardedProto(values) == "", which subsumes the previous
+// len(values) == 0 check. It is deliberately NOT written as "every value is
+// empty": those two are not equivalent, and the difference is the whole
+// point. OBSERVED 2026-08-07 against wire-parsed requests, [","], [",,,"],
+// [" "] and [" , "] all have a non-empty value yet no protocol claim, so an
+// "all values empty" test closes one shape and leaves four — each a
+// one-character way to reach warnUntrustedForwardedProto and spend a slot of
+// its per-window budget.
+//
+// This changes LOGGING only, not the security decision. OBSERVED across the
+// full matrix in both trust states: every no-claim shape already returned
+// false, including from a TRUSTED peer, because lastForwardedProto returns ""
+// and strings.EqualFold("", "https") is false. No input flips the boolean.
+//
+// One real behaviour change to write down rather than have someone rediscover:
+// a no-claim header now returns before isTrustedProxyPeer, so it no longer
+// reaches IsTrustedIP and can no longer be the request that triggers
+// warnInvalidTrustedNetworkOnce for a malformed TRUSTED_NETWORKS entry. That
+// warning is once-per-entry regardless, and every request carrying an actual
+// protocol claim still reaches it, so the entry is still reported.
 func IsSecureRequest(c *gin.Context) bool {
 	if c.Request == nil {
 		return false
@@ -145,8 +168,8 @@ func IsSecureRequest(c *gin.Context) bool {
 	if c.Request.TLS != nil {
 		return true
 	}
-	values := c.Request.Header.Values("X-Forwarded-Proto")
-	if len(values) == 0 {
+	proto := lastForwardedProto(c.Request.Header.Values("X-Forwarded-Proto"))
+	if proto == "" {
 		return false
 	}
 	remoteIP := c.RemoteIP()
@@ -154,7 +177,7 @@ func IsSecureRequest(c *gin.Context) bool {
 		warnUntrustedForwardedProto(remoteIP)
 		return false
 	}
-	return strings.EqualFold(lastForwardedProto(values), "https")
+	return strings.EqualFold(proto, "https")
 }
 
 // lastForwardedProto returns the last non-empty (after TrimSpace) value
