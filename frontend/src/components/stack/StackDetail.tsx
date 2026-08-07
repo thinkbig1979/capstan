@@ -162,7 +162,11 @@ function OverviewTabContent({
 
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">Backup</span>
-          <HelpHint label="Backup" title="Backup">
+          <HelpHint
+            label="Backup"
+            title="Backup"
+            href="https://github.com/thinkbig1979/capstan/blob/main/docs/how-to/configure-backups.md"
+          >
             <p>Adds this stack to scheduled backups, covering its volumes and compose files.</p>
             <p>Set up the repository and schedule under Settings, Backup.</p>
           </HelpHint>

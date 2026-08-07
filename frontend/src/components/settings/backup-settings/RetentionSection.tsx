@@ -21,7 +21,12 @@ export function RetentionSection({ draft, onChange }: RetentionSectionProps) {
     <div className="space-y-4 pt-4 border-t">
       <div className="flex items-center gap-1.5">
         <h3 className="text-lg font-medium">Retention</h3>
-        <HelpHint label="Retention" title="Retention" side="right">
+        <HelpHint
+          label="Retention"
+          title="Retention"
+          side="right"
+          href="https://github.com/thinkbig1979/capstan/blob/main/docs/reference/configuration.md#backups--restic"
+        >
           <p>
             After a backup, restic can thin out old snapshots, keeping a set number per day,
             week, month, and year. Set a level to 0 to keep none there.

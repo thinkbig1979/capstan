@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Info } from 'lucide-react'
+import { ExternalLink, Info } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 
@@ -10,6 +10,13 @@ interface HelpHintProps {
   title?: string
   /** Help body. Plain text or rich nodes. */
   children: React.ReactNode
+  /**
+   * Optional URL to a docs page with more detail. Renders a "Learn more" link
+   * in the popover footer, opening in a new tab. Omit when the hint's own
+   * text already fully answers the question it raises — don't force a link
+   * just because one is available.
+   */
+  href?: string
   side?: 'top' | 'right' | 'bottom' | 'left'
   align?: 'start' | 'center' | 'end'
   /** Extra classes for the trigger button (e.g. spacing). */
@@ -27,6 +34,7 @@ export function HelpHint({
   label,
   title,
   children,
+  href,
   side = 'top',
   align = 'center',
   className,
@@ -57,6 +65,18 @@ export function HelpHint({
       >
         {title &&<p className="mb-1.5 font-medium text-foreground">{title}</p>}
         <div className="space-y-1.5 leading-relaxed text-muted-foreground">{children}</div>
+        {href && (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Learn more about ${label}`}
+            className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline"
+          >
+            Learn more
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        )}
       </PopoverContent>
     </Popover>
   )

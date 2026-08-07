@@ -18,7 +18,12 @@ export function CloudSection({ draft, onChange, rcloneAvailable, onTestCloud, is
     <div className="space-y-4 pt-4 border-t">
       <div className="flex items-center gap-1.5">
         <h3 className="text-lg font-medium">Cloud (rclone)</h3>
-        <HelpHint label="Cloud sync" title="Cloud sync" side="right">
+        <HelpHint
+          label="Cloud sync"
+          title="Cloud sync"
+          side="right"
+          href="https://github.com/thinkbig1979/capstan/blob/main/docs/how-to/configure-backups.md#cloud-sync-optional"
+        >
           <p>rclone copies the restic repository to off-site storage like S3 or Backblaze.</p>
           <p>
             &apos;Remote&apos; is the name you gave that storage in your rclone config, and

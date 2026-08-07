@@ -38,7 +38,12 @@ export function RepositorySection({
     <div className="space-y-4">
       <div className="flex items-center gap-1.5">
         <h3 className="text-lg font-medium">Repository</h3>
-        <HelpHint label="restic repository" title="restic repository" side="right">
+        <HelpHint
+          label="restic repository"
+          title="restic repository"
+          side="right"
+          href="https://github.com/thinkbig1979/capstan/blob/main/docs/how-to/configure-backups.md#configuration"
+        >
           <p>
             Backups run through restic, which stores them deduplicated and encrypted in a
             repository.
