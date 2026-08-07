@@ -12,28 +12,57 @@ Settings → About and `GET /api/v1/version` both report `dev` instead of a
 version number. If you're running a published image, About will show a real
 version tag instead.
 
-## 1. Start the instance
+## 1. Choose a stacks directory you own
+
+`STACKS_DIR` controls where stack directories are written, both inside and
+outside the container — the two paths must match. The default is
+`/opt/stacks`, and the container **deliberately never takes ownership of
+it**: `docker/entrypoint.sh` remaps its runtime user to `PUID`/`PGID`
+(default `1000:1000`) instead of chowning the directory, specifically so
+Capstan never rewrites ownership of compose projects that already live
+there. On a host where `/opt/stacks` doesn't already belong to that user —
+including a plain default install where nothing has claimed it yet — the
+first stack you create will fail with a directory error, and the error
+doesn't say why.
+
+Avoid that by pointing `STACKS_DIR` at a directory you own before you start:
+
+```bash
+mkdir -p ~/capstan-stacks
+```
+
+If you'd rather use `/opt/stacks` (or another shared path), align
+`PUID`/`PGID` to its owner instead — see
+[Paths, volumes & container user](reference/configuration.md#paths-volumes--container-user).
+
+## 2. Start the instance
 
 From the repository root:
 
 ```bash
-./start-local.sh
+STACKS_DIR=~/capstan-stacks docker compose up -d --build
 ```
 
-This builds the all-in-one image, creates `backend/.env` from
-`backend/.env.example` if it doesn't already exist, and runs
-`docker compose up -d --build`. Wait for `Backend is healthy!`, then open
-<http://localhost:5001>.
+This builds the all-in-one image and starts it. Confirm it's actually ready
+before opening it in a browser:
 
-`STACKS_DIR` controls where stack directories are written, both inside and
-outside the container — the two paths must match (see
-[Configuration Reference](reference/configuration.md)). The default,
-`/opt/stacks`, may already be owned by another user or process on your host;
-if stack creation later fails with a directory error, point `STACKS_DIR` at a
-path your container user (`PUID`/`PGID`, default `1000:1000`) can write to
-before retrying.
+```bash
+docker compose ps
+```
 
-## 2. Create the admin account
+Wait for `STATUS` to show `(healthy)` — that's Docker's own healthcheck,
+which runs *inside* the container against genuine loopback. Don't use
+`curl http://localhost:5001/health` from your host as a substitute: by
+design that endpoint only answers loopback callers, and a request from the
+host arrives via the Docker bridge instead, so you'll get a `403` even
+though the instance is fine (`HEALTH_ALLOWED_NETWORKS` in
+[Configuration Reference](reference/configuration.md) controls this). If you
+want a host-reachable check, `curl http://localhost:5001/api/v1/version`
+returns `200` and isn't subject to that restriction.
+
+Once `docker compose ps` shows healthy, open <http://localhost:5001>.
+
+## 3. Create the admin account
 
 A fresh instance with `AUTH_DISABLED=false` opens straight to a setup form —
 there's no separate login step yet, because there's no account to log in
@@ -42,7 +71,7 @@ and a symbol) and submit. Capstan creates the account and logs you straight
 into the dashboard — you won't see the login page until you sign out or your
 session expires.
 
-## 3. Tour the dashboard
+## 4. Tour the dashboard
 
 The dashboard's tab bar is your map of everything Capstan manages on this
 host: **Metrics** (the landing view — CPU/memory/disk at a glance),
@@ -51,7 +80,7 @@ projects), **Updates** (available image updates), **Images**, **Volumes**,
 **Networks**, and **Build Cache**. With no stacks yet, most of these are
 empty — that's expected.
 
-## 4. Create your first stack
+## 5. Create your first stack
 
 Click **New Stack**. The dialog opens with a starter compose template
 already filled in — edit it in place rather than starting from a blank
@@ -72,7 +101,7 @@ file:
 Capstan writes `compose.yaml` into the new stack directory and takes you to
 the stack's **Overview** page, stopped.
 
-## 5. Start it and confirm it's running
+## 6. Start it and confirm it's running
 
 Click **Start**. Capstan runs `docker compose up -d` against the stack's
 directory and streams the output live — you'll see the network and container
@@ -89,7 +118,7 @@ curl -I http://localhost:8088   # or whatever host port you set
 A `200 OK` from nginx means the container Capstan just created is genuinely
 serving traffic, not just reported as running.
 
-## 6. Explore the stack page
+## 7. Explore the stack page
 
 Beyond Overview, the stack page has tabs for **Compose** (edit and redeploy
 the compose file), **Environment** (the stack's `.env`), **Logs** (tailing
