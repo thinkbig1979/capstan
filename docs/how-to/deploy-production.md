@@ -26,6 +26,10 @@ a key independent of `JWT_SECRET`; if unset it falls back to `JWT_SECRET`. Using
 separate value means rotating `JWT_SECRET` doesn't require re-encryption and a
 leaked `JWT_SECRET` alone can't decrypt stored secrets.
 
+For every variable Capstan reads — including which ones a Settings page can
+override at runtime, so a value set here can appear to have no effect — see
+the [Configuration reference](../reference/configuration.md).
+
 ## Security checklist
 
 - **Set a strong `JWT_SECRET`** (min 32 characters) and a separate `STORAGE_KEY`.
