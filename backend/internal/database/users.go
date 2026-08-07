@@ -1,6 +1,8 @@
 package database
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -68,6 +70,39 @@ func (d *DB) GetUserByID(id string) (*models.User, error) {
 	return &user, nil
 }
 
+// ErrNoSoleUser reports that the users table does not hold exactly one row, so
+// "the account" is ambiguous and the caller must name one explicitly.
+var ErrNoSoleUser = errors.New("users table does not contain exactly one account")
+
+// GetSoleUser returns the single account when the users table holds exactly
+// one, and ErrNoSoleUser otherwise.
+//
+// This exists for the offline password reset (agent-os-8pa), where requiring
+// --username would mean an operator locked out of their own instance has to
+// remember which name they chose during first-run setup. Capstan permits
+// exactly one account — /auth/setup 409s once userCount > 0 — so in practice
+// there is never ambiguity to resolve. The error path is kept anyway rather
+// than assuming the invariant holds in a database that may have been edited by
+// hand, which for a recovery tool is exactly the situation to expect.
+func (d *DB) GetSoleUser() (*models.User, error) {
+	count, err := d.UserCount()
+	if err != nil {
+		return nil, err
+	}
+	if count != 1 {
+		return nil, fmt.Errorf("%w: found %d", ErrNoSoleUser, count)
+	}
+
+	var user models.User
+	query := `SELECT id, username, password, created_at, updated_at FROM users LIMIT 1`
+	if err := d.db.QueryRow(query).Scan(
+		&user.ID, &user.Username, &user.Password, &user.CreatedAt, &user.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func (d *DB) UpdateUserPassword(id, password string, updatedAt time.Time) error {
 	query := `UPDATE users SET password = ?, updated_at = ? WHERE id = ?`
 	_, err := d.db.Exec(query, password, updatedAt, id)
@@ -102,6 +137,15 @@ func (d *DB) DeleteSessionsByUserExcluding(userID, excludeSessionID string) erro
 	query := `DELETE FROM sessions WHERE user_id = ? AND id != ?`
 	_, err := d.db.Exec(query, userID, excludeSessionID)
 	return err
+}
+
+// CountSessionsForUser reports how many session rows the user currently holds.
+// Used by the offline password reset to verify its own revocation, and by
+// tests that need to assert on session state rather than on a return code.
+func (d *DB) CountSessionsForUser(userID string) (int, error) {
+	var count int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM sessions WHERE user_id = ?", userID).Scan(&count)
+	return count, err
 }
 
 func (d *DB) DeleteExpiredSessions() error {
