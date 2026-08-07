@@ -88,3 +88,7 @@ Rclone config file: mount it read-only into the container if you manage it exter
 volumes:
   - ~/.config/rclone/rclone.conf:/home/appuser/.config/rclone/rclone.conf:ro
 ```
+
+---
+
+[← Documentation index](../../README.md#documentation)

@@ -81,3 +81,7 @@ production-scale repository. Size it for your own deployment:
 - **Re-check after repository growth**: the ceiling that was safe at 100 GB
   may not be safe at 1 TB — revisit sizing periodically or after adding
   large new backup sources.
+
+---
+
+[← Documentation index](../../README.md#documentation)

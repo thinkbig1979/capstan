@@ -174,3 +174,7 @@ curl -X POST http://localhost:5001/api/v1/backups/restore \
 
 A runbook that has never been executed is a hypothesis. Run it end to end
 against a scratch instance at least once, before you need it.
+
+---
+
+[← Documentation index](../../README.md#documentation)

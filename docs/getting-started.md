@@ -10,7 +10,9 @@ Verified against Capstan version `dev` (commit `unknown`, no build date) —
 this instance was built from source rather than a tagged release, so
 Settings → About and `GET /api/v1/version` both report `dev` instead of a
 version number. If you're running a published image, About will show a real
-version tag instead.
+version tag instead. The walkthrough landed in commit `a20b9f1` (2026-08-07);
+diff `docs/`, `frontend/` and `backend/` from there to see what may have
+drifted since.
 
 ## 1. Choose a stacks directory you own
 
@@ -138,3 +140,7 @@ stack is running; this tutorial stops at "created and running."
   [API Reference](reference/api.md)
 - How the pieces fit together:
   [Architecture](explanation/architecture.md)
+
+---
+
+[← Documentation index](../README.md#documentation)

@@ -29,3 +29,7 @@ matter of pointing it at your existing stacks directory.
 
 You can run Dockge and Capstan side by side during migration as long as only one
 manages a given stack at a time.
+
+---
+
+[← Documentation index](../../README.md#documentation)

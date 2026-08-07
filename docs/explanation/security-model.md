@@ -233,3 +233,7 @@ control of the Docker socket, which is root-equivalent control of the host
 (see [Docker Socket & Security](#docker-socket--security)). Capstan has no
 read-only or scoped-permission user; treat every login as administrative
 access, and don't expose an instance to anyone you wouldn't hand host root.
+
+---
+
+[← Documentation index](../../README.md#documentation)

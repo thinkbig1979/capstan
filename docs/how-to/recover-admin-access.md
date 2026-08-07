@@ -35,3 +35,7 @@ container, and anyone with that can already read `JWT_SECRET` and mint a token,
 or edit `capstan.db` directly. It adds convenience to what host access already
 permits, which is exactly the claim a network-facing reset flow could not make.
 Protecting shell access to the host remains the control that matters.
+
+---
+
+[← Documentation index](../../README.md#documentation)

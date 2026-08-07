@@ -70,3 +70,7 @@ processes instead of the single built image: the backend serves the API on
 `:5001` (`frontend/vite.config.ts`). This is the only mode where API and UI are
 served from different origins/ports; the built image always serves both from
 one.
+
+---
+
+[← Documentation index](../../README.md#documentation)
