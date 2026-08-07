@@ -43,7 +43,8 @@ frontend assets, and backup tools into one image, adds a non-root `appuser`
 Docker socket's group at container start before dropping privileges — see
 [Docker Socket & Security](security-model.md#docker-socket--security) for why
 that step exists. A `HEALTHCHECK` calls `GET /health` (liveness, not
-readiness — see the API Endpoints section of the README for the distinction).
+readiness — see the [API reference](../reference/api.md#health) for the
+distinction).
 
 ## Deployment shape
 
