@@ -41,6 +41,32 @@ func StackID(root, primaryRoot string, extraRoots []string, pathID, name string)
 	return fmt.Sprintf("%s~%s:%s", StackIDRootPrefix(root, primaryRoot, extraRoots), pathID, name)
 }
 
+// ComposeProjectName is the single producer of compose project names, for the
+// same reason StackID above is the single producer of IDs.
+//
+// The scanner and POST /api/v1/stacks each derived this independently and
+// disagreed for the default compose file: create-with-deploy deployed under
+// "<dir>-default" while the scan that immediately follows it stored "<dir>"
+// (agent-os-07x). buildComposeArgs (docker.go) passes the STORED value as -p,
+// so the containers the create had just started were unreachable to every later
+// operation: the dashboard reported Stopped while the stack served traffic, and
+// Start built a second, colliding project.
+//
+// The scanner's rule is the one kept, because it is the one that matches what
+// Docker Compose itself does with a bare compose.yaml in <dir>: the project is
+// the directory name, with no suffix. Only a named compose file (compose.api.
+// yaml) earns one.
+//
+// name is the compose profile as extractStackName returns it ("default" for
+// compose.yaml). Colons are not legal in a compose project name, so a profile
+// carrying one is flattened to "-".
+func ComposeProjectName(dirName, name string) string {
+	if name == "default" {
+		return dirName
+	}
+	return fmt.Sprintf("%s-%s", dirName, strings.ReplaceAll(name, ":", "-"))
+}
+
 // StackIDRootPrefix returns the root component of a stack ID.
 //
 // Normally that is just the root's basename, which is what every stack ID in
@@ -618,12 +644,7 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 			stackPathID := strings.ReplaceAll(relPath, string(filepath.Separator), "-")
 			stackID := StackID(effectiveRoot, s.config.StacksDir, s.config.ExtraStacksDirs, stackPathID, name)
 
-			var projectName string
-			if name == "default" {
-				projectName = dirName
-			} else {
-				projectName = fmt.Sprintf("%s-%s", dirName, strings.ReplaceAll(name, ":", "-"))
-			}
+			projectName := ComposeProjectName(dirName, name)
 
 			stack := models.Stack{
 				ID:          stackID,
