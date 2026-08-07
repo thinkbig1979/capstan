@@ -23,12 +23,12 @@ if [ -S "$SOCK" ]; then
   SOCK_GID="$(stat -c '%g' "$SOCK")"
   if [ "$SOCK_GID" -ne 0 ]; then
     if ! getent group "$SOCK_GID" >/dev/null 2>&1; then
-      addgroup -g "$SOCK_GID" dockerhost
+      groupadd -g "$SOCK_GID" dockerhost
     fi
-    addgroup appuser "$(getent group "$SOCK_GID" | cut -d: -f1)"
+    usermod -aG "$(getent group "$SOCK_GID" | cut -d: -f1)" appuser
   else
     # Socket owned by the root group (e.g. some rootless Docker setups).
-    addgroup appuser root 2>/dev/null || true
+    usermod -aG root appuser 2>/dev/null || true
   fi
 else
   echo "WARN: $SOCK not found. Mount it with:" >&2
@@ -47,4 +47,6 @@ if [ "$(stat -c '%u:%g' /app/data 2>/dev/null)" != "$PUID:$PGID" ]; then
 fi
 
 # 4. Drop privileges and run the server (CMD) as the non-root user.
-exec su-exec appuser "$@"
+#    gosu, like the su-exec it replaces, execs directly and does no environment
+#    munging — HOME and the rest of the container env carry through unchanged.
+exec gosu appuser "$@"

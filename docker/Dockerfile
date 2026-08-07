@@ -1,7 +1,7 @@
 # Frontend build stage — runs on the build host's native arch ($BUILDPLATFORM),
 # not the target arch, because the compiled output (static JS/CSS in dist/) is
 # architecture-neutral. This avoids slow QEMU emulation of the Node build.
-FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-build
+FROM --platform=$BUILDPLATFORM node:22-trixie-slim AS frontend-build
 
 WORKDIR /app/frontend
 
@@ -23,11 +23,13 @@ RUN npm run build
 # Backend build stage — also pinned to $BUILDPLATFORM. Go cross-compiles
 # natively (CGO disabled), so we build on the fast host arch and emit a binary
 # for the requested $TARGETARCH. TARGETOS/TARGETARCH are provided by Buildx.
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS backend-build
+FROM --platform=$BUILDPLATFORM golang:1.26.5-trixie AS backend-build
 
 WORKDIR /app
 
-RUN apk add --no-cache git
+# No package install here: the Debian golang images are buildpack-deps based and
+# already carry git (2.47.3), which `go mod download` needs for VCS-resolved
+# modules. The Alpine variant did not, hence the `apk add git` this replaces.
 
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
@@ -62,9 +64,17 @@ RUN set -eu; \
 
 # Backup-tools fetch stage — downloads restic and rclone static binaries for the
 # target architecture on the build host. Pinned to exact versions for
-# reproducible builds. No QEMU emulation needed: the binaries are static and
-# architecture-specific, resolved via $TARGETARCH provided by Buildx.
-FROM alpine:3.24 AS backup-tools
+# reproducible builds.
+#
+# $BUILDPLATFORM is load-bearing, and was missing before the Debian move: every
+# step here is arch-neutral (curl, sha256sum, bunzip2, unzip) on an archive
+# chosen by $TARGETARCH, so nothing needs emulating. Left unpinned, the arm64 leg
+# ran the package install under QEMU — 324s measured on 2026-08-07, against
+# seconds for the apk it replaced. The consequence is that the fetched binaries
+# cannot be executed in this stage, so the `restic version` / `rclone version`
+# smoke checks moved to the runtime stage, where they exercise the exact
+# binaries that ship rather than a copy in a throwaway stage.
+FROM --platform=$BUILDPLATFORM debian:trixie-slim AS backup-tools
 
 # Pinned versions — bump here when upgrading.
 # Note: use RESTIC_VER / RCLONE_VER (not RESTIC_VERSION / RCLONE_VERSION) to
@@ -83,7 +93,15 @@ ARG RCLONE_SHA256_ARM64=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c
 
 ARG TARGETARCH
 
-RUN apk add --no-cache curl bzip2 unzip
+# ca-certificates is not optional here: with --no-install-recommends, curl does
+# not pull it in, and both downloads below are HTTPS.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      bzip2 \
+      ca-certificates \
+      curl \
+      unzip && \
+    rm -rf /var/lib/apt/lists/*
 
 # restic — official static binary from GitHub releases.
 # Mapping: TARGETARCH (amd64 | arm64) -> restic arch string (amd64 | arm64)
@@ -99,8 +117,7 @@ RUN set -eu; \
     echo "${RESTIC_SHA256}  /tmp/restic.bz2" | sha256sum -c -; \
     bunzip2 /tmp/restic.bz2; \
     mv /tmp/restic /usr/local/bin/restic; \
-    chmod +x /usr/local/bin/restic; \
-    restic version
+    chmod +x /usr/local/bin/restic
 
 # rclone — official static binary from downloads.rclone.org.
 # Mapping: TARGETARCH (amd64 | arm64) -> rclone arch string (amd64 | arm64)
@@ -117,44 +134,73 @@ RUN set -eu; \
     unzip -j /tmp/rclone.zip "rclone-v${RCLONE_VER}-linux-${TARGETARCH}/rclone" -d /tmp; \
     mv /tmp/rclone /usr/local/bin/rclone; \
     chmod +x /usr/local/bin/rclone; \
-    rclone version; \
     rm /tmp/rclone.zip
 
+# Docker CLI source stage. Debian has no docker-cli/buildx/compose packages
+# outside Docker's own apt repo, and `docker.io` from Debian proper drags in the
+# daemon — which this image must never contain, it talks to the host's. The
+# official docker:*-cli image ships exactly the three static binaries we want,
+# built for both target arches, so we lift them out of it.
+#
+# Pinned by index digest, not just by tag: the tag moves and a silently swapped
+# CLI is the kind of change that only shows up in production. Dependabot tracks
+# this FROM line like any other.
+FROM docker:28-cli@sha256:625d9431a9f54c5a2bc90f24f0e1c3d55b1349fd857dd85035f98c2c9acbdd4d AS docker-cli
+
 # Runtime stage
-FROM alpine:3.24
+FROM debian:trixie-slim
 
 WORKDIR /app
 
-RUN apk add --no-cache \
-    ca-certificates \
-    docker-cli \
-    docker-cli-buildx \
-    docker-cli-compose \
-    git \
-    openssh-client \
-    shadow \
-    su-exec \
-    tzdata \
-    wget
+# `passwd` (groupadd/usermod/groupmod) and `tzdata` are already in trixie-slim;
+# they are named anyway because entrypoint.sh's UID/GID remap depends on them
+# and a future trim of the base should fail loudly here, not at container start.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates \
+      git \
+      gosu \
+      openssh-client \
+      passwd \
+      tzdata \
+      wget && \
+    rm -rf /var/lib/apt/lists/*
+
+# The Docker CLI and its two plugins. /usr/local/libexec/... is one of the CLI's
+# default plugin search paths, so `docker buildx` / `docker compose` resolve
+# with no extra config — keep the destination in step with the source path.
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
+COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 
 # Non-root runtime user. The Docker socket's group GID differs from host to
 # host, so it is deliberately NOT hardcoded here — entrypoint.sh discovers the
 # mounted socket's group at runtime and joins it. UID/GID default to 1000 and
 # can be remapped to the host owner via the PUID/PGID env vars.
-RUN addgroup -g 1000 appuser && \
-    adduser -D -u 1000 -G appuser appuser
+RUN groupadd -g 1000 appuser && \
+    useradd -u 1000 -g appuser -m -d /home/appuser -s /bin/sh appuser
 
 # Backup tools — copied from the dedicated fetch stage so the runtime layer
 # stays lean (no curl/unzip/bzip2 installed).
 COPY --from=backup-tools /usr/local/bin/restic /usr/local/bin/restic
 COPY --from=backup-tools /usr/local/bin/rclone /usr/local/bin/rclone
 
-COPY --from=backend-build /app/server /app/
-COPY --from=frontend-build /app/frontend/dist /app/frontend/
+# Smoke test the shipped binaries, in the image that ships them and for the arch
+# it targets. A wrong-arch or truncated download is otherwise only discovered by
+# a user's first backup. Adds no bytes: the commands write nothing.
+RUN restic version && rclone version
 
-RUN chmod +x /app/server && \
-    mkdir -p /opt/stacks /app/data && \
-    chown -R appuser:appuser /app
+# --chmod/--chown on the COPY rather than a following RUN. A `chmod +x` or a
+# `chown -R` over /app forces overlayfs to copy the 50 MB server binary up into
+# a second layer — 59.4 MB of pure duplicate in the 0.16.1 image. Setting the
+# bits as the file lands costs nothing.
+COPY --chown=appuser:appuser --chmod=755 --from=backend-build /app/server /app/
+COPY --chown=appuser:appuser --from=frontend-build /app/frontend/dist /app/frontend/
+
+# /opt/stacks is deliberately left root-owned, as before: PUID/PGID are matched
+# to the host owner of the mounted stacks instead of rewriting its ownership.
+RUN mkdir -p /opt/stacks /app/data && \
+    chown appuser:appuser /app /app/data
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

@@ -411,9 +411,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ADVISORY, for now. This is the only check covering the Alpine 3.24
-      # runtime base and the pinned restic 0.19.1 / rclone 1.74.4 static
-      # binaries — nothing else in CI looks at them at all. Starting advisory is
+      # ADVISORY, for now. This is the only check covering the Debian trixie
+      # runtime base, the Docker CLI binaries lifted from docker:28-cli, and the
+      # pinned restic 0.19.1 / rclone 1.74.4 static binaries — nothing else in
+      # CI looks at any of them at all. Starting advisory is
       # a deliberate choice about sequencing, not about importance: this scan
       # has no observed baseline yet, and turning on an unknown number of
       # findings as a merge blocker on day one blocks work that has nothing to
@@ -436,10 +437,13 @@ jobs:
       # turning it blocking today would red-X every unrelated PR until 9e1
       # lands.
       #
-      # STALE (agent-os-4pa.2, 2026-08-04): the runtime base has since moved to
-      # alpine 3.24, so the 3.21.7 line above is no longer the current base and
-      # the "clean" observation is not re-confirmed here. Re-take this baseline
-      # against 3.24 before graduating the gate to `exit-code: '1'`.
+      # STALE (agent-os-4pa.2, 2026-08-04; still stale 2026-08-07): the runtime
+      # base moved to alpine 3.24 and then off Alpine entirely — it is now
+      # debian:trixie-slim, with the Docker CLI, buildx and compose binaries
+      # copied in from docker:28-cli rather than installed as packages. Nothing
+      # above this line has been re-observed against that image. Re-take the
+      # whole baseline before graduating the gate to `exit-code: '1'`; expect a
+      # different distro's advisory feed and three new Go binaries in it.
       #
       # READING THE `Fixed Version` COLUMN: it is the *product* version, which
       # is not always a Go module version. Trivy reports CVE-2026-34040 in
