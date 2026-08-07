@@ -50,6 +50,20 @@ Branch protection
 Versioning
 Rolling back"
 
+# env-coverage exceptions, one "VAR|reason" per line.
+#
+# ENV_EXCLUDE: read via os.Getenv() in backend/ but not Capstan configuration
+# (OS/runtime-provided), so forcing docs/reference/configuration.md to list
+# them as operator settings would be documentation produced to satisfy the
+# gate rather than to inform an operator.
+ENV_EXCLUDE="HOME|OS-provided; sole use is a default-path join for GitSSHKey (backend/internal/config/config.go:74), not an operator-facing setting"
+
+# ENV_INCLUDE: real Capstan configuration that the literal os.Getenv("...")
+# scan below can't see (e.g. read via a named constant instead of a string
+# literal) but that must still be documented. Enforced explicitly rather
+# than resolved heuristically from Go source.
+ENV_INCLUDE="CAPSTAN_ALLOW_SCHEMA_DOWNGRADE|read via os.Getenv(allowSchemaDowngradeEnv) at backend/internal/database/migrations.go:614; the documented escape hatch for forward-compat schema checks (migrations.go:11-18)"
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -74,6 +88,16 @@ slugify() {
   s=$(printf '%s' "$s" | command sed -E 's/[^a-z0-9 -]//g')
   s="${s// /-}"
   printf '%s' "$s"
+}
+
+# Does $1 appear in file $2 as a whole token (not merely as a substring of a
+# longer identifier, e.g. "PORT" inside "EXPORTED_SETTINGS")? Bounded on both
+# sides by "not [A-Za-z0-9_]" or start/end of line -- deliberately loose
+# about what counts as a boundary (backticks, pipes, spaces, punctuation all
+# qualify) since env vars appear in markdown wrapped in all of those.
+match_whole_token() {
+  local needle="$1" file="$2"
+  command grep -qE "(^|[^A-Za-z0-9_])${needle}([^A-Za-z0-9_]|\$)" "$file"
 }
 
 # Does $2 (an already-slugified anchor, no leading '#') match a heading in file $1?
@@ -187,6 +211,44 @@ check_docs_tree() {
   return 1
 }
 
+# Resolves one $2=url found in $1=source file, updating the caller's `ok`
+# and `reasons` (bash dynamic scoping: these are locals in check_links and
+# this is only ever called from there, in the same shell -- no subshell).
+resolve_link() {
+  local src="$1" url="$2" path anchor target rel_src rel_target
+
+  case "$url" in
+    http://*|https://*|mailto:*)
+      return 0
+      ;;
+  esac
+
+  rel_src="${src#"$REPO_ROOT"/}"
+  path="${url%%#*}"
+  case "$url" in
+    *#*) anchor="${url#*#}" ;;
+    *) anchor="" ;;
+  esac
+
+  if [ -z "$path" ]; then
+    target="$src"
+  else
+    target="$(dirname "$src")/$path"
+  fi
+  rel_target="${target#"$REPO_ROOT"/}"
+
+  if [ ! -f "$target" ]; then
+    reasons="${reasons}${rel_src}: link '$url' does not resolve (no file at $rel_target); "
+    ok=1
+    return 0
+  fi
+
+  if [ -n "$anchor" ] && ! heading_exists "$target" "$anchor"; then
+    reasons="${reasons}${rel_src}: anchor '#$anchor' not found as a heading in $rel_target; "
+    ok=1
+  fi
+}
+
 check_links() {
   local ok=0 reasons="" total_links=0
   local -a sources=()
@@ -199,48 +261,28 @@ check_links() {
     done < <(command find "$REPO_ROOT/docs" -type f -name '*.md')
   fi
 
-  local src link url path anchor target rel_src rel_target
+  local src link def url
   for src in "${sources[@]}"; do
-    rel_src="${src#"$REPO_ROOT"/}"
+    # Inline links: [text](url)
     while IFS= read -r link; do
       [ -z "$link" ] && continue
       total_links=$((total_links + 1))
       url=$(printf '%s\n' "$link" | command sed -E 's/^\[[^]]*\]\(([^)]+)\)$/\1/')
-
-      case "$url" in
-        http://*|https://*|mailto:*)
-          continue
-          ;;
-      esac
-
-      path="${url%%#*}"
-      case "$url" in
-        *#*) anchor="${url#*#}" ;;
-        *) anchor="" ;;
-      esac
-
-      if [ -z "$path" ]; then
-        target="$src"
-      else
-        target="$(dirname "$src")/$path"
-      fi
-      rel_target="${target#"$REPO_ROOT"/}"
-
-      if [ ! -f "$target" ]; then
-        reasons="${reasons}${rel_src}: link '$url' does not resolve (no file at $rel_target); "
-        ok=1
-        continue
-      fi
-
-      if [ -n "$anchor" ] && ! heading_exists "$target" "$anchor"; then
-        reasons="${reasons}${rel_src}: anchor '#$anchor' not found as a heading in $rel_target; "
-        ok=1
-      fi
+      resolve_link "$src" "$url"
     done < <(command grep -oE '\[[^]]*\]\([^)]+\)' "$src")
+
+    # Reference-style link definitions: [label]: url  (optionally <url>,
+    # optionally followed by a "title" or 'title' -- title text is discarded).
+    while IFS= read -r def; do
+      [ -z "$def" ] && continue
+      total_links=$((total_links + 1))
+      url=$(printf '%s\n' "$def" | command sed -E 's/^\[[^]]+\]:[[:space:]]*<?([^[:space:]>]+)>?.*/\1/')
+      resolve_link "$src" "$url"
+    done < <(command grep -oE '^\[[^]]+\]:[[:space:]]*<?[^[:space:]>]+>?.*' "$src")
   done
 
   if [ "$ok" -eq 0 ]; then
-    echo "PASS: links - all $total_links relative link(s)/anchor(s) resolved across README.md, CONTRIBUTING.md and docs/**"
+    echo "PASS: links - all $total_links relative link(s)/anchor(s)/reference-definition(s) resolved across README.md, CONTRIBUTING.md and docs/**"
     return 0
   fi
   echo "FAIL: links - $reasons"
@@ -292,20 +334,47 @@ check_env_coverage() {
     return 1
   fi
 
+  # Drop excluded (OS/runtime-provided) vars.
+  local -a filtered=()
+  local v exvar exreason skip
+  for v in "${vars[@]}"; do
+    skip=0
+    while IFS='|' read -r exvar exreason; do
+      [ -z "$exvar" ] && continue
+      if [ "$v" = "$exvar" ]; then
+        skip=1
+        break
+      fi
+    done <<< "$ENV_EXCLUDE"
+    [ "$skip" -eq 0 ] && filtered+=("$v")
+  done
+  vars=("${filtered[@]}")
+
+  # Add included vars (real config, invisible to the literal scan) that
+  # aren't already present.
+  local incvar increason already
+  while IFS='|' read -r incvar increason; do
+    [ -z "$incvar" ] && continue
+    already=0
+    for v in "${vars[@]:-}"; do
+      [ "$v" = "$incvar" ] && already=1 && break
+    done
+    [ "$already" -eq 0 ] && vars+=("$incvar")
+  done <<< "$ENV_INCLUDE"
+
   local nonliteral_note=""
   if [ "${#nonliteral[@]}" -gt 0 ]; then
-    nonliteral_note=" [note: ${#nonliteral[@]} non-literal os.Getenv() call(s) not checked: ${nonliteral[*]}]"
+    nonliteral_note=" [note: ${#nonliteral[@]} non-literal os.Getenv() call(s) found, checked via ENV_INCLUDE where applicable: ${nonliteral[*]}]"
   fi
 
   if [ ! -f "$config_doc" ]; then
-    echo "FAIL: env-coverage - docs/reference/configuration.md does not exist; ${#vars[@]} var(s) found via literal os.Getenv (${vars[*]}) are undocumented${nonliteral_note}"
+    echo "FAIL: env-coverage - docs/reference/configuration.md does not exist; ${#vars[@]} var(s) to document (${vars[*]}) are undocumented${nonliteral_note}"
     return 1
   fi
 
   local -a missing=()
-  local v
   for v in "${vars[@]}"; do
-    if ! command grep -qF -- "$v" "$config_doc"; then
+    if ! match_whole_token "$v" "$config_doc"; then
       missing+=("$v")
     fi
   done
@@ -315,7 +384,7 @@ check_env_coverage() {
     return 1
   fi
 
-  echo "PASS: env-coverage - all ${#vars[@]} literal os.Getenv var(s) documented in docs/reference/configuration.md${nonliteral_note}"
+  echo "PASS: env-coverage - all ${#vars[@]} required var(s) documented in docs/reference/configuration.md${nonliteral_note}"
   return 0
 }
 
