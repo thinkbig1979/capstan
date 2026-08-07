@@ -82,10 +82,33 @@ line_count() {
 # self-links, e.g. "Docker Socket & Security" -> "docker-socket--security");
 # does not handle duplicate-heading disambiguation (-1, -2 suffixes) since
 # this repo's docs don't have duplicate headings within a file.
+#
+# The character filter is a bash pattern-removal expansion, not a sed
+# subprocess: heading_exists() below calls this once per heading in a file,
+# for every anchor link, so a per-call fork made link-checking cost
+# anchors x headings subprocesses.
+#
+# KNOWN LIMITATION (2026-08-07): this filter is strict ASCII (a-z0-9 space
+# hyphen only), so a heading containing a Unicode letter (accented, e.g.
+# "Café", or otherwise) will have that letter dropped. GitHub's real slugger
+# preserves Unicode letters -- its anchor for "## Café" is "#café", not
+# "#caf" -- so a link into such a heading would be reported as broken by
+# this filter even though it resolves on GitHub, or vice versa if the link
+# text was also mis-slugified the same way. This is a pre-existing gap, not
+# a regression from a prior sed-based version of this function: that version
+# happened to retain some accented letters, but only as a side effect of
+# glibc locale collation under certain UTF-8 locales (`[^a-z0-9 -]` doesn't
+# reliably exclude them there), not because it implemented Unicode-aware
+# slugification -- its behaviour for such input was itself locale-dependent
+# and not something to preserve. Verified this affects none of the headings
+# actually present in README.md/CONTRIBUTING.md (all ASCII plus a few
+# symbols like "→"/"–" that get stripped identically either way). If a
+# future heading needs a diacritic, this function needs a real Unicode
+# case-fold + letter-class check, not a bigger ASCII allowlist.
 slugify() {
   local s="$1"
   s="${s,,}"
-  s=$(printf '%s' "$s" | command sed -E 's/[^a-z0-9 -]//g')
+  s="${s//[^a-z0-9 -]/}"
   s="${s// /-}"
   printf '%s' "$s"
 }
@@ -100,16 +123,27 @@ match_whole_token() {
   command grep -qE "(^|[^A-Za-z0-9_])${needle}([^A-Za-z0-9_]|\$)" "$file"
 }
 
+# Cache of $file -> newline-separated raw heading text, populated on first
+# heading_exists() lookup for that file. Multiple anchor links commonly
+# target the same file, so this avoids re-running the grep|sed heading
+# extraction once per anchor. Sound only because this script never writes
+# the files it reads within a single run -- if that ever changes, a cached
+# entry could go stale mid-run without any error.
+declare -A _HEADING_CACHE
+
 # Does $2 (an already-slugified anchor, no leading '#') match a heading in file $1?
 heading_exists() {
   local file="$1" anchor="$2" heading slug
+  if [ -z "${_HEADING_CACHE[$file]+set}" ]; then
+    _HEADING_CACHE["$file"]=$(command grep -E '^#+[[:space:]]' "$file" | command sed -E 's/^#+[[:space:]]*//')
+  fi
   while IFS= read -r heading; do
     [ -z "$heading" ] && continue
     slug=$(slugify "$heading")
     if [ "$slug" = "$anchor" ]; then
       return 0
     fi
-  done < <(command grep -E '^#+[[:space:]]' "$file" | command sed -E 's/^#+[[:space:]]*//')
+  done <<< "${_HEADING_CACHE[$file]}"
   return 1
 }
 
