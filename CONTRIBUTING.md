@@ -110,6 +110,24 @@ release.
 Rolling back a deployed instance to an older image tag is an operator task —
 see [Upgrading and rolling back](docs/how-to/upgrade-and-roll-back.md).
 
+### Documentation versioning
+
+Docs on `main` describe `main`, not the latest tagged release. Because images
+publish only on version tags (see the table above), `main` routinely carries
+commits with no published image yet — a doc that only ever described the
+latest tag would then be silently behind the code sitting right next to it.
+Tracking `main` avoids that: what a page says matches what you get if you
+build from the commit you're reading it at.
+
+The exception is a page that can only be verified by running an instance —
+currently just [Getting Started](docs/getting-started.md). Those pages carry
+a "Verified against Capstan version `X`" line naming the exact build the
+walkthrough was actually run against. Until a tagged release ships from a
+commit at or after the page's last edit, that stamp legitimately reads `dev`
+(Settings → About and `GET /api/v1/version` both report `dev` for a
+from-source build) — this is expected, not a sign the stamp is stale. Update
+the stamp when you re-verify the page, not on every unrelated release.
+
 ## Testing
 
 ### Quick Start
