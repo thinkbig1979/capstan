@@ -54,7 +54,6 @@ cd testing
 ```
 testing/
 ├── README.md                          # This file
-├── plan.md                            # Detailed test plan
 ├── test-orchestrator.sh              # Master test coordinator
 ├── environments/
 │   ├── setup.sh                      # Creates test environment
@@ -432,7 +431,6 @@ When adding new tests:
 
 For issues or questions:
 
-- Check `plan.md` for detailed test strategy
 - Review existing tests for examples
 - Check browser-automating skill documentation
 - Review Agent OS e2e standards

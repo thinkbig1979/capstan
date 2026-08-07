@@ -49,6 +49,8 @@ scorecard.png
 .idea/
 .mcp.json
 .driftignore
+.agents/
+skills-lock.json
 
 # OS cruft
 .DS_Store
