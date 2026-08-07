@@ -25,7 +25,7 @@ export function RetentionSection({ draft, onChange }: RetentionSectionProps) {
           label="Retention"
           title="Retention"
           side="right"
-          href="https://github.com/thinkbig1979/capstan/blob/main/docs/how-to/configure-backups.md"
+          href="https://github.com/thinkbig1979/capstan/blob/main/docs/reference/configuration.md#backups--restic"
         >
           <p>
             After a backup, restic can thin out old snapshots, keeping a set number per day,
