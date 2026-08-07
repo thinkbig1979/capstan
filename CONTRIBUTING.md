@@ -107,23 +107,8 @@ Pin a specific version (e.g. `ghcr.io/thinkbig1979/capstan:0.11.0`) for
 reproducible deployments; `:latest` always tracks the most recent stable
 release.
 
-### Rolling back
-
-Recovering from a bad release usually means re-pinning an older image tag (or
-letting watchtower revert one). Capstan's database schema is versioned and
-guards against this: on startup it logs the database's schema version
-alongside the version this binary understands, and if the database was
-already migrated by a **newer** binary than the one now starting, startup
-refuses with a fatal error naming both versions rather than running against a
-schema it doesn't fully understand — rolling back across a migration can
-corrupt data.
-
-If you've checked the specific rollback is safe (e.g. the migrations added
-between the two versions are additive and don't change data the older binary
-writes to), set `CAPSTAN_ALLOW_SCHEMA_DOWNGRADE=1` to downgrade the refusal to
-a warning and continue startup anyway. This variable only affects the
-forward-version check; it does not run any down-migration, and it does not by
-itself make an unsafe rollback safe.
+Rolling back a deployed instance to an older image tag is an operator task —
+see [Upgrading and rolling back](docs/how-to/upgrade-and-roll-back.md).
 
 ## Testing
 
@@ -360,9 +345,9 @@ to run it (`./testing/test-orchestrator.sh`).
 
 When running locally, Docker Compose stacks are stored at:
 - **Docker Compose**: a bind mount of `${STACKS_DIR}` (host) to the same path
-  inside the container — see `docker-compose.yaml` and the README's
-  [Volume Path Identity](README.md#volume-path-identity) section for why the
-  host and container paths must match.
+  inside the container — see `docker-compose.yaml` and
+  [Volume Path Identity](docs/explanation/security-model.md#volume-path-identity)
+  for why the host and container paths must match.
 - **Local Go**: `/tmp/stacks`
 
 You can add your own Docker Compose files here and they'll be detected automatically.
@@ -418,9 +403,8 @@ pnpm lint         # Lint
 
 ### Production Deployment
 
-See the README's [Production Deployment](README.md#production-deployment)
-section for the full checklist (secrets, `AUTH_DISABLED`, TLS, trusted
-networks, backups).
+See [Production Deployment](docs/how-to/deploy-production.md) for the full
+checklist (secrets, `AUTH_DISABLED`, TLS, trusted networks, backups).
 
 ### Security Notes
 
@@ -433,8 +417,9 @@ networks, backups).
   Docker's API accepts control commands over the socket regardless of the
   mount's `:ro`/`:rw` flag, so `:ro` only blocks writes to the socket *file*,
   it doesn't restrict what the API will do through it. See
-  [Docker Socket & Security](README.md#docker-socket--security) for the full
-  rationale and how to front it with a socket proxy for real least-privilege.
-- See the README's [Application Security](README.md#application-security)
-  section for the full list of hardening measures (auth, CSRF, CORS, secrets
+  [Docker Socket & Security](docs/explanation/security-model.md#docker-socket--security)
+  for the full rationale and how to front it with a socket proxy for real
+  least-privilege.
+- See [Application Security](docs/explanation/security-model.md#application-security)
+  for the full list of hardening measures (auth, CSRF, CORS, secrets
   encryption, etc).
