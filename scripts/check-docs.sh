@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links env-coverage"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -283,6 +283,133 @@ resolve_link() {
   fi
 }
 
+# Prints every markdown link URL in $1, one per line, in document order.
+#
+# This is the single producer of "what does this file link to". check-links
+# and check-navigation both need that answer and must agree on it: a
+# navigation check that recognized a link the link checker did not (or the
+# reverse) would let a page be simultaneously a dead end and fully linked.
+#
+# An unterminated code fence is reported as a trailing "FENCE <lineno>" line
+# on the same stream (0 when the file is well-formed). Callers consume this
+# function through `< <(extract_links ...)`, which runs it in a SUBSHELL, so
+# a global set inside it would never reach the caller — the fence report has
+# to travel on stdout with the URLs. The sentinel contains a space, and
+# neither extraction pattern can produce a URL containing one ([^)]+ for
+# inline links, [^[:space:]>]+ for reference definitions), so it can never
+# be confused with a real link.
+#
+# Extraction is line-by-line (rather than grep over the whole file) so we
+# can track fence state: link-like syntax inside a ``` or ~~~ fenced code
+# block is example text, not a real markdown link, and must not be scanned.
+#
+# Trimming and matching use bash's builtin [[ =~ ]] / parameter expansion
+# instead of a sed/grep subprocess per line: a ~1,000-line doc times
+# several doc sources means thousands of forked processes if each line
+# spawns one, which measured 6.6x slower than the whole-file grep this
+# replaced. Builtins keep the per-line cost to zero forks.
+extract_links() {
+  local src="$1"
+  local line trimmed url marker rest match is_footnote
+  local in_fence=0 fence_char="" fence_open_line=0 lineno=0
+  # bash's own parser trips on a literal \( \) inside a [[ =~ <pattern> ]]
+  # written inline, so the patterns live in variables and are referenced
+  # unquoted (quoting here would make =~ match them as a literal string).
+  local inline_link_re='\[[^]]*\]\(([^)]+)\)'
+  local refdef_re='^\[[^]]+\]:[[:space:]]*<?([^[:space:]>]+)>?.*'
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+
+    if [[ "$line" =~ ^[[:space:]]*(.*)$ ]]; then
+      trimmed="${BASH_REMATCH[1]}"
+    else
+      trimmed="$line"
+    fi
+
+    # Fence delimiters: ``` or ~~~, 3+ chars, optionally indented, opening
+    # may carry an info string (e.g. ```bash). A fence only closes against
+    # its own character -- a ~~~ block is not closed by ```.
+    if [[ "$trimmed" =~ ^(\`\`\`+|~~~+) ]]; then
+      marker="${BASH_REMATCH[1]}"
+      if [ "$in_fence" -eq 1 ]; then
+        [ "${marker:0:1}" = "$fence_char" ] && { in_fence=0; fence_char=""; fence_open_line=0; }
+      else
+        in_fence=1
+        fence_char="${marker:0:1}"
+        fence_open_line="$lineno"
+      fi
+      continue
+    fi
+    [ "$in_fence" -eq 1 ] && continue
+
+    # Footnote definitions ([^1]: prose...) are not reference-style links --
+    # the marker matches that regex and its body is prose, not a URL -- but
+    # the prose can still hold a genuine inline link, so only the
+    # reference-definition pass below is skipped for these lines, not the
+    # inline pass. Matched against $trimmed so an indented footnote is
+    # still recognized.
+    is_footnote=0
+    [[ "$trimmed" =~ ^\[\^ ]] && is_footnote=1
+
+    # Inline links: [text](url). Looped so a line with more than one link
+    # is fully scanned, same as the old per-line grep -oE did.
+    rest="$line"
+    while [[ "$rest" =~ $inline_link_re ]]; do
+      url="${BASH_REMATCH[1]}"
+      match="${BASH_REMATCH[0]}"
+      printf '%s\n' "$url"
+      rest="${rest#*"$match"}"
+    done
+
+    # Reference-style link definitions: [label]: url  (optionally <url>,
+    # optionally followed by a "title" or 'title' -- title text is discarded).
+    if [ "$is_footnote" -eq 0 ] && [[ "$line" =~ $refdef_re ]]; then
+      url="${BASH_REMATCH[1]}"
+      printf '%s\n' "$url"
+    fi
+  done < "$src"
+
+  if [ "$in_fence" -eq 1 ]; then
+    printf 'FENCE %s\n' "$fence_open_line"
+  else
+    printf 'FENCE 0\n'
+  fi
+}
+
+# Prints every docs/**/*.md path relative to the repo root, sorted, one per
+# line. Shared by check-navigation's orphan and dead-end passes so the two
+# cannot disagree about which files are "the docs".
+docs_pages() {
+  [ -d "$REPO_ROOT/docs" ] || return 0
+  command find "$REPO_ROOT/docs" -type f -name '*.md' | sed "s|^$REPO_ROOT/||" | sort
+}
+
+# Collapses "." and "x/.." segments in the repo-root-relative path $1 and
+# prints the result, so two spellings of the same page compare equal.
+#
+# check-links never needed this: it only asks whether a target exists, and
+# the kernel resolves "a/../b" for it. check-navigation compares paths as
+# strings ("is THIS page among the README's targets"), where docs/./api.md
+# and docs/api.md must not read as two different pages.
+#
+# Pure bash on purpose: realpath is not in the dependency-free set this
+# script is held to, and this touches no filesystem, so it also works for a
+# path that does not exist.
+normalize_rel_path() {
+  local seg
+  local -a stack=()
+  local IFS='/'
+  for seg in $1; do
+    case "$seg" in
+      ''|'.') continue ;;
+      '..') [ "${#stack[@]}" -gt 0 ] && unset 'stack[-1]' ;;
+      *) stack+=("$seg") ;;
+    esac
+  done
+  printf '%s\n' "${stack[*]}"
+}
+
 check_links() {
   local ok=0 reasons="" total_links=0
   local -a sources=()
@@ -295,86 +422,22 @@ check_links() {
     done < <(command find "$REPO_ROOT/docs" -type f -name '*.md')
   fi
 
-  # Extraction is line-by-line (rather than grep over the whole file) so we
-  # can track fence state: link-like syntax inside a ``` or ~~~ fenced code
-  # block is example text, not a real markdown link, and must not be scanned.
-  #
-  # Trimming and matching use bash's builtin [[ =~ ]] / parameter expansion
-  # instead of a sed/grep subprocess per line: a ~1,000-line doc times
-  # several doc sources means thousands of forked processes if each line
-  # spawns one, which measured 6.6x slower than the whole-file grep this
-  # replaced. Builtins keep the per-line cost to zero forks.
-  local src line trimmed url rel_src marker rest match is_footnote
-  local in_fence=0 fence_char="" fence_open_line=0 lineno
-  # bash's own parser trips on a literal \( \) inside a [[ =~ <pattern> ]]
-  # written inline, so the patterns live in variables and are referenced
-  # unquoted (quoting here would make =~ match them as a literal string).
-  local inline_link_re='\[[^]]*\]\(([^)]+)\)'
-  local refdef_re='^\[[^]]+\]:[[:space:]]*<?([^[:space:]>]+)>?.*'
+  local src url rel_src
   for src in "${sources[@]}"; do
-    in_fence=0
-    fence_char=""
-    fence_open_line=0
-    lineno=0
     rel_src="${src#"$REPO_ROOT"/}"
-    while IFS= read -r line || [ -n "$line" ]; do
-      lineno=$((lineno + 1))
-
-      if [[ "$line" =~ ^[[:space:]]*(.*)$ ]]; then
-        trimmed="${BASH_REMATCH[1]}"
-      else
-        trimmed="$line"
-      fi
-
-      # Fence delimiters: ``` or ~~~, 3+ chars, optionally indented, opening
-      # may carry an info string (e.g. ```bash). A fence only closes against
-      # its own character -- a ~~~ block is not closed by ```.
-      if [[ "$trimmed" =~ ^(\`\`\`+|~~~+) ]]; then
-        marker="${BASH_REMATCH[1]}"
-        if [ "$in_fence" -eq 1 ]; then
-          [ "${marker:0:1}" = "$fence_char" ] && { in_fence=0; fence_char=""; fence_open_line=0; }
-        else
-          in_fence=1
-          fence_char="${marker:0:1}"
-          fence_open_line="$lineno"
-        fi
-        continue
-      fi
-      [ "$in_fence" -eq 1 ] && continue
-
-      # Footnote definitions ([^1]: prose...) are not reference-style links --
-      # the marker matches that regex and its body is prose, not a URL -- but
-      # the prose can still hold a genuine inline link, so only the
-      # reference-definition pass below is skipped for these lines, not the
-      # inline pass. Matched against $trimmed so an indented footnote is
-      # still recognized.
-      is_footnote=0
-      [[ "$trimmed" =~ ^\[\^ ]] && is_footnote=1
-
-      # Inline links: [text](url). Looped so a line with more than one link
-      # is fully scanned, same as the old per-line grep -oE did.
-      rest="$line"
-      while [[ "$rest" =~ $inline_link_re ]]; do
-        url="${BASH_REMATCH[1]}"
-        match="${BASH_REMATCH[0]}"
-        total_links=$((total_links + 1))
-        resolve_link "$src" "$url"
-        rest="${rest#*"$match"}"
-      done
-
-      # Reference-style link definitions: [label]: url  (optionally <url>,
-      # optionally followed by a "title" or 'title' -- title text is discarded).
-      if [ "$is_footnote" -eq 0 ] && [[ "$line" =~ $refdef_re ]]; then
-        url="${BASH_REMATCH[1]}"
-        total_links=$((total_links + 1))
-        resolve_link "$src" "$url"
-      fi
-    done < "$src"
-
-    if [ "$in_fence" -eq 1 ]; then
-      reasons="${reasons}${rel_src}: unterminated code fence opened at line $fence_open_line (rest of file not checked for links); "
-      ok=1
-    fi
+    while IFS= read -r url; do
+      [ -z "$url" ] && continue
+      case "$url" in
+        "FENCE 0") continue ;;
+        "FENCE "*)
+          reasons="${reasons}${rel_src}: unterminated code fence opened at line ${url#FENCE } (rest of file not checked for links); "
+          ok=1
+          continue
+          ;;
+      esac
+      total_links=$((total_links + 1))
+      resolve_link "$src" "$url"
+    done < <(extract_links "$src")
   done
 
   if [ "$ok" -eq 0 ]; then
@@ -382,6 +445,121 @@ check_links() {
     return 0
   fi
   echo "FAIL: links - $reasons"
+  return 1
+}
+
+# The docs index every page must be reachable from, and the anchor on it.
+# Kept as constants because both passes below refer to them and a change to
+# the README's index heading has to move them together.
+NAV_INDEX_FILE="README.md"
+NAV_INDEX_ANCHOR="documentation"
+
+# check_navigation guards the gap PR #170 exposed: --check=links verifies that
+# links RESOLVE, and never that a page HAS any. README indexed all 11 pages
+# while four of them linked nowhere at all, and every check stayed green. That
+# only became load-bearing once yg1.6 started deep-linking users from inside
+# the app into a page mid-tree, dropping a reader somewhere with no route out.
+#
+# Two properties, checked over the same page list so they cannot disagree:
+#
+#   (a) no orphans   - README links to every docs/**/*.md
+#   (b) no dead ends - every docs/**/*.md links back to the README index
+#
+# (b) subsumes "has at least one outbound link", but a page with zero links is
+# reported separately from one that links elsewhere and merely never comes
+# home: they are different mistakes and the fix differs.
+check_navigation() {
+  local ok=0 orphans="" no_links="" no_index=""
+  local readme="$REPO_ROOT/$NAV_INDEX_FILE"
+
+  if [ ! -f "$readme" ]; then
+    echo "FAIL: navigation - $NAV_INDEX_FILE not found at repo root"
+    return 1
+  fi
+
+  local pages
+  pages="$(docs_pages)"
+  if [ -z "$pages" ]; then
+    # Without this the loops below iterate zero times and the check reports a
+    # pass having verified nothing -- the exact failure mode this script's
+    # header warns about.
+    echo "FAIL: navigation - no docs/**/*.md pages found; the check would otherwise pass vacuously"
+    return 1
+  fi
+
+  local page url path anchor target dir
+  local n_pages=0 links_seen reaches_index
+
+  # (a) Everything the README points at, as normalized repo-relative paths,
+  # in a "|a|b|c|" string so membership is a glob test with no arrays.
+  local readme_targets="|"
+  while IFS= read -r url; do
+    case "$url" in
+      "FENCE "*|http://*|https://*|mailto:*) continue ;;
+    esac
+    path="${url%%#*}"
+    [ -z "$path" ] && continue
+    readme_targets="${readme_targets}$(normalize_rel_path "$path")|"
+  done < <(extract_links "$readme")
+
+  while IFS= read -r page; do
+    [ -z "$page" ] && continue
+    n_pages=$((n_pages + 1))
+    case "$readme_targets" in
+      *"|$page|"*) ;;
+      *)
+        orphans="${orphans}$page; "
+        ok=1
+        ;;
+    esac
+  done <<< "$pages"
+
+  # (b) Every page's own outbound links, resolved relative to that page.
+  while IFS= read -r page; do
+    [ -z "$page" ] && continue
+    links_seen=0
+    reaches_index=0
+    dir="$(dirname "$page")"
+
+    while IFS= read -r url; do
+      case "$url" in
+        "FENCE "*) continue ;;
+      esac
+      links_seen=$((links_seen + 1))
+      case "$url" in
+        http://*|https://*|mailto:*) continue ;;
+      esac
+      path="${url%%#*}"
+      case "$url" in
+        *#*) anchor="${url#*#}" ;;
+        *) anchor="" ;;
+      esac
+      [ -z "$path" ] && continue
+      target="$(normalize_rel_path "$dir/$path")"
+      if [ "$target" = "$NAV_INDEX_FILE" ] && [ "${anchor,,}" = "$NAV_INDEX_ANCHOR" ]; then
+        reaches_index=1
+      fi
+    done < <(extract_links "$REPO_ROOT/$page")
+
+    if [ "$links_seen" -eq 0 ]; then
+      no_links="${no_links}$page; "
+      ok=1
+    elif [ "$reaches_index" -eq 0 ]; then
+      no_index="${no_index}$page; "
+      ok=1
+    fi
+  done <<< "$pages"
+
+  if [ "$ok" -eq 0 ]; then
+    echo "PASS: navigation - all $n_pages docs page(s) are linked from $NAV_INDEX_FILE and link back to $NAV_INDEX_FILE#$NAV_INDEX_ANCHOR"
+    return 0
+  fi
+
+  local reasons=""
+  [ -n "$orphans" ] && reasons="${reasons}not linked from $NAV_INDEX_FILE (orphan): $orphans"
+  [ -n "$no_links" ] && reasons="${reasons}no outbound links at all (dead end): $no_links"
+  [ -n "$no_index" ] && reasons="${reasons}no link back to $NAV_INDEX_FILE#$NAV_INDEX_ANCHOR: $no_index"
+  echo "FAIL: navigation - $reasons"
   return 1
 }
 
@@ -498,6 +676,7 @@ Valid check names:
   readme-clean   README.md has no contributor-only headings
   docs-tree      required docs/ pages exist and are non-stub
   links          relative markdown links and anchors resolve
+  navigation     no docs page is an orphan or a dead end
   env-coverage   every backend os.Getenv var is documented
 
 With no arguments, all checks run and a summary is printed.
@@ -511,6 +690,7 @@ run_check() {
     readme-clean) check_readme_clean ;;
     docs-tree)    check_docs_tree ;;
     links)        check_links ;;
+    navigation)   check_navigation ;;
     env-coverage) check_env_coverage ;;
     *) return 2 ;;
   esac
