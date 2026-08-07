@@ -75,7 +75,20 @@ jobs:
         # the baseline the next review should compare against.
         with:
           directory: frontend        # The React app lives here, not at the repo root.
-          version: "0.9.1"           # Pinned so this action, frontend/package.json, and the root doctor script can't drift to different react-doctor versions independently. Held at 0.9.1 rather than the newer 0.9.3 (agent-os-uw1, 2026-08-03): frontend/pnpm-workspace.yaml's minimumReleaseAge (10080min/7d) rejects 0.9.3 and its just-published transitive deps until they age past the floor (~2026-08-08); 0.9.1 is the version the policy already allows and the one actually installed. Follow-up filed to bump all four references once 0.9.3 clears that floor.
+          # Must equal frontend/package.json's react-doctor version. There are
+          # only these TWO references now: the repo root previously carried a
+          # third (a `react-doctor` devDependency plus a `doctor` script), and
+          # the three promptly drifted — root and this file sat at 0.9.1 while
+          # frontend moved to 0.9.2, under a comment asserting they could not
+          # drift independently. The root copy was a duplicate of frontend's and
+          # was removed rather than re-synchronised; a lockstep rule over two
+          # files is one you can actually check.
+          #
+          # 0.9.2 is what frontend/pnpm-lock.yaml resolves. Not 0.9.3
+          # (agent-os-uw1): frontend/pnpm-workspace.yaml's minimumReleaseAge
+          # (10080min/7d) rejects it and its just-published transitive deps
+          # until ~2026-08-08. Bump both references together once it clears.
+          version: "0.9.2"
         #   blocking: error          # Gate level: "none" (advisory, the default) | "warning" | "error"
         #   scope: full              # On PRs, scan the whole project instead of just changed files
         #   comment: false           # Disable the sticky PR summary comment

@@ -93,6 +93,15 @@ Supporting-Docs/
 AGENTS.md
 PLAN.md
 Dockge_Replacement_App_Plan
+# Missed by the original sweep (commit 5098a66) and untracked later: agent/editor
+# tooling that is local-only in practice. .mcp.json in particular pointed at
+# .claude/cclsp.json, which this file already ignores — so every fresh clone got
+# an MCP server config referencing a file that was never published. .driftignore
+# configured a .drift/ directory that is ignored above and does not exist here.
+.agents/
+.mcp.json
+skills-lock.json
+.driftignore
 
 # Stray restic repository skeletons (a relative-path restic init bug once
 # created one in a package dir during tests; agent-os-4pa.1)

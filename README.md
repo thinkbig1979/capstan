@@ -145,8 +145,8 @@ volumes:
   - ./data:/app/data   # host bind mount — required for backup persistence
 ```
 
-Never replace this with a Docker named volume. The `docker-compose.prod.yaml` and
-`docker/compose.yaml` both use a bind mount by default.
+Never replace this with a Docker named volume. Both `docker-compose.prod.yaml`
+and `docker-compose.yaml` use a bind mount by default.
 
 ### Running a backup
 
