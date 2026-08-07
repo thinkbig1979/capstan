@@ -1,13 +1,25 @@
 # Configuration Reference
 
 Capstan is configured entirely through environment variables, read once at
-startup by `backend/internal/config/config.go` (`Load()`). Backup and cloud-sync
-settings additionally have a database layer (Settings → Backup in the UI) that
-takes precedence over the environment variable at runtime — the env var is a
-fallback for scripted or headless deployments, not the only way to set them.
+startup by `backend/internal/config/config.go` (`Load()`). 16 of them —
+Git and backup/cloud-sync settings — additionally have a database layer
+(Settings → Git and Settings → Backup in the UI) that takes precedence over
+the environment variable at runtime; the env var there is a fallback for
+scripted or headless deployments, not the only way to set them. Every other
+variable is env-only: read once at startup, with no UI or database override.
 
-Precedence, where a database layer exists: **DB setting → environment variable
-→ hard-coded default**.
+Precedence, for the 16 that have a database layer: **DB setting →
+environment variable → hard-coded default**.
+
+> **If a variable you set in `docker-compose.yaml`/`.env` doesn't seem to be
+> taking effect:** check whether it's one of the 16 DB-backed variables below
+> (marked **DB-overridable** in each affected section) and whether it's also
+> been set through the corresponding Settings page. Once saved through the
+> UI, the database value wins on every subsequent read, including after a
+> container restart — the env var isn't ignored, it's just outranked. There
+> is no log line or UI indicator that surfaces this; the only way to tell is
+> to check the Settings page itself. Clear/reset the field there to fall
+> back to the env var again.
 
 > **Before a production deploy, at minimum change:** `JWT_SECRET` (required,
 > generate with `openssl rand -hex 32`) and `STORAGE_KEY` (strongly
@@ -21,6 +33,8 @@ Precedence, where a database layer exists: **DB setting → environment variable
 
 ## Server & logging
 
+**Env-only** — read once at startup, no UI or database override.
+
 | Name | Default | Required | What it does |
 | --- | --- | --- | --- |
 | `PORT` | `5001` | No | TCP port the server listens on. Must parse as a number between 1 and 65535, checked at startup (`config.go`'s `validate`). |
@@ -28,6 +42,8 @@ Precedence, where a database layer exists: **DB setting → environment variable
 | `LOG_FORMAT` | `text` | No | `text` or `json`. Validated the same way as `LOG_LEVEL`. |
 
 ## Auth & secrets
+
+**Env-only** — read once at startup, no UI or database override.
 
 | Name | Default | Required | What it does |
 | --- | --- | --- | --- |
@@ -41,6 +57,10 @@ Precedence, where a database layer exists: **DB setting → environment variable
 
 ## Paths, volumes & container user
 
+**Env-only** — read once at startup (`PUID`/`PGID` even earlier, by the
+entrypoint script before the server process starts); no UI or database
+override.
+
 | Name | Default | Required | What it does |
 | --- | --- | --- | --- |
 | `STACKS_DIR` | `/opt/stacks` | No | Where Capstan reads/writes managed stacks. Must be identical inside and outside the container (bind mount) for Docker Compose operations issued from inside Capstan to resolve correctly on the host. |
@@ -53,6 +73,13 @@ Precedence, where a database layer exists: **DB setting → environment variable
 
 ## Git integration
 
+**DB-overridable.** Settings → Git (`GetGitSettings`/`UpdateGitSettings` in
+`backend/internal/handlers/settings.go`) reads/writes these in the database
+ahead of the env var below, same DB → env → default precedence as the
+backup settings further down this page. Set the env var for a scripted or
+headless deployment; once a value is saved through Settings → Git, that
+value wins until cleared there.
+
 | Name | Default | Required | What it does |
 | --- | --- | --- | --- |
 | `GIT_SSH_KEY` | `$HOME/.ssh/id_rsa` | No | Path to the SSH private key used for git operations over SSH. `$HOME` here is the OS-provided environment variable inside the container, not a Capstan setting in its own right — it only supplies this default. |
@@ -61,11 +88,17 @@ Precedence, where a database layer exists: **DB setting → environment variable
 
 ## Backups & restic
 
-These are environment-variable fallbacks only. The Settings → Backup UI writes
-to the database, which always takes precedence over the variable below at
-runtime (`resolveBackupConfig` in `backend/internal/services/backup_config.go`).
-Set them if you prefer environment-level configuration to the UI, or for
-scripted/headless deployments.
+**DB-overridable.** These are environment-variable fallbacks, not the last
+word: the Settings → Backup UI writes to the database, and
+`resolveBackupConfig` (`backend/internal/services/backup_config.go`) always
+checks the database first, then the env var, then the hard-coded default —
+on every read, not just at startup, so a UI change takes effect without a
+restart. Concretely: set `BACKUP_KEEP_DAILY=30` here, save a retention value
+in Settings → Backup, restart the container, and you'll still see the
+database's value, not 30 — the env var isn't broken, it's just outranked.
+Set these if you prefer environment-level configuration to the UI, or for
+scripted/headless deployments where nothing has touched Settings → Backup
+yet.
 
 | Name | Default | Required | What it does |
 | --- | --- | --- | --- |
@@ -82,8 +115,9 @@ scripted/headless deployments.
 
 ## Cloud sync & rclone
 
-Same DB-over-env precedence as the backup settings above; used for Stage 2 /
-disaster-recovery sync of the restic repository to a remote.
+**DB-overridable**, same DB → env → default precedence as Backups & restic
+above; used for Stage 2 / disaster-recovery sync of the restic repository to
+a remote.
 
 | Name | Default | Required | What it does |
 | --- | --- | --- | --- |
@@ -92,6 +126,8 @@ disaster-recovery sync of the restic repository to a remote.
 | `RCLONE_TRANSFERS` | `4` | No | Number of parallel file transfers rclone uses during sync. |
 
 ## Database & migrations
+
+**Env-only** — read once at startup, no UI or database override.
 
 | Name | Default | Required | What it does |
 | --- | --- | --- | --- |
