@@ -396,6 +396,13 @@ jobs:
         working-directory: backend
         run: |
           set -eu
+          # Self-hosted runners are NOT ephemeral: /tmp survives between runs,
+          # so a previous run's capstan.db would satisfy the one-and-only
+          # POST /auth/setup and make AUTH-PW-SESSION-001's needsSetup:true
+          # assertion false. Observed on PR 147: the job passed on its first
+          # self-hosted run and failed on the second. Hosted runners hid this
+          # by giving every job a clean VM.
+          rm -rf /tmp/capstan-e2e-auth
           mkdir -p /tmp/capstan-e2e-auth/stacks /tmp/capstan-e2e-auth/data
           PORT=5001 \
           STACKS_DIR=/tmp/capstan-e2e-auth/stacks \
