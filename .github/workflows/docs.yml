@@ -1,0 +1,64 @@
+# Docs CI — structural gates for the docs restructure epic (agent-os-yg1.8).
+#
+# Runs scripts/check-docs.sh and scripts/check-api-docs.sh, which check facts
+# rather than prose: required docs/ pages exist and are non-stub, README.md
+# carries none of the headings that moved to CONTRIBUTING.md/docs/, relative
+# markdown links and anchors resolve, every backend os.Getenv() var is
+# documented in docs/reference/configuration.md, and every registered Gin
+# route is documented in docs/reference/api.md. Both scripts are dependency-
+# free bash (grep/sed/awk/find/wc/test) — no Node, no Go build, no network —
+# so this workflow needs only a checkout.
+#
+# WHY THIS WAS HELD UNTIL NOW:
+#   check-docs.sh exited 1 on main until docs/getting-started.md landed
+#   (agent-os-yg1.4/agent-os-yg1.7). Wiring this in earlier would have landed
+#   a permanently-red job. Both scripts are 6/6 and exit 0 as of a20b9f1.
+#
+# NO PATH FILTER, SAME REASONING AS backend.yml/frontend.yml (agent-os-x8n):
+#   A workflow-level `paths:` filter does not make a required status check
+#   pass on an unrelated PR — it makes the check never report, leaving the PR
+#   on "Expected — waiting for status" forever. That alone would argue for
+#   restricting this job to something like `docs/**`, `README.md`,
+#   `CONTRIBUTING.md`, `backend/**` instead of dropping the filter outright.
+#   But check-api-docs.sh and check-docs.sh's env-coverage check both read
+#   backend/ directly (registered routes, os.Getenv() calls) with no docs/
+#   change in the diff at all — that is the exact case the gate exists to
+#   catch: a route or config var added in Go with no matching docs entry. A
+#   `docs/**`-only filter would silently skip the job on precisely the PRs
+#   most likely to need it. Since the job is bash-only and takes seconds,
+#   the cost of running it on every PR is negligible next to that gap, so no
+#   `paths:` filter is set — matching backend.yml/frontend.yml.
+
+name: Docs CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  # Allow manual one-off runs from the Actions tab.
+  workflow_dispatch:
+
+jobs:
+  docs:
+    name: Docs structure and coverage gates
+    # Runner: self-hosted by default, EXCEPT for pull requests from forks.
+    # This repo is public with forking enabled, so a fork PR running on our own
+    # hardware would be arbitrary code execution on the runner host. Falling
+    # back to a disposable GitHub-hosted VM for fork PRs keeps that code off our
+    # box while still reporting the check — which matters because several of
+    # these are required by branch protection, and a skipped required check
+    # blocks a PR forever rather than failing it honestly.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
+    # Both scripts run in well under a minute; this is a hang guard, not a budget.
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Docs structure gate
+        run: bash scripts/check-docs.sh
+
+      - name: API docs coverage gate
+        run: bash scripts/check-api-docs.sh
