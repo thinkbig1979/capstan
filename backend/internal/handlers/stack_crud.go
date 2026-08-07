@@ -216,7 +216,12 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		envFile = ".env"
 	}
 
-	projectName := fmt.Sprintf("%s-default", req.Name)
+	// Same producer the scanner uses, for the same reason stackID above comes
+	// from services.StackID: the scan at the end of this handler upserts over
+	// this row, and the deploy below runs with whatever is in `stack`. Deriving
+	// the name here independently is what let the two disagree (agent-os-07x).
+	// "default" is the compose profile for the compose.yaml written above.
+	projectName := services.ComposeProjectName(req.Name, "default")
 
 	stack := models.Stack{
 		ID:          stackID,
