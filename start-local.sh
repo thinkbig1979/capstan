@@ -41,9 +41,16 @@ EOF
     echo -e "${GREEN}Created frontend/.env${NC}"
 fi
 
-# Create local directories
-mkdir -p /tmp/stacks /tmp/capstan-data
-echo -e "${GREEN}Created local directories${NC}"
+# Stacks directory.
+#
+# Export it so docker-compose.yaml's ${STACKS_DIR:-/opt/stacks} resolves to the
+# same path this script creates. It did not, and the two disagreed silently: the
+# script made /tmp/stacks while compose mounted /opt/stacks, which on a stock
+# host is root-owned and so unwritable by the container's PUID/PGID user. An
+# already-set STACKS_DIR wins, so this stays overridable.
+export STACKS_DIR="${STACKS_DIR:-/tmp/stacks}"
+mkdir -p "$STACKS_DIR"
+echo -e "${GREEN}Stacks directory: ${STACKS_DIR}${NC}"
 
 # Build and start services
 echo -e "${YELLOW}Building and starting services...${NC}"
@@ -144,9 +151,8 @@ echo ""
 echo -e "${GREEN}=== Capstan is running! ===${NC}"
 echo ""
 echo "Services:"
-echo "  - Backend:  http://localhost:5001"
-echo "  - Frontend: http://localhost:3000"
-echo "  - Health:   $COMPOSE_CMD ps  (/health is loopback-only by default, so it 403s from the host)"
+echo "  - Web UI and API: http://localhost:5001  (one image serves both)"
+echo "  - Health:         $COMPOSE_CMD ps  (/health is loopback-only by default, so it 403s from the host)"
 echo ""
 echo "Useful commands:"
 echo "  - View logs:     $COMPOSE_CMD logs -f"
@@ -155,5 +161,5 @@ echo "  - Restart:       $COMPOSE_CMD restart"
 echo "  - Backend only:  cd backend && make run"
 echo ""
 echo -e "${YELLOW}Note: Authentication is disabled for local testing (AUTH_DISABLED=true)${NC}"
-echo -e "${YELLOW}Stacks are stored in: /tmp/stacks${NC}"
+echo -e "${YELLOW}Stacks are stored in: ${STACKS_DIR}${NC}"
 echo ""
