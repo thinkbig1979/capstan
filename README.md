@@ -79,95 +79,14 @@ cd frontend && ./run-dev.sh      # Vite dev server on :5173 (proxies /api to :50
 
 ## API Endpoints
 
-All routes are under `/api/v1` and require authentication (unless
-`AUTH_DISABLED=true`), except `/health`, `/health/ready` and `/api/v1/version`.
-The web UI is the primary interface; these are the main REST routes.
-
-### Health
-
-Liveness and readiness are separate endpoints, because Capstan is a separate
-process from Docker. Point restart-on-failure checks at liveness and dependency
-monitoring at readiness.
-
-- `GET /health` — **liveness**. 200 whenever the process is up and serving. Makes
-  no Docker call, so a Docker daemon restart cannot mark the container unhealthy
-  and get Capstan bounced for an outage restarting it would not fix. This is what
-  the container `HEALTHCHECK`, and any orchestrator liveness probe, should use.
-- `GET /health/ready` — **readiness**. Reports dependencies, 503 when any is
-  degraded, naming which. The Docker probe is bounded by a 2-second timeout so a
-  hung daemon cannot pile up goroutines across repeated probes. Point an uptime
-  monitor, a load balancer, or a Kubernetes readiness probe here.
-
-```console
-$ curl -s localhost:5001/health
-{"status":"healthy"}
-
-$ curl -s localhost:5001/health/ready          # Docker up
-{"checks":{"docker":{"status":"ok"}},"status":"ready"}
-
-$ curl -s localhost:5001/health/ready          # Docker daemon stopped -> HTTP 503
-{"checks":{"docker":{"error":"Cannot connect to the Docker daemon at unix:///var/run/docker.sock.",
-"status":"unavailable"}},"degraded":["docker"],"status":"degraded"}
-```
-
-**Reachability.** Loopback reaches both with no configuration, so the container's
-own healthcheck needs no setup. Every other address is denied by default —
-upgrading does not silently widen exposure. To let an external monitor in, list
-its network in `HEALTH_ALLOWED_NETWORKS`:
-
-```bash
-HEALTH_ALLOWED_NETWORKS=10.1.0.0/16,192.168.50.7
-```
-
-This is deliberately **not** `TRUSTED_NETWORKS` (Gin's trusted-proxy list) or
-`AUTH_DISABLED_ALLOWED_NETWORKS` (the `AUTH_DISABLED` bypass list) — reusing
-either would mean granting an uptime monitor `X-Forwarded-For` spoofing or
-authentication bypass just to let it read a health endpoint.
-
-### Version
-- `GET /api/v1/version` — build identity of the running binary. Public, so an
-  uptime check or a support conversation can answer "what is running here?"
-  without a session.
-
-```console
-$ curl -s localhost:5001/api/v1/version
-{"version":"0.9.0","commit":"6fb9879...","buildDate":"2026-07-31T09:12:44Z"}
-```
-
-The same values appear on the first startup log line and in the UI under
-**Settings → About**. A published image reports the tag it was built under; a
-local `docker build` with no `--build-arg` reports `version: dev`, which is the
-honest answer rather than a blank.
-
-### Authentication
-- `POST /api/v1/auth/setup` — create the first admin (only when no user exists)
-- `POST /api/v1/auth/login` — log in
-- `POST /api/v1/auth/logout` — log out
-- `GET  /api/v1/auth/me` — current user
-
-### Stacks
-- `GET    /api/v1/stacks` — list stacks
-- `POST   /api/v1/stacks` — create a stack
-- `GET    /api/v1/stacks/:id` — stack details
-- `POST   /api/v1/stacks/:id/start` · `/stop` · `/restart` · `/pull` — lifecycle actions
-- `DELETE /api/v1/stacks/:id` — delete a stack
-
-### Compose & environment files
-- `GET` / `PUT /api/v1/stacks/:id/compose` — read/write compose file
-- `POST /api/v1/stacks/:id/compose/lint` — lint compose file
-- `GET` / `PUT /api/v1/stacks/:id/env` — read/write `.env` file
-
-### Git
-- `GET  /api/v1/git?stackId=<id>` — status
-- `POST /api/v1/git/pull` — pull changes
-- `GET  /api/v1/git/log` — commit log
-- `GET  /api/v1/git/diff/:hash` — commit diff
-
-### Backups
-- `POST /api/v1/backups/run` · `/sync` · `/restore` · `/dr-restore` · `/prune`
-- `GET  /api/v1/backups/status` · `/history` · `/snapshots`
+See [API reference](docs/reference/api.md) for the full route list, grouped
+by resource, plus health-check and version examples.
 
 ## Documentation
+
+- [Getting started](docs/getting-started.md)
+
+### How-to
 
 - [Deploy to production](docs/how-to/deploy-production.md)
 - [Configure backups](docs/how-to/configure-backups.md)
@@ -175,6 +94,14 @@ honest answer rather than a blank.
 - [Migrate from Dockge](docs/how-to/migrate-from-dockge.md)
 - [Recover admin access](docs/how-to/recover-admin-access.md)
 - [Upgrade and roll back](docs/how-to/upgrade-and-roll-back.md)
+
+### Reference
+
+- [Configuration](docs/reference/configuration.md)
+- [API](docs/reference/api.md)
+
+### Explanation
+
 - [Security model](docs/explanation/security-model.md)
 - [Architecture](docs/explanation/architecture.md)
 
