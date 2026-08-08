@@ -42,7 +42,7 @@ func TestUpdateGlobalEnv_WritesAuditEntry_WithoutSecretValues(t *testing.T) {
 	// in production); create that user and inject its ID into the request context.
 	createTestUser(t, handler.db, "admin", "correct-horse-battery")
 	router := gin.New()
-	router.PUT("/settings/global-env", authContextMiddleware("test-user-id"), handler.UpdateGlobalEnv)
+	router.PUT("/settings/global-env", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.UpdateGlobalEnv)
 
 	body := `{"vars":[{"key":"API_TOKEN","value":"s3cr3t-value"},{"key":"REGION","value":"eu-west"}]}`
 	req := httptest.NewRequest(http.MethodPut, "/settings/global-env", strings.NewReader(body))

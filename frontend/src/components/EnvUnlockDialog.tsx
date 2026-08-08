@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,6 +10,7 @@ import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { classifyError } from '@/lib/error-handler'
 import { toast } from 'sonner'
 import { useAuth } from '@/hooks/useAuth'
+import { invalidateEnvUnlockQueries } from '@/lib/env-unlock-queries'
 
 interface EnvUnlockDialogProps {
   open: boolean
@@ -18,6 +20,7 @@ interface EnvUnlockDialogProps {
 
 export function EnvUnlockDialog({ open, onOpenChange, onUnlocked }: EnvUnlockDialogProps) {
   const { authDisabled } = useAuth()
+  const queryClient = useQueryClient()
   const unlock = useEnvUnlockStore((s) => s.unlock)
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -32,8 +35,15 @@ export function EnvUnlockDialog({ open, onOpenChange, onUnlocked }: EnvUnlockDia
     if (!password) return
     setSubmitting(true)
     try {
-      await authApi.verifyPassword(password)
-      unlock()
+      // Read the token defensively rather than destructuring: a 200 with an
+      // unexpected body should still open the window it just paid for, and be
+      // reported as a failed reveal rather than as a wrong password.
+      const verified = await authApi.verifyPassword(password)
+      unlock(verified?.unlockToken ?? null)
+      // The secret surfaces were fetched redacted while locked, so the cached
+      // copies hold blanks. Refetch them with the token attached, or the reveal
+      // toggles would uncover empty strings (agent-os-7o5s).
+      await invalidateEnvUnlockQueries(queryClient)
       toast.success('Environment variables unlocked for 5 minutes')
       onUnlocked?.()
       onOpenChange(false)

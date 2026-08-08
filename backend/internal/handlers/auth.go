@@ -41,6 +41,13 @@ type AuthHandler struct {
 	jwtSecret    string
 	authDisabled bool
 	actionLog    *services.ActionLogger
+	// envUnlock mints the short-lived tokens that gate the secret-reveal
+	// surfaces. Injected after construction (SetEnvUnlockStore) because the same
+	// store instance has to be shared with middleware.EnvUnlock, and threading it
+	// through every NewAuthHandler call site would churn 20-odd tests for no
+	// behavioural gain. A nil store mints nothing, which leaves those surfaces
+	// locked — the safe direction if wiring is ever forgotten.
+	envUnlock *services.EnvUnlockStore
 }
 
 func NewAuthHandler(db *database.DB, jwtSecret string, authDisabled bool) *AuthHandler {
@@ -50,6 +57,37 @@ func NewAuthHandler(db *database.DB, jwtSecret string, authDisabled bool) *AuthH
 		authDisabled: authDisabled,
 		actionLog:    services.NewActionLogger(db),
 	}
+}
+
+// SetEnvUnlockStore wires the shared unlock-token store. Call it with the same
+// instance handed to middleware.EnvUnlock, or nothing this handler mints will
+// ever validate.
+func (h *AuthHandler) SetEnvUnlockStore(store *services.EnvUnlockStore) {
+	h.envUnlock = store
+}
+
+// mintUnlock issues an unlock token for userID and writes the verify-password
+// success body. On a minting failure it still reports ok:true — the password
+// really was correct — but without a token, so the client re-prompts rather than
+// being told its credentials were wrong.
+func (h *AuthHandler) mintUnlock(c *gin.Context, userID string) {
+	if h.envUnlock == nil {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+
+	token, ttl, err := h.envUnlock.Mint(userID)
+	if err != nil {
+		slog.Error("Failed to mint env unlock token", "error", err)
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":          true,
+		"unlockToken": token,
+		"expiresIn":   int(ttl.Seconds()),
+	})
 }
 
 // RegisterPublicRoutes registers public bootstrap endpoints that must not be
@@ -345,6 +383,13 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		}
 	}
 
+	// Drop any live env-unlock window with the session. Without this a token
+	// minted seconds before logout would keep unlocking secrets for the rest of
+	// its 5 minutes on the next login.
+	if h.envUnlock != nil {
+		h.envUnlock.RevokeUser(userID.(string))
+	}
+
 	slog.Info("User logged out", "userID", userID)
 	logActionFromContext(h.actionLog, c, nil, services.ActionLogout, gin.H{})
 
@@ -384,10 +429,24 @@ func (h *AuthHandler) Me(c *gin.Context) {
 }
 
 // VerifyPassword re-checks the current user's password without issuing a new
-// session. Used by the env-reveal unlock flow.
+// session, and on success mints a short-lived unlock token. That token is the
+// second factor the secret-reveal surfaces require: before agent-os-7o5s this
+// handler returned a bare {"ok": true} that nothing consumed, so the password
+// prompt was pure UI ceremony and any authenticated caller could read raw .env
+// contents without ever calling it.
+//
+// The token is session-wide rather than bound to one stack id: it unlocks every
+// secret surface for its lifetime. That deliberately matches the existing UX of
+// one prompt covering the stack .env editor and the global-env settings panel,
+// and is deliberately weaker than a per-stack binding.
 func (h *AuthHandler) VerifyPassword(c *gin.Context) {
 	if h.authDisabled {
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+		// No password exists to re-check, so there is nothing to verify — but the
+		// surfaces still ask for a token, so mint one unconditionally rather than
+		// locking the operator out of their own env files. middleware.EnvUnlock
+		// also opens the gate outright in this mode; this keeps the endpoint's
+		// contract identical either way.
+		h.mintUnlock(c, c.GetString("userID"))
 		return
 	}
 
@@ -442,7 +501,7 @@ func (h *AuthHandler) VerifyPassword(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	h.mintUnlock(c, user.ID)
 }
 
 func validateUsername(username string) *models.AppError {

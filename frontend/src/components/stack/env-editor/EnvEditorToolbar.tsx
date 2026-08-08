@@ -12,6 +12,11 @@ interface EnvEditorToolbarProps {
   onUndo: () => void
   onRedo: () => void
   hasUnsavedChanges: boolean
+  /**
+   * While locked the backend sends no `raw` field at all, so the Raw Editor tab
+   * would show an empty file that looks like data loss. Hide it until unlocked.
+   */
+  locked: boolean
 }
 
 export function EnvEditorToolbar({
@@ -22,6 +27,7 @@ export function EnvEditorToolbar({
   onUndo,
   onRedo,
   hasUnsavedChanges,
+  locked,
 }: EnvEditorToolbarProps) {
   return (
     <div className="flex items-center justify-between">
@@ -29,7 +35,7 @@ export function EnvEditorToolbar({
         <Tabs value={view} onValueChange={(v: string) => onViewChange(v as 'table' | 'raw')}>
           <TabsList>
             <TabsTrigger value="table">Table View</TabsTrigger>
-            <TabsTrigger value="raw">Raw Editor</TabsTrigger>
+            {!locked && <TabsTrigger value="raw">Raw Editor</TabsTrigger>}
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-1 ml-2">

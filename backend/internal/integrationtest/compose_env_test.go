@@ -16,6 +16,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/handlers"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
@@ -30,6 +31,17 @@ func authCtx(userID string) gin.HandlerFunc {
 	}
 }
 
+// envUnlockOpen is the real unlock gate in its AUTH_DISABLED configuration, where
+// there is no password to re-check and the gate is open by design. The env write
+// paths below refuse a locked caller (agent-os-7o5s), and these tests are about
+// atomicity and file modes rather than about the gate — the gate itself is
+// covered in handlers/env_unlock_gate_test.go. Using the real middleware rather
+// than setting its context key by hand keeps this honest: if the gate stops
+// opening under AUTH_DISABLED, these fail too.
+func envUnlockOpen() gin.HandlerFunc {
+	return middleware.EnvUnlock(services.NewEnvUnlockStore(), true)
+}
+
 // setupEnvHandlerRouter creates a minimal Gin router wired to the EnvHandler
 // with all necessary DB and config scaffolding.
 func setupEnvHandlerRouter(t *testing.T, stacksDir string, db *database.DB) (*gin.Engine, *handlers.EnvHandler) {
@@ -41,6 +53,7 @@ func setupEnvHandlerRouter(t *testing.T, stacksDir string, db *database.DB) (*gi
 	group := router.Group("/stacks")
 	// Register with auth middleware so userID is available.
 	group.Use(authCtx("test-user"))
+	group.Use(envUnlockOpen())
 	h.RegisterRoutes(group)
 	return router, h
 }
@@ -53,6 +66,7 @@ func setupComposeHandlerRouter(t *testing.T, stacksDir string, db *database.DB) 
 	router := gin.New()
 	group := router.Group("/stacks")
 	group.Use(authCtx("test-user"))
+	group.Use(envUnlockOpen())
 	h.RegisterRoutes(group)
 	return router, h
 }

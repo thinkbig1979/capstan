@@ -32,10 +32,17 @@ type EnvEntry struct {
 	Comment   bool   `json:"comment,omitempty"`
 }
 
+// EnvResponse is the wire shape of GET /:id/env.
+//
+// Raw is omitempty and Locked is set because the response is redacted for a
+// session that has not re-entered its password: see redactEnvResponse. A caller
+// must therefore treat a missing "raw" as "not authorised to see it", not as
+// "the file is empty" — Locked tells the two apart.
 type EnvResponse struct {
 	Filename string     `json:"filename"`
 	Entries  []EnvEntry `json:"entries"`
-	Raw      string     `json:"raw"`
+	Raw      string     `json:"raw,omitempty"`
+	Locked   bool       `json:"locked,omitempty"`
 }
 
 type EnvRequest struct {
@@ -116,15 +123,63 @@ func (h *EnvHandler) Get(c *gin.Context) {
 
 	entries := h.parseEnvFile(string(content))
 
-	c.JSON(http.StatusOK, EnvResponse{
+	resp := EnvResponse{
 		Filename: stack.EnvFile,
 		Entries:  entries,
 		Raw:      string(content),
-	})
+		Locked:   !envUnlocked(c),
+	}
+	if resp.Locked {
+		redactEnvResponse(&resp)
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// envUnlocked reports whether this request carried a valid env-unlock token, as
+// determined upstream by middleware.EnvUnlock. Reading the context (rather than
+// the header) keeps token validation in one place and makes a route that was
+// never wired through the middleware read false — i.e. fail closed.
+func envUnlocked(c *gin.Context) bool {
+	return c.GetBool(middleware.CtxEnvUnlocked)
+}
+
+// redactEnvResponse strips the secrets from an env payload for a session that
+// has not re-entered its password.
+//
+// It blanks sensitive entry values as well as dropping Raw, because Raw is not
+// the only copy: parseEnvFile puts the same plaintext into every
+// entries[].Value, and Sensitive is only a client-side masking hint. Dropping
+// Raw alone would leave a caller refused the raw file free to read
+// entries[].value instead.
+//
+// Keys, line numbers, comments and non-sensitive values survive, so a locked
+// session can still see the shape of the file (which variables a stack defines,
+// what its TZ is) without seeing any secret.
+func redactEnvResponse(resp *EnvResponse) {
+	resp.Raw = ""
+	for i := range resp.Entries {
+		if resp.Entries[i].Sensitive {
+			resp.Entries[i].Value = ""
+		}
+	}
 }
 
 func (h *EnvHandler) Put(c *gin.Context) {
 	id := c.Param("id")
+
+	// The write path is gated as well as the read path, and not for symmetry: a
+	// locked session was handed blanked sensitive values by Get, so letting it
+	// PUT what it holds would overwrite every secret in the file with "". The
+	// gate is what makes the redaction safe rather than destructive.
+	if !envUnlocked(c) {
+		c.JSON(http.StatusForbidden, models.NewAppError(
+			http.StatusForbidden,
+			models.ErrForbidden,
+			"Re-enter your password to edit environment variables",
+		))
+		return
+	}
 
 	stack, err := h.db.GetStack(id)
 	if err != nil || stack == nil {
@@ -483,6 +538,13 @@ func serializeEnvFile(entries []EnvEntry) string {
 }
 
 func (h *EnvHandler) isSensitiveKey(key string) bool {
+	return isSensitiveEnvKey(key)
+}
+
+// isSensitiveEnvKey classifies a key as secret-bearing by name. Shared with the
+// global-env surface in settings.go so both redact on the same rule — a key that
+// masks in one place and leaks in the other is the whole bug class.
+func isSensitiveEnvKey(key string) bool {
 	upperKey := strings.ToUpper(key)
 
 	if strings.HasPrefix(upperKey, "EXPORT ") {

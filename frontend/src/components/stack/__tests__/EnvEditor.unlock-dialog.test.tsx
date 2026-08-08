@@ -114,7 +114,7 @@ describe('EnvEditor unlock dialog wiring', () => {
   it('a correct password unlocks the session and reveals the pending entry', async () => {
     const user = userEvent.setup()
     mockGetEnv.mockResolvedValue(envDataWithSensitive)
-    mockVerifyPassword.mockResolvedValue(undefined)
+    mockVerifyPassword.mockResolvedValue({ ok: true, unlockToken: 'test-unlock-token', expiresIn: 300 })
     renderWithProviders(<EnvEditor stackId="test-stack" />)
 
     await waitFor(() => {

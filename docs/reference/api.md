@@ -79,7 +79,12 @@ honest answer rather than a blank.
 - `POST /api/v1/auth/logout` — log out
 - `GET /api/v1/auth/me` — current user
 - `POST /api/v1/auth/verify-password` — re-confirm the current user's password
-  for a step-up check (e.g. before revealing a secret)
+  and mint a short-lived unlock token: `{ok, unlockToken, expiresIn}`. The token
+  is the step-up credential for the secret-reveal endpoints below — send it back
+  as an `X-Unlock-Token` header. It lasts 5 minutes, is reusable within that
+  window, is bound to the account that minted it, and is revoked on logout. With
+  `AUTH_DISABLED` there is no password to re-check, so a token is minted
+  unconditionally and the gate is open. See [Secret reveal](#secret-reveal).
 - `PUT /api/v1/auth/password` — change the current user's password
 
 ## Settings
@@ -87,7 +92,8 @@ honest answer rather than a blank.
 - `GET /api/v1/settings/config` — effective server configuration (non-secret
   fields)
 - `GET /api/v1/settings/global-env` / `PUT /api/v1/settings/global-env` —
-  read/write the global `.env` overlay applied across stacks
+  read/write the global `.env` overlay applied across stacks. Gated by
+  `X-Unlock-Token` — see [Secret reveal](#secret-reveal)
 - `GET /api/v1/settings/log-retention` / `PUT /api/v1/settings/log-retention`
   — log retention policy
 - `GET /api/v1/settings/updates` / `PUT /api/v1/settings/updates` —
@@ -135,8 +141,30 @@ honest answer rather than a blank.
 - `POST /api/v1/compose/lint` — lint an arbitrary compose document, not tied
   to a saved stack (used by the create-stack form)
 - `GET /api/v1/stacks/:id/env` / `PUT /api/v1/stacks/:id/env` — read/write a
-  stack's `.env` file
+  stack's `.env` file. Gated by `X-Unlock-Token` — see
+  [Secret reveal](#secret-reveal)
 - `POST /api/v1/stacks/:id/env` — create a stack's `.env` file
+
+## Secret reveal
+
+A valid session is not enough to read the contents of an env file. The endpoints
+that serve secrets require a second factor: an unlock token from
+`POST /api/v1/auth/verify-password`, sent as an `X-Unlock-Token` header.
+
+Without a live token:
+
+- `GET /api/v1/stacks/:id/env` returns the entry keys, line numbers and comments
+  intact, the value **blanked** for every key that looks like a secret
+  (`*_KEY`, `*_SECRET`, `*_PASSWORD`, `*_TOKEN`, `*_API_*`), no `raw` field at
+  all, and `"locked": true`. Non-secret values (e.g. `TZ`) stay visible.
+- `GET /api/v1/settings/global-env` blanks secret-looking values the same way and
+  reports `"locked": true`.
+- `PUT` on either endpoint returns **403 `FORBIDDEN`**. This is not symmetry for
+  its own sake: a locked caller holds the blanks the `GET` handed it, and both
+  endpoints replace the whole file, so accepting that write would overwrite every
+  secret it was not allowed to see.
+
+With a live token, all four behave exactly as they did before.
 
 ## Git
 

@@ -29,6 +29,13 @@ interface EnvTableViewProps {
   onSaveTable: () => void
   saving: boolean
   hasUnsavedChanges: boolean
+  /**
+   * True when the backend withheld the sensitive values because no unlock token
+   * was in play. Saving from that state would persist the blanks it sent us, and
+   * the backend refuses the write anyway — so the button is disabled rather than
+   * left to fail (agent-os-7o5s).
+   */
+  locked: boolean
 }
 
 export function EnvTableView({
@@ -41,6 +48,7 @@ export function EnvTableView({
   onSaveTable,
   saving,
   hasUnsavedChanges,
+  locked,
 }: EnvTableViewProps) {
   // Entries are tagged with their original index so that all edit/delete/toggle
   // handlers still target `entries[originalIndex]` regardless of filter order.
@@ -234,7 +242,11 @@ export function EnvTableView({
           <Plus className="mr-2 h-4 w-4" />
           Add Entry
         </Button>
-        <Button onClick={onSaveTable} disabled={saving || !hasUnsavedChanges}>
+        <Button
+          onClick={onSaveTable}
+          disabled={saving || !hasUnsavedChanges || locked}
+          title={locked ? 'Unlock with your password to edit environment variables' : undefined}
+        >
           <Save className="mr-2 h-4 w-4" />
           {saving ? 'Saving...' : 'Save'}
         </Button>

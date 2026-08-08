@@ -390,7 +390,13 @@ func main() {
 	// middleware.PublicPaths, which both auth and CSRF consult (agent-os-r7e).
 	handlers.NewVersionHandler().RegisterVersionRoutes(api)
 
+	// One store shared by the minting side (POST /auth/verify-password) and the
+	// validating side (middleware.EnvUnlock). Two instances would mint tokens
+	// nothing can validate, which is why this is constructed once, here.
+	envUnlockStore := services.NewEnvUnlockStore()
+
 	authHandler := handlers.NewAuthHandler(db, cfg.JWTSecret, cfg.AuthDisabled)
+	authHandler.SetEnvUnlockStore(envUnlockStore)
 	authGroup := api.Group("/auth")
 	authHandler.RegisterPublicRoutes(authGroup)
 	authGroup.Use(middleware.RateLimitAuth())
@@ -416,6 +422,11 @@ func main() {
 	protected.Use(middleware.AuthMiddleware(db, cfg.JWTSecret, cfg.AuthDisabled, cfg.AuthDisabledAllowedNetworks))
 	protected.Use(middleware.RateLimitByUser())
 	protected.Use(middleware.CSRFMiddleware())
+	// After AuthMiddleware, which is what publishes the userID this gate binds
+	// the token to. It never rejects a request — it only records whether the
+	// caller re-entered their password recently, and the secret-reveal handlers
+	// redact when it did not.
+	protected.Use(middleware.EnvUnlock(envUnlockStore, cfg.AuthDisabled))
 	authHandler.RegisterProtectedRoutes(protected)
 	settingsHandler.RegisterRoutes(protected)
 

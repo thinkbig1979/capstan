@@ -30,6 +30,7 @@ export function GlobalEnvSettingsContent() {
   const {
     isLoading,
     isError,
+    locked,
     vars,
     dirty,
     query,
@@ -73,6 +74,11 @@ export function GlobalEnvSettingsContent() {
             </p>
           </HelpHint>
           <EnvUnlockStatus />
+          {locked && (
+            <Badge variant="outline" className="text-xs whitespace-nowrap">
+              Locked
+            </Badge>
+          )}
           {dirty && (
             <Badge variant="secondary" className="text-xs whitespace-nowrap">
               Unsaved changes
@@ -123,7 +129,8 @@ export function GlobalEnvSettingsContent() {
         <Button
           type="button"
           onClick={handleSave}
-          disabled={isSaving || !dirty}
+          disabled={isSaving || !dirty || locked}
+          title={locked ? 'Unlock with your password to edit global environment variables' : undefined}
         >
           {isSaving ? (
             <>

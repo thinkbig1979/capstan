@@ -5,6 +5,7 @@ import { Toaster } from 'sonner'
 import { queryClient } from '@/lib/query-client'
 import { setAuthCallbacks } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { useEnvUnlockCacheSync } from '@/hooks/useEnvUnlockCacheSync'
 import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
@@ -53,6 +54,9 @@ function AuthenticatedLayout() {
 function App() {
   const { authDisabled, needsSetup, isAuthenticated, checkStatus, checkAuth } = useAuth()
   const [statusChecked, setStatusChecked] = useState(false)
+
+  // Purges cached plaintext secrets when the env-unlock window closes.
+  useEnvUnlockCacheSync()
 
   useEffect(() => {
     setAuthCallbacks(
