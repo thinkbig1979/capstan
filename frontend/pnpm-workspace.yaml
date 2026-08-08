@@ -8,22 +8,21 @@ ignoredBuiltDependencies:
 # Security: delay installs until releases have had time to be vetted, and
 # refuse to silently accept packages whose trust signals weaken on update.
 minimumReleaseAge: 10080
-# Security: the quarantine above and the fast-uri advisory below collided —
-# GHSA-7p8r-x3mc-p8w7 is patched only in fast-uri 3.1.5, published 2026-07-31,
-# still inside the 7-day window on 2026-08-03. Since `pnpm audit` at high and
-# above is a required status check, the quarantine was holding main closed to
-# every merge (agent-os-eld). OBSERVED: `pnpm install` failed with
-# ERR_PNPM_NO_MATURE_MATCHING_VERSION naming a 2026-07-27 cutoff.
+# `minimumReleaseAgeExclude` is deliberately absent. It carried one entry,
+# fast-uri@3.1.5, added on 2026-08-03 because that fix was inside the 7-day
+# window while `pnpm audit` at high and above is a required status check, so
+# the quarantine was holding main closed to every merge (agent-os-eld). That
+# entry carried its own expiry — "REMOVE after 2026-08-07 09:16 UTC, when
+# 3.1.5 clears the window on its own and this entry becomes a no-op" — and it
+# was removed on 2026-08-08 once it had. VERIFIED before removing, not after:
+# with the entry deleted, `pnpm install --frozen-lockfile` exits 0, fast-uri
+# still resolves to 3.1.5, and `pnpm audit --prod --audit-level=high` exits 0.
 #
-# Excluded rather than allowlisted in auditConfig: this installs the FIXED
-# code instead of suppressing the finding. Pinned to the exact version, like
-# trustPolicyExclude above, so the quarantine still applies to every future
-# fast-uri release rather than being switched off for the package.
-#
-# REMOVE after 2026-08-07 09:16 UTC, when 3.1.5 clears the window on its own
-# and this entry becomes a no-op — tracked by agent-os-eld.
-minimumReleaseAgeExclude:
-  - fast-uri@3.1.5
+# Keep it absent. An exclusion is a hole in the maturity floor, and the floor
+# matters most for exactly the brand-new packages an exclusion would admit.
+# The bar for adding one back is a required check that is red RIGHT NOW with
+# no other way through, and whatever is added carries an exact version and a
+# removal date the way that one did.
 trustPolicy: no-downgrade
 # Security: these exact versions were traced and confirmed legitimate on
 # 2026-07-21 (publisher/provenance change, not a takeover) — excluded from
@@ -54,7 +53,8 @@ auditConfig:
 # Security: dev-scope disposition (agent-os-l78, 2026-08-03), not entered
 # above because nothing here is a production finding to allowlist — see
 # "why no entries" at the end. `pnpm audit --audit-level=moderate --json`
-# reports 20 advisories today, none production-reachable (the Dockerfile
+# reported 20 advisories on 2026-08-03 and reports 1 today after the overrides
+# below (agent-os-ziz); none was production-reachable then or now (the Dockerfile
 # build copies only `vite build`'s dist/ output; none of these packages are
 # imported by app code). security.yml's frontend-audit job already treats
 # dev-dependency advisories as advisory-only for this reason, in its "Full
@@ -68,9 +68,20 @@ auditConfig:
 #    a `react-doctor` path alongside it — but checked via `pnpm audit
 #    --audit-level=moderate --json` on 2026-08-03, every one of them also has
 #    20+ paths through the direct eslint devDependency with no react-doctor
-#    in them. Pinning or removing react-doctor would not clear these; the fix
+#    in them. Pinning or removing react-doctor would not clear these.
+#
+#    CORRECTED 2026-08-08 (agent-os-ziz). This paragraph used to end "the fix
 #    is an eslint-toolchain bump, which will land on its own schedule as
-#    upstream (`eslint`, `@typescript-eslint/*`) releases one.
+#    upstream releases one", and an adjacent line said none of these was
+#    "actionable from this repo without forcing resolutions that break the
+#    toolchain". Both were wrong, and neither had been executed — waiting on
+#    upstream was not a measured conclusion, it was an assumption that read
+#    like one. OBSERVED: every one of these five resolves to a patched version
+#    already past the maturity floor, and the `overrides:` block below now
+#    pins them. `pnpm install` succeeds and eslint, `tsc -b`, `vite build` and
+#    the full vitest suite (89 files, 881 tests) all pass. Frontend went from
+#    12 HIGH advisories to 1. Only nanoid remains, and only because its fix is
+#    younger than the 7-day floor — see the note in the overrides block.
 #
 # 2. undici — transitive through jsdom > vitest, the test runner's DOM
 #    implementation. `pnpm why undici` shows only jsdom/vitest paths; not
@@ -104,3 +115,68 @@ overrides:
   # Lives here (not package.json "pnpm.overrides") because pnpm 10.16+/11 reads
   # overrides from pnpm-workspace.yaml.
   fast-uri@<3.1.5: '>=3.1.5 <4'
+
+  # Security: the dev-toolchain advisory batch (agent-os-ziz, 2026-08-08).
+  #
+  # These six are all DoS / ReDoS / prototype-pollution findings in transitive
+  # dependencies of the lint, build and test toolchain — eslint, vite, postcss,
+  # vitest. None is reachable at runtime: the Dockerfile's frontend-build stage
+  # runs `vite build` and copies only dist/, so none of these packages exists
+  # in the shipped image. `pnpm audit --prod --audit-level=high`, the required
+  # status check, was green before this block and is green after it.
+  #
+  # THEY WERE FIXED ANYWAY, AND THE EARLIER REASONING FOR NOT FIXING THEM WAS
+  # WRONG. The dev-scope note ABOVE this `overrides:` block said "None is actionable
+  # from this repo without forcing resolutions that break the toolchain" and
+  # concluded the fix was an upstream eslint-toolchain bump landing on its own
+  # schedule. That was asserted, not measured. OBSERVED 2026-08-08: every one
+  # of these resolves to a patched version that is already past the 7-day
+  # maturity floor, `pnpm install` succeeds, and eslint, tsc -b, vite build and
+  # the full vitest suite all still pass. Twelve HIGH advisories went to one.
+  #
+  # Each selector is capped inside its current major on purpose — these are
+  # security floors for packages this repo does not use directly, not upgrades.
+  # As with fast-uri above: when an advisory raises the bar, bump BOTH sides of
+  # the selector, never just the target, or the override silently becomes a
+  # no-op the moment resolution lands on the old floor.
+  #
+  # GHSA-3ppc-4f35-3m26, GHSA-7r86-cg39-jmmj (ReDoS, <3.1.3) and
+  # GHSA-23c5-xmqv-rm74 (extglob ReDoS, <3.1.4). Reached via eslint and via
+  # rimraf/glob under the test toolchain. The 10.x copies in the tree are
+  # unaffected; this selector cannot touch them.
+  minimatch@<3.1.4: '>=3.1.4 <4'
+  # GHSA-25h7-pfq9-p65f (unbounded recursion in parse(), <3.4.0) and
+  # GHSA-rf6f-7fwh-wjgh (prototype pollution via parse(), <=3.4.1). Reached
+  # only via eslint's cache serialization (flat-cache > flatted).
+  flatted@<3.4.2: '>=3.4.2 <4'
+  # GHSA-3jxr-9vmj-r5cp, GHSA-mh99-v99m-4gvg and GHSA-rgw5-rvv9-x895 (three
+  # DoS-by-expansion findings). Two live copies at different majors, so two
+  # selectors: the 1.x chain reached via minimatch, and the 5.x chain reached
+  # via the newer glob. 5.0.9 is the patched floor for the >=4.0.0 range.
+  brace-expansion@<1.1.18: '>=1.1.18 <2'
+  brace-expansion@>=4.0.0 <5.0.9: '>=5.0.9 <6'
+  # GHSA-52cp-r559-cp3m (quadratic CPU via YAML merge-key chains) and
+  # GHSA-5p4m-2wfm-xmqj (quadratic CPU in !!omap resolution). Reached via
+  # eslint config loading. Range-scoped because both advisories are 4.x-only.
+  js-yaml@>=4.0.0 <4.3.1: '>=4.3.1 <5'
+  # GHSA-2g4f-4pwh-qvx6. The 6.x copy reached via eslint > @eslint/eslintrc;
+  # the separate 8.x copy under composerize is not affected. Capped below 7
+  # because eslintrc asks for ^6.12.4 and 7.x/8.x are API breaks, not fixes.
+  ajv@<6.14.0: '>=6.14.0 <7'
+  # GHSA-fxqj-rqcc-2cmp. Reached via vite (both @tailwindcss/vite and
+  # @vitejs/plugin-react pull it). Note this does NOT clear postcss's own
+  # nanoid dependency — see the nanoid note below.
+  postcss@<8.5.23: '>=8.5.23 <9'
+  #
+  # NOT FIXED, and the reason is the maturity floor rather than a judgement:
+  # nanoid GHSA-2v37-7h3g-55p8 (custom generators can loop indefinitely when
+  # size is non-positive), reached via vite > postcss > nanoid. The fix is
+  # nanoid 3.3.17, published 2026-08-03T10:39Z, which is inside the 7-day
+  # window until 2026-08-10T10:39Z — an override to it today fails the install
+  # with ERR_PNPM_NO_MATURE_MATCHING_VERSION. Adding a minimumReleaseAgeExclude
+  # to force it was rejected: this advisory is dev-only and not reachable in
+  # the shipped image, so it does not clear the bar for punching a hole in the
+  # floor. nanoid 5.x is mature but is an ESM-only major that postcss does not
+  # ask for, so it is an untested API swap rather than a security fix. Add
+  #   nanoid@<3.3.17: '>=3.3.17 <4'
+  # on or after 2026-08-10 — tracked, with that date, as its own issue.
