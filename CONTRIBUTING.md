@@ -58,6 +58,38 @@ environment files: [`.env.example`](.env.example) (production) and
 - State: TanStack Query
 - Editor: CodeMirror 6
 
+### Git hooks
+
+Hooks are tracked in `.githooks/` — see
+[`.githooks/pre-commit`](.githooks/pre-commit) — so every clone gets the same
+ones. `core.hooksPath` points git at that directory, and the root `prepare`
+script sets it during `pnpm install`.
+
+That covers fresh clones. A clone that already has `node_modules` will not
+re-run `prepare`, because pnpm short-circuits with "Already up to date", so wire
+it up once by hand:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`core.hooksPath` is per-clone local config. It is not carried by a fetch or a
+pull, so an existing checkout stays on its old hooks until someone runs the line
+above.
+
+`pre-commit` runs two things, each of which no-ops when its tool is missing:
+
+- **react-doctor** scans staged files via `./node_modules/.bin/react-doctor` or a
+  `react-doctor` on `PATH`. There is deliberately no `pnpm dlx` or `npx`
+  fallback: those fetch and execute whatever npm currently tags `latest` on every
+  commit, and `pnpm dlx` ignores the repo's `minimumReleaseAge` policy entirely.
+  CI runs the `millionco/react-doctor` action on every pull request, so the local
+  scan is a convenience rather than the gate. With no local binary the hook exits
+  silently.
+- **beads** (`bd`) owns the block between its own markers. Leave the markers in
+  place; `bd hooks install` rewrites that section, and it reads `core.hooksPath`,
+  so it updates the tracked file rather than a stale copy under `.git/hooks`.
+
 ### Branch protection
 
 `main` requires these six checks to pass before a pull request can merge:

@@ -1,0 +1,61 @@
+#!/usr/bin/env sh
+
+# react-doctor hook start
+#
+# Resolution is deliberately LOCAL-ONLY. Earlier revisions of this hook fell
+# through to `pnpm dlx react-doctor@latest` and `npx --yes react-doctor@latest`,
+# which fetch and execute whatever npm currently tags `latest` on every commit.
+# Both fallbacks are removed (agent-os-d2r): `pnpm dlx` ignores the repo's
+# `minimumReleaseAge` policy entirely — VERIFIED 2026-08-08 two-sided, a package
+# published ~5h earlier ran under `pnpm dlx` both with and without the policy
+# file present — so no supply-chain control in this repo could reach that path.
+#
+# With no local binary the hook prints the "command not found" line below and
+# exits clean. That is the intended behaviour, not a degradation: CI runs the
+# millionco/react-doctor ACTION on every PR, so the staged scan here is a
+# developer convenience, never the gate.
+react_doctor_scan_staged_files() {
+  if [ -x "./node_modules/.bin/react-doctor" ]; then
+    "./node_modules/.bin/react-doctor" --staged --fail-on warning
+    return
+  fi
+
+  if command -v react-doctor >/dev/null 2>&1; then
+    react-doctor --staged --fail-on warning
+    return
+  fi
+
+  printf '%s\n' "react-doctor: command not found; skipping staged scan."
+}
+
+react_doctor_output=$(mktemp "${TMPDIR:-/tmp}/react-doctor-hook.XXXXXX")
+if react_doctor_scan_staged_files > "$react_doctor_output" 2>&1; then
+  rm -f "$react_doctor_output"
+else
+  rm -f "$react_doctor_output"
+  printf '%s\n' "React Doctor found staged regressions." "Run react-doctor --staged --fail-on warning to inspect." "Want them fixed? Ask your agent to run that command and resolve the findings." >&2
+fi
+# react-doctor hook end
+# --- BEGIN BEADS INTEGRATION v1.0.0 ---
+# This section is managed by beads. Do not remove these markers.
+if command -v bd >/dev/null 2>&1; then
+  export BD_GIT_HOOK=1
+  _bd_timeout=${BEADS_HOOK_TIMEOUT:-300}
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$_bd_timeout" bd hooks run pre-commit "$@"
+    _bd_exit=$?
+    if [ $_bd_exit -eq 124 ]; then
+      echo >&2 "beads: hook 'pre-commit' timed out after ${_bd_timeout}s — continuing without beads"
+      _bd_exit=0
+    fi
+  else
+    bd hooks run pre-commit "$@"
+    _bd_exit=$?
+  fi
+  if [ $_bd_exit -eq 3 ]; then
+    echo >&2 "beads: database not initialized — skipping hook 'pre-commit'"
+    _bd_exit=0
+  fi
+  if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
+fi
+# --- END BEADS INTEGRATION v1.0.0 ---
