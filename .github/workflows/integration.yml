@@ -105,16 +105,18 @@ jobs:
           docker compose version
           docker buildx version
 
-      # Run integration tests scoped to the packages that exist today:
+      # Run integration tests scoped to the two packages named below, and ONLY
+      # those:
       #   - ./internal/integrationtest/  (harness + smoke tests)
-      #   - ./internal/truth/            (added by Wave A1; harmless if absent)
+      #   - ./internal/truth/...         (added by Wave A1; harmless if absent)
       #
-      # Wave B domain integration tests live under their respective packages
-      # (e.g. ./internal/services/, ./internal/handlers/) and will be picked
-      # up automatically because we run ./... with the tag.
+      # There is no ./... discovery here. An integration test placed anywhere
+      # else — ./internal/services/, ./internal/handlers/ — will NOT run in
+      # this job. Add its package to the list below when that happens.
       #
       # -count=1 disables the test cache so each run exercises real Docker.
-      # -v produces per-test output, useful for CI log triage.
+      # -v produces per-test output, useful for CI log triage. It does not
+      # suppress the exit code, so one invocation both logs and gates.
       - name: Run integration tests
         working-directory: backend
         env:
@@ -131,15 +133,6 @@ jobs:
             -count=1 \
             -timeout 8m \
             -v \
-            ./internal/integrationtest/ \
-            ./internal/truth/... \
-            2>&1 || true
-          # Re-run without `|| true` to actually fail the job on non-zero exit.
-          # The first run above captures verbose output even on failure; this
-          # second invocation sets the job exit code correctly.
-          go test -tags=integration \
-            -count=1 \
-            -timeout 8m \
             ./internal/integrationtest/ \
             ./internal/truth/...
 
