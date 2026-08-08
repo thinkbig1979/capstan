@@ -145,7 +145,7 @@ export function useRunBackup() {
       backupApi.runBackup(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
     },
   })
 }
@@ -159,7 +159,7 @@ export function useRestore() {
       backupApi.restore({ ...data, confirm: true }),
     onSuccess: (_data: BackupOperationResult, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
       queryClient.invalidateQueries({
         queryKey: queryKeys.backup.snapshots(variables.stackId),
       })
@@ -320,7 +320,7 @@ export function useBackupStreaming(): BackupStreamState {
     // Refetch helper: invalidate backup history + status so the UI reflects
     // the persisted server run record rather than the transient WS state.
     const refetchHistory = () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
       queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
     }
 

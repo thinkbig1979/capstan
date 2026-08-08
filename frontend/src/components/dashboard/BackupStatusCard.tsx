@@ -105,7 +105,7 @@ export function BackupStatusCard() {
           streaming.connect(result.wsUrl, () => {
             // Invalidate after stream completes so status card refreshes
             queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
-            queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
+            queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
           })
         } else {
           toast.success('Backup started')
