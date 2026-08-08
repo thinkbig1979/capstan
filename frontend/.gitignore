@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Written by the coverage command in agent-os-m1mu / agent-os-c1gu, which is run
+# by hand rather than in CI. It was untracked and easy to stage by accident.
+coverage/
+
 # Local agent/skill tooling (auto-created, not project files)
 .claude/
 .agents/
