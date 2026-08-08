@@ -118,21 +118,52 @@ overrides:
 
   # Security: the dev-toolchain advisory batch (agent-os-ziz, 2026-08-08).
   #
-  # These six are all DoS / ReDoS / prototype-pollution findings in transitive
-  # dependencies of the lint, build and test toolchain — eslint, vite, postcss,
-  # vitest. None is reachable at runtime: the Dockerfile's frontend-build stage
-  # runs `vite build` and copies only dist/, so none of these packages exists
-  # in the shipped image. `pnpm audit --prod --audit-level=high`, the required
-  # status check, was green before this block and is green after it.
+  # These six sit in transitive dependencies of the lint, build and test
+  # toolchain — eslint, vite, postcss, vitest. Five are DoS / ReDoS /
+  # prototype-pollution; postcss GHSA-fxqj-rqcc-2cmp is NOT — it is an
+  # attacker-controlled `sourceMappingURL` reading arbitrary .map files when
+  # `from` is unset, i.e. a file-read on the build machine. ajv and postcss are
+  # MODERATE; the other four families are HIGH. None is reachable at runtime:
+  # the Dockerfile's frontend-build stage runs `vite build` and copies only
+  # dist/, so none of these packages exists in the shipped image.
+  # `pnpm audit --prod --audit-level=high`, the required status check, was
+  # green BEFORE this block and is green after it — it was never at risk, and
+  # nothing here was ever gating a merge.
   #
-  # THEY WERE FIXED ANYWAY, AND THE EARLIER REASONING FOR NOT FIXING THEM WAS
-  # WRONG. The dev-scope note ABOVE this `overrides:` block said "None is actionable
-  # from this repo without forcing resolutions that break the toolchain" and
-  # concluded the fix was an upstream eslint-toolchain bump landing on its own
-  # schedule. That was asserted, not measured. OBSERVED 2026-08-08: every one
-  # of these resolves to a patched version that is already past the 7-day
-  # maturity floor, `pnpm install` succeeds, and eslint, tsc -b, vite build and
-  # the full vitest suite all still pass. Twelve HIGH advisories went to one.
+  # THE EARLIER "NOT ACTIONABLE" REASONING WAS WRONG. The dev-scope note ABOVE
+  # this `overrides:` block said "None is actionable from this repo without
+  # forcing resolutions that break the toolchain" and concluded the fix was an
+  # upstream eslint-toolchain bump landing on its own schedule. That was
+  # asserted, not measured. OBSERVED 2026-08-08: every one of these resolves to
+  # a patched version already past the 7-day maturity floor, `pnpm install`
+  # succeeds, and eslint, tsc -b, vite build and the full vitest suite (89
+  # files, 881 tests) all pass. Frontend went from 16 advisories (12 HIGH, 4
+  # moderate) to 1.
+  #
+  # WHAT MOVED THE VERSIONS WAS THE LOCKFILE RE-RESOLUTION, NOT THESE
+  # SELECTORS, and the first draft of this comment got that backwards.
+  # MEASURED 2026-08-08, two fresh `pnpm install --lockfile-only` runs from no
+  # lockfile, differing only in whether this block is present: minimatch,
+  # flatted, brace-expansion, js-yaml, ajv, postcss and nanoid resolve to
+  # IDENTICAL versions either way, and `pnpm audit` reports the same single
+  # nanoid finding either way. The stale lockfile had been pinning old
+  # versions; re-resolving un-pinned them.
+  #
+  # THAT IS NOT AN ARGUMENT FOR DELETING THIS BLOCK — it is the argument for
+  # keeping it. Upstream has NOT raised its floors: @eslint/eslintrc@3.3.3, the
+  # copy in this tree, still declares `minimatch: ^3.1.2`, `ajv: ^6.12.4` and
+  # `js-yaml: ^4.1.1`, every one of them a range whose bottom is vulnerable.
+  # Today's resolution is patched only because a caret range floats to the
+  # newest mature version and that happens to be above the advisory floor.
+  # Nothing holds it there. These selectors are what hold it there, and they
+  # are DORMANT BY DESIGN: a floor that never fires is a floor doing its job.
+  # VERIFIED two-sided on the same instrument, with a package demanding the
+  # vulnerable minimatch 3.1.2 — WITH `minimatch@<3.1.4` resolution is rescued
+  # to 3.1.5; WITHOUT it, resolution stays on 3.1.2. Do not read "it changes
+  # nothing today" as "it does nothing".
+  #
+  # The lockfile diff also floated minimatch 10.2.5 -> 10.2.6. No selector here
+  # touches 10.x — that is incidental re-resolution, not this block.
   #
   # Each selector is capped inside its current major on purpose — these are
   # security floors for packages this repo does not use directly, not upgrades.
@@ -177,6 +208,16 @@ overrides:
   # to force it was rejected: this advisory is dev-only and not reachable in
   # the shipped image, so it does not clear the bar for punching a hole in the
   # floor. nanoid 5.x is mature but is an ESM-only major that postcss does not
-  # ask for, so it is an untested API swap rather than a security fix. Add
+  # ask for, so it is an untested API swap rather than a security fix. VERIFIED
+  # 2026-08-08 rather than reasoned: `npm view nanoid@5.1.16 exports` has no
+  # `require` condition on `.` or `./non-secure`, `nanoid@3.3.16` still ships
+  # `"main": "index.cjs"`, `postcss@8.5.25` declares `nanoid: ^3.3.16`, and
+  # postcss/lib/input.js does `require('nanoid/non-secure')`. Add
   #   nanoid@<3.3.17: '>=3.3.17 <4'
   # on or after 2026-08-10 — tracked, with that date, as its own issue.
+  #
+  # Expect that override to be DORMANT on arrival, like the six above: nanoid
+  # 3.3.18 landed 2026-08-07T16:41Z, so once the floor clears, postcss's own
+  # `^3.3.16` will float to a patched 3.x without help. Add it anyway. The
+  # point of the line is that nothing can drop BACK below 3.3.17, not that it
+  # is what lifts resolution there.
