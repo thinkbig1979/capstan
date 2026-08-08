@@ -3,8 +3,7 @@
 # Root and frontend/ are two independent pnpm projects with no workspace
 # linking them — each has its own package.json and its own pnpm-lock.yaml.
 # frontend/pnpm-workspace.yaml has carried these two settings for some time;
-# the root tree carried nothing, so the same dependency installed at the root
-# was subject to no maturity floor and no trust check at all.
+# the root tree carried none, so nothing constrained what resolved here.
 #
 # That asymmetry was the finding, not the settings: a policy that applies to
 # one of two sibling trees is bypassed by installing into the other one. Root
@@ -13,6 +12,16 @@
 # (security.yml's "Install root dependencies" step, and e2e-backup.yml's two
 # "Install root dependencies (Playwright)" steps), so whatever resolves here
 # runs in CI.
+#
+# PRECISELY WHAT WAS MISSING, since the mechanism is what a reader reasons
+# from. An earlier draft of this comment said the root tree was "subject to no
+# maturity floor and no trust check at all". That describes the wrong
+# mechanism. pnpm 11.5.1 runs its supply-chain verification pass whether or not
+# a policy file exists; with no policy file it simply has nothing to enforce.
+# VERIFIED 2026-08-08 on the pre-change tree with no pnpm-workspace.yaml
+# present: `pnpm install --frozen-lockfile` printed
+# "✓ Lockfile passes supply-chain policies (141 entries in 1.2s)" and exited 0.
+# The pass ran; the ruleset was empty. Same net effect, different mechanism.
 #
 # This file has no `packages:` key on purpose. pnpm reads pnpm-workspace.yaml
 # as the settings file whether or not it declares a workspace, so adding one
@@ -36,17 +45,70 @@ trustPolicy: no-downgrade
 # writing anything, which is a red required check for a reason that reads as
 # unrelated. VERIFIED 2026-08-08, both sides on the same instrument: with this
 # file, `pnpm install --frozen-lockfile` exited 1 with node_modules absent,
-# naming jose@6.2.7 (published 2026-08-01T16:11Z, inside the cutoff); without
-# it, the same lockfile exited 0 with node_modules present.
+# naming jose@6.2.7 (published 2026-08-01T16:18:16.876Z, inside the cutoff);
+# without it, the same lockfile exited 0 with node_modules present.
 #
-# `--no-frozen-lockfile` does NOT repair this — it runs the same verification
-# first and aborts identically. The sequence that works is the one pnpm's own
-# error text names: `pnpm clean --lockfile` then `pnpm install`, which
-# re-resolves under the policy (here: jose 6.2.7 -> 6.2.6). Commit the
-# re-resolved lockfile together with this file, never this file alone.
+# RECOVERY, AND WHAT IT COSTS. `--no-frozen-lockfile` does NOT repair this — it
+# runs the same verification first and aborts identically. A route that works
+# is the one pnpm's own error text names: `pnpm clean --lockfile` then
+# `pnpm install`.
+#
+# It is "a route", not "the route", and it is not a targeted repair. `pnpm
+# clean --lockfile` DELETES the lockfile outright — VERIFIED 2026-08-08, its
+# output is literally "Removing node_modules" and "Removing pnpm-lock.yaml",
+# and the file is gone afterwards. What follows is therefore a full
+# re-resolution of all ~140 packages, not a surgical fix to the offending
+# entry. It came back clean when eki did it (the only change was jose
+# 6.2.7 -> 6.2.6). That is an outcome of that particular run, not a property of
+# the procedure — re-read the lockfile diff every time. The other known routes
+# are the two escape hatches below, both of which weaken the control rather
+# than satisfying it. Commit the re-resolved lockfile together with this file,
+# never this file alone.
+#
+# ESCAPE HATCH 1: `trustLockfile: true` DISABLES THIS ENTIRE FILE IN ONE LINE.
+# Named here deliberately, on the same reasoning the frontend file applies to
+# its own exclusion-list setting: a hatch that is going to be found under time
+# pressure is better documented than discovered. VERIFIED 2026-08-08, two-sided
+# on the same instrument, using the pre-ac1fab3 root lockfile (the one carrying
+# jose@6.2.7) plus a policy file identical to this one's first two settings:
+#   CONTROL, policy only            -> exit 1, ERR_PNPM_MINIMUM_RELEASE_AGE_
+#                                      VIOLATION naming jose@6.2.7
+#   TEST, + `trustLockfile: true`   -> exit 0, 140 packages installed, and
+#                                      jose@6.2.7 present in node_modules/.pnpm
+# `--config.trustLockfile=true` on the command line does the same thing without
+# touching a file, which is the harder one to notice in review. If you find
+# yourself reaching for either, the honest move is to fix the lockfile or state
+# in the PR why the floor is being turned off.
+#
+# ESCAPE HATCH 2: A SUBDIRECTORY WITH package.json BUT NO pnpm-workspace.yaml
+# INSTALLS SILENTLY WRONG. This trap is CREATED by adding this root file, so it
+# is this file's business to warn about it. VERIFIED 2026-08-08 with pnpm
+# 11.5.1, two-sided, in a scratch tree with a root policy + override and a
+# child package depending on is-odd@3.0.1:
+#   child WITHOUT its own pnpm-workspace.yaml -> the lockfile is written to the
+#     PARENT directory, the parent lockfile's importers block is `.: {}`, and
+#     child/node_modules is ABSENT. The child's dependencies are not installed
+#     at all, and the command still exits 0.
+#   child WITH its own pnpm-workspace.yaml (control) -> lockfile stays in the
+#     child, child/node_modules is populated, and the root override does NOT
+#     apply (is-number resolved to 6.0.0, what is-odd asks for, not the 7.0.0
+#     the root override names). Fully isolated.
+# The silent-success half is what makes this dangerous: exit 0, no warning, no
+# dependencies. NO LIVE IMPACT TODAY — `git ls-tree -r HEAD | grep 'package.json$'`
+# returns exactly package.json and frontend/package.json, and frontend has its
+# own pnpm-workspace.yaml. This is a note for whoever adds the third one: give
+# it its own pnpm-workspace.yaml, or make it a real workspace member.
 #
 # NOT CLOSED BY THIS FILE: `pnpm dlx` ignores minimumReleaseAge entirely.
 # VERIFIED 2026-08-08, two-sided: `pnpm dlx react-doctor@0.9.7` (published
 # ~5 hours earlier) exited 0 and printed its version both with this policy
-# file present and without it. The pre-commit hook's `pnpm dlx
-# react-doctor@latest` fallback is therefore unaffected — tracked separately.
+# file present and without it. That is a property of pnpm, not of this repo,
+# and it is recorded because it bounds what this file can promise.
+#
+# The repo no longer has a `pnpm dlx` call for it to apply to. The pre-commit
+# hook used to fall through to `pnpm dlx react-doctor@latest`; agent-os-d2r
+# removed that fallback and moved the hooks into tracked .githooks/ (merged
+# 03ea16f). An earlier version of this comment described that hook as though it
+# were a repo artifact when it was .git/hooks/pre-commit — untracked and local
+# to one clone, so nothing another reader could check. It is tracked now, and
+# .githooks/pre-commit is the file to read.
