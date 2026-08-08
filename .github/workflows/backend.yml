@@ -185,9 +185,24 @@ jobs:
 
       # Pin the golangci-lint version so a new release can't turn `main` red
       # without a code change — the same reasoning as the pnpm 11.5.1 pin in
-      # frontend.yml. Matches the version installed and verified locally
-      # (2.12.2); bump both together. The action itself is SHA-pinned, same
-      # convention as react-doctor.yml's millionco/react-doctor pin.
+      # frontend.yml. The action itself is SHA-pinned, same convention as
+      # react-doctor.yml's millionco/react-doctor pin.
+      #
+      # Verified locally on 2026-08-08 via `golangci-lint --version`: reports
+      # 2.12.2, matching the pin below, and `golangci-lint run ./...` in
+      # backend/ exits 0. This claim goes stale the moment either binary or
+      # pin changes — re-run both commands yourself before trusting it;
+      # don't assume it still holds.
+      #
+      # A bare `go install .../golangci-lint@v2.12.2` is NOT enough to
+      # reproduce this: it builds against whatever Go toolchain is your
+      # shell default, and if that's older than backend/go.mod's `toolchain`
+      # directive, the resulting binary refuses to run here with "the Go
+      # language version used to build golangci-lint is lower than the
+      # targeted Go version" — an error that names a Go version, not the
+      # pin, so it doesn't read as an install problem. Force the build
+      # toolchain instead: `GOTOOLCHAIN=go1.26.5 go install .../golangci-lint@v2.12.2`
+      # (match whatever `toolchain` line backend/go.mod currently declares).
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
