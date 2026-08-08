@@ -1,4 +1,23 @@
 import { useEffect, useRef, useMemo } from 'react'
+// The aggregate `codemirror` package is kept deliberately, not by omission
+// (agent-os-bhyn considered dropping it in favour of the eight individual
+// @codemirror/* packages this file's neighbours already import).
+//
+// EditorView is also exported by @codemirror/view, but `basicSetup` exists only
+// here and is 18 curated extensions plus a keymap composed from seven of them.
+// Inlining it would mean owning that list and tracking upstream changes to it by
+// hand, and it would ADD @codemirror/commands and @codemirror/language as direct
+// dependencies — a net increase, not a reduction.
+//
+// It also would not close the version-split hazard it looks like it should.
+// Measured 2026-08-08: six installed packages depend on @codemirror/language —
+// this aggregate plus autocomplete, commands, lang-json, lang-yaml and
+// theme-one-dark — so dropping the aggregate removes one of six participants and
+// leaves the failure mode (agent-os-l1hn: two @codemirror/language copies, facet
+// identity mismatch, YAML silently unhighlighted) fully reachable. The control for
+// that is hooks/__tests__/codemirror-yaml-highlighting.test.ts, which mocks
+// nothing on purpose, plus the family-declared-together convention recorded in
+// knip.jsonc's ignoreDependencies entry.
 import { EditorView, basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
 import { yaml } from '@codemirror/lang-yaml'
