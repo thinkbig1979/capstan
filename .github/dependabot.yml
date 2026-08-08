@@ -6,10 +6,14 @@
 #   learn to route around it. A repair path with no gate produces PRs nobody
 #   has a reason to merge. They were added together on purpose.
 #
-# ALL FOUR ECOSYSTEMS THIS REPO ACTUALLY HAS:
-#   gomod (/backend), npm (/frontend), docker (/docker), github-actions (/).
-#   The last one is the easy one to forget and is how pinned action versions
+# EVERY TREE THIS REPO ACTUALLY HAS — four ecosystems across five entries:
+#   gomod (/backend), npm (/frontend), npm (/), docker (/docker),
+#   github-actions (/).
+#   github-actions is the easy one to forget and is how pinned action versions
 #   rot quietly — nothing else in this repo would ever notice.
+#   npm at `/` is the SECOND npm tree, added 2026-08-08 (agent-os-81i). The repo
+#   root is a real pnpm project, not scratch, and it was previously the one tree
+#   CI installed and gated on that nothing would ever propose an update to.
 #
 # GROUPING:
 #   Minor and patch updates are grouped per ecosystem into a single PR, so the
@@ -57,8 +61,25 @@ updates:
   # VERIFIED 2026-07-31, on Dependabot PR #22 (the npm minor+patch group, 36
   # updates): frontend CI's `pnpm install --frozen-lockfile`
   # (.github/workflows/frontend.yml:51) succeeded against a Dependabot-generated
-  # lockfile. A frozen install replays the lockfile rather than resolving, so the
-  # quarantine never applies to it. The two controls do not conflict.
+  # lockfile. The two controls do not conflict.
+  #
+  # CORRECTED 2026-08-08 (agent-os-81i). That paragraph used to explain the
+  # success with "a frozen install replays the lockfile rather than resolving,
+  # so the quarantine never applies to it". THAT EXPLANATION IS FALSE under pnpm
+  # 11.5.1, and it is the load-bearing half — the observation stands, the reason
+  # given for it does not. A frozen install runs the supply-chain verification
+  # pass over the lockfile's entries BEFORE installing anything, and rejects the
+  # committed lockfile itself if an entry is too young. OBSERVED 2026-08-08,
+  # twice: agent-os-eki hit exactly this at the repo root, and it was reproduced
+  # here on a lockfile carrying jose@6.2.7 —
+  # `pnpm install --frozen-lockfile` exited 1 with
+  # ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION and node_modules absent.
+  #
+  # So the cooldown is not belt-and-braces, it is the ONLY thing keeping
+  # Dependabot's PRs green. PR #22 passed because the cooldown had already kept
+  # every proposed version at least 7 days old, not because frozen installs are
+  # immune. Removing a cooldown from any pnpm ecosystem entry here turns
+  # Dependabot into a generator of red required checks.
   #
   # That PR did fail overall, on Lint, because a new rule shipped by one of the
   # updated dev dependencies flagged pre-existing code. That is an ordinary
@@ -134,6 +155,58 @@ updates:
       - dependency-name: node
         update-types:
           - version-update:semver-major
+
+  # ---------------------------------------------------------------------------
+  # THE REPO ROOT pnpm TREE (agent-os-81i). Added 2026-08-08; before that, this
+  # tree was the one thing CI installed and gated on that no automation would
+  # ever update.
+  #
+  # It is a real tree, not scratch: package.json + pnpm-lock.yaml holding cclsp
+  # and playwright, installed with `pnpm install --frozen-lockfile` in three CI
+  # places (security.yml's "Install root dependencies", and e2e-backup.yml's two
+  # "Install root dependencies (Playwright)" steps). security.yml also runs
+  # `pnpm audit --prod --audit-level=high` here as a BLOCKING step.
+  #
+  # The gap was inherited from agent-os-l78, which brought the root under pnpm
+  # because "11 of the pre-l78 Dependabot alerts were against it, invisible to
+  # every workflow here" — the workflow half was fixed and the Dependabot half
+  # was not.
+  #
+  # COOLDOWN IS LOAD-BEARING HERE for the same reason as /frontend, and the root
+  # tree carries the same `minimumReleaseAge: 10080` since agent-os-eki. See the
+  # correction in the /frontend block above: a frozen install does NOT bypass
+  # the quarantine, so without this cooldown Dependabot would open PRs whose
+  # lockfiles CI then refuses to install.
+  #
+  # WHAT IS NOT YET VERIFIED, stated plainly rather than assumed: whether
+  # Dependabot's own re-resolution actually satisfies the floor in practice
+  # cannot be observed until its first run against this entry (Friday 05:00
+  # UTC). The mechanism argument is that a 7-day cooldown and a 7-day
+  # minimumReleaseAge define the same window, which is exactly the alignment
+  # that has held for /frontend since 2026-07-31. If a root PR does arrive red
+  # with ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION, widen this cooldown — do not
+  # weaken minimumReleaseAge, and do not add an exclusion entry.
+  #
+  # Friday, because Mon/Tue/Wed/Thu are taken and the point of spreading them is
+  # that a quiet week produces small PRs on separate days rather than one wall.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: friday
+      time: '05:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    cooldown:
+      default-days: 7
+    groups:
+      root-npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
 
   # ---------------------------------------------------------------------------
   # Directory is `/` — Dependabot finds .github/workflows/ from the repo root,
