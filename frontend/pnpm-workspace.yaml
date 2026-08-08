@@ -150,20 +150,55 @@ overrides:
   # versions; re-resolving un-pinned them.
   #
   # THAT IS NOT AN ARGUMENT FOR DELETING THIS BLOCK — it is the argument for
-  # keeping it. Upstream has NOT raised its floors: @eslint/eslintrc@3.3.3, the
-  # copy in this tree, still declares `minimatch: ^3.1.2`, `ajv: ^6.12.4` and
-  # `js-yaml: ^4.1.1`, every one of them a range whose bottom is vulnerable.
-  # Today's resolution is patched only because a caret range floats to the
-  # newest mature version and that happens to be above the advisory floor.
-  # Nothing holds it there. These selectors are what hold it there, and they
-  # are DORMANT BY DESIGN: a floor that never fires is a floor doing its job.
-  # VERIFIED two-sided on the same instrument, with a package demanding the
-  # vulnerable minimatch 3.1.2 — WITH `minimatch@<3.1.4` resolution is rescued
-  # to 3.1.5; WITHOUT it, resolution stays on 3.1.2. Do not read "it changes
-  # nothing today" as "it does nothing".
+  # keeping it. Today's resolution is patched only because a caret range floats
+  # to the newest mature version and that happens to be above the advisory
+  # floor. These selectors are what hold it there, and they are DORMANT BY
+  # DESIGN: a floor that never fires is a floor doing its job. VERIFIED
+  # two-sided on the same instrument, with a package demanding the vulnerable
+  # minimatch 3.1.2 — WITH `minimatch@<3.1.4` resolution is rescued to 3.1.5;
+  # WITHOUT it, resolution stays on 3.1.2. Do not read "it changes nothing
+  # today" as "it does nothing".
   #
   # The lockfile diff also floated minimatch 10.2.5 -> 10.2.6. No selector here
   # touches 10.x — that is incidental re-resolution, not this block.
+  #
+  # SUPERSEDED IN PART, 2026-08-08, by eslint 9.39.2 -> 10.8.0 (PR #154). The
+  # paragraph above used to argue from "@eslint/eslintrc@3.3.3, the copy in this
+  # tree, still declares `minimatch: ^3.1.2`, `ajv: ^6.12.4` and
+  # `js-yaml: ^4.1.1`". That premise is now FALSE and the sentence is removed
+  # rather than left to mislead: eslint 10 drops @eslint/eslintrc entirely.
+  # OBSERVED on merged main at 4bc78cc — `pnpm why @eslint/eslintrc` returns
+  # nothing and the lockfile holds 0 entries for it. The conclusion (keep the
+  # block) survives; the reason it rested on does not.
+  #
+  # DISPOSITION AFTER ESLINT 10, decided per package against what is actually in
+  # the tree rather than in aggregate. The rule applied: a selector whose
+  # package left the tree ENTIRELY is dead config and goes; a selector whose
+  # package still resolves through some parent stays as a dormant floor.
+  #
+  #   js-yaml   GONE from the tree entirely — zero lockfile entries. Its only
+  #             parent was eslint's config loading via @eslint/eslintrc. DELETED
+  #             below; this is the one selector eslint 10 actually killed.
+  #   ajv       6.15.0 STAYS in the tree, and its parent changed rather than
+  #             disappeared: `pnpm why ajv` now shows eslint@10.8.0 declaring
+  #             the 6.x copy directly instead of reaching it through eslintrc.
+  #             eslint 10 declares `ajv: ^6.14.0`, which is exactly this
+  #             selector's floor, so upstream now agrees with it. Kept: upstream
+  #             agreement is a fact about one release, not a guarantee.
+  #   minimatch only 10.2.6 remains; the 3.x chain is gone with eslintrc. The
+  #             PACKAGE still resolves (via @eslint/config-array), so the
+  #             selector is kept as the guard against a 3.x range returning. It
+  #             cannot touch the 10.x copy — the range forbids it.
+  #   brace-expansion  only 5.0.9 remains, via minimatch 10.2.6. The `<1.1.18`
+  #             selector's 1.x chain is gone for the same reason as minimatch
+  #             3.x; both selectors kept on the same reasoning.
+  #   flatted   3.4.4 STAYS, via flat-cache > file-entry-cache > eslint@10.8.0.
+  #             Unaffected by the major. Kept.
+  #   postcss   8.5.25 STAYS, via vite. Never touched eslint. Kept.
+  #   fast-uri  3.1.5 STAYS, via ajv@8.20.0 — and that path is PRODUCTION
+  #             (@hookform/resolvers and composerize > composeverter are runtime
+  #             dependencies), not dev-scope like the rest of this block. Kept,
+  #             and it is the one selector here that is not dev-only.
   #
   # Each selector is capped inside its current major on purpose — these are
   # security floors for packages this repo does not use directly, not upgrades.
@@ -186,13 +221,19 @@ overrides:
   # via the newer glob. 5.0.9 is the patched floor for the >=4.0.0 range.
   brace-expansion@<1.1.18: '>=1.1.18 <2'
   brace-expansion@>=4.0.0 <5.0.9: '>=5.0.9 <6'
-  # GHSA-52cp-r559-cp3m (quadratic CPU via YAML merge-key chains) and
-  # GHSA-5p4m-2wfm-xmqj (quadratic CPU in !!omap resolution). Reached via
-  # eslint config loading. Range-scoped because both advisories are 4.x-only.
-  js-yaml@>=4.0.0 <4.3.1: '>=4.3.1 <5'
-  # GHSA-2g4f-4pwh-qvx6. The 6.x copy reached via eslint > @eslint/eslintrc;
-  # the separate 8.x copy under composerize is not affected. Capped below 7
-  # because eslintrc asks for ^6.12.4 and 7.x/8.x are API breaks, not fixes.
+  # js-yaml@>=4.0.0 <4.3.1 was here, covering GHSA-52cp-r559-cp3m (quadratic CPU
+  # via YAML merge-key chains) and GHSA-5p4m-2wfm-xmqj (quadratic CPU in !!omap
+  # resolution). REMOVED 2026-08-08 (agent-os-724): js-yaml reached this tree
+  # only through eslint's config loading via @eslint/eslintrc, and eslint 10.8.0
+  # drops @eslint/eslintrc. js-yaml is now absent from the tree entirely — zero
+  # lockfile entries — so the selector had nothing left to match and was dead
+  # config rather than a dormant floor. Restore it, with both advisory IDs, if
+  # js-yaml ever re-enters the dependency graph.
+  # GHSA-2g4f-4pwh-qvx6. The 6.x copy is declared directly by eslint@10.8.0
+  # (before eslint 10 it was reached via eslint > @eslint/eslintrc); the
+  # separate 8.x copy under composerize and @hookform/resolvers is not affected.
+  # Capped below 7 because eslint asks for ^6.14.0 and 7.x/8.x are API breaks,
+  # not fixes.
   ajv@<6.14.0: '>=6.14.0 <7'
   # GHSA-fxqj-rqcc-2cmp. Reached via vite (both @tailwindcss/vite and
   # @vitejs/plugin-react pull it). Note this does NOT clear postcss's own
