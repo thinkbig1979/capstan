@@ -390,7 +390,7 @@ describe('BackupSettingsContent — password reveal / unlock flow', () => {
   })
 
   it('a correct password unlocks the session and reveals the password', async () => {
-    mockVerifyPassword.mockResolvedValue(undefined)
+    mockVerifyPassword.mockResolvedValue({ ok: true, unlockToken: 'test-unlock-token', expiresIn: 300 })
     const wrapper = createWrapper()
     render(<BackupSettingsContent />, { wrapper })
 

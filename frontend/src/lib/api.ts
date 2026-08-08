@@ -1,6 +1,7 @@
 import axios, { AxiosError, type AxiosInstance } from 'axios'
 import type { ActionResult } from '@/lib/action-result'
 import { isSessionLoss } from '@/lib/error-handler'
+import { currentUnlockToken } from '@/stores/envUnlockStore'
 import type {
   User,
   AuthResponse,
@@ -77,6 +78,16 @@ apiClient.interceptors.request.use((config) => {
   const csrfToken = getCSRFToken()
   if (csrfToken) {
     config.headers['X-CSRF-Token'] = csrfToken
+  }
+
+  // The env-unlock token is the second factor in front of every secret-reveal
+  // surface. Sent on all requests rather than threaded through the two call
+  // sites that need it, so a future secret endpoint is covered by default
+  // instead of silently unauthenticated. Only the backend handlers that gate on
+  // it read it; it adds no exposure over the session cookie it travels with.
+  const unlockToken = currentUnlockToken()
+  if (unlockToken) {
+    config.headers['X-Unlock-Token'] = unlockToken
   }
 
   return config
@@ -159,8 +170,16 @@ export const authApi = {
     return response.data
   },
 
+  /**
+   * Re-checks the current password and returns the short-lived unlock token that
+   * the secret-reveal surfaces require. Before agent-os-7o5s this returned a
+   * bare {ok} that nothing consumed, so the prompt gated nothing.
+   */
   verifyPassword: async (password: string) => {
-    const response = await apiClient.post<{ ok: boolean }>('/auth/verify-password', { password })
+    const response = await apiClient.post<{ ok: boolean; unlockToken?: string; expiresIn?: number }>(
+      '/auth/verify-password',
+      { password },
+    )
     return response.data
   },
 }
@@ -175,7 +194,7 @@ export const versionApi = {
 
 export const settingsApi = {
   getGlobalEnv: async () => {
-    const response = await apiClient.get<{ vars: Array<{ key: string; value: string }> }>('/settings/global-env')
+    const response = await apiClient.get<{ vars: Array<{ key: string; value: string }>; locked?: boolean }>('/settings/global-env')
     return response.data
   },
 
@@ -404,8 +423,14 @@ export const stacksApi = {
     return response.data
   },
 
+  /**
+   * `raw` is absent and `locked` is true when the request carried no live unlock
+   * token: the backend withholds every secret value in that state, so a locked
+   * payload must never be saved back — it would persist the blanks
+   * (agent-os-7o5s).
+   */
   getEnv: async (id: string) => {
-    const response = await apiClient.get<{ filename: string; entries: Array<{ key: string; value: string; line: number; sensitive: boolean; comment: boolean }>; raw: string }>(`/stacks/${encodeURIComponent(id)}/env`)
+    const response = await apiClient.get<{ filename: string; entries: Array<{ key: string; value: string; line: number; sensitive: boolean; comment: boolean }>; raw?: string; locked?: boolean }>(`/stacks/${encodeURIComponent(id)}/env`)
     return response.data
   },
 

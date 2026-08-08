@@ -10,8 +10,9 @@ import { useEnvUnlockRemask } from './env-editor/useEnvUnlockRemask'
 import { useEnvMutations } from './env-editor/useEnvMutations'
 import { useEnvEntryActions } from './env-editor/useEnvEntryActions'
 import { useNextRowId } from './env-editor/useRowId'
+import { isSensitiveKey } from './env-editor/sensitiveKey'
 import { EnvEditorToolbar } from './env-editor/EnvEditorToolbar'
-import { EnvLoadingState, EnvErrorState, EnvNoFileState } from './env-editor/EnvEditorEmptyStates'
+import { EnvLoadingState, EnvErrorState, EnvNoFileState, EnvLockedNotice } from './env-editor/EnvEditorEmptyStates'
 import { EnvTableView } from './env-editor/EnvTableView'
 import { EnvRawView } from './env-editor/EnvRawView'
 import type { EnvEntryRow } from './env-editor/types'
@@ -66,7 +67,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     queryFn: async () => {
       try {
         const data = await stacksApi.getEnv(stackId)
-        return data as { filename: string; entries: EnvEntry[]; raw: string } | undefined
+        return data as { filename: string; entries: EnvEntry[]; raw?: string; locked?: boolean } | undefined
       } catch (error: unknown) {
         const err = error as { response?: { status?: number }; status?: number }
         if (err.response?.status === 404 || err.status === 404) {
@@ -85,12 +86,27 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   if (envData !== prevEnvData) {
     setPrevEnvData(envData)
     if (envData) {
-      const rows = envData.entries.map((e) => ({ ...e, _rowId: nextRowId() }))
+      // A reveal is stored as `sensitive: false` on the row itself, so a refetch
+      // would silently re-mask whatever the user had uncovered. That refetch is
+      // now routine: unlocking invalidates this query to swap the blanked values
+      // for the real ones (agent-os-7o5s). Carry the reveals across by key so the
+      // value the user asked to see survives the payload it was waiting for.
+      const revealedKeys = new Set(
+        entries.filter((e) => !e.sensitive && isSensitiveKey(e.key)).map((e) => e.key),
+      )
+      const rows = envData.entries.map((e) => ({
+        ...e,
+        sensitive: e.sensitive && !revealedKeys.has(e.key),
+        _rowId: nextRowId(),
+      }))
       setEntries(rows)
-      setRawContent(envData.raw)
+      // `raw` is absent while locked — the backend withholds it rather than
+      // sending an empty file, so default it instead of writing `undefined` into
+      // a textarea (agent-os-7o5s).
+      setRawContent(envData.raw ?? '')
       setHasUnsavedChanges(false)
       setShowEnvSection(true)
-      resetHistory(rows, envData.raw)
+      resetHistory(rows, envData.raw ?? '')
     } else {
       setShowEnvSection(false)
     }
@@ -106,6 +122,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     setShowEnvSection,
     resetHistory,
   })
+
+  // The backend redacted this payload: sensitive values arrived blank and there
+  // is no raw file. Editing is therefore off the table until the unlock window
+  // opens — saving would persist the blanks, and the backend 403s the write.
+  const locked = envData?.locked === true
 
   if (isLoading) {
     return <EnvLoadingState />
@@ -140,12 +161,15 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         onUndo={handleUndo}
         onRedo={handleRedo}
         hasUnsavedChanges={hasUnsavedChanges}
+        locked={locked}
       />
       <EnvUnlockDialog
         open={unlockDialogOpen}
         onOpenChange={handleUnlockDialogOpenChange}
         onUnlocked={handleUnlocked}
       />
+
+      {locked && <EnvLockedNotice onUnlock={() => handleUnlockDialogOpenChange(true)} />}
 
       <EnvTableView
         visible={view === 'table'}
@@ -157,9 +181,10 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
         onSaveTable={handleSaveTable}
         saving={saveMutation.isPending}
         hasUnsavedChanges={hasUnsavedChanges}
+        locked={locked}
       />
 
-      {view === 'raw' && (
+      {view === 'raw' && !locked && (
         <EnvRawView
           rawContent={rawContent}
           onRawChange={handleRawChange}

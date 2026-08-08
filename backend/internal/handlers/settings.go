@@ -218,12 +218,38 @@ func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
 		}
 	}
 
+	// Same second factor as the per-stack .env surface: without a live unlock
+	// token, secret-looking values are blanked. Global env routinely holds the
+	// credentials every stack shares, so leaving it ungated would just move the
+	// hole one endpoint sideways.
+	locked := !envUnlocked(c)
+	if locked {
+		for i := range envVars {
+			if isSensitiveEnvKey(envVars[i]["key"]) {
+				envVars[i]["value"] = ""
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"vars": envVars,
+		"vars":   envVars,
+		"locked": locked,
 	})
 }
 
 func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
+	// Gated for the same reason as EnvHandler.Put: a locked session was handed
+	// blanked sensitive values, and this endpoint replaces the whole file, so
+	// saving from that state would wipe every secret it could not see.
+	if !envUnlocked(c) {
+		c.JSON(http.StatusForbidden, models.NewAppError(
+			http.StatusForbidden,
+			models.ErrForbidden,
+			"Re-enter your password to edit global environment variables",
+		))
+		return
+	}
+
 	var req struct {
 		Vars []struct {
 			Key   string `json:"key"`

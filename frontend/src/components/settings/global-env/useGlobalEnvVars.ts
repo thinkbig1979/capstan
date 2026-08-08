@@ -84,6 +84,10 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
   return {
     isLoading,
     isError,
+    // The server blanked the secret-looking values because no unlock token was in
+    // play. Saving from that state would persist the blanks, and the backend 403s
+    // the write, so the panel disables Save until unlocked (agent-os-7o5s).
+    locked: data?.locked === true,
     vars,
     dirty,
     query,

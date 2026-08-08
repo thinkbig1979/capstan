@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -59,6 +60,17 @@ func createTestDirectory(t *testing.T, db *database.DB, path string) {
 func authContextMiddleware(userID string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Set("userID", userID)
+		c.Next()
+	}
+}
+
+// envUnlockedMiddleware puts a request in the state a valid X-Unlock-Token would
+// (middleware.EnvUnlock), for the tests whose subject is env parsing, saving or
+// auditing rather than the unlock gate itself. Tests that exercise the gate build
+// the real middleware over a real store instead — see env_unlock_gate_test.go.
+func envUnlockedMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set(middleware.CtxEnvUnlocked, true)
 		c.Next()
 	}
 }
