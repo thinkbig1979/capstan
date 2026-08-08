@@ -197,15 +197,18 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 	}
 
 	var applyErr error
+	// Set by the standalone paths, which recreate the container and so change its
+	// id. Empty after a compose apply, where the id is re-resolved by label below.
+	recreatedID := ""
 	if projectName != "" && serviceName != "" && db != nil {
 		stack, err := db.GetStackByProjectName(projectName)
 		if err == nil && stack != nil {
 			applyErr = s.updateComposeContainer(ctx, *stack, serviceName, wasRunning)
 		} else {
-			applyErr = s.updateStandaloneContainer(ctx, inspect, wasRunning)
+			recreatedID, applyErr = s.updateStandaloneContainer(ctx, inspect, wasRunning)
 		}
 	} else {
-		applyErr = s.updateStandaloneContainer(ctx, inspect, wasRunning)
+		recreatedID, applyErr = s.updateStandaloneContainer(ctx, inspect, wasRunning)
 	}
 
 	durationMs := time.Since(start).Milliseconds()
@@ -215,11 +218,23 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 			truth.Failed("update apply failed", applyErr)
 	}
 
-	// Verify image advancement: find the new container ID after compose recreate
-	// (compose may give it a new ID) then call ContainerImageAdvanced.
+	// Verify image advancement against the container that exists NOW, which is not
+	// the one we were handed: both apply paths replace it.
+	//
+	// The standalone path reports the id it created (agent-os-ekmk). Deriving it
+	// here instead used to leave newContainerID as the pre-update id whenever the
+	// container carried no compose labels — that container had just been removed,
+	// so the inspect below failed and a successful update was reported as failed.
+	//
+	// Compose recreates under its own naming, so there the id is re-resolved by
+	// label. The compose branch is checked first because a compose container whose
+	// stack could not be resolved takes the standalone APPLY path while still being
+	// findable by label.
 	newContainerID := containerID
 	if projectName != "" && serviceName != "" {
 		newContainerID = s.findComposeContainer(ctx, projectName, serviceName, containerID)
+	} else if recreatedID != "" {
+		newContainerID = recreatedID
 	}
 
 	advanced, newImageID, err := truth.ContainerImageAdvanced(ctx, s.client, newContainerID, oldImageID)
@@ -313,28 +328,33 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 
 // updateStandaloneContainer pulls the image, decoding the stream via
 // truth.DrainPullStream so that auth/manifest errors are surfaced (finding #3).
-func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect container.InspectResponse, wasRunning bool) error {
+// It returns the id of the container it created. That return value is load-bearing:
+// the recreate gives the container a NEW id, and the caller's post-update
+// verification has to inspect that one. Before agent-os-ekmk this returned only an
+// error, the caller kept inspecting the pre-update id, and every successful
+// standalone update was reported to the user as failed.
+func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect container.InspectResponse, wasRunning bool) (string, error) {
 	imageRef := inspect.Config.Image
 
 	reader, err := s.client.ImagePull(ctx, imageRef, image.PullOptions{})
 	if err != nil {
-		return fmt.Errorf("pulling image: %w", err)
+		return "", fmt.Errorf("pulling image: %w", err)
 	}
 	defer reader.Close()
 
 	// Decode the stream — surfaces errorDetail/error messages (finding #3 fix).
 	if pullErr := truth.DrainPullStream(reader, nil); pullErr != nil {
-		return fmt.Errorf("pulling image %s: %w", imageRef, pullErr)
+		return "", fmt.Errorf("pulling image %s: %w", imageRef, pullErr)
 	}
 
 	if wasRunning {
 		if err := s.client.ContainerStop(ctx, inspect.ID, container.StopOptions{}); err != nil {
-			return fmt.Errorf("stopping container: %w", err)
+			return "", fmt.Errorf("stopping container: %w", err)
 		}
 	}
 
 	if err := s.client.ContainerRemove(ctx, inspect.ID, container.RemoveOptions{}); err != nil {
-		return fmt.Errorf("removing container: %w", err)
+		return "", fmt.Errorf("removing container: %w", err)
 	}
 
 	name := strings.TrimPrefix(inspect.Name, "/")
@@ -348,16 +368,16 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect c
 
 	newContainer, err := s.client.ContainerCreate(ctx, inspect.Config, inspect.HostConfig, netConfig, nil, name)
 	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
+		return "", fmt.Errorf("creating container: %w", err)
 	}
 
 	if wasRunning {
 		if err := s.client.ContainerStart(ctx, newContainer.ID, container.StartOptions{}); err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return newContainer.ID, fmt.Errorf("starting container: %w", err)
 		}
 	}
 
-	return nil
+	return newContainer.ID, nil
 }
 
 // streamComposeCmd runs a docker compose command and streams each output line
@@ -444,15 +464,18 @@ func (s *DockerService) UpdateContainerStreaming(
 	}
 
 	var applyErr error
+	// See UpdateContainer: only the standalone paths recreate the container and so
+	// know its new id (agent-os-ekmk).
+	recreatedID := ""
 	if projectName != "" && serviceName != "" && db != nil {
 		stack, sErr := db.GetStackByProjectName(projectName)
 		if sErr == nil && stack != nil {
 			applyErr = s.updateComposeContainerStreaming(ctx, *stack, serviceName, wasRunning, emit, setStatus)
 		} else {
-			applyErr = s.updateStandaloneContainerStreaming(ctx, inspect, wasRunning, emit, setStatus)
+			recreatedID, applyErr = s.updateStandaloneContainerStreaming(ctx, inspect, wasRunning, emit, setStatus)
 		}
 	} else {
-		applyErr = s.updateStandaloneContainerStreaming(ctx, inspect, wasRunning, emit, setStatus)
+		recreatedID, applyErr = s.updateStandaloneContainerStreaming(ctx, inspect, wasRunning, emit, setStatus)
 	}
 
 	durationMs := time.Since(start).Milliseconds()
@@ -462,10 +485,14 @@ func (s *DockerService) UpdateContainerStreaming(
 			truth.Failed("update apply failed", applyErr)
 	}
 
-	// Verify image advancement.
+	// Verify image advancement against the container that exists now — see the
+	// same block in UpdateContainer for why the standalone id has to be carried
+	// out of the apply rather than re-derived (agent-os-ekmk).
 	newContainerID := containerID
 	if projectName != "" && serviceName != "" {
 		newContainerID = s.findComposeContainer(ctx, projectName, serviceName, containerID)
+	} else if recreatedID != "" {
+		newContainerID = recreatedID
 	}
 
 	advanced, newImageID, err := truth.ContainerImageAdvanced(ctx, s.client, newContainerID, oldImageID)
@@ -548,6 +575,9 @@ func (s *DockerService) updateComposeContainerStreaming(
 	return nil
 }
 
+// It returns the id of the recreated container, for the same reason as
+// updateStandaloneContainer above (agent-os-ekmk).
+//
 // updateStandaloneContainerStreaming pulls the image via the Docker SDK and
 // decodes the pull stream via truth.DrainPullStream (finding #3 fix), then
 // recreates the container.
@@ -557,7 +587,7 @@ func (s *DockerService) updateStandaloneContainerStreaming(
 	wasRunning bool,
 	emit func(LogLine),
 	setStatus func(Status),
-) error {
+) (string, error) {
 	imageRef := inspect.Config.Image
 
 	setStatus(StatusPulling)
@@ -565,7 +595,7 @@ func (s *DockerService) updateStandaloneContainerStreaming(
 
 	reader, err := s.client.ImagePull(ctx, imageRef, image.PullOptions{})
 	if err != nil {
-		return fmt.Errorf("pulling image: %w", err)
+		return "", fmt.Errorf("pulling image: %w", err)
 	}
 	defer reader.Close()
 
@@ -574,7 +604,7 @@ func (s *DockerService) updateStandaloneContainerStreaming(
 	if pullErr := truth.DrainPullStream(reader, func(line string) {
 		emit(LogLine{Ts: time.Now().UTC(), Text: line, Stream: StreamStdout})
 	}); pullErr != nil {
-		return fmt.Errorf("pulling image %s: %w", imageRef, pullErr)
+		return "", fmt.Errorf("pulling image %s: %w", imageRef, pullErr)
 	}
 
 	emit(LogLine{Ts: time.Now().UTC(), Text: "Pull complete", Stream: StreamStdout})
@@ -584,13 +614,13 @@ func (s *DockerService) updateStandaloneContainerStreaming(
 
 	if wasRunning {
 		if err := s.client.ContainerStop(ctx, inspect.ID, container.StopOptions{}); err != nil {
-			return fmt.Errorf("stopping container: %w", err)
+			return "", fmt.Errorf("stopping container: %w", err)
 		}
 		emit(LogLine{Ts: time.Now().UTC(), Text: "Container stopped", Stream: StreamStdout})
 	}
 
 	if err := s.client.ContainerRemove(ctx, inspect.ID, container.RemoveOptions{}); err != nil {
-		return fmt.Errorf("removing container: %w", err)
+		return "", fmt.Errorf("removing container: %w", err)
 	}
 	emit(LogLine{Ts: time.Now().UTC(), Text: "Old container removed", Stream: StreamStdout})
 
@@ -605,18 +635,18 @@ func (s *DockerService) updateStandaloneContainerStreaming(
 
 	newContainer, err := s.client.ContainerCreate(ctx, inspect.Config, inspect.HostConfig, netConfig, nil, name)
 	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
+		return "", fmt.Errorf("creating container: %w", err)
 	}
 	emit(LogLine{Ts: time.Now().UTC(), Text: "New container created", Stream: StreamStdout})
 
 	if wasRunning {
 		if err := s.client.ContainerStart(ctx, newContainer.ID, container.StartOptions{}); err != nil {
-			return fmt.Errorf("starting container: %w", err)
+			return newContainer.ID, fmt.Errorf("starting container: %w", err)
 		}
 		emit(LogLine{Ts: time.Now().UTC(), Text: "Container started", Stream: StreamStdout})
 	}
 
-	return nil
+	return newContainer.ID, nil
 }
 
 // UpdateComposeServiceStreaming updates a single compose service for a stack,
