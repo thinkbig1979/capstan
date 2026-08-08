@@ -23,9 +23,9 @@ const PAGE_SIZE = 50
 type SortKey = 'id' | 'type' | 'size' | 'lastUsed' | 'usageCount'
 
 const CACHE_SEARCH_FIELDS = [
-  (e: BuildCacheEntry) => e.ID,
-  (e: BuildCacheEntry) => e.Type,
-  (e: BuildCacheEntry) => e.Description,
+  (e: BuildCacheEntry) => e.id,
+  (e: BuildCacheEntry) => e.type,
+  (e: BuildCacheEntry) => e.description,
 ]
 
 export function BuildCacheTab() {
@@ -38,19 +38,19 @@ export function BuildCacheTab() {
     const sorted = [...filtered]
     switch (sortBy) {
       case 'id':
-        return sorted.sort((a, b) => (a.Description || a.ID).localeCompare(b.Description || b.ID))
+        return sorted.sort((a, b) => (a.description || a.id).localeCompare(b.description || b.id))
       case 'type':
-        return sorted.sort((a, b) => a.Type.localeCompare(b.Type))
+        return sorted.sort((a, b) => a.type.localeCompare(b.type))
       case 'size':
-        return sorted.sort((a, b) => b.Size - a.Size)
+        return sorted.sort((a, b) => b.size - a.size)
       case 'lastUsed':
         return sorted.sort((a, b) => {
-          const aTime = a.LastUsedAt ? new Date(a.LastUsedAt).getTime() : 0
-          const bTime = b.LastUsedAt ? new Date(b.LastUsedAt).getTime() : 0
+          const aTime = a.lastUsedAt ? new Date(a.lastUsedAt).getTime() : 0
+          const bTime = b.lastUsedAt ? new Date(b.lastUsedAt).getTime() : 0
           return bTime - aTime
         })
       case 'usageCount':
-        return sorted.sort((a, b) => b.UsageCount - a.UsageCount)
+        return sorted.sort((a, b) => b.usageCount - a.usageCount)
       default:
         return sorted
     }
@@ -58,7 +58,7 @@ export function BuildCacheTab() {
 
   const { page, setPage, totalPages, pageItems } = usePagination(sortedEntries, PAGE_SIZE)
 
-  const totalSize = entries?.reduce((sum, e) => sum + e.Size, 0) || 0
+  const totalSize = entries?.reduce((sum, e) => sum + e.size, 0) || 0
 
   const pruneDescription = `Removes unused build cache${totalSize > 0 ? ` (up to ${formatBytes(totalSize)})` : ''}. Enable 'all' to also remove cache that could still be reused. This cannot be undone.`
 
@@ -138,31 +138,31 @@ export function BuildCacheTab() {
           </TableHeader>
           <TableBody>
             {pageItems.map((entry: BuildCacheEntry) => (
-              <TableRow key={entry.ID}>
+              <TableRow key={entry.id}>
                 <TableCell>
                   <span className="text-xs font-mono text-muted-foreground">
-                    {entry.ID.substring(0, 19)}
+                    {entry.id.substring(0, 19)}
                   </span>
                 </TableCell>
                 <TableCell>
-                  <Badge variant="outline" className="text-xs">{entry.Type}</Badge>
+                  <Badge variant="outline" className="text-xs">{entry.type}</Badge>
                 </TableCell>
                 <TableCell>
-                  <span className="text-sm truncate max-w-[300px] block">{entry.Description || '-'}</span>
+                  <span className="text-sm truncate max-w-[300px] block">{entry.description || '-'}</span>
                 </TableCell>
                 <TableCell>
-                  <span className="text-sm font-medium">{formatBytes(entry.Size)}</span>
+                  <span className="text-sm font-medium">{formatBytes(entry.size)}</span>
                 </TableCell>
                 <TableCell>
-                  <span className="text-sm text-muted-foreground" title={formatDate(entry.LastUsedAt)}>
-                    {formatRelativeTime(entry.LastUsedAt)}
+                  <span className="text-sm text-muted-foreground" title={formatDate(entry.lastUsedAt)}>
+                    {formatRelativeTime(entry.lastUsedAt)}
                   </span>
                 </TableCell>
                 <TableCell className="text-center">
-                  <Badge variant="secondary">{entry.UsageCount}</Badge>
+                  <Badge variant="secondary">{entry.usageCount}</Badge>
                 </TableCell>
                 <TableCell>
-                  {entry.InUse ? (
+                  {entry.inUse ? (
                     <Badge variant="outline" className="text-xs text-success">Yes</Badge>
                   ) : (
                     <span className="text-sm text-muted-foreground">No</span>

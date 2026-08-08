@@ -1,25 +1,33 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { BuildCacheTab } from '../BuildCacheTab'
+import type { BuildCacheEntry } from '@/types'
 
-const mockEntries = [
+// Typed on purpose: this fixture was an untyped literal in PascalCase, so tsc
+// could not see it drift from the real payload (agent-os-iuby).
+const mockEntries: BuildCacheEntry[] = [
   {
-    ID: 'abcdefghijklmno1234567',
-    Type: 'regular',
-    Description: 'layer cache',
-    Size: 1024000,
-    LastUsedAt: '2026-04-29T00:00:00Z',
-    UsageCount: 5,
-    InUse: true,
+    id: 'abcdefghijklmno1234567',
+    type: 'regular',
+    description: 'layer cache',
+    size: 1024000,
+    shared: false,
+    createdAt: '2026-04-28T00:00:00Z',
+    lastUsedAt: '2026-04-29T00:00:00Z',
+    usageCount: 5,
+    inUse: true,
+    parents: ['parent-1'],
   },
   {
-    ID: 'xyz1234567890abcdefgh',
-    Type: 'source.local',
-    Description: '',
-    Size: 512000,
-    LastUsedAt: '2026-04-28T00:00:00Z',
-    UsageCount: 2,
-    InUse: false,
+    id: 'xyz1234567890abcdefgh',
+    type: 'source.local',
+    description: '',
+    size: 512000,
+    shared: false,
+    createdAt: '2026-04-27T00:00:00Z',
+    lastUsedAt: '2026-04-28T00:00:00Z',
+    usageCount: 2,
+    inUse: false,
   },
 ]
 
