@@ -1,0 +1,52 @@
+# Supply-chain policy for the REPO ROOT pnpm tree (agent-os-eki).
+#
+# Root and frontend/ are two independent pnpm projects with no workspace
+# linking them — each has its own package.json and its own pnpm-lock.yaml.
+# frontend/pnpm-workspace.yaml has carried these two settings for some time;
+# the root tree carried nothing, so the same dependency installed at the root
+# was subject to no maturity floor and no trust check at all.
+#
+# That asymmetry was the finding, not the settings: a policy that applies to
+# one of two sibling trees is bypassed by installing into the other one. Root
+# is not a scratch tree — it holds playwright, which runs the E2E suite, and
+# cclsp — and CI installs it with --frozen-lockfile in three places
+# (security.yml's "Install root dependencies" step, and e2e-backup.yml's two
+# "Install root dependencies (Playwright)" steps), so whatever resolves here
+# runs in CI.
+#
+# This file has no `packages:` key on purpose. pnpm reads pnpm-workspace.yaml
+# as the settings file whether or not it declares a workspace, so adding one
+# here does NOT make frontend/ a member of a root workspace; frontend keeps
+# resolving against its own nearer pnpm-workspace.yaml and its own lockfile.
+# VERIFIED 2026-08-08: with this file present, `pnpm install --frozen-lockfile`
+# in frontend/ exits 0 and leaves frontend/pnpm-lock.yaml byte-identical.
+#
+# Delay installs until releases have had time to be vetted. Same value as
+# frontend/pnpm-workspace.yaml (7 days) — the point is that the two trees stop
+# diverging, so bump them together or not at all.
+minimumReleaseAge: 10080
+# Refuse to silently accept packages whose trust signals weaken on update.
+trustPolicy: no-downgrade
+#
+# ADOPTING THIS REQUIRED RE-RESOLVING pnpm-lock.yaml IN THE SAME COMMIT, and it
+# will again next time. The lockfile was originally resolved with no floor in
+# effect, so it legitimately contained packages younger than the floor; the
+# policy then rejects the committed lockfile itself
+# (ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION) and the install aborts before
+# writing anything, which is a red required check for a reason that reads as
+# unrelated. VERIFIED 2026-08-08, both sides on the same instrument: with this
+# file, `pnpm install --frozen-lockfile` exited 1 with node_modules absent,
+# naming jose@6.2.7 (published 2026-08-01T16:11Z, inside the cutoff); without
+# it, the same lockfile exited 0 with node_modules present.
+#
+# `--no-frozen-lockfile` does NOT repair this — it runs the same verification
+# first and aborts identically. The sequence that works is the one pnpm's own
+# error text names: `pnpm clean --lockfile` then `pnpm install`, which
+# re-resolves under the policy (here: jose 6.2.7 -> 6.2.6). Commit the
+# re-resolved lockfile together with this file, never this file alone.
+#
+# NOT CLOSED BY THIS FILE: `pnpm dlx` ignores minimumReleaseAge entirely.
+# VERIFIED 2026-08-08, two-sided: `pnpm dlx react-doctor@0.9.7` (published
+# ~5 hours earlier) exited 0 and printed its version both with this policy
+# file present and without it. The pre-commit hook's `pnpm dlx
+# react-doctor@latest` fallback is therefore unaffected — tracked separately.
