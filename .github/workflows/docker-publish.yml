@@ -44,7 +44,7 @@ jobs:
       checks: read
     steps:
       - name: Require the tagged commit's checks to be green
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             // Manual dispatch is exempt on purpose: it publishes :manual-<sha>
