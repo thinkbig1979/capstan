@@ -626,6 +626,9 @@ func TestIsSecureRequest_NoProtocolClaimIsTreatedAsAbsent(t *testing.T) {
 				t.Errorf("IsSecureRequest = true from a TRUSTED peer for %q, want false - no protocol claim is not an HTTPS claim",
 					trusted.Header.Values("X-Forwarded-Proto"))
 			}
+			if peers, _, suppressed := budgetState(&untrustedForwardedProtoWarned); peers != 0 || suppressed != 0 {
+				t.Errorf("budget after a no-claim header from a TRUSTED peer = (peers %d, suppressed %d), want (0, 0)", peers, suppressed)
+			}
 		})
 	}
 
