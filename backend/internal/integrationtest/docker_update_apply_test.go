@@ -125,18 +125,14 @@ func (c *collector) sawStatus(want services.Status) bool {
 // updateStandaloneContainer: a container with no compose labels, and a nil
 // DashboardDB, takes the standalone branch.
 //
-// DEFECT, tracked in agent-os-ekmk: the apply genuinely succeeds — the container
-// is removed, recreated under the same name and started — and then the result is
-// reported as `failed`, because the post-update verification inspects the
-// container id it started with. That id no longer exists. Only the compose branch
-// re-resolves the id (via findComposeContainer), so this hits every standalone
-// container update.
+// Regression guard for agent-os-ekmk. The apply always worked here — the container
+// is removed, recreated under the same name and started — but the result used to be
+// reported as `failed`, because the post-update verification inspected the container
+// id it started with, which the recreate had just removed. Only the compose branch
+// re-resolved the id, so it hit every standalone container update.
 //
-// The two assertions below are deliberately in tension, and that IS the finding:
-// the container is running afterwards, and the caller was told the update failed.
-// Pinned rather than fixed here so the fix lands as a visible, reviewable
-// behaviour change rather than riding along inside a coverage bead — the same
-// approach agent-os-t9up used.
+// The assertions below were the inverse of these until the fix: they pinned
+// outcome=failed while the very next docker inspect showed the container running.
 func Test_UpdateContainer_Standalone_AppliesAndConverges(t *testing.T) {
 	RequireDocker(t)
 	PullPinnedImage(t, updateTestImage)
@@ -160,12 +156,13 @@ func Test_UpdateContainer_Standalone_AppliesAndConverges(t *testing.T) {
 	assert.Equal(t, "true", strings.TrimSpace(string(out)),
 		"a container that was running before the update must be running after it")
 
-	// AND YET the caller is told it failed. agent-os-ekmk.
-	assert.Equal(t, "failed", string(ar.Outcome),
-		"DEFECT (agent-os-ekmk): a successful standalone update is reported as failed")
-	assert.Contains(t, ar.Reason, "post-update container inspect failed",
-		"DEFECT (agent-os-ekmk): the failure comes from inspecting the pre-update "+
-			"container id, which the apply path has already removed")
+	// AND the caller is told so. Anything but "failed" is acceptable here: the image
+	// was already current, so no_change is the honest outcome and success is only
+	// reachable when the image genuinely advanced.
+	assert.NotEqual(t, "failed", string(ar.Outcome),
+		"a successful standalone update must not be reported as failed (agent-os-ekmk): %s", ar.Reason)
+	assert.NotContains(t, ar.Reason, "post-update container inspect failed",
+		"the verification must inspect the recreated container, not the id it replaced")
 }
 
 // Test_UpdateContainerStreaming_Standalone_EmitsPullProgress drives
@@ -184,13 +181,11 @@ func Test_UpdateContainerStreaming_Standalone_EmitsPullProgress(t *testing.T) {
 	c := &collector{}
 	_, ar := svc.UpdateContainerStreaming(ctx, id, nil, c.emit, c.setStatus)
 
-	// Same DEFECT as the non-streaming path above (agent-os-ekmk): the pull and
-	// the recreate both succeed, and the verification step then inspects an id
-	// that no longer exists.
-	assert.Equal(t, "failed", string(ar.Outcome),
-		"DEFECT (agent-os-ekmk): a successful standalone streaming update is reported as failed")
-	assert.Contains(t, ar.Reason, "post-update container inspect failed",
-		"DEFECT (agent-os-ekmk)")
+	// Same guard as the non-streaming path above (agent-os-ekmk).
+	assert.NotEqual(t, "failed", string(ar.Outcome),
+		"a successful standalone streaming update must not be reported as failed: %s", ar.Reason)
+	assert.NotContains(t, ar.Reason, "post-update container inspect failed",
+		"the verification must inspect the recreated container, not the id it replaced")
 
 	// The status transition is what drives the UI's progress indicator.
 	assert.True(t, c.sawStatus(services.StatusPulling),
