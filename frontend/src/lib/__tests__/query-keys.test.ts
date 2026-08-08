@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { QueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../query-keys'
 
 /**
@@ -54,7 +55,7 @@ describe('queryKeys literal shapes', () => {
     expect(queryKeys.backup.settings()).toEqual(['backup', 'settings'])
     expect(queryKeys.backup.policies()).toEqual(['backup', 'policies'])
     expect(queryKeys.backup.status()).toEqual(['backup', 'status'])
-    expect(queryKeys.backup.history(5)).toEqual(['backup', 'history', { limit: 5 }])
+    expect(queryKeys.backup.historyAll()).toEqual(['backup', 'history'])
     expect(queryKeys.backup.snapshots('s1')).toEqual(['backup', 'snapshots', 's1'])
     expect(queryKeys.backup.run('r1')).toEqual(['backup', 'runs', 'r1'])
     expect(queryKeys.backup.snapshotPreview('snap1')).toEqual(['backup', 'snapshot-preview', 'snap1'])
@@ -128,7 +129,7 @@ describe('queryKeys prefix relationships', () => {
       queryKeys.backup.settings(),
       queryKeys.backup.policies(),
       queryKeys.backup.status(),
-      queryKeys.backup.history(),
+      queryKeys.backup.historyAll(),
       queryKeys.backup.snapshots('s1'),
       queryKeys.backup.run('r1'),
       queryKeys.backup.snapshotPreview('snap1'),
@@ -152,12 +153,84 @@ describe('queryKeys prefix relationships', () => {
     ).toBe(true)
   })
 
-  it('backup.history() is a prefix of stackHistory for the same limit', () => {
-    // stackHistory nests under history, so history(limit) must not be a prefix
-    // by object identity — react-query hashes structurally, so an equal {limit}
-    // object is what makes this match.
-    const history = queryKeys.backup.history(5)
-    const stackHistory = queryKeys.backup.stackHistory(5, 's1')
-    expect(JSON.stringify(stackHistory).startsWith(JSON.stringify(history).slice(0, -1))).toBe(true)
+})
+
+/**
+ * Shape assertions cannot see this class of bug. react-query matches by partial
+ * deep equality, not by array prefix, so a key that *looks* like a prefix can
+ * still reach nothing — which is exactly what `backup.history()` did: it emitted
+ * `['backup','history',{limit:undefined}]`, and `{limit:undefined}` fails partial
+ * equality against the registered `{limit:20}`, so all five backup-history
+ * invalidations silently no-op'd. These tests run a real QueryClient and assert
+ * that an invalidation actually REACHES the registered query.
+ */
+describe('queryKeys invalidation reaches its queries', () => {
+  const registerAndInvalidate = async (
+    registered: readonly unknown[],
+    invalidateWith: readonly unknown[],
+  ) => {
+    const client = new QueryClient()
+    client.setQueryData(registered, { runs: [] })
+    await client.invalidateQueries({ queryKey: invalidateWith })
+    const state = client.getQueryState(registered)
+    client.clear()
+    return state?.isInvalidated ?? false
+  }
+
+  it('backup.historyAll() invalidates the registered stack-history query', async () => {
+    // useStackBackupRuns registers under stackHistory(limit, stackId) with the
+    // hook's default limit of 20; the five mutation call sites invalidate with
+    // historyAll().
+    expect(
+      await registerAndInvalidate(
+        queryKeys.backup.stackHistory(20, 's1'),
+        queryKeys.backup.historyAll(),
+      ),
+    ).toBe(true)
+  })
+
+  it('backup.historyAll() reaches every limit, not just the one it was written against', async () => {
+    expect(
+      await registerAndInvalidate(
+        queryKeys.backup.stackHistory(50, 's1'),
+        queryKeys.backup.historyAll(),
+      ),
+    ).toBe(true)
+  })
+
+  it('backup.all() reaches the stack-history query too', async () => {
+    expect(
+      await registerAndInvalidate(
+        queryKeys.backup.stackHistory(20, 's1'),
+        queryKeys.backup.all(),
+      ),
+    ).toBe(true)
+  })
+
+  it('backup.historyAll() does not reach unrelated backup queries', async () => {
+    expect(
+      await registerAndInvalidate(queryKeys.backup.status(), queryKeys.backup.historyAll()),
+    ).toBe(false)
+  })
+
+  it('updateHistory.all() invalidates a filtered update-history list', async () => {
+    expect(
+      await registerAndInvalidate(
+        queryKeys.updateHistory.list({ stackId: 's1' }),
+        queryKeys.updateHistory.all(),
+      ),
+    ).toBe(true)
+  })
+
+  it('git.all(stackId) invalidates that stack log and diff but not another stack', async () => {
+    expect(
+      await registerAndInvalidate(queryKeys.git.log('s1', 50, 0, 'a.yml'), queryKeys.git.all('s1')),
+    ).toBe(true)
+    expect(
+      await registerAndInvalidate(queryKeys.git.diff('s1', 'abc'), queryKeys.git.all('s1')),
+    ).toBe(true)
+    expect(
+      await registerAndInvalidate(queryKeys.git.diff('s2', 'abc'), queryKeys.git.all('s1')),
+    ).toBe(false)
   })
 })

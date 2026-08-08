@@ -349,7 +349,7 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
           stream.connect(wsPath, (finalStatus) => {
             queryClient.invalidateQueries({ queryKey: queryKeys.backup.snapshots(stackId) })
             queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
-            queryClient.invalidateQueries({ queryKey: queryKeys.backup.history() })
+            queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
             queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(stackId) })
             // Derive the toast from the real terminal outcome — a failed or
             // partial restore must not be reported as a green success.

@@ -115,7 +115,13 @@ export const queryKeys = {
     settings: () => ['backup', 'settings'] as const,
     policies: () => ['backup', 'policies'] as const,
     status: () => ['backup', 'status'] as const,
-    history: (limit?: number) => ['backup', 'history', { limit }] as const,
+    /**
+     * Bare prefix for every backup-history entry — this is what mutations
+     * invalidate. It deliberately carries no `{ limit }` segment: react-query
+     * matches by partial deep equality, so a key ending in `{ limit: undefined }`
+     * fails against a query registered under `{ limit: 20 }` and reaches nothing.
+     */
+    historyAll: () => ['backup', 'history'] as const,
     snapshots: (stackId: string) => ['backup', 'snapshots', stackId] as const,
     run: (runId: string) => ['backup', 'runs', runId] as const,
     snapshotPreview: (snapshotId: string) => ['backup', 'snapshot-preview', snapshotId] as const,
