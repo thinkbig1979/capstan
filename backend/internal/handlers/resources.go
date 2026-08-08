@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/docker/docker/api/types/build"
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -160,12 +161,61 @@ func (h *ResourcesHandler) listNetworks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"networks": networks})
 }
 
+// BuildCacheEntry is our own wire representation of a Docker build-cache
+// record.
+//
+// The endpoint used to serialize build.CacheRecord from the Docker SDK
+// straight to the wire, which made it the only PascalCase payload in the API
+// and inherited an upstream tag typo: CacheRecord declares
+// `json:" Parents,omitempty"` with a LEADING SPACE, so the field went out as
+// " Parents" and the frontend's Parents was permanently undefined
+// (agent-os-iuby). Declaring our own type closes both problems for good — a
+// tag change upstream can no longer alter our contract.
+//
+// The deprecated CacheRecord.Parent (singular, deprecated in API v1.42) is
+// deliberately not carried over; nothing consumed it.
+type BuildCacheEntry struct {
+	ID          string     `json:"id"`
+	Parents     []string   `json:"parents,omitempty"`
+	Type        string     `json:"type"`
+	Description string     `json:"description"`
+	InUse       bool       `json:"inUse"`
+	Shared      bool       `json:"shared"`
+	Size        int64      `json:"size"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	LastUsedAt  *time.Time `json:"lastUsedAt"`
+	UsageCount  int        `json:"usageCount"`
+}
+
+// toBuildCacheEntries maps the Docker SDK records onto our own response type.
+func toBuildCacheEntries(records []*build.CacheRecord) []BuildCacheEntry {
+	entries := make([]BuildCacheEntry, 0, len(records))
+	for _, r := range records {
+		if r == nil {
+			continue
+		}
+		entries = append(entries, BuildCacheEntry{
+			ID:          r.ID,
+			Parents:     r.Parents,
+			Type:        r.Type,
+			Description: r.Description,
+			InUse:       r.InUse,
+			Shared:      r.Shared,
+			Size:        r.Size,
+			CreatedAt:   r.CreatedAt,
+			LastUsedAt:  r.LastUsedAt,
+			UsageCount:  r.UsageCount,
+		})
+	}
+	return entries
+}
+
 func (h *ResourcesHandler) listBuildCache(c *gin.Context) {
-	entries, err := h.docker.ListBuildCache(c.Request.Context())
+	records, err := h.docker.ListBuildCache(c.Request.Context())
 	if err != nil {
 		slog.Error("Failed to list build cache", "error", err)
 		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list build cache")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"entries": entries})
+	c.JSON(http.StatusOK, gin.H{"entries": toBuildCacheEntries(records)})
 }

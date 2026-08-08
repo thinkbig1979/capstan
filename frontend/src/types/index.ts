@@ -208,17 +208,23 @@ export interface DockerNetwork {
   stack: string
 }
 
+/**
+ * GET /resources/build-cache. Mirrors handlers.BuildCacheEntry — the backend
+ * declares its own response type rather than serializing the Docker SDK struct,
+ * so these are lowerCamelCase like the rest of the API. `parents` is omitted
+ * when empty (agent-os-iuby).
+ */
 export interface BuildCacheEntry {
-  ID: string
-  Type: string
-  Description: string
-  InUse: boolean
-  Shared: boolean
-  Size: number
-  CreatedAt: string
-  LastUsedAt: string | null
-  UsageCount: number
-  Parents?: string[]
+  id: string
+  type: string
+  description: string
+  inUse: boolean
+  shared: boolean
+  size: number
+  createdAt: string
+  lastUsedAt: string | null
+  usageCount: number
+  parents?: string[]
 }
 
 export interface ContainerUpdateInfo {
