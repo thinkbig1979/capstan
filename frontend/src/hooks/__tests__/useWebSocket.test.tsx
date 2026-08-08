@@ -348,6 +348,133 @@ describe('useWebSocket auth-disabled behavior', () => {
       expect(closeSpy).toHaveBeenCalled()
     })
 
+    it('reconnect re-wires the state callbacks, so the reopened socket reaches connected', async () => {
+      // Asserting only that status flips to 'connecting' passes even when
+      // reconnect() connects with the raw caller options and no state setters
+      // are wired at all — the socket then opens and the UI sits on
+      // 'connecting' forever. The assertion that matters is what happens
+      // AFTER the reopened socket fires onopen.
+      useAuthStore.setState({ authDisabled: true, isAuthenticated: false, token: null })
+
+      const onOpen = vi.fn()
+      const onMessage = vi.fn()
+      const { result } = renderHook(() => useWebSocket('/containers', onMessage, { onOpen }))
+
+      await waitFor(() => {
+        expect(result.current.wsState).toBe('CONNECTING')
+      })
+
+      const firstSocket = MockWebSocket.instance!
+      act(() => {
+        firstSocket.onopen!()
+      })
+      expect(result.current.status).toBe('connected')
+
+      act(() => {
+        result.current.reconnect()
+      })
+      expect(result.current.status).toBe('connecting')
+
+      // reconnect() re-opens on a 100ms timer.
+      await waitFor(() => {
+        expect(MockWebSocket.instance).not.toBe(firstSocket)
+      })
+
+      act(() => {
+        MockWebSocket.instance!.onopen!()
+      })
+
+      expect(result.current.status).toBe('connected')
+      expect(result.current.wsState).toBe('OPEN')
+      // The caller's own handler still runs, once per open.
+      expect(onOpen).toHaveBeenCalledTimes(2)
+    })
+
+    it('reconnect keeps the close/reconnecting wiring too', async () => {
+      useAuthStore.setState({ authDisabled: true, isAuthenticated: false, token: null })
+
+      const onMessage = vi.fn()
+      const { result } = renderHook(() => useWebSocket('/containers', onMessage, {}))
+
+      await waitFor(() => {
+        expect(result.current.wsState).toBe('CONNECTING')
+      })
+
+      const firstSocket = MockWebSocket.instance!
+      act(() => {
+        result.current.reconnect()
+      })
+      await waitFor(() => {
+        expect(MockWebSocket.instance).not.toBe(firstSocket)
+      })
+
+      act(() => {
+        MockWebSocket.instance!.onopen!()
+      })
+      expect(result.current.status).toBe('connected')
+
+      act(() => {
+        MockWebSocket.instance!.onclose!()
+      })
+
+      expect(result.current.wsState).toBe('RECONNECTING')
+      expect(result.current.reconnectAttempts).toBe(1)
+    })
+
+    it('flipping skip from true to false connects without a remount', async () => {
+      useAuthStore.setState({ authDisabled: true, isAuthenticated: false, token: null })
+
+      const onMessage = vi.fn()
+      const { result, rerender } = renderHook(
+        ({ skip }: { skip: boolean }) => useWebSocket('/containers', onMessage, { skip }),
+        { initialProps: { skip: true } },
+      )
+
+      expect(MockWebSocket.instance).toBeNull()
+      expect(result.current.wsState).toBe('CLOSED')
+
+      rerender({ skip: false })
+
+      await waitFor(() => {
+        expect(result.current.wsState).toBe('CONNECTING')
+      })
+      expect(MockWebSocket.instance).not.toBeNull()
+
+      act(() => {
+        MockWebSocket.instance!.onopen!()
+      })
+      expect(result.current.status).toBe('connected')
+    })
+
+    it('flipping skip back to true tears the connection down', async () => {
+      useAuthStore.setState({ authDisabled: true, isAuthenticated: false, token: null })
+
+      const onMessage = vi.fn()
+      const { result, rerender } = renderHook(
+        ({ skip }: { skip: boolean }) => useWebSocket('/containers', onMessage, { skip }),
+        { initialProps: { skip: false } },
+      )
+
+      await waitFor(() => {
+        expect(result.current.wsState).toBe('CONNECTING')
+      })
+
+      act(() => {
+        MockWebSocket.instance!.onopen!()
+      })
+      expect(result.current.status).toBe('connected')
+
+      const closeSpy = vi.spyOn(MockWebSocket.instance!, 'close')
+
+      act(() => {
+        rerender({ skip: true })
+      })
+
+      expect(closeSpy).toHaveBeenCalled()
+      expect(result.current.wsState).toBe('CLOSED')
+      expect(result.current.status).toBe('disconnected')
+    })
+
     it('reconnect resets status and re-connects', async () => {
       useAuthStore.setState({ authDisabled: true, isAuthenticated: false, token: null })
 

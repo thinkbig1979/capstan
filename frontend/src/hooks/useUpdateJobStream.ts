@@ -100,8 +100,13 @@ export function useUpdateJobStream(
     })
   }, [queryClient])
 
+  // This used to pass a '/ws/updates/jobs/_noop' sentinel when jobId was null,
+  // because `skip` was not a dependency of useWebSocket's connect effect —
+  // varying the path was the only way to force it to re-run once a job id
+  // arrived. skip is a real dependency now (agent-os-9d5e), so the placeholder
+  // path is never connected to and does not need to look like an endpoint.
   const { status } = useWebSocketJSON<JobStreamFrame>(
-    jobId ? `/ws/updates/jobs/${jobId}` : '/ws/updates/jobs/_noop',
+    jobId ? `/ws/updates/jobs/${jobId}` : '',
     handleFrame,
     { skip, onClose: handleClose },
   )
