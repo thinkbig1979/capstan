@@ -92,7 +92,7 @@ above.
 
 ### Branch protection
 
-`main` requires these six checks to pass before a pull request can merge:
+`main` requires these seven checks to pass before a pull request can merge:
 
 | Check | Workflow |
 | --- | --- |
@@ -102,6 +102,17 @@ above.
 | Build, vet, and unit tests | `backend.yml` |
 | Race detector | `backend.yml` |
 | Lint, test, and build | `frontend.yml` |
+| Docs structure and coverage gates | `docs.yml` |
+
+`Lint (golangci-lint)` is **not** required, so a green required set does not tell
+you it passed. Read that job explicitly before merging.
+
+A newly required check has a failure mode worth knowing: a pull request whose
+head predates the check becoming required never ran it, so it sits at `BLOCKED`
+with everything else green and no red job to point at. `Docs structure and
+coverage gates` became required on 2026-08-07 and did exactly this to several
+open Dependabot PRs. The fix is to rebase the branch — `@dependabot rebase` on a
+Dependabot PR.
 
 Force pushes and branch deletion are blocked. Reviews are not required, and
 administrators can bypass a stuck check — the rule is there to stop an
