@@ -26,7 +26,10 @@ export function useWebSocket(
   const wsClientRef = useRef<WSClient | null>(null)
   const onMessageRef = useRef(onMessage)
   const optionsRef = useRef(options)
-  const skipRef = useRef(options.skip)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Read off `options` rather than a ref: this is the one option the connect
+  // effect must react to, so it has to be a real dependency (agent-os-9d5e).
+  const skip = options.skip ?? false
   const [lastMessage, setLastMessage] = useState<string | ArrayBuffer | null>(null)
   const [status, setStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'reconnecting'>('disconnected')
   const [wsState, setWsState] = useState<WSState>('CLOSED')
@@ -40,25 +43,22 @@ export function useWebSocket(
     optionsRef.current = options
   }, [options])
 
-  useEffect(() => {
-    skipRef.current = options.skip
-  }, [options.skip])
-
   const wrappedOnMessage = useCallback((data: string | ArrayBuffer) => {
     setLastMessage(data)
     onMessageRef.current(data)
   }, [])
 
-  useEffect(() => {
-    if ((!isAuthenticated && !authDisabled) || skipRef.current) {
-      return
-    }
-
-    const client = new WSClient()
-    wsClientRef.current = client
-    const opts = optionsRef.current
-
-    const enhancedOptions: WSClientOptions = {
+  /**
+   * Layers the hook's state updates onto the caller's lifecycle callbacks.
+   *
+   * Every connect must go through this. The initial connect and the manual
+   * reconnect used to build it separately, and reconnect's copy was simply
+   * missing — it connected with the raw caller options, so the reopened socket
+   * updated no state and the UI sat on 'connecting' forever (agent-os-9d5e).
+   * Keeping exactly one builder is what makes that class of drift impossible.
+   */
+  const buildEnhancedOptions = useCallback((opts: UseWebSocketOptions): WSClientOptions => {
+    return {
       ...opts,
       onOpen: () => {
         setStatus('connected')
@@ -86,39 +86,57 @@ export function useWebSocket(
         opts.onReconnectFailed?.()
       },
     }
+  }, [])
+
+  useEffect(() => {
+    if ((!isAuthenticated && !authDisabled) || skip) {
+      return
+    }
+
+    const client = new WSClient()
+    wsClientRef.current = client
 
     const connectingTimeout = setTimeout(() => {
       setStatus('connecting')
       setWsState('CONNECTING')
     }, 0)
-    client.connect(path, wrappedOnMessage, enhancedOptions)
+    client.connect(path, wrappedOnMessage, buildEnhancedOptions(optionsRef.current))
 
     return () => {
       clearTimeout(connectingTimeout)
+      // A manual reconnect re-opens on a timer; if the effect re-runs (path,
+      // auth or skip changed) before it fires, that timer would otherwise
+      // connect the replacement client to the old path.
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
       client.close()
       wsClientRef.current = null
       setStatus('disconnected')
       setWsState('CLOSED')
       setReconnectAttempts(0)
     }
-  }, [path, isAuthenticated, authDisabled, wrappedOnMessage])
+  }, [path, isAuthenticated, authDisabled, skip, wrappedOnMessage, buildEnhancedOptions])
 
   const send = useCallback((data: string | ArrayBuffer) => {
     wsClientRef.current?.send(data)
   }, [])
 
   const reconnect = useCallback(() => {
-    if ((!isAuthenticated && !authDisabled) || optionsRef.current.skip) {
+    if ((!isAuthenticated && !authDisabled) || skip) {
       return
     }
-    const opts = optionsRef.current
+    const enhancedOptions = buildEnhancedOptions(optionsRef.current)
     wsClientRef.current?.close()
     setStatus('connecting')
     setWsState('CONNECTING')
-    setTimeout(() => {
-      wsClientRef.current?.connect(path, wrappedOnMessage, opts)
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null
+      wsClientRef.current?.connect(path, wrappedOnMessage, enhancedOptions)
     }, 100)
-  }, [path, isAuthenticated, authDisabled, wrappedOnMessage])
+  }, [path, isAuthenticated, authDisabled, skip, wrappedOnMessage, buildEnhancedOptions])
 
   const disconnect = useCallback(() => {
     wsClientRef.current?.close()
