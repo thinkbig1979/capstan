@@ -396,12 +396,6 @@ npx playwright test
 See the header comment in `playwright.config.ts` for the environment
 variables it reads (base URL, test credentials, backup repo path, etc).
 
-#### Bash-harness E2E suite
-
-A broader smoke/core/regression suite driven by browser automation lives
-under `testing/` with its own orchestrator; see `testing/README.md` for how
-to run it (`./testing/test-orchestrator.sh`).
-
 ### Stacks Directory
 
 When running locally, Docker Compose stacks are stored at:

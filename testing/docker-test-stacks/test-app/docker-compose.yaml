@@ -1,7 +1,0 @@
-services:
-  web:
-    image: nginx:alpine
-    ports:
-      - "8080:80"
-    environment:
-      - APP_NAME=\${APP_NAME:-TestApp}
