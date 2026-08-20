@@ -239,26 +239,33 @@ overrides:
   # @vitejs/plugin-react pull it). Note this does NOT clear postcss's own
   # nanoid dependency — see the nanoid note below.
   postcss@<8.5.23: '>=8.5.23 <9'
+  # Security: nanoid GHSA-2v37-7h3g-55p8 — custom generators can loop forever
+  # when size is non-positive. Reached only via vite > postcss > nanoid (5
+  # paths), so dev-toolchain scope like the six above: the Dockerfile's
+  # frontend-build stage runs `vite build` and copies only dist/, and nanoid
+  # is absent from the shipped image.
   #
-  # NOT FIXED, and the reason is the maturity floor rather than a judgement:
-  # nanoid GHSA-2v37-7h3g-55p8 (custom generators can loop indefinitely when
-  # size is non-positive), reached via vite > postcss > nanoid. The fix is
-  # nanoid 3.3.17, published 2026-08-03T10:39Z, which is inside the 7-day
-  # window until 2026-08-10T10:39Z — an override to it today fails the install
-  # with ERR_PNPM_NO_MATURE_MATCHING_VERSION. Adding a minimumReleaseAgeExclude
-  # to force it was rejected: this advisory is dev-only and not reachable in
-  # the shipped image, so it does not clear the bar for punching a hole in the
-  # floor. nanoid 5.x is mature but is an ESM-only major that postcss does not
-  # ask for, so it is an untested API swap rather than a security fix. VERIFIED
-  # 2026-08-08 rather than reasoned: `npm view nanoid@5.1.16 exports` has no
-  # `require` condition on `.` or `./non-secure`, `nanoid@3.3.16` still ships
-  # `"main": "index.cjs"`, `postcss@8.5.25` declares `nanoid: ^3.3.16`, and
-  # postcss/lib/input.js does `require('nanoid/non-secure')`. Add
-  #   nanoid@<3.3.17: '>=3.3.17 <4'
-  # on or after 2026-08-10 — tracked, with that date, as its own issue.
+  # THE FLOOR MOVED WHILE THIS WAS DEFERRED, SO THE VERSION THAT USED TO BE
+  # WRITTEN HERE IS NOW WRONG. This slot held a "NOT FIXED" note (agent-os-ziz,
+  # 2026-08-08) saying the fix was nanoid 3.3.17, published 2026-08-03T10:39Z
+  # and inside the 7-day `minimumReleaseAge` window until 2026-08-10T10:39Z, so
+  # an override to it failed the install with ERR_PNPM_NO_MATURE_MATCHING_VERSION.
+  # It instructed a later editor to add `nanoid@<3.3.17: '>=3.3.17 <4'` on or
+  # after 2026-08-10. Do NOT restore that selector — the advisory has since
+  # raised its own bar and 3.3.17 is vulnerable too. OBSERVED 2026-08-20 from
+  # `pnpm audit --audit-level=moderate` in this tree: "Vulnerable versions
+  # <3.3.18 / Patched versions >=3.3.18". The fix is 3.3.18, published
+  # 2026-08-07T16:41Z, which cleared the floor on 2026-08-14 (agent-os-bvi).
   #
-  # Expect that override to be DORMANT on arrival, like the six above: nanoid
-  # 3.3.18 landed 2026-08-07T16:41Z, so once the floor clears, postcss's own
-  # `^3.3.16` will float to a patched 3.x without help. Add it anyway. The
-  # point of the line is that nothing can drop BACK below 3.3.17, not that it
-  # is what lifts resolution there.
+  # Rejected then and still rejected: a `minimumReleaseAgeExclude` entry to
+  # force an immature version — the floor cleared on its own, so there is
+  # nothing to punch a hole for. nanoid 5.x is still the wrong answer too, an
+  # ESM-only major that postcss does not ask for (postcss/lib/input.js does
+  # `require('nanoid/non-secure')`), i.e. an untested API swap, not a fix.
+  #
+  # DORMANT on arrival, like the six above: postcss declares `nanoid: ^3.3.16`,
+  # which floats to a patched 3.x without help. This line is what stops it
+  # dropping BACK below 3.3.18. When an advisory raises the bar again, bump
+  # BOTH sides of the selector — the stale 3.3.17 instruction replaced here is
+  # exactly the debris a one-sided bump leaves behind.
+  nanoid@<3.3.18: '>=3.3.18 <4'
