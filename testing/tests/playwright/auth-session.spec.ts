@@ -89,57 +89,108 @@ test.describe('Auth session E2E', () => {
   test.beforeAll(async ({ browser }) => {
     sharedContext = await browser.newContext()
 
-    // Neutralize AppShell's Sidebar background polling for the WHOLE shared
-    // context, for the whole file. useSidebarData.ts:16-48 fires four
-    // queries on mount (stacks, settings/config, resources/updates,
-    // backups/status); only backups/status carries a refetchInterval (60s,
-    // useSidebarData.ts:46) — the other three only have staleTime and would
-    // refetch on remount or react-query's default refetchOnWindowFocus
-    // (query-client.ts:8), not on a timer. Left unstubbed, ANY of these can
-    // 401 once the session is revoked and independently trigger the exact
-    // interceptor redirect AUTH-PW-SESSION-005 exists to test — which cuts
-    // both ways: with a slow/cold environment inflating elapsed time past
-    // that 60s mark, a background 401 can race the deliberate UI trigger and
-    // either (a) redirect before the precondition at 005's top even reads
-    // the URL, turning it red for a reason unrelated to what it names, or
-    // (b) redirect through a broken/renamed/deleted trigger element and go
-    // green for the wrong reason — the assertion would no longer test what
-    // its own title claims. Stubbing these four makes the whole file's
-    // browser session deterministic: no background request can ever 401, so
-    // AUTH-PW-SESSION-005's redirect can only come from its own deliberate
-    // click, restoring it as a real, load-bearing assertion.
+    // Neutralize AppShell's background traffic for the WHOLE shared context,
+    // for the whole file — with a default-deny gate, not an endpoint list.
     //
-    // route() only intercepts traffic from pages/requests made through THIS
-    // context — AUTH-PW-SESSION-002/003/004 use the `request` fixture (a
-    // separate APIRequestContext Playwright creates per test), which never
-    // goes through these routes, so they're unaffected. AUTH-PW-SESSION-001
-    // doesn't depend on any of these four endpoints' data either (its
-    // assertions are the URL and the Settings link's visibility).
-    const emptyStacks = { stacks: [] }
-    const emptyConfig = { stacksDir: '', stacksDirectories: [] }
-    const emptyUpdates = { updates: [] }
-    const idleBackupStatus = {
-      resticAvailable: false,
-      rcloneAvailable: false,
-      repositoryInitialized: false,
-      enabledStackCount: 0,
-      lastRun: null,
-      nextRunAt: null,
-      repoSizeBytes: null,
-      schedulerRunning: false,
+    // WHY A GATE AND NOT A LIST (agent-os-epc4): this used to stub four
+    // endpoints by name (stacks, settings/config, resources/updates,
+    // backups/status) and claim on that basis that no background request
+    // could ever 401. The claim was false, and it is what made
+    // AUTH-PW-SESSION-005 flaky. DashboardPage is React.lazy (App.tsx:15-17)
+    // inside a Suspense boundary the Header sits OUTSIDE of, so
+    // AUTH-PW-SESSION-001 finishes — it waits only for the Header's Settings
+    // link — while the dashboard chunk is still loading. Whenever that chunk
+    // then mounts it fires two endpoints the four stubs never covered:
+    // GET /directories (DashboardPage.tsx:92-96) and GET /dashboard/stats
+    // (DashboardPage.tsx:108-114). Land that mount after
+    // AUTH-PW-SESSION-003's revocation and both 401 SESSION_EXPIRED,
+    // api.ts:88-107's interceptor calls the logout callback registered at
+    // App.tsx:61-68, and the page hard-redirects to /login — either before
+    // 005's precondition reads the URL (OBSERVED in CI: expected '/',
+    // received '/login') or mid-click, tearing the document out from under
+    // the Settings click (OBSERVED in CI: 'element was detached from the DOM,
+    // retrying', then a /login with no Settings link for the rest of the
+    // 30s). OBSERVED locally: with ~8s of extra elapsed time between 003 and
+    // 005 — which is all a slower CI host is — this reproduced 3 runs out of
+    // 3, no docker activity required.
+    //
+    // Two further triggers reach those SAME two queries once they have
+    // mounted successfully: useStackEvents.ts:146-152 turns /ws/events
+    // container events into invalidateQueries([dashboardStats(), ...]),
+    // which refetches an ACTIVE query regardless of staleTime, and the
+    // backend relays the HOST docker daemon's container event stream to
+    // every subscriber (handlers/monitoring.go:234,
+    // services/monitor.go:214-300) — so on the self-hosted capstan-e2e
+    // runner this spec runs on (.github/workflows/e2e-backup.yml), containers
+    // belonging to entirely unrelated jobs drive it. refetchOnWindowFocus
+    // (query-client.ts:8) is a third.
+    //
+    // No list survives that: this one was already incomplete, and any query
+    // added to any page in future silently reopens the same hole with no
+    // failing test to say so. The gate inverts the default instead —
+    // everything under /api/v1/ that this spec does not explicitly need is
+    // aborted, and an aborted request reaches axios with no `error.response`
+    // at all, so the interceptor's `error.response?.status === 401` branch
+    // (api.ts:89) is unreachable for it BY CONSTRUCTION rather than by
+    // enumeration. AUTH-PW-SESSION-005's redirect can then only come from its
+    // own deliberate click, which is what restores it as a real, load-bearing
+    // assertion.
+    //
+    // Matching on URL.pathname rather than a glob also drops a latent trap in
+    // the old stubs: an exact-path glob stops matching the moment a caller
+    // adds a query string, and resourcesApi.checkUpdates does exactly that
+    // when refresh=true (api.ts:656-661).
+    //
+    // route() only intercepts traffic from pages in THIS context, so the
+    // `request`-fixture calls in AUTH-PW-SESSION-002/003/004 are unaffected;
+    // WebSockets are never intercepted at all, and cannot reach the axios
+    // interceptor either way.
+
+    // Reaches the real backend. /auth/ because AUTH-PW-SESSION-001 performs
+    // the one real setup this file is allowed and App.tsx's boot probe must
+    // see a real answer; /settings/backup because its 401 IS the trigger
+    // AUTH-PW-SESSION-005 exists to observe.
+    const passThroughPrefixes = ['/api/v1/auth/', '/api/v1/settings/backup']
+
+    // Answered 200 rather than aborted, so the Sidebar renders its normal
+    // populated shell instead of an error state. These four are the ones
+    // useSidebarData.ts:16-48 reads, and their shapes are known.
+    const cannedResponses: Record<string, unknown> = {
+      '/api/v1/stacks': { stacks: [] },
+      '/api/v1/settings/config': { stacksDir: '', stacksDirectories: [] },
+      '/api/v1/resources/updates': { updates: [] },
+      '/api/v1/backups/status': {
+        resticAvailable: false,
+        rcloneAvailable: false,
+        repositoryInitialized: false,
+        enabledStackCount: 0,
+        lastRun: null,
+        nextRunAt: null,
+        repoSizeBytes: null,
+        schedulerRunning: false,
+      },
     }
-    await sharedContext.route('**/api/v1/stacks', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyStacks) }),
-    )
-    await sharedContext.route('**/api/v1/settings/config', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyConfig) }),
-    )
-    await sharedContext.route('**/api/v1/resources/updates', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(emptyUpdates) }),
-    )
-    await sharedContext.route('**/api/v1/backups/status', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(idleBackupStatus) }),
-    )
+
+    await sharedContext.route('**/api/v1/**', (route) => {
+      const path = new URL(route.request().url()).pathname
+
+      if (passThroughPrefixes.some((prefix) => path.startsWith(prefix))) {
+        return route.continue()
+      }
+
+      const canned = cannedResponses[path]
+      if (canned !== undefined) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(canned),
+        })
+      }
+
+      // Default deny. Never reaches the backend, so it can never 401, so it
+      // can never redirect this page out from under AUTH-PW-SESSION-005.
+      return route.abort()
+    })
 
     sharedPage = await sharedContext.newPage()
   })
@@ -374,7 +425,16 @@ test.describe('Auth session E2E', () => {
     // deliberately exempts from the hard-redirect logout path (the auth
     // store handles a failed boot probe itself, via a different code path
     // than the one this test is verifying).
-    await sharedPage.getByRole('link', { name: 'Settings', exact: true }).click()
+    //
+    // Asserted visible before clicking, same as the Backup link below: a
+    // click that fails its own actionability retry loop reports whatever the
+    // element was doing at the 30s mark rather than what was wrong, which is
+    // how the redirect diagnosed above first surfaced — as an opaque
+    // "element was detached from the DOM, retrying" against a link that was
+    // never the problem.
+    const settingsLink = sharedPage.getByRole('link', { name: 'Settings', exact: true })
+    await expect(settingsLink).toBeVisible({ timeout: 10_000 })
+    await settingsLink.click()
     await sharedPage.waitForURL((u) => u.pathname === '/settings', { timeout: 15_000 })
 
     // Clicking into the Backup section mounts BackupSettingsContent, whose
@@ -385,19 +445,17 @@ test.describe('Auth session E2E', () => {
     // the logout callback registered in App.tsx:58-63, which does a hard
     // `window.location.href = '/login'`.
     //
-    // This click is the ONLY possible trigger for that redirect: the
-    // beforeAll above stubs every background-polling endpoint AppShell's
-    // Sidebar touches (stacks/settings-config/resources-updates/
-    // backups-status) to always 200, so nothing else in this browser
-    // session can ever 401. Without that neutralization this assertion was
-    // racy in both directions — a slow/cold environment could let a
-    // background poll redirect before this click even ran (failing for a
-    // reason unrelated to what this test names), or let it redirect through
-    // a broken/renamed Backup link and still go green (passing without
-    // having tested anything) — see git history on this test for the full
-    // diagnosis. With the race removed, the click is load-bearing again:
-    // assert the link is actually there before clicking, so a broken/
-    // renamed/removed Backup link fails LOUDLY here.
+    // This click is the ONLY possible trigger for that redirect, and the
+    // beforeAll's default-deny gate is what makes that true: /settings/backup
+    // is one of exactly two paths allowed to reach the backend at all, so no
+    // other request in this browser session can produce a 401 for the
+    // interceptor to act on. Without that the assertion was racy in both
+    // directions — a background 401 could redirect before this click even ran
+    // (failing for a reason unrelated to what this test names), or redirect
+    // through a broken/renamed Backup link and still go green (passing
+    // without having tested anything). With the race removed the click is
+    // load-bearing again: assert the link is actually there before clicking,
+    // so a broken/renamed/removed Backup link fails LOUDLY here.
     const backupLink = sharedPage.getByRole('link', { name: 'Backup', exact: true })
     await expect(backupLink).toBeVisible({ timeout: 10_000 })
     await backupLink.click()
