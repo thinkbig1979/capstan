@@ -119,24 +119,21 @@ jobs:
       #   never call" as a build failure is how a gate loses its audience.
       #
       # ACCEPTED EXCEPTIONS (symbol-tier findings that do not fail this job):
-      #   All three are docker/docker, all found in v28.5.2+incompatible, all
+      #   Both are docker/docker, both found in v28.5.2+incompatible, both
       #   with "Fixed in: N/A" — no upstream release carries a fix, so there is
       #   no version to move to. The reachability assessment recorded in
-      #   agent-os-vkr is that none is exploitable through capstan: all three
+      #   agent-os-vkr is that neither is exploitable through capstan: both
       #   are daemon-side, and capstan links only the API client
       #   (github.com/docker/docker/api/** and .../client).
       #
-      #     GO-2026-5668  race in `docker cp`; arbitrary empty-file creation on
-      #                   the host via symlink swap. Daemon-side. capstan has no
-      #                   CopyToContainer / CopyFromContainer call sites.
       #     GO-2026-4887  AuthZ plugin bypass on oversized request bodies.
       #                   Daemon-side; capstan runs no authz plugins.
       #     GO-2026-4883  off-by-one in plugin privilege validation. Daemon-side;
       #                   capstan has no PluginInstall / PluginUpgrade call sites.
       #
       # DELIBERATELY *NOT* IN THE LIST:
-      #   Two further docker/docker advisories land on the same
-      #   v28.5.2+incompatible, and both are reported at module tier only —
+      #   Three further docker/docker advisories land on the same
+      #   v28.5.2+incompatible, all reported at module tier only —
       #   their sole finding carries neither `package` nor `function`, so the
       #   symbol-tier gate below never sees them and an allowlist entry would
       #   protect nothing and trip the stale-exception notice on every run.
@@ -144,22 +141,29 @@ jobs:
       #     GO-2026-5746  CVE-2026-41567 / GHSA-x86f-5xw2-fm2r. `PUT
       #                   /containers/{id}/archive` executes container binaries.
       #                   Daemon-side; capstan has no CopyToContainer call sites.
+      #     GO-2026-5668  race in `docker cp`; arbitrary empty-file creation on
+      #                   the host via symlink swap. Daemon-side. capstan has no
+      #                   CopyToContainer / CopyFromContainer call sites. Was an
+      #                   accepted exception until 2026-08-20, when govulncheck
+      #                   stopped tracing a call to it and CI began reporting
+      #                   the entry as stale.
       #     GO-2026-5617  CVE-2026-42306 / GHSA-rg2x-37c3-w2rh. Race in
       #                   `docker cp` allows bind mount redirection. Daemon-side,
       #                   the same class as GO-2026-5668 above.
       #
       #   They are written down here rather than left out silently because
-      #   Dependabot raises both as runtime-scope alerts, and the answer to "why
-      #   is this one not allowlisted like the other three?" needs to be "it
-      #   does not need to be", not "nobody looked". Verified 2026-08-01.
+      #   Dependabot raises all three as runtime-scope alerts, and the answer
+      #   to "why is this one not allowlisted like the other two?" needs to be
+      #   "it does not need to be", not "nobody looked". Verified 2026-08-01;
+      #   tiers re-confirmed 2026-08-20.
       #
       #   This assessment is tied to what capstan imports *today* and expires:
       #   agent-os-96h re-checks all five on 2026-10-30, including re-running
       #   `go list -deps ./... | grep '^github.com/docker/docker'` to confirm
       #   only api/** and client are still linked, and re-checking whether
-      #   GO-2026-5746 / GO-2026-5617 have risen to the symbol tier. Delete
-      #   entries from this list when a fix ships; do not extend the list
-      #   without the same standard of written reachability evidence.
+      #   GO-2026-5746 / GO-2026-5617 / GO-2026-5668 have risen to the symbol
+      #   tier. Delete entries from this list when a fix ships; do not extend
+      #   the list without the same standard of written reachability evidence.
       - name: Evaluate findings against accepted exceptions
         run: |
           set -euo pipefail
@@ -168,7 +172,6 @@ jobs:
           cat > "${RUNNER_TEMP}/allowed.txt" <<'ALLOWED'
           GO-2026-4883
           GO-2026-4887
-          GO-2026-5668
           ALLOWED
           sort -u -o "${RUNNER_TEMP}/allowed.txt" "${RUNNER_TEMP}/allowed.txt"
 
