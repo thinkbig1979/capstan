@@ -3,8 +3,7 @@ import { defineConfig, devices } from 'playwright/test'
 /**
  * Playwright configuration for Capstan E2E tests.
  *
- * Specs live under testing/tests/playwright/ to sit alongside the existing
- * bash-harness tests in testing/tests/.
+ * Specs live under testing/tests/playwright/; see testing/README.md.
  *
  * Run:
  *   npx playwright test                          # all specs

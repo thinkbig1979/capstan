@@ -69,15 +69,17 @@ backend/frontend/assets/
 /scorecard.png
 /reports/
 
-# Playwright's own output (agent-os-5y9). testing/reports/results.json and
-# testing/reports/screenshots/ above are pre-existing, intentionally
-# committed bash-harness fixtures — leave those tracked. These are Playwright
-# itself: /test-results/ is its default trace/attachment outputDir (created
-# on any local failing run), and the html/json paths are the reporter outputs
-# configured in playwright.config.ts.
+# Playwright's own output (agent-os-5y9). Everything under testing/reports/ is
+# generated: /test-results/ is Playwright's default trace/attachment outputDir
+# (created on any local failing run), the html/json paths are the reporter
+# outputs configured in playwright.config.ts, and screenshots/ is that config's
+# screenshotsPath. Nothing in testing/reports/ is tracked any more — the two
+# committed bash-harness fixtures that used to live there went with the bash
+# test framework (agent-os-uc4u).
 /test-results/
 /testing/reports/playwright-html/
 /testing/reports/playwright-results.json
+/testing/reports/screenshots/
 
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
