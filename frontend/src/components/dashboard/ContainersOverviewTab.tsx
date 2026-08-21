@@ -294,8 +294,8 @@ function ContainerTable({
                       <Info className="h-3.5 w-3.5 text-muted-foreground" />
                     </Button>
                     <div className="flex flex-col min-w-0">
-                      <span className="font-medium text-sm truncate">{container.name}</span>
-                      <span className="text-xs text-muted-foreground truncate max-w-[200px]">{container.image}</span>
+                      <span className="font-medium font-mono text-[13px] truncate">{container.name}</span>
+                      <span className="text-xs text-muted-foreground font-mono truncate max-w-[200px]">{container.image}</span>
                       {container.stackId ? (
                         <TooltipProvider>
                           <Tooltip>

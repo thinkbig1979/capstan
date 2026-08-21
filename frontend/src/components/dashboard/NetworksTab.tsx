@@ -174,7 +174,7 @@ export function NetworksTab() {
             {sortedNetworks.map((net: DockerNetwork) => (
               <TableRow key={net.id}>
                 <TableCell>
-                  <span className="font-medium text-sm">{net.name}</span>
+                  <span className="font-medium font-mono text-[13px]">{net.name}</span>
                 </TableCell>
                 <TableCell>
                   <span className="text-xs font-mono text-muted-foreground">

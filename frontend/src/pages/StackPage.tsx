@@ -15,6 +15,7 @@ import { useStackStore } from '@/stores/stackStore'
 import { useCheckUpdates, useUpdateStack, useUpdateJobs } from '@/hooks/useResources'
 import { useUpdateJobStore, type UpdateJob } from '@/stores/updateJobStore'
 import { StackUpdateBadge } from '@/components/stack/StackUpdateBadge'
+import { GitStatus } from '@/components/git/GitStatus'
 import { UpdateJobLog } from '@/components/updates/UpdateJobLog'
 import { queryKeys } from '@/lib/query-keys'
 
@@ -267,7 +268,7 @@ export function StackPage() {
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-3xl font-bold tracking-tight truncate">{stack.projectName}</h1>
+              <h1 className="text-2xl font-bold tracking-tight truncate font-mono">{stack.projectName}</h1>
               <StackUpdateBadge
                 count={stackUpdatesCount}
                 onUpdate={handleStackUpdate}
@@ -275,7 +276,10 @@ export function StackPage() {
                 updatePending={updateStackMutation.isPending}
               />
             </div>
-            <p className="text-muted-foreground truncate">{stack.directory}</p>
+            <div className="mt-1 flex items-center gap-2 flex-wrap">
+              <p className="text-sm text-muted-foreground truncate font-mono">{stack.directory}</p>
+              <GitStatus stack={stack} />
+            </div>
           </div>
           <Button
             variant="outline"

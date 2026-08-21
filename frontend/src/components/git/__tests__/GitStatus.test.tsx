@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
 
 const mockUseGitStatus = vi.fn()
@@ -35,72 +36,104 @@ const mockStack = {
   gitBehind: 0,
 }
 
+function gitData(overrides: Record<string, unknown> = {}) {
+  return {
+    branch: 'main',
+    commit: 'abc123',
+    commitShort: 'abc1234',
+    commitMessage: 'test',
+    commitAuthor: 'test',
+    commitDate: '2024-01-01',
+    dirty: false,
+    dirtyCount: 0,
+    ahead: 0,
+    behind: 0,
+    ...overrides,
+  }
+}
+
 describe('GitStatus', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockUseGitPull.mockReturnValue({ mutate: vi.fn(), isPending: false })
   })
 
-  it('shows loading state', () => {
+  it('renders nothing while loading', () => {
     mockUseGitStatus.mockReturnValue({ isLoading: true, error: null, data: null })
-    renderWithProviders(<GitStatus stack={mockStack} />)
-    expect(screen.getByText('Loading git status...')).toBeInTheDocument()
+    const { container } = renderWithProviders(<GitStatus stack={mockStack} />)
+    expect(container).toBeEmptyDOMElement()
   })
 
-  it('shows not a git repo message when fetch fails', () => {
+  it('renders nothing when the directory is not a git repository', () => {
     mockUseGitStatus.mockReturnValue({ isLoading: false, error: new Error('fail'), data: null })
-    renderWithProviders(<GitStatus stack={mockStack} />)
-    expect(screen.getByText('This directory is not a git repository.')).toBeInTheDocument()
+    const { container } = renderWithProviders(<GitStatus stack={mockStack} />)
+    expect(container).toBeEmptyDOMElement()
   })
 
-  it('renders branch name', () => {
-    mockUseGitStatus.mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { branch: 'main', commit: 'abc123', commitShort: 'abc1234', commitMessage: 'test', commitAuthor: 'test', commitDate: '2024-01-01', dirty: false, dirtyCount: 0, ahead: 0, behind: 0 },
-    })
+  it('renders branch name in the chip', () => {
+    mockUseGitStatus.mockReturnValue({ isLoading: false, error: null, data: gitData() })
     renderWithProviders(<GitStatus stack={mockStack} />)
     expect(screen.getByText('main')).toBeInTheDocument()
   })
 
-  it('shows ahead badge when ahead > 0', () => {
-    mockUseGitStatus.mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { branch: 'feature', commit: 'def456', commitShort: 'def4567', commitMessage: 'test', commitAuthor: 'test', commitDate: '2024-01-01', dirty: false, dirtyCount: 0, ahead: 3, behind: 0 },
-    })
+  it('shows a clean marker when the working tree is clean', () => {
+    mockUseGitStatus.mockReturnValue({ isLoading: false, error: null, data: gitData() })
     renderWithProviders(<GitStatus stack={mockStack} />)
-    expect(screen.getByText('3 ahead')).toBeInTheDocument()
+    expect(screen.getByText(/clean/)).toBeInTheDocument()
   })
 
-  it('shows behind badge when behind > 0', () => {
+  it('shows a dirty count in the chip when dirty', () => {
     mockUseGitStatus.mockReturnValue({
       isLoading: false,
       error: null,
-      data: { branch: 'main', commit: 'abc123', commitShort: 'abc1234', commitMessage: 'test', commitAuthor: 'test', commitDate: '2024-01-01', dirty: false, dirtyCount: 0, ahead: 0, behind: 2 },
+      data: gitData({ dirty: true, dirtyCount: 3 }),
     })
     renderWithProviders(<GitStatus stack={mockStack} />)
-    expect(screen.getByText('2 behind')).toBeInTheDocument()
+    expect(screen.getByText(/3 dirty/)).toBeInTheDocument()
   })
 
-  it('shows dirty badge when dirty is true', () => {
+  it('shows ahead badge in the popover when ahead > 0', async () => {
+    const user = userEvent.setup()
     mockUseGitStatus.mockReturnValue({
       isLoading: false,
       error: null,
-      data: { branch: 'main', commit: 'abc123', commitShort: 'abc1234', commitMessage: 'test', commitAuthor: 'test', commitDate: '2024-01-01', dirty: true, dirtyCount: 3, ahead: 0, behind: 0 },
+      data: gitData({ branch: 'feature', ahead: 3 }),
     })
     renderWithProviders(<GitStatus stack={mockStack} />)
-    expect(screen.getByText('3 uncommitted changes')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Git status/ }))
+    expect(await screen.findByText('3 ahead')).toBeInTheDocument()
   })
 
-  it('renders pull buttons', () => {
+  it('shows behind badge in the popover when behind > 0', async () => {
+    const user = userEvent.setup()
     mockUseGitStatus.mockReturnValue({
       isLoading: false,
       error: null,
-      data: { branch: 'main', commit: 'abc123', commitShort: 'abc1234', commitMessage: 'test', commitAuthor: 'test', commitDate: '2024-01-01', dirty: false, dirtyCount: 0, ahead: 0, behind: 0 },
+      data: gitData({ behind: 2 }),
     })
     renderWithProviders(<GitStatus stack={mockStack} />)
-    expect(screen.getByText('Git Pull')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Git status/ }))
+    expect(await screen.findByText('2 behind')).toBeInTheDocument()
+  })
+
+  it('shows dirty badge in the popover when dirty is true', async () => {
+    const user = userEvent.setup()
+    mockUseGitStatus.mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: gitData({ dirty: true, dirtyCount: 3 }),
+    })
+    renderWithProviders(<GitStatus stack={mockStack} />)
+    await user.click(screen.getByRole('button', { name: /Git status/ }))
+    expect(await screen.findByText('3 uncommitted changes')).toBeInTheDocument()
+  })
+
+  it('renders pull buttons in the popover', async () => {
+    const user = userEvent.setup()
+    mockUseGitStatus.mockReturnValue({ isLoading: false, error: null, data: gitData() })
+    renderWithProviders(<GitStatus stack={mockStack} />)
+    await user.click(screen.getByRole('button', { name: /Git status/ }))
+    expect(await screen.findByText('Git Pull')).toBeInTheDocument()
     expect(screen.getByText('Pull & Redeploy')).toBeInTheDocument()
   })
 })

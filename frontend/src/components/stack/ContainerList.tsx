@@ -77,8 +77,8 @@ export function ContainerList({ containers }: ContainerListProps) {
           <TableBody>
             {filtered.map((container) => (
               <TableRow key={container.id}>
-                <TableCell className="font-medium">{container.name}</TableCell>
-                <TableCell className="text-sm text-muted-foreground">{container.image}</TableCell>
+                <TableCell className="font-medium font-mono text-[13px]">{container.name}</TableCell>
+                <TableCell className="text-sm text-muted-foreground font-mono">{container.image}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
                     {container.state === 'running' && <Play className="h-3 w-3 text-success" aria-hidden="true" />}
@@ -110,8 +110,8 @@ export function ContainerList({ containers }: ContainerListProps) {
           <div key={container.id} className="rounded-lg border p-4 space-y-3">
             <div className="flex items-start justify-between gap-2">
               <div className="flex-1 min-w-0">
-                <h3 className="font-medium truncate">{container.name}</h3>
-                <p className="text-sm text-muted-foreground truncate">{container.image}</p>
+                <h3 className="font-medium font-mono truncate">{container.name}</h3>
+                <p className="text-sm text-muted-foreground font-mono truncate">{container.image}</p>
               </div>
               <div className="flex items-center gap-2">
                 {container.state === 'running' && <Play className="h-4 w-4 text-success" aria-hidden="true" />}

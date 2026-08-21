@@ -1,5 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Download, GitBranch, ArrowUp, ArrowDown, FileWarning } from 'lucide-react'
 import { useGitStatus, useGitPull } from '@/hooks/useGit'
 import { useState } from 'react'
@@ -11,6 +12,11 @@ interface GitStatusProps {
   stack: Stack
 }
 
+/**
+ * Compact git chip for the stack header. Renders nothing while loading and
+ * nothing at all for non-git directories; details and pull actions live in a
+ * popover behind the chip.
+ */
 export function GitStatus({ stack }: GitStatusProps) {
   const { data: gitStatus, isLoading, error } = useGitStatus(stack.id)
   const pullMutation = useGitPull()
@@ -23,30 +29,8 @@ export function GitStatus({ stack }: GitStatusProps) {
 
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  if (isLoading) {
-    return (
-      <div className="rounded-lg border bg-card p-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <GitBranch className="h-4 w-4 text-muted-foreground" />
-          <h3 className="text-sm font-medium">Git Status</h3>
-        </div>
-        <div className="text-sm text-muted-foreground">Loading git status...</div>
-      </div>
-    )
-  }
-
-  if (error || !gitStatus) {
-    return (
-      <div className="rounded-lg border bg-card p-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <GitBranch className="h-4 w-4 text-muted-foreground" />
-          <h3 className="text-sm font-medium">Git Status</h3>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          This directory is not a git repository.
-        </p>
-      </div>
-    )
+  if (isLoading || error || !gitStatus) {
+    return null
   }
 
   const handlePull = (redeploy = false) => {
@@ -78,12 +62,66 @@ export function GitStatus({ stack }: GitStatusProps) {
 
   return (
     <>
-      <div className="rounded-lg border bg-card p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <GitBranch className="h-4 w-4 text-muted-foreground" />
-            <h3 className="text-sm font-medium">Git Status</h3>
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-0.5 text-xs font-mono text-info hover:bg-accent transition-colors"
+            aria-label={`Git status: ${gitStatus.branch}, ${gitStatus.dirty ? `${gitStatus.dirtyCount} uncommitted changes` : 'clean'}`}
+          >
+            <GitBranch className="h-3 w-3" aria-hidden="true" />
+            {gitStatus.branch}
+            <span className={gitStatus.dirty ? 'text-warning' : 'text-muted-foreground'}>
+              · {gitStatus.dirty ? `${gitStatus.dirtyCount} dirty` : 'clean'}
+            </span>
+            {gitStatus.ahead > 0 && (
+              <span className="inline-flex items-center text-success">
+                <ArrowUp className="h-3 w-3" aria-hidden="true" />
+                {gitStatus.ahead}
+              </span>
+            )}
+            {gitStatus.behind > 0 && (
+              <span className="inline-flex items-center text-warning">
+                <ArrowDown className="h-3 w-3" aria-hidden="true" />
+                {gitStatus.behind}
+              </span>
+            )}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-96 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="font-mono text-xs gap-1.5">
+              <GitBranch className="h-3 w-3" />
+              {gitStatus.branch}
+            </Badge>
+
+            {gitStatus.ahead > 0 && (
+              <Badge variant="secondary" className="text-xs gap-1 text-success">
+                <ArrowUp className="h-3 w-3" />
+                {gitStatus.ahead} ahead
+              </Badge>
+            )}
+            {gitStatus.behind > 0 && (
+              <Badge variant="secondary" className="text-xs gap-1 text-warning">
+                <ArrowDown className="h-3 w-3" />
+                {gitStatus.behind} behind
+              </Badge>
+            )}
+
+            {gitStatus.dirty && (
+              <Badge variant="destructive" className="text-xs gap-1">
+                <FileWarning className="h-3 w-3" />
+                {gitStatus.dirtyCount} uncommitted change{gitStatus.dirtyCount !== 1 ? 's' : ''}
+              </Badge>
+            )}
+
+            {gitStatus.commitShort && (
+              <span className="text-xs text-muted-foreground font-mono" title={gitStatus.commitMessage}>
+                {gitStatus.commitShort}
+              </span>
+            )}
           </div>
+
           <div className="flex gap-2">
             <Button
               variant="outline"
@@ -104,48 +142,15 @@ export function GitStatus({ stack }: GitStatusProps) {
               Pull & Redeploy
             </Button>
           </div>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline" className="font-mono text-xs gap-1.5">
-            <GitBranch className="h-3 w-3" />
-            {gitStatus.branch}
-          </Badge>
-
-          {gitStatus.ahead > 0 && (
-            <Badge variant="secondary" className="text-xs gap-1 text-success">
-              <ArrowUp className="h-3 w-3" />
-              {gitStatus.ahead} ahead
-            </Badge>
-          )}
-          {gitStatus.behind > 0 && (
-            <Badge variant="secondary" className="text-xs gap-1 text-warning">
-              <ArrowDown className="h-3 w-3" />
-              {gitStatus.behind} behind
-            </Badge>
-          )}
-
-          {gitStatus.dirty && (
-            <Badge variant="destructive" className="text-xs gap-1">
-              <FileWarning className="h-3 w-3" />
-              {gitStatus.dirtyCount} uncommitted change{gitStatus.dirtyCount !== 1 ? 's' : ''}
-            </Badge>
-          )}
-
-          {gitStatus.commitShort && (
-            <span className="text-xs text-muted-foreground font-mono" title={gitStatus.commitMessage}>
-              {gitStatus.commitShort}
-            </span>
-          )}
-        </div>
-
-        <GitSettingsSection
-          directoryPath={stack.directory}
-          remoteURL={gitStatus.remote}
-          open={settingsOpen}
-          onToggle={() => setSettingsOpen(!settingsOpen)}
-        />
-      </div>
+          <GitSettingsSection
+            directoryPath={stack.directory}
+            remoteURL={gitStatus.remote}
+            open={settingsOpen}
+            onToggle={() => setSettingsOpen(!settingsOpen)}
+          />
+        </PopoverContent>
+      </Popover>
 
       {showConfirmDialog && confirmDialogProps && (
         <ConfirmDialog

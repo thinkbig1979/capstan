@@ -228,12 +228,7 @@ export function DashboardPage() {
   if (isLoading) {
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-            <p className="text-muted-foreground">Loading...</p>
-          </div>
-        </div>
+        <p className="text-sm text-muted-foreground">Loading...</p>
         <div className="h-10 w-full bg-muted animate-pulse rounded-md" />
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <StackCardSkeleton />
@@ -252,12 +247,7 @@ export function DashboardPage() {
 
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-            <p className="text-muted-foreground">Error loading data</p>
-          </div>
-        </div>
+        <p className="text-sm text-muted-foreground">Error loading data</p>
         <Card className="border-destructive">
           <CardContent className="pt-6">
             <div className="flex items-start gap-4">
@@ -303,7 +293,7 @@ export function DashboardPage() {
             { value: 'overview', label: 'Metrics' },
             { value: 'stacks', label: 'Stacks' },
             { value: 'containers', label: 'Containers' },
-            { value: 'directories', label: 'Dirs' },
+            { value: 'directories', label: 'Directories' },
             {
               value: 'updates',
               label: isScanningUpdates ? (

@@ -9,7 +9,6 @@ import { LogViewer } from './LogViewer'
 import { StackUpdatesTab } from './StackUpdatesTab'
 import { BackupsTab } from './BackupsTab'
 import { OperationProgress } from './OperationProgress'
-import { GitStatus as GitStatusComponent } from '../git/GitStatus'
 import { GitHistory } from '../git/GitHistory'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -203,7 +202,6 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
 
   return (
     <div className="h-full flex flex-col gap-4">
-      <GitStatusComponent stack={stack} />
       <Tabs value={activeTab} onValueChange={onTabChange} className="flex-1">
         <ResponsiveTabsList
           value={activeTab}
