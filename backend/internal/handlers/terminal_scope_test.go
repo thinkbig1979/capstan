@@ -351,3 +351,42 @@ func TestTerminalFreesSlotOnAbnormalTermination(t *testing.T) {
 
 // The host-wide ceiling itself is covered in
 // internal/services/terminal_test.go, where the limit field is reachable.
+
+// TestTerminalAllowsContainerByID — the frontend has always sent the docker
+// container ID in the :container path segment (TerminalToolbar keys its select
+// on container.id, and the Overview Shell action follows it), and docker exec
+// accepts either name or ID. The membership check added in agent-os-7u5
+// matched names only, which denied every legitimate client with
+// "Container does not belong to this stack".
+func TestTerminalAllowsContainerByID(t *testing.T) {
+	lister := &fakeContainerLister{containersByProject: map[string][]string{
+		"proj-a": {"proj-a-web-1"},
+	}}
+	f := newTerminalFixture(t, NewConnectionManager(5), lister)
+
+	// The fake lister assigns each container the ID "id-<name>".
+	code, text := dialTerminal(t, f, "stack-a", "id-proj-a-web-1")
+
+	if code == CloseCodeAuthFailure {
+		t.Fatalf("container ID in its own stack was rejected by the scoping check: %d %q", code, text)
+	}
+	if rows := deniedRows(t, f.db); len(rows) != 0 {
+		t.Errorf("action log has %d terminal_denied rows for an allowed container ID, want 0", len(rows))
+	}
+}
+
+// TestTerminalStillRejectsForeignContainerByID — accepting IDs must not widen
+// the scope: another stack's container ID stays denied.
+func TestTerminalStillRejectsForeignContainerByID(t *testing.T) {
+	lister := &fakeContainerLister{containersByProject: map[string][]string{
+		"proj-a": {"proj-a-web-1"},
+		"proj-b": {"proj-b-db-1"},
+	}}
+	f := newTerminalFixture(t, NewConnectionManager(5), lister)
+
+	code, _ := dialTerminal(t, f, "stack-a", "id-proj-b-db-1")
+
+	if code != CloseCodeAuthFailure {
+		t.Fatalf("close code = %d, want %d", code, CloseCodeAuthFailure)
+	}
+}

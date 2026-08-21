@@ -170,7 +170,11 @@ func (h *TerminalHandler) assertContainerInStack(c *gin.Context, conn *Connectio
 	}
 
 	for _, ctr := range containers {
-		if ctr.Name == containerName {
+		// The frontend sends the docker container ID in the :container path
+		// segment (TerminalToolbar keys its select on container.id); docker
+		// exec accepts either form, so membership must too. Exact match only —
+		// no ID-prefix shortening, which could be probed.
+		if ctr.Name == containerName || ctr.ID == containerName {
 			return nil
 		}
 	}
