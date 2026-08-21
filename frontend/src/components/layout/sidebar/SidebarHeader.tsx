@@ -3,7 +3,6 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
   ArrowUpCircle,
-  ArrowUpDown,
   Boxes,
   ListChecks,
   PanelLeftClose,
@@ -22,8 +21,6 @@ interface SidebarHeaderProps {
   onSearchChange: (value: string) => void
   statusFilter: StackStatus | 'all'
   onStatusFilterChange: (status: StackStatus | 'all') => void
-  sortBy: 'name' | 'status'
-  onToggleSort: () => void
 }
 
 export function SidebarHeader({
@@ -36,8 +33,6 @@ export function SidebarHeader({
   onSearchChange,
   statusFilter,
   onStatusFilterChange,
-  sortBy,
-  onToggleSort,
 }: SidebarHeaderProps) {
   return (
     <div className="p-3 border-b space-y-2">
@@ -141,16 +136,6 @@ export function SidebarHeader({
             )}
           </button>
         ))}
-        <div className="flex-1" />
-        <button
-          type="button"
-          onClick={onToggleSort}
-          className="inline-flex items-center gap-0.5 h-5 px-1.5 rounded text-[10px] text-muted-foreground hover:bg-muted transition-colors"
-          title={`Sort by ${sortBy === 'name' ? 'name' : 'status'}. Click to toggle.`}
-        >
-          <ArrowUpDown className="h-2.5 w-2.5" />
-          {sortBy === 'name' ? 'A-Z' : 'St'}
-        </button>
       </div>
     </div>
   )

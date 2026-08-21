@@ -43,6 +43,10 @@ vi.mock('@/components/stack/StackDetail', () => ({
 vi.mock('@/components/stack/StackUpdateBadge', () => ({
   StackUpdateBadge: () => <div data-testid="stack-update-badge" />,
 }))
+// The git header chip has its own direct test (GitStatus.test.tsx).
+vi.mock('@/components/git/GitStatus', () => ({
+  GitStatus: () => <div data-testid="git-status-chip" />,
+}))
 vi.mock('@/components/updates/UpdateJobLog', () => ({
   UpdateJobLog: () => <div data-testid="update-job-log" />,
 }))
@@ -122,6 +126,21 @@ describe('StackPage', () => {
 
       await waitFor(() => expect(screen.getByTestId('active-tab')).toHaveTextContent('logs'))
       expect(window.location.pathname).toBe('/stacks/s1/logs')
+    })
+
+    // The 11-tab layout merged into 6 tabs; old deep links must land on the
+    // merged tab (with the Activity section in ?view=).
+    it.each([
+      ['/stacks/s1/compose', '/stacks/s1/editor', ''],
+      ['/stacks/s1/environment', '/stacks/s1/editor', ''],
+      ['/stacks/s1/split', '/stacks/s1/editor', ''],
+      ['/stacks/s1/history', '/stacks/s1/activity', '?view=history'],
+      ['/stacks/s1/updates', '/stacks/s1/activity', '?view=updates'],
+      ['/stacks/s1/backups', '/stacks/s1/activity', '?view=backups'],
+    ])('redirects the old %s deep link', async (from, toPath, toSearch) => {
+      renderPage(from)
+      await waitFor(() => expect(window.location.pathname).toBe(toPath))
+      expect(window.location.search).toBe(toSearch)
     })
   })
 

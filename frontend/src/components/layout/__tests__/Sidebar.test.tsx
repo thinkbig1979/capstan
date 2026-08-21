@@ -212,10 +212,12 @@ describe('Sidebar', () => {
     expect(screen.getAllByText('No stacks match filters').length).toBeGreaterThan(0)
   })
 
-  it('toggles sort order between name and status', async () => {
+  // The sidebar sort toggle was removed in the phase-2 redesign — sorting is
+  // the fleet table's job; the sidebar always lists by name.
+  it('lists stacks sorted by name', async () => {
     listMock.mockResolvedValueOnce([
-      { id: 's1', projectName: 'alpha', status: 'running', containers: [], directory: '/stacks', isGitRepo: false, gitDirty: false },
       { id: 's2', projectName: 'bravo', status: 'stopped', containers: [], directory: '/stacks', isGitRepo: false, gitDirty: false },
+      { id: 's1', projectName: 'alpha', status: 'running', containers: [], directory: '/stacks', isGitRepo: false, gitDirty: false },
       { id: 's3', projectName: 'charlie', status: 'error', containers: [], directory: '/stacks', isGitRepo: false, gitDirty: false },
     ] as never)
     renderSidebar()
@@ -229,17 +231,7 @@ describe('Sidebar', () => {
       .map((el) => el.textContent)
     expect(nameOrder).toEqual(['alpha', 'bravo', 'charlie'])
 
-    await act(async () => {
-      fireEvent.click(screen.getAllByTitle(/Sort by name/)[0])
-    })
-
-    await waitFor(() => expect(screen.getAllByTitle(/Sort by status/).length).toBeGreaterThan(0))
-    const statusOrder = screen
-      .getAllByText(/^(alpha|bravo|charlie)$/)
-      .slice(0, 3)
-      .map((el) => el.textContent)
-    // error < running < stopped alphabetically -> charlie, alpha, bravo.
-    expect(statusOrder).toEqual(['charlie', 'alpha', 'bravo'])
+    expect(screen.queryByTitle(/Sort by/)).not.toBeInTheDocument()
   })
 
   it('persists the search query to localStorage and restores it on remount', async () => {

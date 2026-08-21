@@ -3,7 +3,13 @@ import { StackDetail } from '@/components/stack/StackDetail'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { AlertCircle, RefreshCw, Home, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
+import { AlertCircle, RefreshCw, Home, Trash2, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { classifyError } from '@/lib/error-handler'
@@ -41,6 +47,23 @@ export function StackPage() {
   useEffect(() => {
     setSelectedStack(id ?? null)
   }, [id, setSelectedStack])
+
+  // Old deep-link tabs redirect to the merged tab set: Compose/Environment/
+  // Compose+Env became the Editor split view, History/Updates/Backups became
+  // sections of the Activity tab (the section rides in ?view=).
+  useEffect(() => {
+    if (!id) return
+    const redirects: Record<string, string> = {
+      compose: 'editor',
+      environment: 'editor',
+      split: 'editor',
+      history: 'activity?view=history',
+      updates: 'activity?view=updates',
+      backups: 'activity?view=backups',
+    }
+    const target = redirects[activeTab]
+    if (target) navigate(`/stacks/${id}/${target}`, { replace: true })
+  }, [activeTab, id, navigate])
 
   const handleTabChange = (newTab: string) => {
     navigate(`/stacks/${id}/${newTab}`, { replace: true })
@@ -281,16 +304,31 @@ export function StackPage() {
               <GitStatus stack={stack} />
             </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDelete}
-            disabled={isDeleting || deleteMutation.isPending}
-            className="text-destructive hover:text-destructive shrink-0"
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            <span className="hidden sm:inline">Delete Stack</span>
-          </Button>
+          {/* Destructive actions live behind the overflow menu rather than as
+              an always-visible red button in the header. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                className="shrink-0"
+                title="More actions"
+                aria-label="More stack actions"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                disabled={isDeleting || deleteMutation.isPending}
+                onClick={handleDelete}
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete Stack
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         {latestStackJob && (
