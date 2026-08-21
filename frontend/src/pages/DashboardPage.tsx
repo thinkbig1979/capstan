@@ -10,7 +10,7 @@ import { StackCardSkeleton, MetricsSkeleton, DialogLoadingFallback } from '@/com
 import { AlertCircle, RefreshCw, Plus } from 'lucide-react'
 import { useStackStatusAnimation } from '@/hooks/useStackStatusAnimation'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
-import { useDashboardMetrics } from '@/hooks/useDashboardMetrics'
+import { useDashboardMetricsContext } from '@/hooks/DashboardMetricsContext'
 import { DashboardMetricsTab } from '@/components/dashboard/DashboardMetricsTab'
 import { ContainersOverviewTab } from '@/components/dashboard/ContainersOverviewTab'
 import { ImagesTab } from '@/components/dashboard/ImagesTab'
@@ -19,6 +19,8 @@ import { NetworksTab } from '@/components/dashboard/NetworksTab'
 import { BuildCacheTab } from '@/components/dashboard/BuildCacheTab'
 import { UpdatesTab } from '@/components/dashboard/UpdatesTab'
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader'
+import { AttentionStrip } from '@/components/dashboard/AttentionStrip'
+import { HostStrip, type HostView } from '@/components/dashboard/HostStrip'
 import { StacksTab } from '@/components/dashboard/StacksTab'
 import { DirectoriesTab } from '@/components/dashboard/DirectoriesTab'
 import { classifyError } from '@/lib/error-handler'
@@ -47,9 +49,11 @@ function sortDirectories(items: ConfiguredDir[] | undefined) {
 
 export function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const activeTab = searchParams.get('tab') || 'overview'
+  // The fleet (stacks) view is the landing tab; Metrics keeps its historical
+  // 'overview' URL value so old ?tab=overview links still work.
+  const activeTab = searchParams.get('tab') || 'stacks'
   const setActiveTab = useCallback((tab: string) => {
-    setSearchParams(tab === 'overview' ? {} : { tab }, { replace: true })
+    setSearchParams(tab === 'stacks' ? {} : { tab }, { replace: true })
   }, [setSearchParams])
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   // Once opened, keep CreateStackDialog mounted for the rest of the session so
@@ -77,7 +81,7 @@ export function DashboardPage() {
   )
   const [isRefreshing, setIsRefreshing] = useState(false)
 
-  const { containers: metricsContainers, aggregates, latestMetrics, isConnected: metricsConnected, ws: metricsWs } = useDashboardMetrics()
+  const { containers: metricsContainers, aggregates, latestMetrics, isConnected: metricsConnected, ws: metricsWs } = useDashboardMetricsContext()
 
   useEffect(() => {
     localStorage.setItem('dashboard-sort', sortBy)
@@ -290,9 +294,8 @@ export function DashboardPage() {
           onValueChange={setActiveTab}
           variant="line"
           tabs={[
-            { value: 'overview', label: 'Metrics' },
             { value: 'stacks', label: 'Stacks' },
-            { value: 'containers', label: 'Containers' },
+            { value: 'overview', label: 'Metrics' },
             { value: 'directories', label: 'Directories' },
             {
               value: 'updates',
@@ -305,10 +308,6 @@ export function DashboardPage() {
                 'Updates'
               ),
             },
-            { value: 'images', label: 'Images' },
-            { value: 'volumes', label: 'Volumes' },
-            { value: 'networks', label: 'Networks' },
-            { value: 'build-cache', label: 'Build Cache' },
           ]}
         />
 
@@ -329,8 +328,14 @@ export function DashboardPage() {
           </ErrorBoundary>
         </TabsContent>
 
-        <TabsContent value="stacks" className="mt-4">
+        <TabsContent value="stacks" className="mt-4 space-y-4">
           <ErrorBoundary>
+            <AttentionStrip
+              stacks={stacks || []}
+              onShowUpdates={() => setActiveTab('updates')}
+              onFilterStopped={() => setStatusFilter('stopped')}
+              onFilterError={() => setStatusFilter('error')}
+            />
             <StacksTab
               stacks={stacks || []}
               filteredStacks={filteredStacks}
@@ -352,11 +357,20 @@ export function DashboardPage() {
               deletePending={deleteMutation.isPending}
               isAnimating={isAnimating}
             />
+            <HostStrip
+              stats={dashboardStats}
+              onNavigate={(view: HostView) => setActiveTab(view)}
+            />
           </ErrorBoundary>
         </TabsContent>
 
-        <TabsContent value="containers" className="mt-4">
+        <TabsContent value="containers" className="mt-4 space-y-4">
           <ErrorBoundary>
+            <HostStrip
+              stats={dashboardStats}
+              activeView="containers"
+              onNavigate={(view: HostView) => setActiveTab(view)}
+            />
             <ContainersOverviewTab stats={dashboardStats} latestMetrics={latestMetrics} metricsStatus={metricsWs.status} />
           </ErrorBoundary>
         </TabsContent>
@@ -377,26 +391,46 @@ export function DashboardPage() {
           </ErrorBoundary>
         </TabsContent>
 
-        <TabsContent value="images" className="mt-4">
+        <TabsContent value="images" className="mt-4 space-y-4">
           <ErrorBoundary>
+            <HostStrip
+              stats={dashboardStats}
+              activeView="images"
+              onNavigate={(view: HostView) => setActiveTab(view)}
+            />
             <ImagesTab />
           </ErrorBoundary>
         </TabsContent>
 
-        <TabsContent value="volumes" className="mt-4">
+        <TabsContent value="volumes" className="mt-4 space-y-4">
           <ErrorBoundary>
+            <HostStrip
+              stats={dashboardStats}
+              activeView="volumes"
+              onNavigate={(view: HostView) => setActiveTab(view)}
+            />
             <VolumesTab />
           </ErrorBoundary>
         </TabsContent>
 
-        <TabsContent value="networks" className="mt-4">
+        <TabsContent value="networks" className="mt-4 space-y-4">
           <ErrorBoundary>
+            <HostStrip
+              stats={dashboardStats}
+              activeView="networks"
+              onNavigate={(view: HostView) => setActiveTab(view)}
+            />
             <NetworksTab />
           </ErrorBoundary>
         </TabsContent>
 
-        <TabsContent value="build-cache" className="mt-4">
+        <TabsContent value="build-cache" className="mt-4 space-y-4">
           <ErrorBoundary>
+            <HostStrip
+              stats={dashboardStats}
+              activeView="build-cache"
+              onNavigate={(view: HostView) => setActiveTab(view)}
+            />
             <BuildCacheTab />
           </ErrorBoundary>
         </TabsContent>

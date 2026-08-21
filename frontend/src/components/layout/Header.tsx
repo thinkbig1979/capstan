@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { HeaderVitals } from '@/components/layout/HeaderVitals'
 import { useUIStore } from '@/stores/uiStore'
 import { useAuth } from '@/hooks/useAuth'
 import { toast } from 'sonner'
@@ -182,6 +183,7 @@ export function Header() {
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <HeaderVitals />
         <Button
           variant="ghost"
           size="icon"

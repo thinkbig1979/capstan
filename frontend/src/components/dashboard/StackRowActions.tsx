@@ -1,5 +1,11 @@
 import { Button } from '@/components/ui/button'
-import { Play, Square, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Play, Square, RefreshCw, Trash2, MoreHorizontal } from 'lucide-react'
 
 interface StackRowActionsProps {
   stackId: string
@@ -47,9 +53,25 @@ export function StackRowActions({
           <RefreshCw className={`h-3.5 w-3.5 ${restartPending ? 'animate-spin' : ''}`} />
         </Button>
       )}
-      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={(e) => onDelete(stackId, stackName, e)} disabled={isDeleting || deletePending} title="Delete" aria-label={`Delete ${stackName}`}>
-        <Trash2 className="h-3.5 w-3.5" />
-      </Button>
+      {/* Destructive actions live behind the overflow menu, not as an
+          always-visible red button next to Start/Stop. */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" className="h-7 w-7" disabled={isDeleting} title="More actions" aria-label={`More actions for ${stackName}`}>
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            disabled={isDeleting || deletePending}
+            onClick={(e) => onDelete(stackId, stackName, e)}
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete {stackName}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 }

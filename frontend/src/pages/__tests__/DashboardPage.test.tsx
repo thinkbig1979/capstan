@@ -41,8 +41,8 @@ vi.mock('sonner', () => ({
 // useDashboardMetrics opens a real WebSocket via useMetricsBase; there is no WS
 // shim in test/setup.ts and the hook has its own dedicated coverage, so it's
 // mocked here to keep this suite focused on page-level wiring.
-vi.mock('@/hooks/useDashboardMetrics', () => ({
-  useDashboardMetrics: () => ({
+vi.mock('@/hooks/DashboardMetricsContext', () => ({
+  useDashboardMetricsContext: () => ({
     containers: [],
     aggregates: {},
     latestMetrics: {},
@@ -97,6 +97,14 @@ vi.mock('@/components/dashboard/NetworksTab', () => ({
 }))
 vi.mock('@/components/dashboard/BuildCacheTab', () => ({
   BuildCacheTab: () => <div data-testid="tab-build-cache" />,
+}))
+vi.mock('@/components/dashboard/AttentionStrip', () => ({
+  AttentionStrip: () => <div data-testid="attention-strip" />,
+}))
+vi.mock('@/components/dashboard/HostStrip', () => ({
+  HostStrip: ({ activeView }: { activeView?: string }) => (
+    <div data-testid="host-strip" data-active-view={activeView} />
+  ),
 }))
 
 import { DashboardPage } from '../DashboardPage'
@@ -158,8 +166,14 @@ describe('DashboardPage', () => {
   })
 
   describe('tab routing', () => {
-    it('renders the Metrics tab by default when no ?tab is present', async () => {
+    it('renders the Stacks (fleet) tab by default when no ?tab is present', async () => {
       renderPage('/')
+      await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument())
+      expect(screen.queryByTestId('tab-overview')).not.toBeInTheDocument()
+    })
+
+    it('keeps the historical ?tab=overview URL working for Metrics', async () => {
+      renderPage('/?tab=overview')
       await waitFor(() => expect(screen.getByTestId('tab-overview')).toBeInTheDocument())
       expect(screen.queryByTestId('tab-stacks')).not.toBeInTheDocument()
     })
@@ -173,15 +187,15 @@ describe('DashboardPage', () => {
     it('switches tabs and updates the URL when a tab trigger is clicked', async () => {
       const user = userEvent.setup()
       renderPage('/')
-      await waitFor(() => expect(screen.getByTestId('tab-overview')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument())
 
       // Radix Tabs switches on focus (default activationMode="automatic"), which
       // fireEvent.click does not simulate — userEvent.click does.
-      await user.click(screen.getByRole('tab', { name: 'Stacks' }))
+      await user.click(screen.getByRole('tab', { name: 'Metrics' }))
 
-      await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument())
-      expect(screen.queryByTestId('tab-overview')).not.toBeInTheDocument()
-      expect(window.location.search).toBe('?tab=stacks')
+      await waitFor(() => expect(screen.getByTestId('tab-overview')).toBeInTheDocument())
+      expect(screen.queryByTestId('tab-stacks')).not.toBeInTheDocument()
+      expect(window.location.search).toBe('?tab=overview')
     })
   })
 
@@ -193,7 +207,7 @@ describe('DashboardPage', () => {
       renderPage('/')
 
       expect(screen.getByText('Loading...')).toBeInTheDocument()
-      expect(screen.queryByTestId('tab-overview')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('tab-stacks')).not.toBeInTheDocument()
       expect(screen.queryByTestId('dashboard-header')).not.toBeInTheDocument()
     })
   })
@@ -207,7 +221,7 @@ describe('DashboardPage', () => {
 
       await waitFor(() => expect(screen.getByText('Failed to load dashboard')).toBeInTheDocument(), { timeout: 3000 })
       expect(screen.getByText('stacks down')).toBeInTheDocument()
-      expect(screen.queryByTestId('tab-overview')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('tab-stacks')).not.toBeInTheDocument()
 
       listStacks.mockClear()
       fireEvent.click(screen.getByRole('button', { name: /Retry/ }))

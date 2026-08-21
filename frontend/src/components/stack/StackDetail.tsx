@@ -2,14 +2,11 @@ import { useEffect, Suspense, lazy } from 'react'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { ResponsiveTabsList } from '@/components/ui/responsive-tabs-list'
 import { ContainerList } from './ContainerList'
-import { EnvEditor } from './EnvEditor'
 import { ComposeEnvSplit } from './ComposeEnvSplit'
 import { TerminalComponent } from './Terminal'
 import { LogViewer } from './LogViewer'
-import { StackUpdatesTab } from './StackUpdatesTab'
-import { BackupsTab } from './BackupsTab'
+import { ActivityTab } from './ActivityTab'
 import { OperationProgress } from './OperationProgress'
-import { GitHistory } from '../git/GitHistory'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -22,15 +19,13 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useStreamingOperation } from '@/hooks/useStreamingOperation'
 import { useAutoUpdatePolicies } from '@/hooks/useResources'
 import { toast } from 'sonner'
-import { EditorSkeleton, MetricsSkeleton } from '@/components/LoadingSkeleton'
+import { MetricsSkeleton } from '@/components/LoadingSkeleton'
 import type { Stack, AutoUpdatePolicy } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
 
-// Lazy: both pull in a heavy vendor bundle (codemirror / recharts) that most
-// stack detail visits don't need — only the Compose and Metrics tabs do.
-const ComposeEditor = lazy(() =>
-  import('./ComposeEditor').then((m) => ({ default: m.ComposeEditor })),
-)
+// Lazy: pulls in recharts, which most stack detail visits don't need — only
+// the Metrics tab does. (The Editor tab's codemirror is lazy inside
+// ComposeEnvSplit.)
 const MetricsPanel = lazy(() =>
   import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })),
 )
@@ -209,15 +204,11 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
           variant="line"
           tabs={[
             { value: 'overview', label: 'Overview' },
-            { value: 'history', label: 'History' },
-            { value: 'compose', label: 'Compose' },
-            { value: 'environment', label: 'Environment' },
-            { value: 'split', label: 'Compose + Env' },
+            { value: 'editor', label: 'Editor' },
             { value: 'logs', label: 'Logs' },
             { value: 'terminal', label: 'Terminal' },
             { value: 'metrics', label: 'Metrics' },
-            { value: 'updates', label: 'Updates' },
-            { value: 'backups', label: 'Backups' },
+            { value: 'activity', label: 'Activity' },
           ]}
         />
 
@@ -237,27 +228,9 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
           </TabErrorBoundary>
         </TabsContent>
 
-        <TabsContent value="history" className="mt-4">
-          <TabErrorBoundary>
-            <GitHistory stackId={stack.id} />
-          </TabErrorBoundary>
-        </TabsContent>
-
-        <TabsContent value="compose" className="mt-4">
-          <TabErrorBoundary>
-            <Suspense fallback={<EditorSkeleton />}>
-              <ComposeEditor stackId={stack.id} />
-            </Suspense>
-          </TabErrorBoundary>
-        </TabsContent>
-
-        <TabsContent value="environment" className="mt-4">
-          <TabErrorBoundary>
-            <EnvEditor stackId={stack.id} />
-          </TabErrorBoundary>
-        </TabsContent>
-
-        <TabsContent value="split" className="mt-4">
+        <TabsContent value="editor" className="mt-4">
+          {/* Compose + Environment as one split view; the standalone Compose
+              and Environment tabs merged into it. */}
           <ComposeEnvSplit stackId={stack.id} />
         </TabsContent>
 
@@ -281,15 +254,9 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
           </TabErrorBoundary>
         </TabsContent>
 
-        <TabsContent value="updates" className="mt-4">
+        <TabsContent value="activity" className="mt-4">
           <TabErrorBoundary>
-            <StackUpdatesTab stackId={stack.id} />
-          </TabErrorBoundary>
-        </TabsContent>
-
-        <TabsContent value="backups" className="mt-4">
-          <TabErrorBoundary>
-            <BackupsTab stackId={stack.id} />
+            <ActivityTab stackId={stack.id} />
           </TabErrorBoundary>
         </TabsContent>
       </Tabs>

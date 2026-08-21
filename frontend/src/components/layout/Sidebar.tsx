@@ -33,7 +33,6 @@ export function Sidebar() {
     statusFilter,
     setStatusFilter,
     sortBy,
-    setSortBy,
     hasFilters,
     clearFilters,
   } = useSidebarFilters();
@@ -86,8 +85,6 @@ export function Sidebar() {
     onSearchChange: setSearchQuery,
     statusFilter,
     onStatusFilterChange: setStatusFilter,
-    sortBy,
-    onToggleSort: () => setSortBy(sortBy === "name" ? "status" : "name"),
     hasFilters,
     onClearFilters: clearFilters,
     selectedIds,

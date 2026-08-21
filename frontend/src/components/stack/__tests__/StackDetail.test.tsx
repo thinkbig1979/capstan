@@ -104,8 +104,7 @@ describe('StackDetail — tabs', () => {
     renderDetail()
 
     for (const label of [
-      'Overview', 'History', 'Compose', 'Environment', 'Compose + Env',
-      'Logs', 'Terminal', 'Metrics', 'Updates', 'Backups',
+      'Overview', 'Editor', 'Logs', 'Terminal', 'Metrics', 'Activity',
     ]) {
       expect(await screen.findByRole('tab', { name: label })).toBeInTheDocument()
     }
@@ -122,25 +121,35 @@ describe('StackDetail — tabs', () => {
   })
 
   it.each([
-    ['history', 'git-history'],
-    ['environment', 'env-editor'],
-    ['split', 'compose-env-split'],
+    ['editor', 'compose-env-split'],
     ['logs', 'log-viewer'],
     ['terminal', 'terminal'],
-    ['updates', 'updates-tab'],
-    ['backups', 'backups-tab'],
+    // Activity defaults to its History section.
+    ['activity', 'git-history'],
   ])('renders the %s tab content when it is active', async (tab, testid) => {
     renderDetail({ activeTab: tab })
     expect(await screen.findByTestId(testid)).toBeInTheDocument()
   })
 
   it.each([
-    ['compose', 'compose-editor'],
     ['metrics', 'metrics-panel'],
   ])('resolves the lazily-loaded %s tab behind Suspense', async (tab, testid) => {
     renderDetail({ activeTab: tab })
     // Lazy imports mean this is only present after the chunk resolves.
     expect(await screen.findByTestId(testid)).toBeInTheDocument()
+  })
+
+  it('switches Activity sections between History, Updates and Backups', async () => {
+    const user = userEvent.setup()
+    renderDetail({ activeTab: 'activity' })
+
+    expect(await screen.findByTestId('git-history')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Updates' }))
+    expect(await screen.findByTestId('updates-tab')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Backups' }))
+    expect(await screen.findByTestId('backups-tab')).toBeInTheDocument()
   })
 
   it('mounts only the active tab, so no inactive tab pays for its children', async () => {

@@ -25,8 +25,6 @@ interface SidebarBodyProps {
   onSearchChange: (value: string) => void
   statusFilter: StackStatus | 'all'
   onStatusFilterChange: (status: StackStatus | 'all') => void
-  sortBy: 'name' | 'status'
-  onToggleSort: () => void
   hasFilters: boolean
   onClearFilters: () => void
   selectedIds: Set<string>
@@ -58,8 +56,6 @@ export function SidebarBody({
   onSearchChange,
   statusFilter,
   onStatusFilterChange,
-  sortBy,
-  onToggleSort,
   hasFilters,
   onClearFilters,
   selectedIds,
@@ -90,8 +86,6 @@ export function SidebarBody({
         onSearchChange={onSearchChange}
         statusFilter={statusFilter}
         onStatusFilterChange={onStatusFilterChange}
-        sortBy={sortBy}
-        onToggleSort={onToggleSort}
       />
 
       {selecting && (
