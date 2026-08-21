@@ -84,12 +84,12 @@ describe('StatusBadge', () => {
       expect(badge.className).toContain('border-success/30')
     })
 
-    it('applies error tone for stopped', () => {
+    it('applies neutral tone for stopped (intentional state, not an error)', () => {
       renderWithProviders(<StatusBadge status="stopped" pulse={false} />)
       const badge = getStatusByText('Stopped')
-      expect(badge.getAttribute('data-tone')).toBe('error')
-      expect(badge.className).toContain('text-destructive')
-      expect(badge.className).toContain('bg-destructive/15')
+      expect(badge.getAttribute('data-tone')).toBe('neutral')
+      expect(badge.className).toContain('text-muted-foreground')
+      expect(badge.className).toContain('bg-muted')
     })
 
     it('applies error tone for error (broken/unreadable stack)', () => {

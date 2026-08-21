@@ -113,7 +113,7 @@ export function StacksTab({
               }
             }}
           >
-            <TableCell className="font-medium" style={{ paddingLeft: `${stackPadding}px` }}>
+            <TableCell className="font-medium font-mono text-[13px]" style={{ paddingLeft: `${stackPadding}px` }}>
               {stack.projectName}
             </TableCell>
             <TableCell className="text-sm text-muted-foreground">
@@ -216,7 +216,7 @@ export function StacksTab({
                       }
                     }}
                   >
-                    <TableCell className="font-medium">{stack.projectName}</TableCell>
+                    <TableCell className="font-medium font-mono text-[13px]">{stack.projectName}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       <button
                         type="button"

@@ -11,7 +11,9 @@ export type Status = 'running' | 'stopped' | 'partial' | 'error' | 'unknown'
 
 const statusConfig: Record<Status, { label: string; tone: StatusTone }> = {
   running: { label: 'Running', tone: 'success' },
-  stopped: { label: 'Stopped', tone: 'error' },
+  // Stopped is a normal, intentional state — neutral, not red. Red is
+  // reserved for actual errors.
+  stopped: { label: 'Stopped', tone: 'neutral' },
   partial: { label: 'Partial', tone: 'warning' },
   // "error" means the stack's compose file is missing/unreadable (Capstan can't
   // resolve its state) — distinct from an intentionally stopped stack.

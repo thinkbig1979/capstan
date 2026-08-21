@@ -12,9 +12,12 @@ interface DashboardHeaderProps {
 export function DashboardHeader({ onRefresh, onCreateStack, isRefreshing, subtitle }: DashboardHeaderProps) {
   return (
     <div className="flex items-center justify-between">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-        {subtitle && <p className="text-muted-foreground tabular-nums">{subtitle}</p>}
+      {/* The page identity lives in the header breadcrumb; this row only
+          carries the fleet summary and actions. */}
+      <div className="min-w-0">
+        {subtitle && (
+          <p className="text-sm text-muted-foreground font-mono tabular-nums truncate">{subtitle}</p>
+        )}
       </div>
       <div className="flex items-center gap-2">
         <Button variant="outline" size="icon" onClick={onRefresh} disabled={isRefreshing} aria-label="Refresh dashboard">

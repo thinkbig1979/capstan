@@ -36,7 +36,7 @@ export function StackRow({ stack, selecting, selected, onToggleSelect, pinned, o
           <SquareIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
         <span className={`h-2 w-2 rounded-full shrink-0 ${dotColor}`} aria-hidden="true" />
-        <span className="flex-1 truncate">{stack.projectName}</span>
+        <span className="flex-1 truncate font-mono text-[12.5px]">{stack.projectName}</span>
       </button>
     )
   }
@@ -53,7 +53,7 @@ export function StackRow({ stack, selecting, selected, onToggleSelect, pinned, o
       aria-label={`${stack.projectName} - ${stack.status}`}
     >
       <span className={`h-2 w-2 rounded-full shrink-0 ${dotColor}`} aria-hidden="true" />
-      <span className="flex-1 truncate">{stack.projectName}</span>
+      <span className="flex-1 truncate font-mono text-[12.5px]">{stack.projectName}</span>
       {!!stack.containers?.length && (
         <Badge
           variant="secondary"

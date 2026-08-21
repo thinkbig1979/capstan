@@ -55,7 +55,6 @@ vi.mock('../OperationProgress', () => ({
     <div data-testid="operation-progress" data-status={status} data-action={action} />
   ),
 }))
-vi.mock('../../git/GitStatus', () => ({ GitStatus: () => <div data-testid="git-status" /> }))
 vi.mock('../../git/GitHistory', () => ({ GitHistory: () => <div data-testid="git-history" /> }))
 vi.mock('@/components/dashboard/AutoUpdateToggle', () => ({
   AutoUpdateToggle: (props: { globalDisabled: boolean }) => (
@@ -153,10 +152,8 @@ describe('StackDetail — tabs', () => {
     expect(screen.queryByTestId('metrics-panel')).not.toBeInTheDocument()
   })
 
-  it('shows git status above the tabs on every tab', async () => {
-    renderDetail({ activeTab: 'logs' })
-    expect(await screen.findByTestId('git-status')).toBeInTheDocument()
-  })
+  // Git status moved out of StackDetail into the StackPage header chip
+  // (see GitStatus.test.tsx), so StackDetail no longer renders it.
 })
 
 describe('StackDetail — the action bar', () => {

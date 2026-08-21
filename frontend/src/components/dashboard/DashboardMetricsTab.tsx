@@ -249,11 +249,11 @@ export function DashboardMetricsTab({
             </CardAction>
           </CardHeader>
           <CardFooter className="flex-col items-start gap-1.5 text-sm">
-            <div className="line-clamp-1 flex gap-2 font-medium">
-              {totalStacks ? Math.round((runningStacks / totalStacks) * 100) : 0}% uptime
+            <div className="line-clamp-1 flex gap-2 font-medium tabular-nums">
+              {runningStacks} of {totalStacks} stacks up
             </div>
             <div className="text-muted-foreground">
-              Stack availability
+              Right now, not uptime over time
             </div>
           </CardFooter>
         </Card>
@@ -264,14 +264,18 @@ export function DashboardMetricsTab({
               {stoppedStacks}
             </CardTitle>
             <CardAction>
-              <Badge variant="outline" className="text-destructive border-destructive/30">
+              <Badge variant="outline">
                 Inactive
               </Badge>
             </CardAction>
           </CardHeader>
           <CardFooter className="flex-col items-start gap-1.5 text-sm">
             <div className="line-clamp-1 flex gap-2 font-medium">
-              {stoppedStacks > 0 ? 'Needs attention' : 'All stacks running'}
+              {stoppedStacks > 0
+                ? 'Stopped by choice or by error'
+                : totalStacks > 0
+                  ? 'All stacks running'
+                  : 'No stacks yet'}
             </div>
             <div className="text-muted-foreground">
               Stopped or errored stacks
@@ -280,23 +284,23 @@ export function DashboardMetricsTab({
         </Card>
         <Card className="@container/card">
           <CardHeader>
-            <CardDescription>Containers</CardDescription>
+            <CardDescription>Stack Containers</CardDescription>
             <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
               {totalContainers}
             </CardTitle>
             <CardAction>
               <Badge variant="outline">
                 <Server className="size-3" />
-                {runningContainers} running
+                {runningContainers} on host
               </Badge>
             </CardAction>
           </CardHeader>
           <CardFooter className="flex-col items-start gap-1.5 text-sm">
             <div className="line-clamp-1 flex gap-2 font-medium">
-              Total container instances
+              Containers in managed stacks
             </div>
             <div className="text-muted-foreground">
-              Managed by Docker Compose
+              Badge counts all running containers on the host
             </div>
           </CardFooter>
         </Card>
