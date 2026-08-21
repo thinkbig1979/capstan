@@ -32,6 +32,23 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }))
 
+// The lifecycle action bar moved from StackDetail to the page header in the
+// phase-3 redesign, and its streaming operation now lives here too.
+const execute = vi.fn()
+const reset = vi.fn()
+// Mutated (via Object.assign) per test to drive the running/success branches.
+const operationState = { status: 'idle', action: '', error: null as string | null, lines: [] as string[] }
+
+vi.mock('@/hooks/useStreamingOperation', () => ({
+  useStreamingOperation: () => ({ ...operationState, execute, cancel: vi.fn(), reset }),
+}))
+
+vi.mock('@/components/stack/OperationProgress', () => ({
+  OperationProgress: ({ status, action }: { status: string; action: string }) => (
+    <div data-testid="operation-progress" data-status={status} data-action={action} />
+  ),
+}))
+
 vi.mock('@/components/stack/StackDetail', () => ({
   StackDetail: ({ activeTab, onTabChange }: { activeTab: string; onTabChange: (tab: string) => void }) => (
     <div data-testid="stack-detail">
@@ -69,14 +86,17 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
   }
 }
 
-function renderPage(route = '/stacks/s1') {
+function renderPage(
+  route = '/stacks/s1',
+  // Injectable so a test can spy on the client before mount-time effects run.
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+  }),
+) {
   // BrowserRouter (matching main.tsx's actual router) rather than MemoryRouter,
   // so assertions against window.location reflect real navigation, the same
   // way frontend/src/test/utils.tsx's renderWithProviders does.
   window.history.pushState({}, 'Test page', route)
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
-  })
   return {
     ...render(
       <BrowserRouter>
@@ -97,6 +117,7 @@ function renderPage(route = '/stacks/s1') {
 describe('StackPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    Object.assign(operationState, { status: 'idle', action: '', error: null, lines: [] })
     getStack.mockResolvedValue(makeStack())
     checkUpdates.mockResolvedValue({ updates: [] })
     getUpdateJobs.mockResolvedValue({ jobs: [] })
@@ -141,6 +162,155 @@ describe('StackPage', () => {
       renderPage(from)
       await waitFor(() => expect(window.location.pathname).toBe(toPath))
       expect(window.location.search).toBe(toSearch)
+    })
+  })
+
+  describe('header status pill and uptime', () => {
+    it('shows running-count and uptime derived from container data', async () => {
+      getStack.mockResolvedValue(
+        makeStack({
+          status: 'running',
+          containers: [
+            { id: 'c1', name: 'web', image: 'nginx:1', state: 'running', status: 'Up 2 hours', ports: [] },
+            { id: 'c2', name: 'db', image: 'pg:16', state: 'running', status: 'Up 6 days', ports: [] },
+          ],
+        }),
+      )
+
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByText('Running · 2/2')).toBeInTheDocument())
+      // The chip reports the youngest running container, never more than the
+      // stack as a whole has been up.
+      expect(screen.getByText('up 2 hours')).toBeInTheDocument()
+    })
+
+    it('reports a partial stack as such', async () => {
+      getStack.mockResolvedValue(
+        makeStack({
+          status: 'partial',
+          containers: [
+            { id: 'c1', name: 'web', image: 'nginx:1', state: 'running', status: 'Up 1 hour', ports: [] },
+            { id: 'c2', name: 'db', image: 'pg:16', state: 'exited', status: 'Exited (0)', ports: [] },
+          ],
+        }),
+      )
+
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByText('Partial · 1/2')).toBeInTheDocument())
+    })
+
+    it('shows a plain status pill with no counts for a stopped stack', async () => {
+      getStack.mockResolvedValue(makeStack({ status: 'stopped', containers: [] }))
+
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByText('Stopped')).toBeInTheDocument())
+      expect(screen.queryByText(/up /)).not.toBeInTheDocument()
+    })
+  })
+
+  describe('header action bar (moved from StackDetail in phase 3)', () => {
+    it('runs the matching operation for each button', async () => {
+      getStack.mockResolvedValue(makeStack({ status: 'running' }))
+      renderPage('/stacks/s1')
+      await waitFor(() => expect(screen.getByTestId('stack-detail')).toBeInTheDocument())
+
+      fireEvent.click(screen.getByRole('button', { name: /Restart/ }))
+      expect(execute).toHaveBeenCalledWith('s1', 'restart')
+
+      fireEvent.click(screen.getByRole('button', { name: /Pull Images/ }))
+      expect(execute).toHaveBeenCalledWith('s1', 'pull')
+
+      fireEvent.click(screen.getByRole('button', { name: /Stop/ }))
+      expect(execute).toHaveBeenCalledWith('s1', 'stop')
+    })
+
+    it('offers Start but not Stop on a stopped stack', async () => {
+      getStack.mockResolvedValue(makeStack({ status: 'stopped' }))
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /Start/ })).toBeEnabled())
+      expect(screen.getByRole('button', { name: /Stop/ })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /Restart/ })).toBeDisabled()
+
+      fireEvent.click(screen.getByRole('button', { name: /Start/ }))
+      expect(execute).toHaveBeenCalledWith('s1', 'start')
+    })
+
+    it('offers Stop but not Start on a running stack', async () => {
+      getStack.mockResolvedValue(makeStack({ status: 'running' }))
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /Stop/ })).toBeEnabled())
+      expect(screen.getByRole('button', { name: /Start/ })).toBeDisabled()
+    })
+
+    it('lets a partially-running stack be started', async () => {
+      getStack.mockResolvedValue(makeStack({ status: 'partial' }))
+      renderPage('/stacks/s1')
+
+      // "partial" means some services are down, so Start is the useful action.
+      await waitFor(() => expect(screen.getByRole('button', { name: /Start/ })).toBeEnabled())
+      expect(screen.getByRole('button', { name: /Stop/ })).toBeDisabled()
+    })
+
+    it('disables every action while one is already running', async () => {
+      Object.assign(operationState, { status: 'running', action: 'start' })
+      getStack.mockResolvedValue(makeStack({ status: 'stopped' }))
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /Starting\.\.\./ })).toBeDisabled())
+      expect(screen.getByRole('button', { name: /Stop/ })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /Restart/ })).toBeDisabled()
+      // Pull has no status precondition of its own, but must not race a start.
+      expect(screen.getByRole('button', { name: /Pull Images/ })).toBeDisabled()
+    })
+
+    it.each([
+      ['start', 'Starting...'],
+      ['stop', 'Stopping...'],
+      ['restart', 'Restarting...'],
+      ['pull', 'Pulling...'],
+    ])('labels the in-flight %s button "%s"', async (action, label) => {
+      Object.assign(operationState, { status: 'running', action })
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByText(label)).toBeInTheDocument())
+    })
+
+    it('passes the operation through to the progress panel', async () => {
+      Object.assign(operationState, { status: 'running', action: 'pull', lines: ['pulling…'] })
+      renderPage('/stacks/s1')
+
+      await waitFor(() => {
+        const progress = screen.getByTestId('operation-progress')
+        expect(progress).toHaveAttribute('data-status', 'running')
+        expect(progress).toHaveAttribute('data-action', 'pull')
+      })
+    })
+
+    it('refreshes the stack and confirms the action by name after success', async () => {
+      Object.assign(operationState, { status: 'success', action: 'restart' })
+
+      // The spy has to be in place before the mount, because the effect that
+      // invalidates runs on it.
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+      })
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+
+      renderPage('/stacks/s1', queryClient)
+
+      const { toast } = await import('sonner')
+      await waitFor(() => {
+        expect(toast.success).toHaveBeenCalledWith('Restart completed')
+      })
+      // Stale data after a restart is the visible bug this guards: the status
+      // pill would still read "stopped".
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stack', 's1'] })
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stacks'] })
     })
   })
 

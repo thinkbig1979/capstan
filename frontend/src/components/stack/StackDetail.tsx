@@ -1,4 +1,4 @@
-import { useEffect, Suspense, lazy } from 'react'
+import { Suspense, lazy } from 'react'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { ResponsiveTabsList } from '@/components/ui/responsive-tabs-list'
 import { ContainerList } from './ContainerList'
@@ -6,22 +6,17 @@ import { ComposeEnvSplit } from './ComposeEnvSplit'
 import { TerminalComponent } from './Terminal'
 import { LogViewer } from './LogViewer'
 import { ActivityTab } from './ActivityTab'
-import { OperationProgress } from './OperationProgress'
-import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { HelpHint } from '@/components/ui/help-hint'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { TabErrorBoundary } from '@/components/TabErrorBoundary'
-import { Download, Play, Square, RefreshCw, Info } from 'lucide-react'
-import { useQueryClient } from '@tanstack/react-query'
-import { useStreamingOperation } from '@/hooks/useStreamingOperation'
+import { Info } from 'lucide-react'
+import { useSearchParams } from 'react-router'
 import { useAutoUpdatePolicies } from '@/hooks/useResources'
-import { toast } from 'sonner'
+import { useMetricsBase } from '@/hooks/useMetricsBase'
 import { MetricsSkeleton } from '@/components/LoadingSkeleton'
 import type { Stack, AutoUpdatePolicy } from '@/types'
-import { queryKeys } from '@/lib/query-keys'
 
 // Lazy: pulls in recharts, which most stack detail visits don't need — only
 // the Metrics tab does. (The Editor tab's codemirror is lazy inside
@@ -36,26 +31,23 @@ interface StackDetailProps {
   onTabChange: (tab: string) => void
 }
 
+function KvRow({ k, children }: { k: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-border/60 py-2 text-sm last:border-b-0">
+      <span className="text-muted-foreground">{k}</span>
+      <span className="min-w-0 truncate text-right font-mono text-xs" title={typeof children === 'string' ? children : undefined}>
+        {children}
+      </span>
+    </div>
+  )
+}
+
 function OverviewTabContent({
   stack,
-  onStart,
-  onStop,
-  onRestart,
-  onPull,
-  isStarting,
-  isStopping,
-  isRestarting,
-  isPulling,
+  onTabChange,
 }: {
   stack: Stack
-  onStart: () => void
-  onStop: () => void
-  onRestart: () => void
-  onPull: () => void
-  isStarting: boolean
-  isStopping: boolean
-  isRestarting: boolean
-  isPulling: boolean
+  onTabChange: (tab: string) => void
 }) {
   const { data: policiesData } = useAutoUpdatePolicies()
 
@@ -66,134 +58,92 @@ function OverviewTabContent({
     (p) => p.targetType === 'container' && stack.containers?.some((c) => c.id === p.targetId),
   )
 
-  const canStart = stack.status === 'stopped' || stack.status === 'partial'
-  const canStop = stack.status === 'running'
-  const anyRunning = isStarting || isStopping || isRestarting || isPulling
+  // Per-stack metrics stream — the same socket path the Metrics tab uses, but
+  // only one of the two tabs is ever mounted, so at most one socket is open.
+  const { latestMetrics, containers: metricContainers } = useMetricsBase(`/ws/metrics/${stack.id}`)
 
   return (
-    <div className="space-y-6">
-      {/* Action bar sits directly under the tabs so Start is the obvious next step on a
-          stopped stack, rather than being orphaned below the container list. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onStart}
-          disabled={!canStart || anyRunning}
-        >
-          <Play className="mr-2 h-4 w-4" />
-          {isStarting ? 'Starting...' : 'Start'}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onStop}
-          disabled={!canStop || anyRunning}
-        >
-          <Square className="mr-2 h-4 w-4" />
-          {isStopping ? 'Stopping...' : 'Stop'}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onRestart}
-          disabled={!canStop || anyRunning}
-        >
-          <RefreshCw className={`mr-2 h-4 w-4 ${isRestarting ? 'animate-spin' : ''}`} />
-          {isRestarting ? 'Restarting...' : 'Restart'}
-        </Button>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onPull}
-            disabled={anyRunning}
-          >
-            <Download className={`mr-2 h-4 w-4 ${isPulling ? 'animate-spin' : ''}`} />
-            {isPulling ? 'Pulling...' : 'Pull Images'}
-          </Button>
-          <HelpHint label="Pull images" title="Pull images">
-            <p>Downloads the latest image for each service without restarting anything.</p>
-            <p>
-              Running containers keep using the old image until you restart or recreate them,
-              so this just stages the update.
-            </p>
-          </HelpHint>
+    <div className="grid items-start gap-4 min-[980px]:grid-cols-[minmax(0,1fr)_280px]">
+      <div className="min-w-0 overflow-hidden rounded-lg border bg-card">
+        <div className="border-b px-4 py-2.5 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+          Services
         </div>
-
-        <Separator orientation="vertical" className="h-6 mx-1" />
-
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Auto-Update</span>
-          <HelpHint label="Auto-update" title="Auto-update">
-            <p>Updates this stack on its own whenever a scan finds a newer image.</p>
-            <p>
-              The global auto-update switch in Settings has to be on first. Updating recreates
-              containers, so expect a brief interruption.
-            </p>
-          </HelpHint>
-          <AutoUpdateToggle
-            targetType="stack"
-            targetId={stack.id}
-            enabled={stackPolicy?.enabled ?? false}
-            paused={stackPolicy?.paused ?? false}
-            consecutiveFailures={stackPolicy?.consecutiveFailures ?? 0}
-            globalDisabled={!policiesData?.globalEnabled}
-          />
-          {hasContainerPolicies && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Individual container settings override this stack-level toggle</p>
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-
-        <Separator orientation="vertical" className="h-6 mx-1" />
-
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Backup</span>
-          <HelpHint
-            label="Backup"
-            title="Backup"
-            href="https://github.com/thinkbig1979/capstan/blob/main/docs/how-to/configure-backups.md"
-          >
-            <p>Adds this stack to scheduled backups, covering its volumes and compose files.</p>
-            <p>Set up the repository and schedule under Settings, Backup.</p>
-          </HelpHint>
-          <BackupToggle stackId={stack.id} />
-        </div>
-      </div>
-
-      <div>
-        <h3 className="mb-3 text-lg font-semibold">Containers</h3>
         <ContainerList
           containers={stack.containers || []}
+          stackId={stack.id}
+          latestMetrics={latestMetrics}
+          metricNames={metricContainers}
+          onShowLogs={(name) => onTabChange(`logs?container=${encodeURIComponent(name)}`)}
+          onOpenShell={(containerId) => onTabChange(`terminal?container=${encodeURIComponent(containerId)}`)}
         />
+      </div>
+
+      <div className="flex flex-col gap-4">
+        <div className="overflow-hidden rounded-lg border bg-card">
+          <div className="border-b px-4 py-2.5 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+            Stack
+          </div>
+          <div className="px-4 pb-1 pt-1">
+            <KvRow k="Compose file">{stack.composeFile}</KvRow>
+            <KvRow k="Env file">{stack.envFile || '—'}</KvRow>
+            <KvRow k="Services">{String(stack.containers?.length ?? 0)}</KvRow>
+            {stack.isGitRepo && <KvRow k="Branch">{stack.gitBranch || '—'}</KvRow>}
+          </div>
+          <div className="flex items-center justify-between gap-2 border-t px-4 py-2.5">
+            <div className="flex items-center gap-1.5 text-sm">
+              Auto-update
+              <HelpHint label="Auto-update" title="Auto-update">
+                <p>Updates this stack on its own whenever a scan finds a newer image.</p>
+                <p>
+                  The global auto-update switch in Settings has to be on first. Updating recreates
+                  containers, so expect a brief interruption.
+                </p>
+              </HelpHint>
+              {hasContainerPolicies && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Individual container settings override this stack-level toggle</p>
+                  </TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+            <AutoUpdateToggle
+              targetType="stack"
+              targetId={stack.id}
+              enabled={stackPolicy?.enabled ?? false}
+              paused={stackPolicy?.paused ?? false}
+              consecutiveFailures={stackPolicy?.consecutiveFailures ?? 0}
+              globalDisabled={!policiesData?.globalEnabled}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-2 border-t px-4 py-2.5">
+            <div className="flex items-center gap-1.5 text-sm">
+              Backup
+              <HelpHint
+                label="Backup"
+                title="Backup"
+                href="https://github.com/thinkbig1979/capstan/blob/main/docs/how-to/configure-backups.md"
+              >
+                <p>Adds this stack to scheduled backups, covering its volumes and compose files.</p>
+                <p>Set up the repository and schedule under Settings, Backup.</p>
+              </HelpHint>
+            </div>
+            <BackupToggle stackId={stack.id} />
+          </div>
+        </div>
       </div>
     </div>
   )
 }
 
 export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps) {
-  const queryClient = useQueryClient()
-  const operation = useStreamingOperation()
-
-  const isStarting = operation.status === 'running' && operation.action === 'start'
-  const isStopping = operation.status === 'running' && operation.action === 'stop'
-  const isRestarting = operation.status === 'running' && operation.action === 'restart'
-  const isPulling = operation.status === 'running' && operation.action === 'pull'
-
-  useEffect(() => {
-    if (operation.status === 'success') {
-      queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(stack.id) })
-      queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
-      toast.success(`${operation.action.charAt(0).toUpperCase() + operation.action.slice(1)} completed`)
-    }
-  }, [operation.status, operation.action, stack.id, queryClient])
+  // Service-row deep links (Logs / Shell) carry the target container in
+  // ?container=; the tab content picks it up as its initial selection.
+  const [searchParams] = useSearchParams()
+  const containerParam = searchParams.get('container') ?? undefined
 
   return (
     <div className="h-full flex flex-col gap-4">
@@ -214,17 +164,7 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
 
         <TabsContent value="overview" className="mt-4">
           <TabErrorBoundary>
-            <OverviewTabContent
-              stack={stack}
-              onStart={() => operation.execute(stack.id, 'start')}
-              onStop={() => operation.execute(stack.id, 'stop')}
-              onRestart={() => operation.execute(stack.id, 'restart')}
-              onPull={() => operation.execute(stack.id, 'pull')}
-              isStarting={isStarting}
-              isStopping={isStopping}
-              isRestarting={isRestarting}
-              isPulling={isPulling}
-            />
+            <OverviewTabContent stack={stack} onTabChange={onTabChange} />
           </TabErrorBoundary>
         </TabsContent>
 
@@ -236,13 +176,13 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
 
         <TabsContent value="logs" className="mt-4">
           <TabErrorBoundary>
-            <LogViewer stackId={stack.id} initialContainer={undefined} hasRunningContainers={stack.status !== 'stopped' && (stack.containers?.length ?? 0) > 0} />
+            <LogViewer stackId={stack.id} initialContainer={containerParam} hasRunningContainers={stack.status !== 'stopped' && (stack.containers?.length ?? 0) > 0} />
           </TabErrorBoundary>
         </TabsContent>
 
         <TabsContent value="terminal" className="mt-4">
           <TabErrorBoundary>
-            <TerminalComponent stack={stack} initialContainer={undefined} />
+            <TerminalComponent stack={stack} initialContainer={containerParam} />
           </TabErrorBoundary>
         </TabsContent>
 
@@ -260,14 +200,6 @@ export function StackDetail({ stack, activeTab, onTabChange }: StackDetailProps)
           </TabErrorBoundary>
         </TabsContent>
       </Tabs>
-
-      <OperationProgress
-        status={operation.status}
-        lines={operation.lines}
-        action={operation.action}
-        error={operation.error}
-        onDismiss={operation.reset}
-      />
     </div>
   )
 }

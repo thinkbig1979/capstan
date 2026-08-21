@@ -1,36 +1,26 @@
 /**
  * StackDetail was at 0/32 statements (agent-os-c1gu), and it is the one of that
  * bead's five modules with a standing obligation: it is stubbed at
- * pages/__tests__/StackPage.test.tsx:35, and agent-os-m1mu's criterion 5 says a
+ * pages/__tests__/StackPage.test.tsx, and agent-os-m1mu's criterion 5 says a
  * component may be stubbed in a page test OR tested directly, never neither.
  * This file is the "tested directly" half, so that stub is now legitimate.
  *
  * Its heavy children ARE stubbed here, which criterion 3 permits only because
  * every one of them has its own direct test: ContainerList, ComposeEditor,
  * EnvEditor, ComposeEnvSplit, LogViewer, Terminal, MetricsPanel,
- * StackUpdatesTab, BackupsTab, OperationProgress, GitStatus, GitHistory,
- * AutoUpdateToggle and BackupToggle. MetricsPanel's is MetricsPanel.test.tsx,
- * added in the same bead — which is why StackDetail came last.
+ * StackUpdatesTab, BackupsTab, GitStatus, GitHistory, AutoUpdateToggle and
+ * BackupToggle.
  *
- * What is left unstubbed is what this file is about: the tab wiring, the action
- * bar's enable/disable rules, and the post-operation refresh.
+ * What is left unstubbed is what this file is about: the tab wiring, the
+ * Overview detail grid (Stack card + service deep links), and the ?container
+ * pass-through. The lifecycle action bar moved to StackPage in the phase-3
+ * redesign — its coverage lives in StackPage.test.tsx now.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
-import { QueryClient } from '@tanstack/react-query'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
-import { toast } from 'sonner'
 import type { Stack } from '@/types'
-
-const execute = vi.fn()
-const reset = vi.fn()
-// Mutated per test to drive the running/success branches.
-let operationState = { status: 'idle', action: '', error: null as string | null, lines: [] as string[] }
-
-vi.mock('@/hooks/useStreamingOperation', () => ({
-  useStreamingOperation: () => ({ ...operationState, execute, cancel: vi.fn(), reset }),
-}))
 
 const mockGetPolicies = vi.fn()
 vi.mock('@/lib/api', () => ({
@@ -41,20 +31,47 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }))
 
+// jsdom has no WebSocket; the Overview grid's live-metrics stream is not under
+// test here (useMetricsBase has its own direct test).
+vi.mock('@/hooks/useMetricsBase', () => ({
+  useMetricsBase: () => ({
+    containers: [],
+    baseAggregates: { totalCpuPercent: 0, totalMemUsage: 0, totalMemLimit: 0, totalMemPercent: 0 },
+    latestMetrics: {},
+    isConnected: false,
+    ws: {},
+  }),
+}))
+
 // Every stub below names a component that has its own direct test (see the file
 // comment). Each renders a testid so the tab wiring can be asserted on.
-vi.mock('../ContainerList', () => ({ ContainerList: () => <div data-testid="container-list" /> }))
-vi.mock('../EnvEditor', () => ({ EnvEditor: () => <div data-testid="env-editor" /> }))
-vi.mock('../ComposeEnvSplit', () => ({ ComposeEnvSplit: () => <div data-testid="compose-env-split" /> }))
-vi.mock('../Terminal', () => ({ TerminalComponent: () => <div data-testid="terminal" /> }))
-vi.mock('../LogViewer', () => ({ LogViewer: () => <div data-testid="log-viewer" /> }))
-vi.mock('../StackUpdatesTab', () => ({ StackUpdatesTab: () => <div data-testid="updates-tab" /> }))
-vi.mock('../BackupsTab', () => ({ BackupsTab: () => <div data-testid="backups-tab" /> }))
-vi.mock('../OperationProgress', () => ({
-  OperationProgress: ({ status, action }: { status: string; action: string }) => (
-    <div data-testid="operation-progress" data-status={status} data-action={action} />
+// ContainerList's stub additionally exposes its deep-link callbacks so the
+// Overview → Logs/Terminal wiring can be exercised.
+vi.mock('../ContainerList', () => ({
+  ContainerList: (props: {
+    onShowLogs?: (name: string) => void
+    onOpenShell?: (id: string) => void
+  }) => (
+    <div data-testid="container-list">
+      <button onClick={() => props.onShowLogs?.('web')}>row-logs</button>
+      <button onClick={() => props.onOpenShell?.('c1')}>row-shell</button>
+    </div>
   ),
 }))
+vi.mock('../EnvEditor', () => ({ EnvEditor: () => <div data-testid="env-editor" /> }))
+vi.mock('../ComposeEnvSplit', () => ({ ComposeEnvSplit: () => <div data-testid="compose-env-split" /> }))
+vi.mock('../Terminal', () => ({
+  TerminalComponent: ({ initialContainer }: { initialContainer?: string }) => (
+    <div data-testid="terminal" data-initial-container={initialContainer ?? ''} />
+  ),
+}))
+vi.mock('../LogViewer', () => ({
+  LogViewer: ({ initialContainer }: { initialContainer?: string }) => (
+    <div data-testid="log-viewer" data-initial-container={initialContainer ?? ''} />
+  ),
+}))
+vi.mock('../StackUpdatesTab', () => ({ StackUpdatesTab: () => <div data-testid="updates-tab" /> }))
+vi.mock('../BackupsTab', () => ({ BackupsTab: () => <div data-testid="backups-tab" /> }))
 vi.mock('../../git/GitHistory', () => ({ GitHistory: () => <div data-testid="git-history" /> }))
 vi.mock('@/components/dashboard/AutoUpdateToggle', () => ({
   AutoUpdateToggle: (props: { globalDisabled: boolean }) => (
@@ -73,15 +90,23 @@ import { StackDetail } from '../StackDetail'
 function stack(overrides: Partial<Stack> = {}): Stack {
   return {
     id: 'stack-1',
-    name: 'my-stack',
-    path: '/srv/stacks/my-stack',
+    projectName: 'my-stack',
+    directory: '/srv/stacks/my-stack',
+    composeFile: 'docker-compose.yaml',
     status: 'running',
+    isGitRepo: false,
+    gitDirty: false,
+    gitAhead: 0,
+    gitBehind: 0,
     containers: [],
     ...overrides,
   } as Stack
 }
 
-function renderDetail(props: { stack?: Stack; activeTab?: string; onTabChange?: (t: string) => void } = {}) {
+function renderDetail(
+  props: { stack?: Stack; activeTab?: string; onTabChange?: (t: string) => void } = {},
+  options: { route?: string } = {},
+) {
   const onTabChange = props.onTabChange ?? vi.fn()
   const result = renderWithProviders(
     <StackDetail
@@ -89,13 +114,13 @@ function renderDetail(props: { stack?: Stack; activeTab?: string; onTabChange?: 
       activeTab={props.activeTab ?? 'overview'}
       onTabChange={onTabChange}
     />,
+    options,
   )
   return { ...result, onTabChange }
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  operationState = { status: 'idle', action: '', error: null, lines: [] }
   mockGetPolicies.mockResolvedValue({ policies: [], globalEnabled: true })
 })
 
@@ -163,118 +188,69 @@ describe('StackDetail — tabs', () => {
 
   // Git status moved out of StackDetail into the StackPage header chip
   // (see GitStatus.test.tsx), so StackDetail no longer renders it.
+  // The lifecycle action bar (Start/Stop/Restart/Pull) likewise moved to the
+  // StackPage header — see StackPage.test.tsx.
 })
 
-describe('StackDetail — the action bar', () => {
-  it('runs the matching operation for each button', async () => {
+describe('StackDetail — Overview detail grid', () => {
+  it('shows the Stack card facts from the stack payload', async () => {
+    renderDetail({
+      stack: stack({
+        composeFile: 'docker-compose.yaml',
+        envFile: '.env',
+        containers: [
+          { id: 'c1', name: 'web', image: 'nginx:1', state: 'running', status: 'Up', ports: [] },
+        ] as Stack['containers'],
+      }),
+    })
+
+    expect(await screen.findByText('Compose file')).toBeInTheDocument()
+    expect(screen.getByText('docker-compose.yaml')).toBeInTheDocument()
+    expect(screen.getByText('Env file')).toBeInTheDocument()
+    expect(screen.getByText('.env')).toBeInTheDocument()
+    // "Services" appears both as the left panel's header and as the kv row.
+    expect(screen.getAllByText('Services').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('shows the git branch row only for git-backed stacks', async () => {
+    renderDetail({ stack: stack({ isGitRepo: true, gitBranch: 'main' }) })
+
+    expect(await screen.findByText('Branch')).toBeInTheDocument()
+    expect(screen.getByText('main')).toBeInTheDocument()
+  })
+
+  it('deep-links a service row to the Logs tab with the container preselected', async () => {
     const user = userEvent.setup()
-    renderDetail({ stack: stack({ status: 'running' }) })
+    const { onTabChange } = renderDetail()
 
-    await user.click(await screen.findByRole('button', { name: /Restart/ }))
-    expect(execute).toHaveBeenCalledWith('stack-1', 'restart')
+    await user.click(await screen.findByText('row-logs'))
 
-    await user.click(screen.getByRole('button', { name: /Pull Images/ }))
-    expect(execute).toHaveBeenCalledWith('stack-1', 'pull')
-
-    await user.click(screen.getByRole('button', { name: /Stop/ }))
-    expect(execute).toHaveBeenCalledWith('stack-1', 'stop')
+    expect(onTabChange).toHaveBeenCalledWith('logs?container=web')
   })
 
-  it('starts a stopped stack', async () => {
+  it('deep-links a service row to the Terminal tab with the container preselected', async () => {
     const user = userEvent.setup()
-    renderDetail({ stack: stack({ status: 'stopped' }) })
+    const { onTabChange } = renderDetail()
 
-    await user.click(await screen.findByRole('button', { name: /Start/ }))
-    expect(execute).toHaveBeenCalledWith('stack-1', 'start')
-  })
+    await user.click(await screen.findByText('row-shell'))
 
-  it('offers Start but not Stop on a stopped stack', async () => {
-    renderDetail({ stack: stack({ status: 'stopped' }) })
-
-    expect(await screen.findByRole('button', { name: /Start/ })).toBeEnabled()
-    expect(screen.getByRole('button', { name: /Stop/ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /Restart/ })).toBeDisabled()
-  })
-
-  it('offers Stop but not Start on a running stack', async () => {
-    renderDetail({ stack: stack({ status: 'running' }) })
-
-    expect(await screen.findByRole('button', { name: /Stop/ })).toBeEnabled()
-    expect(screen.getByRole('button', { name: /Start/ })).toBeDisabled()
-  })
-
-  it('lets a partially-running stack be started', async () => {
-    renderDetail({ stack: stack({ status: 'partial' }) })
-
-    // "partial" means some services are down, so Start is the useful action.
-    expect(await screen.findByRole('button', { name: /Start/ })).toBeEnabled()
-    expect(screen.getByRole('button', { name: /Stop/ })).toBeDisabled()
-  })
-
-  it('disables every action while one is already running', async () => {
-    operationState = { status: 'running', action: 'start', error: null, lines: [] }
-    renderDetail({ stack: stack({ status: 'stopped' }) })
-
-    expect(await screen.findByRole('button', { name: /Starting\.\.\./ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /Stop/ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /Restart/ })).toBeDisabled()
-    // Pull has no status precondition of its own, but must not race a start.
-    expect(screen.getByRole('button', { name: /Pull Images/ })).toBeDisabled()
-  })
-
-  it.each([
-    ['start', 'Starting...'],
-    ['stop', 'Stopping...'],
-    ['restart', 'Restarting...'],
-    ['pull', 'Pulling...'],
-  ])('labels the in-flight %s button "%s"', async (action, label) => {
-    operationState = { status: 'running', action, error: null, lines: [] }
-    renderDetail()
-
-    expect(await screen.findByText(label)).toBeInTheDocument()
-  })
-
-  it('passes the operation through to the progress panel', async () => {
-    operationState = { status: 'running', action: 'pull', error: null, lines: ['pulling…'] }
-    renderDetail()
-
-    const progress = await screen.findByTestId('operation-progress')
-    expect(progress).toHaveAttribute('data-status', 'running')
-    expect(progress).toHaveAttribute('data-action', 'pull')
+    expect(onTabChange).toHaveBeenCalledWith('terminal?container=c1')
   })
 })
 
-describe('StackDetail — after an operation succeeds', () => {
-  it('refreshes the stack and confirms the action by name', async () => {
-    operationState = { status: 'success', action: 'restart', error: null, lines: [] }
+describe('StackDetail — ?container pass-through', () => {
+  it('feeds ?container= to the log viewer as its initial selection', async () => {
+    renderDetail({ activeTab: 'logs' }, { route: '/stacks/stack-1/logs?container=web' })
 
-    // The spy has to be in place before the mount, because the effect that
-    // invalidates runs on it.
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    })
-    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
-
-    renderWithProviders(
-      <StackDetail stack={stack()} activeTab="overview" onTabChange={vi.fn()} />,
-      { queryClient },
-    )
-
-    await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith('Restart completed')
-    })
-    // Stale data after a restart is the visible bug this guards: the status badge
-    // would still read "stopped".
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stack', 'stack-1'] })
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stacks'] })
+    const viewer = await screen.findByTestId('log-viewer')
+    expect(viewer).toHaveAttribute('data-initial-container', 'web')
   })
 
-  it('says nothing while an operation is merely running', async () => {
-    operationState = { status: 'running', action: 'start', error: null, lines: [] }
-    renderDetail()
+  it('feeds ?container= to the terminal as its initial selection', async () => {
+    renderDetail({ activeTab: 'terminal' }, { route: '/stacks/stack-1/terminal?container=c1' })
 
-    await screen.findByTestId('operation-progress')
-    expect(toast.success).not.toHaveBeenCalled()
+    const terminal = await screen.findByTestId('terminal')
+    expect(terminal).toHaveAttribute('data-initial-container', 'c1')
   })
 })
 
@@ -310,5 +286,11 @@ describe('StackDetail — auto-update wiring', () => {
     await waitFor(() => {
       expect(document.querySelector('svg.lucide-info')).not.toBeNull()
     })
+  })
+
+  it('renders the backup toggle in the Stack card', async () => {
+    renderDetail()
+
+    expect(await screen.findByTestId('backup-toggle')).toBeInTheDocument()
   })
 })
