@@ -462,10 +462,12 @@ test.describe('Backup flow E2E', () => {
 
     // ── Step 2: UI BackupsTab ─────────────────────────────────────────────
     if (testStackId) {
-      await page.goto(`${BASE_URL}/stacks/${testStackId}`)
+      // Backups is a section of the Activity tab since the phase-2 redesign;
+      // deep-link straight to it (old /backups links redirect here too).
+      await page.goto(`${BASE_URL}/stacks/${testStackId}/activity?view=backups`)
       await page.waitForLoadState('networkidle')
 
-      // Click Backups tab
+      // The inner Backups section tab (already active via the deep link)
       const backupsTab = page.getByRole('tab', { name: /^backups$/i })
       if (await backupsTab.count() > 0) {
         await backupsTab.click()
@@ -528,7 +530,9 @@ test.describe('Backup flow E2E', () => {
 
     // ── UI path ───────────────────────────────────────────────────────────
     if (testStackId) {
-      await page.goto(`${BASE_URL}/stacks/${testStackId}`)
+      // Backups is a section of the Activity tab since the phase-2 redesign;
+      // deep-link straight to it (old /backups links redirect here too).
+      await page.goto(`${BASE_URL}/stacks/${testStackId}/activity?view=backups`)
       await page.waitForLoadState('networkidle')
 
       const backupsTab = page.getByRole('tab', { name: /^backups$/i })
@@ -634,7 +638,9 @@ test.describe('Backup flow E2E', () => {
 
     // ── BackupsTab still renders correctly ────────────────────────────────
     if (testStackId) {
-      await page.goto(`${BASE_URL}/stacks/${testStackId}`)
+      // Backups is a section of the Activity tab since the phase-2 redesign;
+      // deep-link straight to it (old /backups links redirect here too).
+      await page.goto(`${BASE_URL}/stacks/${testStackId}/activity?view=backups`)
       await page.waitForLoadState('networkidle')
 
       const backupsTab = page.getByRole('tab', { name: /^backups$/i })
