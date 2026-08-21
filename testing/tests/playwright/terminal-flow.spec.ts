@@ -170,11 +170,32 @@ test.describe.serial('Terminal flow E2E', () => {
   test('TERM-PW-003: the Terminal tab dropdown connects (container-ID path contract)', async () => {
     // The dropdown keys its options on container.id, so selecting from it puts
     // the raw docker ID in the WS path — the historic flow that was denied for
-    // three weeks. A fresh navigation (no ?container=) exercises it from zero.
-    await sharedPage.goto(`${BASE_URL}/stacks/${encodeURIComponent(testStackId)}/terminal`)
-    await sharedPage.waitForLoadState('networkidle')
+    // three weeks.
+    //
+    // Navigate via the tabs, NOT goto(): a full reload boots the whole app
+    // again — the toolbar only renders once the stack query reports running
+    // containers, and a cold reload both races that one-shot fetch and opens a
+    // fresh socket set against the backend's per-user WS cap (flaked exactly
+    // this way on this test's first CI run). Clicking Overview unmounts the
+    // connected terminal from 002; clicking Terminal remounts it clean, with
+    // no ?container= param, so the dropdown starts from "Select container".
+    // A tab click can land in the same tick as a React re-render (the freshly
+    // mounted Overview streams metrics and refetches the stack, so the tree
+    // churns) and be dispatched into a swapped-out node — observed locally as
+    // a click that leaves the route unchanged. Retry the click until the
+    // route actually changes instead of asserting on a single shot.
+    const clickTabUntil = async (name: string, url: RegExp) => {
+      await expect(async () => {
+        await sharedPage.getByRole('tab', { name }).click()
+        await expect(sharedPage).toHaveURL(url, { timeout: 2_000 })
+      }).toPass({ timeout: 20_000 })
+    }
+    await clickTabUntil('Overview', /\/overview$/)
+    await clickTabUntil('Terminal', /\/terminal$/)
 
-    const containerSelect = sharedPage.getByRole('combobox')
+    const containerSelect = sharedPage
+      .getByRole('tabpanel', { name: 'Terminal' })
+      .getByRole('combobox')
     await expect(containerSelect).toBeVisible({ timeout: 15_000 })
     await containerSelect.click()
     await sharedPage.getByRole('option', { name: new RegExp(TEST_STACK_NAME) }).first().click()
