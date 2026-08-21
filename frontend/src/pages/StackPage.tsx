@@ -3,7 +3,7 @@ import { StackDetail } from '@/components/stack/StackDetail'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { AlertCircle, RefreshCw, Home, Trash2, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react'
+import { AlertCircle, RefreshCw, Home, Trash2, ChevronDown, ChevronRight, MoreHorizontal, Play, Square, Download } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,7 +23,23 @@ import { useUpdateJobStore, type UpdateJob } from '@/stores/updateJobStore'
 import { StackUpdateBadge } from '@/components/stack/StackUpdateBadge'
 import { GitStatus } from '@/components/git/GitStatus'
 import { UpdateJobLog } from '@/components/updates/UpdateJobLog'
+import { OperationProgress } from '@/components/stack/OperationProgress'
+import { Status as StatusPill, StatusDot, type StatusTone } from '@/components/ui/status'
+import { HelpHint } from '@/components/ui/help-hint'
+import { useStreamingOperation } from '@/hooks/useStreamingOperation'
+import { stackUptime } from '@/lib/uptime'
+import type { StackStatus } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
+
+// Same status → tone/label mapping as the dashboard's StatusBadge: stopped is
+// a normal state (neutral), red is reserved for actual errors.
+const STATUS_PILL: Record<StackStatus, { label: string; tone: StatusTone }> = {
+  running: { label: 'Running', tone: 'success' },
+  stopped: { label: 'Stopped', tone: 'neutral' },
+  partial: { label: 'Partial', tone: 'warning' },
+  error: { label: 'Error', tone: 'error' },
+  unknown: { label: 'Unknown', tone: 'neutral' },
+}
 
 // Most recently created job (by createdAt) without copying/sorting the array.
 function latestByCreatedAt(jobs: UpdateJob[]): UpdateJob | undefined {
@@ -101,6 +117,24 @@ export function StackPage() {
 
   // Hydrate update jobs store so stack job status is available on mount
   useUpdateJobs()
+
+  // Lifecycle operations (start/stop/restart/pull) live at the page level so
+  // the header action buttons and the tab content share one stream; the
+  // progress panel renders below the header for whichever tab is active.
+  const operation = useStreamingOperation()
+  const isStarting = operation.status === 'running' && operation.action === 'start'
+  const isStopping = operation.status === 'running' && operation.action === 'stop'
+  const isRestarting = operation.status === 'running' && operation.action === 'restart'
+  const isPulling = operation.status === 'running' && operation.action === 'pull'
+  const anyRunning = isStarting || isStopping || isRestarting || isPulling
+
+  useEffect(() => {
+    if (operation.status === 'success' && id) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.stack.detail(id) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
+      toast.success(`${operation.action.charAt(0).toUpperCase() + operation.action.slice(1)} completed`)
+    }
+  }, [operation.status, operation.action, id, queryClient])
 
   // Available updates for this stack
   const { data: updateData } = useCheckUpdates()
@@ -285,27 +319,71 @@ export function StackPage() {
     }
   }
 
+  const pill = STATUS_PILL[stack.status] || STATUS_PILL.unknown
+  const containerCount = stack.containers?.length ?? 0
+  const runningCount = stack.containers?.filter((c) => c.state === 'running').length ?? 0
+  const uptime = stackUptime(stack.containers)
+  const canStart = stack.status === 'stopped' || stack.status === 'partial'
+  const canStop = stack.status === 'running'
+
   return (
     <>
       <div className="space-y-6">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-2xl font-bold tracking-tight truncate font-mono">{stack.projectName}</h1>
-              <StackUpdateBadge
-                count={stackUpdatesCount}
-                onUpdate={handleStackUpdate}
-                jobStatus={activeJob?.status}
-                updatePending={updateStackMutation.isPending}
-              />
-            </div>
-            <div className="mt-1 flex items-center gap-2 flex-wrap">
+            <h1 className="text-2xl font-bold tracking-tight truncate font-mono">{stack.projectName}</h1>
+            <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+              <StatusPill
+                tone={pill.tone}
+                className="gap-1.5 text-[11px] font-semibold uppercase tracking-wider"
+              >
+                <StatusDot tone={pill.tone} pulse={stack.status === 'running'} />
+                {containerCount > 0 ? `${pill.label} · ${runningCount}/${containerCount}` : pill.label}
+              </StatusPill>
               <p className="text-sm text-muted-foreground truncate font-mono">{stack.directory}</p>
               <GitStatus stack={stack} />
+              {uptime && (
+                <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-mono text-muted-foreground">
+                  {uptime}
+                </span>
+              )}
             </div>
           </div>
-          {/* Destructive actions live behind the overflow menu rather than as
-              an always-visible red button in the header. */}
+          {/* Stack lifecycle actions live in the header so they work from any
+              tab; the streaming operation they share renders its progress
+              panel below. Destructive actions stay behind the overflow menu. */}
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            <Button variant="outline" size="sm" onClick={() => operation.execute(stack.id, 'start')} disabled={!canStart || anyRunning}>
+              <Play className="mr-1.5 h-4 w-4" />
+              {isStarting ? 'Starting...' : 'Start'}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => operation.execute(stack.id, 'stop')} disabled={!canStop || anyRunning}>
+              <Square className="mr-1.5 h-4 w-4" />
+              {isStopping ? 'Stopping...' : 'Stop'}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => operation.execute(stack.id, 'restart')} disabled={!canStop || anyRunning}>
+              <RefreshCw className={`mr-1.5 h-4 w-4 ${isRestarting ? 'animate-spin' : ''}`} />
+              {isRestarting ? 'Restarting...' : 'Restart'}
+            </Button>
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" onClick={() => operation.execute(stack.id, 'pull')} disabled={anyRunning}>
+                <Download className={`mr-1.5 h-4 w-4 ${isPulling ? 'animate-spin' : ''}`} />
+                {isPulling ? 'Pulling...' : 'Pull Images'}
+              </Button>
+              <HelpHint label="Pull images" title="Pull images">
+                <p>Downloads the latest image for each service without restarting anything.</p>
+                <p>
+                  Running containers keep using the old image until you restart or recreate them,
+                  so this just stages the update.
+                </p>
+              </HelpHint>
+            </div>
+            <StackUpdateBadge
+              count={stackUpdatesCount}
+              onUpdate={handleStackUpdate}
+              jobStatus={activeJob?.status}
+              updatePending={updateStackMutation.isPending}
+            />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -329,6 +407,7 @@ export function StackPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
         </div>
 
         {latestStackJob && (
@@ -350,6 +429,14 @@ export function StackPage() {
           stack={stack}
           activeTab={activeTab}
           onTabChange={handleTabChange}
+        />
+
+        <OperationProgress
+          status={operation.status}
+          lines={operation.lines}
+          action={operation.action}
+          error={operation.error}
+          onDismiss={operation.reset}
         />
       </div>
       <ConfirmComponent />
