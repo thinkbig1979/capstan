@@ -34,6 +34,9 @@ type ResourcesHandler struct {
 	actionLog  *services.ActionLogger
 }
 
+// NewResourcesHandler delegates to NewResourcesHandlerWithJobManager (nil
+// jobManager) so the nil-check below has exactly one copy to keep correct.
+//
 // Both constructors keep *services.SchedulerService as their parameter type
 // (production callers, e.g. cmd/server/main.go, are unaffected) and nil-check
 // the concrete pointer before assigning it to the interface field. That order
@@ -44,11 +47,7 @@ type ResourcesHandler struct {
 // receiver, which panics (both dereference s.mu with no nil-receiver guard).
 // Checking scheduler != nil on the still-concrete parameter avoids that.
 func NewResourcesHandler(docker *services.DockerService, db *database.DB, scheduler *services.SchedulerService) *ResourcesHandler {
-	h := &ResourcesHandler{docker: docker, db: db, actionLog: services.NewActionLogger(db)}
-	if scheduler != nil {
-		h.scheduler = scheduler
-	}
-	return h
+	return NewResourcesHandlerWithJobManager(docker, db, scheduler, nil)
 }
 
 func NewResourcesHandlerWithJobManager(docker *services.DockerService, db *database.DB, scheduler *services.SchedulerService, jobManager *services.UpdateJobManager) *ResourcesHandler {
