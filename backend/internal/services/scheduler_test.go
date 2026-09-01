@@ -363,14 +363,21 @@ func TestStartBackgroundScan_ConcurrentWithStop_NoRace(t *testing.T) {
 			"iteration %d: IsScanning must be false once Stop has returned (startErr=%v)", i, startErr)
 	}
 
-	// Positive control. The race only exists on the interleaving where Stop
-	// wins the mutex first, which post-fix is exactly the `rejected` bucket.
-	// If a future change makes this test stop exercising that interleaving it
-	// would pass identically on racy and non-racy code, guarding nothing — so
-	// record the split, and fail loudly if the scan side never ran at all.
+	// Positive control, asserted on `rejected` and not on `admitted`. The race
+	// only exists on the interleaving where Stop wins the mutex first, and
+	// post-fix that is exactly the `rejected` bucket — so `rejected` is the
+	// bucket that proves this test still exercises the path it guards. Against
+	// the unfixed code the split is admitted=60 rejected=0 (measured), so this
+	// assertion also fails there, which is what makes it a regression guard
+	// rather than a description.
+	//
+	// Do NOT assert on `admitted`: which side wins is scheduler-dependent, and
+	// a faster machine legitimately rejects all 60. CI observed
+	// admitted=0 rejected=60 while this developer machine ran 25-35 rejected.
+	// Both are healthy; only rejected=0 means the guard went untested.
 	t.Logf("Start/Stop interleavings over %d iterations: admitted=%d rejected=%d", iterations, admitted, rejected)
-	require.Positive(t, admitted,
-		"StartBackgroundScan was rejected on all %d iterations — Stop won the mutex every time, "+
+	require.Positive(t, rejected,
+		"StartBackgroundScan was admitted on all %d iterations — Stop never won the mutex, "+
 			"so this test is no longer exercising the concurrent Add/Wait path it exists to guard",
 		iterations)
 }

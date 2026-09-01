@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
 	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -753,7 +753,7 @@ func (s *SchedulerService) pruneVanishedTargets(ctx context.Context, updates []m
 		case err == nil:
 			live = append(live, update)
 
-		case client.IsErrNotFound(err):
+		case cerrdefs.IsNotFound(err):
 			evicted++
 			s.logger.Info("Evicting cached update: container no longer exists",
 				"container", update.ContainerName, "containerID", update.ContainerID)
