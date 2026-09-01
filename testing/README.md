@@ -7,7 +7,8 @@ testing/
 ├── README.md
 ├── tests/playwright/
 │   ├── auth-session.spec.ts    # Setup, login, session revocation
-│   └── backup-flow.spec.ts     # Backup configure -> run -> restore
+│   ├── backup-flow.spec.ts     # Backup configure -> run -> restore
+│   └── terminal-flow.spec.ts   # Start stack -> open shell -> run a command
 └── reports/                    # Playwright reporter output (generated, gitignored)
 ```
 
@@ -35,6 +36,7 @@ The two specs need *different* backends and cannot run against the same one:
 |------|---------------------|
 | `auth-session.spec.ts` | `AUTH_DISABLED=false` and a virgin `DATA_DIR` — its first test performs the one and only `POST /auth/setup` and asserts `needsSetup` was true beforehand |
 | `backup-flow.spec.ts` | `AUTH_DISABLED=true`, restic 0.19.1+ on `PATH`, a Docker daemon (the backup path stops the stack before snapshotting), and a pre-existing stack named `test-app` |
+| `terminal-flow.spec.ts` | `AUTH_DISABLED=true` and a Docker daemon — it starts the `test-app` stack itself and opens a real shell into its container. Runs in the backup-flow CI job (same backend). |
 
 ## Running in CI
 
