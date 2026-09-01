@@ -417,4 +417,22 @@ describe('UpdateScheduleContent — apply schedule', () => {
       await screen.findByText(/Times are in UTC \(\+00:00\), the server's own clock\./),
     ).toBeInTheDocument()
   })
+
+  it('warns that a scheduled apply cannot run while scanning is disabled, and stays quiet once an interval is set', async () => {
+    mockGetUpdates.mockResolvedValue(scheduledSettings({ scanIntervalMinutes: 0 }))
+    const disabled = renderPanel()
+
+    expect(
+      await screen.findByText(/Scheduled updates can't run while scanning is disabled/),
+    ).toBeInTheDocument()
+    disabled.unmount()
+
+    mockGetUpdates.mockResolvedValue(scheduledSettings())
+    renderPanel()
+
+    await screen.findByRole('radio', { name: 'At a set time' })
+    expect(
+      screen.queryByText(/Scheduled updates can't run while scanning is disabled/),
+    ).not.toBeInTheDocument()
+  })
 })
