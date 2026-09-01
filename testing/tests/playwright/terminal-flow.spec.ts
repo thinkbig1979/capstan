@@ -56,13 +56,19 @@ let csrfToken = ''
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Log in via the UI; skip if AUTH_DISABLED. */
+/**
+ * Log in via the UI; skip if AUTH_DISABLED.
+ *
+ * With AUTH_DISABLED (how CI runs this job) there is no login step, so this
+ * navigates nowhere: beforeAll only needs the context's request fixture, and
+ * TERM-PW-001's own goto is the page's first load. Booting /dashboard here
+ * bought nothing and cost a full app boot — auth probe, settings/config,
+ * resources/updates, dashboard/stats, backups/status, stacks — plus the events
+ * and dashboard-metrics sockets, which also count against the backend's
+ * per-user WebSocket cap this spec is already careful about.
+ */
 async function loginIfNeeded(page: Page): Promise<void> {
-  if (AUTH_DISABLED) {
-    await page.goto(`${BASE_URL}/dashboard`)
-    await page.waitForLoadState('networkidle')
-    return
-  }
+  if (AUTH_DISABLED) return
   await page.goto(`${BASE_URL}/login`)
   await page.waitForLoadState('networkidle')
   if (!page.url().includes('login')) return
