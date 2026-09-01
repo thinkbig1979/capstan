@@ -13,20 +13,50 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
+// updateScanner is the narrow seam checkUpdates needs from a scheduler: start
+// a background scan and report whether one is in flight. *services.SchedulerService
+// satisfies it structurally, so production wiring is unchanged. Tests substitute
+// a fake to drive scanStartIsBenign's unreached branch through the router: a real
+// SchedulerService's StartBackgroundScan can only ever return ErrScanInProgress,
+// ErrSchedulerStopping, or nil (see scheduler.go's StartBackgroundScan), so there
+// is no way to reach checkUpdates' 500 branch through the concrete type alone
+// (agent-os-10hb).
+type updateScanner interface {
+	StartBackgroundScan() error
+	IsScanning() bool
+}
+
 type ResourcesHandler struct {
 	docker     *services.DockerService
 	db         *database.DB
-	scheduler  *services.SchedulerService
+	scheduler  updateScanner
 	jobManager *services.UpdateJobManager
 	actionLog  *services.ActionLogger
 }
 
+// Both constructors keep *services.SchedulerService as their parameter type
+// (production callers, e.g. cmd/server/main.go, are unaffected) and nil-check
+// the concrete pointer before assigning it to the interface field. That order
+// matters: main.go can pass a typed-nil *SchedulerService when Docker is
+// unavailable, and boxing a typed nil pointer into an interface value directly
+// produces a NON-nil interface (the classic typed-nil trap) — h.scheduler != nil
+// would then be true and StartBackgroundScan/IsScanning would run on a nil
+// receiver, which panics (both dereference s.mu with no nil-receiver guard).
+// Checking scheduler != nil on the still-concrete parameter avoids that.
 func NewResourcesHandler(docker *services.DockerService, db *database.DB, scheduler *services.SchedulerService) *ResourcesHandler {
-	return &ResourcesHandler{docker: docker, db: db, scheduler: scheduler, actionLog: services.NewActionLogger(db)}
+	h := &ResourcesHandler{docker: docker, db: db, actionLog: services.NewActionLogger(db)}
+	if scheduler != nil {
+		h.scheduler = scheduler
+	}
+	return h
 }
 
 func NewResourcesHandlerWithJobManager(docker *services.DockerService, db *database.DB, scheduler *services.SchedulerService, jobManager *services.UpdateJobManager) *ResourcesHandler {
-	return &ResourcesHandler{docker: docker, db: db, scheduler: scheduler, jobManager: jobManager, actionLog: services.NewActionLogger(db)}
+	h := &ResourcesHandler{docker: docker, db: db, jobManager: jobManager, actionLog: services.NewActionLogger(db)}
+	if scheduler != nil {
+		h.scheduler = scheduler
+	}
+	return h
 }
 
 func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
