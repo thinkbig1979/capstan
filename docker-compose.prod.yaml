@@ -73,6 +73,12 @@ services:
       # Match the host user that owns your stacks/data (default 1000).
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
+      # Container timezone, which is the zone clock-time schedules run in:
+      # scheduled updates and backups fire against this clock, not the host's.
+      # Left at UTC, "03:00" in the UI means 03:00 UTC, so an operator in
+      # Europe/Amsterdam gets 05:00 local in summer and 04:00 in winter. Set it
+      # to your IANA zone (e.g. TZ=Europe/Amsterdam) in .env or the shell.
+      - TZ=${TZ:-UTC}
       # JWT_SECRET (required) and STORAGE_KEY (recommended) are read from .env
       # below — generate each with `openssl rand -hex 32`. See README / Deployment
       # Guide. STORAGE_KEY encrypts stored secrets at rest independently of

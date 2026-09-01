@@ -31,6 +31,12 @@ services:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
       - TRUSTED_NETWORKS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,172.18.0.0/16,127.0.0.1,::1
+      # Container timezone, which is the zone clock-time schedules run in:
+      # scheduled updates and backups fire against this clock, not the host's.
+      # Left at UTC, "03:00" in the UI means 03:00 UTC, so an operator in
+      # Europe/Amsterdam gets 05:00 local in summer and 04:00 in winter. Set it
+      # to your IANA zone (e.g. TZ=Europe/Amsterdam) in .env or the shell.
+      - TZ=${TZ:-UTC}
       # Backup — optional env-var fallbacks; DB settings (Settings → Backup) take
       # precedence at runtime. RESTIC_REPOSITORY defaults to /app/data/restic-repo
       # which lives inside the ./data bind mount below.
