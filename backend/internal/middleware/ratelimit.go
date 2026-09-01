@@ -350,16 +350,32 @@ const (
 	authAccountAnyIPMaxReqs = 60
 )
 
-func InitRateLimiters() {
+// InitRateLimiters builds the four process-wide limiters. apiMaxReqs is the
+// general API budget per rolling minute; callers pass
+// config.DefaultAPIRateLimitPerMin unless RATE_LIMIT_API_PER_MIN overrides it.
+//
+// The budget is a parameter rather than a literal because the end-to-end suites
+// drive one bucket far harder than any human does: with AUTH_DISABLED=true
+// RateLimitByUser finds no userID and keys every request on the client IP, so a
+// whole Playwright run shares a single bucket. OBSERVED 2026-09-01 in CI run
+// 33508313900: 352 requests in 58.96s from one suite against the 300 ceiling,
+// which 429'd tests unrelated to the traffic that spent the budget. In
+// production, where auth is on, each user keys on their own UUID and never
+// aggregates this way.
+//
+// The auth budgets stay hardcoded. They are brute-force controls with no
+// legitimate reason to vary per deployment, and the E2E problem does not touch
+// them.
+func InitRateLimiters(apiMaxReqs int) {
 	authIPRateLimiter = NewRateLimiter(1*time.Minute, authIPMaxReqs)
 	authAccountRateLimiter = NewRateLimiter(1*time.Minute, authAccountMaxReqs)
 	authAccountAnyIPRateLimiter = NewRateLimiter(1*time.Minute, authAccountAnyIPMaxReqs)
-	apiRateLimiter = NewRateLimiter(1*time.Minute, 300)
+	apiRateLimiter = NewRateLimiter(1*time.Minute, apiMaxReqs)
 	slog.Info("Rate limiters initialized",
 		"auth_per_ip", strconv.Itoa(authIPMaxReqs)+"/min",
 		"auth_per_ip_account", strconv.Itoa(authAccountMaxReqs)+"/min",
 		"auth_per_account", strconv.Itoa(authAccountAnyIPMaxReqs)+"/min",
-		"api", "300/min",
+		"api", strconv.Itoa(apiMaxReqs)+"/min",
 	)
 }
 
