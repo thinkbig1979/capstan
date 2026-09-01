@@ -320,7 +320,29 @@ type UpdateSettingsResponse struct {
 	LastScanAt          string `json:"lastScanAt,omitempty"`
 	LastScanError       string `json:"lastScanError,omitempty"`
 	GlobalAutoUpdate    bool   `json:"globalAutoUpdate"`
-	AutoUpdateStats     struct {
+	// ApplyMode is "immediate" (apply on the scan tick) or "scheduled" (apply
+	// at ApplyTime on ApplyDays).
+	ApplyMode string `json:"applyMode"`
+	// ApplyTime is a wall-clock "HH:MM" in the server's local zone.
+	ApplyTime string `json:"applyTime"`
+	// ApplyDays uses Go's weekday numbering, 0=Sunday..6=Saturday.
+	//
+	// It must always marshal as a JSON array, never null: the frontend indexes
+	// into it. A nil []int marshals to null, so every construction site
+	// initialises it to []int{} before filling — and it deliberately carries no
+	// omitempty, which would erase a legitimately empty selection back to
+	// nothing at all.
+	ApplyDays []int `json:"applyDays"`
+	// NextApplyAt is the next scheduled apply instant in RFC3339, omitted when
+	// no apply is scheduled: immediate mode, auto-update off, or scanning
+	// disabled (the apply timer lives inside the scan scheduler, so an interval
+	// of 0 means nothing applies).
+	NextApplyAt string `json:"nextApplyAt,omitempty"`
+	// ServerTimezone and ServerTimeOffset are display-only, so the operator can
+	// see which clock ApplyTime is interpreted against.
+	ServerTimezone   string `json:"serverTimezone"`
+	ServerTimeOffset string `json:"serverTimeOffset"`
+	AutoUpdateStats  struct {
 		EnabledContainers int `json:"enabledContainers"`
 		UpdatesLast7Days  int `json:"updatesLast7Days"`
 		UpdatesLast30Days int `json:"updatesLast30Days"`

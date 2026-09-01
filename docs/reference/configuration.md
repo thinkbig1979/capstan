@@ -70,6 +70,7 @@ override.
 | `DATA_DIR` | `/app/data` | No | Where Capstan stores its SQLite database, keys, and (by default) the restic backup repository. |
 | `PUID` | `1000` | No | Host UID the container's `appuser` is remapped to at startup by `docker/entrypoint.sh`. Not read by the Go binary — set as a container environment variable and consumed by the entrypoint script before the server process starts. Match it to the host user that owns your `stacks`/`data` directories. |
 | `PGID` | `1000` | No | Host GID counterpart to `PUID`, same remapping mechanism. |
+| `TZ` | `UTC` | No | IANA zone name the container's clock runs in. Not read by the Go binary either — the runtime resolves it through `tzdata` into Go's `time.Local`, which is what clock-time schedules are interpreted against. `tzdata` ships in the image (`docker/Dockerfile:165`, installed explicitly on top of `debian:trixie-slim`), so any IANA name resolves as-is and there is no need to bind-mount `/etc/localtime` or `/usr/share/zoneinfo` from the host. This is the one setting that decides *when* scheduled updates and backups actually fire: a schedule saved as `03:00` means 03:00 in this zone, so leaving it at `UTC` gives an operator in `Europe/Amsterdam` a 05:00 local run in summer and 04:00 in winter, with no error anywhere to say so. Both bundled compose files set it as `TZ=${TZ:-UTC}`, so exporting `TZ` or putting it in `.env` is enough. The resolved zone and offset are shown beside the schedule fields in Settings → Backup and Settings → Updates. |
 
 ## Git integration
 
@@ -109,7 +110,10 @@ yet.
 | `BACKUP_KEEP_MONTHLY` | `6` | No | Monthly snapshots to retain. |
 | `BACKUP_KEEP_YEARLY` | `0` | No | Yearly snapshots to retain. |
 | `BACKUP_AUTO_PRUNE` | `true` | No | Whether `--prune` is appended to the retention `forget` command. Only the literal string `true` (case-sensitive) is treated as true. |
-| `BACKUP_SCHEDULE_INTERVAL` | `0` (disabled) | No | Backup scheduler tick, in minutes. `0` disables the scheduler. |
+| `BACKUP_SCHEDULE_INTERVAL` | `0` (disabled) | No | Backup scheduler tick, in minutes. `0` disables the scheduler. For a clock-time schedule set in Settings → Backup (e.g. `03:00`), the zone that time is read in comes from [`TZ`](#paths-volumes--container-user), which defaults to `UTC`. |
+| `BACKUP_SCHEDULE_MODE` | `interval` | No | How scheduled backups are timed. `interval` runs every `BACKUP_SCHEDULE_INTERVAL` minutes from process start. `scheduled` runs at `BACKUP_SCHEDULE_TIME` on the weekdays in `BACKUP_SCHEDULE_DAYS`, read against [`TZ`](#paths-volumes--container-user). Any other value falls back to `interval` with a logged error. |
+| `BACKUP_SCHEDULE_TIME` | `02:00` | No | Time of day for `scheduled` mode, as 24-hour zero-padded `HH:MM`. Ignored in `interval` mode. An unparseable value falls back to `interval` mode with a logged error, so backups keep running. |
+| `BACKUP_SCHEDULE_DAYS` | `0,1,2,3,4,5,6` | No | Weekdays for `scheduled` mode, comma-separated, `0` is Sunday through `6` is Saturday. Ignored in `interval` mode. An empty or invalid list falls back to `interval` mode with a logged error. |
 | `BACKUP_SYNC_AFTER` | `false` | No | Whether an rclone sync runs automatically after each local backup. Only the literal string `true` is treated as true. |
 | `BACKUP_HOSTNAME` | system hostname | No | Value passed as `--hostname` to restic `backup`/`forget`. |
 

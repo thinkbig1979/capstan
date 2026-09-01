@@ -576,10 +576,19 @@ func TestUpdateSettings_ScheduleZeroOnlyStops(t *testing.T) {
 type handlerFakeScheduler struct {
 	started bool
 	stopped bool
+	// scheduled records the DailySchedule StartScheduled was called with, so a
+	// test can tell "started in interval mode" from "started in scheduled
+	// mode". nil means StartScheduled was never called.
+	scheduled *services.DailySchedule
 }
 
 func (s *handlerFakeScheduler) Start(_ time.Duration) {
 	s.started = true
+}
+
+func (s *handlerFakeScheduler) StartScheduled(sched services.DailySchedule) {
+	s.started = true
+	s.scheduled = &sched
 }
 
 func (s *handlerFakeScheduler) Stop() {
@@ -1744,4 +1753,357 @@ func TestRunBackup_AfterShutdownBegun_Returns503(t *testing.T) {
 	var body map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.Equal(t, "SERVER_SHUTTING_DOWN", body["code"])
+}
+
+// ─────────────────────────────────────────────
+// Fixed-clock-time schedule settings — agent-os-mtbo.3
+// ─────────────────────────────────────────────
+
+// TestGetSettings_ScheduleDefaults verifies the new response fields exist with
+// their documented defaults on a fresh install, and in particular that
+// scheduleDays is an ARRAY and never JSON null — the UI iterates it directly.
+func TestGetSettings_ScheduleDefaults(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	t.Cleanup(h.Stop)
+	r := newBackupRouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	body := decodeBody(t, w)
+	assert.Equal(t, "interval", body["scheduleMode"], "default mode must preserve today's behaviour")
+	assert.Equal(t, "02:00", body["scheduleTime"])
+
+	days, ok := body["scheduleDays"].([]interface{})
+	require.True(t, ok, "scheduleDays must be a JSON array, got %#v", body["scheduleDays"])
+	assert.Len(t, days, 7, "the default schedule is every day")
+
+	assert.NotEmpty(t, body["serverTimezone"], "the UI renders the zone name beside the time field")
+	offset, ok := body["serverTimeOffset"].(string)
+	require.True(t, ok)
+	assert.Regexp(t, `^[+-]\d{2}:\d{2}$`, offset)
+}
+
+// TestGetSettings_ScheduleDaysNeverNull is the negative half of the array
+// guarantee: even an unparseable stored value must serialise as [], not null.
+func TestGetSettings_ScheduleDaysNeverNull(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	require.NoError(t, db.SetSetting("backup_schedule_days", "not,a,day"))
+
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	t.Cleanup(h.Stop)
+	r := newBackupRouter(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	assert.Contains(t, w.Body.String(), `"scheduleDays":[]`,
+		"scheduleDays must serialise as an empty array, never null")
+}
+
+// TestUpdateSettings_ScheduleFieldsRoundTrip PUTs the three new fields through
+// the real handler and GETs them back. gin silently accepts unknown JSON
+// fields, so a struct-tag typo would otherwise ship green with the value
+// simply never arriving.
+func TestUpdateSettings_ScheduleFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	t.Cleanup(h.Stop)
+	r := newBackupRouter(h)
+	svc.SetScheduler(&handlerFakeScheduler{})
+
+	req := jsonReq(t, http.MethodPut, "/api/settings/backup", map[string]interface{}{
+		"scheduleMode": "scheduled",
+		"scheduleTime": "23:15",
+		// Deliberately unsorted and duplicated: the stored form is normalised.
+		"scheduleDays": []int{5, 1, 1},
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// The PUT response is getSettings, so it already carries the new values.
+	body := decodeBody(t, w)
+	assert.Equal(t, "scheduled", body["scheduleMode"])
+	assert.Equal(t, "23:15", body["scheduleTime"])
+	assert.Equal(t, []interface{}{float64(1), float64(5)}, body["scheduleDays"])
+
+	// And a fresh GET must agree, proving the values were persisted.
+	getReq := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
+	getW := httptest.NewRecorder()
+	r.ServeHTTP(getW, getReq)
+	require.Equal(t, http.StatusOK, getW.Code)
+
+	getBody := decodeBody(t, getW)
+	assert.Equal(t, "scheduled", getBody["scheduleMode"])
+	assert.Equal(t, "23:15", getBody["scheduleTime"])
+	assert.Equal(t, []interface{}{float64(1), float64(5)}, getBody["scheduleDays"])
+
+	stored, err := db.GetSetting("backup_schedule_days")
+	require.NoError(t, err)
+	assert.Equal(t, "1,5", stored, "weekdays are stored sorted and deduped")
+}
+
+// TestUpdateSettings_AbsentScheduleFieldsAreUnchanged: the UI sends a field
+// only when it differs, so absent must mean unchanged.
+func TestUpdateSettings_AbsentScheduleFieldsAreUnchanged(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	require.NoError(t, db.SetSetting("backup_schedule_mode", "scheduled"))
+	require.NoError(t, db.SetSetting("backup_schedule_time", "04:05"))
+	require.NoError(t, db.SetSetting("backup_schedule_days", "2,4"))
+
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	t.Cleanup(h.Stop)
+	r := newBackupRouter(h)
+	svc.SetScheduler(&handlerFakeScheduler{})
+
+	req := jsonReq(t, http.MethodPut, "/api/settings/backup", map[string]interface{}{
+		"keepDaily": 9,
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	body := decodeBody(t, w)
+	assert.Equal(t, "scheduled", body["scheduleMode"])
+	assert.Equal(t, "04:05", body["scheduleTime"])
+	assert.Equal(t, []interface{}{float64(2), float64(4)}, body["scheduleDays"])
+}
+
+// TestUpdateSettings_InvalidScheduleValuesReturn400 covers every rejecting
+// case; TestUpdateSettings_ScheduleFieldsRoundTrip above is the accepting
+// control on the same endpoint.
+func TestUpdateSettings_InvalidScheduleValuesReturn400(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body map[string]interface{}
+	}{
+		{"unknown mode", map[string]interface{}{"scheduleMode": "hourly"}},
+		{"empty mode", map[string]interface{}{"scheduleMode": ""}},
+		{"time out of range", map[string]interface{}{"scheduleTime": "25:00"}},
+		{"time minute out of range", map[string]interface{}{"scheduleTime": "02:60"}},
+		{"time not zero padded", map[string]interface{}{"scheduleTime": "2:00"}},
+		{"time with seconds", map[string]interface{}{"scheduleTime": "02:00:00"}},
+		{"time garbage", map[string]interface{}{"scheduleTime": "later"}},
+		{"weekday above range", map[string]interface{}{"scheduleDays": []int{7}}},
+		{"weekday below range", map[string]interface{}{"scheduleDays": []int{-1}}},
+		{"no weekdays selected", map[string]interface{}{"scheduleDays": []int{}}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := newBackupHandlerDB(t)
+			svc := buildBackupSvc(t, db, true, false)
+			h := NewBackupHandler(svc, db, slog.Default())
+			t.Cleanup(h.Stop)
+			r := newBackupRouter(h)
+
+			sched := &handlerFakeScheduler{}
+			svc.SetScheduler(sched)
+
+			req := jsonReq(t, http.MethodPut, "/api/settings/backup", tc.body)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			body := decodeBody(t, w)
+			assert.Equal(t, models.ErrValidation, body["code"])
+
+			// Validation happens before any write, so nothing may be persisted
+			// and the running scheduler must not be disturbed.
+			for _, key := range []string{"backup_schedule_mode", "backup_schedule_time", "backup_schedule_days"} {
+				stored, err := db.GetSetting(key)
+				assert.Empty(t, stored, "%s must not be written by a rejected request (err=%v)", key, err)
+			}
+			assert.False(t, sched.stopped, "a rejected request must not stop the scheduler")
+		})
+	}
+}
+
+// TestUpdateSettings_ModeChangeRestartsScheduler covers finding C: the restart
+// used to be gated on the interval field alone, so switching to scheduled mode
+// left the old ticker running until the next process restart.
+func TestUpdateSettings_ModeChangeRestartsScheduler(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	// No interval row at all: scheduled mode must not need one.
+	require.NoError(t, db.SetSetting("backup_schedule_time", "01:30"))
+
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	t.Cleanup(h.Stop)
+	r := newBackupRouter(h)
+
+	sched := &handlerFakeScheduler{}
+	svc.SetScheduler(sched)
+
+	req := jsonReq(t, http.MethodPut, "/api/settings/backup", map[string]interface{}{
+		"scheduleMode": "scheduled",
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	assert.True(t, sched.stopped, "a mode change must stop the running scheduler")
+	require.NotNil(t, sched.scheduled, "a mode change to scheduled must re-arm on the scheduled path")
+	assert.Equal(t, 1, sched.scheduled.Hour)
+	assert.Equal(t, 30, sched.scheduled.Minute)
+}
+
+// TestUpdateSettings_TimeAndDaysChangesRestartScheduler covers the other two
+// fields of finding C, each on its own.
+func TestUpdateSettings_TimeAndDaysChangesRestartScheduler(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body map[string]interface{}
+	}{
+		{"time only", map[string]interface{}{"scheduleTime": "06:00"}},
+		{"days only", map[string]interface{}{"scheduleDays": []int{0, 6}}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := newBackupHandlerDB(t)
+			require.NoError(t, db.SetSetting("backup_schedule_mode", "scheduled"))
+
+			svc := buildBackupSvc(t, db, true, false)
+			h := NewBackupHandler(svc, db, slog.Default())
+			t.Cleanup(h.Stop)
+			r := newBackupRouter(h)
+
+			sched := &handlerFakeScheduler{}
+			svc.SetScheduler(sched)
+
+			req := jsonReq(t, http.MethodPut, "/api/settings/backup", tc.body)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code)
+
+			assert.True(t, sched.stopped, "changing %s must stop the running scheduler", tc.name)
+			assert.NotNil(t, sched.scheduled, "changing %s must re-arm the scheduler", tc.name)
+		})
+	}
+}
+
+// TestUpdateSettings_NonScheduleChangeDoesNotRestartScheduler is the control
+// for the two tests above: widening the restart trigger must not make every
+// unrelated settings save bounce the scheduler.
+func TestUpdateSettings_NonScheduleChangeDoesNotRestartScheduler(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	t.Cleanup(h.Stop)
+	r := newBackupRouter(h)
+
+	sched := &handlerFakeScheduler{}
+	svc.SetScheduler(sched)
+
+	req := jsonReq(t, http.MethodPut, "/api/settings/backup", map[string]interface{}{
+		"keepDaily":    21,
+		"rclonePath":   "somewhere/else",
+		"rcloneRemote": "other",
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	assert.False(t, sched.stopped, "a non-schedule change must leave the scheduler alone")
+	assert.False(t, sched.started)
+}
+
+// TestUpdateSettings_SavingDoesNotKillRunningScheduledScheduler pins the
+// SEQUENCE rather than an end state. The bug this task removes was a RUNNING
+// scheduled-mode scheduler being stopped and then not restarted, so the test
+// has to start one first: an assertion made from a never-started state cannot
+// see that class of failure at all, and would pass against a build that never
+// starts the scheduler under any circumstances.
+//
+// Interval 0 throughout, because that is the configuration an operator lands
+// in after switching to a fixed time, and the one every interval-shaped guard
+// gets wrong.
+func TestUpdateSettings_SavingDoesNotKillRunningScheduledScheduler(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body map[string]interface{}
+	}{
+		// The literal sequence: an ordinary save of something unrelated.
+		{"unrelated field", map[string]interface{}{"keepDaily": 30}},
+		// The discriminating one: a schedule field DOES stop the scheduler
+		// first, so the restart is what keeps it alive.
+		{"schedule field", map[string]interface{}{"scheduleTime": "23:45"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := newBackupHandlerDB(t)
+			require.NoError(t, db.SetSetting("backup_schedule_mode", "scheduled"))
+			require.NoError(t, db.SetSetting("backup_schedule_time", "02:00"))
+			// backup_schedule_interval deliberately never set → resolves to 0.
+
+			svc := buildBackupSvc(t, db, true, false)
+			h := NewBackupHandler(svc, db, slog.Default())
+			t.Cleanup(h.Stop)
+			r := newBackupRouter(h)
+
+			sched := &handlerFakeScheduler{}
+			svc.SetScheduler(sched)
+
+			// Boot the scheduler the way main.go does, and prove it is really
+			// running before the save — otherwise the assertion afterwards
+			// proves nothing.
+			svc.StartScheduler()
+			require.True(t, svc.SchedulerRunning(), "precondition: the scheduler must be running before the save")
+			require.NotNil(t, sched.scheduled, "precondition: it must be running on the scheduled path")
+
+			req := jsonReq(t, http.MethodPut, "/api/settings/backup", tc.body)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+			assert.True(t, svc.SchedulerRunning(),
+				"saving %s must leave the scheduled-mode scheduler running; a zero interval is not 'disabled' in this mode", tc.name)
+			assert.NotNil(t, sched.scheduled, "it must still be on the scheduled path")
+
+			// And the status endpoint must agree, since that is what the
+			// operator actually sees.
+			statusReq := httptest.NewRequest(http.MethodGet, "/api/backups/status", nil)
+			statusW := httptest.NewRecorder()
+			r.ServeHTTP(statusW, statusReq)
+			require.Equal(t, http.StatusOK, statusW.Code)
+			assert.Equal(t, true, decodeBody(t, statusW)["schedulerRunning"],
+				"the status endpoint must still report the scheduler as running")
+		})
+	}
 }

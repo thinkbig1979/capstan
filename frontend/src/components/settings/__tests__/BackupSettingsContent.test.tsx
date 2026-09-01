@@ -3,6 +3,8 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { BackupSettingsContent } from '../BackupSettingsContent'
+import { buildPayload, toDraft } from '../backup-settings/backup-payload'
+import type { BackupSettings } from '@/types'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { useAuthStore } from '@/stores/authStore'
 import { toast } from 'sonner'
@@ -51,6 +53,12 @@ function makeSettings(overrides: Partial<{
   resticAvailable: boolean
   rcloneAvailable: boolean
   repositoryInitialized: boolean
+  scheduleIntervalMinutes: number
+  scheduleMode: 'interval' | 'scheduled'
+  scheduleTime: string
+  scheduleDays: number[]
+  serverTimezone: string
+  serverTimeOffset: string
 }> = {}) {
   return {
     repository: '/app/data/restic-repo',
@@ -63,6 +71,13 @@ function makeSettings(overrides: Partial<{
     keepYearly: 0,
     autoPrune: true,
     scheduleIntervalMinutes: 0,
+    scheduleMode: 'interval' as const,
+    scheduleTime: '03:00',
+    // Ascending Go weekday ints, 0 = Sunday. Every day, the server default.
+    scheduleDays: [0, 1, 2, 3, 4, 5, 6],
+    // A default install sets no TZ, so the backend reports UTC.
+    serverTimezone: 'UTC',
+    serverTimeOffset: '+00:00',
     syncAfterBackup: false,
     rcloneRemote: '',
     rclonePath: '',
@@ -629,5 +644,163 @@ describe('BackupSettingsContent — source badges', () => {
     await waitFor(() => {
       expect(screen.getAllByText('saved').length).toBeGreaterThan(0)
     })
+  })
+})
+
+describe('BackupSettingsContent — fixed-time schedule', () => {
+  /** Switch the Schedule section to "At a set time" and wait for the fields to appear. */
+  async function switchToScheduledMode() {
+    fireEvent.click(await screen.findByRole('radio', { name: 'At a set time' }))
+    return screen.findByLabelText('Time of day')
+  }
+
+  it('shows the interval field in interval mode and the time field in scheduled mode', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    // Interval mode is the default, so the interval input is the visible control.
+    expect(await screen.findByLabelText('Interval (minutes)')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Time of day')).not.toBeInTheDocument()
+
+    await switchToScheduledMode()
+
+    expect(screen.queryByLabelText('Interval (minutes)')).not.toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Days' })).toBeInTheDocument()
+  })
+
+  it('reports the server clock with the values a default install produces', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    expect(
+      await screen.findByText("Times are in UTC (+00:00), the server's own clock."),
+    ).toBeInTheDocument()
+  })
+
+  it('sends scheduleMode, scheduleTime and scheduleDays when saving in scheduled mode', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    const timeInput = await switchToScheduledMode()
+    fireEvent.change(timeInput, { target: { value: '02:30' } })
+    // Drop Sunday (Go weekday 0); the component re-emits the rest ascending.
+    fireEvent.click(screen.getByRole('button', { name: 'Sunday' }))
+
+    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scheduleMode: 'scheduled',
+          scheduleTime: '02:30',
+          scheduleDays: [1, 2, 3, 4, 5, 6],
+        }),
+      )
+    })
+  })
+
+  it('still sends scheduleIntervalMinutes when saving in interval mode', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.change(await screen.findByLabelText('Interval (minutes)'), {
+      target: { value: '45' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateSettings).toHaveBeenCalled()
+    })
+    const payload = mockUpdateSettings.mock.calls[0][0]
+    expect(payload).toHaveProperty('scheduleIntervalMinutes', 45)
+    // Mode was never touched, so it must not ride along.
+    expect(payload).not.toHaveProperty('scheduleMode')
+  })
+
+  it('omits an untouched scheduleDays but includes a genuinely changed one', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    // Case that must be OMITTED: mode changes, the day set does not. scheduleDays
+    // is an array, so a reference compare would wrongly mark it dirty here.
+    await switchToScheduledMode()
+    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateSettings).toHaveBeenCalledTimes(1)
+    })
+    const unchanged = mockUpdateSettings.mock.calls[0][0]
+    expect(unchanged).toHaveProperty('scheduleMode', 'scheduled')
+    expect(unchanged).not.toHaveProperty('scheduleDays')
+
+    // Case that must be INCLUDED, on the same instrument: toggle a day off.
+    fireEvent.click(screen.getByRole('button', { name: 'Wednesday' }))
+    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateSettings).toHaveBeenCalledTimes(2)
+    })
+    const changed = mockUpdateSettings.mock.calls[1][0]
+    expect(changed).toHaveProperty('scheduleDays', [0, 1, 2, 4, 5, 6])
+  })
+
+  it('keeps Save disabled when the schedule fields are only rendered, never edited', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    const saveButton = await screen.findByRole('button', { name: /save backup settings/i })
+    expect(screen.getByRole('radio', { name: 'Every so often' })).toBeInTheDocument()
+    expect(saveButton).toBeDisabled()
+  })
+
+  it('refuses to empty the day set, so a scheduled backup always has a day to fire on', async () => {
+    mockGetSettings.mockResolvedValue(makeSettings({ scheduleMode: 'scheduled', scheduleDays: [3] }))
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    const wednesday = await screen.findByRole('button', { name: 'Wednesday' })
+    expect(wednesday).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(wednesday)
+
+    expect(wednesday).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: /save backup settings/i })).toBeDisabled()
+  })
+})
+
+describe('buildPayload — scheduleDays is compared by value, not by reference', () => {
+  /**
+   * The UI-level tests above cannot see this bug: toDraft passes the settings
+   * array through by reference, so draft and remote share one object and even a
+   * reference compare looks correct. The identity only diverges when the
+   * settings query refetches and parses a fresh, equal array — which is every
+   * refetch. A reference compare pins the form dirty from that moment on,
+   * because isDirty is derived from this payload (useBackupForm.ts:39-40).
+   */
+  it('treats an equal-but-distinct array from a refetch as unchanged', () => {
+    const remote = makeSettings() as BackupSettings
+    const draft = toDraft(remote)
+    const refetched: BackupSettings = { ...remote, scheduleDays: [...remote.scheduleDays] }
+
+    expect(refetched.scheduleDays).not.toBe(draft.scheduleDays)
+    expect(buildPayload(refetched, draft, '')).toEqual({})
+  })
+
+  it('sends a genuinely changed day set', () => {
+    const remote = makeSettings() as BackupSettings
+    const draft = { ...toDraft(remote), scheduleDays: [1, 3, 5] }
+
+    expect(buildPayload(remote, draft, '')).toEqual({ scheduleDays: [1, 3, 5] })
+  })
+
+  it('stays clean when the server omits scheduleDays and the default fills in', () => {
+    const remote = makeSettings() as BackupSettings
+    // A backend that predates the schedule fields sends nothing for them.
+    delete (remote as Partial<BackupSettings>).scheduleDays
+    const draft = toDraft(remote)
+
+    // The default is a fresh array on every call, so a reference compare would
+    // report this untouched form as dirty forever.
+    expect(buildPayload(remote, draft, '')).toEqual({})
   })
 })

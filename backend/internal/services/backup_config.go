@@ -9,6 +9,19 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 )
 
+const (
+	// ScheduleModeInterval fires every ScheduleInterval minutes, anchored to
+	// process start. This is the historical behaviour and the default.
+	ScheduleModeInterval = "interval"
+	// ScheduleModeScheduled fires at a fixed wall-clock time on chosen days.
+	ScheduleModeScheduled = "scheduled"
+
+	// DefaultScheduleTime is the fire time used when none is configured.
+	DefaultScheduleTime = "02:00"
+	// DefaultScheduleDays is every weekday, in Go's 0=Sunday numbering.
+	DefaultScheduleDays = "0,1,2,3,4,5,6"
+)
+
 // BackupConfig holds the effective backup configuration resolved from DB
 // settings (highest precedence) over environment-variable fallbacks over
 // hard-coded defaults. resolveBackupConfig reads from the DB at call time so
@@ -33,7 +46,23 @@ type BackupConfig struct {
 	AutoPrune bool
 
 	// ScheduleInterval is the backup scheduler tick in minutes. 0 = disabled.
+	// Only consulted in "interval" mode; see ScheduleMode.
 	ScheduleInterval int
+
+	// ScheduleMode selects how the backup scheduler decides when to fire:
+	// ScheduleModeInterval (a plain ticker anchored to process start) or
+	// ScheduleModeScheduled (a fixed wall-clock time on chosen weekdays).
+	// Any unrecognised stored value is treated as interval mode, which is the
+	// behaviour every existing install already has.
+	ScheduleMode string
+
+	// ScheduleTime is the wall-clock fire time in "HH:MM" 24-hour form, used
+	// only in scheduled mode. Default "02:00".
+	ScheduleTime string
+
+	// ScheduleDays is the comma-separated Go weekday list (0=Sunday) the
+	// schedule fires on, used only in scheduled mode. Default: every day.
+	ScheduleDays string
 
 	// SyncAfter causes an rclone sync to run after each local backup.
 	SyncAfter bool
@@ -92,6 +121,16 @@ func resolveBackupConfig(db *database.DB, cfg *config.Config) BackupConfig {
 
 	// --- backup_schedule_interval (default 0 = disabled) ---
 	bc.ScheduleInterval = resolveIntSetting(db, "backup_schedule_interval", cfg.BackupScheduleInterval, 0)
+
+	// --- backup_schedule_mode / _time / _days ---
+	//
+	// Deliberately NOT seeded by any migration: resolveStringSetting (like
+	// resolveIntSetting) returns a non-empty DB value BEFORE consulting the env
+	// fallback, so seeding a row would make the matching BACKUP_SCHEDULE_* env
+	// var permanently dead on every install.
+	bc.ScheduleMode = resolveStringSetting(db, "backup_schedule_mode", cfg.BackupScheduleMode, ScheduleModeInterval)
+	bc.ScheduleTime = resolveStringSetting(db, "backup_schedule_time", cfg.BackupScheduleTime, DefaultScheduleTime)
+	bc.ScheduleDays = resolveStringSetting(db, "backup_schedule_days", cfg.BackupScheduleDays, DefaultScheduleDays)
 
 	// --- backup_sync_after (default false) ---
 	bc.SyncAfter = resolveBoolSetting(db, "backup_sync_after", cfg.BackupSyncAfter, false)
@@ -210,6 +249,21 @@ func resolveIntSetting(db *database.DB, key, envVal string, defaultVal int) int 
 		if v, err := strconv.Atoi(envVal); err == nil {
 			return v
 		}
+	}
+	return defaultVal
+}
+
+// resolveStringSetting reads a DB setting, falls back to envVal, then to
+// defaultVal. Mirrors resolveIntSetting/resolveBoolSetting: a non-empty DB
+// value always wins, so no caller should seed one for a key that also has an
+// env fallback.
+func resolveStringSetting(db *database.DB, key, envVal, defaultVal string) string {
+	dbVal, _ := db.GetSetting(key)
+	if dbVal != "" {
+		return dbVal
+	}
+	if envVal != "" {
+		return envVal
 	}
 	return defaultVal
 }

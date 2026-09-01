@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,13 +17,28 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
+// scanStartIsBenign reports whether a StartBackgroundScan error is one of the
+// expected "not right now" outcomes rather than a real failure. A scan already
+// running, or a scheduler mid-Stop (which an interval change goes through, via
+// Restart), both mean "no new scan was started" — the caller asked to refresh
+// and the honest answer is to hand back what is already cached, not a 500.
+//
+// This used to be a string comparison against "scan already in progress", so
+// any newly introduced error text landed in the 500 branch by default. Match
+// on the sentinels instead (agent-os-mtbo.9).
+func scanStartIsBenign(err error) bool {
+	return err == nil ||
+		errors.Is(err, services.ErrScanInProgress) ||
+		errors.Is(err, services.ErrSchedulerStopping)
+}
+
 func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 	refresh := c.Query("refresh")
 
 	if refresh == "true" {
 		if h.scheduler != nil {
 			err := h.scheduler.StartBackgroundScan()
-			if err != nil && err.Error() != "scan already in progress" {
+			if !scanStartIsBenign(err) {
 				slog.Error("Failed to start background scan", "error", err)
 				handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to start update scan"))
 				return
@@ -56,7 +72,10 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 				"updates":   updates,
 				"fromCache": len(cachedUpdates) > 0,
 				"scannedAt": lastScanAt,
-				"scanning":  true,
+				// Not hardcoded true: on the ErrSchedulerStopping path no scan
+				// was started, and telling the client one is running would have
+				// it poll for a result that is never coming.
+				"scanning": h.scheduler.IsScanning(),
 			})
 			return
 		}
