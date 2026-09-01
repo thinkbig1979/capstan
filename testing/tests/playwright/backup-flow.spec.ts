@@ -321,105 +321,83 @@ test.describe('Backup flow E2E', () => {
     const policy = await policyResp.json()
     expect(policy.enabled).toBe(true)
 
-    // ── UI: dashboard should show toggle ON for this stack ─────────────────
-    // The policy is already enabled, so the first load renders the ON state —
-    // previously this was a second boot correcting a dashboard loaded before
-    // the PUT.
-    await loginIfNeeded(page, '/dashboard')
+    // ── UI: the stack detail page shows the toggle ON for this stack ───────
+    // BackupToggle mounts in StackDetail (frontend/src/components/stack/
+    // StackDetail.tsx) and in the non-default Updates tab — never on the
+    // dashboard. `/dashboard` is not even a route: App.tsx's catch-all
+    // redirects it to `/`. This load used to go there, so the toggle was
+    // absent every time and the assertions below were skipped in favour of an
+    // API check that could not fail. The policy is already enabled, so the
+    // first load renders the ON state.
+    //
+    // The stack id goes in the path raw. `~` is unreserved and `:` is legal in
+    // a path segment, and the app's own link does the same
+    // (frontend/src/components/layout/sidebar/StackRow.tsx).
+    await loginIfNeeded(page, `/stacks/${testStackId}`)
 
-    // BackupToggle renders data-testid="backup-toggle-<stackId>" when enabled
+    // BackupToggle renders data-testid="backup-toggle-<stackId>" when enabled.
+    // Unconditional and retrying: a missing toggle must fail this test loudly.
     const toggleEl = page.locator(`[data-testid="backup-toggle-${testStackId}"]`)
-    if (await toggleEl.count() > 0) {
-      await expect(toggleEl).toBeVisible()
-      // The stop-policy selector should appear when enabled
-      const stopPolicyTrigger = page.locator(
-        `[data-testid="backup-stop-policy-${testStackId}"]`,
-      )
-      await expect(stopPolicyTrigger).toBeVisible({ timeout: 5_000 })
-    } else {
-      // Stack card may not be visible — verify via API instead
-      const policiesResp = await apiGet(request, '/api/v1/backups/policies')
-      const policiesBody = await policiesResp.json()
-      const enabledPolicy = (policiesBody.policies ?? []).find(
-        (p: { targetId: string; enabled: boolean }) => p.targetId === testStackId && p.enabled,
-      )
-      expect(enabledPolicy, 'Policy not enabled after toggle').toBeTruthy()
-    }
+    await expect(toggleEl).toBeVisible()
+
+    // The stop-policy selector should appear when enabled
+    const stopPolicyTrigger = page.locator(
+      `[data-testid="backup-stop-policy-${testStackId}"]`,
+    )
+    await expect(stopPolicyTrigger).toBeVisible()
   })
 
   // ── 004: Run backup and wait for completion ────────────────────────────────
 
-  test('BACKUP-PW-004: run backup and verify completion', async ({ page, request }) => {
-    await ensureCsrf(request)
+  // The backup is driven entirely through the UI now, so this test makes no
+  // API calls of its own and needs neither `request` nor a CSRF bootstrap —
+  // the app's axios client handles the double-submit header itself.
+  test('BACKUP-PW-004: run backup and verify completion', async ({ page }) => {
+    // ── Click "Back up now" in the BackupStatusCard ───────────────────────
+    // BackupStatusCard mounts only in BackupSettingsContent (frontend/src/
+    // components/settings/BackupSettingsContent.tsx), i.e. /settings/backup.
+    // This load used to go to `/dashboard`, which is not a route at all, so the
+    // button was never present and the whole UI path was silently replaced by
+    // an API fallback that asserted nothing about the UI.
+    await loginIfNeeded(page, '/settings/backup')
 
-    // ── Option A: click "Back up now" in the BackupStatusCard ─────────────
-    await loginIfNeeded(page, '/dashboard')
-
+    // Unconditional: a missing or disabled button must fail this test loudly.
+    // It is enabled once the restic repo is initialised, which BACKUP-PW-002
+    // did earlier in this serial run.
     const backupNowBtn = page.getByRole('button', { name: /back up now/i })
-    let ranViaUI = false
+    await expect(backupNowBtn).toBeVisible()
+    await expect(backupNowBtn).toBeEnabled()
 
-    if (await backupNowBtn.count() > 0 && await backupNowBtn.isEnabled()) {
-      await backupNowBtn.click()
-      // Wait for "Running..." to appear then disappear
-      await page
-        .getByText(/running/i)
-        .waitFor({ timeout: 5_000 })
-        .catch(() => {/* may transition fast */})
+    await backupNowBtn.click()
 
-      const succeeded = await page
-        .getByText(/success|completed/i)
-        .waitFor({ timeout: 60_000 })
-        .then(() => true)
-        .catch(() => false)
+    // The click registered: the card is busy while the mutation is in flight
+    // and then while its WebSocket streams the run.
+    await expect(backupNowBtn).toBeDisabled()
 
-      if (succeeded) {
-        ranViaUI = true
-      }
-    }
+    // "Live output" mounts only once the stream has delivered a line, so it
+    // belongs to THIS click rather than to any earlier run.
+    await expect(page.getByText('Live output')).toBeVisible({ timeout: 30_000 })
 
-    if (!ranViaUI) {
-      // ── Option B: API fallback ────────────────────────────────────────────
-      const runResp = await apiMutate(request, 'POST', '/api/v1/backups/run', {
-        stackIds: [],
-      })
-      expect(runResp.status()).toBe(202)
-      const runBody = await runResp.json()
-      const runId: string = runBody.runId
-      const wsUrl: string = runBody.wsUrl
-      expect(runId).toBeTruthy()
-      expect(wsUrl, 'run response must include a wsUrl').toBeTruthy()
+    // Busy clears only when the stream reports done — BackupStatusCard's
+    // isBusy is (mutation pending || streaming === 'running') — and the done
+    // handler then invalidates the backup-status query. Waiting for it is what
+    // makes the Last-run assertions below describe this run.
+    //
+    // This wait is load-bearing, not decoration. OBSERVED while writing this
+    // test: asserting the Success badge straight after the click passed ~150ms
+    // later against a badge left over from a previous suite run, while restic
+    // still had ~13s of work to go, and BACKUP-PW-005 then found no snapshots.
+    await expect(backupNowBtn).toBeEnabled({ timeout: 90_000 })
 
-      // The op is only stashed; connect the WS to actually execute the backup
-      // and await the streamed completion before asserting on history.
-      const wsResult = await runViaWs(wsUrl)
-      // "partial" fails here too — see the runViaWs doc comment for why.
-      expect(
-        wsResult.outcome,
-        `Backup WS did not report success (outcome=${wsResult.outcome}, reason="${wsResult.reason}"). ` +
-          `Last events: ${wsResult.events.slice(-3).join(' | ')}`,
-      ).toBe('success')
-
-      // Poll history until the run completes
-      const completedRun = await pollUntil(async () => {
-        const histResp = await apiGet(request, '/api/v1/backups/history?limit=10')
-        if (!histResp.ok()) return null
-        const hist = await histResp.json()
-        const run = (hist.runs ?? []).find(
-          (r: { id: string; status: string }) => r.id === runId,
-        )
-        if (!run) {
-          // Fallback: check the most recent run
-          const latest = (hist.runs ?? [])[0]
-          if (latest && ['success', 'failed'].includes(latest.status)) return latest
-          return null
-        }
-        if (['success', 'failed'].includes(run.status)) return run
-        return null
-      }, 90_000)
-
-      expect(completedRun, 'Backup run did not complete within timeout').toBeTruthy()
-      expect(completedRun!.status, 'Backup run failed').toBe('success')
-    }
+    // The stream reached a terminal state (Clear renders only when there are
+    // lines and the stream is no longer running), and that state is success.
+    // This page renders exactly one LastRunBadge and has no run-history table,
+    // so these two locators can only be describing the run just made.
+    // exact: the RepositorySection further down the page also has a
+    // "Clear saved password" button, which a substring match picks up too.
+    await expect(page.getByRole('button', { name: 'Clear', exact: true })).toBeVisible()
+    await expect(page.getByText(/^(Failed|Partial|Interrupted)$/)).toHaveCount(0)
+    await expect(page.getByText('Success', { exact: true }).first()).toBeVisible()
   })
 
   // ── 005: Verify snapshot appears ──────────────────────────────────────────
