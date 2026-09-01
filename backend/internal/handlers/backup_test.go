@@ -2038,3 +2038,72 @@ func TestUpdateSettings_NonScheduleChangeDoesNotRestartScheduler(t *testing.T) {
 	assert.False(t, sched.stopped, "a non-schedule change must leave the scheduler alone")
 	assert.False(t, sched.started)
 }
+
+// TestUpdateSettings_SavingDoesNotKillRunningScheduledScheduler pins the
+// SEQUENCE rather than an end state. The bug this task removes was a RUNNING
+// scheduled-mode scheduler being stopped and then not restarted, so the test
+// has to start one first: an assertion made from a never-started state cannot
+// see that class of failure at all, and would pass against a build that never
+// starts the scheduler under any circumstances.
+//
+// Interval 0 throughout, because that is the configuration an operator lands
+// in after switching to a fixed time, and the one every interval-shaped guard
+// gets wrong.
+func TestUpdateSettings_SavingDoesNotKillRunningScheduledScheduler(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body map[string]interface{}
+	}{
+		// The literal sequence: an ordinary save of something unrelated.
+		{"unrelated field", map[string]interface{}{"keepDaily": 30}},
+		// The discriminating one: a schedule field DOES stop the scheduler
+		// first, so the restart is what keeps it alive.
+		{"schedule field", map[string]interface{}{"scheduleTime": "23:45"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := newBackupHandlerDB(t)
+			require.NoError(t, db.SetSetting("backup_schedule_mode", "scheduled"))
+			require.NoError(t, db.SetSetting("backup_schedule_time", "02:00"))
+			// backup_schedule_interval deliberately never set → resolves to 0.
+
+			svc := buildBackupSvc(t, db, true, false)
+			h := NewBackupHandler(svc, db, slog.Default())
+			t.Cleanup(h.Stop)
+			r := newBackupRouter(h)
+
+			sched := &handlerFakeScheduler{}
+			svc.SetScheduler(sched)
+
+			// Boot the scheduler the way main.go does, and prove it is really
+			// running before the save — otherwise the assertion afterwards
+			// proves nothing.
+			svc.StartScheduler()
+			require.True(t, svc.SchedulerRunning(), "precondition: the scheduler must be running before the save")
+			require.NotNil(t, sched.scheduled, "precondition: it must be running on the scheduled path")
+
+			req := jsonReq(t, http.MethodPut, "/api/settings/backup", tc.body)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+			assert.True(t, svc.SchedulerRunning(),
+				"saving %s must leave the scheduled-mode scheduler running; a zero interval is not 'disabled' in this mode", tc.name)
+			assert.NotNil(t, sched.scheduled, "it must still be on the scheduled path")
+
+			// And the status endpoint must agree, since that is what the
+			// operator actually sees.
+			statusReq := httptest.NewRequest(http.MethodGet, "/api/backups/status", nil)
+			statusW := httptest.NewRecorder()
+			r.ServeHTTP(statusW, statusReq)
+			require.Equal(t, http.StatusOK, statusW.Code)
+			assert.Equal(t, true, decodeBody(t, statusW)["schedulerRunning"],
+				"the status endpoint must still report the scheduler as running")
+		})
+	}
+}
