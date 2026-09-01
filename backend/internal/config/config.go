@@ -10,6 +10,18 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/logging"
 )
 
+// DefaultAPIRateLimitPerMin is the API budget, in requests per rolling minute,
+// applied to every deployment that does not set RATE_LIMIT_API_PER_MIN. It is
+// the single source of truth for that number: middleware.InitRateLimiters takes
+// the budget as an argument rather than holding its own copy, so there is no
+// second 300 to drift out of step with this one.
+//
+// The constant lives here, not next to the auth limiter constants in
+// internal/middleware, because middleware already depends on this package
+// (transitively, via internal/services) and the reverse edge would be an import
+// cycle. Verified 2026-09-01 with `go list -deps ./internal/middleware`.
+const DefaultAPIRateLimitPerMin = 300
+
 type StacksDirEntry struct {
 	Path      string `json:"path"`
 	Name      string `json:"name"`
@@ -31,6 +43,12 @@ type Config struct {
 	AuthDisabled    bool
 	CORSOrigins     string
 	TrustedNetworks string
+	// APIRateLimitPerMin is the per-caller budget for the authenticated API
+	// surface, in requests per rolling minute. Raising it weakens a real
+	// abuse control, so it exists for one purpose: an end-to-end test run
+	// drives far more traffic through one bucket than any human does. See
+	// RATE_LIMIT_API_PER_MIN in docs/reference/configuration.md.
+	APIRateLimitPerMin int
 	// HealthNetworks lists the CIDRs, beyond loopback, that may reach /health
 	// and /health/ready. Deliberately separate from TrustedNetworks: that value
 	// is Gin's trusted-proxy list, so reusing it would force an operator to
@@ -72,6 +90,7 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		Port:                        "5001",
+		APIRateLimitPerMin:          DefaultAPIRateLimitPerMin,
 		LogLevel:                    logging.DefaultLevel,
 		LogFormat:                   logging.FormatText,
 		GitSSHKey:                   filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa"),
@@ -109,6 +128,23 @@ func Load() (*Config, error) {
 
 	if port := os.Getenv("PORT"); port != "" {
 		cfg.Port = port
+	}
+
+	// Absent or empty leaves DefaultAPIRateLimitPerMin in place, so an existing
+	// deployment that never sets this sees byte-identical limiter behaviour. A
+	// malformed or non-positive value is rejected at startup rather than
+	// falling back, matching PORT and LOG_LEVEL: silently ignoring a typo in a
+	// security control is how an operator comes to believe a limit is in force
+	// when it is not.
+	if apiRateLimit := os.Getenv("RATE_LIMIT_API_PER_MIN"); apiRateLimit != "" {
+		parsed, err := strconv.Atoi(apiRateLimit)
+		if err != nil {
+			return nil, &ConfigError{Field: "RATE_LIMIT_API_PER_MIN", Message: "must be a number, got " + strconv.Quote(apiRateLimit)}
+		}
+		if parsed < 1 {
+			return nil, &ConfigError{Field: "RATE_LIMIT_API_PER_MIN", Message: "must be at least 1, got " + apiRateLimit}
+		}
+		cfg.APIRateLimitPerMin = parsed
 	}
 
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {

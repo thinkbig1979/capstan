@@ -336,3 +336,60 @@ func TestLoad_UnsetStorageKeyDoesNotWarn(t *testing.T) {
 		t.Errorf("did not expect a STORAGE_KEY warning when unset, got: %s", buf.String())
 	}
 }
+
+// An unset RATE_LIMIT_API_PER_MIN must leave the API budget at exactly the
+// pre-existing 300/min. This is the constraint that matters: the variable was
+// added for CI, and every deployment that ignores it must be unaffected.
+func TestLoad_DefaultsAPIRateLimitWhenUnset(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("RATE_LIMIT_API_PER_MIN", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if cfg.APIRateLimitPerMin != 300 {
+		t.Errorf("expected unset RATE_LIMIT_API_PER_MIN to default to 300, got %d", cfg.APIRateLimitPerMin)
+	}
+}
+
+// The other side: the variable is actually read. Without this, the assignment
+// in Load() could be deleted and the default test above would stay green.
+func TestLoad_HonoursAPIRateLimitFromEnvironment(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("RATE_LIMIT_API_PER_MIN", "2000")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if cfg.APIRateLimitPerMin != 2000 {
+		t.Errorf("expected Load() to honour RATE_LIMIT_API_PER_MIN=2000, got %d", cfg.APIRateLimitPerMin)
+	}
+}
+
+// A typo in a security control fails startup rather than silently reverting to
+// the default, matching PORT and LOG_LEVEL. Zero and negatives are rejected for
+// the same reason from the other direction: a 0 budget fails CLOSED and refuses
+// every request, which reads as an outage with no obvious cause. That is
+// measured, not assumed — see
+// middleware.TestInitRateLimiters_RejectsNonPositiveBudget, which drives the
+// limiter at 0 and pins the resulting panic. This check is the outer of two
+// guards; middleware.InitRateLimiters panics if a non-positive budget reaches
+// it by any other route.
+func TestLoad_RejectsImplausibleAPIRateLimit(t *testing.T) {
+	for _, value := range []string{"not-a-number", "0", "-1", "300.5"} {
+		t.Run(value, func(t *testing.T) {
+			setBaseLoadEnv(t)
+			t.Setenv("RATE_LIMIT_API_PER_MIN", value)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected Load() to reject RATE_LIMIT_API_PER_MIN=%s, got nil error", value)
+			}
+			if !strings.Contains(err.Error(), "RATE_LIMIT_API_PER_MIN") {
+				t.Errorf("error should name the offending variable, got: %v", err)
+			}
+		})
+	}
+}

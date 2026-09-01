@@ -319,7 +319,7 @@ func main() {
 	}
 	defer watcherService.Stop()
 
-	middleware.InitRateLimiters()
+	middleware.InitRateLimiters(cfg.APIRateLimitPerMin)
 	handlers.InitUpgrader(cfg.CORSOrigins, cfg.AuthDisabled)
 
 	gin.SetMode(gin.ReleaseMode)

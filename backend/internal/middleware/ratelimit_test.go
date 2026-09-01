@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/thinkbig1979/capstan/backend/internal/config"
 )
 
 // newAuthTestRouter returns a router with the auth limiter in front of a handler
@@ -19,7 +21,7 @@ import (
 func newAuthTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	InitRateLimiters()
+	InitRateLimiters(config.DefaultAPIRateLimitPerMin)
 
 	r := gin.New()
 	r.Use(RateLimitAuth())
@@ -627,5 +629,141 @@ func TestPeekLoginUsername_NilBody(t *testing.T) {
 	}
 	if len(rest) != 0 {
 		t.Fatalf("expected an empty body after peek, got %q", rest)
+	}
+}
+
+// newAPITestRouter returns a router with the general API limiter in front of a
+// trivial handler, initialised at the given budget.
+func newAPITestRouter(t *testing.T, apiMaxReqs int) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	InitRateLimiters(apiMaxReqs)
+
+	r := gin.New()
+	r.Use(RateLimitByUser())
+	r.GET("/api/v1/stacks", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	return r
+}
+
+func apiRequest(r *gin.Engine, ip string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks", nil)
+	req.RemoteAddr = ip + ":54321"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// The default budget must stay exactly 300/min. This is the production half of
+// the RATE_LIMIT_API_PER_MIN pair: a deployment that never sets the variable
+// gets the same ceiling it got before the variable existed. Asserting the
+// constant alone would not catch a wiring mistake, so this drives real requests
+// through the middleware and checks the boundary from both sides — the 300th is
+// allowed, the 301st is not.
+func TestAPILimit_DefaultBudgetIsUnchangedAt300(t *testing.T) {
+	if config.DefaultAPIRateLimitPerMin != 300 {
+		t.Fatalf("default API budget changed: expected 300, got %d — this is a production rate limit, not a tunable", config.DefaultAPIRateLimitPerMin)
+	}
+
+	r := newAPITestRouter(t, config.DefaultAPIRateLimitPerMin)
+	const ip = "203.0.113.40"
+
+	for i := 0; i < config.DefaultAPIRateLimitPerMin; i++ {
+		if w := apiRequest(r, ip); w.Code != http.StatusOK {
+			t.Fatalf("request %d of %d: expected 200, got %d (%s)", i+1, config.DefaultAPIRateLimitPerMin, w.Code, w.Body.String())
+		}
+	}
+
+	if w := apiRequest(r, ip); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("request %d: expected 429, got %d (%s)", config.DefaultAPIRateLimitPerMin+1, w.Code, w.Body.String())
+	}
+}
+
+// The E2E half: raising the budget must actually raise it. Same instrument,
+// same 301st request, opposite outcome — without this the test above would pass
+// against a build that ignores the parameter entirely and always uses 300.
+func TestAPILimit_RaisedBudgetAdmitsThe301stRequest(t *testing.T) {
+	const raised = 2000
+	r := newAPITestRouter(t, raised)
+	const ip = "203.0.113.41"
+
+	for i := 0; i < config.DefaultAPIRateLimitPerMin; i++ {
+		if w := apiRequest(r, ip); w.Code != http.StatusOK {
+			t.Fatalf("request %d: expected 200, got %d (%s)", i+1, w.Code, w.Body.String())
+		}
+	}
+
+	if w := apiRequest(r, ip); w.Code != http.StatusOK {
+		t.Fatalf("request %d under a raised budget of %d: expected 200, got %d (%s)", config.DefaultAPIRateLimitPerMin+1, raised, w.Code, w.Body.String())
+	}
+
+	// The raised budget is still a ceiling, not an off switch. A fix that
+	// disabled limiting for the E2E backend would pass every assertion above.
+	for i := config.DefaultAPIRateLimitPerMin + 1; i < raised; i++ {
+		if w := apiRequest(r, ip); w.Code != http.StatusOK {
+			t.Fatalf("request %d: expected 200, got %d (%s)", i+1, w.Code, w.Body.String())
+		}
+	}
+
+	if w := apiRequest(r, ip); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("request %d: expected 429 at the raised ceiling, got %d (%s)", raised+1, w.Code, w.Body.String())
+	}
+}
+
+// A non-positive budget must be refused loudly at init. It is not a lax limit
+// but a total API outage: check() rejects when len(valid) >= rl.maxReqs, so at 0
+// the first request of every bucket compares 0 >= 0 and is refused, visible only
+// as ordinary "Rate limit exceeded" warnings.
+//
+// 0 is Go's zero value, so it is the value a future caller is most likely to
+// supply by accident — a risk that did not exist while the budget was a literal.
+func TestInitRateLimiters_RejectsNonPositiveBudget(t *testing.T) {
+	for _, budget := range []int{0, -1, -300} {
+		t.Run(fmt.Sprintf("budget_%d", budget), func(t *testing.T) {
+			defer func() {
+				recovered := recover()
+				if recovered == nil {
+					t.Fatalf("InitRateLimiters(%d) returned normally; expected a panic, because this budget refuses every request", budget)
+				}
+				if msg := fmt.Sprint(recovered); !strings.Contains(msg, "RATE_LIMIT_API_PER_MIN") {
+					t.Errorf("panic should name the variable an operator would have to fix, got: %s", msg)
+				}
+			}()
+			InitRateLimiters(budget)
+		})
+	}
+}
+
+// The other side, on the same instrument: a positive budget is passed through
+// untouched, not clamped, rounded, or otherwise adjusted by the guard. Without
+// this, a guard that panicked on everything would satisfy the test above.
+func TestInitRateLimiters_PassesPositiveBudgetThrough(t *testing.T) {
+	for _, budget := range []int{1, config.DefaultAPIRateLimitPerMin, 2000} {
+		t.Run(fmt.Sprintf("budget_%d", budget), func(t *testing.T) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Fatalf("InitRateLimiters(%d) panicked on a valid budget: %v", budget, recovered)
+				}
+			}()
+			InitRateLimiters(budget)
+
+			if apiRateLimiter.maxReqs != budget {
+				t.Errorf("expected the API limiter to carry budget %d, got %d", budget, apiRateLimiter.maxReqs)
+			}
+		})
+	}
+
+	// A budget of 1 is the tightest value the guard admits, so it is the one
+	// that proves the boundary is at 0 and not somewhere above it: the first
+	// request must be allowed and the second refused.
+	r := newAPITestRouter(t, 1)
+	const ip = "203.0.113.42"
+
+	if w := apiRequest(r, ip); w.Code != http.StatusOK {
+		t.Fatalf("first request at budget 1: expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if w := apiRequest(r, ip); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request at budget 1: expected 429, got %d (%s)", w.Code, w.Body.String())
 	}
 }
