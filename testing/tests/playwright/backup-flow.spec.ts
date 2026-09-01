@@ -395,15 +395,37 @@ test.describe.serial('Backup flow E2E', () => {
     // still had ~13s of work to go, and BACKUP-PW-005 then found no snapshots.
     await expect(backupNowBtn).toBeEnabled({ timeout: 90_000 })
 
-    // The stream reached a terminal state (Clear renders only when there are
-    // lines and the stream is no longer running), and that state is success.
-    // This page renders exactly one LastRunBadge and has no run-history table,
-    // so these two locators can only be describing the run just made.
+    // The stream reached a terminal state: Clear renders only once there are
+    // lines and the stream is no longer running.
     // exact: the RepositorySection further down the page also has a
     // "Clear saved password" button, which a substring match picks up too.
     await expect(page.getByRole('button', { name: 'Clear', exact: true })).toBeVisible()
-    await expect(page.getByText(/^(Failed|Partial|Interrupted)$/)).toHaveCount(0)
-    await expect(page.getByText('Success', { exact: true }).first()).toBeVisible()
+
+    // Read the outcome off THIS run's stream, never off the Last-run badge.
+    //
+    // The badge is DB-backed, and useBackup's done handler only ISSUES the
+    // status refetch — refetchHistory() awaits nothing — in the same React
+    // commit that takes streaming.status out of 'running' and so clears
+    // isBusy. The badge therefore still describes the PREVIOUS run for a whole
+    // /api/v1/backups/status round trip, and that endpoint shells out to
+    // restic twice (CheckRepository, RepoSizeBytes), so the window is a restic
+    // round trip wide.
+    //
+    // OBSERVED, with a previous successful run in DATA_DIR and this stack's
+    // directory chmod 000 to force a real failure: the stream said
+    // "Backup run finished: status=failed ok=0 failed=1" while the badge still
+    // read "Success", and asserting on the badge passed this test green on a
+    // failed backup.
+    //
+    // The stream cannot be stale: connect() calls setLines([]) before it
+    // streams, so every line under "Live output" belongs to this click. It is
+    // also outcome-specific — useBackup appends "Backup completed
+    // successfully." only on success, "Backup partially completed." on
+    // partial, and "Error: ..." on failed and on interrupted. Asserting the
+    // success line positively therefore fails on all three bad outcomes; the
+    // Error check just ahead of it only buys a clearer message.
+    await expect(page.getByText(/^Error:/)).toHaveCount(0)
+    await expect(page.getByText('Backup completed successfully.')).toBeVisible()
   })
 
   // ── 005: Verify snapshot appears ──────────────────────────────────────────
