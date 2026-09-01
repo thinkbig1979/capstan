@@ -370,8 +370,13 @@ func TestLoad_HonoursAPIRateLimitFromEnvironment(t *testing.T) {
 
 // A typo in a security control fails startup rather than silently reverting to
 // the default, matching PORT and LOG_LEVEL. Zero and negatives are rejected for
-// the same reason from the other direction: 0 would fail closed and reject every
-// request, which reads as an outage with no obvious cause.
+// the same reason from the other direction: a 0 budget fails CLOSED and refuses
+// every request, which reads as an outage with no obvious cause. That is
+// measured, not assumed — see
+// middleware.TestInitRateLimiters_RejectsNonPositiveBudget, which drives the
+// limiter at 0 and pins the resulting panic. This check is the outer of two
+// guards; middleware.InitRateLimiters panics if a non-positive budget reaches
+// it by any other route.
 func TestLoad_RejectsImplausibleAPIRateLimit(t *testing.T) {
 	for _, value := range []string{"not-a-number", "0", "-1", "300.5"} {
 		t.Run(value, func(t *testing.T) {

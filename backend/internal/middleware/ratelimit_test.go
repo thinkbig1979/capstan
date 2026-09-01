@@ -710,3 +710,60 @@ func TestAPILimit_RaisedBudgetAdmitsThe301stRequest(t *testing.T) {
 		t.Fatalf("request %d: expected 429 at the raised ceiling, got %d (%s)", raised+1, w.Code, w.Body.String())
 	}
 }
+
+// A non-positive budget must be refused loudly at init. It is not a lax limit
+// but a total API outage: check() rejects when len(valid) >= rl.maxReqs, so at 0
+// the first request of every bucket compares 0 >= 0 and is refused, visible only
+// as ordinary "Rate limit exceeded" warnings.
+//
+// 0 is Go's zero value, so it is the value a future caller is most likely to
+// supply by accident — a risk that did not exist while the budget was a literal.
+func TestInitRateLimiters_RejectsNonPositiveBudget(t *testing.T) {
+	for _, budget := range []int{0, -1, -300} {
+		t.Run(fmt.Sprintf("budget_%d", budget), func(t *testing.T) {
+			defer func() {
+				recovered := recover()
+				if recovered == nil {
+					t.Fatalf("InitRateLimiters(%d) returned normally; expected a panic, because this budget refuses every request", budget)
+				}
+				if msg := fmt.Sprint(recovered); !strings.Contains(msg, "RATE_LIMIT_API_PER_MIN") {
+					t.Errorf("panic should name the variable an operator would have to fix, got: %s", msg)
+				}
+			}()
+			InitRateLimiters(budget)
+		})
+	}
+}
+
+// The other side, on the same instrument: a positive budget is passed through
+// untouched, not clamped, rounded, or otherwise adjusted by the guard. Without
+// this, a guard that panicked on everything would satisfy the test above.
+func TestInitRateLimiters_PassesPositiveBudgetThrough(t *testing.T) {
+	for _, budget := range []int{1, config.DefaultAPIRateLimitPerMin, 2000} {
+		t.Run(fmt.Sprintf("budget_%d", budget), func(t *testing.T) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Fatalf("InitRateLimiters(%d) panicked on a valid budget: %v", budget, recovered)
+				}
+			}()
+			InitRateLimiters(budget)
+
+			if apiRateLimiter.maxReqs != budget {
+				t.Errorf("expected the API limiter to carry budget %d, got %d", budget, apiRateLimiter.maxReqs)
+			}
+		})
+	}
+
+	// A budget of 1 is the tightest value the guard admits, so it is the one
+	// that proves the boundary is at 0 and not somewhere above it: the first
+	// request must be allowed and the second refused.
+	r := newAPITestRouter(t, 1)
+	const ip = "203.0.113.42"
+
+	if w := apiRequest(r, ip); w.Code != http.StatusOK {
+		t.Fatalf("first request at budget 1: expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if w := apiRequest(r, ip); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request at budget 1: expected 429, got %d (%s)", w.Code, w.Body.String())
+	}
+}
