@@ -59,6 +59,9 @@ type Config struct {
 	BackupKeepYearly       string
 	BackupAutoPrune        string
 	BackupScheduleInterval string
+	BackupScheduleMode     string
+	BackupScheduleTime     string
+	BackupScheduleDays     string
 	BackupSyncAfter        string
 	RcloneRemote           string
 	RclonePath             string
@@ -146,6 +149,9 @@ func Load() (*Config, error) {
 	cfg.BackupKeepYearly = os.Getenv("BACKUP_KEEP_YEARLY")
 	cfg.BackupAutoPrune = os.Getenv("BACKUP_AUTO_PRUNE")
 	cfg.BackupScheduleInterval = os.Getenv("BACKUP_SCHEDULE_INTERVAL")
+	cfg.BackupScheduleMode = os.Getenv("BACKUP_SCHEDULE_MODE")
+	cfg.BackupScheduleTime = os.Getenv("BACKUP_SCHEDULE_TIME")
+	cfg.BackupScheduleDays = os.Getenv("BACKUP_SCHEDULE_DAYS")
 	cfg.BackupSyncAfter = os.Getenv("BACKUP_SYNC_AFTER")
 	cfg.RcloneRemote = os.Getenv("RCLONE_REMOTE")
 	cfg.RclonePath = os.Getenv("RCLONE_PATH")

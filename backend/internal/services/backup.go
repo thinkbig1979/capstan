@@ -79,8 +79,12 @@ type dockerStopper interface {
 // BackupScheduler is the interface for the scheduler that will be wired in the
 // next task. BackupService holds a pointer slot so main.go can call
 // svc.SetScheduler(sched) after construction.
+//
+// The two Start variants correspond to the two ScheduleModes: Start for
+// interval mode, StartScheduled for a fixed wall-clock time on chosen days.
 type BackupScheduler interface {
 	Start(interval time.Duration)
+	StartScheduled(sched DailySchedule)
 	Stop()
 }
 
@@ -245,13 +249,45 @@ func (s *BackupService) ForceSetBusy(busy bool) {
 	}
 }
 
-// StartScheduler starts the scheduler if it has been set and the configured
-// interval is non-zero. It is called from main.go after wiring.
+// StartScheduler starts the scheduler if it has been set and the resolved
+// configuration asks for one. It is called from main.go after wiring.
+//
+// In interval mode a zero interval means "disabled" and nothing is started.
+// In scheduled mode the interval is irrelevant — an operator who switches to a
+// fixed time will plausibly zero it — so the interval guard must not be
+// consulted, or scheduled mode would silently never run.
 func (s *BackupService) StartScheduler() {
 	if s.sched == nil {
 		return
 	}
 	bc := resolveBackupConfig(s.db, s.cfg)
+
+	if bc.ScheduleMode == ScheduleModeScheduled {
+		sched, err := ParseDailySchedule(bc.ScheduleTime, bc.ScheduleDays)
+		if err != nil {
+			// Fall back to interval mode rather than to silence: a backup
+			// feature that quietly stops backing up is the worst available
+			// outcome. The handler rejects bad values with 400, so reaching
+			// here means the stored rows were written some other way.
+			s.logger.Error("Invalid stored backup schedule; falling back to interval mode",
+				"schedule_time", bc.ScheduleTime,
+				"schedule_days", bc.ScheduleDays,
+				"error", err,
+			)
+			s.startIntervalScheduler(bc)
+			return
+		}
+		s.sched.StartScheduled(sched)
+		s.schedulerActive.Store(true)
+		return
+	}
+
+	s.startIntervalScheduler(bc)
+}
+
+// startIntervalScheduler starts the ticker path, honouring the historical
+// "interval <= 0 means disabled" rule.
+func (s *BackupService) startIntervalScheduler(bc BackupConfig) {
 	if bc.ScheduleInterval <= 0 {
 		return
 	}
@@ -274,18 +310,40 @@ func (s *BackupService) SchedulerRunning() bool {
 	return s.schedulerActive.Load()
 }
 
-// NextRunAt returns the estimated timestamp of the next scheduled automatic
-// backup, or nil when the scheduler is not running or the interval is zero.
+// NextRunAt returns the timestamp of the next scheduled automatic backup, or
+// nil when the scheduler is not running or is configured not to run.
 //
-// Because the scheduler uses a plain time.Ticker whose start time is not
-// persisted, the estimate is derived from the most recent backup run's
-// FinishedAt timestamp plus the configured interval. When no run exists yet
-// (scheduler just started) the estimate is time.Now plus the interval.
+// In scheduled mode the answer is exact: the schedule itself knows its next
+// wall-clock instant, so NextAfter(now) is returned directly and the interval
+// is not consulted at all (a scheduled-mode install may legitimately have a
+// zero interval).
+//
+// In interval mode it is only an estimate. The scheduler uses a plain
+// time.Ticker whose start time is not persisted, so the estimate is derived
+// from the most recent backup run's FinishedAt timestamp plus the configured
+// interval. When no run exists yet (scheduler just started) the estimate is
+// time.Now plus the interval.
 func (s *BackupService) NextRunAt() *time.Time {
 	if !s.schedulerActive.Load() {
 		return nil
 	}
 	bc := resolveBackupConfig(s.db, s.cfg)
+
+	if bc.ScheduleMode == ScheduleModeScheduled {
+		sched, err := ParseDailySchedule(bc.ScheduleTime, bc.ScheduleDays)
+		if err != nil {
+			// Misconfigured, so there is no next instant to report. The
+			// StartScheduler fallback logs this loudly; do not log per status
+			// poll.
+			return nil
+		}
+		next, ok := sched.NextAfter(time.Now())
+		if !ok {
+			return nil
+		}
+		return &next
+	}
+
 	if bc.ScheduleInterval <= 0 {
 		return nil
 	}
