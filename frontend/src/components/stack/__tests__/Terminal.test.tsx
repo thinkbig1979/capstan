@@ -105,6 +105,24 @@ function connect() {
   })
 }
 
+// Positive anchor shared by the four "no longer Connected" / "no error toast"
+// assertions below (agent-os-4bg1). TerminalToolbar renders the 'Connected'
+// badge under `isConnected` and the Reconnect button under
+// `!isConnected && !isConnecting && selectedContainer`, so the Reconnect button
+// appearing proves a render has COMMITTED with isConnected false — the very
+// render that must have removed 'Connected'.
+//
+// This is the shape a negative assertion needs. `waitFor` wrapped around the
+// negative itself would pass on its first poll, before the thing being denied
+// had any chance to appear, turning a weak test into one that cannot fail.
+// `waitFor` around this POSITIVE precondition is safe: it returns the moment
+// the condition holds and keeps polling while it does not.
+async function waitForDisconnectedRender() {
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: /Reconnect/ })).toBeInTheDocument()
+  })
+}
+
 beforeEach(() => {
   capturedOnMessage = null
   capturedOptions = null
@@ -162,23 +180,22 @@ describe('TerminalComponent — connection lifecycle', () => {
     // the message never survives to be observable — only the connection-state
     // UI change is durable.
     //
-    // WHY THE FIXED SLEEP BELOW STAYS (agent-os-gxgk): the sibling test
-    // 'renders inbound binary frames' traded its sleep for a waitFor, and that
-    // substitution is safe only for POSITIVE assertions. This test's only
-    // assertion is negative — `queryByText('Connected')` being absent — and a
-    // waitFor around a negative passes on its first poll, before the thing
-    // being denied has had any chance to appear. That converts a weak test
-    // into one that cannot fail. Four other sleeps in this file are kept for
-    // the same reason and point back here.
+    // agent-os-4bg1: this used to `await new Promise((r) => setTimeout(r, 50))`
+    // inside the act block. That sleep gated nothing — `onClose` calls
+    // `setIsConnected(false)` synchronously (useTerminalSession.ts:72) and React
+    // flushes on act exit, so the wall-clock wait was inert, not merely short.
+    // The negative assertion now anchors on `waitForDisconnectedRender`, the
+    // committed-render precondition, instead of on the clock. Three other sites
+    // in this file share that helper and point back here.
     render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
     connect()
     expect(screen.getByText('Connected')).toBeInTheDocument()
 
-    await act(async () => {
+    act(() => {
       capturedOptions?.onClose?.(new CloseEvent('close', { code: 1006 }))
-      await new Promise((r) => setTimeout(r, 50))
     })
 
+    await waitForDisconnectedRender()
     expect(screen.queryByText('Connected')).not.toBeInTheDocument()
   })
 
@@ -244,15 +261,16 @@ describe('TerminalComponent — disconnect / reconnect controls', () => {
     render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
     connect()
 
-    // Sleep kept: `not.toBeInTheDocument()` below is a negative assertion —
-    // see the note on 'clears connected state on close'.
-    await act(async () => {
+    act(() => {
       fireEvent.click(screen.getByTitle('Disconnect terminal'))
-      await new Promise((r) => setTimeout(r, 50))
     })
 
     expect(disconnectSpy).toHaveBeenCalledTimes(1)
     expect(toast.info).toHaveBeenCalledWith('Terminal disconnected')
+    // The two assertions above prove the handler ran, not that React committed
+    // a render, so they are not the anchor for the negative below — see the
+    // note on 'clears connected state on close'.
+    await waitForDisconnectedRender()
     expect(screen.queryByText('Connected')).not.toBeInTheDocument()
   })
 
@@ -274,15 +292,16 @@ describe('TerminalComponent — switching containers', () => {
 
     fireEvent.click(screen.getByRole('combobox'))
     const option = await screen.findByRole('option', { name: 'worker' })
-    // Sleep kept: `not.toBeInTheDocument()` below is a negative assertion —
-    // see the note on 'clears connected state on close'.
-    await act(async () => {
+    act(() => {
       fireEvent.click(option)
-      await new Promise((r) => setTimeout(r, 50))
     })
 
     expect(disconnectSpy).toHaveBeenCalledTimes(1)
     expect(screen.getByText('worker')).toBeInTheDocument()
+    // `selectedContainer` becomes 'c2' and `isConnecting` stays false, so the
+    // Reconnect button is the committed-render anchor here too — see the note
+    // on 'clears connected state on close'.
+    await waitForDisconnectedRender()
     expect(screen.queryByText('Connected')).not.toBeInTheDocument()
   })
 
@@ -384,18 +403,32 @@ describe('TerminalComponent — keyboard shortcuts', () => {
     render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
     connect()
 
-    // Sleep kept: the very next assertion is "Copy is STILL disabled", a
-    // negative shape — see the note on 'clears connected state on close'.
-    await act(async () => {
+    act(() => {
       capturedOnMessage?.(new TextEncoder().encode('selectable line\r\n').buffer)
-      await new Promise((r) => setTimeout(r, 50))
+    })
+
+    // agent-os-4bg1: the fixed sleep here is replaced by xterm's own write
+    // callback, the same barrier 'copies the current selection on Ctrl+Shift+C'
+    // uses. Callbacks fire in write order, so an empty write resolves only once
+    // the frame above has been parsed — which `select()` below depends on.
+    //
+    // The barrier cannot weaken the "still disabled" assertion that follows.
+    // `hasSelection` is written in exactly one place,
+    // `onSelectionChange(() => setHasSelection(terminal.hasSelection()))`
+    // (useXtermLifecycle.ts:117-119), so whether or not a write can fire that
+    // event is irrelevant: the value stored is `terminal.hasSelection()`, which
+    // is false while no selection exists. A write cannot enable Copy.
+    const terminal = capturedTerminal
+    expect(terminal).not.toBeNull()
+    await act(async () => {
+      await new Promise<void>((resolve) => terminal?.write('', resolve))
     })
 
     // Copy is disabled until xterm reports an active selection.
     expect(screen.getByTitle('Copy (Ctrl+Shift+C)')).toBeDisabled()
 
     act(() => {
-      capturedTerminal?.select(0, 0, 'selectable line'.length)
+      terminal?.select(0, 0, 'selectable line'.length)
     })
 
     expect(screen.getByTitle('Copy (Ctrl+Shift+C)')).not.toBeDisabled()
@@ -521,13 +554,15 @@ describe('TerminalComponent — session duration', () => {
     render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
     connect()
 
-    // Sleep kept: `not.toHaveBeenCalled()` below is a negative assertion —
-    // see the note on 'clears connected state on close'.
-    await act(async () => {
+    act(() => {
       capturedOptions?.onClose?.(new CloseEvent('close', { code: 1006 }))
-      await new Promise((r) => setTimeout(r, 50))
     })
 
+    // `toast.error` is raised synchronously inside the same `onClose` handler
+    // that clears the connected state (useTerminalSession.ts:79-91), and before
+    // it, so a committed disconnected render proves `onClose` ran to completion
+    // — see the note on 'clears connected state on close'.
+    await waitForDisconnectedRender()
     expect(toast.error).not.toHaveBeenCalled()
   })
 
