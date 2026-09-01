@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -82,7 +83,7 @@ func TestStartBackgroundScan_ConcurrentCallReturnsError(t *testing.T) {
 	// Second concurrent call must be rejected.
 	err = svc.StartBackgroundScan()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "already in progress")
+	require.ErrorIs(t, err, ErrScanInProgress)
 
 	// Signal the first scan to complete.
 	close(release)
@@ -249,4 +250,101 @@ func TestStartStopStart_Cycle(t *testing.T) {
 	// Clean up
 	svc.Stop()
 	assert.False(t, svc.IsRunning(), "IsRunning should be false after second Stop")
+}
+
+// TestStartBackgroundScan_ConcurrentWithStop_NoRace is the regression test for
+// agent-os-mtbo.9: SchedulerService used to call s.wg.Add(1) outside s.mu while
+// Stop() released s.mu and then called s.wg.Wait(), with no happens-before edge
+// between the two. sync.WaitGroup deliberately instruments Add's first
+// increment and Wait's first waiter as a modelled read/write on the same
+// location precisely to catch "Add concurrent with Wait", so this shape trips
+// the race detector.
+//
+// Run it with -race; without -race it cannot fail for the reason it exists.
+// Against the unfixed code it reported:
+//
+//	WARNING: DATA RACE
+//	  .../internal/services/scheduler.go:241 +0x2f4   (s.wg.Add(1) in StartBackgroundScan)
+//	  .../internal/services/scheduler.go:124 +0x64    (s.wg.Wait() in Stop)
+//
+// The fix is the `stopped` field: see its doc comment on SchedulerService.
+func TestStartBackgroundScan_ConcurrentWithStop_NoRace(t *testing.T) {
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	const iterations = 60
+
+	var admitted, rejected int
+	for i := 0; i < iterations; i++ {
+		svc := NewSchedulerService(&fakeUpdateChecker{}, db, nil, nil)
+		svc.Start(10 * time.Millisecond)
+
+		var startErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			startErr = svc.StartBackgroundScan()
+		}()
+		go func() {
+			defer wg.Done()
+			svc.Stop()
+		}()
+		wg.Wait()
+
+		if startErr == nil {
+			admitted++
+		} else {
+			rejected++
+		}
+
+		// Order-independent invariant: whichever goroutine won the mutex, once
+		// Stop() has returned there is no scan still running. If the scan was
+		// admitted, its wg.Add happened under the same mu that Stop takes
+		// before its Wait, so Stop waited for it; if it was rejected, no scan
+		// was ever started. A failure here means Stop returned while a scan it
+		// did not know about was still in flight.
+		assert.False(t, svc.IsScanning(),
+			"iteration %d: IsScanning must be false once Stop has returned (startErr=%v)", i, startErr)
+	}
+
+	// Positive control. The race only exists on the interleaving where Stop
+	// wins the mutex first, which post-fix is exactly the `rejected` bucket.
+	// If a future change makes this test stop exercising that interleaving it
+	// would pass identically on racy and non-racy code, guarding nothing — so
+	// record the split, and fail loudly if the scan side never ran at all.
+	t.Logf("Start/Stop interleavings over %d iterations: admitted=%d rejected=%d", iterations, admitted, rejected)
+	require.Positive(t, admitted,
+		"StartBackgroundScan was rejected on all %d iterations — Stop won the mutex every time, "+
+			"so this test is no longer exercising the concurrent Add/Wait path it exists to guard",
+		iterations)
+}
+
+// TestStartBackgroundScan_RejectedWhileStopped is the deterministic companion
+// to the race test above: it pins the `stopped` guard's observable semantics
+// without depending on any interleaving. Stop() latches stopped, so a later
+// StartBackgroundScan refuses rather than calling s.wg.Add behind Stop's back;
+// Start() clears the latch again.
+func TestStartBackgroundScan_RejectedWhileStopped(t *testing.T) {
+	svc := newTestScheduler(t, &fakeUpdateChecker{})
+
+	svc.Start(time.Hour)
+	require.NoError(t, svc.StartBackgroundScan(), "a freshly started scheduler must admit scans")
+	assert.Eventually(t, func() bool { return !svc.IsScanning() }, 2*time.Second, 10*time.Millisecond)
+
+	svc.Stop()
+
+	err := svc.StartBackgroundScan()
+	require.Error(t, err, "a stopped scheduler must refuse to start a background scan")
+	require.ErrorIs(t, err, ErrSchedulerStopping,
+		"the refusal must be the exported sentinel: handlers.checkUpdates matches on it "+
+			"with errors.Is to keep a refresh during the stop window off the 500 path")
+	assert.False(t, svc.IsScanning(), "a refused scan must not leave the scanning flag set")
+
+	// Start() must clear the latch, otherwise Restart() would permanently
+	// disable background scans.
+	svc.Start(time.Hour)
+	require.NoError(t, svc.StartBackgroundScan(), "Start must clear the stopped latch")
+	svc.Stop()
 }

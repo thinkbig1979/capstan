@@ -2,7 +2,7 @@ package services
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -15,6 +15,22 @@ import (
 
 type EventBroadcaster func(event models.StackEvent)
 
+// Sentinel errors returned by RunScan and StartBackgroundScan. Both mean "not
+// right now", not "something went wrong": callers should recognise them with
+// errors.Is and degrade gracefully rather than surfacing a failure. They are
+// sentinels rather than bare formatted errors because handlers.checkUpdates
+// used to distinguish them by string comparison, which silently misclassified
+// every new error text as a 500 (agent-os-mtbo.9).
+var (
+	// ErrScanInProgress means a scan is already running; the caller should
+	// wait for it rather than starting another.
+	ErrScanInProgress = errors.New("scan already in progress")
+	// ErrSchedulerStopping means Stop() has committed to shutting down, so no
+	// new scan can be registered until the next Start(). See the stopped field
+	// on SchedulerService.
+	ErrSchedulerStopping = errors.New("scheduler is stopping")
+)
+
 // updateChecker is the narrow interface scheduler needs from DockerService.
 type updateChecker interface {
 	CheckForUpdates(ctx context.Context, db DashboardDB) ([]models.ContainerUpdateInfo, error)
@@ -22,14 +38,35 @@ type updateChecker interface {
 }
 
 type SchedulerService struct {
-	docker       updateChecker
-	db           *database.DB
-	mu           sync.Mutex
-	ticker       *time.Ticker
-	done         chan struct{}
-	logger       *slog.Logger
-	scanning     bool
-	broadcastFn  EventBroadcaster
+	docker      updateChecker
+	db          *database.DB
+	mu          sync.Mutex
+	ticker      *time.Ticker
+	done        chan struct{}
+	logger      *slog.Logger
+	scanning    bool
+	broadcastFn EventBroadcaster
+	// stopped is set under mu by Stop() before it ever calls s.wg.Wait(), and
+	// checked under the same mu by every path that would call s.wg.Add(1) —
+	// the tick handler in Start() and StartBackgroundScan(). Without this,
+	// Add (called outside any lock Stop() also takes before its own Wait) is
+	// unsynchronized with Stop's Wait from the race detector's point of view:
+	// sync.WaitGroup deliberately instruments Add's first-increment and
+	// Wait's first-waiter transitions as a modelled read/write on the same
+	// location specifically to catch "Add concurrent with Wait" (see
+	// sync/waitgroup.go), and that is exactly what happens here — a tick, or
+	// a manual ?refresh=true landing in handlers.checkUpdates, arriving while
+	// Stop() is unwinding. Routing both the Add and the stopped check through
+	// mu gives them the real happens-before edge that was missing, and also
+	// closes the behavioural half of the bug: Stop() could return while a
+	// scan it never counted was still in flight (agent-os-mtbo.9, ported from
+	// BackupSchedulerService/agent-os-o26).
+	//
+	// Any future timer added to this struct must register with s.wg the same
+	// way: check stopped and call s.wg.Add(1) while still holding s.mu.
+	// Releasing the lock between the check and the Add reintroduces the race
+	// in a form that looks fixed.
+	stopped      bool
 	wg           sync.WaitGroup
 	parentCtx    context.Context
 	parentCancel context.CancelFunc
@@ -39,7 +76,7 @@ func NewSchedulerService(docker updateChecker, db *database.DB, logger *slog.Log
 	if logger == nil {
 		logger = slog.Default()
 	}
-	//nolint:gosec // stored on the struct as parentCancel; called by Stop() at scheduler.go:113 (or replaced by the next Start(), which cancels the old one before creating a new one)
+	//nolint:gosec // stored on the struct as parentCancel; called by Stop() in this file (or replaced by the next Start(), which cancels the old one before creating a new one)
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SchedulerService{
 		docker:       docker,
@@ -66,11 +103,12 @@ func (s *SchedulerService) Start(interval time.Duration) {
 	if s.parentCancel != nil {
 		s.parentCancel()
 	}
-	//nolint:gosec // stored on the struct as parentCancel; called by Stop() at scheduler.go:113 (or replaced by the next Start(), which cancels the old one before creating a new one, as above)
+	//nolint:gosec // stored on the struct as parentCancel; called by Stop() in this file (or replaced by the next Start(), which cancels the old one before creating a new one, as above)
 	s.parentCtx, s.parentCancel = context.WithCancel(context.Background())
 
 	s.ticker = time.NewTicker(interval)
 	s.done = make(chan struct{})
+	s.stopped = false
 
 	// Capture locals so the goroutine does not race with Stop() zeroing struct fields.
 	ticker := s.ticker
@@ -82,7 +120,23 @@ func (s *SchedulerService) Start(interval time.Duration) {
 		for {
 			select {
 			case <-ticker.C:
+				s.mu.Lock()
+				if s.stopped {
+					// Stop() has already committed to shutting down (and is
+					// about to, or already did, call s.wg.Wait()). Starting a
+					// cycle now would call s.wg.Add outside Stop's knowledge,
+					// racing Wait — see the stopped field's doc comment. Skip
+					// the tick; the <-done case fires on the next iteration.
+					s.mu.Unlock()
+					continue
+				}
+				// Add while still holding mu, not after releasing it: Stop()
+				// takes mu (to set stopped) before it ever calls s.wg.Wait(),
+				// so this ordering gives Add and Wait a real happens-before
+				// edge through the mutex instead of racing.
 				s.wg.Add(1)
+				s.mu.Unlock()
+
 				go func() {
 					defer s.wg.Done()
 					s.runCycle(parentCtx)
@@ -97,6 +151,13 @@ func (s *SchedulerService) Start(interval time.Duration) {
 
 func (s *SchedulerService) Stop() {
 	s.mu.Lock()
+
+	// Commit to shutdown before releasing mu (and long before the s.wg.Wait()
+	// call below). Any tick handler or StartBackgroundScan that acquires mu
+	// after this point sees stopped and skips s.wg.Add entirely, so Add can
+	// never be invoked concurrently with Wait — see the stopped field's doc
+	// comment.
+	s.stopped = true
 
 	if s.ticker != nil {
 		s.ticker.Stop()
@@ -205,7 +266,7 @@ func (s *SchedulerService) RunScan(ctx context.Context) ([]models.CachedUpdate, 
 	s.mu.Lock()
 	if s.scanning {
 		s.mu.Unlock()
-		return nil, fmt.Errorf("scan already in progress")
+		return nil, ErrScanInProgress
 	}
 	s.scanning = true
 	s.mu.Unlock()
@@ -230,15 +291,25 @@ func (s *SchedulerService) IsScanning() bool {
 
 func (s *SchedulerService) StartBackgroundScan() error {
 	s.mu.Lock()
+	if s.stopped {
+		// Stop() has committed to shutting down; admitting a scan now would
+		// call s.wg.Add behind Stop's back — see the stopped field's doc
+		// comment. Refuse instead. Start() clears the latch, so this only
+		// affects the shutdown window (and the gap inside Restart()).
+		s.mu.Unlock()
+		return ErrSchedulerStopping
+	}
 	if s.scanning {
 		s.mu.Unlock()
-		return fmt.Errorf("scan already in progress")
+		return ErrScanInProgress
 	}
 	s.scanning = true
 	parentCtx := s.parentCtx // capture under lock to avoid data race
+	// Add while still holding mu — same happens-before argument as the tick
+	// handler in Start().
+	s.wg.Add(1)
 	s.mu.Unlock()
 
-	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		defer func() {
