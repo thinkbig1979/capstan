@@ -1404,10 +1404,11 @@ func TestCheckRepository_SuccessWhenRepoReachable(t *testing.T) {
 
 // fakeScheduler is a minimal BackupScheduler stub for testing wiring.
 type fakeScheduler struct {
-	mu       sync.Mutex
-	started  bool
-	stopped  bool
-	interval time.Duration
+	mu        sync.Mutex
+	started   bool
+	stopped   bool
+	interval  time.Duration
+	scheduled *DailySchedule // set by StartScheduled; nil until then
 }
 
 func (f *fakeScheduler) Start(interval time.Duration) {
@@ -1415,6 +1416,20 @@ func (f *fakeScheduler) Start(interval time.Duration) {
 	defer f.mu.Unlock()
 	f.started = true
 	f.interval = interval
+}
+
+func (f *fakeScheduler) StartScheduled(sched DailySchedule) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.started = true
+	f.scheduled = &sched
+}
+
+// lastScheduled returns the schedule StartScheduled was last called with.
+func (f *fakeScheduler) lastScheduled() *DailySchedule {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.scheduled
 }
 
 func (f *fakeScheduler) Stop() {

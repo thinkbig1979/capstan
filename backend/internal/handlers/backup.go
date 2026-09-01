@@ -3,10 +3,12 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -145,6 +147,17 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	rcloneTransfers, _ := db.GetSetting("rclone_transfers")
 	hostname, _ := db.GetSetting("backup_hostname")
 
+	// scheduleDays is always an array, never null: the UI iterates it directly
+	// and a JSON null would break that. An unparseable stored value degrades to
+	// the empty array rather than failing the whole settings read.
+	scheduleDays := []int{}
+	if parsed, err := services.ParseWeekdays(bc.ScheduleDays); err == nil {
+		for _, day := range parsed {
+			scheduleDays = append(scheduleDays, int(day))
+		}
+	}
+	tzName, tzOffset := services.ServerTimezone()
+
 	av := h.svc.Available()
 	repoStatus := h.svc.CheckRepository(c.Request.Context())
 
@@ -159,6 +172,11 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 		"keepYearly":              settingIntOrDefault(keepYearly, 0),
 		"autoPrune":               settingBoolOrDefault(autoPrune, true),
 		"scheduleIntervalMinutes": settingIntOrDefault(scheduleInterval, 0),
+		"scheduleMode":            bc.ScheduleMode,
+		"scheduleTime":            bc.ScheduleTime,
+		"scheduleDays":            scheduleDays,
+		"serverTimezone":          tzName,
+		"serverTimeOffset":        tzOffset,
 		"syncAfterBackup":         settingBoolOrDefault(syncAfterBackup, false),
 		"rcloneRemote":            rcloneRemote,
 		"rclonePath":              rclonePath,
@@ -182,11 +200,54 @@ type backupSettingsRequest struct {
 	KeepYearly              *int    `json:"keepYearly"`
 	AutoPrune               *bool   `json:"autoPrune"`
 	ScheduleIntervalMinutes *int    `json:"scheduleIntervalMinutes"`
+	ScheduleMode            *string `json:"scheduleMode"`
+	ScheduleTime            *string `json:"scheduleTime"`
+	ScheduleDays            *[]int  `json:"scheduleDays"`
 	SyncAfterBackup         *bool   `json:"syncAfterBackup"`
 	RcloneRemote            *string `json:"rcloneRemote"`
 	RclonePath              *string `json:"rclonePath"`
 	RcloneTransfers         *int    `json:"rcloneTransfers"`
 	Hostname                *string `json:"hostname"`
+}
+
+// validateScheduleFields validates the three schedule fields that are present
+// in the request and returns the weekday list in its stored comma-separated
+// form. Absent (nil) fields are not validated: nil means "leave unchanged".
+//
+// Validation goes through the services helpers so the handler and the
+// scheduler can never disagree about what is acceptable. Their errors are
+// plain values with operator-readable messages; any non-nil error is a 400.
+func validateScheduleFields(req *backupSettingsRequest) (scheduleDaysCSV string, err error) {
+	if req.ScheduleMode != nil {
+		switch *req.ScheduleMode {
+		case services.ScheduleModeInterval, services.ScheduleModeScheduled:
+		default:
+			return "", fmt.Errorf("invalid scheduleMode %q: expected %q or %q",
+				*req.ScheduleMode, services.ScheduleModeInterval, services.ScheduleModeScheduled)
+		}
+	}
+
+	if req.ScheduleTime != nil {
+		if _, _, err := services.ParseScheduleTime(*req.ScheduleTime); err != nil {
+			return "", err
+		}
+	}
+
+	if req.ScheduleDays != nil {
+		parts := make([]string, 0, len(*req.ScheduleDays))
+		for _, day := range *req.ScheduleDays {
+			parts = append(parts, strconv.Itoa(day))
+		}
+		// ParseWeekdays owns the range check, the empty-list rejection and the
+		// sort/dedupe; FormatWeekdays renders the normalised result back.
+		weekdays, err := services.ParseWeekdays(strings.Join(parts, ","))
+		if err != nil {
+			return "", err
+		}
+		scheduleDaysCSV = services.FormatWeekdays(weekdays)
+	}
+
+	return scheduleDaysCSV, nil
 }
 
 func (h *BackupHandler) updateSettings(c *gin.Context) {
@@ -201,8 +262,23 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 	}
 
 	db := h.db
-	intervalChanged := false
-	var newInterval int
+	// scheduleChanged covers EVERY field the scheduler reads, not just the
+	// interval: changing only the mode, time or days would otherwise leave the
+	// running scheduler on its old configuration until the next process
+	// restart.
+	scheduleChanged := false
+
+	// Validate all schedule fields before writing any of them, so a bad value
+	// cannot leave a half-applied schedule behind.
+	scheduleDaysCSV, err := validateScheduleFields(&req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			err.Error(),
+		))
+		return
+	}
 
 	if req.Repository != nil {
 		if err := db.SetSetting("restic_repository", *req.Repository); err != nil {
@@ -254,10 +330,30 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 		}
 	}
 	if req.ScheduleIntervalMinutes != nil {
-		intervalChanged = true
-		newInterval = *req.ScheduleIntervalMinutes
-		if err := db.SetSetting("backup_schedule_interval", strconv.Itoa(newInterval)); err != nil {
+		scheduleChanged = true
+		if err := db.SetSetting("backup_schedule_interval", strconv.Itoa(*req.ScheduleIntervalMinutes)); err != nil {
 			h.internalError(c, "Failed to save schedule_interval setting", err)
+			return
+		}
+	}
+	if req.ScheduleMode != nil {
+		scheduleChanged = true
+		if err := db.SetSetting("backup_schedule_mode", *req.ScheduleMode); err != nil {
+			h.internalError(c, "Failed to save schedule_mode setting", err)
+			return
+		}
+	}
+	if req.ScheduleTime != nil {
+		scheduleChanged = true
+		if err := db.SetSetting("backup_schedule_time", *req.ScheduleTime); err != nil {
+			h.internalError(c, "Failed to save schedule_time setting", err)
+			return
+		}
+	}
+	if req.ScheduleDays != nil {
+		scheduleChanged = true
+		if err := db.SetSetting("backup_schedule_days", scheduleDaysCSV); err != nil {
+			h.internalError(c, "Failed to save schedule_days setting", err)
 			return
 		}
 	}
@@ -296,11 +392,13 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 		}
 	}
 
-	if intervalChanged {
+	if scheduleChanged {
 		h.svc.StopScheduler()
-		if newInterval > 0 {
-			h.svc.StartScheduler()
-		}
+		// Unconditionally re-ask the service to start. StartScheduler resolves
+		// the effective mode and interval itself and declines when the config
+		// says so; a second interval check here would wrongly refuse to restart
+		// a scheduled-mode install whose interval is (legitimately) zero.
+		h.svc.StartScheduler()
 	}
 
 	h.getSettings(c)
