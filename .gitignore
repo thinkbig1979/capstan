@@ -47,6 +47,10 @@ vendor/
 *.db
 
 # Local environment overrides
+# /.env is anchored: docker-compose.prod.yaml's env_file requires operators to
+# create a root .env holding JWT_SECRET and RESTIC_PASSWORD. .env.example is
+# tracked and must stay visible, which the anchored form leaves alone.
+/.env
 backend/.env
 frontend/.env
 backend/server
