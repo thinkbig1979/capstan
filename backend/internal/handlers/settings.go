@@ -464,9 +464,12 @@ func (h *SettingsHandler) GetUpdateSettings(c *gin.Context) {
 }
 
 func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
+	// Pointer fields: an absent key means "leave unchanged". Non-pointer fields
+	// bound to their zero value here, so a partial PUT silently wrote interval 0
+	// and auto-update false, then stopped the scheduler (agent-os-mtbo.8).
 	var req struct {
-		ScanIntervalMinutes int  `json:"scanIntervalMinutes"`
-		GlobalAutoUpdate    bool `json:"globalAutoUpdate"`
+		ScanIntervalMinutes *int  `json:"scanIntervalMinutes"`
+		GlobalAutoUpdate    *bool `json:"globalAutoUpdate"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -478,7 +481,7 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 		return
 	}
 
-	if req.ScanIntervalMinutes != 0 && req.ScanIntervalMinutes < 15 {
+	if req.ScanIntervalMinutes != nil && *req.ScanIntervalMinutes != 0 && *req.ScanIntervalMinutes < 15 {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
 			"VALIDATION_ERROR",
@@ -487,54 +490,56 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 		return
 	}
 
-	oldIntervalStr, _ := h.db.GetSetting("update_scan_interval")
-	oldInterval := 0
-	if oldIntervalStr != "" {
-		if v, err := strconv.Atoi(oldIntervalStr); err == nil {
-			oldInterval = v
+	applied := gin.H{"setting": "update_schedule"}
+
+	if req.ScanIntervalMinutes != nil {
+		oldIntervalStr, _ := h.db.GetSetting("update_scan_interval")
+		oldInterval := 0
+		if oldIntervalStr != "" {
+			if v, err := strconv.Atoi(oldIntervalStr); err == nil {
+				oldInterval = v
+			}
+		}
+
+		if err := h.db.SetSetting("update_scan_interval", fmt.Sprintf("%d", *req.ScanIntervalMinutes)); err != nil {
+			slog.Error("Failed to update scan interval", "error", err)
+			c.JSON(http.StatusInternalServerError, models.NewAppError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to update scan interval",
+			))
+			return
+		}
+		applied["scan_interval"] = *req.ScanIntervalMinutes
+
+		if h.scheduler != nil && *req.ScanIntervalMinutes != oldInterval {
+			if *req.ScanIntervalMinutes > 0 {
+				h.scheduler.Restart(time.Duration(*req.ScanIntervalMinutes) * time.Minute)
+			} else {
+				h.scheduler.Stop()
+			}
 		}
 	}
 
-	if err := h.db.SetSetting("update_scan_interval", fmt.Sprintf("%d", req.ScanIntervalMinutes)); err != nil {
-		slog.Error("Failed to update scan interval", "error", err)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to update scan interval",
-		))
-		return
-	}
-
-	autoUpdateVal := "false"
-	if req.GlobalAutoUpdate {
-		autoUpdateVal = "true"
-	}
-	if err := h.db.SetSetting("auto_update_enabled", autoUpdateVal); err != nil {
-		slog.Error("Failed to update auto-update setting", "error", err)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to update auto-update setting",
-		))
-		return
-	}
-
-	if h.scheduler != nil && req.ScanIntervalMinutes != oldInterval {
-		if req.ScanIntervalMinutes > 0 {
-			h.scheduler.Restart(time.Duration(req.ScanIntervalMinutes) * time.Minute)
-		} else {
-			h.scheduler.Stop()
+	if req.GlobalAutoUpdate != nil {
+		autoUpdateVal := "false"
+		if *req.GlobalAutoUpdate {
+			autoUpdateVal = "true"
 		}
+		if err := h.db.SetSetting("auto_update_enabled", autoUpdateVal); err != nil {
+			slog.Error("Failed to update auto-update setting", "error", err)
+			c.JSON(http.StatusInternalServerError, models.NewAppError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to update auto-update setting",
+			))
+			return
+		}
+		applied["auto_update"] = *req.GlobalAutoUpdate
 	}
 
-	slog.Info("Update settings changed",
-		"scan_interval", req.ScanIntervalMinutes,
-		"auto_update", req.GlobalAutoUpdate)
-	logActionFromContext(h.actionLog, c, nil, services.ActionUpdateSettings, gin.H{
-		"setting":       "update_schedule",
-		"scan_interval": req.ScanIntervalMinutes,
-		"auto_update":   req.GlobalAutoUpdate,
-	})
+	slog.Info("Update settings changed", "applied", applied)
+	logActionFromContext(h.actionLog, c, nil, services.ActionUpdateSettings, applied)
 
 	h.GetUpdateSettings(c)
 }
