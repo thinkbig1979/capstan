@@ -221,7 +221,13 @@ async function pollUntil<T>(
 
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
-test.describe('Backup flow E2E', () => {
+// .serial, not plain describe. playwright.config.ts already pins workers: 1 and
+// fullyParallel: false, so ordering holds either way; what .serial changes is
+// RETRY behaviour. With retries: 1 in CI a failing test currently retries ALONE
+// against module-level state (authToken, testStackId, firstSnapshotId) that
+// earlier tests in this block set, so the retry runs against a half-built
+// world. .serial replays the whole block instead.
+test.describe.serial('Backup flow E2E', () => {
   // ── 001: Configure backup settings ─────────────────────────────────────────
 
   test('BACKUP-PW-001: configure backup repository and password', async ({
@@ -260,7 +266,7 @@ test.describe('Backup flow E2E', () => {
 
     // Repository input should be present
     const repoInput = page.locator('#backup-repository')
-    await expect(repoInput).toBeVisible({ timeout: 10_000 })
+    await expect(repoInput).toBeVisible()
 
     // The saved path should appear in the input value
     const repoValue = await repoInput.inputValue()
@@ -287,7 +293,7 @@ test.describe('Backup flow E2E', () => {
     // Match the positive state exactly — "Not initialized" also contains the
     // substring "initialized", so an exact match avoids a false positive.
     const initializedBadge = page.getByText('Initialized', { exact: true })
-    await expect(initializedBadge.first()).toBeVisible({ timeout: 10_000 })
+    await expect(initializedBadge.first()).toBeVisible()
   })
 
   // ── 003: Enable backup toggle on test-app stack ────────────────────────────
@@ -466,8 +472,17 @@ test.describe('Backup flow E2E', () => {
 
       // Snapshot table should have at least one row — the Restore button's
       // aria-label includes the short ID
+      // No timeout override here: playwright.config.ts's expect timeout of 15s
+      // applies. This assertion's budget has to cover the page's whole boot,
+      // not just the last hop — `waitForLoadState('networkidle')` above can and
+      // does settle in the quiet gap before React fires its first query wave,
+      // in which case every request the button depends on lands inside this
+      // budget. OBSERVED idle, with a warm repo: 4.2s of it, gated by
+      // /backups/snapshots. Two of those calls shell out to restic and
+      // serialise on the repo lock, so the tail is much longer than the mean —
+      // which is what made the old 10s override flaky.
       const restoreBtn = page.getByRole('button', { name: /restore snapshot/i })
-      await expect(restoreBtn.first()).toBeVisible({ timeout: 10_000 })
+      await expect(restoreBtn.first()).toBeVisible()
     }
   })
 
