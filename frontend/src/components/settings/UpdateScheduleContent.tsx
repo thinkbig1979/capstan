@@ -66,6 +66,7 @@ export function UpdateScheduleContent() {
   const effectiveApplyDays = initialized
     ? applyDays
     : (settings?.applyDays?.length ? settings.applyDays : DEFAULT_APPLY_DAYS)
+  const effectiveScanMinutes = effectivePreset === 'custom' ? effectiveCustom : parseInt(effectivePreset, 10)
 
   if (isLoading) {
     return (
@@ -255,6 +256,15 @@ export function UpdateScheduleContent() {
               }
               idPrefix="update-apply"
             />
+            {effectiveApplyMode === 'scheduled' && effectiveScanMinutes === 0 && (
+              <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3">
+                <AlertCircle className="h-4 w-4 mt-0.5 text-warning shrink-0" />
+                <p className="text-sm text-warning">
+                  Scheduled updates can&apos;t run while scanning is disabled: nothing detects
+                  new images to apply. Set a scan interval above.
+                </p>
+              </div>
+            )}
             {settings?.nextApplyAt && (
               <p className="text-sm text-muted-foreground">
                 Next scheduled update: {formatDateFull(settings.nextApplyAt)}
