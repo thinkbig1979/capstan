@@ -506,7 +506,7 @@ export function useUpdateSettings() {
 export function useUpdateUpdateSettings() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: { scanIntervalMinutes: number; globalAutoUpdate: boolean }) =>
+    mutationFn: (data: { scanIntervalMinutes: number; globalAutoUpdate: boolean; applyMode?: 'immediate' | 'scheduled'; applyTime?: string; applyDays?: number[] }) =>
       settingsApi.updateUpdates(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.settings.updates() })

@@ -304,6 +304,17 @@ export interface UpdateSettings {
     updatesLast7Days: number
     updatesLast30Days: number
   }
+  /** Whether detected updates apply as soon as they are found, or on a schedule. */
+  applyMode: 'immediate' | 'scheduled'
+  /** "HH:MM" in server local time. */
+  applyTime: string
+  /** Go weekday ints, 0 = Sunday. Never null. */
+  applyDays: number[]
+  /** RFC3339. Omitted while no scheduled apply is pending. */
+  nextApplyAt?: string
+  /** The server's own zone, reported for display. There is no timezone setting. */
+  serverTimezone: string
+  serverTimeOffset: string
 }
 
 export interface UpdateHistoryFilters {
@@ -388,6 +399,15 @@ export interface BackupSettings {
   resticAvailable: boolean
   rcloneAvailable: boolean
   repositoryInitialized: boolean
+  /** Whether backups run on a fixed interval or at a time of day. */
+  scheduleMode: 'interval' | 'scheduled'
+  /** "HH:MM" in server local time. */
+  scheduleTime: string
+  /** Go weekday ints, 0 = Sunday. Never null. */
+  scheduleDays: number[]
+  /** The server's own zone, reported for display. There is no timezone setting. */
+  serverTimezone: string
+  serverTimeOffset: string
 }
 
 export interface BackupStatus {

@@ -213,7 +213,7 @@ export const settingsApi = {
     return response.data
   },
 
-  updateUpdates: async (data: { scanIntervalMinutes: number; globalAutoUpdate: boolean }) => {
+  updateUpdates: async (data: { scanIntervalMinutes: number; globalAutoUpdate: boolean; applyMode?: 'immediate' | 'scheduled'; applyTime?: string; applyDays?: number[] }) => {
     const response = await apiClient.put<UpdateSettings>('/settings/updates', data)
     return response.data
   },
@@ -745,7 +745,7 @@ export const backupApi = {
     return response.data
   },
 
-  updateSettings: async (data: Partial<Pick<BackupSettings, 'repository' | 'keepDaily' | 'keepWeekly' | 'keepMonthly' | 'keepYearly' | 'autoPrune' | 'scheduleIntervalMinutes' | 'syncAfterBackup' | 'rcloneRemote' | 'rclonePath' | 'rcloneTransfers' | 'hostname'>> & { password?: string }) => {
+  updateSettings: async (data: Partial<Pick<BackupSettings, 'repository' | 'keepDaily' | 'keepWeekly' | 'keepMonthly' | 'keepYearly' | 'autoPrune' | 'scheduleIntervalMinutes' | 'scheduleMode' | 'scheduleTime' | 'scheduleDays' | 'syncAfterBackup' | 'rcloneRemote' | 'rclonePath' | 'rcloneTransfers' | 'hostname'>> & { password?: string }) => {
     const response = await apiClient.put<BackupSettings>('/settings/backup', data)
     return response.data
   },
