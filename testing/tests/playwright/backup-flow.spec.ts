@@ -79,26 +79,38 @@ async function expandBackupSection(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle')
 }
 
-/** Log in via the UI; skip if AUTH_DISABLED. */
-async function loginIfNeeded(page: Page): Promise<void> {
+/**
+ * Log in via the UI if auth is on, then land on `target`.
+ *
+ * `target` exists so this is the caller's ONE page load. Every `page.goto` here
+ * re-bootstraps the whole app — the auth probe, settings/config,
+ * resources/updates, dashboard/stats, backups/status, stacks, plus the events
+ * and dashboard-metrics websockets — and CI runs AUTH_DISABLED=true, where
+ * there is no login step at all. Landing on /dashboard and letting the caller
+ * immediately navigate elsewhere therefore paid for a full boot that nothing
+ * asserted on. Callers run their API-only setup (ensureCsrf, stack-id lookup,
+ * the mutation under test) BEFORE calling this, so the single load already
+ * reflects the state they are about to assert on.
+ */
+async function loginIfNeeded(page: Page, target = '/dashboard'): Promise<void> {
   if (AUTH_DISABLED) {
-    await page.goto(`${BASE_URL}/dashboard`)
+    await page.goto(`${BASE_URL}${target}`)
     await page.waitForLoadState('networkidle')
     return
   }
   await page.goto(`${BASE_URL}/login`)
   await page.waitForLoadState('networkidle')
 
-  const url = page.url()
-  if (!url.includes('login')) {
-    // Already authenticated (session cookie)
-    return
+  // A session cookie may have skipped the form entirely.
+  if (page.url().includes('login')) {
+    await page.getByLabel(/email/i).fill(TEST_USER)
+    await page.getByLabel(/password/i).fill(TEST_PASSWORD)
+    await page.getByRole('button', { name: /login|sign in/i }).click()
+    await page.waitForURL((u) => !u.href.includes('login'), { timeout: 15_000 })
   }
 
-  await page.getByLabel(/email/i).fill(TEST_USER)
-  await page.getByLabel(/password/i).fill(TEST_PASSWORD)
-  await page.getByRole('button', { name: /login|sign in/i }).click()
-  await page.waitForURL((u) => !u.href.includes('login'), { timeout: 15_000 })
+  await page.goto(`${BASE_URL}${target}`)
+  await page.waitForLoadState('networkidle')
 }
 
 /** GET the backend API with auth header when we have a token. */
@@ -216,9 +228,6 @@ test.describe('Backup flow E2E', () => {
     page,
     request,
   }) => {
-    // ── Login ────────────────────────────────────────────────────────────────
-    await loginIfNeeded(page)
-
     // ── Obtain auth token for subsequent API calls ─────────────────────────
     if (!AUTH_DISABLED) {
       const loginResp = await request.post(`${API_URL}/api/v1/auth/login`, {
@@ -241,8 +250,8 @@ test.describe('Backup flow E2E', () => {
     expect(settings).toHaveProperty('repository')
 
     // ── Verify in UI ───────────────────────────────────────────────────────
-    await page.goto(`${BASE_URL}/settings`)
-    await page.waitForLoadState('networkidle')
+    // Settings are already saved, so this first and only page load shows them.
+    await loginIfNeeded(page, '/settings')
 
     // Backup settings live in a collapsible accordion section (not a tab). The
     // section is collapsed by default, so expand it via its chevron button
@@ -261,7 +270,6 @@ test.describe('Backup flow E2E', () => {
   // ── 002: Initialize repository ─────────────────────────────────────────────
 
   test('BACKUP-PW-002: initialize restic repository', async ({ page, request }) => {
-    await loginIfNeeded(page)
     await ensureCsrf(request)
 
     // POST /api/v1/backups/repo/init
@@ -271,8 +279,8 @@ test.describe('Backup flow E2E', () => {
     expect(initBody.initialized).toBe(true)
 
     // ── UI: settings page should show "Initialized" badge ─────────────────
-    await page.goto(`${BASE_URL}/settings`)
-    await page.waitForLoadState('networkidle')
+    // Loaded after the init call, so the badge is present on first render.
+    await loginIfNeeded(page, '/settings')
 
     await expandBackupSection(page)
 
@@ -288,7 +296,6 @@ test.describe('Backup flow E2E', () => {
     page,
     request,
   }) => {
-    await loginIfNeeded(page)
     await ensureCsrf(request)
 
     // ── Resolve stack ID ──────────────────────────────────────────────────
@@ -315,8 +322,10 @@ test.describe('Backup flow E2E', () => {
     expect(policy.enabled).toBe(true)
 
     // ── UI: dashboard should show toggle ON for this stack ─────────────────
-    await page.goto(`${BASE_URL}/dashboard`)
-    await page.waitForLoadState('networkidle')
+    // The policy is already enabled, so the first load renders the ON state —
+    // previously this was a second boot correcting a dashboard loaded before
+    // the PUT.
+    await loginIfNeeded(page, '/dashboard')
 
     // BackupToggle renders data-testid="backup-toggle-<stackId>" when enabled
     const toggleEl = page.locator(`[data-testid="backup-toggle-${testStackId}"]`)
@@ -341,12 +350,10 @@ test.describe('Backup flow E2E', () => {
   // ── 004: Run backup and wait for completion ────────────────────────────────
 
   test('BACKUP-PW-004: run backup and verify completion', async ({ page, request }) => {
-    await loginIfNeeded(page)
     await ensureCsrf(request)
 
     // ── Option A: click "Back up now" in the BackupStatusCard ─────────────
-    await page.goto(`${BASE_URL}/dashboard`)
-    await page.waitForLoadState('networkidle')
+    await loginIfNeeded(page, '/dashboard')
 
     const backupNowBtn = page.getByRole('button', { name: /back up now/i })
     let ranViaUI = false
@@ -421,8 +428,6 @@ test.describe('Backup flow E2E', () => {
     page,
     request,
   }) => {
-    await loginIfNeeded(page)
-
     // Resolve stack ID first — needed to scope the snapshot lookup below. The
     // repo also holds an automatic capstan-database self-backup snapshot
     // (backend/internal/services/backup.go:1240), so an unscoped snapshot
@@ -463,9 +468,9 @@ test.describe('Backup flow E2E', () => {
     // ── Step 2: UI BackupsTab ─────────────────────────────────────────────
     if (testStackId) {
       // Backups is a section of the Activity tab since the phase-2 redesign;
-      // deep-link straight to it (old /backups links redirect here too).
-      await page.goto(`${BASE_URL}/stacks/${testStackId}/activity?view=backups`)
-      await page.waitForLoadState('networkidle')
+      // deep-link straight to it (old /backups links redirect here too). This
+      // is the test's only page load.
+      await loginIfNeeded(page, `/stacks/${testStackId}/activity?view=backups`)
 
       // The inner Backups section tab (already active via the deep link)
       const backupsTab = page.getByRole('tab', { name: /^backups$/i })
@@ -494,7 +499,6 @@ test.describe('Backup flow E2E', () => {
     page,
     request,
   }) => {
-    await loginIfNeeded(page)
     await ensureCsrf(request)
 
     // Resolve stack ID first — the snapshot lookup below is scoped by it.
@@ -531,9 +535,9 @@ test.describe('Backup flow E2E', () => {
     // ── UI path ───────────────────────────────────────────────────────────
     if (testStackId) {
       // Backups is a section of the Activity tab since the phase-2 redesign;
-      // deep-link straight to it (old /backups links redirect here too).
-      await page.goto(`${BASE_URL}/stacks/${testStackId}/activity?view=backups`)
-      await page.waitForLoadState('networkidle')
+      // deep-link straight to it (old /backups links redirect here too). This
+      // is the test's only page load.
+      await loginIfNeeded(page, `/stacks/${testStackId}/activity?view=backups`)
 
       const backupsTab = page.getByRole('tab', { name: /^backups$/i })
       if (await backupsTab.count() > 0) {
@@ -617,11 +621,8 @@ test.describe('Backup flow E2E', () => {
   // ── 007: Post-restore verification ────────────────────────────────────────
 
   test('BACKUP-PW-007: post-restore state verification', async ({ page, request }) => {
-    await loginIfNeeded(page)
-
     // ── Dashboard accessible ───────────────────────────────────────────────
-    await page.goto(`${BASE_URL}/dashboard`)
-    await page.waitForLoadState('networkidle')
+    await loginIfNeeded(page, '/dashboard')
     // Look only for crash/error-boundary phrases — a bare word like "Error"
     // legitimately appears in the dashboard's status-filter chips, so the old
     // /error|crash|broken/i was too broad and matched normal UI chrome.
