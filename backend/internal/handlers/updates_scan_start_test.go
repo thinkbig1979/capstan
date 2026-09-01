@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
@@ -76,4 +77,42 @@ func TestScanStartIsBenign(t *testing.T) {
 			assert.Equal(t, tc.want, scanStartIsBenign(tc.err))
 		})
 	}
+}
+
+// fakeUnreliableScanner is an updateScanner whose StartBackgroundScan always
+// returns an error scanStartIsBenign does not recognise. A real
+// *services.SchedulerService cannot produce this: StartBackgroundScan only
+// ever returns ErrScanInProgress, ErrSchedulerStopping, or nil (scheduler.go).
+// This fake is the seam that lets a test drive checkUpdates' 500 branch
+// through the router (agent-os-10hb) — TestScanStartIsBenign above proves the
+// classifier alone rejects such an error, but proved nothing about whether the
+// handler still wires that rejection to a 500 response.
+type fakeUnreliableScanner struct {
+	startErr error
+}
+
+func (f *fakeUnreliableScanner) StartBackgroundScan() error { return f.startErr }
+func (f *fakeUnreliableScanner) IsScanning() bool           { return false }
+
+// TestResourcesHandler_CheckUpdates_RefreshUnrecognisedSchedulerError_ServerError
+// is the router-level counterpart to TestResourcesHandler_CheckUpdates_RefreshWhileSchedulerStopping_NoServerError:
+// that test proves a recognised (benign) scheduler error degrades to 202: this
+// one proves an unrecognised scheduler error still reaches a 500 through the
+// same router, the same handler, the same code path — differing only in which
+// error the scheduler seam returns.
+func TestResourcesHandler_CheckUpdates_RefreshUnrecognisedSchedulerError_ServerError(t *testing.T) {
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	fake := &fakeUnreliableScanner{startErr: errors.New("database is unreachable")}
+	handler := &ResourcesHandler{db: db, scheduler: fake, actionLog: services.NewActionLogger(db)}
+	router := setupResourcesRouter(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/resources/updates?refresh=true", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code,
+		"an unrecognised scheduler error must still take the 500 branch, not be swallowed into a 202")
 }
