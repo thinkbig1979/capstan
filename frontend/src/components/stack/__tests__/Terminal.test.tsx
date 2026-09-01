@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
-import { render, screen, act, fireEvent } from '@testing-library/react'
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import type { Stack, Container } from '@/types'
 import type { UseWebSocketOptions } from '@/hooks/useWebSocket'
 
@@ -188,12 +188,44 @@ describe('TerminalComponent — connection lifecycle', () => {
     connect()
 
     const encoded = new TextEncoder().encode('HELLO-FROM-SHELL').buffer
-    await act(async () => {
+    act(() => {
       capturedOnMessage?.(encoded)
-      await new Promise((r) => setTimeout(r, 50))
     })
 
-    expect(container.textContent).toContain('HELLO-FROM-SHELL')
+    // agent-os-gxgk: this used to be a fixed `await new Promise((r) =>
+    // setTimeout(r, 50))` and failed roughly one full-suite run in three.
+    // `terminal.write()` (useTerminalSession.ts:54) lands in the DOM in two
+    // asynchronous stages: xterm's WriteBuffer drains the parser across
+    // macrotasks, and only then does the DOM renderer repaint on a
+    // requestAnimationFrame tick (~16ms under jsdom). A wall-clock sleep
+    // guesses at the sum of both, so when the vitest worker is descheduled
+    // under a contended pool the timer fires late and the assertion runs
+    // against a DOM the renderer has not touched yet. So wait on the two
+    // observable conditions instead of on the clock.
+    //
+    // MEASURED (2026-09-01, this worktree, `npx vitest run
+    // src/components/stack/__tests__/Terminal.test.tsx -t 'renders inbound
+    // binary frames'`): with the old fixed sleep shrunk to 0ms this test
+    // failed 3/3 on `expected ... to contain 'HELLO-FROM-SHELL'`; with the
+    // waits below and no wall-clock grace at all it passes. Under 16 busy
+    // loops on 8 cores and `--pool=threads --maxWorkers=1`, the old 50ms
+    // version failed 2 of 6 runs and this version passed 6 of 6.
+
+    // Condition 1 — parser drained. Callbacks are invoked in write order, so
+    // an empty write resolves only once xterm has processed the frame above.
+    // (MEASURED via a scratch spec: `write('')`'s callback does fire, and
+    // fires after a previously queued payload write's callback.)
+    const terminal = capturedTerminal
+    expect(terminal).not.toBeNull()
+    await act(async () => {
+      await new Promise<void>((resolve) => terminal?.write('', resolve))
+    })
+
+    // Condition 2 — renderer painted. `waitFor` polls this until it holds
+    // rather than assuming one rAF tick has elapsed.
+    await waitFor(() => {
+      expect(container.textContent).toContain('HELLO-FROM-SHELL')
+    })
   })
 })
 
