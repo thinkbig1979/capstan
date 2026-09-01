@@ -524,6 +524,26 @@ CREATE INDEX IF NOT EXISTS idx_backup_run_items_stack_id ON backup_run_items(sta
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users(username COLLATE NOCASE);
 `,
 	},
+	{
+		Version: 14,
+		Name:    "schedule_settings",
+		SQL: `
+-- Defaults for the scheduled-update window (agent-os-mtbo). 'immediate'
+-- reproduces today's behaviour exactly: updates apply as soon as they are
+-- approved, and the time/days rows are inert until the mode is changed, so
+-- upgrading an existing install changes nothing until an operator opts in.
+--
+-- INSERT OR IGNORE, not INSERT OR REPLACE: an operator who has already set a
+-- window must keep it across every subsequent restart. Unlike the backup
+-- settings, these three have no environment-variable fallback to shadow --
+-- nothing in internal/config reads an UPDATE_APPLY_* variable -- so seeding
+-- them cannot make an env var silently dead the way seeding a backup_ key
+-- would (services.resolveIntSetting prefers a non-empty DB row over the env).
+INSERT OR IGNORE INTO settings (key, value) VALUES ('update_apply_mode', 'immediate');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('update_apply_time', '03:00');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('update_apply_days', '0,1,2,3,4,5,6');
+`,
+	},
 }
 
 // checkNoCaseCollidingUsernames is migration 13's PreCheck. It detects
