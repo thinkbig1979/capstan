@@ -2,7 +2,7 @@ package services
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -14,6 +14,22 @@ import (
 )
 
 type EventBroadcaster func(event models.StackEvent)
+
+// Sentinel errors returned by RunScan and StartBackgroundScan. Both mean "not
+// right now", not "something went wrong": callers should recognise them with
+// errors.Is and degrade gracefully rather than surfacing a failure. They are
+// sentinels rather than bare formatted errors because handlers.checkUpdates
+// used to distinguish them by string comparison, which silently misclassified
+// every new error text as a 500 (agent-os-mtbo.9).
+var (
+	// ErrScanInProgress means a scan is already running; the caller should
+	// wait for it rather than starting another.
+	ErrScanInProgress = errors.New("scan already in progress")
+	// ErrSchedulerStopping means Stop() has committed to shutting down, so no
+	// new scan can be registered until the next Start(). See the stopped field
+	// on SchedulerService.
+	ErrSchedulerStopping = errors.New("scheduler is stopping")
+)
 
 // updateChecker is the narrow interface scheduler needs from DockerService.
 type updateChecker interface {
@@ -250,7 +266,7 @@ func (s *SchedulerService) RunScan(ctx context.Context) ([]models.CachedUpdate, 
 	s.mu.Lock()
 	if s.scanning {
 		s.mu.Unlock()
-		return nil, fmt.Errorf("scan already in progress")
+		return nil, ErrScanInProgress
 	}
 	s.scanning = true
 	s.mu.Unlock()
@@ -281,11 +297,11 @@ func (s *SchedulerService) StartBackgroundScan() error {
 		// comment. Refuse instead. Start() clears the latch, so this only
 		// affects the shutdown window (and the gap inside Restart()).
 		s.mu.Unlock()
-		return fmt.Errorf("scheduler is stopping")
+		return ErrSchedulerStopping
 	}
 	if s.scanning {
 		s.mu.Unlock()
-		return fmt.Errorf("scan already in progress")
+		return ErrScanInProgress
 	}
 	s.scanning = true
 	parentCtx := s.parentCtx // capture under lock to avoid data race

@@ -83,7 +83,7 @@ func TestStartBackgroundScan_ConcurrentCallReturnsError(t *testing.T) {
 	// Second concurrent call must be rejected.
 	err = svc.StartBackgroundScan()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "already in progress")
+	require.ErrorIs(t, err, ErrScanInProgress)
 
 	// Signal the first scan to complete.
 	close(release)
@@ -337,7 +337,9 @@ func TestStartBackgroundScan_RejectedWhileStopped(t *testing.T) {
 
 	err := svc.StartBackgroundScan()
 	require.Error(t, err, "a stopped scheduler must refuse to start a background scan")
-	assert.Contains(t, err.Error(), "stopping")
+	require.ErrorIs(t, err, ErrSchedulerStopping,
+		"the refusal must be the exported sentinel: handlers.checkUpdates matches on it "+
+			"with errors.Is to keep a refresh during the stop window off the 500 path")
 	assert.False(t, svc.IsScanning(), "a refused scan must not leave the scanning flag set")
 
 	// Start() must clear the latch, otherwise Restart() would permanently
