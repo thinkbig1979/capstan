@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
@@ -264,5 +264,157 @@ describe('UpdateScheduleContent — statistics', () => {
 
     await screen.findByText('Auto-Update')
     expect(screen.queryByText('Statistics')).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * Apply-time schedule. The three apply fields are optional on the wire, so the
+ * assertions below always come in pairs: the case that must send them, and the
+ * case that must not. A one-sided check here would pass for a screen that sends
+ * nothing at all.
+ */
+const scheduledSettings = (overrides: Record<string, unknown> = {}) =>
+  makeSettings({
+    scanIntervalMinutes: 720,
+    globalAutoUpdate: true,
+    applyMode: 'scheduled',
+    applyTime: '02:30',
+    applyDays: [1, 3],
+    serverTimezone: 'UTC',
+    serverTimeOffset: '+00:00',
+    ...overrides,
+  })
+
+describe('UpdateScheduleContent — apply schedule', () => {
+  it('renders the schedule fields only while auto-update is on', async () => {
+    mockGetUpdates.mockResolvedValue(makeSettings({ globalAutoUpdate: false }))
+    const off = renderPanel()
+
+    await screen.findByText(/Auto-update is off/)
+    expect(screen.queryByRole('radio', { name: 'Every so often' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'At a set time' })).not.toBeInTheDocument()
+    off.unmount()
+
+    mockGetUpdates.mockResolvedValue(makeSettings({ globalAutoUpdate: true }))
+    renderPanel()
+
+    expect(await screen.findByRole('radio', { name: 'Every so often' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'At a set time' })).toBeInTheDocument()
+  })
+
+  it('hydrates the mode, time and days the server reports', async () => {
+    mockGetUpdates.mockResolvedValue(scheduledSettings())
+    renderPanel()
+
+    expect(await screen.findByRole('radio', { name: 'At a set time' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    expect(screen.getByLabelText('Time of day')).toHaveValue('02:30')
+    const days = within(screen.getByRole('group', { name: 'Days' }))
+    expect(days.getByRole('button', { name: 'Monday' })).toHaveAttribute('aria-pressed', 'true')
+    expect(days.getByRole('button', { name: 'Sunday' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('sends applyMode, applyTime and applyDays when the mode is switched to scheduled', async () => {
+    mockGetUpdates.mockResolvedValue(
+      scheduledSettings({ applyMode: 'immediate', applyTime: '04:00', applyDays: [2, 5] }),
+    )
+    renderPanel()
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'At a set time' }))
+
+    await waitFor(() =>
+      expect(mockUpdateUpdates).toHaveBeenCalledWith({
+        scanIntervalMinutes: 720,
+        globalAutoUpdate: true,
+        applyMode: 'scheduled',
+        applyTime: '04:00',
+        applyDays: [2, 5],
+      }),
+    )
+  })
+
+  it('sends the new time, and the new days sorted ascending', async () => {
+    mockGetUpdates.mockResolvedValue(scheduledSettings())
+    renderPanel()
+
+    fireEvent.change(await screen.findByLabelText('Time of day'), { target: { value: '05:45' } })
+
+    await waitFor(() =>
+      expect(mockUpdateUpdates).toHaveBeenCalledWith({
+        scanIntervalMinutes: 720,
+        globalAutoUpdate: true,
+        applyMode: 'scheduled',
+        applyTime: '05:45',
+        applyDays: [1, 3],
+      }),
+    )
+
+    const days = within(screen.getByRole('group', { name: 'Days' }))
+    fireEvent.click(days.getByRole('button', { name: 'Sunday' }))
+
+    await waitFor(() =>
+      expect(mockUpdateUpdates).toHaveBeenLastCalledWith({
+        scanIntervalMinutes: 720,
+        globalAutoUpdate: true,
+        applyMode: 'scheduled',
+        applyTime: '05:45',
+        applyDays: [0, 1, 3],
+      }),
+    )
+  })
+
+  it('leaves the apply fields out of a save the admin never touched', async () => {
+    mockGetUpdates.mockResolvedValue(scheduledSettings())
+    const user = userEvent.setup()
+    renderPanel()
+
+    await user.click(await screen.findByRole('combobox', { name: 'Scan Interval' }))
+    await user.click(await screen.findByRole('option', { name: 'Every hour' }))
+
+    await waitFor(() =>
+      expect(mockUpdateUpdates).toHaveBeenCalledWith({
+        scanIntervalMinutes: 60,
+        globalAutoUpdate: true,
+      }),
+    )
+  })
+
+  it('says when the next scheduled update is due, and stays quiet when none is', async () => {
+    mockGetUpdates.mockResolvedValue(scheduledSettings({ nextApplyAt: '2026-09-02T02:30:00Z' }))
+    const withNext = renderPanel()
+
+    expect(await screen.findByText(/^Next scheduled update: /)).toBeInTheDocument()
+    withNext.unmount()
+
+    mockGetUpdates.mockResolvedValue(scheduledSettings())
+    renderPanel()
+
+    await screen.findByRole('radio', { name: 'At a set time' })
+    expect(screen.queryByText(/^Next scheduled update: /)).not.toBeInTheDocument()
+  })
+
+  it('warns about the scheduled time in scheduled mode, and about scans in immediate mode', async () => {
+    mockGetUpdates.mockResolvedValue(scheduledSettings())
+    const scheduled = renderPanel()
+
+    expect(await screen.findByText(/applied at the scheduled time/)).toBeInTheDocument()
+    scheduled.unmount()
+
+    mockGetUpdates.mockResolvedValue(scheduledSettings({ applyMode: 'immediate' }))
+    renderPanel()
+
+    expect(await screen.findByText(/detected during scans/)).toBeInTheDocument()
+    expect(screen.queryByText(/applied at the scheduled time/)).not.toBeInTheDocument()
+  })
+
+  it('reports the server clock, which is UTC on a default install', async () => {
+    mockGetUpdates.mockResolvedValue(scheduledSettings())
+    renderPanel()
+
+    expect(
+      await screen.findByText(/Times are in UTC \(\+00:00\), the server's own clock\./),
+    ).toBeInTheDocument()
   })
 })

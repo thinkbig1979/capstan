@@ -6,6 +6,7 @@ import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { useUpdateSettings, useUpdateUpdateSettings } from '@/hooks/useResources'
 import { HelpHint } from '@/components/ui/help-hint'
 import { formatDateFull } from '@/lib/format'
+import { ScheduleModeFields } from '@/components/settings/ScheduleModeFields'
 import { AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -18,6 +19,11 @@ import {
 
 const PRESETS = ['0', '60', '360', '720', '1440']
 
+// Fallbacks for a server that predates the apply-time schedule: it sends no
+// applyMode/applyTime/applyDays, and the fields below still have to render.
+const DEFAULT_APPLY_TIME = '03:00'
+const DEFAULT_APPLY_DAYS = [0, 1, 2, 3, 4, 5, 6]
+
 export function UpdateScheduleContent() {
   const { data: settings, isLoading } = useUpdateSettings()
   const updateSettingsMutation = useUpdateUpdateSettings()
@@ -26,6 +32,13 @@ export function UpdateScheduleContent() {
   const [scanPreset, setScanPreset] = useState<string>('0')
   const [customMinutes, setCustomMinutes] = useState<number>(60)
   const [globalAutoUpdate, setGlobalAutoUpdate] = useState(false)
+  const [applyMode, setApplyMode] = useState<'immediate' | 'scheduled'>('immediate')
+  const [applyTime, setApplyTime] = useState(DEFAULT_APPLY_TIME)
+  const [applyDays, setApplyDays] = useState<number[]>(DEFAULT_APPLY_DAYS)
+  // The three apply fields are optional on the wire. Until the admin touches the
+  // schedule we leave them out of every save, so editing the scan interval cannot
+  // overwrite a server-side schedule with this screen's defaults.
+  const [applyTouched, setApplyTouched] = useState(false)
 
   // Hydrate local editable state from the query result once it loads.
   // Adjusted during render (rather than in an effect) — `initialized` makes
@@ -39,12 +52,20 @@ export function UpdateScheduleContent() {
       setCustomMinutes(settings.scanIntervalMinutes)
     }
     setGlobalAutoUpdate(settings.globalAutoUpdate)
+    setApplyMode(settings.applyMode ?? 'immediate')
+    setApplyTime(settings.applyTime ?? DEFAULT_APPLY_TIME)
+    setApplyDays(settings.applyDays?.length ? settings.applyDays : DEFAULT_APPLY_DAYS)
   }
 
   const scanInterval = settings?.scanIntervalMinutes ?? 0
   const effectivePreset = initialized ? scanPreset : (PRESETS.includes(String(scanInterval)) ? String(scanInterval) : 'custom')
   const effectiveCustom = initialized ? customMinutes : scanInterval
   const effectiveAutoUpdate = initialized ? globalAutoUpdate : (settings?.globalAutoUpdate ?? false)
+  const effectiveApplyMode = initialized ? applyMode : (settings?.applyMode ?? 'immediate')
+  const effectiveApplyTime = initialized ? applyTime : (settings?.applyTime ?? DEFAULT_APPLY_TIME)
+  const effectiveApplyDays = initialized
+    ? applyDays
+    : (settings?.applyDays?.length ? settings.applyDays : DEFAULT_APPLY_DAYS)
 
   if (isLoading) {
     return (
@@ -55,20 +76,36 @@ export function UpdateScheduleContent() {
     )
   }
 
-  const save = (updates: { scanIntervalMinutes?: number; globalAutoUpdate?: boolean }) => {
+  type ApplyUpdates = {
+    applyMode?: 'immediate' | 'scheduled'
+    applyTime?: string
+    applyDays?: number[]
+  }
+
+  const save = (updates: { scanIntervalMinutes?: number; globalAutoUpdate?: boolean } & ApplyUpdates) => {
     const minutes = updates.scanIntervalMinutes ?? (effectivePreset === 'custom' ? effectiveCustom : parseInt(effectivePreset, 10))
     const autoUpdate = updates.globalAutoUpdate ?? effectiveAutoUpdate
     if (minutes > 0 && minutes < 15) {
       toast.error('Custom interval must be at least 15 minutes')
       return
     }
-    updateSettingsMutation.mutate(
-      { scanIntervalMinutes: minutes, globalAutoUpdate: autoUpdate },
-      {
-        onSuccess: () => toast.success('Settings saved'),
-        onError: () => toast.error('Failed to save settings'),
-      },
-    )
+    const payload: { scanIntervalMinutes: number; globalAutoUpdate: boolean } & ApplyUpdates = {
+      scanIntervalMinutes: minutes,
+      globalAutoUpdate: autoUpdate,
+    }
+    const touchesSchedule =
+      updates.applyMode !== undefined ||
+      updates.applyTime !== undefined ||
+      updates.applyDays !== undefined
+    if (applyTouched || touchesSchedule) {
+      payload.applyMode = updates.applyMode ?? effectiveApplyMode
+      payload.applyTime = updates.applyTime ?? effectiveApplyTime
+      payload.applyDays = updates.applyDays ?? effectiveApplyDays
+    }
+    updateSettingsMutation.mutate(payload, {
+      onSuccess: () => toast.success('Settings saved'),
+      onError: () => toast.error('Failed to save settings'),
+    })
   }
 
   const handlePresetChange = (value: string) => {
@@ -87,6 +124,29 @@ export function UpdateScheduleContent() {
   const handleAutoUpdateChange = (checked: boolean) => {
     setGlobalAutoUpdate(checked)
     save({ globalAutoUpdate: checked })
+  }
+
+  const handleApplyModeChange = (mode: 'interval' | 'scheduled') => {
+    const next = mode === 'interval' ? 'immediate' : 'scheduled'
+    setApplyMode(next)
+    setApplyTouched(true)
+    save({ applyMode: next })
+  }
+
+  const handleApplyTimeChange = (time: string) => {
+    setApplyTime(time)
+    setApplyTouched(true)
+    // A time input reports an empty string while the admin is still part-way
+    // through typing, so only a complete HH:MM is worth sending.
+    if (/^\d{2}:\d{2}$/.test(time)) {
+      save({ applyTime: time })
+    }
+  }
+
+  const handleApplyDaysChange = (days: number[]) => {
+    setApplyDays(days)
+    setApplyTouched(true)
+    save({ applyDays: days })
   }
 
   const stats = settings?.autoUpdateStats
@@ -169,12 +229,46 @@ export function UpdateScheduleContent() {
           </div>
         </div>
         {effectiveAutoUpdate && (
-          <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3">
-            <AlertCircle className="h-4 w-4 mt-0.5 text-warning shrink-0" />
-            <p className="text-sm text-warning">
-              Only containers and stacks with auto-update turned on will be updated. Updates happen when new images are detected during scans and may cause brief service interruption.
-            </p>
-          </div>
+          <>
+            <ScheduleModeFields
+              mode={effectiveApplyMode === 'scheduled' ? 'scheduled' : 'interval'}
+              onModeChange={handleApplyModeChange}
+              time={effectiveApplyTime}
+              onTimeChange={handleApplyTimeChange}
+              days={effectiveApplyDays}
+              onDaysChange={handleApplyDaysChange}
+              serverTimezone={settings?.serverTimezone ?? 'UTC'}
+              serverTimeOffset={settings?.serverTimeOffset ?? '+00:00'}
+              intervalLabel="Apply as soon as an update is found"
+              /*
+               * ScheduleModeFields renders intervalLabel inside a Label whose htmlFor is
+               * hardcoded to `${idPrefix}-interval`, so passing no control would leave that
+               * reference dangling. There is no second cadence control to put here — the
+               * Scan Interval select above already governs it — so this static line takes
+               * the id and says so, instead of duplicating the select.
+               */
+              intervalControl={
+                <p id="update-apply-interval" className="text-xs text-muted-foreground">
+                  Scans keep running on the interval above. Anything they find is applied
+                  right away.
+                </p>
+              }
+              idPrefix="update-apply"
+            />
+            {settings?.nextApplyAt && (
+              <p className="text-sm text-muted-foreground">
+                Next scheduled update: {formatDateFull(settings.nextApplyAt)}
+              </p>
+            )}
+            <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3">
+              <AlertCircle className="h-4 w-4 mt-0.5 text-warning shrink-0" />
+              <p className="text-sm text-warning">
+                {effectiveApplyMode === 'scheduled'
+                  ? 'Only containers and stacks with auto-update turned on will be updated. Scans keep running on the interval above, and anything they find is applied at the scheduled time, which may cause brief service interruption.'
+                  : 'Only containers and stacks with auto-update turned on will be updated. Updates happen when new images are detected during scans and may cause brief service interruption.'}
+              </p>
+            </div>
+          </>
         )}
         {!effectiveAutoUpdate && (
           <div className="flex items-start gap-2 rounded-lg border bg-muted/50 p-3">
