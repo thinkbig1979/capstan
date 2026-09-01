@@ -56,13 +56,18 @@ esac
 # Tracked files in scope. `git ls-files` rather than `find` on purpose:
 # find sweeps node_modules and other untracked vendored trees, and an
 # untracked vendored script is not something this gate should redden the
-# build over. The grep arm catches Dockerfile variants (Dockerfile.dev,
-# Dockerfile-ci) that a fixed pathspec list would miss.
+# build over.
+#
+# The grep arm catches both Dockerfile naming conventions a fixed pathspec
+# list would miss: suffixed (Dockerfile.dev, Dockerfile-ci) and prefixed
+# (web.dockerfile). The suffix may not itself contain a dot, which is what
+# keeps prose files like docs/dockerfile-notes.md out of scope -- a markdown
+# file swept as a Dockerfile could redden the build over a code fence.
 tracked_files() {
   {
     command git -C "$REPO_ROOT" ls-files -- '*.sh' '*.bash'
     command git -C "$REPO_ROOT" ls-files -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
-    command git -C "$REPO_ROOT" ls-files | command grep -iE '(^|/)Dockerfile([.-][^/]*)?$'
+    command git -C "$REPO_ROOT" ls-files | command grep -iE '(^|/)Dockerfile([.-][^/.]*)?$|(^|/)[^/]*\.dockerfile$'
   } | command sort -u
 }
 
