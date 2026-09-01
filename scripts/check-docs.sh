@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -662,6 +662,30 @@ check_env_coverage() {
   return 0
 }
 
+# check_line_continuation delegates to scripts/check-line-continuation.sh so the
+# rule is also runnable on its own against an arbitrary path (the sibling
+# script takes file arguments; this dispatcher does not). It is folded in here
+# rather than added as a second CI step because this job already runs
+# check-docs.sh, so no workflow edit is needed to make it a required gate.
+check_line_continuation() {
+  local script="$SCRIPT_DIR/check-line-continuation.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: line-continuation - $script not found"
+    return 1
+  fi
+
+  local out status
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: line-continuation - ${out#line-continuation: }"
+    return 0
+  fi
+  echo "FAIL: line-continuation - a comment follows a backslash continuation, which ends the command there:"
+  echo "$out"
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # dispatch
 # ---------------------------------------------------------------------------
@@ -678,6 +702,7 @@ Valid check names:
   links          relative markdown links and anchors resolve
   navigation     no docs page is an orphan or a dead end
   env-coverage   every backend os.Getenv var is documented
+  line-continuation  no comment line follows a backslash continuation
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -692,6 +717,7 @@ run_check() {
     links)        check_links ;;
     navigation)   check_navigation ;;
     env-coverage) check_env_coverage ;;
+    line-continuation) check_line_continuation ;;
     *) return 2 ;;
   esac
 }
