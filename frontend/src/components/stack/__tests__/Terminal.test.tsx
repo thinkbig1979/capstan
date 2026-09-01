@@ -117,6 +117,15 @@ function connect() {
 // had any chance to appear, turning a weak test into one that cannot fail.
 // `waitFor` around this POSITIVE precondition is safe: it returns the moment
 // the condition holds and keeps polling while it does not.
+//
+// MEASURED (2026-09-01): today this resolves on its FIRST poll at all four
+// call sites — every one of those transitions is synchronous inside `act()`,
+// and replacing this whole helper body with a bare synchronous `expect` still
+// passes 25/25. So it is not fixing a live flake; it is a guard against one of
+// those transitions becoming asynchronous later, and it removes 50ms of dead
+// wall-clock per site. Breaking the role regex fails all four by exhausting
+// the ~1000ms window, which is what shows the anchor is real rather than
+// decorative.
 async function waitForDisconnectedRender() {
   await waitFor(() => {
     expect(screen.getByRole('button', { name: /Reconnect/ })).toBeInTheDocument()
@@ -558,10 +567,14 @@ describe('TerminalComponent — session duration', () => {
       capturedOptions?.onClose?.(new CloseEvent('close', { code: 1006 }))
     })
 
-    // `toast.error` is raised synchronously inside the same `onClose` handler
-    // that clears the connected state (useTerminalSession.ts:79-91), and before
-    // it, so a committed disconnected render proves `onClose` ran to completion
-    // — see the note on 'clears connected state on close'.
+    // `toast.error` (useTerminalSession.ts:80,85) and the `setIsConnected(false)`
+    // that produces the disconnected render (useTerminalSession.ts:72) sit in
+    // the same synchronous `onClose` body. React batches the state update and
+    // commits the re-render only after that body returns, so a committed
+    // disconnected render proves the handler ran past the toast branches —
+    // whichever order the two statements are written in. (The anchor would stop
+    // being sound if someone wrapped the setState in `flushSync`, which would
+    // let the render commit mid-handler.) See 'clears connected state on close'.
     await waitForDisconnectedRender()
     expect(toast.error).not.toHaveBeenCalled()
   })
