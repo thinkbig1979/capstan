@@ -214,14 +214,6 @@ jobs:
         working-directory: backend
         run: |
           set -eu
-          PORT=5001 \
-          STACKS_DIR=/tmp/capstan-e2e/stacks \
-          DATA_DIR=/tmp/capstan-e2e/data \
-          AUTH_DISABLED=true \
-          JWT_SECRET=e2e-ci-secret-32-characters-min-pad \
-          LOG_LEVEL=info \
-          LOG_FORMAT=text \
-          CORS_ORIGINS=http://localhost:3001 \
           # The whole suite shares ONE rate-limit bucket. RateLimitByUser keys
           # on the user UUID when a request is authenticated and on the client
           # IP otherwise, and here every request comes from ::1 — under
@@ -236,6 +228,19 @@ jobs:
           # 2000 is a ceiling with ~5.6x headroom over the observed rate, not an
           # off switch: a runaway retry loop still trips it, which is the signal
           # worth keeping.
+          #
+          # NOTE: keep this block ABOVE the command. A comment line between a
+          # trailing '\' and the line it continues onto ENDS the command there,
+          # leaving the preceding assignments as unexported shell variables. That
+          # shipped once and the backend died on a missing JWT_SECRET.
+          PORT=5001 \
+          STACKS_DIR=/tmp/capstan-e2e/stacks \
+          DATA_DIR=/tmp/capstan-e2e/data \
+          AUTH_DISABLED=true \
+          JWT_SECRET=e2e-ci-secret-32-characters-min-pad \
+          LOG_LEVEL=info \
+          LOG_FORMAT=text \
+          CORS_ORIGINS=http://localhost:3001 \
           RATE_LIMIT_API_PER_MIN=2000 \
           nohup ./server > /tmp/capstan-e2e/backend.log 2>&1 &
           for i in $(seq 1 30); do
@@ -439,6 +444,16 @@ jobs:
           # by giving every job a clean VM.
           rm -rf /tmp/capstan-e2e-auth
           mkdir -p /tmp/capstan-e2e-auth/stacks /tmp/capstan-e2e-auth/data
+          # Same single-bucket exposure as the backup-flow job. Authenticated
+          # requests here key on the user UUID, but every pre-login and
+          # unauthenticated request still lands in the one ::1 bucket, so this
+          # suite can reach the same ceiling by a narrower route. Raised
+          # pre-emptively — NOT observed failing this way, unlike backup-flow.
+          #
+          # NOTE: keep this block ABOVE the command. A comment line between a
+          # trailing '\' and the line it continues onto ENDS the command there,
+          # leaving the preceding assignments as unexported shell variables. That
+          # shipped once and the backend died on a missing JWT_SECRET.
           PORT=5001 \
           STACKS_DIR=/tmp/capstan-e2e-auth/stacks \
           DATA_DIR=/tmp/capstan-e2e-auth/data \
@@ -447,11 +462,6 @@ jobs:
           LOG_LEVEL=info \
           LOG_FORMAT=text \
           CORS_ORIGINS=http://localhost:3001 \
-          # Same single-bucket exposure as the backup-flow job. Authenticated
-          # requests here key on the user UUID, but every pre-login and
-          # unauthenticated request still lands in the one ::1 bucket, so this
-          # suite can reach the same ceiling by a narrower route. Raised
-          # pre-emptively — NOT observed failing this way, unlike backup-flow.
           RATE_LIMIT_API_PER_MIN=2000 \
           nohup ./server > /tmp/capstan-e2e-auth/backend.log 2>&1 &
           for i in $(seq 1 30); do
