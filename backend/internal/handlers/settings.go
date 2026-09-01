@@ -419,11 +419,39 @@ func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// applyModeImmediate and applyModeScheduled are the only two accepted values of
+// the update_apply_mode setting. Immediate is the default seeded by migration 14.
+const (
+	applyModeImmediate = "immediate"
+	applyModeScheduled = "scheduled"
+)
+
+// defaultApplyTime and defaultApplyDays mirror what migration 14 seeds. They are
+// the fallback for a settings row that is missing entirely, so that a GET on a
+// database predating the migration still renders a usable form.
+const (
+	defaultApplyTime = "03:00"
+	defaultApplyDays = "0,1,2,3,4,5,6"
+)
+
 func (h *SettingsHandler) GetUpdateSettings(c *gin.Context) {
 	scanIntervalStr, _ := h.db.GetSetting("update_scan_interval")
 	lastScanAt, _ := h.db.GetSetting("update_scan_last_run")
 	lastScanError, _ := h.db.GetSetting("update_scan_last_error")
 	autoUpdateEnabledStr, _ := h.db.GetSetting("auto_update_enabled")
+	applyMode, _ := h.db.GetSetting("update_apply_mode")
+	applyTime, _ := h.db.GetSetting("update_apply_time")
+	applyDaysStr, _ := h.db.GetSetting("update_apply_days")
+
+	if applyMode != applyModeScheduled {
+		applyMode = applyModeImmediate
+	}
+	if applyTime == "" {
+		applyTime = defaultApplyTime
+	}
+	if applyDaysStr == "" {
+		applyDaysStr = defaultApplyDays
+	}
 
 	scanInterval := 0
 	if scanIntervalStr != "" {
@@ -446,9 +474,37 @@ func (h *SettingsHandler) GetUpdateSettings(c *gin.Context) {
 		lastScanErrorPtr = &lastScanError
 	}
 
+	// ApplyDays is initialised before it is filled so that it marshals as [] and
+	// never as null, including on the parse-failure path below.
 	response := models.UpdateSettingsResponse{
 		ScanIntervalMinutes: scanInterval,
 		GlobalAutoUpdate:    autoUpdateEnabledStr == "true",
+		ApplyMode:           applyMode,
+		ApplyTime:           applyTime,
+		ApplyDays:           []int{},
+	}
+	response.ServerTimezone, response.ServerTimeOffset = services.ServerTimezone()
+
+	weekdays, err := services.ParseWeekdays(applyDaysStr)
+	if err != nil {
+		// Report the stored days as empty rather than inventing a default: an
+		// operator seeing no days selected can see something is wrong, where a
+		// silently substituted default would hide it.
+		slog.Error("Stored update_apply_days is invalid", "value", applyDaysStr, "error", err)
+	}
+	for _, day := range weekdays {
+		response.ApplyDays = append(response.ApplyDays, int(day))
+	}
+
+	// nextApplyAt only means something when an apply is actually going to
+	// happen: scheduled mode, auto-update on, and a scan interval that keeps the
+	// scheduler (and with it the apply timer) running.
+	if applyMode == applyModeScheduled && response.GlobalAutoUpdate && scanInterval > 0 {
+		if schedule, schedErr := services.ParseDailySchedule(applyTime, applyDaysStr); schedErr == nil {
+			if next, ok := schedule.NextAfter(time.Now()); ok {
+				response.NextApplyAt = next.Format(time.RFC3339)
+			}
+		}
 	}
 	if lastScanAtPtr != nil {
 		response.LastScanAt = *lastScanAtPtr
@@ -468,8 +524,11 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	// bound to their zero value here, so a partial PUT silently wrote interval 0
 	// and auto-update false, then stopped the scheduler (agent-os-mtbo.8).
 	var req struct {
-		ScanIntervalMinutes *int  `json:"scanIntervalMinutes"`
-		GlobalAutoUpdate    *bool `json:"globalAutoUpdate"`
+		ScanIntervalMinutes *int    `json:"scanIntervalMinutes"`
+		GlobalAutoUpdate    *bool   `json:"globalAutoUpdate"`
+		ApplyMode           *string `json:"applyMode"`
+		ApplyTime           *string `json:"applyTime"`
+		ApplyDays           *[]int  `json:"applyDays"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -488,6 +547,47 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 			"Scan interval must be 0 (disabled) or at least 15 minutes",
 		))
 		return
+	}
+
+	// Validate the apply schedule before writing anything, so a bad day list
+	// cannot leave a half-applied time behind. The service falls back to
+	// immediate mode on an unparseable stored schedule; this is the other half
+	// of that pair — reject it at the door so it never gets stored.
+	if req.ApplyMode != nil && *req.ApplyMode != applyModeImmediate && *req.ApplyMode != applyModeScheduled {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			"VALIDATION_ERROR",
+			fmt.Sprintf("Invalid apply mode %q: expected %q or %q", *req.ApplyMode, applyModeImmediate, applyModeScheduled),
+		))
+		return
+	}
+	if req.ApplyTime != nil {
+		if _, _, err := services.ParseScheduleTime(*req.ApplyTime); err != nil {
+			c.JSON(http.StatusBadRequest, models.NewAppError(
+				http.StatusBadRequest,
+				"VALIDATION_ERROR",
+				err.Error(),
+			))
+			return
+		}
+	}
+	applyDaysCSV := ""
+	if req.ApplyDays != nil {
+		parts := make([]string, 0, len(*req.ApplyDays))
+		for _, day := range *req.ApplyDays {
+			parts = append(parts, strconv.Itoa(day))
+		}
+		weekdays, err := services.ParseWeekdays(strings.Join(parts, ","))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.NewAppError(
+				http.StatusBadRequest,
+				"VALIDATION_ERROR",
+				err.Error(),
+			))
+			return
+		}
+		// Store the normalised (sorted, deduped) form so a GET round-trips.
+		applyDaysCSV = services.FormatWeekdays(weekdays)
 	}
 
 	applied := gin.H{"setting": "update_schedule"}
@@ -536,6 +636,60 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 			return
 		}
 		applied["auto_update"] = *req.GlobalAutoUpdate
+	}
+
+	// Every audit key below is set INSIDE its own nil guard, never above it:
+	// an "applied" entry for a field the request never sent would make the audit
+	// row tell exactly the lie the all-pointer conversion (agent-os-mtbo.8) was
+	// written to stop telling.
+	if req.ApplyMode != nil {
+		if err := h.db.SetSetting("update_apply_mode", *req.ApplyMode); err != nil {
+			slog.Error("Failed to update apply mode", "error", err)
+			c.JSON(http.StatusInternalServerError, models.NewAppError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to update apply mode",
+			))
+			return
+		}
+		applied["apply_mode"] = *req.ApplyMode
+	}
+
+	if req.ApplyTime != nil {
+		if err := h.db.SetSetting("update_apply_time", *req.ApplyTime); err != nil {
+			slog.Error("Failed to update apply time", "error", err)
+			c.JSON(http.StatusInternalServerError, models.NewAppError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to update apply time",
+			))
+			return
+		}
+		applied["apply_time"] = *req.ApplyTime
+	}
+
+	if req.ApplyDays != nil {
+		if err := h.db.SetSetting("update_apply_days", applyDaysCSV); err != nil {
+			slog.Error("Failed to update apply days", "error", err)
+			c.JSON(http.StatusInternalServerError, models.NewAppError(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to update apply days",
+			))
+			return
+		}
+		applied["apply_days"] = applyDaysCSV
+	}
+
+	// Re-arm on ANY of the three, not just on a changed interval: a schedule
+	// edit that leaves the interval alone still has to reach the running apply
+	// timer, or it takes effect only at the next restart.
+	//
+	// This is deliberately NOT h.scheduler.Restart(): the merged settings screen
+	// sends applyMode/applyTime/applyDays on their own, and stopping the scan
+	// scheduler on a pure schedule edit would be the mtbo.8 bug in a new place.
+	if h.scheduler != nil && (req.ApplyMode != nil || req.ApplyTime != nil || req.ApplyDays != nil) {
+		h.scheduler.ReloadApplySchedule()
 	}
 
 	slog.Info("Update settings changed", "applied", applied)

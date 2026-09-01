@@ -481,11 +481,25 @@ func main() {
 
 	if schedulerService != nil {
 		intervalStr, _ := db.GetSetting("update_scan_interval")
+		scanIntervalMinutes := 0
 		if intervalStr != "" {
-			if minutes, err := strconv.Atoi(intervalStr); err == nil && minutes > 0 {
-				schedulerService.Start(time.Duration(minutes) * time.Minute)
-				slog.Info("Update scheduler started", "interval_minutes", minutes)
+			if minutes, err := strconv.Atoi(intervalStr); err == nil {
+				scanIntervalMinutes = minutes
 			}
+		}
+
+		if scanIntervalMinutes > 0 {
+			// Start also arms the scheduled-apply timer, reading update_apply_*
+			// itself, so a configured apply schedule is live from boot.
+			schedulerService.Start(time.Duration(scanIntervalMinutes) * time.Minute)
+			slog.Info("Update scheduler started", "interval_minutes", scanIntervalMinutes)
+		} else if applyMode, _ := db.GetSetting("update_apply_mode"); applyMode == "scheduled" {
+			// The apply timer lives inside the scan scheduler, because applying
+			// from a cache no scan ever refreshes is worse than not applying.
+			// Say so rather than letting a configured schedule sit silently dead.
+			applyTime, _ := db.GetSetting("update_apply_time")
+			slog.Warn("Auto-update apply is scheduled but the update scan interval is 0, so nothing will be applied",
+				"apply_time", applyTime)
 		}
 	}
 
