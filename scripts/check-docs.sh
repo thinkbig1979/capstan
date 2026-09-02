@@ -697,11 +697,24 @@ check_networkidle_probes() {
     return 1
   fi
 
-  local out status
+  # The gate's own controls run FIRST. A scan that passes because the rule
+  # stopped firing is indistinguishable from a clean tree, and this check is
+  # required on main -- so prove the rule still fires, both ways, before
+  # believing anything it reports.
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: networkidle-probes - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
   out=$(bash "$script" 2>&1)
   status=$?
   if [ "$status" -eq 0 ]; then
-    echo "PASS: networkidle-probes - ${out#networkidle-probes: }"
+    echo "PASS: networkidle-probes - ${self#networkidle-probes }; ${out#networkidle-probes: }"
     return 0
   fi
   echo "FAIL: networkidle-probes - a spec counts requests with a raw listener instead of the settle helper, or the helper's copy of the app's WS-invalidation debounce has drifted:"

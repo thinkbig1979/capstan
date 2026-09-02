@@ -47,7 +47,9 @@
  * scanner can tell "this wait bounds that count" from "this wait is a wait", so
  * a rule that tries reddens correct code far more often than it catches a bad
  * probe. `waitForResponse` therefore stays unflagged, and a probe that counts
- * with it is caught in review rather than by a gate.
+ * with it is caught in review rather than by a gate. `page.routeFromHAR()` and
+ * `page.routeWebSocket()` are excluded from the backstop for the same kind of
+ * reason, recorded there rather than here.
  */
 
 import type { Page, Request } from 'playwright/test'
