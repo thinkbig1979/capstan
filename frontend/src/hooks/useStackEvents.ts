@@ -23,13 +23,6 @@ export interface ContainerEvent {
   timestamp: string
 }
 
-interface ScanCompleteEvent {
-  type: 'scan_complete'
-  added: number
-  removed: number
-  timestamp: string
-}
-
 export interface ResourceChangedEvent {
   type: 'resource_changed'
   event?: string
@@ -90,7 +83,6 @@ interface UpdateScanFailedEvent {
 export type StackEvent =
   | StackStatusEvent
   | ContainerEvent
-  | ScanCompleteEvent
   | ResourceChangedEvent
   | UpdateScanCompleteEvent
   | UpdatePolicyChangedEvent
@@ -149,10 +141,6 @@ export function useStackEvents() {
       keys.push(queryKeys.stack.detail(event.stackId), queryKeys.stacks())
     }
     scheduleInvalidations(keys)
-  }, [scheduleInvalidations])
-
-  const handleScanCompleteEvent = useCallback(() => {
-    scheduleInvalidations([queryKeys.stacks(), queryKeys.directories()])
   }, [scheduleInvalidations])
 
   const handleResourceChangedEvent = useCallback((event: ResourceChangedEvent) => {
@@ -266,9 +254,6 @@ export function useStackEvents() {
       case 'container_event':
         handleContainerEvent(data)
         break
-      case 'scan_complete':
-        handleScanCompleteEvent()
-        break
       case 'resource_changed':
         handleResourceChangedEvent(data)
         break
@@ -297,7 +282,6 @@ export function useStackEvents() {
   }, [
     handleStackStatusEvent,
     handleContainerEvent,
-    handleScanCompleteEvent,
     handleResourceChangedEvent,
     handleUpdateScanCompleteEvent,
     handleUpdateScanFailedEvent,
