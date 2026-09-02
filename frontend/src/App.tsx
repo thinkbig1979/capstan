@@ -39,15 +39,24 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+// AuthGuard wraps AppShell, not the other way round: the shell mounts Sidebar
+// (4 queries via useSidebarData) and Header, whose HeaderVitals issues a 5th
+// (dashboardApi.stats -> /api/v1/dashboard/stats). Each fires on mount, so with
+// the shell outside the guard all five ran against a dead session before the
+// redirect to /login could unmount them, measured 2026-09-02 as 5 wasted 401s
+// per logged-out load of `/`. The shell's two WebSockets were never part of it:
+// useWebSocket.ts:92 returns early when unauthenticated, so they self-guarded
+// and the damage was HTTP-only. Gating the mount fixes every query at once and
+// cannot be defeated by a sixth one added to the shell later.
 function AuthenticatedLayout() {
   return (
-    <AppShell>
-      <AuthGuard>
+    <AuthGuard>
+      <AppShell>
         <Suspense fallback={suspendedFallback}>
           <Outlet />
         </Suspense>
-      </AuthGuard>
-    </AppShell>
+      </AppShell>
+    </AuthGuard>
   )
 }
 
