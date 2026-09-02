@@ -3,51 +3,51 @@
 #
 # Two rules, both about the same 750ms:
 #
-#   1. A request-counting assertion in testing/ must not bound its measurement
-#      window with a bare `waitForLoadState('networkidle')`.
-#   2. The debounce constant the E2E helper copies must still match the one the
-#      app actually uses.
+#   1. Request counting in testing/ goes through the sanctioned helper, so that
+#      the helper's runtime guard can enforce the measurement window.
+#   2. The debounce constant that helper copies still matches the app's.
 #
-# WHY: networkidle resolves 500ms after the last connection closes, but this
-# app debounces its WebSocket-driven react-query invalidations by 750ms
-# (`scheduleInvalidations()` in frontend/src/hooks/useStackEvents.ts).
-# 750 > 500, so a probe bounded by networkidle stops listening ~250ms before a
-# WS-triggered refetch can be scheduled. OBSERVED 2026-09-01: a baseline probe
-# so bounded reported "/api/v1/stacks fires 1x", while a run holding the page
-# for 12s measured the same 1x AND saw a second fetch land 752-928ms after a
-# container_event frame. The count was consistent with both "no bug" and "bug
-# invisible to this instrument". Nothing else in CI can see that difference:
-# the test passes either way, it just measures the wrong window.
+# WHY: `waitForLoadState('networkidle')` resolves 500ms after the last
+# connection closes, but this app debounces its WebSocket-driven react-query
+# invalidations by 750ms, in `scheduleInvalidations()` in
+# frontend/src/hooks/useStackEvents.ts. 750 > 500, so a probe bounded by
+# networkidle stops listening ~250ms before a WS-triggered refetch can be
+# scheduled. OBSERVED 2026-09-01: a baseline probe so bounded reported
+# "/api/v1/stacks fires 1x", while a run holding the page for 12s measured the
+# same 1x AND saw a second fetch land 752-928ms after a container_event frame.
+# The count was consistent with both "no bug" and "bug invisible to this
+# instrument".
 #
-# The correct wait is testing/tests/playwright/helpers/network-settle.ts,
-# `waitForInvalidationSettle()`, which holds past the debounce.
+# WHY THIS SCRIPT DOES NOT MENTION networkidle (2026-09-02). It used to: it
+# looked for a bare networkidle wait sitting near a "request-counting marker".
+# That heuristic was removed after review measured it failing in both
+# directions at once. False positives: one ordinary `await
+# page.waitForResponse(...)` — a WAIT, not a counter — produced 6 violations,
+# five on pre-existing untouched lines, and `attemptCount++` in a retry loop
+# fired it too. False negative: a spec that called the counting helper, bounded
+# it with a bare networkidle and asserted on the tally exited 0, because the
+# listener lives in another file and a per-file line scanner cannot see it.
+# A required gate that reddens correct code and passes the exact bug it was
+# built for is worse than no gate. "Is this wait bounding that count" is not a
+# question a line scanner can answer; "is there a raw request listener in a
+# spec" is. So that is the question asked here, and the real enforcement lives
+# in the helper at runtime, where it cannot be evaded by naming or formatting:
+# reading a tally's `count` throws unless the page was settled first.
 #
-# Rule 2 exists because that helper restates the 750 rather than importing it
+# Rule 2 exists because the helper restates the 750 rather than importing it
 # (it is transpiled outside the frontend's tsconfig graph). A duplicated
 # constant nothing checks is rot waiting to happen, so the source value is
-# re-read from `scheduleInvalidations()` on every run. The source is located by
-# its function name and the timeout read from inside it -- deliberately NOT by
-# grepping the file for a bare `750`, which would match any unrelated
-# occurrence and could not fail for the right reason.
+# re-read on every run. The source is located by its function NAME and the
+# timeout read from inside it -- deliberately NOT by grepping the file for a
+# bare `750`, which would match any unrelated occurrence and could not fail for
+# the right reason.
 #
-# Rule 1 is scoped to counting sites on purpose. Waiting for RENDER with
-# networkidle is fine and is what every current call site in this suite does,
-# so a blanket ban would be noise the next author routes around. A violation is
-# a networkidle wait sitting within WINDOW lines of a request-counting marker.
+# Comments are excluded, so a commented-out listener does not redden the build.
 #
-# Comments are excluded from BOTH the marker scan and the violation scan. A
-# comment cannot be a request-counting assertion, and reporting one is worse
-# than useless: there is no remedy an author could apply, since you cannot call
-# waitForInvalidationSettle() from a comment. Found 2026-09-02 by review, after
-# the first version flagged the very note that explains this rule.
-#
-# Opt out with the token `networkidle-ok:` plus a reason, on the offending line
-# or in the three lines above it, when a render-wait genuinely sits next to a
-# counter. The reason is required -- a bare token is not an opt-out.
-#
-# KNOWN LIMIT (not tested -- inferred from the matched forms): detection is
-# line-based, so a `waitForLoadState(` split across lines is not seen. Every
-# current call site is single-line (e.g. backup-flow.spec.ts:83).
+# KNOWN GAP (by design): counting by repeated `waitForResponse()` calls is not
+# caught here, and `.route()` interception is not flagged either -- see the
+# note on ROUTE_GAP below. Keeping ordinary waits unflagged is the whole point
+# of the rewrite.
 #
 # Dependency-free by design: git, grep, sort and awk only.
 #
@@ -64,29 +64,30 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# How far a networkidle wait may sit from a counting marker and still be
-# considered part of the same measurement. Wide enough to span a helper
-# function and its callers' setup; narrow enough that unrelated tests in the
-# same file don't cross-contaminate.
-WINDOW="${NETWORKIDLE_PROBE_WINDOW:-40}"
-
 HELPER_REL='testing/tests/playwright/helpers/network-settle.ts'
 HELPER_CONST='WS_INVALIDATION_DEBOUNCE_MS'
 SOURCE_REL='frontend/src/hooks/useStackEvents.ts'
 SOURCE_FN='scheduleInvalidations'
 
+# ROUTE_GAP: `sharedContext.route('**/api/v1/**', ...)` in auth-session.spec.ts
+# is a canned-response stubbing harness, not a counter. Flagging `.route(`
+# would redden that untouched, correct file on day one -- the same false
+# positive class this rewrite removed -- so route interception is out of scope
+# until someone actually counts with it.
+
 usage() {
   cat <<USAGE >&2
 Usage: $(basename "$0") [FILE...]
 
-With no arguments, every tracked TypeScript file under testing/ is scanned.
+With no arguments, every tracked TypeScript file under testing/ is scanned,
+except the helpers/ directory that implements the sanctioned counting API.
 With arguments, exactly those paths are scanned.
 
-Fails when a bare waitForLoadState('networkidle') sits within $WINDOW lines of a
-request-counting marker (page.on('request'/'response'), waitForResponse(), or a
-count/tally/requests identifier being incremented). Use
-waitForInvalidationSettle() from $HELPER_REL,
-or annotate the line with "networkidle-ok: <reason>".
+Fails when a spec attaches a raw request listener (page.on('request'),
+'response', 'requestfinished', 'requestfailed') instead of using
+countMatchingRequests() from $HELPER_REL,
+whose tally refuses to be read until the page has been settled. Annotate a
+deliberate exception with "request-listener-ok: <reason>".
 
 Also fails when $HELPER_CONST in that helper no longer
 matches the setTimeout() inside $SOURCE_FN() in $SOURCE_REL.
@@ -108,7 +109,7 @@ helper_path="$REPO_ROOT/$HELPER_REL"
 source_path="$REPO_ROOT/$SOURCE_REL"
 
 if [ ! -r "$helper_path" ]; then
-  echo "FAIL: networkidle-probes - $HELPER_REL is missing, but this gate tells authors to use waitForInvalidationSettle() from it"
+  echo "FAIL: networkidle-probes - $HELPER_REL is missing, but this gate tells authors to count requests with it"
   exit 1
 fi
 if [ ! -r "$source_path" ]; then
@@ -169,7 +170,7 @@ fi
 drift_note="debounce constant ${helper_ms}ms matches $SOURCE_FN() in $SOURCE_REL"
 
 # ---------------------------------------------------------------------------
-# rule 1: no request-counting assertion bounded by bare networkidle
+# rule 1: no raw request listener outside the sanctioned helper
 # ---------------------------------------------------------------------------
 
 # `git ls-files` rather than `find`: find sweeps node_modules and other
@@ -194,33 +195,44 @@ else
   done < <(tracked_files)
 fi
 
+# The helpers/ directory implements the sanctioned API and is the one place a
+# raw listener belongs.
 readable=()
 for f in "${files[@]:-}"; do
   [ -z "$f" ] && continue
+  case "$f" in
+    */helpers/*) continue ;;
+  esac
   if [ -r "$f" ] && [ -f "$f" ]; then
     readable+=("$f")
   else
-    echo "SKIP: $f (not a readable regular file)" >&2
+    # Not a warning. A tracked path that cannot be read means the gate did not
+    # inspect what it claims to inspect, and a green "PASS" would be a lie.
+    echo "FAIL: networkidle-probes - $f is tracked but not a readable regular file; the gate could not inspect it"
+    exit 1
   fi
 done
 
+# A gate that cannot tell "clean" from "inspected nothing" carries no
+# information. Renaming testing/ used to leave this check green forever.
 if [ "${#readable[@]}" -eq 0 ]; then
-  echo "networkidle-probes: no files to scan; $drift_note"
-  exit 0
+  echo "FAIL: networkidle-probes - no files to scan; expected tracked TypeScript under testing/, so either the tree moved or the pathspec is wrong"
+  exit 1
 fi
 
-# Whole-file buffering, because a violation is defined by lines on BOTH sides
-# of the networkidle wait: the marker may precede it or follow it. C[] holds
-# each line with comments removed, and is what the two detectors read; L[]
-# holds the raw line, and is what the opt-out annotation is read from.
-command awk -v WINDOW="$WINDOW" -v DRIFT="$drift_note" '
+# Whole-file buffering: the opt-out annotation may sit on the three lines above
+# the violation, and the block-comment state has to carry across lines. C[]
+# holds each line with comments removed and is what the detector reads; L[]
+# holds the raw line and is what the annotation is read from.
+command awk -v DRIFT="$drift_note" '
   BEGIN { SQ = sprintf("%c", 39); DQ = sprintf("%c", 34); BT = sprintf("%c", 96) }
 
   # Strip // and /* */ comments, preserving string literals so that neither a
   # URL containing "//" truncates a line nor a commented-out example counts as
   # code. BLOCKSTATE carries the open-block-comment state to the next line.
-  function strip_comments(s, inblock,   out, i, len, c, c2, q) {
+  function strip_comments(s, inblock,   out, mask, i, len, c, c2, q) {
     out = ""
+    mask = ""
     i = 1
     len = length(s)
     while (i <= len) {
@@ -235,19 +247,22 @@ command awk -v WINDOW="$WINDOW" -v DRIFT="$drift_note" '
         if (c2 == "/") break
         if (c2 == "*") { inblock = 1; i += 2; continue }
         out = out c
+        mask = mask "."
         i++
         continue
       }
       if (c == SQ || c == DQ || c == BT) {
         q = c
         out = out c
+        mask = mask "S"
         i++
         while (i <= len) {
           c = substr(s, i, 1)
           out = out c
+          mask = mask "S"
           i++
           if (c == "\\") {
-            if (i <= len) { out = out substr(s, i, 1); i++ }
+            if (i <= len) { out = out substr(s, i, 1); mask = mask "S"; i++ }
             continue
           }
           if (c == q) break
@@ -255,52 +270,45 @@ command awk -v WINDOW="$WINDOW" -v DRIFT="$drift_note" '
         continue
       }
       out = out c
+      mask = mask "."
       i++
     }
     BLOCKSTATE = inblock
+    MASK = mask
     return out
   }
 
-  function is_marker(l,   low) {
+  # Only a listener ATTACH. `waitForResponse()` is an ordinary wait and
+  # `attemptCount++` is an ordinary retry loop; neither is counting requests,
+  # and treating them as such is what got the previous rule deleted.
+  # The listener syntax needs the quoted event name, so string literals are kept
+  # in C[] rather than blanked. M[] then says which characters are INSIDE a
+  # literal, so that a template literal quoting the whole call -- prose, not code
+  # -- is not reported. Found 2026-09-02 by a false-positive control.
+  function is_listener(l, m,   low, pos, start) {
     low = tolower(l)
-    if (low ~ /\.on\([ \t]*["'"'"'](request|response)/) return 1
-    if (low ~ /waitforresponse[ \t]*\(/) return 1
-    if (low ~ /[a-z0-9_$]*(count|tally|requests)[a-z0-9_$]*[ \t]*(\+\+|\+=)/) return 1
+    pos = 1
+    while (match(substr(low, pos), /\.on\([ \t]*["'"'"'`](request|response|requestfinished|requestfailed)["'"'"'`]/)) {
+      start = pos + RSTART - 1
+      if (substr(m, start, 1) != "S") return 1
+      pos = start + 1
+    }
     return 0
-  }
-  function is_idle(l,   low) {
-    low = tolower(l)
-    return low ~ /waitforloadstate[ \t]*\([ \t]*["'"'"'`]networkidle/
   }
   function annotated(i,   j) {
     for (j = i; j >= 1 && j >= i - 3; j--) {
-      if (tolower(L[j]) ~ /networkidle-ok:[ \t]*[^ \t]/) return 1
+      if (tolower(L[j]) ~ /request-listener-ok:[ \t]*[^ \t]/) return 1
     }
     return 0
   }
-  function settled(i,   j) {
-    for (j = (i - 3 < 1 ? 1 : i - 3); j <= i + 3 && j <= n; j++) {
-      if (tolower(C[j]) ~ /await[ \t]+[a-z0-9_$.]*waitforinvalidationsettle[ \t]*\(/) return 1
-    }
-    return 0
-  }
-  function nearest_marker(i,   j) {
-    for (j = (i - WINDOW < 1 ? 1 : i - WINDOW); j <= i + WINDOW && j <= n; j++) {
-      if (j != i && is_marker(C[j])) return j
-    }
-    return 0
-  }
-  function process(f,   i, m) {
+  function process(f,   i) {
     scanned++
     BLOCKSTATE = 0
-    for (i = 1; i <= n; i++) C[i] = strip_comments(L[i], BLOCKSTATE)
+    for (i = 1; i <= n; i++) { C[i] = strip_comments(L[i], BLOCKSTATE); M[i] = MASK }
     for (i = 1; i <= n; i++) {
-      if (!is_idle(C[i])) continue
-      if (annotated(i) || settled(i)) continue
-      m = nearest_marker(i)
-      if (m == 0) continue
-      printf "%s:%d: request-counting assertion bounded by bare networkidle (counting marker on line %d)\n", f, i, m
-      printf "    %d: %s\n", m, L[m]
+      if (!is_listener(C[i], M[i])) continue
+      if (annotated(i)) continue
+      printf "%s:%d: raw request listener in a spec; use countMatchingRequests() instead\n", f, i
       printf "    %d: %s\n", i, L[i]
       bad++
     }
@@ -314,10 +322,12 @@ command awk -v WINDOW="$WINDOW" -v DRIFT="$drift_note" '
   END {
     if (n > 0) process(prevfile)
     if (bad > 0) {
-      printf "FAIL: networkidle-probes - %d site(s); networkidle resolves at 500ms but the WS-invalidation debounce is longer, so the refetch lands outside the window\n", bad
-      printf "Use waitForInvalidationSettle() from testing/tests/playwright/helpers/network-settle.ts, or annotate with \"networkidle-ok: <reason>\".\n"
+      printf "FAIL: networkidle-probes - %d raw request listener(s) outside the sanctioned helper\n", bad
+      printf "Count requests with countMatchingRequests() from testing/tests/playwright/helpers/network-settle.ts:\n"
+      printf "its tally refuses to be read until waitForInvalidationSettle() has run, which a hand-rolled listener cannot enforce.\n"
+      printf "If the listener genuinely is not counting anything, annotate it with \"request-listener-ok: <reason>\".\n"
       exit 1
     }
-    printf "networkidle-probes: %d file(s) scanned, no request-counting assertion relies on bare networkidle; %s\n", scanned, DRIFT
+    printf "networkidle-probes: %d file(s) scanned, no raw request listener outside the helper; %s\n", scanned, DRIFT
   }
 ' "${readable[@]}"

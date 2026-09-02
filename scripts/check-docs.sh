@@ -704,7 +704,7 @@ check_networkidle_probes() {
     echo "PASS: networkidle-probes - ${out#networkidle-probes: }"
     return 0
   fi
-  echo "FAIL: networkidle-probes - a request-counting assertion stops at networkidle (which resolves before the app's WS-invalidation debounce), or the helper's copy of that debounce has drifted from the app:"
+  echo "FAIL: networkidle-probes - a spec counts requests with a raw listener instead of the settle helper, or the helper's copy of the app's WS-invalidation debounce has drifted:"
   echo "$out"
   return 1
 }
@@ -726,7 +726,7 @@ Valid check names:
   navigation     no docs page is an orphan or a dead end
   env-coverage   every backend os.Getenv var is documented
   line-continuation  no comment line follows a backslash continuation
-  networkidle-probes no request-counting assertion in testing/ stops at networkidle, and the E2E helper's debounce constant matches the app's
+  networkidle-probes request counting in testing/ goes through the settle helper, whose debounce constant matches the app's
 
 With no arguments, all checks run and a summary is printed.
 USAGE
