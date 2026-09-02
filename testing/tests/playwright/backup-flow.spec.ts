@@ -170,7 +170,10 @@ async function apiMutate(
  * WebSocket, so no extra dependency is needed.
  *
  * wsUrl is the backend-relative path (e.g. "/ws/backups/run/<id>"); it lives
- * under /api/v1 on the BACKEND, which vite does NOT proxy — so we always dial
+ * under /api/v1 on the BACKEND. vite DOES proxy it (vite.config.ts, '/api' →
+ * API_URL, ws: true) — but that proxy only exists for requests the browser
+ * page makes through its own origin. This helper runs in the Node test
+ * process, which has no vite origin to proxy through, so we always dial
  * API_URL directly, never BASE_URL.
  *
  * The terminal frame is `{type:"done", outcome:"success"|"partial"|"failed",
@@ -363,10 +366,11 @@ test.describe.serial('Backup flow E2E', () => {
 
   // ── 004: Run backup and wait for completion ────────────────────────────────
 
-  // The backup is driven entirely through the UI now, so this test makes no
-  // API calls of its own and needs neither `request` nor a CSRF bootstrap —
-  // the app's axios client handles the double-submit header itself.
-  test('BACKUP-PW-004: run backup and verify completion', async ({ page }) => {
+  // The backup is driven entirely through the UI now. The test still needs
+  // `request` — not for setup, but to read back the durable history record
+  // and correlate it to the runId this click kicks off (see below); no CSRF
+  // bootstrap is needed for that, since it's a GET.
+  test('BACKUP-PW-004: run backup and verify completion', async ({ page, request }) => {
     // ── Click "Back up now" in the BackupStatusCard ───────────────────────
     // BackupStatusCard mounts only in BackupSettingsContent (frontend/src/
     // components/settings/BackupSettingsContent.tsx), i.e. /settings/backup.
@@ -382,11 +386,33 @@ test.describe.serial('Backup flow E2E', () => {
     await expect(backupNowBtn).toBeVisible()
     await expect(backupNowBtn).toBeEnabled()
 
+    // Armed (not awaited) before the click so we can't miss the response, and
+    // read only after toBeDisabled below rather than in between — see there
+    // for why. Matched on pathname, not on API_URL: the page dials BASE_URL
+    // (:3001) and vite proxies /api through to API_URL (:5001), so a
+    // predicate built from API_URL would match nothing the page itself sends.
+    const kickoff = page.waitForResponse(
+      (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/backups/run',
+    )
+
     await backupNowBtn.click()
 
     // The click registered: the card is busy while the mutation is in flight
     // and then while its WebSocket streams the run.
+    //
+    // Nothing goes between click() and this assertion. toBeDisabled retries
+    // UNTIL disabled rather than waiting a fixed amount, so awaiting the
+    // kickoff response here first would burn the whole 15s expect budget if
+    // the busy window had already closed by the time we got to it.
     await expect(backupNowBtn).toBeDisabled()
+
+    // Pin this run's ID now, before anything else races ahead. This is the
+    // correlation key the history check at the end of this test uses to pin
+    // the observed outcome to THIS run rather than the most recent one.
+    const kickoffResp = await kickoff
+    expect(kickoffResp.status()).toBe(202)
+    const { runId } = await kickoffResp.json()
+    expect(runId, 'POST /backups/run did not return a runId').toBeTruthy()
 
     // "Live output" mounts only once the stream has delivered a line, so it
     // belongs to THIS click rather than to any earlier run.
@@ -433,7 +459,32 @@ test.describe.serial('Backup flow E2E', () => {
     // success line positively therefore fails on all three bad outcomes; the
     // Error check just ahead of it only buys a clearer message.
     await expect(page.getByText(/^Error:/)).toHaveCount(0)
+    // This positive assertion depends on execBackup leaving dr.reason empty
+    // on success: useBackup.ts:359's `msg.reason || 'Backup completed
+    // successfully.'` falls through to the literal string only then, unlike
+    // its restore/sync/dr-restore/prune siblings, which all set dr.reason on
+    // their own success path (backend/internal/services/backup_runner.go).
+    // The runId-correlated history check below is what keeps this test
+    // honest if that asymmetry is ever "tidied up" — it checks the
+    // DB-persisted status, not this reason-dependent UI string.
     await expect(page.getByText('Backup completed successfully.')).toBeVisible()
+
+    // ── Correlate the outcome to THIS run, not the most recent one ─────────
+    // The Last-run badge and dashboard read GetBackupRuns(1) — most recent —
+    // so nothing above actually pins the observed outcome to the run this
+    // test kicked off; a concurrent scheduler run would be indistinguishable.
+    // /backups/history is a plain GetBackupRuns SELECT, unlike /backups/status
+    // (which shells out to restic twice and would compete for the repo lock
+    // BACKUP-PW-005's snapshot list needs next).
+    const historyResp = await apiGet(request, '/api/v1/backups/history')
+    expect(historyResp.ok()).toBe(true)
+    const { runs } = (await historyResp.json()) as { runs: Array<{ id: string; status: string }> }
+    // Never `if (run) expect(...)` — that's silently vacuous on a missed find,
+    // which is exactly a failed/absent backup's signature. `?.status` fails
+    // loudly on undefined instead.
+    const thisRun = runs.find((r) => r.id === runId)
+    expect(thisRun, `No history record found for runId ${runId}`).toBeTruthy()
+    expect(thisRun?.status).toBe('success')
   })
 
   // ── 005: Verify snapshot appears ──────────────────────────────────────────
