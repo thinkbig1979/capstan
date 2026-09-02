@@ -47,6 +47,15 @@
 # false positives by construction. See
 # testing/tests/playwright/helpers/network-settle.ts.
 #
+# WHY THE LAYER 1 CONTROLS ARE NOT IN HERE. The runtime guard is TypeScript,
+# and .github/workflows/docs.yml -- which is what makes this a required check --
+# has no setup-node step: it checks out and runs bash, nothing else. This gate
+# is bash-only by construction, so it can only ever cover bash-testable things,
+# and --self-test below covers exactly the drift check. The guard's own controls
+# live in testing/tests/playwright/network-settle-guard.spec.ts, where a
+# TypeScript runtime already exists. The split is that constraint, not a
+# preference.
+#
 # Dependency-free by design: awk only.
 #
 # Usage:

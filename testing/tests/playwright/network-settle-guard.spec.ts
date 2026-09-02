@@ -18,6 +18,14 @@ import {
  * revision: `ATTACK A count read OK -> 2 (guard did NOT fire)`. GUARD-002 below
  * is that attack, frozen.
  *
+ * WHY HERE AND NOT IN THE SHELL GATE. scripts/check-networkidle-probes.sh has
+ * a --self-test that covers the debounce drift check, and these controls would
+ * sit naturally beside it — except that the guard is TypeScript and
+ * .github/workflows/docs.yml, which is what makes that gate required, has no
+ * setup-node step. It checks out and runs bash. So that gate can only cover
+ * bash-testable things, and these live here, where a TypeScript runtime already
+ * exists. The split is that constraint, not a preference.
+ *
  * These drive a STUB page rather than a browser: the guard's semantics are
  * about ordering, not about rendering, and a stub makes the ordering explicit
  * instead of hoping real traffic arrives in the right sequence. No fixture, no

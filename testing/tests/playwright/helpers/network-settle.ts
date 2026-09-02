@@ -65,9 +65,12 @@
  *      2026-09-02), while still passing a spec that misused this very helper.
  *      An ordinary wait is not a measurement and no line scanner can tell the
  *      two apart, so it stays unflagged and review catches it instead.
- *   2. Counting inside the `match` predicate. The predicate is caller code;
- *      incrementing a variable in it and never reading `.count` sidesteps the
- *      guard completely.
+ *   2. Counting inside a callback this module hands back to the caller —
+ *      either the `match` predicate here or `activityFilter` on the settle.
+ *      Both are caller code that sees every URL, so incrementing in one and
+ *      never reading `.count` sidesteps the guard completely. MEASURED
+ *      2026-09-02 against the fixed guard: `counted via activityFilter, no
+ *      tally, no guard -> 2`.
  *   3. `page['on']`, `page.on.bind(page)`, or a computed event name, attaching
  *      a listener without ever touching this module.
  *
