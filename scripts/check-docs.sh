@@ -687,9 +687,8 @@ check_line_continuation() {
 }
 
 # check_networkidle_probes delegates to scripts/check-networkidle-probes.sh for
-# the same reason line-continuation does: the rule stays runnable on its own
-# against an arbitrary path, and folding it in here makes it a required gate
-# without a workflow edit.
+# the same reason line-continuation does: the rule stays runnable on its own,
+# and folding it in here makes it a required gate without a workflow edit.
 check_networkidle_probes() {
   local script="$SCRIPT_DIR/check-networkidle-probes.sh"
   if [ ! -f "$script" ]; then
@@ -697,9 +696,9 @@ check_networkidle_probes() {
     return 1
   fi
 
-  # The gate's own controls run FIRST. A scan that passes because the rule
-  # stopped firing is indistinguishable from a clean tree, and this check is
-  # required on main -- so prove the rule still fires, both ways, before
+  # The check's own controls run FIRST. A check that passes because it has
+  # silently stopped working is indistinguishable from a clean tree, and this
+  # one is required on main -- so prove it still fires, both ways, before
   # believing anything it reports.
   local self status
   self=$(bash "$script" --self-test 2>&1)
@@ -717,7 +716,7 @@ check_networkidle_probes() {
     echo "PASS: networkidle-probes - ${self#networkidle-probes }; ${out#networkidle-probes: }"
     return 0
   fi
-  echo "FAIL: networkidle-probes - a spec counts requests with a raw listener instead of the settle helper, or the helper's copy of the app's WS-invalidation debounce has drifted:"
+  echo "FAIL: networkidle-probes - the E2E settle helper's copy of the app's WS-invalidation debounce has drifted, or could not be read:"
   echo "$out"
   return 1
 }
@@ -739,7 +738,7 @@ Valid check names:
   navigation     no docs page is an orphan or a dead end
   env-coverage   every backend os.Getenv var is documented
   line-continuation  no comment line follows a backslash continuation
-  networkidle-probes request counting in testing/ goes through the settle helper, whose debounce constant matches the app's
+  networkidle-probes the E2E settle helper's debounce constant still matches the app's
 
 With no arguments, all checks run and a summary is printed.
 USAGE

@@ -27,29 +27,54 @@
  * open WebSockets — terminal-flow.spec.ts awaits it on a page with two live
  * sockets and passes in CI. Sockets are not what makes it the wrong bound.
  *
- * HOW THIS IS ENFORCED. Reading a tally's `count` THROWS unless a
- * `waitForInvalidationSettle()` on the same page has completed since the tally
- * started — see `countMatchingRequests()`. That is the mechanism, and it cannot
- * be evaded by naming, formatting or file layout. A static backstop
- * (scripts/check-networkidle-probes.sh) catches hand-rolled listeners, and
- * `.route()` handlers, that never reach this module at all.
+ * HOW THIS IS ENFORCED. Reading a tally's `count` (or `urls`) THROWS unless a
+ * `waitForInvalidationSettle()` on the same page completed AFTER the most
+ * recent request that tally matched — see `countMatchingRequests()`.
  *
- * WHAT IS DELIBERATELY NOT COVERED, and why the trade was taken: counting by
- * repeated `await page.waitForResponse(...)` calls. Neither layer sees it --
- * layer 1 is never reached because no tally is constructed, and the static
- * backstop does not look at waits at all. This is a decision, not an oversight.
- * The gate that preceded this one DID try to catch it, by flagging a bare
- * networkidle wait sitting near anything that looked like a counter, and
- * OBSERVED 2026-09-02 that rule turned one ordinary `await
- * page.waitForResponse(...)` into 6 violations on a REQUIRED CI check, five of
- * them on pre-existing untouched lines -- while a spec that misused this very
- * helper still exited 0. An ordinary wait is not a measurement, and no line
- * scanner can tell "this wait bounds that count" from "this wait is a wait", so
- * a rule that tries reddens correct code far more often than it catches a bad
- * probe. `waitForResponse` therefore stays unflagged, and a probe that counts
- * with it is caught in review rather than by a gate. `page.routeFromHAR()` and
- * `page.routeWebSocket()` are excluded from the backstop for the same kind of
- * reason, recorded there rather than here.
+ * Ordering is the entire point, and getting it slightly wrong makes the guard
+ * ornamental. An earlier revision only checked that SOME settle had happened
+ * since the tally object was constructed. That sounds equivalent and is not:
+ * settle first, act second, read third, and it never fired. OBSERVED
+ * 2026-09-02 against that revision: `ATTACK A count read OK -> 2 (guard did
+ * NOT fire)`, and one settle unlocked a tally permanently, for every later read
+ * over every later window — `ATTACK B first=1 then count read OK -> 3`. Both
+ * throw now, because the comparison is against the last matched REQUEST rather
+ * than against the tally's birth.
+ *
+ * THERE IS NO STATIC BACKSTOP, and that is a decision (2026-09-02). Three were
+ * built and all three deleted: a line-proximity heuristic, then a "raw listener
+ * in a spec" scanner, then that plus `.route(`. Each failed in BOTH directions
+ * on a REQUIRED check. The last one reddened a multi-line template literal of
+ * prose (the string mask is per-line, only the block-comment state carries
+ * across), reddened a correctly annotated stub whose JSDoc pushed the marker
+ * past a three-line lookback, and reddened `router.route('/stacks').get(fn)` —
+ * while waving through `page.on(\n  'request',\n  fn\n)`, which is exactly
+ * what prettier emits once the handler grows. TypeScript is not line-oriented
+ * and the formatter decides where the lines fall, so "is there a raw listener
+ * in this file" is not a question a line scanner can answer. The runtime guard
+ * needs no help from one: it lives inside the code that is actually counting,
+ * so it has no false positives by construction.
+ *
+ * WHAT IS DELIBERATELY NOT COVERED. Three things, each a decision rather than
+ * an oversight:
+ *
+ *   1. Counting by repeated `await page.waitForResponse(...)`. No tally is
+ *      constructed, so the guard is never reached. The gate that tried to catch
+ *      this statically turned one ordinary wait into 6 violations on a REQUIRED
+ *      check, five of them on untouched pre-existing lines (OBSERVED
+ *      2026-09-02), while still passing a spec that misused this very helper.
+ *      An ordinary wait is not a measurement and no line scanner can tell the
+ *      two apart, so it stays unflagged and review catches it instead.
+ *   2. Counting inside the `match` predicate. The predicate is caller code;
+ *      incrementing a variable in it and never reading `.count` sidesteps the
+ *      guard completely.
+ *   3. `page['on']`, `page.on.bind(page)`, or a computed event name, attaching
+ *      a listener without ever touching this module.
+ *
+ * 2 and 3 are deliberate circumvention, not the accidental misuse this module
+ * exists to prevent. A test helper cannot stop a caller who is trying to defeat
+ * it, and building machinery that pretends otherwise is how the three deleted
+ * scanners happened.
  */
 
 import type { Page, Request } from 'playwright/test'
@@ -99,12 +124,23 @@ const SETTLE_POLL_MS = 50
 const DEFAULT_ACTIVITY_FILTER = () => true
 
 /**
- * Per-page count of completed settles.
+ * One monotonic clock for "what happened before what".
+ *
+ * Both a matched request and a completed settle take the next value, so the two
+ * are directly comparable. A counter rather than `Date.now()` because the
+ * question is purely one of ordering: two events inside the same millisecond
+ * still have to be ordered, and a settle legitimately completes very soon after
+ * the quiet window that preceded it.
+ */
+let eventSeq = 0
+
+/**
+ * The sequence number of the most recently completed settle, per page.
  *
  * A WeakMap rather than a property on the page so nothing leaks when the page
- * closes, and so the stamp cannot be read or forged from spec code.
+ * closes, and so the value cannot be read or forged from spec code.
  */
-const settleStamps = new WeakMap<Page, number>()
+const lastSettleSeq = new WeakMap<Page, number>()
 
 export interface InvalidationSettleOptions {
   /** Override the debounce when testing a component that uses a different one. */
@@ -126,18 +162,29 @@ export interface InvalidationSettleOptions {
  * burst — a stack restart streams container events — a fixed
  * `waitForTimeout(750 + 300)` can expire while the deadline is still being
  * pushed out, which is the same failure as the networkidle bug it replaces,
- * just with a narrower window. So the clock here restarts on every request and
- * every WebSocket frame, and the wait returns only once the page has been quiet
- * for `debounceMs + graceMs`.
+ * just with a narrower window. So the clock here restarts on every request, and
+ * the wait returns only once the page has been quiet for
+ * `debounceMs + graceMs`.
  *
- * KNOWN LIMIT: `page.on('websocket')` only reports sockets opened AFTER it is
- * attached, and this app opens its event sockets during page load. For a burst
- * arriving on one of those pre-existing sockets the frames are invisible here,
- * and only the resulting HTTP refetches restart the clock. That still cannot
- * return mid-refetch, but a burst running longer than the quiet window with no
- * HTTP traffic at all could be cut short. Not observed in this suite; stated
- * because the fix (attaching a tracker before the first navigation) costs API
- * surface nobody needs yet.
+ * WHY WEBSOCKET FRAMES ARE NOT ON THAT CLOCK (decided 2026-09-02, reversing an
+ * earlier revision that put them there). Two reasons pointing the same way.
+ *
+ * It never worked for the traffic that matters: `page.on('websocket')` reports
+ * only sockets opened AFTER it attaches, and this app opens its event sockets
+ * during page load, so the frames that actually drive the invalidations were
+ * invisible here from the start.
+ *
+ * And watching frames is actively hazardous. The backend pushes dashboard
+ * metrics every 1000ms (`broadcastMetrics` in
+ * backend/internal/services/monitor.go) while the quiet window is
+ * debounce + grace = 1050ms. A socket opened DURING a settle — which
+ * frontend/src/hooks/useWebSocket.ts does on reconnect — would restart the
+ * clock every 1000ms against a 1050ms requirement, a 50ms margin, and the
+ * settle would spin to its 30s cap and throw. Paying a hang risk for coverage
+ * that was already absent is a bad trade, so HTTP alone drives the clock: an
+ * invalidation worth waiting for ends in a refetch, and the refetch restarts
+ * it. This also removes the per-socket handlers, which were attached on every
+ * settle and never detached.
  */
 export async function waitForInvalidationSettle(
   page: Page,
@@ -158,13 +205,7 @@ export async function waitForInvalidationSettle(
   const onRequest = (request: { url(): string }) => {
     if (isActivity(request.url())) touch()
   }
-  const onSocket = (socket: { on(event: string, handler: () => void): void }) => {
-    socket.on('framereceived', touch)
-    socket.on('framesent', touch)
-  }
-
   page.on('request', onRequest)
-  page.on('websocket', onSocket)
   try {
     const deadline = Date.now() + timeoutMs
     for (;;) {
@@ -180,14 +221,16 @@ export async function waitForInvalidationSettle(
     }
   } finally {
     page.off('request', onRequest)
-    page.off('websocket', onSocket)
   }
 
-  settleStamps.set(page, (settleStamps.get(page) ?? 0) + 1)
+  lastSettleSeq.set(page, ++eventSeq)
 }
 
 export interface RequestTally {
-  /** Requests matched so far. THROWS until the page has been settled. */
+  /**
+   * Requests matched so far. THROWS unless a settle has completed since the
+   * most recent matched request.
+   */
   readonly count: number
   /** The matched URLs, in order, for failure messages. Same guard as `count`. */
   readonly urls: readonly string[]
@@ -199,16 +242,28 @@ export interface RequestTally {
  * Tally the requests whose URL matches `match`, from now until `stop()`.
  *
  * Reading `count` (or `urls`) throws unless `waitForInvalidationSettle()` has
- * completed on this page since the tally was created. That is deliberate and is
- * the whole mechanism: a tally is only as trustworthy as the window it was
- * taken over, and every cheap-looking bound — `networkidle`, a fixed sleep, an
- * `expect` on some other element — stops before this app's debounce can fire.
- * Ordering matters, so start the tally, do the thing, settle, then read:
+ * completed on this page SINCE THE LAST REQUEST THIS TALLY MATCHED. That is
+ * deliberate and is the whole mechanism: a tally is only as trustworthy as the
+ * window it was taken over, and every cheap-looking bound — `networkidle`, a
+ * fixed sleep, an `expect` on some other element — stops before this app's
+ * debounce can fire.
+ *
+ * "Since the last matched request" rather than "since the tally was created",
+ * because the second is satisfied by settling BEFORE the action and then never
+ * waiting for the traffic at all. Read the guard as: nothing you are counting
+ * may have arrived after the last time you waited.
+ *
+ * So: start the tally, do the thing, settle, then read — and stop it when done,
+ * or the listener outlives the test.
  *
  *   const tally = countMatchingRequests(page, /\/api\/v1\/stacks$/)
- *   await page.getByRole('button', { name: 'Restart' }).click()
- *   await waitForInvalidationSettle(page)
- *   expect(tally.count).toBe(1)
+ *   try {
+ *     await page.getByRole('button', { name: 'Restart' }).click()
+ *     await waitForInvalidationSettle(page)
+ *     expect(tally.count).toBe(1)
+ *   } finally {
+ *     tally.stop()
+ *   }
  */
 export function countMatchingRequests(
   page: Page,
@@ -216,22 +271,30 @@ export function countMatchingRequests(
 ): RequestTally {
   const urls: string[] = []
   const matches = typeof match === 'function' ? match : (url: string) => match.test(url)
-  const startStamp = settleStamps.get(page) ?? 0
+
+  // Seeded at construction, so a tally that has matched nothing at all still
+  // demands a settle before it may be read as 0.
+  let lastMatchSeq = ++eventSeq
 
   const onRequest = (request: Request) => {
     const url = request.url()
-    if (matches(url)) urls.push(url)
+    if (!matches(url)) return
+    urls.push(url)
+    lastMatchSeq = ++eventSeq
   }
   page.on('request', onRequest)
 
   const assertSettled = () => {
-    if ((settleStamps.get(page) ?? 0) > startStamp) return
+    if ((lastSettleSeq.get(page) ?? 0) > lastMatchSeq) return
     throw new Error(
-      'Refusing to read a request tally that was never settled. Await ' +
-        'waitForInvalidationSettle(page) from ' +
-        'testing/tests/playwright/helpers/network-settle.ts after the action and ' +
-        'before reading .count. Bounding the window with networkidle (or any fixed ' +
-        'wait) is not enough: it resolves at 500ms, while this app debounces its ' +
+      'Refusing to read a request tally that has not been settled since its ' +
+        'last matched request. The order has to be: create the tally, do the ' +
+        'thing, await waitForInvalidationSettle(page) from ' +
+        'testing/tests/playwright/helpers/network-settle.ts, THEN read .count. ' +
+        'Settling BEFORE the action does not count -- the requests you are ' +
+        'measuring arrive after that settle finished, so nothing ever waited ' +
+        'for them. Bounding the window with networkidle (or any fixed wait) is ' +
+        'not enough either: it resolves at 500ms, while this app debounces its ' +
         `WS-driven invalidations by ${WS_INVALIDATION_DEBOUNCE_MS}ms, so the refetch ` +
         'you are trying to count lands after you stopped listening.'
     )
