@@ -161,11 +161,16 @@ async function apiMutate(
 }
 
 /**
- * Trigger a stashed backup/restore operation by connecting its WebSocket.
+ * Attach to a backup/restore operation's WebSocket and await its outcome.
  *
- * POST /backups/run and /backups/restore return 202 + a wsUrl and only STASH a
- * pending op (5-min TTL). The engine executes ONLY when a client connects the
- * WS, exactly as the real UI does. We open it here and await the streamed
+ * POST /backups/run and /backups/restore start the operation immediately, on
+ * a detached goroutine, and return 202 + a wsUrl. A BackupRun DB record is
+ * created with status="running" before that response is sent, so the run is
+ * durable even if no WS client ever connects (backend/internal/handlers/
+ * backup.go:675-679, backend/internal/services/backup_runner.go:350 —
+ * `LaunchBackup` ends in `go reg.execBackup(...)`). Connecting the WS here
+ * only lets us observe the run to completion, the same way the real UI does;
+ * it does not start anything. We open it here and await the streamed
  * `{type:"done"}` event. Node 22 (the Playwright runner) exposes a global
  * WebSocket, so no extra dependency is needed.
  *
@@ -409,6 +414,9 @@ test.describe.serial('Backup flow E2E', () => {
     // Pin this run's ID now, before anything else races ahead. This is the
     // correlation key the history check at the end of this test uses to pin
     // the observed outcome to THIS run rather than the most recent one.
+    // Reading the response body here relies on nothing having navigated the
+    // page between the click above and this await — a page.goto in between
+    // would tear down the in-flight response listener.
     const kickoffResp = await kickoff
     expect(kickoffResp.status()).toBe(202)
     const { runId } = await kickoffResp.json()
@@ -470,12 +478,18 @@ test.describe.serial('Backup flow E2E', () => {
     await expect(page.getByText('Backup completed successfully.')).toBeVisible()
 
     // ── Correlate the outcome to THIS run, not the most recent one ─────────
-    // The Last-run badge and dashboard read GetBackupRuns(1) — most recent —
+    // The Last-run badge (BackupStatusCard.tsx's LastRunBadge) and
+    // BackupToggle's status pill both read GetBackupRuns(1) — most recent —
     // so nothing above actually pins the observed outcome to the run this
     // test kicked off; a concurrent scheduler run would be indistinguishable.
     // /backups/history is a plain GetBackupRuns SELECT, unlike /backups/status
     // (which shells out to restic twice and would compete for the repo lock
     // BACKUP-PW-005's snapshot list needs next).
+    //
+    // This only pins WHICH run and that its job status is success — "success"
+    // is a job status, not proof of coverage. A run that backed up zero
+    // stacks would also report success. BACKUP-PW-005's snapshot count is
+    // what proves test-app itself was actually backed up.
     const historyResp = await apiGet(request, '/api/v1/backups/history')
     expect(historyResp.ok()).toBe(true)
     const { runs } = (await historyResp.json()) as { runs: Array<{ id: string; status: string }> }
