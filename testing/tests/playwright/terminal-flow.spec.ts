@@ -56,6 +56,14 @@ let csrfToken = ''
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// Every `waitForLoadState('networkidle')` below is a RENDER wait, which is a
+// fine thing to want. It is NOT a valid bound for a request-COUNT assertion:
+// networkidle resolves 500ms after the last connection, while the app debounces
+// its WS-driven react-query invalidations by 750ms (`scheduleInvalidations()` in
+// frontend/src/hooks/useStackEvents.ts), so the refetch lands outside the window.
+// To count requests use countMatchingRequests() plus waitForInvalidationSettle()
+// from ./helpers/network-settle.ts; that tally refuses to be read unsettled.
+
 /**
  * Log in via the UI; skip if AUTH_DISABLED.
  *

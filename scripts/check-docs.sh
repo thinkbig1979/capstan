@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -686,6 +686,41 @@ check_line_continuation() {
   return 1
 }
 
+# check_networkidle_probes delegates to scripts/check-networkidle-probes.sh for
+# the same reason line-continuation does: the rule stays runnable on its own,
+# and folding it in here makes it a required gate without a workflow edit.
+check_networkidle_probes() {
+  local script="$SCRIPT_DIR/check-networkidle-probes.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: networkidle-probes - $script not found"
+    return 1
+  fi
+
+  # The check's own controls run FIRST. A check that passes because it has
+  # silently stopped working is indistinguishable from a clean tree, and this
+  # one is required on main -- so prove it still fires, both ways, before
+  # believing anything it reports.
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: networkidle-probes - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: networkidle-probes - ${self#networkidle-probes }; ${out#networkidle-probes: }"
+    return 0
+  fi
+  echo "FAIL: networkidle-probes - the E2E settle helper's copy of the app's WS-invalidation debounce has drifted, or could not be read:"
+  echo "$out"
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # dispatch
 # ---------------------------------------------------------------------------
@@ -703,6 +738,7 @@ Valid check names:
   navigation     no docs page is an orphan or a dead end
   env-coverage   every backend os.Getenv var is documented
   line-continuation  no comment line follows a backslash continuation
+  networkidle-probes the E2E settle helper's debounce constant still matches the app's
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -718,6 +754,7 @@ run_check() {
     navigation)   check_navigation ;;
     env-coverage) check_env_coverage ;;
     line-continuation) check_line_continuation ;;
+    networkidle-probes) check_networkidle_probes ;;
     *) return 2 ;;
   esac
 }
