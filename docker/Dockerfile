@@ -145,7 +145,7 @@ RUN set -eu; \
 # Pinned by index digest, not just by tag: the tag moves and a silently swapped
 # CLI is the kind of change that only shows up in production. Dependabot tracks
 # this FROM line like any other.
-FROM docker:29-cli@sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe AS docker-cli
+FROM docker:29-cli@sha256:3f4743208d2338c934d7b8bcfbe1bb54c0b2355c510ad5e0f31c0c4a54bd704e AS docker-cli
 
 # Runtime stage
 FROM debian:trixie-slim
