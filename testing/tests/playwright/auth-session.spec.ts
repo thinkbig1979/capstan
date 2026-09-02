@@ -171,6 +171,10 @@ test.describe('Auth session E2E', () => {
       },
     }
 
+    // Canned responses, not a counter: this fulfills fixed JSON so the
+    // revoked-session assertions never depend on the backend, and nothing here
+    // tallies requests for a settle window to bound.
+    // request-listener-ok: canned-response stubbing harness, no request tally
     await sharedContext.route('**/api/v1/**', (route) => {
       const path = new URL(route.request().url()).pathname
 

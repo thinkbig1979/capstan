@@ -31,8 +31,23 @@
  * `waitForInvalidationSettle()` on the same page has completed since the tally
  * started — see `countMatchingRequests()`. That is the mechanism, and it cannot
  * be evaded by naming, formatting or file layout. A static backstop
- * (scripts/check-networkidle-probes.sh) catches hand-rolled listeners that
- * never reach this module at all.
+ * (scripts/check-networkidle-probes.sh) catches hand-rolled listeners, and
+ * `.route()` handlers, that never reach this module at all.
+ *
+ * WHAT IS DELIBERATELY NOT COVERED, and why the trade was taken: counting by
+ * repeated `await page.waitForResponse(...)` calls. Neither layer sees it --
+ * layer 1 is never reached because no tally is constructed, and the static
+ * backstop does not look at waits at all. This is a decision, not an oversight.
+ * The gate that preceded this one DID try to catch it, by flagging a bare
+ * networkidle wait sitting near anything that looked like a counter, and
+ * OBSERVED 2026-09-02 that rule turned one ordinary `await
+ * page.waitForResponse(...)` into 6 violations on a REQUIRED CI check, five of
+ * them on pre-existing untouched lines -- while a spec that misused this very
+ * helper still exited 0. An ordinary wait is not a measurement, and no line
+ * scanner can tell "this wait bounds that count" from "this wait is a wait", so
+ * a rule that tries reddens correct code far more often than it catches a bad
+ * probe. `waitForResponse` therefore stays unflagged, and a probe that counts
+ * with it is caught in review rather than by a gate.
  */
 
 import type { Page, Request } from 'playwright/test'

@@ -44,10 +44,20 @@
 #
 # Comments are excluded, so a commented-out listener does not redden the build.
 #
+# `.route()` came INTO scope 2026-09-02, matched on the METHOD and not the
+# receiver. The only site in this repo is `sharedContext.route(...)`, so a
+# `page.`-anchored pattern would have missed it, and a route handler is a
+# measured evasion of layer 1: `page.route('**/api/v1/stacks', r => { hits++ })`
+# counts requests without ever constructing a tally, so nothing at runtime can
+# refuse to hand back the number. Unlike the deleted proximity rule this fires
+# only on a line that genuinely installs interception -- never on a comment, a
+# `waitForResponse` wait or a retry counter -- and its cost is one annotated
+# line per deliberate stub, which is bounded and self-documenting.
+#
 # KNOWN GAP (by design): counting by repeated `waitForResponse()` calls is not
-# caught here, and `.route()` interception is not flagged either -- see the
-# note on ROUTE_GAP below. Keeping ordinary waits unflagged is the whole point
-# of the rewrite.
+# caught here. Keeping ordinary waits unflagged is the whole point of the
+# rewrite; the same gap is restated in the helper's docblock, which is where
+# that trade is actually made and where the next author will be reading.
 #
 # Dependency-free by design: git, grep, sort and awk only.
 #
@@ -69,12 +79,6 @@ HELPER_CONST='WS_INVALIDATION_DEBOUNCE_MS'
 SOURCE_REL='frontend/src/hooks/useStackEvents.ts'
 SOURCE_FN='scheduleInvalidations'
 
-# ROUTE_GAP: `sharedContext.route('**/api/v1/**', ...)` in auth-session.spec.ts
-# is a canned-response stubbing harness, not a counter. Flagging `.route(`
-# would redden that untouched, correct file on day one -- the same false
-# positive class this rewrite removed -- so route interception is out of scope
-# until someone actually counts with it.
-
 usage() {
   cat <<USAGE >&2
 Usage: $(basename "$0") [FILE...]
@@ -83,9 +87,9 @@ With no arguments, every tracked TypeScript file under testing/ is scanned,
 except the helpers/ directory that implements the sanctioned counting API.
 With arguments, exactly those paths are scanned.
 
-Fails when a spec attaches a raw request listener (page.on('request'),
-'response', 'requestfinished', 'requestfailed') instead of using
-countMatchingRequests() from $HELPER_REL,
+Fails when a spec intercepts requests itself -- a raw listener (.on('request'),
+'response', 'requestfinished', 'requestfailed') or a .route() handler --
+instead of using countMatchingRequests() from $HELPER_REL,
 whose tally refuses to be read until the page has been settled. Annotate a
 deliberate exception with "request-listener-ok: <reason>".
 
@@ -278,9 +282,9 @@ command awk -v DRIFT="$drift_note" '
     return out
   }
 
-  # Only a listener ATTACH. `waitForResponse()` is an ordinary wait and
-  # `attemptCount++` is an ordinary retry loop; neither is counting requests,
-  # and treating them as such is what got the previous rule deleted.
+  # Only an ATTACH. `waitForResponse()` is an ordinary wait and `attemptCount++`
+  # is an ordinary retry loop; neither is counting requests, and treating them as
+  # such is what got the previous rule deleted.
   # The listener syntax needs the quoted event name, so string literals are kept
   # in C[] rather than blanked. M[] then says which characters are INSIDE a
   # literal, so that a template literal quoting the whole call -- prose, not code
@@ -295,20 +299,36 @@ command awk -v DRIFT="$drift_note" '
     }
     return 0
   }
+  # Route interception, matched on the METHOD alone. Constraining to `page.`
+  # would miss the one real site in this repo (`sharedContext.route(...)`) and
+  # would be the same no-receiver looseness the review faulted. Same string mask
+  # as is_listener(), so `.route(` quoted inside a literal is still prose.
+  function is_route(l, m,   low, pos, start) {
+    low = tolower(l)
+    pos = 1
+    while (match(substr(low, pos), /\.route\(/)) {
+      start = pos + RSTART - 1
+      if (substr(m, start, 1) != "S") return 1
+      pos = start + 1
+    }
+    return 0
+  }
   function annotated(i,   j) {
     for (j = i; j >= 1 && j >= i - 3; j--) {
       if (tolower(L[j]) ~ /request-listener-ok:[ \t]*[^ \t]/) return 1
     }
     return 0
   }
-  function process(f,   i) {
+  function process(f,   i, what) {
     scanned++
     BLOCKSTATE = 0
     for (i = 1; i <= n; i++) { C[i] = strip_comments(L[i], BLOCKSTATE); M[i] = MASK }
     for (i = 1; i <= n; i++) {
-      if (!is_listener(C[i], M[i])) continue
+      if (is_listener(C[i], M[i])) what = "raw request listener"
+      else if (is_route(C[i], M[i])) what = "route interception"
+      else continue
       if (annotated(i)) continue
-      printf "%s:%d: raw request listener in a spec; use countMatchingRequests() instead\n", f, i
+      printf "%s:%d: %s in a spec; use countMatchingRequests() instead, or annotate it\n", f, i, what
       printf "    %d: %s\n", i, L[i]
       bad++
     }
@@ -322,12 +342,12 @@ command awk -v DRIFT="$drift_note" '
   END {
     if (n > 0) process(prevfile)
     if (bad > 0) {
-      printf "FAIL: networkidle-probes - %d raw request listener(s) outside the sanctioned helper\n", bad
+      printf "FAIL: networkidle-probes - %d request interception(s) outside the sanctioned helper\n", bad
       printf "Count requests with countMatchingRequests() from testing/tests/playwright/helpers/network-settle.ts:\n"
       printf "its tally refuses to be read until waitForInvalidationSettle() has run, which a hand-rolled listener cannot enforce.\n"
-      printf "If the listener genuinely is not counting anything, annotate it with \"request-listener-ok: <reason>\".\n"
+      printf "If it genuinely counts nothing -- a canned-response stub, say -- annotate it with \"request-listener-ok: <reason>\".\n"
       exit 1
     }
-    printf "networkidle-probes: %d file(s) scanned, no raw request listener outside the helper; %s\n", scanned, DRIFT
+    printf "networkidle-probes: %d file(s) scanned, no unannotated request interception outside the helper; %s\n", scanned, DRIFT
   }
 ' "${readable[@]}"
