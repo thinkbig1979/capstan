@@ -480,40 +480,42 @@ test.describe.serial('Backup flow E2E', () => {
     console.log(`First snapshot: id=${firstSnapshotId}, shortId=${shortId}`)
 
     // ── Step 2: UI BackupsTab ─────────────────────────────────────────────
-    if (testStackId) {
-      // Backups is a section of the Activity tab since the phase-2 redesign;
-      // deep-link straight to it (old /backups links redirect here too). This
-      // is the test's only page load.
-      await loginIfNeeded(page, `/stacks/${testStackId}/activity?view=backups`)
+    // Backups is a section of the Activity tab since the phase-2 redesign;
+    // deep-link straight to it (old /backups links redirect here too). This
+    // is the test's only page load.
+    await loginIfNeeded(page, `/stacks/${testStackId}/activity?view=backups`)
 
-      // The inner Backups section tab (already active via the deep link)
-      const backupsTab = page.getByRole('tab', { name: /^backups$/i })
-      if (await backupsTab.count() > 0) {
-        await backupsTab.click()
-        await page.waitForLoadState('networkidle')
-      }
+    // The inner Backups section tab (already active via the deep link).
+    // Unconditional and retrying: `locator.count()` is a point-in-time check
+    // with no auto-wait, so a not-yet-painted tablist would silently skip the
+    // click; `locator.click()` auto-waits up to actionTimeout (30s). Clicking
+    // an already-active trigger is harmless — it calls
+    // setSearchParams({view:'backups'}, {replace:true}) with the same value,
+    // no remount.
+    const backupsTab = page.getByRole('tab', { name: /^backups$/i })
+    await backupsTab.click()
+    await page.waitForLoadState('networkidle')
 
-      // "No snapshots yet" empty state should NOT appear
-      const emptyState = page.getByText(/no snapshots yet/i)
-      await expect(emptyState).not.toBeVisible({ timeout: 5_000 }).catch(() => {
-        // Not visible = good; if assertion fails that means it IS visible
-        throw new Error('BackupsTab shows "No snapshots yet" despite API having snapshots')
-      })
+    // "No snapshots yet" empty state should NOT appear
+    const emptyState = page.getByText(/no snapshots yet/i)
+    await expect(emptyState).not.toBeVisible({ timeout: 5_000 }).catch(() => {
+      // Not visible = good; if assertion fails that means it IS visible
+      throw new Error('BackupsTab shows "No snapshots yet" despite API having snapshots')
+    })
 
-      // Snapshot table should have at least one row — the Restore button's
-      // aria-label includes the short ID
-      // No timeout override here: playwright.config.ts's expect timeout of 15s
-      // applies. This assertion's budget has to cover the page's whole boot,
-      // not just the last hop — `waitForLoadState('networkidle')` above can and
-      // does settle in the quiet gap before React fires its first query wave,
-      // in which case every request the button depends on lands inside this
-      // budget. OBSERVED idle, with a warm repo: 4.2s of it, gated by
-      // /backups/snapshots. Two of those calls shell out to restic and
-      // serialise on the repo lock, so the tail is much longer than the mean —
-      // which is what made the old 10s override flaky.
-      const restoreBtn = page.getByRole('button', { name: /restore snapshot/i })
-      await expect(restoreBtn.first()).toBeVisible()
-    }
+    // Snapshot table should have at least one row — the Restore button's
+    // aria-label includes the short ID
+    // No timeout override here: playwright.config.ts's expect timeout of 15s
+    // applies. This assertion's budget has to cover the page's whole boot,
+    // not just the last hop — `waitForLoadState('networkidle')` above can and
+    // does settle in the quiet gap before React fires its first query wave,
+    // in which case every request the button depends on lands inside this
+    // budget. OBSERVED idle, with a warm repo: 4.2s of it, gated by
+    // /backups/snapshots. Two of those calls shell out to restic and
+    // serialise on the repo lock, so the tail is much longer than the mean —
+    // which is what made the old 10s override flaky.
+    const restoreBtn = page.getByRole('button', { name: /restore snapshot/i })
+    await expect(restoreBtn.first()).toBeVisible()
   })
 
   // ── 006: Restore snapshot via ConfirmDialog ────────────────────────────────
