@@ -474,7 +474,11 @@ test.describe.serial('Backup flow E2E', () => {
     // their own success path (backend/internal/services/backup_runner.go).
     // The runId-correlated history check below is what keeps this test
     // honest if that asymmetry is ever "tidied up" — it checks the
-    // DB-persisted status, not this reason-dependent UI string.
+    // DB-persisted status, not this reason-dependent UI string. (This
+    // assertion must stay directly after the Error:-count-0 check above and
+    // in this order — that check is vacuous on its own, satisfied by a
+    // stream with no lines at all, and only means something because this one
+    // runs right after it and requires a line to exist.)
     await expect(page.getByText('Backup completed successfully.')).toBeVisible()
 
     // ── Correlate the outcome to THIS run, not the most recent one ─────────
