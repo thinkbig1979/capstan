@@ -161,16 +161,24 @@ async function apiMutate(
 }
 
 /**
- * Trigger a stashed backup/restore operation by connecting its WebSocket.
+ * Attach to a backup/restore operation's WebSocket and await its outcome.
  *
- * POST /backups/run and /backups/restore return 202 + a wsUrl and only STASH a
- * pending op (5-min TTL). The engine executes ONLY when a client connects the
- * WS, exactly as the real UI does. We open it here and await the streamed
+ * POST /backups/run and /backups/restore start the operation immediately, on
+ * a detached goroutine, and return 202 + a wsUrl. A BackupRun DB record is
+ * created with status="running" before that response is sent, so the run is
+ * durable even if no WS client ever connects (backend/internal/handlers/
+ * backup.go:675-679, backend/internal/services/backup_runner.go:350 —
+ * `LaunchBackup` ends in `go reg.execBackup(...)`). Connecting the WS here
+ * only lets us observe the run to completion, the same way the real UI does;
+ * it does not start anything. We open it here and await the streamed
  * `{type:"done"}` event. Node 22 (the Playwright runner) exposes a global
  * WebSocket, so no extra dependency is needed.
  *
  * wsUrl is the backend-relative path (e.g. "/ws/backups/run/<id>"); it lives
- * under /api/v1 on the BACKEND, which vite does NOT proxy — so we always dial
+ * under /api/v1 on the BACKEND. vite DOES proxy it (vite.config.ts, '/api' →
+ * API_URL, ws: true) — but that proxy only exists for requests the browser
+ * page makes through its own origin. This helper runs in the Node test
+ * process, which has no vite origin to proxy through, so we always dial
  * API_URL directly, never BASE_URL.
  *
  * The terminal frame is `{type:"done", outcome:"success"|"partial"|"failed",
@@ -363,10 +371,11 @@ test.describe.serial('Backup flow E2E', () => {
 
   // ── 004: Run backup and wait for completion ────────────────────────────────
 
-  // The backup is driven entirely through the UI now, so this test makes no
-  // API calls of its own and needs neither `request` nor a CSRF bootstrap —
-  // the app's axios client handles the double-submit header itself.
-  test('BACKUP-PW-004: run backup and verify completion', async ({ page }) => {
+  // The backup is driven entirely through the UI now. The test still needs
+  // `request` — not for setup, but to read back the durable history record
+  // and correlate it to the runId this click kicks off (see below); no CSRF
+  // bootstrap is needed for that, since it's a GET.
+  test('BACKUP-PW-004: run backup and verify completion', async ({ page, request }) => {
     // ── Click "Back up now" in the BackupStatusCard ───────────────────────
     // BackupStatusCard mounts only in BackupSettingsContent (frontend/src/
     // components/settings/BackupSettingsContent.tsx), i.e. /settings/backup.
@@ -382,11 +391,36 @@ test.describe.serial('Backup flow E2E', () => {
     await expect(backupNowBtn).toBeVisible()
     await expect(backupNowBtn).toBeEnabled()
 
+    // Armed (not awaited) before the click so we can't miss the response, and
+    // read only after toBeDisabled below rather than in between — see there
+    // for why. Matched on pathname, not on API_URL: the page dials BASE_URL
+    // (:3001) and vite proxies /api through to API_URL (:5001), so a
+    // predicate built from API_URL would match nothing the page itself sends.
+    const kickoff = page.waitForResponse(
+      (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/backups/run',
+    )
+
     await backupNowBtn.click()
 
     // The click registered: the card is busy while the mutation is in flight
     // and then while its WebSocket streams the run.
+    //
+    // Nothing goes between click() and this assertion. toBeDisabled retries
+    // UNTIL disabled rather than waiting a fixed amount, so awaiting the
+    // kickoff response here first would burn the whole 15s expect budget if
+    // the busy window had already closed by the time we got to it.
     await expect(backupNowBtn).toBeDisabled()
+
+    // Pin this run's ID now, before anything else races ahead. This is the
+    // correlation key the history check at the end of this test uses to pin
+    // the observed outcome to THIS run rather than the most recent one.
+    // Reading the response body here relies on nothing having navigated the
+    // page between the click above and this await — a page.goto in between
+    // would tear down the in-flight response listener.
+    const kickoffResp = await kickoff
+    expect(kickoffResp.status()).toBe(202)
+    const { runId } = await kickoffResp.json()
+    expect(runId, 'POST /backups/run did not return a runId').toBeTruthy()
 
     // "Live output" mounts only once the stream has delivered a line, so it
     // belongs to THIS click rather than to any earlier run.
@@ -433,7 +467,42 @@ test.describe.serial('Backup flow E2E', () => {
     // success line positively therefore fails on all three bad outcomes; the
     // Error check just ahead of it only buys a clearer message.
     await expect(page.getByText(/^Error:/)).toHaveCount(0)
+    // This positive assertion depends on execBackup leaving dr.reason empty
+    // on success: useBackup.ts:359's `msg.reason || 'Backup completed
+    // successfully.'` falls through to the literal string only then, unlike
+    // its restore/sync/dr-restore/prune siblings, which all set dr.reason on
+    // their own success path (backend/internal/services/backup_runner.go).
+    // The runId-correlated history check below is what keeps this test
+    // honest if that asymmetry is ever "tidied up" — it checks the
+    // DB-persisted status, not this reason-dependent UI string. (This
+    // assertion must stay directly after the Error:-count-0 check above and
+    // in this order — that check is vacuous on its own, satisfied by a
+    // stream with no lines at all, and only means something because this one
+    // runs right after it and requires a line to exist.)
     await expect(page.getByText('Backup completed successfully.')).toBeVisible()
+
+    // ── Correlate the outcome to THIS run, not the most recent one ─────────
+    // The Last-run badge (BackupStatusCard.tsx's LastRunBadge) and
+    // BackupToggle's status pill both read GetBackupRuns(1) — most recent —
+    // so nothing above actually pins the observed outcome to the run this
+    // test kicked off; a concurrent scheduler run would be indistinguishable.
+    // /backups/history is a plain GetBackupRuns SELECT, unlike /backups/status
+    // (which shells out to restic twice and would compete for the repo lock
+    // BACKUP-PW-005's snapshot list needs next).
+    //
+    // This only pins WHICH run and that its job status is success — "success"
+    // is a job status, not proof of coverage. A run that backed up zero
+    // stacks would also report success. BACKUP-PW-005's snapshot count is
+    // what proves test-app itself was actually backed up.
+    const historyResp = await apiGet(request, '/api/v1/backups/history')
+    expect(historyResp.ok()).toBe(true)
+    const { runs } = (await historyResp.json()) as { runs: Array<{ id: string; status: string }> }
+    // Never `if (run) expect(...)` — that's silently vacuous on a missed find,
+    // which is exactly a failed/absent backup's signature. `?.status` fails
+    // loudly on undefined instead.
+    const thisRun = runs.find((r) => r.id === runId)
+    expect(thisRun, `No history record found for runId ${runId}`).toBeTruthy()
+    expect(thisRun?.status).toBe('success')
   })
 
   // ── 005: Verify snapshot appears ──────────────────────────────────────────
@@ -480,40 +549,42 @@ test.describe.serial('Backup flow E2E', () => {
     console.log(`First snapshot: id=${firstSnapshotId}, shortId=${shortId}`)
 
     // ── Step 2: UI BackupsTab ─────────────────────────────────────────────
-    if (testStackId) {
-      // Backups is a section of the Activity tab since the phase-2 redesign;
-      // deep-link straight to it (old /backups links redirect here too). This
-      // is the test's only page load.
-      await loginIfNeeded(page, `/stacks/${testStackId}/activity?view=backups`)
+    // Backups is a section of the Activity tab since the phase-2 redesign;
+    // deep-link straight to it (old /backups links redirect here too). This
+    // is the test's only page load.
+    await loginIfNeeded(page, `/stacks/${testStackId}/activity?view=backups`)
 
-      // The inner Backups section tab (already active via the deep link)
-      const backupsTab = page.getByRole('tab', { name: /^backups$/i })
-      if (await backupsTab.count() > 0) {
-        await backupsTab.click()
-        await page.waitForLoadState('networkidle')
-      }
+    // The inner Backups section tab (already active via the deep link).
+    // Unconditional and retrying: `locator.count()` is a point-in-time check
+    // with no auto-wait, so a not-yet-painted tablist would silently skip the
+    // click; `locator.click()` auto-waits up to actionTimeout (30s). Clicking
+    // an already-active trigger is harmless — it calls
+    // setSearchParams({view:'backups'}, {replace:true}) with the same value,
+    // no remount.
+    const backupsTab = page.getByRole('tab', { name: /^backups$/i })
+    await backupsTab.click()
+    await page.waitForLoadState('networkidle')
 
-      // "No snapshots yet" empty state should NOT appear
-      const emptyState = page.getByText(/no snapshots yet/i)
-      await expect(emptyState).not.toBeVisible({ timeout: 5_000 }).catch(() => {
-        // Not visible = good; if assertion fails that means it IS visible
-        throw new Error('BackupsTab shows "No snapshots yet" despite API having snapshots')
-      })
+    // "No snapshots yet" empty state should NOT appear
+    const emptyState = page.getByText(/no snapshots yet/i)
+    await expect(emptyState).not.toBeVisible({ timeout: 5_000 }).catch(() => {
+      // Not visible = good; if assertion fails that means it IS visible
+      throw new Error('BackupsTab shows "No snapshots yet" despite API having snapshots')
+    })
 
-      // Snapshot table should have at least one row — the Restore button's
-      // aria-label includes the short ID
-      // No timeout override here: playwright.config.ts's expect timeout of 15s
-      // applies. This assertion's budget has to cover the page's whole boot,
-      // not just the last hop — `waitForLoadState('networkidle')` above can and
-      // does settle in the quiet gap before React fires its first query wave,
-      // in which case every request the button depends on lands inside this
-      // budget. OBSERVED idle, with a warm repo: 4.2s of it, gated by
-      // /backups/snapshots. Two of those calls shell out to restic and
-      // serialise on the repo lock, so the tail is much longer than the mean —
-      // which is what made the old 10s override flaky.
-      const restoreBtn = page.getByRole('button', { name: /restore snapshot/i })
-      await expect(restoreBtn.first()).toBeVisible()
-    }
+    // Snapshot table should have at least one row — the Restore button's
+    // aria-label includes the short ID
+    // No timeout override here: playwright.config.ts's expect timeout of 15s
+    // applies. This assertion's budget has to cover the page's whole boot,
+    // not just the last hop — `waitForLoadState('networkidle')` above can and
+    // does settle in the quiet gap before React fires its first query wave,
+    // in which case every request the button depends on lands inside this
+    // budget. OBSERVED idle, with a warm repo: 4.2s of it, gated by
+    // /backups/snapshots. Two of those calls shell out to restic and
+    // serialise on the repo lock, so the tail is much longer than the mean —
+    // which is what made the old 10s override flaky.
+    const restoreBtn = page.getByRole('button', { name: /restore snapshot/i })
+    await expect(restoreBtn.first()).toBeVisible()
   })
 
   // ── 006: Restore snapshot via ConfirmDialog ────────────────────────────────
