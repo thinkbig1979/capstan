@@ -103,21 +103,51 @@ overrides:
   # fast-uri ^3.0.1 and so resolves to a vulnerable 3.1.x on its own.
   # Removable once ajv's own floor moves past 3.1.5.
   #
-  # The selector must stay one step ahead of the floor it enforces. This read
-  # `fast-uri@<3.1.4: '>=3.1.4 <4'`, which stopped matching the moment
-  # resolution landed ON 3.1.4 — so when GHSA-7p8r-x3mc-p8w7 raised the bar to
-  # 3.1.5, the override was already a silent no-op and `pnpm audit` failed
-  # (agent-os-eld). Bump BOTH sides together, never just the target.
+  # WHAT ACTUALLY MOVES RESOLUTION IS THE TARGET FLOOR, NOT THE SELECTOR.
+  # MEASURED 2026-09-03 (agent-os-oyfn follow-up), starting from a lockfile
+  # pinned at 3.1.5 and running `pnpm install --lockfile-only` once per cell:
   #
-  # RECURRED (agent-os-oyfn, 2026-09-03): same mechanism, one rung up. The
-  # selector had been bumped to `<3.1.5` but resolution then landed ON 3.1.5,
-  # so the override was again a silent no-op the moment it stopped being
-  # ahead of the floor. Four new advisories (GHSA-5jgf-p345-68v8,
-  # GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp) require
-  # >=3.1.6. Bumped BOTH sides to <3.1.6 / >=3.1.6 <4. Second occurrence of
-  # this exact failure mode — a guard that fails when the selector stops
-  # matching anything would catch it at the source instead of via a red
-  # required check, next time it recurs.
+  #     selector    target      resolves to
+  #     <3.1.5      >=3.1.5     3.1.5   (stuck)
+  #     <3.1.5      >=3.1.6     3.1.6   <- target alone is sufficient
+  #     <3.1.6      >=3.1.5     3.1.5   <- selector alone does nothing
+  #     <3.1.6      >=3.1.6     3.1.6
+  #     <4          >=3.1.5     3.1.5   (a wide selector does NOT float it up)
+  #     <4          >=3.1.6     3.1.6
+  #
+  # So the rule this block carried for two occurrences — "the selector must
+  # stay one step ahead of the floor" and "bump BOTH sides, never just the
+  # target" — is WRONG and is withdrawn. Bumping the selector alone leaves the
+  # lockfile pinned; bumping the target alone fixes it. pnpm keeps the locked
+  # version whenever it still satisfies the overridden range, so only raising
+  # the range's floor above the locked version forces re-resolution.
+  #
+  # SCOPE OF THAT MEASUREMENT, stated so it is not over-read: exactly one
+  # package requests fast-uri here (ajv@8.20.0, `^3.0.1`). With a single
+  # consumer at a single range the selector had no set to discriminate, which
+  # is why it made no difference. It could matter with several consumers at
+  # differing ranges. What is measured is that HERE it is not the lever.
+  #
+  # WHEN A NEW ADVISORY LANDS: raise the TARGET floor above the vulnerable
+  # range and run `pnpm install` so the lockfile re-resolves. Matching the
+  # selector to it is harmless and keeps the pair readable, but it is not what
+  # fixes anything — do not spend time on it, and do not conclude the override
+  # is working just because the selector looks current.
+  #
+  # NO GUARD IS PROPOSED, deliberately. The obvious one — fail when a selector
+  # matches nothing — would watch the variable this measurement just showed to
+  # be inert, and it would fire in the healthy steady state too, since after a
+  # successful bump resolution always sits AT the floor. The condition that
+  # actually hurts is "a newly published advisory outranks the current floor",
+  # which is exactly what `pnpm audit --prod --audit-level=high` already
+  # reports as a required check. Note also that minimumReleaseAge (7 days, top
+  # of this file) can hold the fixed version out of reach when an advisory is
+  # fresh; that is the case agent-os-eld had to work around, and it is a
+  # property of the quarantine, not of this override.
+  #
+  # History: GHSA-7p8r-x3mc-p8w7 raised the bar to 3.1.5 (agent-os-eld,
+  # 2026-08); GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf
+  # and GHSA-jqff-g426-hqxp raised it to 3.1.6 (agent-os-oyfn, 2026-09-03).
   #
   # Capped below 4 on purpose: ajv asks for ^3.0.1, so handing it the 4.x major
   # would be an untested API change rather than a security fix.
