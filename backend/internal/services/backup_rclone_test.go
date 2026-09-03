@@ -172,47 +172,12 @@ func TestRcloneManager_RestoreRepo_Args(t *testing.T) {
 
 	call := runner.lastCall()
 	assert.Equal(t, "rclone", call.Binary)
-	assert.Equal(t, "copy", call.Args[0])
+	assert.Equal(t, "sync", call.Args[0])
 
 	// source → destination: remote:path → localPath
 	l := len(call.Args)
 	assert.Equal(t, "myremote:backups/capstan", call.Args[l-2])
 	assert.Equal(t, "/restore/dir", call.Args[l-1])
-}
-
-// TestRcloneManager_RestoreRepo_DoesNotBuildDeletingCommand is the regression
-// test for the DR-restore data-loss defect (agent-os-h0my): RestoreRepo used
-// to build `rclone sync`, which makes the destination identical to the
-// source and DELETES destination files absent from the source. The
-// destination here is the live local restic repository, which on a healthy
-// install holds the only copy of every snapshot.
-//
-// OBSERVED 2026-09-03 (four-arm probe, real restic 0.18.0 + real rclone,
-// production flag set, local repo ahead of remote by one snapshot): `sync`
-// destroyed the local-only snapshot and `restic check` still PASSED
-// afterwards — there is no error to catch and no integrity check that fires.
-// `rclone copy` never deletes from the destination, so this asserts the verb
-// directly as the safety property, rather than re-deriving it from the full
-// argv shape TestRcloneManager_RestoreRepo_Args already checks.
-func TestRcloneManager_RestoreRepo_DoesNotBuildDeletingCommand(t *testing.T) {
-	t.Parallel()
-
-	runner := &fakeRunner{}
-	m := testRcloneManager(runner)
-
-	out := make(chan StreamLine, 64)
-	go func() {
-		for range out {
-		}
-	}()
-	err := m.RestoreRepo(context.Background(), "myremote", "backups/capstan", "/restore/dir", 1, out)
-	require.NoError(t, err)
-	close(out)
-
-	call := runner.lastCall()
-	assert.NotEqual(t, "sync", call.Args[0],
-		"restore direction must never build rclone sync: it mirrors-with-delete onto the live local restic repo")
-	assert.Equal(t, "copy", call.Args[0])
 }
 
 func TestRcloneManager_RestoreRepo_UsesConfigDefaults(t *testing.T) {

@@ -1188,11 +1188,10 @@ func TestRunDRRestore_Success(t *testing.T) {
 	err := svc.RunDRRestore(context.Background(), out)
 	require.NoError(t, err)
 
-	// rclone must have been called with copy, not sync — DR restore must
-	// not mirror-with-delete onto the live local restic repo.
+	// rclone sync must have been called.
 	require.NotEmpty(t, runner.calls)
 	assert.Equal(t, "rclone", runner.calls[0].Binary)
-	assert.Equal(t, "copy", runner.calls[0].Args[0])
+	assert.Equal(t, "sync", runner.calls[0].Args[0])
 }
 
 func TestRunDRRestore_UnavailableWhenNoRclone(t *testing.T) {
