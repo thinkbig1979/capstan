@@ -131,6 +131,12 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 		}
 
 		defer h.cm.Remove(conn.ID)
+		// gorilla's Upgrade hijacks the connection, so net/http never closes it.
+		// Every return below (stream-error, write-error — ctx-done never
+		// actually fires today, since nothing external ever cancels ctx) left
+		// the socket and its goroutines open until this defer (agent-os-14gr),
+		// same shape as operations.go:91 / logs.go:130.
+		defer conn.Conn.Close()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
