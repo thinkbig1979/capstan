@@ -1034,36 +1034,23 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 
 		// Register so a session revocation (logout, password change) can reach
 		// this connection — see SetConnectionManager. Nil cm (not wired) skips
-		// registration rather than failing the attach; unlike the other WS
-		// handlers, a refused Add here would abandon an already-running durable
-		// backup op's only viewer, which is worse than leaving it uncapped.
+		// registration rather than failing the attach.
 		//
-		// That soft failure has a cost in BOTH directions, and both are known
-		// limits rather than oversights (agent-os-teop):
-		//
-		// 1. Unregistered means unrevocable. A connection whose Add fails (the
-		//    caller is already at the shared per-user cap) is in NO manager, so
-		//    CloseForSession/CloseForUser cannot reach it — a user already at
-		//    cap gets a backup stream that survives their own logout. Closing
-		//    this properly needs a way to register WITHOUT consuming a cap slot,
-		//    which ConnectionManager does not currently offer: NewConnectionManager
-		//    coerces maxPerUser <= 0 to DefaultConnectionLimit, so there is no
-		//    uncapped mode and a separate manager would only move the threshold.
-		//
-		// 2. These five routes now DRAW ON a budget five other stream types
-		//    enforce. h.cm is the shared cap-10 manager (cmd/server/main.go),
-		//    also used by logs, monitoring, dashboard, operations and
-		//    update-jobs — all of which DO hard-refuse at the cap with
-		//    "Connection limit exceeded". Backup streams never refuse, but they
-		//    do occupy slots, so open backup streams now make those other
-		//    streams get refused sooner than they used to. Before this bead,
-		//    wsAttach registered with nothing and consumed no budget at all.
-		//
-		// Fixing either properly is a cap-semantics change, not a comment.
+		// AddUnmetered (not Add): refusing at the cap here would abandon an
+		// already-running durable backup op's only viewer, which is worse than
+		// leaving it uncapped, so this must never refuse — but it still must be
+		// revocable and must not draw on the budget the other five WS handlers
+		// sharing h.cm (logs, monitoring, dashboard, operations, update-jobs)
+		// hard-enforce. Before AddUnmetered existed, the soft
+		// `if err := h.cm.Add(...); err == nil { defer h.cm.Remove(...) }` here
+		// had both costs: a connection whose Add failed (already at cap) was in
+		// NO manager and so unrevocable, surviving the user's own logout — and
+		// an under-cap connection's Add still incremented userCounts, spending a
+		// slot the other five handlers refuse at (agent-os-pu4y, formerly
+		// documented as a known limit of agent-os-teop's fix).
 		if h.cm != nil {
-			if err := h.cm.Add(conn.ID, conn); err == nil {
-				defer h.cm.Remove(conn.ID)
-			}
+			h.cm.AddUnmetered(conn.ID, conn)
+			defer h.cm.Remove(conn.ID)
 		}
 
 		// wsCtx is cancelled on client disconnect; it governs only the write loop.

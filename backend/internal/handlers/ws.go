@@ -101,8 +101,16 @@ type Connection struct {
 type ConnectionManager struct {
 	connections map[string]*Connection
 	userCounts  map[string]int
-	mu          sync.RWMutex
-	maxPerUser  int
+	// metered marks which connection IDs counted against userCounts when they
+	// were registered (via Add). AddUnmetered registers a connection WITHOUT
+	// an entry here, and Remove/closeMatching consult this map before
+	// decrementing userCounts — both already unconditionally decrement it for
+	// every connection they remove, so a connection that never incremented it
+	// must be excluded there too, or removing it silently inflates every
+	// other user's effective cap (agent-os-pu4y).
+	metered    map[string]bool
+	mu         sync.RWMutex
+	maxPerUser int
 }
 
 func NewConnectionManager(maxPerUser int) *ConnectionManager {
@@ -112,6 +120,7 @@ func NewConnectionManager(maxPerUser int) *ConnectionManager {
 	return &ConnectionManager{
 		connections: make(map[string]*Connection),
 		userCounts:  make(map[string]int),
+		metered:     make(map[string]bool),
 		maxPerUser:  maxPerUser,
 	}
 }
@@ -131,7 +140,27 @@ func (cm *ConnectionManager) Add(id string, conn *Connection) error {
 
 	cm.connections[id] = conn
 	cm.userCounts[conn.UserID] = count + 1
+	cm.metered[id] = true
 	return nil
+}
+
+// AddUnmetered registers conn for revocation (CloseForSession/CloseForUser can
+// reach it, exactly like a connection added via Add) WITHOUT consuming a
+// per-user cap slot: it never refuses, and it never increments userCounts.
+//
+// This is for a handler that must not abandon an already-running operation's
+// only viewer just because the caller is at the cap (wsAttach in backup.go),
+// but still wants the connection reachable by session/user revocation. A
+// dedicated lower-cap ConnectionManager does NOT give the same result:
+// NewConnectionManager coerces maxPerUser <= 0 to DefaultConnectionLimit, so
+// there is no way to construct an actually-uncapped manager — only a
+// registration path that bypasses the cap on the existing one.
+func (cm *ConnectionManager) AddUnmetered(id string, conn *Connection) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	cm.connections[id] = conn
+	// cm.metered[id] intentionally left unset — see the field comment.
 }
 
 func (cm *ConnectionManager) Remove(id string) {
@@ -139,10 +168,13 @@ func (cm *ConnectionManager) Remove(id string) {
 	defer cm.mu.Unlock()
 
 	if conn, exists := cm.connections[id]; exists {
-		cm.userCounts[conn.UserID]--
-		if cm.userCounts[conn.UserID] <= 0 {
-			delete(cm.userCounts, conn.UserID)
+		if cm.metered[id] {
+			cm.userCounts[conn.UserID]--
+			if cm.userCounts[conn.UserID] <= 0 {
+				delete(cm.userCounts, conn.UserID)
+			}
 		}
+		delete(cm.metered, id)
 		delete(cm.connections, id)
 	}
 }
@@ -239,10 +271,16 @@ func (cm *ConnectionManager) closeMatching(match func(*Connection) bool, closeCo
 			continue
 		}
 		targets = append(targets, conn)
-		cm.userCounts[conn.UserID]--
-		if cm.userCounts[conn.UserID] <= 0 {
-			delete(cm.userCounts, conn.UserID)
+		// Same meteredness check as Remove — a connection registered via
+		// AddUnmetered never incremented userCounts, so revoking it here must
+		// not decrement it either (agent-os-pu4y).
+		if cm.metered[id] {
+			cm.userCounts[conn.UserID]--
+			if cm.userCounts[conn.UserID] <= 0 {
+				delete(cm.userCounts, conn.UserID)
+			}
 		}
+		delete(cm.metered, id)
 		delete(cm.connections, id)
 	}
 	cm.mu.Unlock()
