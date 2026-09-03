@@ -48,6 +48,11 @@ type AuthHandler struct {
 	// behavioural gain. A nil store mints nothing, which leaves those surfaces
 	// locked — the safe direction if wiring is ever forgotten.
 	envUnlock *services.EnvUnlockStore
+	// connMgrs is every ConnectionManager whose live WebSocket connections must
+	// be closed on logout — same injection-after-construction reasoning as
+	// envUnlock above. A nil/unset slice closes nothing rather than failing
+	// logout (agent-os-teop).
+	connMgrs ConnectionManagers
 }
 
 func NewAuthHandler(db *database.DB, jwtSecret string, authDisabled bool) *AuthHandler {
@@ -64,6 +69,14 @@ func NewAuthHandler(db *database.DB, jwtSecret string, authDisabled bool) *AuthH
 // ever validate.
 func (h *AuthHandler) SetEnvUnlockStore(store *services.EnvUnlockStore) {
 	h.envUnlock = store
+}
+
+// SetConnectionManagers wires the ConnectionManagers whose live connections
+// Logout closes for the session it just revoked. Call it with the same
+// managers handed to every other WS handler (cmd/server/main.go); an unset
+// value is a no-op, matching SetEnvUnlockStore's "safe if forgotten" shape.
+func (h *AuthHandler) SetConnectionManagers(cms ConnectionManagers) {
+	h.connMgrs = cms
 }
 
 // mintUnlock issues an unlock token for userID and writes the verify-password
@@ -381,6 +394,14 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		if delErr := h.db.DeleteSession(jti); delErr != nil {
 			slog.Warn("Failed to revoke session on logout", "error", delErr)
 		}
+
+		// Deleting the session row does not touch a WebSocket already
+		// upgraded under it — nothing re-checks session validity on a live
+		// connection (agent-os-teop). Close every connection carrying this
+		// jti across every registered manager (terminal, logs, dashboard,
+		// etc.) so a stolen cookie's live PTY doesn't outlive the logout that
+		// was supposed to end it.
+		h.connMgrs.CloseForSession(jti)
 	}
 
 	// Drop any live env-unlock window with the session. Without this a token

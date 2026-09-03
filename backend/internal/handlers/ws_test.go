@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -99,6 +101,216 @@ func TestConnectionManager_CloseAll(t *testing.T) {
 	cm.CloseAll()
 	assert.Equal(t, 0, cm.Count())
 	assert.Equal(t, 0, cm.CountByUser("user1"))
+}
+
+// TestConnectionManager_CloseForSession is two-sided on the same instrument
+// (agent-os-teop acceptance #2): the revoked session's connection must close
+// AND a connection for a different, live session must stay open. A
+// close-everything fix passes a one-sided test and is wrong.
+func TestConnectionManager_CloseForSession(t *testing.T) {
+	cm := NewConnectionManager(10)
+	revoked := &Connection{ID: uuid.New().String(), UserID: "user1", SessionID: "sess-revoked"}
+	live := &Connection{ID: uuid.New().String(), UserID: "user2", SessionID: "sess-live"}
+	require.NoError(t, cm.Add(revoked.ID, revoked))
+	require.NoError(t, cm.Add(live.ID, live))
+
+	cm.CloseForSession("sess-revoked")
+
+	_, revokedPresent := cm.Get(revoked.ID)
+	assert.False(t, revokedPresent, "the connection for the revoked session must be closed and removed")
+
+	_, livePresent := cm.Get(live.ID)
+	assert.True(t, livePresent, "a connection for a different, non-revoked session must stay open")
+	assert.Equal(t, 1, cm.Count())
+	assert.Equal(t, 1, cm.CountByUser("user2"))
+}
+
+// TestConnectionManager_CloseForSession_EmptyIsNoop guards the AUTH_DISABLED
+// case named in the brief: upgradeConnection never sets SessionID when auth
+// is disabled, so every anonymous connection carries SessionID "". If
+// CloseForSession("") matched "" == "" it would tear down every dev-mode
+// connection on the host from a single anonymous logout.
+func TestConnectionManager_CloseForSession_EmptyIsNoop(t *testing.T) {
+	cm := NewConnectionManager(10)
+	anon := &Connection{ID: uuid.New().String(), UserID: "anonymous", SessionID: ""}
+	require.NoError(t, cm.Add(anon.ID, anon))
+
+	cm.CloseForSession("")
+
+	_, present := cm.Get(anon.ID)
+	assert.True(t, present, "an empty sessionID must close nothing, not match every empty-SessionID connection")
+}
+
+// TestConnectionManager_CloseForUser_ExcludesCaller mirrors
+// database.DeleteSessionsByUserExcluding's semantics: a password change
+// revokes every OTHER live session for the user, never the request's own.
+// Two-sided plus a third control: the caller's own connection stays open,
+// another session for the SAME user closes, and a connection for a
+// DIFFERENT user is untouched.
+func TestConnectionManager_CloseForUser_ExcludesCaller(t *testing.T) {
+	cm := NewConnectionManager(10)
+	caller := &Connection{ID: uuid.New().String(), UserID: "user1", SessionID: "sess-caller"}
+	otherSession := &Connection{ID: uuid.New().String(), UserID: "user1", SessionID: "sess-other"}
+	otherUser := &Connection{ID: uuid.New().String(), UserID: "user2", SessionID: "sess-elsewhere"}
+	require.NoError(t, cm.Add(caller.ID, caller))
+	require.NoError(t, cm.Add(otherSession.ID, otherSession))
+	require.NoError(t, cm.Add(otherUser.ID, otherUser))
+
+	cm.CloseForUser("user1", "sess-caller")
+
+	_, callerPresent := cm.Get(caller.ID)
+	assert.True(t, callerPresent, "the caller's own session must not be closed by its own password change")
+
+	_, otherSessionPresent := cm.Get(otherSession.ID)
+	assert.False(t, otherSessionPresent, "another live session for the same user must be closed")
+
+	_, otherUserPresent := cm.Get(otherUser.ID)
+	assert.True(t, otherUserPresent, "a connection for a different user must be untouched")
+}
+
+// TestConnectionManager_CloseForUser_AnonymousIsNoop is CloseForUser's half of
+// the AUTH_DISABLED guard: upgradeConnection assigns every connection userID
+// "anonymous" in that mode, so CloseForUser("anonymous", ...) must not be
+// triggerable into closing every dev-mode connection on the host.
+//
+// exceptSessionID is deliberately a DIFFERENT, non-empty value from the
+// connection's own SessionID (not "" as a first draft of this test used).
+// With both SessionID and exceptSessionID equal to "", the except-clause
+// (conn.SessionID != exceptSessionID) already evaluates false on its own —
+// "" != "" — so the connection is excluded regardless of whether the
+// anonymous guard exists, and the test would pass even with that guard
+// deleted, proving nothing about it. Confirmed by deliberately removing the
+// guard: with an empty exceptSessionID the test still passed; with this
+// non-empty one it failed as expected.
+func TestConnectionManager_CloseForUser_AnonymousIsNoop(t *testing.T) {
+	cm := NewConnectionManager(10)
+	anon := &Connection{ID: uuid.New().String(), UserID: "anonymous", SessionID: ""}
+	require.NoError(t, cm.Add(anon.ID, anon))
+
+	cm.CloseForUser("anonymous", "sess-someone-else")
+
+	_, present := cm.Get(anon.ID)
+	assert.True(t, present, `userID "anonymous" (what AUTH_DISABLED assigns) must close nothing`)
+}
+
+// TestSafeWriteMessage_SurvivesConcurrentRevocationClose is the regression for
+// the crash hazard measured on agent-os-teop: closing a live connection via
+// CloseForSession/CloseForUser while another goroutine is mid-write to the
+// SAME gorilla connection (exactly terminal.go's PTY writer racing a
+// revocation from an HTTP request goroutine) is a genuine concurrent write.
+// gorilla panics on a concurrent WriteMessage — best-effort, unsynchronized
+// c.isWriting bool (gorilla/websocket@v1.5.3 conn.go:610-624) — on whichever
+// goroutine loses the race, and nothing recovers a panic in a bare `go`
+// goroutine like writeToWebSocket's.
+//
+// What prevents it: safeWriteCloseMessage sends the close frame via gorilla's
+// WriteControl rather than WriteMessage. WriteControl is documented safe to
+// call concurrently with an in-flight data write (doc.go:133-134: "The Close
+// and WriteControl methods can be called concurrently with all other
+// methods") — it takes gorilla's own internal control-frame lock, not
+// WriteMutex, so this test exercises that contract directly rather than
+// safeWriteMessage's WriteMutex (which still serializes terminal.go/logs.go's
+// OWN data writers against each other, but is not what makes THIS close safe).
+// A test that only closes an IDLE connection would pass trivially and prove
+// nothing about this — this one keeps a real writer goroutine hammering the
+// connection throughout the close.
+func TestSafeWriteMessage_SurvivesConcurrentRevocationClose(t *testing.T) {
+	// A channel handoff, not a polled variable: Upgrade() itself writes the
+	// handshake response to the raw net.Conn, and reading a plain variable
+	// from the test goroutine before that write has a synchronizes-with edge
+	// with it is its own data race, independent of anything under test here.
+	serverConnCh := make(chan *websocket.Conn, 1)
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		serverConnCh <- c
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	clientConn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer clientConn.Close()
+	defer resp.Body.Close()
+
+	var serverConn *websocket.Conn
+	select {
+	case serverConn = <-serverConnCh:
+	case <-time.After(time.Second):
+		t.Fatal("server-side upgrade did not complete in time")
+	}
+
+	conn := &Connection{
+		ID:        uuid.New().String(),
+		UserID:    "user1",
+		SessionID: "sess-1",
+		Conn:      serverConn,
+		CreatedAt: time.Now(),
+	}
+	cm := NewConnectionManager(10)
+	require.NoError(t, cm.Add(conn.ID, conn))
+
+	// Drain client-side reads so the server's writes never block on a full
+	// socket buffer while the writer loop below spins.
+	go func() {
+		for {
+			if _, _, err := clientConn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	stop := make(chan struct{})
+	writerDone := make(chan struct{})
+	var writerPanic any
+	go func() {
+		defer close(writerDone)
+		// This goroutine's own recover: gorilla's panic fires in whichever
+		// goroutine loses the race (its detector is an unsynchronized bool,
+		// not a mutex), so it can land here instead of in CloseForSession's
+		// goroutine. Recovering locally turns a would-be process crash into a
+		// normal, reportable test failure.
+		defer func() { writerPanic = recover() }()
+		for i := 0; i < 5000; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if err := safeWriteMessage(conn, websocket.BinaryMessage, []byte("pty-output")); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Give the writer a head start so the close below lands mid-stream —
+	// the shape of a logout arriving while a terminal is actively streaming.
+	time.Sleep(2 * time.Millisecond)
+
+	// Its own recover too: gorilla's detector is an unsynchronized bool, not a
+	// mutex, so the panic can land in EITHER goroutine depending on timing —
+	// confirmed by observation, not assumed: reproducing this hazard against
+	// an intentionally-broken build hit both call sites across repeated runs.
+	// Without this recover a regression here would hard-crash the whole test
+	// binary instead of failing this one test.
+	var closePanic any
+	func() {
+		defer func() { closePanic = recover() }()
+		cm.CloseForSession("sess-1")
+	}()
+	close(stop)
+	<-writerDone
+
+	assert.Nil(t, writerPanic,
+		"a revoked-session close must not race the connection's own writer and crash the process: %v", writerPanic)
+	assert.Nil(t, closePanic,
+		"closing a revoked session must not itself panic on a concurrent write: %v", closePanic)
+
+	_, stillPresent := cm.Get(conn.ID)
+	assert.False(t, stillPresent, "the revoked connection must be removed from the manager")
 }
 
 func TestValidateJWT(t *testing.T) {

@@ -44,6 +44,13 @@ type BackupHandler struct {
 	db       *database.DB
 	logger   *slog.Logger
 	registry *services.BackupRunnerRegistry
+	// cm is nil until SetConnectionManager is called. wsAttach registered with
+	// no ConnectionManager at all before agent-os-teop, which meant a session
+	// revocation (logout, password change) never reached these five WS routes —
+	// a nil cm here just means "not wired," so a caller that never sets it
+	// (every existing test constructing a BackupHandler directly) keeps working
+	// unchanged rather than panicking.
+	cm *ConnectionManager
 }
 
 // NewBackupHandler creates a BackupHandler. Call RegisterRoutes and
@@ -59,6 +66,15 @@ func NewBackupHandler(
 		logger:   logger,
 		registry: services.NewBackupRunnerRegistry(db, svc, logger),
 	}
+}
+
+// SetConnectionManager wires the shared ConnectionManager the five
+// /ws/backups/* routes register their live connections with, so a session
+// revocation (logout, password change) can close them like every other WS
+// route. Not required for the handler to function — wsAttach degrades to
+// "not tracked, not capped" when this is never called (agent-os-teop).
+func (h *BackupHandler) SetConnectionManager(cm *ConnectionManager) {
+	h.cm = cm
 }
 
 // Stop stops the handler's durable-run registry: its GC loop and, critically,
@@ -1015,6 +1031,40 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 			return
 		}
 		defer conn.Conn.Close()
+
+		// Register so a session revocation (logout, password change) can reach
+		// this connection — see SetConnectionManager. Nil cm (not wired) skips
+		// registration rather than failing the attach; unlike the other WS
+		// handlers, a refused Add here would abandon an already-running durable
+		// backup op's only viewer, which is worse than leaving it uncapped.
+		//
+		// That soft failure has a cost in BOTH directions, and both are known
+		// limits rather than oversights (agent-os-teop):
+		//
+		// 1. Unregistered means unrevocable. A connection whose Add fails (the
+		//    caller is already at the shared per-user cap) is in NO manager, so
+		//    CloseForSession/CloseForUser cannot reach it — a user already at
+		//    cap gets a backup stream that survives their own logout. Closing
+		//    this properly needs a way to register WITHOUT consuming a cap slot,
+		//    which ConnectionManager does not currently offer: NewConnectionManager
+		//    coerces maxPerUser <= 0 to DefaultConnectionLimit, so there is no
+		//    uncapped mode and a separate manager would only move the threshold.
+		//
+		// 2. These five routes now DRAW ON a budget five other stream types
+		//    enforce. h.cm is the shared cap-10 manager (cmd/server/main.go),
+		//    also used by logs, monitoring, dashboard, operations and
+		//    update-jobs — all of which DO hard-refuse at the cap with
+		//    "Connection limit exceeded". Backup streams never refuse, but they
+		//    do occupy slots, so open backup streams now make those other
+		//    streams get refused sooner than they used to. Before this bead,
+		//    wsAttach registered with nothing and consumed no budget at all.
+		//
+		// Fixing either properly is a cap-semantics change, not a comment.
+		if h.cm != nil {
+			if err := h.cm.Add(conn.ID, conn); err == nil {
+				defer h.cm.Remove(conn.ID)
+			}
+		}
 
 		// wsCtx is cancelled on client disconnect; it governs only the write loop.
 		// The underlying operation runs on context.Background() and is not affected.

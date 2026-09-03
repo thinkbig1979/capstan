@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -28,7 +30,7 @@ import (
 // 204 whether or not it invalidates anything (settings.go:213), so a status
 // assertion cannot distinguish "revoked the other sessions" from "silently did
 // nothing".
-func setupRealAuthChangePasswordRouter(t *testing.T, db *database.DB, secret string) *gin.Engine {
+func setupRealAuthChangePasswordRouter(t *testing.T, db *database.DB, secret string) (*gin.Engine, *SettingsHandler) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	handler := NewSettingsHandler(db, "", secret, false, nil, nil)
@@ -36,7 +38,7 @@ func setupRealAuthChangePasswordRouter(t *testing.T, db *database.DB, secret str
 	protected := router.Group("")
 	protected.Use(middleware.AuthMiddleware(db, secret, false, ""))
 	protected.PUT("/auth/password", handler.ChangePassword)
-	return router
+	return router, handler
 }
 
 // seedSession creates a live session row for an existing user.
@@ -96,7 +98,7 @@ func TestSettingsHandler_ChangePassword_CookieOnlyRevokesOtherSessions(t *testin
 	const bystanderJTI = "session-bystander"
 	seedSession(t, db, otherUser.ID, bystanderJTI)
 
-	router := setupRealAuthChangePasswordRouter(t, db, secret)
+	router, _ := setupRealAuthChangePasswordRouter(t, db, secret)
 
 	callerToken := generateTestToken(user.ID, user.Username, callerJTI, secret)
 	body := `{"currentPassword":"OldPassword123!","newPassword":"NewPassword456!"}`
@@ -131,4 +133,107 @@ func TestSettingsHandler_ChangePassword_CookieOnlyRevokesOtherSessions(t *testin
 	assert.NotNil(t, bystander,
 		"another user's session must never be revoked by this user's password change")
 	assert.NoError(t, err)
+}
+
+// TestSettingsHandler_ChangePassword_ClosesOtherLiveConnections is the
+// regression for agent-os-teop: revoking the other session ROWS never touched
+// an already-open WebSocket for them, so the classic "change my password to
+// kick the intruder out" left their live PTY/log stream running.
+//
+// Two-sided across BOTH ConnectionManagers (mirrors
+// TestAuthHandler_Logout_ClosesLiveConnectionsForRevokedSession): the OTHER
+// session's connections close in each manager, while the CALLER's own
+// connection — same user, but the session that must survive its own password
+// change per database.DeleteSessionsByUserExcluding's semantics — stays open.
+//
+// Seen failing first against pre-fix code (no CloseForUser, no call site in
+// ChangePassword): the "other" connection assertions failed because those
+// connections were never removed from either manager.
+func TestSettingsHandler_ChangePassword_ClosesOtherLiveConnections(t *testing.T) {
+	const secret = "test-secret-key-32-chars-long!!!"
+	const callerJTI = "session-caller-ws"
+	const otherJTI = "session-other-ws"
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	user := createTestUser(t, db, "pwuser-ws", "OldPassword123!")
+	seedSession(t, db, user.ID, callerJTI)
+	seedSession(t, db, user.ID, otherJTI)
+
+	router, handler := setupRealAuthChangePasswordRouter(t, db, secret)
+
+	sharedCM := NewConnectionManager(10)
+	terminalCM := NewConnectionManager(5)
+	handler.SetConnectionManagers(ConnectionManagers{sharedCM, terminalCM})
+
+	callerConn := &Connection{ID: uuid.New().String(), UserID: user.ID, SessionID: callerJTI}
+	otherConnShared := &Connection{ID: uuid.New().String(), UserID: user.ID, SessionID: otherJTI}
+	otherConnTerminal := &Connection{ID: uuid.New().String(), UserID: user.ID, SessionID: otherJTI}
+	require.NoError(t, sharedCM.Add(callerConn.ID, callerConn))
+	require.NoError(t, sharedCM.Add(otherConnShared.ID, otherConnShared))
+	require.NoError(t, terminalCM.Add(otherConnTerminal.ID, otherConnTerminal))
+
+	callerToken := generateTestToken(user.ID, user.Username, callerJTI, secret)
+	body := `{"currentPassword":"OldPassword123!","newPassword":"NewPassword456!"}`
+	req := httptest.NewRequest(http.MethodPut, "/auth/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "capstan_token", Value: callerToken})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNoContent, w.Code)
+
+	_, present := sharedCM.Get(callerConn.ID)
+	assert.True(t, present, "the caller's own connection must not be closed by its own password change")
+
+	_, present = sharedCM.Get(otherConnShared.ID)
+	assert.False(t, present, "another live session's connection must be closed in the shared manager")
+	_, present = terminalCM.Get(otherConnTerminal.ID)
+	assert.False(t, present, "another live session's connection must be closed in the terminal manager too")
+}
+
+// TestSettingsHandler_ChangePassword_RevokesEnvUnlock is the regression for
+// agent-os-teop's fourth part: the env-unlock token is a second factor bound
+// to userID only (services/env_unlock.go), never to a session, so revoking
+// sessions above does nothing to it. Before this fix, RevokeUser was wired
+// into AuthHandler.Logout only (agent-os-gm5-era) — SettingsHandler never
+// received the store at all, so an attacker holding a live unlock token kept
+// the ability to reveal plaintext secrets for up to EnvUnlockTTL after the
+// owner changed the password specifically to lock them out.
+//
+// Seen failing first against pre-fix code (no envUnlock field/setter on
+// SettingsHandler, no RevokeUser call in ChangePassword): store.Valid still
+// returned true after the password change, since nothing had revoked it.
+func TestSettingsHandler_ChangePassword_RevokesEnvUnlock(t *testing.T) {
+	const secret = "test-secret-key-32-chars-long!!!"
+	const callerJTI = "session-caller-unlock"
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	user := createTestUser(t, db, "pwuser-unlock", "OldPassword123!")
+	seedSession(t, db, user.ID, callerJTI)
+
+	router, handler := setupRealAuthChangePasswordRouter(t, db, secret)
+
+	store := services.NewEnvUnlockStore()
+	handler.SetEnvUnlockStore(store)
+	unlockToken, _, err := store.Mint(user.ID)
+	require.NoError(t, err)
+	require.True(t, store.Valid(unlockToken, user.ID),
+		"sanity: a freshly minted unlock token must validate before the password change")
+
+	callerToken := generateTestToken(user.ID, user.Username, callerJTI, secret)
+	body := `{"currentPassword":"OldPassword123!","newPassword":"NewPassword456!"}`
+	req := httptest.NewRequest(http.MethodPut, "/auth/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "capstan_token", Value: callerToken})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNoContent, w.Code)
+
+	assert.False(t, store.Valid(unlockToken, user.ID),
+		"changing the password must revoke any live env-unlock token for the user, not just sessions (agent-os-teop)")
 }
