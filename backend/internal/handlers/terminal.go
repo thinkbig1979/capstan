@@ -241,10 +241,16 @@ func (h *TerminalHandler) writeToWebSocket(conn *Connection, session *services.T
 
 			h.terminal.UpdateActivity(session.ID)
 
-			// A failed deadline set surfaces immediately as a write error
-			// below, which is already handled.
-			_ = conn.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := conn.Conn.WriteMessage(websocket.BinaryMessage, buffer[:n]); err != nil {
+			// Through the WriteMutex, not conn.Conn directly. A revocation
+			// close (CloseForSession/CloseForUser) does not actually need
+			// this — it sends its close frame via WriteControl, which
+			// gorilla documents safe to call concurrently with any other
+			// method (see safeWriteCloseMessage). This conversion is the
+			// general invariant instead: every write to a Connection goes
+			// through WriteMutex, matching dashboard.go/operations.go/
+			// backup.go/update_jobs_ws.go, so a future second writer on this
+			// connection is protected without a fresh audit (agent-os-teop).
+			if err := safeWriteMessage(conn, websocket.BinaryMessage, buffer[:n]); err != nil {
 				slog.Debug("WebSocket write error", "error", err)
 				return
 			}

@@ -84,8 +84,15 @@ func isLoopbackOrigin(origin string) bool {
 }
 
 type Connection struct {
-	ID         string
-	UserID     string
+	ID     string
+	UserID string
+	// SessionID is the "jti" AuthMiddleware validated for the HTTP request
+	// that upgraded this connection (middleware/auth.go publishes it on the
+	// gin context after checking the session row). Empty under AUTH_DISABLED,
+	// which never mints a session — see CloseForSession/CloseForUser, which
+	// both treat that as "nothing to match" rather than "match everything"
+	// (agent-os-teop).
+	SessionID  string
 	Conn       *websocket.Conn
 	CreatedAt  time.Time
 	WriteMutex sync.Mutex
@@ -160,17 +167,106 @@ func (cm *ConnectionManager) CountByUser(userID string) int {
 }
 
 func (cm *ConnectionManager) CloseAll() {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+	cm.closeMatching(func(*Connection) bool { return true }, websocket.CloseNormalClosure, "Server shutting down")
+}
 
+// CloseForSession closes every live connection whose SessionID matches
+// sessionID — e.g. the session logout just deleted. Sends
+// CloseCodeAuthFailure (4401) so the frontend's shouldReconnectAfter
+// (frontend/src/lib/ws.ts) stops retrying instead of running its 5-attempt
+// backoff against a session no request can ever satisfy again.
+//
+// A blank sessionID closes nothing. AuthMiddleware only publishes "jti" for a
+// real (non-AUTH_DISABLED) request; treating "" as a wildcard here would let a
+// dev-mode (AUTH_DISABLED) caller — which never carries a jti — close every
+// anonymous connection on the host (agent-os-teop).
+func (cm *ConnectionManager) CloseForSession(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	cm.closeMatching(func(conn *Connection) bool {
+		return conn.SessionID == sessionID
+	}, CloseCodeAuthFailure, "Session revoked")
+}
+
+// CloseForUser closes every live connection belonging to userID, except one
+// whose SessionID equals exceptSessionID (pass "" to except none). Mirrors
+// database.DeleteSessionsByUserExcluding, which the password-change
+// revocation path (handlers/settings.go) uses to invalidate every OTHER
+// session for the user without logging out the request that changed it.
+//
+// A blank or "anonymous" userID closes nothing. AUTH_DISABLED assigns every
+// connection userID "anonymous" (upgradeConnection) and a real caller's
+// userID is never blank past AuthMiddleware, so either value here means "no
+// real user to scope the close to," not "close everything" (agent-os-teop).
+func (cm *ConnectionManager) CloseForUser(userID, exceptSessionID string) {
+	if userID == "" || userID == "anonymous" {
+		return
+	}
+	cm.closeMatching(func(conn *Connection) bool {
+		return conn.UserID == userID && conn.SessionID != exceptSessionID
+	}, CloseCodeAuthFailure, "Session revoked")
+}
+
+// closeMatching collects every connection satisfying match under cm.mu,
+// removes it from the manager, releases the lock, and only THEN closes the
+// collected connections. writeCloseMessage sleeps up to 100ms per connection;
+// holding cm.mu across that would block every concurrent Add/Remove for
+// 100ms x N connections on what is otherwise a fast request path (logout,
+// password change) — the previous CloseAll did exactly that, which was fine
+// at its shutdown-only call site but is not fine reused for a live
+// revocation (agent-os-teop).
+func (cm *ConnectionManager) closeMatching(match func(*Connection) bool, closeCode int, reason string) {
+	cm.mu.Lock()
+	var targets []*Connection
 	for id, conn := range cm.connections {
-		if conn.Conn != nil {
-			writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Server shutting down")
-			conn.Conn.Close()
+		if !match(conn) {
+			continue
+		}
+		targets = append(targets, conn)
+		cm.userCounts[conn.UserID]--
+		if cm.userCounts[conn.UserID] <= 0 {
+			delete(cm.userCounts, conn.UserID)
 		}
 		delete(cm.connections, id)
 	}
-	cm.userCounts = make(map[string]int)
+	cm.mu.Unlock()
+
+	for _, conn := range targets {
+		if conn.Conn != nil {
+			safeWriteCloseMessage(conn, closeCode, reason)
+			conn.Conn.Close()
+		}
+	}
+}
+
+// ConnectionManagers is every ConnectionManager whose live connections must be
+// closed together when a session or user is revoked. There are two today
+// (the shared cap and the lower-cap terminal one, cmd/server/main.go) and
+// handlers that revoke sessions (logout, password change) hold one of these
+// rather than each ConnectionManager individually, so wiring in a third
+// manager later is a one-line change in main.go instead of a signature change
+// in every revoking handler — the failure mode this guards against is a fix
+// that silently reaches only one manager and leaves another connection type
+// open while appearing to work (agent-os-teop).
+type ConnectionManagers []*ConnectionManager
+
+// CloseForSession fans out to every manager. See ConnectionManager.CloseForSession.
+func (cms ConnectionManagers) CloseForSession(sessionID string) {
+	for _, cm := range cms {
+		if cm != nil {
+			cm.CloseForSession(sessionID)
+		}
+	}
+}
+
+// CloseForUser fans out to every manager. See ConnectionManager.CloseForUser.
+func (cms ConnectionManagers) CloseForUser(userID, exceptSessionID string) {
+	for _, cm := range cms {
+		if cm != nil {
+			cm.CloseForUser(userID, exceptSessionID)
+		}
+	}
 }
 
 func authenticateToken(token string, db *database.DB, jwtSecret string) (string, error) {
@@ -258,6 +354,27 @@ func safeWriteJSON(c *Connection, v interface{}) error {
 	return writeJSON(c.Conn, v)
 }
 
+// safeWriteMessage writes a raw WebSocket message while holding the
+// Connection's WriteMutex, serializing with every other DATA writer on the
+// same connection — safeWriteJSON and safePingLoop. terminal.go's PTY writer
+// and logs.go's log-line/ping writer both go through this instead of calling
+// conn.Conn.WriteMessage directly: gorilla's Conn panics on a concurrent
+// write (best-effort, unsynchronized c.isWriting bool — gorilla/websocket@
+// v1.5.3 conn.go:610-624), and nothing recovers a panic in a bare `go`
+// goroutine like writeToWebSocket's. Note this protects data writers against
+// EACH OTHER (logs.go's ping vs. log-line writer, or any future second
+// writer) — the close path (safeWriteCloseMessage) does not need or take this
+// mutex at all; it uses WriteControl, which gorilla documents safe to call
+// concurrently with this (agent-os-teop).
+func safeWriteMessage(c *Connection, messageType int, data []byte) error {
+	c.WriteMutex.Lock()
+	defer c.WriteMutex.Unlock()
+	// A failed deadline set surfaces immediately as a write error below,
+	// which the caller already handles.
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return c.Conn.WriteMessage(messageType, data)
+}
+
 func safePingLoop(ctx context.Context, c *Connection, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -291,6 +408,37 @@ func writeCloseMessage(conn *websocket.Conn, closeCode int, reason string) {
 		return
 	}
 
+	time.Sleep(100 * time.Millisecond)
+}
+
+// safeWriteCloseMessage sends a close frame via gorilla's WriteControl,
+// rather than the raw-WriteMessage-based writeCloseMessage CloseAll used to
+// call directly on a live connection's *websocket.Conn. That would be a
+// genuine concurrent write whenever the connection has an active writer
+// (terminal.go's PTY streamer, logs.go's log/ping writer): gorilla panics on a
+// concurrent WriteMessage, and there is no recover() reaching a bare `go`
+// goroutine (agent-os-teop).
+//
+// WriteControl is different: gorilla's own package doc (doc.go:133-134)
+// states "The Close and WriteControl methods can be called concurrently with
+// all other methods" — it takes gorilla's internal control-frame lock, not
+// WriteMutex, and never touches the data-write path's isWriting bookkeeping.
+// That also means this call never queues behind a data writer holding
+// WriteMutex for its full write deadline (terminal.go's is 10s against a
+// wedged client), so a revocation on the request path (logout, password
+// change) cannot be stalled by an in-flight PTY write. Safe unilaterally, not
+// just "safe if every writer in the codebase cooperates with WriteMutex" —
+// the mutex conversion in terminal.go/logs.go stays anyway, since it is what
+// keeps two DATA writers off each other, which WriteControl does not cover.
+func safeWriteCloseMessage(c *Connection, closeCode int, reason string) {
+	// Mirrors writeCloseMessage's deadline and post-send grace period, just
+	// via WriteControl instead of WriteMessage.
+	deadline := time.Now().Add(5 * time.Second)
+	msg := websocket.FormatCloseMessage(closeCode, reason)
+	if err := c.Conn.WriteControl(websocket.CloseMessage, msg, deadline); err != nil {
+		slog.Debug("Failed to send close message", "error", err)
+		return
+	}
 	time.Sleep(100 * time.Millisecond)
 }
 
@@ -345,8 +493,30 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 
 	connectionID := uuid.New().String()
 	connection := &Connection{
-		ID:        connectionID,
+		ID: connectionID,
+		// UserID and SessionID deliberately come from DIFFERENT sources, and
+		// that is a documented tradeoff, not an oversight (agent-os-teop).
+		// Taking UserID from the gin context (c.GetString("userID"), what
+		// AuthMiddleware publishes) instead of the local var above would be
+		// the more consistent design — SessionID already does this — but a
+		// large, pre-existing slice of the WS test suite (terminal_scope_
+		// test.go, operations_test.go, and others) wires the handler onto a
+		// bare gin.New() router with NO AuthMiddleware in the chain and
+		// authDisabled=true passed directly to the handler, relying on
+		// upgradeConnection's own authDisabled branch above to supply
+		// "anonymous". Sourcing UserID from context broke that pattern
+		// wholesale (TestTerminalRefusesBeyondPerUserCap and siblings failed
+		// with an empty UserID) — OBSERVED by running the suite, not
+		// inferred. SessionID has no equivalent test dependency (those same
+		// fixtures never set "jti" either way, so it stays "" in both
+		// designs), which is why only it was switched to context. The latent
+		// risk this leaves: on the one path where AuthMiddleware validated a
+		// header token but upgradeConnection's own gate re-validates a
+		// DIFFERENT token read from inside the WS frame (no cookie present),
+		// UserID and SessionID could in principle name different sessions.
+		// No current caller sends a second, different token there.
 		UserID:    userID,
+		SessionID: c.GetString("jti"),
 		Conn:      conn,
 		CreatedAt: time.Now(),
 	}

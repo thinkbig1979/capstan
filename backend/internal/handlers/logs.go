@@ -157,29 +157,15 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 		close(logChan)
 	}()
 
-	var writeMu sync.Mutex
-
-	go func() {
-		ticker := time.NewTicker(DefaultPingInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				writeMu.Lock()
-				// A failed deadline set surfaces immediately as a write
-				// error on the next line, which is already handled below.
-				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				err := conn.WriteMessage(websocket.PingMessage, nil)
-				writeMu.Unlock()
-				if err != nil {
-					slog.Debug("Failed to send ping", "error", err)
-					return
-				}
-			}
-		}
-	}()
+	// Through wsConn.WriteMutex via safePingLoop, not the private mutex this
+	// used to declare locally: the ping writer here and the log-line writer
+	// below are two independent data writers on the same connection, and
+	// WriteMutex is what keeps them from racing each other (a raw write on
+	// either side panics gorilla on a concurrent WriteMessage). The close
+	// path (CloseForSession/CloseForUser) is safe against both regardless —
+	// it sends its close frame via WriteControl, not through WriteMutex at
+	// all (agent-os-teop; see safeWriteCloseMessage's doc comment).
+	go safePingLoop(ctx, wsConn, DefaultPingInterval)
 
 	go func() {
 		for {
@@ -226,10 +212,7 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 			filterMutex.Unlock()
 
 			if shouldSend {
-				writeMu.Lock()
-				err := writeJSON(conn, logLine)
-				writeMu.Unlock()
-				if err != nil {
+				if err := safeWriteJSON(wsConn, logLine); err != nil {
 					slog.Debug("Failed to send log line", "error", err)
 					goto cleanup
 				}

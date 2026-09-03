@@ -44,6 +44,13 @@ type BackupHandler struct {
 	db       *database.DB
 	logger   *slog.Logger
 	registry *services.BackupRunnerRegistry
+	// cm is nil until SetConnectionManager is called. wsAttach registered with
+	// no ConnectionManager at all before agent-os-teop, which meant a session
+	// revocation (logout, password change) never reached these five WS routes —
+	// a nil cm here just means "not wired," so a caller that never sets it
+	// (every existing test constructing a BackupHandler directly) keeps working
+	// unchanged rather than panicking.
+	cm *ConnectionManager
 }
 
 // NewBackupHandler creates a BackupHandler. Call RegisterRoutes and
@@ -59,6 +66,15 @@ func NewBackupHandler(
 		logger:   logger,
 		registry: services.NewBackupRunnerRegistry(db, svc, logger),
 	}
+}
+
+// SetConnectionManager wires the shared ConnectionManager the five
+// /ws/backups/* routes register their live connections with, so a session
+// revocation (logout, password change) can close them like every other WS
+// route. Not required for the handler to function — wsAttach degrades to
+// "not tracked, not capped" when this is never called (agent-os-teop).
+func (h *BackupHandler) SetConnectionManager(cm *ConnectionManager) {
+	h.cm = cm
 }
 
 // Stop stops the handler's durable-run registry: its GC loop and, critically,
@@ -1015,6 +1031,17 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 			return
 		}
 		defer conn.Conn.Close()
+
+		// Register so a session revocation (logout, password change) can reach
+		// this connection — see SetConnectionManager. Nil cm (not wired) skips
+		// registration rather than failing the attach; unlike the other WS
+		// handlers, a refused Add here would abandon an already-running durable
+		// backup op's only viewer, which is worse than leaving it uncapped.
+		if h.cm != nil {
+			if err := h.cm.Add(conn.ID, conn); err == nil {
+				defer h.cm.Remove(conn.ID)
+			}
+		}
 
 		// wsCtx is cancelled on client disconnect; it governs only the write loop.
 		// The underlying operation runs on context.Background() and is not affected.

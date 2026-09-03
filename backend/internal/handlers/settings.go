@@ -29,6 +29,19 @@ type SettingsHandler struct {
 	scheduler    *services.SchedulerService
 	cfg          *config.Config
 	actionLog    *services.ActionLogger
+	// envUnlock mints/revokes the short-lived unlock tokens gating the
+	// secret-reveal surfaces (stack .env, global env). Injected after
+	// construction (SetEnvUnlockStore), mirroring handlers.AuthHandler's field
+	// of the same name: the same store instance is shared with
+	// middleware.EnvUnlock and authHandler, and threading it through every
+	// NewSettingsHandler call site would churn its existing tests for no
+	// behavioural gain. A nil store is a no-op RevokeUser (agent-os-teop).
+	envUnlock *services.EnvUnlockStore
+	// connMgrs is every ConnectionManager whose live WebSocket connections
+	// must be closed when a password change revokes every OTHER session for
+	// the user. Same injection-after-construction reasoning as envUnlock; a
+	// nil/unset slice closes nothing (agent-os-teop).
+	connMgrs ConnectionManagers
 }
 
 func NewSettingsHandler(db *database.DB, stacksDir string, jwtSecret string, authDisabled bool, scheduler *services.SchedulerService, cfg *config.Config) *SettingsHandler {
@@ -41,6 +54,21 @@ func NewSettingsHandler(db *database.DB, stacksDir string, jwtSecret string, aut
 		cfg:          cfg,
 		actionLog:    services.NewActionLogger(db),
 	}
+}
+
+// SetEnvUnlockStore wires the shared unlock-token store, the same instance
+// handed to handlers.AuthHandler and middleware.EnvUnlock, so ChangePassword
+// can revoke a live unlock window when it revokes sessions. Without this call
+// h.envUnlock stays nil and RevokeUser is skipped (agent-os-teop).
+func (h *SettingsHandler) SetEnvUnlockStore(store *services.EnvUnlockStore) {
+	h.envUnlock = store
+}
+
+// SetConnectionManagers wires the ConnectionManagers whose live connections
+// ChangePassword closes for every session it revokes. See
+// handlers.AuthHandler.SetConnectionManagers for the same pattern.
+func (h *SettingsHandler) SetConnectionManagers(cms ConnectionManagers) {
+	h.connMgrs = cms
 }
 
 func (h *SettingsHandler) RegisterRoutes(group *gin.RouterGroup) {
@@ -198,6 +226,23 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 		if err := h.db.DeleteSessionsByUserExcluding(userID.(string), currentSessionID); err != nil {
 			slog.Error("Failed to invalidate other sessions after password change", "error", err, "userID", userID)
 		}
+
+		// Deleting the session rows does not touch any WebSocket already
+		// upgraded under them (agent-os-teop) — same gap Logout has, and the
+		// same fix: close every OTHER live connection for this user across
+		// every registered manager, without touching the caller's own.
+		h.connMgrs.CloseForUser(userID.(string), currentSessionID)
+	}
+
+	// The unlock token is a second factor bound to userID only, never to a
+	// session (services/env_unlock.go), so revoking sessions above does not
+	// touch it: an attacker who unlocked secrets before the password changed
+	// keeps that ability for up to EnvUnlockTTL regardless. Revoke it here too,
+	// unconditionally (not gated on currentSessionID being non-empty, unlike
+	// the connection close above) — mirrors handlers.AuthHandler.Logout, which
+	// already does this on logout (agent-os-teop).
+	if h.envUnlock != nil {
+		h.envUnlock.RevokeUser(userID.(string))
 	}
 
 	c.Status(http.StatusNoContent)

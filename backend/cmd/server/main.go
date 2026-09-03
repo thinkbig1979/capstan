@@ -456,6 +456,16 @@ func main() {
 	// behind it.
 	terminalConnections := handlers.NewConnectionManager(5)
 
+	// Every ConnectionManager whose live connections a session/user
+	// revocation must reach. authHandler.Logout and settingsHandler.
+	// ChangePassword both close through this rather than each manager
+	// individually, so a third manager later is a one-line addition here
+	// instead of a signature change in every revoking handler (agent-os-teop).
+	allConnectionManagers := handlers.ConnectionManagers{connectionManager, terminalConnections}
+	authHandler.SetConnectionManagers(allConnectionManagers)
+	settingsHandler.SetConnectionManagers(allConnectionManagers)
+	settingsHandler.SetEnvUnlockStore(envUnlockStore)
+
 	logsHandler := handlers.NewLogsHandler(dockerService, db, cfg.JWTSecret, cfg.AuthDisabled, cfg.DataDir, connectionManager)
 	logsHandler.RegisterRoutes(protected)
 
@@ -548,6 +558,10 @@ func main() {
 	backupSched := services.NewBackupScheduler(backupSvc, db, slog.Default())
 	backupSvc.SetScheduler(backupSched)
 	backupHandler := handlers.NewBackupHandler(backupSvc, db, slog.Default())
+	// Registers the five /ws/backups/* connections with the shared manager, so
+	// they are reachable from allConnectionManagers above like every other WS
+	// route — previously wsAttach registered with nothing (agent-os-teop).
+	backupHandler.SetConnectionManager(connectionManager)
 
 	// REST routes sit under the same protected group as StacksHandler/ResourcesHandler.
 	backupHandler.RegisterRoutes(protected)
