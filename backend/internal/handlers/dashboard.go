@@ -140,7 +140,10 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 		containerIDs, err := h.docker.GetRunningContainerIDs(ctx)
 		if err != nil {
 			slog.Error("Failed to get running container IDs for dashboard metrics", "error", err)
-			writeCloseMessage(conn.Conn, 1011, "Failed to get containers")
+			// safePingLoop is already running on this connection (started
+			// above); the raw writeCloseMessage races its WriteMutex-guarded
+			// ping over the same *websocket.Conn (agent-os-1jzj).
+			safeWriteCloseMessage(conn, 1011, "Failed to get containers")
 			return
 		}
 
@@ -166,7 +169,8 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 		statsChan, err := h.monitor.StreamStats(ctx, containerIDs)
 		if err != nil {
 			slog.Error("Failed to start dashboard stats stream", "error", err)
-			writeCloseMessage(conn.Conn, 1011, "Failed to stream metrics")
+			// Same race as above: safePingLoop is already running.
+			safeWriteCloseMessage(conn, 1011, "Failed to stream metrics")
 			return
 		}
 
