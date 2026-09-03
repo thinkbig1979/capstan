@@ -31,6 +31,20 @@ import (
 // main() exposes no seam, so the honest options were to refactor purely for
 // testability or assert on the source.
 //
+// THREE construction forms are recognised, because the first version of this
+// test inspected only *ast.AssignStmt and an adversarial review found two ways
+// to add an unrevocable manager that it passed green (agent-os-teop):
+//
+//	cm := handlers.NewConnectionManager(10)          // *ast.AssignStmt
+//	var cm = handlers.NewConnectionManager(10)       // *ast.ValueSpec — was MISSED
+//	handlers.NewFooHandler(handlers.NewConnectionManager(10))
+//	                                                 // unnamed — was MISSED
+//
+// The third form cannot be fixed by naming it in the slice, because slice
+// elements are identifiers and an inline call has no identifier: it is
+// reported directly at its construction site. A guard with a silent blind
+// spot is worse than no guard, since it reads as coverage that does not exist.
+//
 // If this test fails because a new ConnectionManager was added and correctly
 // wired into the slice by a DIFFERENT variable name than this test expects,
 // update the expectations — do not delete the test. If it fails because a
@@ -48,43 +62,91 @@ func TestEveryConnectionManagerIsInTheRevocationSet(t *testing.T) {
 		t.Fatalf("failed to parse main.go: %v", err)
 	}
 
-	// constructed maps each variable name assigned from
-	// handlers.NewConnectionManager(...) to the position it was constructed at,
-	// so a failure can point at the exact line.
-	constructed := map[string]token.Pos{}
+	// managerCall reports whether e is a handlers.NewConnectionManager(...)
+	// call, whatever syntax it is embedded in.
+	managerCall := func(e ast.Expr) (*ast.CallExpr, bool) {
+		call, ok := e.(*ast.CallExpr)
+		if !ok {
+			return nil, false
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != constructorCall {
+			return nil, false
+		}
+		return call, true
+	}
 
+	// Pass 1: every construction site in the file, in source order, regardless
+	// of how it is written. This is the denominator — anything the named-form
+	// passes below do not account for is an unnamed construction.
+	var allSites []token.Pos
 	ast.Inspect(file, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
+		e, ok := n.(ast.Expr)
 		if !ok {
 			return true
 		}
-		for i, rhs := range assign.Rhs {
-			call, ok := rhs.(*ast.CallExpr)
-			if !ok {
-				continue
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != constructorCall {
-				continue
-			}
-			if i >= len(assign.Lhs) {
-				continue
-			}
-			ident, ok := assign.Lhs[i].(*ast.Ident)
-			if !ok {
-				continue
-			}
-			constructed[ident.Name] = call.Pos()
+		if call, ok := managerCall(e); ok {
+			allSites = append(allSites, call.Pos())
 		}
 		return true
 	})
 
 	// A rename or refactor that removes every call would otherwise make this
 	// test vacuously green — the exact "check that cannot fail" shape the
-	// auth_wiring_test.go precedent already warns about.
-	if len(constructed) == 0 {
-		t.Fatalf("found no %s(...) assignment in main.go; this test can no longer guard "+
+	// auth_wiring_test.go precedent already warns about. Anchored on the call
+	// sites rather than on the named ones, so a file whose managers are ALL
+	// constructed inline fails loudly instead of reporting nothing to check.
+	if len(allSites) == 0 {
+		t.Fatalf("found no %s(...) call in main.go; this test can no longer guard "+
 			"manager coverage and must be updated to follow whatever replaced it (agent-os-teop)", constructorCall)
+	}
+
+	// Pass 2: the construction sites that bind a name, via either
+	// `cm := ...` (*ast.AssignStmt) or `var cm = ...` (*ast.ValueSpec).
+	type namedManager struct {
+		name string
+		pos  token.Pos
+	}
+	var constructed []namedManager
+	named := map[token.Pos]bool{}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch d := n.(type) {
+		case *ast.AssignStmt:
+			for i, rhs := range d.Rhs {
+				call, ok := managerCall(rhs)
+				if !ok || i >= len(d.Lhs) {
+					continue
+				}
+				if ident, ok := d.Lhs[i].(*ast.Ident); ok {
+					constructed = append(constructed, namedManager{ident.Name, call.Pos()})
+					named[call.Pos()] = true
+				}
+			}
+		case *ast.ValueSpec:
+			for i, v := range d.Values {
+				call, ok := managerCall(v)
+				if !ok || i >= len(d.Names) {
+					continue
+				}
+				constructed = append(constructed, namedManager{d.Names[i].Name, call.Pos()})
+				named[call.Pos()] = true
+			}
+		}
+		return true
+	})
+
+	// An inline construction can never appear in the slice, because the slice's
+	// elements are identifiers. Report it at its own position: there is no name
+	// to look up and nothing to add.
+	for _, pos := range allSites {
+		if !named[pos] {
+			t.Errorf("%s: a %s(...) is constructed inline with no variable name, so it can never be "+
+				"an element of the handlers.%s{...} literal — its live connections will never be closed "+
+				"on logout or password change (agent-os-teop). Assign it to a variable and add that "+
+				"variable to the slice.",
+				fset.Position(pos), constructorCall, sliceType)
+		}
 	}
 
 	// covered collects every identifier named as an element of a
@@ -115,12 +177,12 @@ func TestEveryConnectionManagerIsInTheRevocationSet(t *testing.T) {
 			"there is then unreachable from logout/password-change revocation (agent-os-teop)", sliceType)
 	}
 
-	for name, pos := range constructed {
-		if !covered[name] {
+	for _, m := range constructed {
+		if !covered[m.name] {
 			t.Errorf("%s: %s is constructed via %s(...) but is NOT an element of the handlers.%s{...} "+
 				"literal — its live connections will never be closed on logout or password change "+
 				"(agent-os-teop). Add it to the slice.",
-				fset.Position(pos), name, constructorCall, sliceType)
+				fset.Position(m.pos), m.name, constructorCall, sliceType)
 		}
 	}
 }
