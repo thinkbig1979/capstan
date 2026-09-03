@@ -1037,6 +1037,10 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 		// registration rather than failing the attach; unlike the other WS
 		// handlers, a refused Add here would abandon an already-running durable
 		// backup op's only viewer, which is worse than leaving it uncapped.
+		// The cost of that choice: a connection that fails to register (the
+		// caller already at the shared per-user cap) is in NO manager, so this
+		// bead's fix cannot reach it either — a user already at cap gets a
+		// backup stream that survives their own logout (agent-os-teop).
 		if h.cm != nil {
 			if err := h.cm.Add(conn.ID, conn); err == nil {
 				defer h.cm.Remove(conn.ID)

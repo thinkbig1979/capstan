@@ -167,7 +167,9 @@ func (cm *ConnectionManager) CountByUser(userID string) int {
 }
 
 func (cm *ConnectionManager) CloseAll() {
-	cm.closeMatching(func(*Connection) bool { return true }, websocket.CloseNormalClosure, "Server shutting down")
+	// The 100ms grace is shutdown-only (see closeMatching's doc comment) —
+	// not on a request path, so paying it once here is fine.
+	cm.closeMatching(func(*Connection) bool { return true }, websocket.CloseNormalClosure, "Server shutting down", 100*time.Millisecond)
 }
 
 // CloseForSession closes every live connection whose SessionID matches
@@ -184,9 +186,11 @@ func (cm *ConnectionManager) CloseForSession(sessionID string) {
 	if sessionID == "" {
 		return
 	}
+	// No grace period: measured to buy nothing (safeWriteCloseMessage's doc
+	// comment), and this runs on the logout request path.
 	cm.closeMatching(func(conn *Connection) bool {
 		return conn.SessionID == sessionID
-	}, CloseCodeAuthFailure, "Session revoked")
+	}, CloseCodeAuthFailure, "Session revoked", 0)
 }
 
 // CloseForUser closes every live connection belonging to userID, except one
@@ -203,20 +207,31 @@ func (cm *ConnectionManager) CloseForUser(userID, exceptSessionID string) {
 	if userID == "" || userID == "anonymous" {
 		return
 	}
+	// No grace period: same reasoning as CloseForSession — this runs on the
+	// password-change request path.
 	cm.closeMatching(func(conn *Connection) bool {
 		return conn.UserID == userID && conn.SessionID != exceptSessionID
-	}, CloseCodeAuthFailure, "Session revoked")
+	}, CloseCodeAuthFailure, "Session revoked", 0)
 }
 
 // closeMatching collects every connection satisfying match under cm.mu,
-// removes it from the manager, releases the lock, and only THEN closes the
-// collected connections. writeCloseMessage sleeps up to 100ms per connection;
-// holding cm.mu across that would block every concurrent Add/Remove for
-// 100ms x N connections on what is otherwise a fast request path (logout,
-// password change) — the previous CloseAll did exactly that, which was fine
-// at its shutdown-only call site but is not fine reused for a live
+// removes it from the manager, releases the lock, writes every close frame,
+// waits grace ONCE (not per connection — see below), and only then closes
+// the collected sockets.
+//
+// Holding cm.mu across the writes would block every concurrent Add/Remove on
+// what is otherwise a fast request path (logout, password change) — the
+// previous CloseAll held cm.mu across its own writeCloseMessage calls, which
+// was fine at its shutdown-only call site but is not fine reused for a live
 // revocation (agent-os-teop).
-func (cm *ConnectionManager) closeMatching(match func(*Connection) bool, closeCode int, reason string) {
+//
+// grace is applied ONCE after every frame is written, not per connection:
+// CloseForSession/CloseForUser pass 0 (measured to buy nothing — see
+// safeWriteCloseMessage), so they pay no sleep at all; CloseAll passes a
+// small grace for its shutdown-only path. A per-connection sleep here would
+// make a revocation O(N) against the manager's per-user cap (up to 1.5s at
+// cap 10+5) for zero benefit.
+func (cm *ConnectionManager) closeMatching(match func(*Connection) bool, closeCode int, reason string, grace time.Duration) {
 	cm.mu.Lock()
 	var targets []*Connection
 	for id, conn := range cm.connections {
@@ -235,6 +250,15 @@ func (cm *ConnectionManager) closeMatching(match func(*Connection) bool, closeCo
 	for _, conn := range targets {
 		if conn.Conn != nil {
 			safeWriteCloseMessage(conn, closeCode, reason)
+		}
+	}
+
+	if grace > 0 {
+		time.Sleep(grace)
+	}
+
+	for _, conn := range targets {
+		if conn.Conn != nil {
 			conn.Conn.Close()
 		}
 	}
@@ -431,15 +455,20 @@ func writeCloseMessage(conn *websocket.Conn, closeCode int, reason string) {
 // the mutex conversion in terminal.go/logs.go stays anyway, since it is what
 // keeps two DATA writers off each other, which WriteControl does not cover.
 func safeWriteCloseMessage(c *Connection, closeCode int, reason string) {
-	// Mirrors writeCloseMessage's deadline and post-send grace period, just
-	// via WriteControl instead of WriteMessage.
+	// Mirrors writeCloseMessage's deadline, via WriteControl instead of
+	// WriteMessage. Deliberately NO post-send sleep here (unlike
+	// writeCloseMessage): measured (gorilla over loopback, 20 runs each arm)
+	// that the peer sees the close code 20/20 with or without a grace period
+	// — WriteControl already flushes the frame to the kernel send buffer, and
+	// a subsequent Close() does not race that. Any grace period a caller
+	// still wants belongs in that caller, once, after writing every frame —
+	// see closeMatching's grace parameter — not per-connection here, which
+	// would put O(N) sleeps on a request path (agent-os-teop).
 	deadline := time.Now().Add(5 * time.Second)
 	msg := websocket.FormatCloseMessage(closeCode, reason)
 	if err := c.Conn.WriteControl(websocket.CloseMessage, msg, deadline); err != nil {
 		slog.Debug("Failed to send close message", "error", err)
-		return
 	}
-	time.Sleep(100 * time.Millisecond)
 }
 
 func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDisabled bool) (*Connection, error) {

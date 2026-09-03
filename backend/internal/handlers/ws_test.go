@@ -172,12 +172,22 @@ func TestConnectionManager_CloseForUser_ExcludesCaller(t *testing.T) {
 // the AUTH_DISABLED guard: upgradeConnection assigns every connection userID
 // "anonymous" in that mode, so CloseForUser("anonymous", ...) must not be
 // triggerable into closing every dev-mode connection on the host.
+//
+// exceptSessionID is deliberately a DIFFERENT, non-empty value from the
+// connection's own SessionID (not "" as a first draft of this test used).
+// With both SessionID and exceptSessionID equal to "", the except-clause
+// (conn.SessionID != exceptSessionID) already evaluates false on its own —
+// "" != "" — so the connection is excluded regardless of whether the
+// anonymous guard exists, and the test would pass even with that guard
+// deleted, proving nothing about it. Confirmed by deliberately removing the
+// guard: with an empty exceptSessionID the test still passed; with this
+// non-empty one it failed as expected.
 func TestConnectionManager_CloseForUser_AnonymousIsNoop(t *testing.T) {
 	cm := NewConnectionManager(10)
 	anon := &Connection{ID: uuid.New().String(), UserID: "anonymous", SessionID: ""}
 	require.NoError(t, cm.Add(anon.ID, anon))
 
-	cm.CloseForUser("anonymous", "")
+	cm.CloseForUser("anonymous", "sess-someone-else")
 
 	_, present := cm.Get(anon.ID)
 	assert.True(t, present, `userID "anonymous" (what AUTH_DISABLED assigns) must close nothing`)
