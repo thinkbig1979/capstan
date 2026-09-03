@@ -210,6 +210,16 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 		}
 
 		defer h.cm.Remove(conn.ID)
+		// gorilla's Upgrade hijacks the connection, so net/http never closes
+		// it. The only reachable exit below is the write-error case (client
+		// vanishes mid-stream) — ctx.Done() never fires (nothing external
+		// ever cancels ctx) and the eventChan-closed case never fires either
+		// (only this function's own deferred Unsubscribe closes eventChan,
+		// and that runs after this loop has already exited) — but every
+		// exit left the socket and safePingLoop's goroutine open until this
+		// defer (agent-os-iz9w), same shape as handleMetricsWebSocket
+		// (agent-os-14gr) / operations.go:91 / logs.go:130.
+		defer conn.Conn.Close()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
