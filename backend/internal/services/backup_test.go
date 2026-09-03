@@ -991,10 +991,27 @@ func (e fakeExitError) ExitCode() int { return e.code }
 func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 	t.Parallel()
 
-	buildArm := func(t *testing.T, localSnapshotsJSON []byte, localErr error, remoteLsfOutput []byte, remoteLsfErr error, syncCalled *bool) *BackupService {
+	// lsfArgs, when non-nil, captures the exact argv the probe invoked rclone
+	// with. This matters because a stray or missing "/" in the
+	// remote:path/snapshots target would misdirect the probe onto a path
+	// that doesn't exist -- which surfaces as exit 3 ("directory not
+	// found"), the very signal remoteHasSnapshots treats as "confirmed
+	// empty" -- so a broken join would make this guard PROCEED into the
+	// mirror-delete it exists to prevent, while every assertion that only
+	// checks the canned return value would stay green. Capturing the args
+	// the closure was actually called with (rather than a value hardcoded
+	// independently of what remoteHasSnapshots builds) is what lets arm 1
+	// assert against the real target.
+	buildArm := func(t *testing.T, localSnapshotsJSON []byte, localErr error, remoteLsfOutput []byte, remoteLsfErr error, syncCalled *bool, lsfArgs *[]string) *BackupService {
 		t.Helper()
 		db := newBackupTestDB(t)
 		require.NoError(t, db.SetSetting("rclone_remote", "myremote"))
+		// A non-empty, multi-segment path is deliberate: it is the only
+		// setting that actually exercises the "/" join in
+		// remoteHasSnapshots's target (remote:path/snapshots). An empty
+		// path collapses to a bare "snapshots" with no join to get wrong,
+		// which would make arm 1's argv assertion below trivially true.
+		require.NoError(t, db.SetSetting("rclone_path", "backup/path"))
 		docker := &fakeDocker{}
 
 		resticRunner := &conditionalRunner{
@@ -1012,8 +1029,11 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 				}
 				return nil // rclone sync itself always "succeeds" -- these arms test whether it runs at all
 			},
-			onOutput: func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
-				return remoteLsfOutput, remoteLsfErr // `rclone lsf remote:path/snapshots`
+			onOutput: func(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
+				if lsfArgs != nil {
+					*lsfArgs = args // `rclone lsf remote:path/snapshots` -- capture the real target
+				}
+				return remoteLsfOutput, remoteLsfErr
 			},
 		}
 		return buildSvc(t, db, docker, resticRunner, rcloneRunner)
@@ -1022,15 +1042,25 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 	t.Run("arm1_RefusesZeroLocalAgainstPopulatedRemote", func(t *testing.T) {
 		t.Parallel()
 		var syncCalled bool
+		var lsfArgs []string
 		// local: "null" == restic's own zero-snapshot JSON output.
 		// remote: one snapshot file listed by `rclone lsf`, i.e. the remote is NOT empty.
-		svc := buildArm(t, []byte("null"), nil, []byte("1c8dd5b20b330c7bf7d6e49cbdc71d58ace311bd508b9154c5848a6d87a2c991\n"), nil, &syncCalled)
+		svc := buildArm(t, []byte("null"), nil, []byte("1c8dd5b20b330c7bf7d6e49cbdc71d58ace311bd508b9154c5848a6d87a2c991\n"), nil, &syncCalled, &lsfArgs)
 
 		out := make(chan StreamLine, 64)
 		err := svc.RunSync(context.Background(), out)
 
 		require.Error(t, err, "arm 1: must refuse -- local has zero snapshots but the remote already holds some, so syncing would mirror-delete them")
 		assert.False(t, syncCalled, "arm 1: rclone sync must never run once the guard has refused")
+		// Pin the exact target the probe queried. buildSvc's bc has
+		// RcloneRemote "myremote" and RclonePath "backup/path" -- if the
+		// join between them were wrong (a missing or doubled "/"), the
+		// probe would query the wrong path, which on a real remote would
+		// come back as exit 3 ("directory not found") -- read by
+		// remoteHasSnapshots as "confirmed empty" -- and this arm would
+		// pass for the wrong reason: not because the guard is correct, but
+		// because it queried nothing meaningful and defaulted to PROCEED.
+		require.Equal(t, []string{"lsf", "myremote:backup/path/snapshots"}, lsfArgs, "arm 1: the probe must query the real remote:path/snapshots target, not an arbitrary one")
 	})
 
 	t.Run("arm2_ProceedsZeroLocalAgainstEmptyRemote", func(t *testing.T) {
@@ -1040,7 +1070,7 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 		// remote: rclone's own "directory not found" (exit code 3) -- the
 		// documented, stable signal for a path that has never been synced to,
 		// e.g. a brand-new install. This must read as "empty", not "unreadable".
-		svc := buildArm(t, []byte("null"), nil, nil, fakeExitError{code: 3}, &syncCalled)
+		svc := buildArm(t, []byte("null"), nil, nil, fakeExitError{code: 3}, &syncCalled, nil)
 
 		out := make(chan StreamLine, 64)
 		err := svc.RunSync(context.Background(), out)
@@ -1056,7 +1086,7 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 		// directory exists but is genuinely empty (`rclone lsf` exits 0 with
 		// no output), rather than not existing at all (exit 3). Both shapes
 		// of "empty" must proceed.
-		svc := buildArm(t, []byte("null"), nil, []byte(""), nil, &syncCalled)
+		svc := buildArm(t, []byte("null"), nil, []byte(""), nil, &syncCalled, nil)
 
 		out := make(chan StreamLine, 64)
 		err := svc.RunSync(context.Background(), out)
@@ -1074,7 +1104,7 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 		// point of this arm is that a non-empty LOCAL repository must skip
 		// the remote check entirely -- normal operation must not pay for a
 		// network round trip on every scheduled sync.
-		svc := buildArm(t, localJSON, nil, []byte("some-other-snapshot-file\n"), nil, &syncCalled)
+		svc := buildArm(t, localJSON, nil, []byte("some-other-snapshot-file\n"), nil, &syncCalled, nil)
 
 		out := make(chan StreamLine, 64)
 		err := svc.RunSync(context.Background(), out)
@@ -1092,7 +1122,7 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 		// guard cannot tell whether the remote is genuinely empty or just
 		// unreachable, and this is a mirror-delete path, so it must fail
 		// closed rather than assume "empty" and proceed.
-		svc := buildArm(t, []byte("null"), nil, nil, fakeExitError{code: 1}, &syncCalled)
+		svc := buildArm(t, []byte("null"), nil, nil, fakeExitError{code: 1}, &syncCalled, nil)
 
 		out := make(chan StreamLine, 64)
 		err := svc.RunSync(context.Background(), out)
