@@ -580,26 +580,39 @@ test.describe.serial('Backup flow E2E', () => {
     await expect(confirmBtn).toBeVisible({ timeout: 5_000 })
     await confirmBtn.click()
 
-    // RestoreProgress panel appears with "Restoring…"
-    const restoringText = page.getByText(/restoring[…\.]/i)
-    await expect(restoringText)
-      .toBeVisible({ timeout: 5_000 })
-      .catch(() => {/* may transition immediately */})
-
     // Wait for the RestoreProgress panel itself to report completion.
-    // Scoped to <main> (AppShell's single landmark, frontend/src/components/
-    // layout/AppShell.tsx:25) to exclude sonner's <Toaster/> — mounted as a
-    // sibling of AppShell in App.tsx and always portalled to document.body
-    // regardless of JSX position (BackupsTab.tsx:357 fires
-    // toast.success('Restore completed'), same text as the panel header).
-    // Exact text (not a /restore completed/i substring regex) also excludes
-    // the streamed WS log line, which renders the same phrase lowercase and
-    // prefixed (e.g. "[stacks~test-app:default] restore completed",
-    // BackupsTab.tsx's log line divs), and "Restore partially completed"
-    // (BackupsTab.tsx:150) — a partial restore must fail this assertion,
-    // not slip through as a substring match.
-    const restoreHeader = page.locator('main').getByText('Restore completed', { exact: true })
-    await expect(restoreHeader).toBeVisible({ timeout: 90_000 })
+    // Targeted via a dedicated data-testid (BackupsTab.tsx:174,
+    // data-testid="restore-progress-header") rather than a <main>-scoped
+    // text locator, because the completion text collides with THREE other
+    // sources at this instant — measured: an unscoped page-wide
+    // /restore completed/i resolves to 4 elements at the moment this
+    // assertion needs to fire. Those sources: sonner's toast
+    // (BackupsTab.tsx:357, toast.success('Restore completed')), and two
+    // backend-emitted WS log lines surfaced in the same panel — a prefixed
+    // one (backend/internal/services/backup.go:1073, `"[%s] restore
+    // completed"`) excluded by its "[stack~...]" prefix, and an unprefixed
+    // one (backend/internal/services/backup_runner.go:440,
+    // `dr.reason = "restore completed"`, surfaced via useBackup.ts:359)
+    // excluded ONLY by case — one dropped capital letter in that Go string
+    // away from colliding with this assertion. The testid binds this
+    // assertion to the component under test instead of to backend string
+    // casing.
+    //
+    // sonner's <Toaster/> is excluded by DOM position, not by any portal:
+    // sonner 2.0.8 renders inline at its own JSX position — it does NOT
+    // call createPortal (verified: `grep -c 'createPortal\|document\.body'`
+    // over frontend/node_modules/sonner/dist/{index.mjs,index.js} is 0 for
+    // both files). It is simply a JSX sibling of <AppShell> in App.tsx
+    // (:120, :134, :154), so its toast markup never carries this
+    // component's data-testid regardless of where sonner places it in the
+    // DOM.
+    //
+    // Exact text (not a substring match) also guards against the SAME
+    // element rendering "Restore partially completed" (BackupsTab.tsx:150)
+    // — a partial restore must fail this assertion, not slip through as a
+    // substring match.
+    const restoreHeader = page.getByTestId('restore-progress-header')
+    await expect(restoreHeader).toHaveText('Restore completed', { timeout: 90_000 })
   })
 
   // ── 007: Post-restore verification ────────────────────────────────────────

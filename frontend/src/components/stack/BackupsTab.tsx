@@ -171,7 +171,7 @@ function RestoreProgress({
           {status === 'success' && <CheckCircle2 className="h-4 w-4" />}
           {status === 'partial' && <AlertCircle className="h-4 w-4" />}
           {status === 'error' && <XCircle className="h-4 w-4" />}
-          <span>{headerLabel()}</span>
+          <span data-testid="restore-progress-header">{headerLabel()}</span>
           {isRunning && lines.length > 0 && (
             <span className="text-xs opacity-60">({lines.length} lines)</span>
           )}
