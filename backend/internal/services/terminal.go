@@ -6,7 +6,10 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path"
 	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,13 +33,35 @@ const ReaperInterval = 60 * time.Second
 // descriptors, held for up to SessionTimeout (agent-os-a0y).
 const MaxConcurrentSessions = 20
 
+// containerPIDDiscoveryAttempts / containerPIDDiscoveryInterval bound the poll
+// that looks up the shell's pid inside the container after spawning it (see
+// findContainerPID). The remote shell can take a moment to appear in the
+// container's process table after the local `docker exec` CLI has started, so
+// a single immediate sample would be timing-sensitive.
+const containerPIDDiscoveryAttempts = 20
+const containerPIDDiscoveryInterval = 25 * time.Millisecond
+
 type TerminalSession struct {
 	ID            string
 	StackID       string
 	ContainerName string
 	Cmd           *exec.Cmd
 	Pty           *os.File
-	lastActivity  time.Time
+	// ContainerPID is the shell's process ID as seen from INSIDE the
+	// container's own PID namespace (i.e. what `docker exec <container> ps`
+	// reports), not the host-namespace PID `docker top`/`docker inspect`
+	// report for the same process — those two numbers differ (verified: a
+	// process shown as PID 1 by an in-container `ps` was PID 51264 in
+	// `docker top`). CloseSession uses this to kill the shell from within the
+	// container's own namespace, which works regardless of whether this
+	// service's own process shares the host's PID namespace.
+	//
+	// Zero means discovery failed or was ambiguous (e.g. the container has no
+	// `ps` binary) — CloseSession degrades to its pre-existing local-CLI-only
+	// cleanup in that case, never blocking session creation on this being
+	// found.
+	ContainerPID int
+	lastActivity time.Time
 }
 
 type TerminalService struct {
@@ -79,6 +104,7 @@ func (s *TerminalService) CreateSession(stackID, containerName string) (*Termina
 	shells := []string{"/bin/sh", "/bin/bash"}
 	var err error
 	var ptyFile *os.File
+	var shellUsed string
 
 	for _, shell := range shells {
 		//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
@@ -89,6 +115,7 @@ func (s *TerminalService) CreateSession(stackID, containerName string) (*Termina
 		if err == nil {
 			session.Cmd = cmd
 			session.Pty = ptyFile
+			shellUsed = shell
 			break
 		}
 		slog.Debug("Failed to create PTY session", "shell", shell, "error", err)
@@ -98,8 +125,91 @@ func (s *TerminalService) CreateSession(stackID, containerName string) (*Termina
 		return nil, err
 	}
 
+	// Best-effort: find the shell's pid inside the container so CloseSession
+	// can reap it later (see ContainerPID doc comment). Excludes pids already
+	// tracked for this container so a sibling session's shell is never
+	// mistaken for this one; the whole map is already held under s.mu, so
+	// this is race-free with any concurrent CreateSession/CloseSession.
+	session.ContainerPID = s.findContainerPID(containerName, shellUsed)
+
 	s.sessions[session.ID] = session
 	return session, nil
+}
+
+// findContainerPID polls `docker exec <containerName> ps` for a process
+// running shellPath that isn't already tracked by an existing session for the
+// same container, and returns its pid as seen from inside the container's own
+// PID namespace. It returns 0 (never found, or ambiguous) rather than guess —
+// picking the wrong pid to kill later is worse than not killing anything, and
+// CloseSession's existing local-CLI cleanup still runs either way.
+//
+// Callers must hold s.mu (this reads s.sessions to build the exclusion set).
+func (s *TerminalService) findContainerPID(containerName, shellPath string) int {
+	known := make(map[int]struct{})
+	for _, existing := range s.sessions {
+		if existing.ContainerName == containerName && existing.ContainerPID != 0 {
+			known[existing.ContainerPID] = struct{}{}
+		}
+	}
+
+	wantComm := path.Base(shellPath) // e.g. "/bin/sh" -> "sh"
+
+	for attempt := 0; attempt < containerPIDDiscoveryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(containerPIDDiscoveryInterval)
+		}
+
+		//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
+		cmd := execCommand("docker", "exec", "--", containerName, "ps", "-o", "pid,args")
+		cmd.Env = dockerEnv()
+		out, err := cmd.Output()
+		if err != nil {
+			// No `ps` in the container (or it's already gone) — give up
+			// silently. This is a best-effort enhancement, not a
+			// requirement for the session to work.
+			slog.Debug("findContainerPID: ps failed", "container", containerName, "error", err)
+			return 0
+		}
+
+		candidate := 0
+		ambiguous := false
+		for _, line := range strings.Split(string(out), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			pid, err := strconv.Atoi(fields[0])
+			if err != nil || pid <= 1 {
+				// Not a pid line (e.g. the header), or PID 1 — never a
+				// candidate: killing a container's init process would kill
+				// the whole container.
+				continue
+			}
+			if _, tracked := known[pid]; tracked {
+				continue
+			}
+			argv0 := strings.TrimPrefix(fields[1], "-") // login shells: "-sh"
+			if path.Base(argv0) != wantComm {
+				continue
+			}
+			if candidate != 0 {
+				ambiguous = true
+				break
+			}
+			candidate = pid
+		}
+
+		if ambiguous {
+			slog.Debug("findContainerPID: multiple untracked candidates, giving up rather than guessing", "container", containerName)
+			return 0
+		}
+		if candidate != 0 {
+			return candidate
+		}
+	}
+
+	slog.Debug("findContainerPID: shell did not appear in the container's process table in time", "container", containerName)
+	return 0
 }
 
 // SessionCount reports the number of live PTY sessions. Every session is a
@@ -141,15 +251,71 @@ func (s *TerminalService) CloseSession(sessionID string) {
 		return
 	}
 
+	// CloseSession has no incoming context (the handler calls it via a plain
+	// `defer h.terminal.CloseSession(session.ID)`), so this is the natural
+	// origination point for one; reapExpiredSessions instead threads through
+	// the context StartReaper was given.
+	s.terminateSession(context.Background(), sessionID, session)
+}
+
+// terminateSession kills a session's local `docker exec` CLI process and pty,
+// reaps the shell running INSIDE the container (best-effort, only when
+// findContainerPID succeeded at creation time — see ContainerPID), and
+// removes it from the map. Callers must hold s.mu.
+func (s *TerminalService) terminateSession(ctx context.Context, sessionID string, session *TerminalSession) {
 	if session.Cmd != nil && session.Cmd.Process != nil {
 		// Best-effort; the session is being torn down regardless, and a
-		// failed kill here (process already exited) isn't actionable.
+		// failed kill here (process already exited) isn't actionable. This
+		// only ever kills the LOCAL `docker exec` CLI — it does not reach the
+		// shell running inside the container, which is why killInContainer
+		// below exists.
 		_ = session.Cmd.Process.Kill()
 	}
 	if session.Pty != nil {
 		session.Pty.Close()
 	}
+	if session.ContainerPID != 0 {
+		s.killInContainer(ctx, session.ContainerName, session.ContainerPID)
+	}
 	delete(s.sessions, sessionID)
+}
+
+// killInContainer SIGKILLs pid from INSIDE containerName's own PID namespace,
+// by running the kill as a fresh `docker exec` rather than signalling pid
+// directly from this process: this service's own process is not guaranteed to
+// share a PID namespace with the target container (e.g. Docker-out-of-Docker
+// deployments, where this service and every managed container are sibling
+// containers under one host daemon), so a plain syscall-level kill on pid
+// would either fail or — worse — silently signal an unrelated process if the
+// number happened to be reused in this process's own namespace.
+//
+// Sends the signal to pid's whole process group first (so a backgrounded
+// child survives the shell it was spawned from, e.g. `sleep 400 &`, is also
+// caught) and then to pid alone as a fallback if it is not a group leader.
+// SIGKILL cannot be caught or ignored, so this also reaps a shell currently
+// running a foreground full-screen program (vim, top, ssh, ...), unlike
+// writing "exit\n" to the pty.
+//
+// Best-effort: errors (container already gone, docker unreachable) are
+// logged, not returned — CloseSession/reapExpiredSessions tear the session
+// down from this service's side regardless.
+func (s *TerminalService) killInContainer(ctx context.Context, containerName string, pid int) {
+	if pid <= 1 {
+		// Defensive: findContainerPID already excludes pid <= 1, but never
+		// let a caller reach the container's init process from here either.
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	killScript := fmt.Sprintf("kill -KILL -%d 2>/dev/null; kill -KILL %d 2>/dev/null; exit 0", pid, pid)
+	//nolint:gosec // explicit argv built from an int and a validated container name, not a shell string
+	cmd := execCommandContext(ctx, "docker", "exec", "--", containerName, "sh", "-c", killScript)
+	cmd.Env = dockerEnv()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		slog.Debug("killInContainer: docker exec kill failed", "container", containerName, "pid", pid, "error", err, "output", string(out))
+	}
 }
 
 func (s *TerminalService) UpdateActivity(sessionID string) {
@@ -171,13 +337,13 @@ func (s *TerminalService) StartReaper(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.reapExpiredSessions()
+				s.reapExpiredSessions(ctx)
 			}
 		}
 	}()
 }
 
-func (s *TerminalService) reapExpiredSessions() {
+func (s *TerminalService) reapExpiredSessions(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -185,16 +351,7 @@ func (s *TerminalService) reapExpiredSessions() {
 	for id, session := range s.sessions {
 		if now.Sub(session.lastActivity) > SessionTimeout {
 			slog.Info("Reaping inactive terminal session", "session_id", id, "stack_id", session.StackID)
-			if session.Cmd != nil && session.Cmd.Process != nil {
-				// Best-effort; the session is being torn down regardless,
-				// and a failed kill here (process already exited) isn't
-				// actionable.
-				_ = session.Cmd.Process.Kill()
-			}
-			if session.Pty != nil {
-				session.Pty.Close()
-			}
-			delete(s.sessions, id)
+			s.terminateSession(ctx, id, session)
 		}
 	}
 }
