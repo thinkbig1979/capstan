@@ -260,6 +260,11 @@ func (m *RcloneManager) probeRestoreSource(ctx context.Context, remote, path str
 //     any local-only pack/index files sync would otherwise delete into a
 //     sibling directory instead, covering the probe's blind spot: a source
 //     that IS a valid repository but is incomplete relative to the local one.
+//     backupDir is this safety net: an empty value disables it (RestoreRepo
+//     then falls straight through to plain `rclone sync` with the probe as
+//     the only guard). The single production caller always passes a
+//     timestamped sibling path, but a future caller that passes "" gets no
+//     warning that it has opted out.
 //
 // RcloneManager.Sync (the upload direction, local -> remote) intentionally
 // keeps sync with no such caller-supplied backup-dir: there the local repo is

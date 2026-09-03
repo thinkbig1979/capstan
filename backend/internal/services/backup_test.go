@@ -1268,14 +1268,70 @@ func TestRunDRRestore_Success(t *testing.T) {
 	err := svc.RunDRRestore(context.Background(), out)
 	require.NoError(t, err)
 
-	// RestoreRepo must probe the source before it ever runs sync.
-	require.Len(t, runner.calls, 2, "RunDRRestore must probe the source, then rclone sync")
+	// RestoreRepo must probe the source, then rclone sync, then RunDRRestore
+	// must verify the assembled repository actually opens before reporting
+	// completion.
+	require.Len(t, runner.calls, 3, "RunDRRestore must probe the source, rclone sync, then verify the result")
 	assert.Equal(t, "rclone", runner.calls[0].Binary)
 	assert.Equal(t, "lsf", runner.calls[0].Args[0])
 	assert.Equal(t, "rclone", runner.calls[1].Binary)
 	assert.Equal(t, "sync", runner.calls[1].Args[0])
 	assert.True(t, argContains(runner.calls[1].Args, "--backup-dir"),
 		"RunDRRestore must pass --backup-dir so a sync that deletes local-only files preserves them")
+	assert.Equal(t, "restic", runner.calls[2].Binary)
+	assert.Equal(t, "snapshots", runner.calls[2].Args[0])
+
+	lines := drainChannel(out)
+	var sawCompleted bool
+	for _, l := range lines {
+		if l.Line == "DR restore completed" {
+			sawCompleted = true
+		}
+	}
+	assert.True(t, sawCompleted, "a genuine restore that verifies successfully must still report completion")
+}
+
+// TestRunDRRestore_FailsWhenRestoredRepositoryDoesNotOpen is the regression
+// test for the round-3 review defect: RunDRRestore reported "DR restore
+// completed" and logged ActionRestore the moment rclone.RestoreRepo returned
+// nil, without ever confirming the repository it just assembled opens.
+// RestoreRepo's source probe only confirms a config object exists at the
+// source (see its doc comment) -- a truncated upload, or a config object
+// left over from a different-key-lineage repository, both pass that probe
+// and neither produces anything restic can open. OBSERVED by review (real
+// restic + rclone, source = a truncated upload holding only config): sync
+// exits 0, `restic snapshots` on the assembled repository then fails with
+// "wrong password or no key found", and the prior code still reported
+// completion.
+func TestRunDRRestore_FailsWhenRestoredRepositoryDoesNotOpen(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	require.NoError(t, db.SetSetting("rclone_remote", "myremote"))
+	docker := &fakeDocker{}
+
+	runner := &conditionalRunner{
+		onOutput: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return []byte("config"), nil // the source probe passes
+		},
+		onRun: func(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
+			if name == "restic" {
+				return fmt.Errorf("wrong password or no key found")
+			}
+			return nil // rclone sync succeeds
+		},
+	}
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	out := make(chan StreamLine, 128)
+	err := svc.RunDRRestore(context.Background(), out)
+	lines := drainChannel(out)
+
+	require.Error(t, err, "RunDRRestore must fail when the restored repository does not open")
+	assert.Contains(t, err.Error(), "pre-dr-", "the error must point the operator at the backup directory holding any displaced files")
+	for _, l := range lines {
+		assert.NotEqual(t, "DR restore completed", l.Line, "must not report completion when post-restore verification failed")
+	}
 }
 
 func TestRunDRRestore_UnavailableWhenNoRclone(t *testing.T) {

@@ -906,7 +906,10 @@ func (s *BackupService) RunSync(ctx context.Context, out chan<- StreamLine) erro
 	}
 	defer s.releaseGlobal()
 
-	if s.rcloneBin == "" {
+	// runSyncInternal (agent-os-h0my) now also shells out to restic, to guard
+	// against syncing an empty/invalid local repository onto the remote --
+	// so both binaries are required here, not just rclone.
+	if s.rcloneBin == "" || s.resticBin == "" {
 		return ErrBackupUnavailable
 	}
 
@@ -954,7 +957,14 @@ func (s *BackupService) runSyncInternal(ctx context.Context, bc BackupConfig, ou
 
 	restic := s.newResticMgr(bc)
 	if err := restic.CheckRepository(ctx); err != nil {
-		return fmt.Errorf("refusing rclone sync: local repository is not accessible: %w", err)
+		// CheckRepository's own wrapping (see ResticManager.CheckRepository)
+		// discards the real restic stderr text (Run only streams it to a
+		// throwaway channel), so a stale exclusive lock left by an
+		// interrupted prune surfaces here as a generic "exited: exit status
+		// 1" with no hint of the actual cause. Name the likely fix
+		// explicitly rather than let the operator chase "repository is not
+		// accessible" against a repository that is, in fact, fine.
+		return fmt.Errorf("refusing rclone sync: local repository is not accessible (if this is a stale lock from an interrupted operation, run `restic unlock`): %w", err)
 	}
 
 	rclone := s.newRcloneMgr(bc)
@@ -1174,6 +1184,26 @@ func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine)
 
 	if err := rclone.RestoreRepo(ctx, bc.RcloneRemote, bc.RclonePath, localRepoPath, backupDir, 3, out); err != nil {
 		return fmt.Errorf("rclone restore repo: %w", err)
+	}
+
+	// Verify the assembled repository actually opens before reporting
+	// success. RestoreRepo's source probe only confirms a config object
+	// exists at the source (see its doc comment) -- it deliberately does NOT
+	// confirm the source is restorable, since that would mean decrypting
+	// with the password. A truncated/interrupted upload, or a config object
+	// left over from a different-key-lineage repository, both pass that
+	// probe and both produce a local repository restic refuses to open.
+	// `restic snapshots --quiet` (the same check runSyncInternal uses) does
+	// decrypt, so it catches exactly this case. Without this check the
+	// operator was told "DR restore completed" while holding a repository
+	// that does not open, discovered later from an unrelated operation with
+	// no pointer back to what happened.
+	stream(out, "info", "Verifying restored repository")
+	if err := s.newResticMgr(bc).CheckRepository(ctx); err != nil {
+		return fmt.Errorf(
+			"DR restore assembled a repository that does not open (wrong password, or a corrupt/incomplete/foreign source): %w -- "+
+				"any local-only files displaced by the sync were preserved in %s",
+			err, backupDir)
 	}
 
 	stream(out, "info", "DR restore completed")
