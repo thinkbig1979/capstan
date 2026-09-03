@@ -35,7 +35,30 @@ function EngineUnavailableBanner({ resticAvailable }: { resticAvailable: boolean
   )
 }
 
-function LastRunBadge({ status }: { status: string }) {
+function LastRunBadge({
+  kind,
+  status,
+  stacksTotal,
+}: {
+  kind: string
+  status: string
+  stacksTotal: number
+}) {
+  if (kind === 'backup' && status === 'success' && stacksTotal === 0) {
+    // agent-os-a9gi: a zero-policy backup run persists status="success" by
+    // design (see TestRunBackup_NoRequestedIDsWithNoPoliciesIsUnchanged in
+    // backend/internal/services/backup_test.go) -- nothing the operator asked
+    // for was withheld, but rendering it as a green "Success" would mislead
+    // an operator into believing backups actually ran. Same neutral/slate
+    // treatment as the `interrupted` branch below: not a failure, just not
+    // a meaningful success either.
+    return (
+      <Badge variant="outline" className="gap-1 border-slate-300 text-slate-600 dark:text-slate-400">
+        <CircleDashed className="h-3 w-3" />
+        No stacks backed up
+      </Badge>
+    )
+  }
   if (status === 'success') {
     return (
       <Badge variant="outline" className="gap-1 border-green-300 text-green-700 dark:text-green-400">
@@ -191,7 +214,11 @@ export function BackupStatusCard() {
               <p className="text-xs text-muted-foreground">Last run</p>
               {statusData.lastRun ? (
                 <div className="flex flex-col gap-0.5">
-                  <LastRunBadge status={statusData.lastRun.status} />
+                  <LastRunBadge
+                    kind={statusData.lastRun.kind}
+                    status={statusData.lastRun.status}
+                    stacksTotal={statusData.lastRun.stacksTotal}
+                  />
                   <span className="text-xs text-muted-foreground">
                     {formatRelativeTime(statusData.lastRun.startedAt)}
                   </span>
