@@ -950,6 +950,188 @@ func TestRunSync_ProceedsWhenLocalRepositoryCheckSucceeds(t *testing.T) {
 	assert.Equal(t, []string{"restic", "rclone"}, calledBinaries, "the local repository check must run before rclone, and rclone must still run when it succeeds")
 }
 
+// fakeExitError simulates os/exec's *exec.ExitError for tests, without
+// actually spawning a process. Production code type-asserts errors returned
+// by commandRunner.Output against an unexported "ExitCode() int" interface
+// (see isExitCode in backup_rclone.go) so that rclone's own documented exit
+// code 3 ("directory not found") can be told apart from any other failure
+// (connectivity, auth, misconfiguration). *exec.ExitError satisfies that
+// same interface in production; this fake satisfies it in tests.
+type fakeExitError struct {
+	code int
+}
+
+func (e fakeExitError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+func (e fakeExitError) ExitCode() int { return e.code }
+
+// TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete is the regression test for
+// agent-os-nf31: CheckRepository (and the agent-os-h0my guard built on it)
+// passes on a freshly re-initialised, valid-but-EMPTY local restic
+// repository -- `restic snapshots --quiet` exits 0 with zero snapshots, the
+// same as it does against a populated one. Syncing that up via `rclone
+// sync`, which mirrors WITH DELETE, would silently wipe every snapshot the
+// remote already held.
+//
+// A two-arm test (empty-local-refuses / populated-local-proceeds) cannot
+// distinguish a correct, remote-aware guard from a broken one that simply
+// refuses whenever the local repository is empty -- and a broken guard of
+// that shape would refuse the legitimate first-ever sync from a brand-new
+// install, making the product unusable on day one. Arm 2 below is what
+// forces the guard to actually look at the remote instead of taking the
+// local-empty shortcut.
+//
+//	arm | local        | remote        | expected
+//	  1 | 0 snapshots  | HAS snapshots | REFUSE (the bug; must fail on today's code)
+//	  2 | 0 snapshots  | empty/absent  | PROCEED (genuine first sync)
+//	  3 | N>0 snapshots| anything      | PROCEED (normal); remote must not even be queried
+//
+// Arm 1 is asserted first, alone, so it can be observed failing against
+// pre-fix code (RunSync returning nil instead of an error) before the fix
+// exists.
+func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
+	t.Parallel()
+
+	// lsfArgs, when non-nil, captures the exact argv the probe invoked rclone
+	// with. This matters because a stray or missing "/" in the
+	// remote:path/snapshots target would misdirect the probe onto a path
+	// that doesn't exist -- which surfaces as exit 3 ("directory not
+	// found"), the very signal remoteHasSnapshots treats as "confirmed
+	// empty" -- so a broken join would make this guard PROCEED into the
+	// mirror-delete it exists to prevent, while every assertion that only
+	// checks the canned return value would stay green. Capturing the args
+	// the closure was actually called with (rather than a value hardcoded
+	// independently of what remoteHasSnapshots builds) is what lets arm 1
+	// assert against the real target.
+	buildArm := func(t *testing.T, localSnapshotsJSON []byte, localErr error, remoteLsfOutput []byte, remoteLsfErr error, syncCalled *bool, lsfArgs *[]string) *BackupService {
+		t.Helper()
+		db := newBackupTestDB(t)
+		require.NoError(t, db.SetSetting("rclone_remote", "myremote"))
+		// A non-empty, multi-segment path is deliberate: it is the only
+		// setting that actually exercises the "/" join in
+		// remoteHasSnapshots's target (remote:path/snapshots). An empty
+		// path collapses to a bare "snapshots" with no join to get wrong,
+		// which would make arm 1's argv assertion below trivially true.
+		require.NoError(t, db.SetSetting("rclone_path", "backup/path"))
+		docker := &fakeDocker{}
+
+		resticRunner := &conditionalRunner{
+			onRun: func(_ context.Context, _ string, _ []string, _ []string, _ chan<- StreamLine) error {
+				return nil // CheckRepository (`restic snapshots --quiet`) always reachable in these arms
+			},
+			onOutput: func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
+				return localSnapshotsJSON, localErr // ListSnapshots (`restic snapshots --json --latest 1`)
+			},
+		}
+		rcloneRunner := &conditionalRunner{
+			onRun: func(_ context.Context, _ string, _ []string, _ []string, _ chan<- StreamLine) error {
+				if syncCalled != nil {
+					*syncCalled = true
+				}
+				return nil // rclone sync itself always "succeeds" -- these arms test whether it runs at all
+			},
+			onOutput: func(_ context.Context, _ string, args []string, _ []string) ([]byte, error) {
+				if lsfArgs != nil {
+					*lsfArgs = args // `rclone lsf remote:path/snapshots` -- capture the real target
+				}
+				return remoteLsfOutput, remoteLsfErr
+			},
+		}
+		return buildSvc(t, db, docker, resticRunner, rcloneRunner)
+	}
+
+	t.Run("arm1_RefusesZeroLocalAgainstPopulatedRemote", func(t *testing.T) {
+		t.Parallel()
+		var syncCalled bool
+		var lsfArgs []string
+		// local: "null" == restic's own zero-snapshot JSON output.
+		// remote: one snapshot file listed by `rclone lsf`, i.e. the remote is NOT empty.
+		svc := buildArm(t, []byte("null"), nil, []byte("1c8dd5b20b330c7bf7d6e49cbdc71d58ace311bd508b9154c5848a6d87a2c991\n"), nil, &syncCalled, &lsfArgs)
+
+		out := make(chan StreamLine, 64)
+		err := svc.RunSync(context.Background(), out)
+
+		require.Error(t, err, "arm 1: must refuse -- local has zero snapshots but the remote already holds some, so syncing would mirror-delete them")
+		assert.False(t, syncCalled, "arm 1: rclone sync must never run once the guard has refused")
+		// Pin the exact target the probe queried. buildSvc's bc has
+		// RcloneRemote "myremote" and RclonePath "backup/path" -- if the
+		// join between them were wrong (a missing or doubled "/"), the
+		// probe would query the wrong path, which on a real remote would
+		// come back as exit 3 ("directory not found") -- read by
+		// remoteHasSnapshots as "confirmed empty" -- and this arm would
+		// pass for the wrong reason: not because the guard is correct, but
+		// because it queried nothing meaningful and defaulted to PROCEED.
+		require.Equal(t, []string{"lsf", "myremote:backup/path/snapshots"}, lsfArgs, "arm 1: the probe must query the real remote:path/snapshots target, not an arbitrary one")
+	})
+
+	t.Run("arm2_ProceedsZeroLocalAgainstEmptyRemote", func(t *testing.T) {
+		t.Parallel()
+		var syncCalled bool
+		// local: zero snapshots, same as arm 1.
+		// remote: rclone's own "directory not found" (exit code 3) -- the
+		// documented, stable signal for a path that has never been synced to,
+		// e.g. a brand-new install. This must read as "empty", not "unreadable".
+		svc := buildArm(t, []byte("null"), nil, nil, fakeExitError{code: 3}, &syncCalled, nil)
+
+		out := make(chan StreamLine, 64)
+		err := svc.RunSync(context.Background(), out)
+
+		require.NoError(t, err, "arm 2: a genuine first-ever sync (both sides empty) must proceed, not be refused")
+		assert.True(t, syncCalled, "arm 2: rclone sync must actually run for a genuine first sync")
+	})
+
+	t.Run("arm2b_ProceedsZeroLocalAgainstExistingEmptyRemoteDir", func(t *testing.T) {
+		t.Parallel()
+		var syncCalled bool
+		// Supplementary positive control for arm 2: the remote "snapshots"
+		// directory exists but is genuinely empty (`rclone lsf` exits 0 with
+		// no output), rather than not existing at all (exit 3). Both shapes
+		// of "empty" must proceed.
+		svc := buildArm(t, []byte("null"), nil, []byte(""), nil, &syncCalled, nil)
+
+		out := make(chan StreamLine, 64)
+		err := svc.RunSync(context.Background(), out)
+
+		require.NoError(t, err, "arm 2b: an existing-but-empty remote must proceed like a never-synced one")
+		assert.True(t, syncCalled, "arm 2b: rclone sync must actually run")
+	})
+
+	t.Run("arm3_ProceedsNonEmptyLocalWithoutQueryingRemote", func(t *testing.T) {
+		t.Parallel()
+		var syncCalled bool
+		localJSON := []byte(`[{"id":"1c8dd5b2","short_id":"1c8dd5b2","time":"2026-09-03T22:32:34Z","hostname":"h","tags":[],"paths":["/data"]}]`)
+		// The remote lsf output below claims the remote is populated. If the
+		// guard queried the remote here, it would (wrongly) refuse. The
+		// point of this arm is that a non-empty LOCAL repository must skip
+		// the remote check entirely -- normal operation must not pay for a
+		// network round trip on every scheduled sync.
+		svc := buildArm(t, localJSON, nil, []byte("some-other-snapshot-file\n"), nil, &syncCalled, nil)
+
+		out := make(chan StreamLine, 64)
+		err := svc.RunSync(context.Background(), out)
+
+		require.NoError(t, err, "arm 3: normal sync from a populated local repository must proceed")
+		assert.True(t, syncCalled, "arm 3: rclone sync must actually run")
+	})
+
+	t.Run("unreadableRemote_RefusesRatherThanGuessing", func(t *testing.T) {
+		t.Parallel()
+		var syncCalled bool
+		// local: zero snapshots, as in arms 1/2.
+		// remote: a failure that is NOT the documented "directory not found"
+		// (exit 3) -- e.g. a connectivity/auth/misconfiguration error. The
+		// guard cannot tell whether the remote is genuinely empty or just
+		// unreachable, and this is a mirror-delete path, so it must fail
+		// closed rather than assume "empty" and proceed.
+		svc := buildArm(t, []byte("null"), nil, nil, fakeExitError{code: 1}, &syncCalled, nil)
+
+		out := make(chan StreamLine, 64)
+		err := svc.RunSync(context.Background(), out)
+
+		require.Error(t, err, "an unreadable remote must refuse, not be treated as empty")
+		assert.False(t, syncCalled, "rclone sync must never run when the remote could not be verified as empty")
+	})
+}
+
 // ============================================================
 // Prune
 // ============================================================

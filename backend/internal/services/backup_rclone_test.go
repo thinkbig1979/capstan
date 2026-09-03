@@ -483,3 +483,103 @@ func TestRcloneManager_Sync_StatsFlag(t *testing.T) {
 	assert.True(t, argContains(call.Args, "--stats-one-line"))
 	assert.True(t, argContains(call.Args, "--verbose"))
 }
+
+// --- remoteHasSnapshots argv tests (agent-os-nf31) ---
+//
+// These pin the exact `remote:path/snapshots` string remoteHasSnapshots
+// builds. This is the one way the zero-snapshot mirror-delete guard could
+// fail in the DANGEROUS direction: a stray or missing "/" between path and
+// "snapshots" would make `rclone lsf` look at a path that doesn't exist even
+// when the real snapshots directory is populated, which surfaces as exit 3
+// ("directory not found") -- the exact signal remoteHasSnapshots treats as
+// "confirmed empty" -- and the guard would then PROCEED into the very
+// mirror-delete it exists to prevent. Argv precision here is load-bearing,
+// not stylistic.
+
+func TestRcloneManager_RemoteHasSnapshots_Args(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{outputData: []byte("abc123\n")}
+	m := testRcloneManager(runner)
+
+	has, err := m.remoteHasSnapshots(context.Background(), "myremote", "backups/capstan")
+	require.NoError(t, err)
+	assert.True(t, has)
+
+	call := runner.lastCall()
+	assert.Equal(t, "rclone", call.Binary)
+	assert.Equal(t, []string{"lsf", "myremote:backups/capstan/snapshots"}, call.Args)
+}
+
+func TestRcloneManager_RemoteHasSnapshots_EmptyPath(t *testing.T) {
+	t.Parallel()
+
+	// An empty path must not produce a leading "/" (e.g. "myremote:/snapshots"),
+	// which would be a different, likely-wrong rclone target.
+	runner := &fakeRunner{outputData: []byte("")}
+	m := testRcloneManager(runner)
+
+	has, err := m.remoteHasSnapshots(context.Background(), "myremote", "")
+	require.NoError(t, err)
+	assert.False(t, has)
+
+	call := runner.lastCall()
+	assert.Equal(t, []string{"lsf", "myremote:snapshots"}, call.Args)
+}
+
+func TestRcloneManager_RemoteHasSnapshots_TrailingSlashInPathDoesNotDoubleUp(t *testing.T) {
+	t.Parallel()
+
+	// A path with a trailing "/" must not produce "path//snapshots" -- a
+	// double slash is exactly the kind of stray-separator bug that could
+	// make a populated remote look like "directory not found" to rclone.
+	runner := &fakeRunner{outputData: []byte("abc123\n")}
+	m := testRcloneManager(runner)
+
+	has, err := m.remoteHasSnapshots(context.Background(), "myremote", "backups/capstan/")
+	require.NoError(t, err)
+	assert.True(t, has)
+
+	call := runner.lastCall()
+	assert.Equal(t, []string{"lsf", "myremote:backups/capstan/snapshots"}, call.Args)
+}
+
+func TestRcloneManager_RemoteHasSnapshots_EmptyOutputMeansFalse(t *testing.T) {
+	t.Parallel()
+
+	// exit 0, empty output: the snapshots directory exists but holds nothing.
+	runner := &fakeRunner{outputData: []byte("")}
+	m := testRcloneManager(runner)
+
+	has, err := m.remoteHasSnapshots(context.Background(), "myremote", "backups/capstan")
+	require.NoError(t, err)
+	assert.False(t, has)
+}
+
+func TestRcloneManager_RemoteHasSnapshots_ExitCode3MeansEmptyNotError(t *testing.T) {
+	t.Parallel()
+
+	// exit 3 is rclone's own "directory not found" -- the remote has never
+	// been synced to. This must read as "confirmed empty" (false, nil), not
+	// as an error the caller has to fail closed on.
+	runner := &fakeRunner{outputErr: fakeExitError{code: 3}}
+	m := testRcloneManager(runner)
+
+	has, err := m.remoteHasSnapshots(context.Background(), "myremote", "backups/capstan")
+	require.NoError(t, err, "exit code 3 (directory not found) must not surface as an error")
+	assert.False(t, has)
+}
+
+func TestRcloneManager_RemoteHasSnapshots_OtherErrorsPropagate(t *testing.T) {
+	t.Parallel()
+
+	// Any exit code other than 3 (connectivity, auth, misconfiguration, ...)
+	// must come back as an error so the caller can fail closed, rather than
+	// being silently treated as "empty".
+	runner := &fakeRunner{outputErr: fakeExitError{code: 1}}
+	m := testRcloneManager(runner)
+
+	has, err := m.remoteHasSnapshots(context.Background(), "myremote", "backups/capstan")
+	require.Error(t, err)
+	assert.False(t, has)
+}
