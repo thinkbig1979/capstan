@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -232,6 +233,78 @@ func (m *RcloneManager) probeRestoreSource(ctx context.Context, remote, path str
 		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (expected to list exactly \"config\", got %q)", target, got)
 	}
 	return nil
+}
+
+// exitCoder is satisfied by *exec.ExitError (and, in tests, by any fake that
+// wants to simulate one) without this package importing os/exec just to name
+// the type. isExitCode reports whether err unwraps to something exposing the
+// given process exit code.
+type exitCoder interface {
+	ExitCode() int
+}
+
+func isExitCode(err error, code int) bool {
+	var ec exitCoder
+	if errors.As(err, &ec) {
+		return ec.ExitCode() == code
+	}
+	return false
+}
+
+// remoteHasSnapshots reports whether the remote side of the mirror
+// (remote:path) already holds any restic snapshots, by running `rclone lsf
+// remote:path/snapshots` -- restic's own snapshots directory, one object per
+// snapshot. It exists to answer a narrower question than probeRestoreSource:
+// not "does this look like a repository" but "is it non-empty", and it is
+// deliberately more permissive about "not found" than probeRestoreSource is.
+//
+// This is used by BackupService.runSyncInternal (agent-os-nf31) to guard the
+// upload direction (local -> remote, via `rclone sync`, which mirrors WITH
+// DELETE) when the local repository has zero snapshots: a genuine
+// first-ever sync from a brand-new install also has zero local snapshots, so
+// "local is empty" can't by itself mean refuse -- only "local is empty AND
+// remote is not" does. See runSyncInternal's doc comment for the full guard.
+//
+// OBSERVED 2026-09-03 (local backend, rclone v1.60.1-DEV, real restic
+// 0.18.0 repos synced with plain `rclone sync`):
+//   - remote:path/snapshots populated (>=1 snapshot file)        -> exit 0, non-empty output
+//   - remote:path/snapshots exists but empty                     -> exit 0, empty output
+//   - remote:path/snapshots never synced to (path doesn't exist) -> exit 3, "directory not found"
+//   - remote misconfigured (e.g. unknown remote name)            -> exit 1, a config-lookup error
+//
+// Exit code 3 is rclone's own documented, backend-independent "directory not
+// found" code (distinct from 5/6/7 for retryable/fatal/less-serious errors),
+// so it is treated here as authoritative confirmation of "empty" -- not just
+// "some error occurred". Any OTHER error (wrong exit code, or none to read)
+// means we could not confirm the remote is empty, and this is a
+// mirror-delete path: fail closed, the same posture probeRestoreSource takes
+// for its own not-found case, even though the two guards disagree about
+// what to DO with a "not found" result (probeRestoreSource refuses on it;
+// this one, deliberately, treats it as "confirmed empty" and proceeds).
+func (m *RcloneManager) remoteHasSnapshots(ctx context.Context, remote, path string) (bool, error) {
+	snapshotsPath := strings.TrimSuffix(path, "/")
+	if snapshotsPath == "" {
+		snapshotsPath = "snapshots"
+	} else {
+		snapshotsPath += "/snapshots"
+	}
+	target := fmt.Sprintf("%s:%s", remote, snapshotsPath)
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	raw, err := m.runner.Output(ctx, "rclone", []string{"lsf", target}, nil)
+	if err != nil {
+		if isExitCode(err, 3) {
+			// "directory not found": the remote has never been synced to
+			// (or the path prefix doesn't exist yet). That is the ordinary
+			// shape of a brand-new install -- treat it as empty, not as a
+			// failure to refuse on.
+			return false, nil
+		}
+		return false, fmt.Errorf("could not list %s to check for existing snapshots: %w", target, err)
+	}
+	return len(strings.TrimSpace(string(raw))) > 0, nil
 }
 
 // RestoreRepo copies the remote rclone repository (remote:path) to localPath

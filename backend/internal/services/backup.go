@@ -940,16 +940,25 @@ func (s *BackupService) RunSync(ctx context.Context, out chan<- StreamLine) erro
 // check also catches a config file that exists but fails to open with the
 // configured password.
 //
-// Residual gap, deliberately not closed here: `restic snapshots --quiet`
-// succeeds against a freshly `restic init`ed repository holding zero
-// snapshots, same as it does against a populated one -- there is no "and has
-// at least one snapshot" clause. Syncing that up would still mirror-delete
-// every snapshot in the cloud copy. The empty-DIRECTORY case this guard was
-// built for (agent-os-h0my) is caught; a narrower "someone re-initialised an
-// otherwise-real repository to empty" case is not. Left as a known limit
-// rather than extended, since guarding it would need a different check
-// (e.g. snapshot count > 0) and is a separate judgment call about a
-// different failure mode.
+// Former residual gap, now closed (agent-os-nf31): `restic snapshots
+// --quiet` succeeds against a freshly `restic init`ed repository holding
+// zero snapshots, same as it does against a populated one -- there is no
+// "and has at least one snapshot" clause. The empty-DIRECTORY case above
+// (agent-os-h0my) was caught, but a narrower "someone re-initialised an
+// otherwise-real repository to empty" case was not: syncing that up would
+// still mirror-delete every snapshot already in the cloud copy.
+//
+// Below, once CheckRepository passes, a zero local snapshot count is
+// therefore not by itself refused: a genuine first-ever sync from a
+// brand-new install also has zero local snapshots, and refusing that would
+// make the product unusable on day one. Only when the local repository is
+// BOTH empty AND the remote already holds snapshots is the sync refused
+// (RcloneManager.remoteHasSnapshots). If the remote cannot be confirmed
+// empty (any error other than its own "directory not found"), this also
+// refuses -- fail closed, since this is a mirror-delete path. The remote
+// check only runs on this rare empty-local branch: a populated local
+// repository (the normal, steady-state case) proceeds straight to sync
+// without the extra network round trip.
 func (s *BackupService) runSyncInternal(ctx context.Context, bc BackupConfig, out chan<- StreamLine) error {
 	if bc.RcloneRemote == "" {
 		return fmt.Errorf("rclone remote is not configured")
@@ -967,7 +976,23 @@ func (s *BackupService) runSyncInternal(ctx context.Context, bc BackupConfig, ou
 		return fmt.Errorf("refusing rclone sync: local repository is not accessible (if this is a stale lock from an interrupted operation, run `restic unlock`): %w", err)
 	}
 
+	localSnaps, err := restic.ListSnapshots(ctx, "", 1)
+	if err != nil {
+		return fmt.Errorf("refusing rclone sync: could not determine local snapshot count: %w", err)
+	}
+
 	rclone := s.newRcloneMgr(bc)
+
+	if len(localSnaps) == 0 {
+		hasRemote, err := rclone.remoteHasSnapshots(ctx, bc.RcloneRemote, bc.RclonePath)
+		if err != nil {
+			return fmt.Errorf("refusing rclone sync: local repository has zero snapshots and the remote could not be confirmed empty: %w", err)
+		}
+		if hasRemote {
+			return fmt.Errorf("refusing rclone sync: local repository has zero snapshots but the remote already holds snapshots -- syncing would mirror-delete them (if this is a genuine re-initialised repository, restore from the remote first)")
+		}
+	}
+
 	return rclone.Sync(ctx, bc.ResticRepository, bc.RcloneRemote, bc.RclonePath, bc.RcloneTransfers, 3, out)
 }
 
