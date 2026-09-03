@@ -140,9 +140,27 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 	return fmt.Errorf("sync failed after %d attempts: %w", retries, lastErr)
 }
 
-// RestoreRepo copies the remote rclone repository (remote:path) to localPath.
-// This is the Stage 3 DR restore: fetch the restic repository from cloud
-// storage so that `restic restore` can be run against it locally.
+// RestoreRepo copies the remote rclone repository (remote:path) to localPath
+// using `rclone copy`, not `rclone sync`. This is the Stage 3 DR restore:
+// fetch the restic repository from cloud storage so that `restic restore`
+// can be run against it locally.
+//
+// This direction deliberately does NOT mirror-with-delete like Sync does.
+// The destination here is the live local restic repository, which on a
+// healthy install is the only copy of every snapshot; `sync` would delete
+// any local-only snapshot absent from the remote (e.g. taken after the last
+// upload, or the remote path is reachable but empty). OBSERVED 2026-09-03
+// (real restic 0.18.0 + real rclone, four arms, production flag set, local
+// repo ahead of remote by one snapshot): `sync` silently destroyed the
+// local-only snapshot and `restic check` still PASSED afterwards, so nothing
+// downstream could detect the loss. `copy` merges the remote in instead,
+// preserves local-only snapshots, still fully restores a totally-lost local
+// repo, and stays valid against a remote that was since forget+pruned.
+// Sync (local -> remote, upload direction) intentionally keeps `sync`: there,
+// the local repo is authoritative and mirror-with-delete is how retention
+// (forgotten/pruned snapshots) propagates offsite. Do not "fix" this
+// asymmetry back to a single shared verb; the two directions differ because
+// which side is authoritative differs.
 // It retries with the same backoff as Sync.
 func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath string, retries int, out chan<- StreamLine) error {
 	if remote == "" {
@@ -163,7 +181,9 @@ func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath
 	source := fmt.Sprintf("%s:%s", remote, path)
 	m.logger.Info("Starting rclone restore", "source", source, "destination", localPath)
 
-	args := append([]string{"sync"}, syncOptions(transfers)...)
+	// copy, not sync: see the doc comment above for why this direction must
+	// not mirror-with-delete onto the live local restic repo.
+	args := append([]string{"copy"}, syncOptions(transfers)...)
 	args = append(args, source, localPath)
 
 	var lastErr error
