@@ -153,15 +153,48 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 // expected location, whereas an emptiness check on that path would see
 // something there and pass it.
 //
+// What this guard claims, precisely -- the distinction matters for what is
+// safe to build on top of it:
+//   - IT CLAIMS: "this source is not obviously empty or absent, so deleting
+//     the local repo to mirror it is not obviously destroying data for
+//     nothing." Existence of a config object is sufficient for this claim,
+//     and is all this guard asserts.
+//   - IT DOES NOT CLAIM: "this restore will produce a working repository."
+//     A truncated/interrupted upload, or a `config` object left over from an
+//     unrelated repository at the same path, both have a config object
+//     present and pass this probe, yet neither restores anything usable.
+//     Confirming restorability would mean decrypting with the repository
+//     password, turning a near-free listing into a heavy, credentialed
+//     operation -- deliberately out of scope here. Do not extend this
+//     guard's pass to imply that stronger guarantee.
+//
 // OBSERVED 2026-09-03 (local backend, rclone v1.60.1-DEV): this exits 0 and
 // prints "config" when the object is present, and exits 3 ("directory not
 // found") for every negative case tried -- an empty-but-existing directory,
 // a directory holding unrelated files at a wrong prefix, and a nonexistent
-// path entirely. On an object-store backend a missing/unreachable source may
-// instead surface as a different non-zero exit (rclone's own taxonomy
-// reserves 5 for temporary/connection errors) -- this method does not branch
-// on the specific code. ANY non-nil error means "not confirmed as a restic
-// repository", and the caller must refuse rather than proceed. Fail closed.
+// path entirely.
+//
+// OBSERVED 2026-09-03 (object-store emulation: `rclone serve s3` on the
+// pinned rclone v1.74.4 binary, checksum-verified against the Dockerfile's
+// RCLONE_SHA256_AMD64, driven with the exact syncOptions() flag set): a
+// wrong prefix inside a valid, reachable bucket ALSO exits 0 and deletes the
+// local repo -- a prefix with no keys is a successful empty listing on an
+// object store, not an error, so there is no directory-not-found signal to
+// catch there. A nonexistent bucket instead exits 3 and refuses untouched,
+// and a correct prefix restores correctly, confirming the instrument
+// discriminates rather than trivially passing or failing every case. This is
+// measured on rclone's own S3 emulation (marked Experimental upstream), not
+// against real AWS/B2/GCS -- no credentials were available to confirm there
+// -- but it demonstrates protocol-level object-store behaviour (an empty
+// prefix is an empty listing, not an error), not something specific to the
+// emulator.
+//
+// A missing/unreachable source may therefore surface as different non-zero
+// exits depending on backend (rclone's own taxonomy reserves 3 for
+// "directory not found" and 5 for temporary/connection errors); this method
+// does not branch on the specific code. ANY non-nil error means "not
+// confirmed as a restic repository", and the caller must refuse rather than
+// proceed. Fail closed.
 func (m *RcloneManager) probeRestoreSource(ctx context.Context, remote, path string) error {
 	configPath := strings.TrimSuffix(path, "/")
 	if configPath == "" {
@@ -203,11 +236,14 @@ func (m *RcloneManager) probeRestoreSource(ctx context.Context, remote, path str
 // printing green over the resurrection. sync's own destructive potential is
 // instead bounded by two independent, fail-closed guards run before it:
 //
-//  1. probeRestoreSource positively confirms the source is a genuine restic
-//     repository (a config object at the exact path) before sync is allowed
-//     to run at all. This catches an empty-but-existing source and a
-//     right-bucket-wrong-prefix source, both of which previously made sync
-//     exit 0 while deleting every local snapshot.
+//  1. probeRestoreSource positively confirms the source is not obviously
+//     empty or absent (a config object at the exact path) before sync is
+//     allowed to run at all. This catches an empty-but-existing source and a
+//     right-bucket-wrong-prefix source -- both OBSERVED to make sync exit 0
+//     while deleting every local snapshot; see probeRestoreSource's doc
+//     comment for the measurements. It does NOT confirm the source restores
+//     to a working repository -- see the same comment for why that would be
+//     a different, heavier guarantee this guard deliberately doesn't make.
 //  2. --backup-dir (added by the caller, RunDRRestore in backup.go) moves
 //     any local-only pack/index files sync would otherwise delete into a
 //     sibling directory instead, covering the probe's blind spot: a source

@@ -1122,10 +1122,16 @@ func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine)
 	}
 
 	// Destination is the configured local restic repository (server-derived from
-	// config/DB, default <DataDir>/restic-repo) — never taken from client input.
-	// rclone sync mirrors the remote onto this path and deletes files not in the
-	// source, so a client-supplied path would be an arbitrary host-path overwrite
-	// primitive (C1).
+	// config/DB, default <DataDir>/restic-repo) — never taken from client input,
+	// for two independent reasons:
+	//  1. (C1) rclone sync mirrors the remote onto this path and deletes files
+	//     not in the source, so a client-supplied path would be an arbitrary
+	//     host-path overwrite primitive.
+	//  2. (agent-os-h0my) RestoreRepo's source probe and --backup-dir guard the
+	//     REMOTE side of the sync (is the source a genuine, non-empty restic
+	//     repository); neither says anything about the destination. A
+	//     client-controlled destination would still be an unguarded arbitrary
+	//     host-path write, independent of what the source-side guards do.
 	localRepoPath := bc.ResticRepository
 	if localRepoPath == "" {
 		localRepoPath = filepath.Join(s.cfg.DataDir, "restic-repo")
