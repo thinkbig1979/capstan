@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -193,7 +194,10 @@ func buildSvc(
 // derived server-side inside DataDir and never influenced by client input.
 func TestRunDRRestore_ConfinesDestinationToDataDir(t *testing.T) {
 	db := newBackupTestDB(t)
-	rcloneRunner := &fakeRunner{}
+	// outputData: the source probe (rclone lsf) must see the source as a
+	// genuine restic repository -- exactly "config" -- for RestoreRepo to
+	// proceed to sync at all.
+	rcloneRunner := &fakeRunner{outputData: []byte("config")}
 	svc := buildSvc(t, db, &fakeDocker{}, &fakeRunner{}, rcloneRunner)
 	// resolveBackupConfig falls back to cfg.RcloneRemote when the DB has none,
 	// so this makes RunDRRestore's "remote configured" precondition pass.
@@ -873,6 +877,79 @@ func TestRunSync_BusyWhileBackupRunning(t *testing.T) {
 	assert.ErrorIs(t, err, ErrBackupBusy)
 }
 
+// TestRunSync_RefusesWhenLocalRepositoryCheckFails is the regression test for
+// the upload-direction mirror of the DR-restore data-loss defect
+// (agent-os-h0my): runSyncInternal passes bc.ResticRepository straight to
+// RcloneManager.Sync with no check that it is a genuine restic repository.
+// rclone.Sync mirrors the local repo onto the remote and deletes remote
+// files absent from the source, so an empty-but-existing local repository
+// (e.g. left behind by RunDRRestore's os.MkdirAll if a DR restore is
+// interrupted before RestoreRepo ever populates it) would otherwise wipe the
+// last surviving copy of every snapshot offsite the next time a sync runs.
+//
+// This asserts rclone is never invoked once the local repository check has
+// failed, not merely that RunSync's final error is non-nil.
+func TestRunSync_RefusesWhenLocalRepositoryCheckFails(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	require.NoError(t, db.SetSetting("rclone_remote", "myremote"))
+	docker := &fakeDocker{}
+
+	var calledBinaries []string
+	runner := &conditionalRunner{
+		onRun: func(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
+			calledBinaries = append(calledBinaries, name)
+			if name == "restic" {
+				return fmt.Errorf("unable to open config file: repository not found")
+			}
+			return nil
+		},
+		onOutput: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return nil, nil
+		},
+	}
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	out := make(chan StreamLine, 64)
+	err := svc.RunSync(context.Background(), out)
+
+	require.Error(t, err, "RunSync must refuse when the local repository check fails")
+	assert.NotContains(t, calledBinaries, "rclone", "rclone must never be invoked once the local repository check has failed")
+}
+
+// TestRunSync_ProceedsWhenLocalRepositoryCheckSucceeds is the positive
+// control for TestRunSync_RefusesWhenLocalRepositoryCheckFails: a genuine
+// sync from a local repository that passes the check must still succeed,
+// and must still actually invoke rclone. A guard that refuses everything
+// would pass the negative test above without proving the guard is
+// selective.
+func TestRunSync_ProceedsWhenLocalRepositoryCheckSucceeds(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	require.NoError(t, db.SetSetting("rclone_remote", "myremote"))
+	docker := &fakeDocker{}
+
+	var calledBinaries []string
+	runner := &conditionalRunner{
+		onRun: func(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
+			calledBinaries = append(calledBinaries, name)
+			return nil
+		},
+		onOutput: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return nil, nil
+		},
+	}
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	out := make(chan StreamLine, 64)
+	err := svc.RunSync(context.Background(), out)
+
+	require.NoError(t, err, "a genuine sync from a repository that passes the check must still succeed")
+	assert.Equal(t, []string{"restic", "rclone"}, calledBinaries, "the local repository check must run before rclone, and rclone must still run when it succeeds")
+}
+
 // ============================================================
 // Prune
 // ============================================================
@@ -1181,17 +1258,80 @@ func TestRunDRRestore_Success(t *testing.T) {
 	require.NoError(t, db.SetSetting("rclone_remote", "myremote"))
 
 	docker := &fakeDocker{}
-	runner := &fakeRunner{}
+	// outputData: the source probe (rclone lsf) must see the source as a
+	// genuine restic repository -- exactly "config" -- for RestoreRepo to
+	// proceed to sync at all.
+	runner := &fakeRunner{outputData: []byte("config")}
 	svc := buildSvc(t, db, docker, runner, runner)
 
 	out := make(chan StreamLine, 128)
 	err := svc.RunDRRestore(context.Background(), out)
 	require.NoError(t, err)
 
-	// rclone sync must have been called.
-	require.NotEmpty(t, runner.calls)
+	// RestoreRepo must probe the source, then rclone sync, then RunDRRestore
+	// must verify the assembled repository actually opens before reporting
+	// completion.
+	require.Len(t, runner.calls, 3, "RunDRRestore must probe the source, rclone sync, then verify the result")
 	assert.Equal(t, "rclone", runner.calls[0].Binary)
-	assert.Equal(t, "sync", runner.calls[0].Args[0])
+	assert.Equal(t, "lsf", runner.calls[0].Args[0])
+	assert.Equal(t, "rclone", runner.calls[1].Binary)
+	assert.Equal(t, "sync", runner.calls[1].Args[0])
+	assert.True(t, argContains(runner.calls[1].Args, "--backup-dir"),
+		"RunDRRestore must pass --backup-dir so a sync that deletes local-only files preserves them")
+	assert.Equal(t, "restic", runner.calls[2].Binary)
+	assert.Equal(t, "snapshots", runner.calls[2].Args[0])
+
+	lines := drainChannel(out)
+	var sawCompleted bool
+	for _, l := range lines {
+		if l.Line == "DR restore completed" {
+			sawCompleted = true
+		}
+	}
+	assert.True(t, sawCompleted, "a genuine restore that verifies successfully must still report completion")
+}
+
+// TestRunDRRestore_FailsWhenRestoredRepositoryDoesNotOpen is the regression
+// test for the round-3 review defect: RunDRRestore reported "DR restore
+// completed" and logged ActionRestore the moment rclone.RestoreRepo returned
+// nil, without ever confirming the repository it just assembled opens.
+// RestoreRepo's source probe only confirms a config object exists at the
+// source (see its doc comment) -- a truncated upload, or a config object
+// left over from a different-key-lineage repository, both pass that probe
+// and neither produces anything restic can open. OBSERVED by review (real
+// restic + rclone, source = a truncated upload holding only config): sync
+// exits 0, `restic snapshots` on the assembled repository then fails with
+// "wrong password or no key found", and the prior code still reported
+// completion.
+func TestRunDRRestore_FailsWhenRestoredRepositoryDoesNotOpen(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupTestDB(t)
+	require.NoError(t, db.SetSetting("rclone_remote", "myremote"))
+	docker := &fakeDocker{}
+
+	runner := &conditionalRunner{
+		onOutput: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return []byte("config"), nil // the source probe passes
+		},
+		onRun: func(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
+			if name == "restic" {
+				return fmt.Errorf("wrong password or no key found")
+			}
+			return nil // rclone sync succeeds
+		},
+	}
+	svc := buildSvc(t, db, docker, runner, runner)
+
+	out := make(chan StreamLine, 128)
+	err := svc.RunDRRestore(context.Background(), out)
+	lines := drainChannel(out)
+
+	require.Error(t, err, "RunDRRestore must fail when the restored repository does not open")
+	assert.Contains(t, err.Error(), "pre-dr-", "the error must point the operator at the backup directory holding any displaced files")
+	for _, l := range lines {
+		assert.NotEqual(t, "DR restore completed", l.Line, "must not report completion when post-restore verification failed")
+	}
 }
 
 func TestRunDRRestore_UnavailableWhenNoRclone(t *testing.T) {
