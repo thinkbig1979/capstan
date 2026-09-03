@@ -194,7 +194,10 @@ func buildSvc(
 // derived server-side inside DataDir and never influenced by client input.
 func TestRunDRRestore_ConfinesDestinationToDataDir(t *testing.T) {
 	db := newBackupTestDB(t)
-	rcloneRunner := &fakeRunner{}
+	// outputData: the source probe (rclone lsf) must see the source as a
+	// genuine restic repository -- exactly "config" -- for RestoreRepo to
+	// proceed to sync at all.
+	rcloneRunner := &fakeRunner{outputData: []byte("config")}
 	svc := buildSvc(t, db, &fakeDocker{}, &fakeRunner{}, rcloneRunner)
 	// resolveBackupConfig falls back to cfg.RcloneRemote when the DB has none,
 	// so this makes RunDRRestore's "remote configured" precondition pass.
@@ -1255,7 +1258,10 @@ func TestRunDRRestore_Success(t *testing.T) {
 	require.NoError(t, db.SetSetting("rclone_remote", "myremote"))
 
 	docker := &fakeDocker{}
-	runner := &fakeRunner{}
+	// outputData: the source probe (rclone lsf) must see the source as a
+	// genuine restic repository -- exactly "config" -- for RestoreRepo to
+	// proceed to sync at all.
+	runner := &fakeRunner{outputData: []byte("config")}
 	svc := buildSvc(t, db, docker, runner, runner)
 
 	out := make(chan StreamLine, 128)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 )
@@ -168,20 +169,22 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 //     operation -- deliberately out of scope here. Do not extend this
 //     guard's pass to imply that stronger guarantee.
 //
-// OBSERVED 2026-09-03 (local backend, rclone v1.60.1-DEV): this exits 0 and
-// prints "config" when the object is present, and exits 3 ("directory not
-// found") for every negative case tried -- an empty-but-existing directory,
-// a directory holding unrelated files at a wrong prefix, and a nonexistent
-// path entirely.
+// OBSERVED 2026-09-03 (local backend, rclone v1.60.1-DEV): `rclone lsf
+// <remote>:<path>/config` exits 0 and prints exactly "config" when the
+// object is a file, and exits 3 ("directory not found") for an
+// empty-but-existing directory, a directory holding unrelated files at a
+// wrong prefix, and a nonexistent path entirely.
 //
 // OBSERVED 2026-09-03 (object-store emulation: `rclone serve s3` on the
 // pinned rclone v1.74.4 binary, checksum-verified against the Dockerfile's
-// RCLONE_SHA256_AMD64, driven with the exact syncOptions() flag set): a
-// wrong prefix inside a valid, reachable bucket ALSO exits 0 and deletes the
-// local repo -- a prefix with no keys is a successful empty listing on an
-// object store, not an error, so there is no directory-not-found signal to
-// catch there. A nonexistent bucket instead exits 3 and refuses untouched,
-// and a correct prefix restores correctly, confirming the instrument
+// RCLONE_SHA256_AMD64, driven with the exact syncOptions() flag set): on an
+// object store, a wrong prefix inside a valid, reachable bucket instead
+// exits 0 with EMPTY output -- a prefix with no keys is a successful empty
+// listing there, not an error, so there is no directory-not-found signal to
+// catch. An exit-code-only check (`err == nil`) would have let this through;
+// checking the exit code was the same mistake as the original bug. A
+// nonexistent bucket exits 3 and refuses untouched, and a correct prefix
+// lists "config" and restores correctly, confirming the instrument
 // discriminates rather than trivially passing or failing every case. This is
 // measured on rclone's own S3 emulation (marked Experimental upstream), not
 // against real AWS/B2/GCS -- no credentials were available to confirm there
@@ -189,12 +192,26 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 // prefix is an empty listing, not an error), not something specific to the
 // emulator.
 //
-// A missing/unreachable source may therefore surface as different non-zero
-// exits depending on backend (rclone's own taxonomy reserves 3 for
-// "directory not found" and 5 for temporary/connection errors); this method
-// does not branch on the specific code. ANY non-nil error means "not
-// confirmed as a restic repository", and the caller must refuse rather than
-// proceed. Fail closed.
+// This is why the check below is on OUTPUT, not just the exit code: it
+// requires the command to both succeed AND print exactly "config".
+//
+// The exact-match (not strings.Contains) is also load-bearing, not
+// stylistic. OBSERVED 2026-09-03 (both local backend and the S3 emulation
+// above, identical result): if the object at <path>/config is itself a
+// DIRECTORY rather than a file -- e.g. a decoy, or a restic repository whose
+// layout is not what is expected here -- `rclone lsf` lists that
+// directory's CONTENTS instead of failing, e.g. printing "inner.txt". A
+// Contains check could accept a directory-named-"config" holding some
+// unrelated file whose name happens to contain the substring "config"; an
+// exact match on the trimmed output rejects the directory case outright
+// (rclone also suffixes directory entries with "/", which alone would
+// already exclude an exact match against "config").
+//
+// A missing/unreachable source may surface as different non-zero exits
+// depending on backend (rclone's own taxonomy reserves 3 for "directory not
+// found" and 5 for temporary/connection errors); this method does not branch
+// on the specific code. Refuse on ANY error, OR on a success whose trimmed
+// output is not exactly "config". Fail closed.
 func (m *RcloneManager) probeRestoreSource(ctx context.Context, remote, path string) error {
 	configPath := strings.TrimSuffix(path, "/")
 	if configPath == "" {
@@ -207,18 +224,13 @@ func (m *RcloneManager) probeRestoreSource(ctx context.Context, remote, path str
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	args := []string{"lsf", target}
-
-	out := make(chan StreamLine, 32)
-	go func() {
-		for range out {
-		}
-	}()
-
-	if err := m.runner.Run(ctx, "rclone", args, nil, out); err != nil {
+	raw, err := m.runner.Output(ctx, "rclone", []string{"lsf", target}, nil)
+	if err != nil {
 		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (no config object found): %w", target, err)
 	}
-	close(out)
+	if got := strings.TrimSpace(string(raw)); got != "config" {
+		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (expected to list exactly \"config\", got %q)", target, got)
+	}
 	return nil
 }
 
@@ -277,6 +289,18 @@ func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath
 	if err := m.probeRestoreSource(ctx, remote, path); err != nil {
 		m.logger.Warn("Refusing DR restore: source failed repository probe", "error", err)
 		return err
+	}
+
+	// backupDir is created here, only once the probe has passed, not by the
+	// caller before RestoreRepo runs at all: creating it earlier would leave
+	// an empty "<repo>.pre-dr-<timestamp>" directory behind on every refused
+	// restore attempt, littering the backup volume with directories that
+	// were never used for anything.
+	if backupDir != "" {
+		if err := os.MkdirAll(backupDir, 0o700); err != nil {
+			return fmt.Errorf("create DR restore backup directory: %w", err)
+		}
+		m.logger.Info("Preserving local-only files sync would otherwise delete", "backup_dir", backupDir)
 	}
 
 	source := fmt.Sprintf("%s:%s", remote, path)
