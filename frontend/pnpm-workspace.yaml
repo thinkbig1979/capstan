@@ -109,12 +109,22 @@ overrides:
   # 3.1.5, the override was already a silent no-op and `pnpm audit` failed
   # (agent-os-eld). Bump BOTH sides together, never just the target.
   #
+  # RECURRED (agent-os-oyfn, 2026-09-03): same mechanism, one rung up. The
+  # selector had been bumped to `<3.1.5` but resolution then landed ON 3.1.5,
+  # so the override was again a silent no-op the moment it stopped being
+  # ahead of the floor. Four new advisories (GHSA-5jgf-p345-68v8,
+  # GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp) require
+  # >=3.1.6. Bumped BOTH sides to <3.1.6 / >=3.1.6 <4. Second occurrence of
+  # this exact failure mode — a guard that fails when the selector stops
+  # matching anything would catch it at the source instead of via a red
+  # required check, next time it recurs.
+  #
   # Capped below 4 on purpose: ajv asks for ^3.0.1, so handing it the 4.x major
   # would be an untested API change rather than a security fix.
   #
   # Lives here (not package.json "pnpm.overrides") because pnpm 10.16+/11 reads
   # overrides from pnpm-workspace.yaml.
-  fast-uri@<3.1.5: '>=3.1.5 <4'
+  fast-uri@<3.1.6: '>=3.1.6 <4'
 
   # Security: the dev-toolchain advisory batch (agent-os-ziz, 2026-08-08).
   #
