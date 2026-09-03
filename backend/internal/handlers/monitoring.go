@@ -99,14 +99,18 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 		containerIDs, err := h.monitor.GetContainersForStack(ctx, stack.ProjectName)
 		if err != nil {
 			slog.Error("Failed to get containers for stack", "stackId", stackID, "error", err)
-			writeCloseMessage(conn.Conn, websocket.CloseInternalServerErr, "Failed to get containers")
+			// safePingLoop is already running on this connection (started
+			// above); the raw writeCloseMessage races its WriteMutex-guarded
+			// ping over the same *websocket.Conn (agent-os-1jzj).
+			safeWriteCloseMessage(conn, websocket.CloseInternalServerErr, "Failed to get containers")
 			return
 		}
 
 		statsChan, err := h.monitor.StreamStats(ctx, containerIDs)
 		if err != nil {
 			slog.Error("Failed to start stats stream", "stackId", stackID, "error", err)
-			writeCloseMessage(conn.Conn, websocket.CloseInternalServerErr, "Failed to stream metrics")
+			// Same race as above: safePingLoop is already running.
+			safeWriteCloseMessage(conn, websocket.CloseInternalServerErr, "Failed to stream metrics")
 			return
 		}
 

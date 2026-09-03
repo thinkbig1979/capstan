@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -311,6 +312,103 @@ func TestSafeWriteMessage_SurvivesConcurrentRevocationClose(t *testing.T) {
 
 	_, stillPresent := cm.Get(conn.ID)
 	assert.False(t, stillPresent, "the revoked connection must be removed from the manager")
+}
+
+// TestSafeWriteCloseMessage_SurvivesConcurrentPingLoop is the regression for
+// agent-os-1jzj: dashboard.go's and monitoring.go's WebSocket handlers start
+// `go safePingLoop(ctx, conn, DefaultPingInterval)` and then, on later error
+// branches running on the same goroutine, send a close frame. Before this
+// fix those four sites sent that frame through the raw, unsynchronized
+// writeCloseMessage, which takes no lock at all — a genuine concurrent write
+// racing safePingLoop's WriteMutex-guarded ping on the same *websocket.Conn,
+// the same gorilla hazard documented on safeWriteMessage above
+// (agent-os-teop). safePingLoop itself runs in a bare `go` with no recover,
+// so reproducing this with the real function can crash the whole test binary
+// rather than fail cleanly; wrapping its actual call in a deferred recover
+// (not a duplicated copy of its body) catches that without forking the
+// implementation under test.
+//
+// This test exercises the fixed primitive (safeWriteCloseMessage, which the
+// four call sites now use) racing the real safePingLoop. Before the fix,
+// swapping the call below back to the raw writeCloseMessage reproduces the
+// bug: `go test -race -run TestSafeWriteCloseMessage_SurvivesConcurrentPingLoop`
+// reports a DATA RACE between writeCloseMessage and safePingLoop (see commit
+// message for the verbatim run).
+func TestSafeWriteCloseMessage_SurvivesConcurrentPingLoop(t *testing.T) {
+	serverConnCh := make(chan *websocket.Conn, 1)
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		serverConnCh <- c
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	clientConn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer clientConn.Close()
+	defer resp.Body.Close()
+
+	var serverConn *websocket.Conn
+	select {
+	case serverConn = <-serverConnCh:
+	case <-time.After(time.Second):
+		t.Fatal("server-side upgrade did not complete in time")
+	}
+
+	conn := &Connection{
+		ID:        uuid.New().String(),
+		UserID:    "user1",
+		SessionID: "sess-1",
+		Conn:      serverConn,
+		CreatedAt: time.Now(),
+	}
+
+	// Drain client-side reads so the server's ping writes never block on a
+	// full socket buffer while the loop below spins.
+	go func() {
+		for {
+			if _, _, err := clientConn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pingDone := make(chan struct{})
+	var pingPanic any
+	go func() {
+		defer close(pingDone)
+		// Recovers a panic from anywhere in safePingLoop's call stack on
+		// THIS goroutine — no need to duplicate its body to get a
+		// recoverable copy.
+		defer func() { pingPanic = recover() }()
+		safePingLoop(ctx, conn, 200*time.Microsecond)
+	}()
+
+	// Give the ping loop a head start so it is actively writing when the
+	// close call below lands, mirroring dashboard.go/monitoring.go where
+	// `go safePingLoop(...)` starts before the later error-path close.
+	time.Sleep(2 * time.Millisecond)
+
+	var closePanic any
+	func() {
+		defer func() { closePanic = recover() }()
+		for i := 0; i < 300; i++ {
+			safeWriteCloseMessage(conn, websocket.CloseInternalServerErr, "Failed to get containers")
+		}
+	}()
+
+	cancel()
+	<-pingDone
+
+	assert.Nil(t, pingPanic, "safePingLoop must not panic on a concurrent close: %v", pingPanic)
+	assert.Nil(t, closePanic, "a close racing the ping loop must not itself panic: %v", closePanic)
 }
 
 func TestValidateJWT(t *testing.T) {
