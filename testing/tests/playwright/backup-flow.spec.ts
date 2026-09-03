@@ -160,81 +160,6 @@ async function apiMutate(
   return request.post(`${API_URL}${path}`, { headers, data })
 }
 
-/**
- * Attach to a backup/restore operation's WebSocket and await its outcome.
- *
- * POST /backups/run and /backups/restore start the operation immediately, on
- * a detached goroutine, and return 202 + a wsUrl. A BackupRun DB record is
- * created with status="running" before that response is sent, so the run is
- * durable even if no WS client ever connects (backend/internal/handlers/
- * backup.go:675-679, backend/internal/services/backup_runner.go:350 —
- * `LaunchBackup` ends in `go reg.execBackup(...)`). Connecting the WS here
- * only lets us observe the run to completion, the same way the real UI does;
- * it does not start anything. We open it here and await the streamed
- * `{type:"done"}` event. Node 22 (the Playwright runner) exposes a global
- * WebSocket, so no extra dependency is needed.
- *
- * wsUrl is the backend-relative path (e.g. "/ws/backups/run/<id>"); it lives
- * under /api/v1 on the BACKEND. vite DOES proxy it (vite.config.ts, '/api' →
- * API_URL, ws: true) — but that proxy only exists for requests the browser
- * page makes through its own origin. This helper runs in the Node test
- * process, which has no vite origin to proxy through, so we always dial
- * API_URL directly, never BASE_URL.
- *
- * The terminal frame is `{type:"done", outcome:"success"|"partial"|"failed",
- * reason:"..."}` (backend/internal/handlers/backup.go:846,976-980) — there has
- * never been a boolean `success` field on this frame; `outcome` is returned
- * as-is and callers decide what counts as passing (see the two call sites
- * below — for these single-target runs, "partial" is treated as a failure,
- * not a lesser pass: backend/internal/services/backup.go:499-527,634-661
- * shows "partial" only fires here when the capstan-database self-backup
- * failed alongside an otherwise-successful stack backup, a real degradation).
- */
-async function runViaWs(
-  wsUrl: string,
-  timeoutMs = 90_000,
-): Promise<{ outcome: string; reason: string; events: string[] }> {
-  const wsBase = API_URL.replace(/^http/, 'ws') + '/api/v1'
-  return new Promise((resolve) => {
-    const events: string[] = []
-    const ws = new WebSocket(wsBase + wsUrl)
-    let settled = false
-    const finish = (outcome: string, reason = '') => {
-      if (settled) return
-      settled = true
-      try { ws.close() } catch { /* already closing */ }
-      resolve({ outcome, reason, events })
-    }
-    ws.onmessage = (m: MessageEvent) => {
-      const raw = String(m.data)
-      events.push(raw.slice(0, 200))
-      try {
-        const j = JSON.parse(raw)
-        if (j.type === 'done') finish(j.outcome ?? 'failed', j.reason ?? '')
-      } catch { /* non-JSON stream line */ }
-    }
-    // A clean close before a done event means the op failed/expired.
-    ws.onclose = () => finish('failed', 'WebSocket closed before a done frame arrived')
-    ws.onerror = () => { /* close handler resolves */ }
-    setTimeout(() => finish('failed', `timed out after ${timeoutMs}ms`), timeoutMs)
-  })
-}
-
-/** Poll a condition until it returns a truthy value or timeout expires. */
-async function pollUntil<T>(
-  fn: () => Promise<T | null>,
-  timeoutMs = 60_000,
-  intervalMs = 2_000,
-): Promise<T | null> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    const result = await fn()
-    if (result) return result
-    await new Promise((r) => setTimeout(r, intervalMs))
-  }
-  return null
-}
-
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
 // .serial, not plain describe. playwright.config.ts already pins workers: 1 and
@@ -593,8 +518,6 @@ test.describe.serial('Backup flow E2E', () => {
     page,
     request,
   }) => {
-    await ensureCsrf(request)
-
     // Resolve stack ID first — the snapshot lookup below is scoped by it.
     if (!testStackId) {
       const stacksResp = await apiGet(request, '/api/v1/stacks')
@@ -607,109 +530,89 @@ test.describe.serial('Backup flow E2E', () => {
     }
     expect(testStackId, 'No stack ID for restore').toBeTruthy()
 
-    // Resolve snapshot ID if not set from previous test. Scoped via ?stackId
-    // for the same reason as BACKUP-PW-005 — the repo also holds the
-    // capstan-database self-backup snapshot, and an unscoped list is not safe
-    // to index by position (agent-os-5y9 Phase 1 finding).
-    if (!firstSnapshotId) {
-      const snapshotsResp = await apiGet(
-        request,
-        `/api/v1/backups/snapshots?stackId=${encodeURIComponent(testStackId)}`,
-      )
-      const snaps = await snapshotsResp.json()
-      const list = Array.isArray(snaps) ? snaps : []
-      expect(list.length, 'No snapshots available for restore').toBeGreaterThan(0)
-      firstSnapshotId = list[0].id
-    }
+    // Resolve the snapshot to restore. Scoped via ?stackId for the same
+    // reason as BACKUP-PW-005 — the repo also holds the capstan-database
+    // self-backup snapshot, and an unscoped list is not safe to index by
+    // position (agent-os-5y9 Phase 1 finding). Always re-fetched (not just
+    // when firstSnapshotId is unset) because module state only carries the
+    // raw id, not the shortId the UI's Restore button is labelled with.
+    const snapshotsResp = await apiGet(
+      request,
+      `/api/v1/backups/snapshots?stackId=${encodeURIComponent(testStackId)}`,
+    )
+    const snaps = await snapshotsResp.json()
+    const snapshotList: Array<{ id: string; shortId?: string }> = Array.isArray(snaps)
+      ? snaps
+      : []
+    expect(snapshotList.length, 'No snapshots available for restore').toBeGreaterThan(0)
 
+    if (!firstSnapshotId) firstSnapshotId = snapshotList[0].id
     expect(firstSnapshotId, 'No snapshot ID for restore').toBeTruthy()
 
-    let restoredViaUI = false
+    const targetSnapshot =
+      snapshotList.find((s) => s.id === firstSnapshotId) ?? snapshotList[0]
+    const shortId = targetSnapshot.shortId ?? targetSnapshot.id.slice(0, 8)
 
     // ── UI path ───────────────────────────────────────────────────────────
-    if (testStackId) {
-      // Backups is a section of the Activity tab since the phase-2 redesign;
-      // deep-link straight to it (old /backups links redirect here too). This
-      // is the test's only page load.
-      await loginIfNeeded(page, `/stacks/${testStackId}/activity?view=backups`)
+    // Backups is a section of the Activity tab since the phase-2 redesign;
+    // deep-link straight to it (old /backups links redirect here too). This
+    // is the test's only page load.
+    await loginIfNeeded(page, `/stacks/${testStackId}/activity?view=backups`)
 
-      const backupsTab = page.getByRole('tab', { name: /^backups$/i })
-      if (await backupsTab.count() > 0) {
-        await backupsTab.click()
-        await page.waitForLoadState('networkidle')
-      }
+    // Unconditional and retrying, same reasoning as BACKUP-PW-005's
+    // backupsTab click: `count()` is a point-in-time check with no
+    // auto-wait, so a not-yet-painted tablist would silently skip the
+    // click; `click()` auto-waits up to actionTimeout (30s).
+    const backupsTab = page.getByRole('tab', { name: /^backups$/i })
+    await backupsTab.click()
+    await page.waitForLoadState('networkidle')
 
-      // Click any Restore button in the snapshots table
-      const restoreBtn = page.getByRole('button', { name: /restore snapshot/i })
-      if (await restoreBtn.count() > 0) {
-        await restoreBtn.first().click()
+    // Click the Restore button correlated to the snapshot under test — not
+    // just "any" restore button — the same correlation BACKUP-PW-004 uses
+    // for its runId (aria-label shape: BackupsTab.tsx:271, SnapshotRow).
+    const restoreBtn = page.getByRole('button', { name: `Restore snapshot ${shortId}` })
+    await expect(restoreBtn).toBeVisible()
+    await restoreBtn.click()
 
-        // ConfirmDialog appears — click the destructive "Restore" confirm button.
-        // The ConfirmDialog renders confirmText="Restore" as a red/destructive button.
-        const confirmBtn = page.getByRole('button', { name: /^restore$/i })
-        await expect(confirmBtn).toBeVisible({ timeout: 5_000 })
-        await confirmBtn.click()
+    // ConfirmDialog appears — click the destructive "Restore" confirm button.
+    // The ConfirmDialog renders confirmText="Restore" as a red/destructive button.
+    const confirmBtn = page.getByRole('button', { name: /^restore$/i })
+    await expect(confirmBtn).toBeVisible({ timeout: 5_000 })
+    await confirmBtn.click()
 
-        // RestoreProgress panel appears with "Restoring…"
-        const restoringText = page.getByText(/restoring[…\.]/i)
-        await expect(restoringText)
-          .toBeVisible({ timeout: 5_000 })
-          .catch(() => {/* may transition immediately */})
-
-        // Wait for "Restore completed"
-        const doneText = page.getByText(/restore completed/i)
-        const restored = await doneText
-          .waitFor({ timeout: 90_000 })
-          .then(() => true)
-          .catch(() => false)
-
-        if (restored) {
-          await expect(doneText).toBeVisible()
-          restoredViaUI = true
-        }
-      }
-    }
-
-    if (!restoredViaUI) {
-      // ── API fallback (confirm=true required by server) ─────────────────
-      const restoreResp = await apiMutate(request, 'POST', '/api/v1/backups/restore', {
-        stackId: testStackId,
-        snapshotId: firstSnapshotId,
-        confirm: true,
-      })
-      expect(restoreResp.status()).toBe(202)
-      const restoreBody = await restoreResp.json()
-      const restoreRunId: string = restoreBody.runId
-      const restoreWsUrl: string = restoreBody.wsUrl
-      expect(restoreRunId).toBeTruthy()
-      expect(restoreWsUrl, 'restore response must include a wsUrl').toBeTruthy()
-
-      // Connect the WS to actually run the restore and await completion.
-      const wsResult = await runViaWs(restoreWsUrl)
-      // "partial" fails here too — see the runViaWs doc comment for why.
-      expect(
-        wsResult.outcome,
-        `Restore WS did not report success (outcome=${wsResult.outcome}, reason="${wsResult.reason}"). ` +
-          `Last events: ${wsResult.events.slice(-3).join(' | ')}`,
-      ).toBe('success')
-
-      // Poll for completion
-      const done = await pollUntil(async () => {
-        const histResp = await apiGet(request, '/api/v1/backups/history?limit=10')
-        if (!histResp.ok()) return null
-        const hist = await histResp.json()
-        const run = (hist.runs ?? []).find(
-          (r: { id: string; status: string }) => r.id === restoreRunId,
-        )
-        if (run && ['success', 'failed'].includes(run.status)) return run
-        const latest = (hist.runs ?? [])[0]
-        if (latest && ['success', 'failed'].includes(latest.status)) return latest
-        return null
-      }, 90_000)
-
-      expect(done, 'Restore did not complete within timeout').toBeTruthy()
-      expect(done!.status, 'Restore failed').toBe('success')
-    }
+    // Wait for the RestoreProgress panel itself to report completion.
+    // Targeted via a dedicated data-testid (BackupsTab.tsx:174,
+    // data-testid="restore-progress-header") rather than a <main>-scoped
+    // text locator, because the completion text collides with THREE other
+    // sources at this instant — measured: an unscoped page-wide
+    // /restore completed/i resolves to 4 elements at the moment this
+    // assertion needs to fire. Those sources: sonner's toast
+    // (BackupsTab.tsx:357, toast.success('Restore completed')), and two
+    // backend-emitted WS log lines surfaced in the same panel — a prefixed
+    // one (backend/internal/services/backup.go:1073, `"[%s] restore
+    // completed"`) excluded by its "[stack~...]" prefix, and an unprefixed
+    // one (backend/internal/services/backup_runner.go:440,
+    // `dr.reason = "restore completed"`, surfaced via useBackup.ts:359)
+    // excluded ONLY by case — one dropped capital letter in that Go string
+    // away from colliding with this assertion. The testid binds this
+    // assertion to the component under test instead of to backend string
+    // casing.
+    //
+    // sonner's <Toaster/> is excluded by DOM position, not by any portal:
+    // sonner 2.0.8 renders inline at its own JSX position — it does NOT
+    // call createPortal (verified: `grep -c 'createPortal\|document\.body'`
+    // over frontend/node_modules/sonner/dist/{index.mjs,index.js} is 0 for
+    // both files). It is simply a JSX sibling of <AppShell> in App.tsx
+    // (:120, :134, :154), so its toast markup never carries this
+    // component's data-testid regardless of where sonner places it in the
+    // DOM.
+    //
+    // Exact text (not a substring match) also guards against the SAME
+    // element rendering "Restore partially completed" (BackupsTab.tsx:150)
+    // — a partial restore must fail this assertion, not slip through as a
+    // substring match.
+    const restoreHeader = page.getByTestId('restore-progress-header')
+    await expect(restoreHeader).toHaveText('Restore completed', { timeout: 90_000 })
   })
 
   // ── 007: Post-restore verification ────────────────────────────────────────
@@ -732,20 +635,20 @@ test.describe.serial('Backup flow E2E', () => {
     expect(remaining.length, 'Snapshots disappeared after restore').toBeGreaterThan(0)
 
     // ── BackupsTab still renders correctly ────────────────────────────────
-    if (testStackId) {
-      // Backups is a section of the Activity tab since the phase-2 redesign;
-      // deep-link straight to it (old /backups links redirect here too).
-      await page.goto(`${BASE_URL}/stacks/${testStackId}/activity?view=backups`)
-      await page.waitForLoadState('networkidle')
+    expect(testStackId, 'No stack ID for post-restore UI check').toBeTruthy()
 
-      const backupsTab = page.getByRole('tab', { name: /^backups$/i })
-      if (await backupsTab.count() > 0) {
-        await backupsTab.click()
-        await page.waitForLoadState('networkidle')
-      }
+    // Backups is a section of the Activity tab since the phase-2 redesign;
+    // deep-link straight to it (old /backups links redirect here too).
+    await page.goto(`${BASE_URL}/stacks/${testStackId}/activity?view=backups`)
+    await page.waitForLoadState('networkidle')
 
-      // No error message in the tab
-      await expect(page.getByText(/failed to load snapshots/i)).not.toBeVisible()
-    }
+    // Unconditional and retrying — see BACKUP-PW-005/006's identical
+    // backupsTab click for why `count()` is unsafe here.
+    const backupsTab = page.getByRole('tab', { name: /^backups$/i })
+    await backupsTab.click()
+    await page.waitForLoadState('networkidle')
+
+    // No error message in the tab
+    await expect(page.getByText(/failed to load snapshots/i)).not.toBeVisible()
   })
 })
