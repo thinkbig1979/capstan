@@ -923,10 +923,29 @@ func (s *BackupService) RunSync(ctx context.Context, out chan<- StreamLine) erro
 // runSyncInternal executes the rclone sync without acquiring the global lock.
 // It is called both by RunSync (which holds the lock) and by RunBackup's
 // post-backup sync (which already holds the lock).
+//
+// Before syncing, it refuses to proceed unless the local repository checks
+// out via restic (the same `restic snapshots --quiet` check EnsureRepository
+// already relies on before a fresh backup). This is the upload-direction
+// mirror of the download-direction guard in RcloneManager.RestoreRepo
+// (agent-os-h0my): rclone.Sync mirrors the local repo onto the remote and
+// deletes remote files absent from the source, so an empty-but-existing
+// local repository -- e.g. left behind by RunDRRestore's os.MkdirAll if a DR
+// restore is interrupted before RestoreRepo ever populates it -- would
+// otherwise make a subsequent sync wipe the last surviving copy of every
+// snapshot offsite. Checking via restic rather than a raw file-existence
+// check also catches a config file that exists but fails to open with the
+// configured password.
 func (s *BackupService) runSyncInternal(ctx context.Context, bc BackupConfig, out chan<- StreamLine) error {
 	if bc.RcloneRemote == "" {
 		return fmt.Errorf("rclone remote is not configured")
 	}
+
+	restic := s.newResticMgr(bc)
+	if err := restic.CheckRepository(ctx); err != nil {
+		return fmt.Errorf("refusing rclone sync: local repository is not accessible: %w", err)
+	}
+
 	rclone := s.newRcloneMgr(bc)
 	return rclone.Sync(ctx, bc.ResticRepository, bc.RcloneRemote, bc.RclonePath, bc.RcloneTransfers, 3, out)
 }
@@ -1115,12 +1134,29 @@ func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine)
 		return fmt.Errorf("create restic repository directory: %w", err)
 	}
 
+	// backupDir is a sibling of localRepoPath, never nested inside it --
+	// rclone refuses --backup-dir when it overlaps the destination
+	// ("destination and parameter to --backup-dir mustn't overlap", exit 7).
+	// It is the second, independent safety net alongside RestoreRepo's source
+	// probe (see that function's doc comment): if the remote source turns
+	// out to be a genuine-but-incomplete restic repository -- the probe only
+	// confirms a config object exists, it cannot detect incompleteness --
+	// `rclone sync` would otherwise delete local pack/index files the remote
+	// lacks. --backup-dir moves those files here instead of deleting them.
+	// Nothing here is cleaned up automatically (out of scope for
+	// agent-os-h0my); the stream line below names the directory so an
+	// operator can find and remove it later.
+	backupDir := fmt.Sprintf("%s.pre-dr-%d", localRepoPath, time.Now().Unix())
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
+		return fmt.Errorf("create DR restore backup directory: %w", err)
+	}
+
 	rclone := s.newRcloneMgr(bc)
 
-	stream(out, "info", fmt.Sprintf("Starting DR restore from %s:%s to %s",
-		bc.RcloneRemote, bc.RclonePath, localRepoPath))
+	stream(out, "info", fmt.Sprintf("Starting DR restore from %s:%s to %s (any local-only files the restore would otherwise delete are preserved in %s)",
+		bc.RcloneRemote, bc.RclonePath, localRepoPath, backupDir))
 
-	if err := rclone.RestoreRepo(ctx, bc.RcloneRemote, bc.RclonePath, localRepoPath, 3, out); err != nil {
+	if err := rclone.RestoreRepo(ctx, bc.RcloneRemote, bc.RclonePath, localRepoPath, backupDir, 3, out); err != nil {
 		return fmt.Errorf("rclone restore repo: %w", err)
 	}
 

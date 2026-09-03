@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -166,15 +167,121 @@ func TestRcloneManager_RestoreRepo_Args(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.RestoreRepo(context.Background(), "myremote", "backups/capstan", "/restore/dir", 1, out)
+	err := m.RestoreRepo(context.Background(), "myremote", "backups/capstan", "/restore/dir", "", 1, out)
 	require.NoError(t, err)
 	close(out)
 
-	call := runner.lastCall()
+	// RestoreRepo must probe the source before it ever runs sync.
+	require.Len(t, runner.calls, 2, "RestoreRepo must call the source probe, then sync")
+	assert.Equal(t, "lsf", runner.calls[0].Args[0])
+
+	call := runner.calls[1]
 	assert.Equal(t, "rclone", call.Binary)
 	assert.Equal(t, "sync", call.Args[0])
 
 	// source → destination: remote:path → localPath
+	l := len(call.Args)
+	assert.Equal(t, "myremote:backups/capstan", call.Args[l-2])
+	assert.Equal(t, "/restore/dir", call.Args[l-1])
+}
+
+// TestRcloneManager_RestoreRepo_RefusesWhenSourceProbeFails is the regression
+// test for the DR-restore data-loss defect (agent-os-h0my): RestoreRepo runs
+// `rclone sync` against whatever remote:path is configured, with no check
+// that it is actually a restic repository. `rclone sync` makes the
+// destination identical to the source and deletes destination files absent
+// from the source -- and the destination is the live local restic repo,
+// which on a healthy install holds the only copy of every snapshot. An
+// empty-but-existing source, or a valid bucket at the wrong prefix, makes
+// sync exit 0 while silently deleting everything (see the bead's
+// ORCHESTRATOR CORRECTION comments, OBSERVED 2026-09-03).
+//
+// This asserts sync is never invoked once a source probe has failed, not
+// merely that RestoreRepo's final error is non-nil.
+func TestRcloneManager_RestoreRepo_RefusesWhenSourceProbeFails(t *testing.T) {
+	t.Parallel()
+
+	var calledVerbs []string
+	runner := &conditionalRunner{
+		onRun: func(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
+			calledVerbs = append(calledVerbs, args[0])
+			if args[0] == "lsf" {
+				return fmt.Errorf("directory not found")
+			}
+			return nil
+		},
+		onOutput: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return nil, nil
+		},
+	}
+	m := testRcloneManager(runner)
+
+	out := make(chan StreamLine, 64)
+	go func() {
+		for range out {
+		}
+	}()
+	err := m.RestoreRepo(context.Background(), "myremote", "backups/capstan", "/restore/dir", "", 1, out)
+	close(out)
+
+	require.Error(t, err, "RestoreRepo must refuse when the source fails the repository probe")
+	assert.NotContains(t, calledVerbs, "sync", "sync must never be invoked once the probe has failed")
+}
+
+// TestRcloneManager_RestoreRepo_ProceedsWhenSourceProbeSucceeds is the
+// positive control for TestRcloneManager_RestoreRepo_RefusesWhenSourceProbeFails:
+// a genuine restore from a source that passes the probe must still succeed,
+// and must still actually run sync. A guard that refuses everything would
+// pass the negative test above without proving the guard is selective.
+func TestRcloneManager_RestoreRepo_ProceedsWhenSourceProbeSucceeds(t *testing.T) {
+	t.Parallel()
+
+	var calledVerbs []string
+	runner := &conditionalRunner{
+		onRun: func(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
+			calledVerbs = append(calledVerbs, args[0])
+			return nil
+		},
+		onOutput: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return nil, nil
+		},
+	}
+	m := testRcloneManager(runner)
+
+	out := make(chan StreamLine, 64)
+	go func() {
+		for range out {
+		}
+	}()
+	err := m.RestoreRepo(context.Background(), "myremote", "backups/capstan", "/restore/dir", "", 1, out)
+	close(out)
+
+	require.NoError(t, err, "a genuine restore from a source that passes the probe must still succeed")
+	assert.Equal(t, []string{"lsf", "sync"}, calledVerbs, "probe must run before sync, and sync must still run when the probe succeeds")
+}
+
+// TestRcloneManager_RestoreRepo_PassesBackupDir confirms --backup-dir is
+// wired into the sync argv when the caller supplies one, positioned before
+// the trailing source/destination pair (rclone requires source and
+// destination as the final two positional args).
+func TestRcloneManager_RestoreRepo_PassesBackupDir(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	m := testRcloneManager(runner)
+
+	out := make(chan StreamLine, 64)
+	go func() {
+		for range out {
+		}
+	}()
+	err := m.RestoreRepo(context.Background(), "myremote", "backups/capstan", "/restore/dir", "/restore/dir.pre-dr-123", 1, out)
+	require.NoError(t, err)
+	close(out)
+
+	call := runner.lastCall()
+	assert.True(t, argPairContains(call.Args, "--backup-dir", "/restore/dir.pre-dr-123"))
+
 	l := len(call.Args)
 	assert.Equal(t, "myremote:backups/capstan", call.Args[l-2])
 	assert.Equal(t, "/restore/dir", call.Args[l-1])
@@ -191,7 +298,7 @@ func TestRcloneManager_RestoreRepo_UsesConfigDefaults(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.RestoreRepo(context.Background(), "", "", "/local", 1, out)
+	err := m.RestoreRepo(context.Background(), "", "", "/local", "", 1, out)
 	require.NoError(t, err)
 	close(out)
 
@@ -237,7 +344,7 @@ func TestRcloneManager_RestoreRepo_ContextCancel(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.RestoreRepo(ctx, "r", "p", "/local", 1, out)
+	err := m.RestoreRepo(ctx, "r", "p", "/local", "", 1, out)
 	close(out)
 
 	assert.ErrorIs(t, err, context.DeadlineExceeded)

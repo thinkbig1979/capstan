@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -140,11 +141,88 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 	return fmt.Errorf("sync failed after %d attempts: %w", retries, lastErr)
 }
 
-// RestoreRepo copies the remote rclone repository (remote:path) to localPath.
-// This is the Stage 3 DR restore: fetch the restic repository from cloud
-// storage so that `restic restore` can be run against it locally.
+// probeRestoreSource confirms remote:path is a genuine restic repository
+// before RestoreRepo is allowed to run rclone sync against it, by positively
+// asserting the presence of the `config` object every restic repository
+// writes at its root (written once by `restic init`, never deleted). This is
+// deliberately NOT an emptiness check: `rclone lsf <remote>:<path>/config` is
+// a single-object listing, so it costs O(1) regardless of repository size
+// (an emptiness check via e.g. `rclone size` would have to walk the whole
+// tree), and it also rejects "right bucket, wrong prefix" -- a path that
+// exists and holds unrelated data still has no config object at the exact
+// expected location, whereas an emptiness check on that path would see
+// something there and pass it.
+//
+// OBSERVED 2026-09-03 (local backend, rclone v1.60.1-DEV): this exits 0 and
+// prints "config" when the object is present, and exits 3 ("directory not
+// found") for every negative case tried -- an empty-but-existing directory,
+// a directory holding unrelated files at a wrong prefix, and a nonexistent
+// path entirely. On an object-store backend a missing/unreachable source may
+// instead surface as a different non-zero exit (rclone's own taxonomy
+// reserves 5 for temporary/connection errors) -- this method does not branch
+// on the specific code. ANY non-nil error means "not confirmed as a restic
+// repository", and the caller must refuse rather than proceed. Fail closed.
+func (m *RcloneManager) probeRestoreSource(ctx context.Context, remote, path string) error {
+	configPath := strings.TrimSuffix(path, "/")
+	if configPath == "" {
+		configPath = "config"
+	} else {
+		configPath += "/config"
+	}
+	target := fmt.Sprintf("%s:%s", remote, configPath)
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	args := []string{"lsf", target}
+
+	out := make(chan StreamLine, 32)
+	go func() {
+		for range out {
+		}
+	}()
+
+	if err := m.runner.Run(ctx, "rclone", args, nil, out); err != nil {
+		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (no config object found): %w", target, err)
+	}
+	close(out)
+	return nil
+}
+
+// RestoreRepo copies the remote rclone repository (remote:path) to localPath
+// via `rclone sync`. This is the Stage 3 DR restore: fetch the restic
+// repository from cloud storage so that `restic restore` can be run against
+// it locally.
+//
+// rclone sync deliberately stays the download-direction verb (a `copy`-based
+// fix was tried and reverted -- see agent-os-h0my's history): `copy` cannot
+// remove files, so it cannot reconcile a stale local `config` against an
+// incoming different-key-lineage repository (restic then refuses to open the
+// merged repo at all), and it silently resurrects snapshots a real `restic
+// forget --prune` had already removed from the remote, with `restic check`
+// printing green over the resurrection. sync's own destructive potential is
+// instead bounded by two independent, fail-closed guards run before it:
+//
+//  1. probeRestoreSource positively confirms the source is a genuine restic
+//     repository (a config object at the exact path) before sync is allowed
+//     to run at all. This catches an empty-but-existing source and a
+//     right-bucket-wrong-prefix source, both of which previously made sync
+//     exit 0 while deleting every local snapshot.
+//  2. --backup-dir (added by the caller, RunDRRestore in backup.go) moves
+//     any local-only pack/index files sync would otherwise delete into a
+//     sibling directory instead, covering the probe's blind spot: a source
+//     that IS a valid repository but is incomplete relative to the local one.
+//
+// RcloneManager.Sync (the upload direction, local -> remote) intentionally
+// keeps sync with no such caller-supplied backup-dir: there the local repo is
+// authoritative, and mirror-with-delete is how retention (forgotten/pruned
+// snapshots) propagates offsite. Do not "fix" this asymmetry back to a
+// single shared verb; the two directions differ because which side is
+// authoritative differs. (BackupService.runSyncInternal guards that
+// direction its own way -- see its doc comment.)
+//
 // It retries with the same backoff as Sync.
-func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath string, retries int, out chan<- StreamLine) error {
+func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath, backupDir string, retries int, out chan<- StreamLine) error {
 	if remote == "" {
 		remote = m.cfg.RcloneRemote
 	}
@@ -160,10 +238,18 @@ func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath
 		transfers = 4
 	}
 
+	if err := m.probeRestoreSource(ctx, remote, path); err != nil {
+		m.logger.Warn("Refusing DR restore: source failed repository probe", "error", err)
+		return err
+	}
+
 	source := fmt.Sprintf("%s:%s", remote, path)
 	m.logger.Info("Starting rclone restore", "source", source, "destination", localPath)
 
 	args := append([]string{"sync"}, syncOptions(transfers)...)
+	if backupDir != "" {
+		args = append(args, "--backup-dir", backupDir)
+	}
 	args = append(args, source, localPath)
 
 	var lastErr error
