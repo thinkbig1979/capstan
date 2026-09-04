@@ -27,8 +27,11 @@ import { App } from '../App'
 // writes rather than reasoning about React: isAuthenticated has five write sites
 // in stores/authStore.ts (:30 login, :40 setup, :58 logout, :69/:76 checkAuth)
 // and authDisabled two, both inside checkStatus (:85 the probe's answer, :103 the
-// restrictive fallback taken when the probe fails, which writes false and so can
-// only lower access, never raise it); statusChecked holds a full-page spinner
+// restrictive fallback taken when the probe fails, added 2026-09-04 -- it writes
+// false, so it can only lower access, never raise it, and like :85 it fires inside
+// App's boot effect while statusChecked is still false, when the full-page spinner
+// IS the whole tree and there is no mounted AuthenticatedLayout for either write
+// to unmount); statusChecked holds a full-page spinner
 // until both auth probes resolve, so nothing under AuthenticatedLayout renders
 // with auth unresolved; login/setup live on route trees that never mount AppShell;
 // the 401 interceptor navigates the document instead of mutating the store; and
