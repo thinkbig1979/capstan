@@ -69,6 +69,7 @@ func (h *UpdateJobsWSHandler) streamJob(c *gin.Context) {
 		// its close frame written by serveWS itself. Nothing to do here.
 		return
 	}
+	// release() closes the connection and deregisters it, in that order.
 	defer release()
 
 	ctx, cancel := context.WithCancel(context.Background())

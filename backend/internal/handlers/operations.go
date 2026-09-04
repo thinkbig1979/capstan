@@ -98,6 +98,7 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 		if err != nil {
 			return
 		}
+		// release() closes the connection and deregisters it, in that order.
 		defer release()
 
 		// The whole streaming body is wrapped in an IIFE so that every return

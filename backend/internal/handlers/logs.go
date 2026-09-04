@@ -118,6 +118,7 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 	if err != nil {
 		return
 	}
+	// release() closes the connection and deregisters it, in that order.
 	defer release()
 
 	conn := wsConn.Conn

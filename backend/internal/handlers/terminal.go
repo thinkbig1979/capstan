@@ -80,6 +80,7 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 			}
 			return
 		}
+		// release() closes the connection and deregisters it, in that order.
 		defer release()
 
 		stack, err := h.db.GetStack(stackID)
