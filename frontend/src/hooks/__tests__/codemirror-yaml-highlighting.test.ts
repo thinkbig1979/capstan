@@ -44,6 +44,56 @@ function highlightedTokens(parent: HTMLElement): string[] {
     .map((el) => el.textContent ?? '')
 }
 
+/**
+ * CodeMirror's INITIAL parse runs on a wall-clock budget, so a busy machine can
+ * leave the editor showing a partly-highlighted document for a moment.
+ * @codemirror/language's LanguageState.init calls `work(20, viewportEnd)`, and
+ * ParseContext.work turns that into `endTime = Date.now() + 20`, re-checked
+ * after every `parse.advance()`. A process descheduled mid-construction — which
+ * is what a loaded full-suite run does — finds the budget already spent after
+ * the first advance, takes the partial tree, and highlights only the first
+ * token. The parseWorker view plugin then finishes the parse and re-renders,
+ * but jsdom has no requestIdleCallback so that lands on the library's
+ * setTimeout(…, 500) fallback: recovery is real, and up to ~500ms late.
+ *
+ * OBSERVED (the third test below reproduces it on demand): the same document
+ * that renders ['services','web','image','restart'] on an idle box renders
+ * ['services'] synchronously under a stalled clock, then completes ~500ms later.
+ *
+ * So poll for the tokens instead of reading them once. The wait is observable,
+ * not a fixed sleep — it returns on the first check whenever the parse already
+ * finished, which is every run on an unloaded box.
+ */
+const SETTLE_TIMEOUT_MS = 5_000
+
+async function settledTokens(parent: HTMLElement, expected: string[]): Promise<string[]> {
+  const deadline = Date.now() + SETTLE_TIMEOUT_MS
+  let tokens = highlightedTokens(parent)
+  while (!expected.every((token) => tokens.includes(token)) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    tokens = highlightedTokens(parent)
+  }
+  // Returned rather than asserted here so the caller's own expect() produces the
+  // diagnostic, e.g. `expected [ 'services' ] to include 'image'`.
+  return tokens
+}
+
+/**
+ * Spends the initial parse budget before CodeMirror can use it, by making every
+ * Date.now() reading a second later than the last. Deterministic stand-in for
+ * the descheduling that a loaded full-suite run does to this test for real.
+ */
+function withStalledClock<T>(fn: () => T): T {
+  const realNow = Date.now
+  let readings = 0
+  Date.now = () => realNow.call(Date) + readings++ * 1_000
+  try {
+    return fn()
+  } finally {
+    Date.now = realNow
+  }
+}
+
 afterEach(() => {
   for (const view of views.splice(0)) {
     view.destroy()
@@ -51,9 +101,11 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('CodeMirror language packs resolve against the same @codemirror/language', () => {
-  it('highlights YAML in the compose editor', () => {
-    const tokens = highlightedTokens(renderDoc(YAML_DOC, yaml()))
+// The settle budget above is longer than vitest's 5s default test timeout, which
+// would otherwise abort the poll before it could report what it actually saw.
+describe('CodeMirror language packs resolve against the same @codemirror/language', { timeout: 20_000 }, () => {
+  it('highlights YAML in the compose editor', async () => {
+    const tokens = await settledTokens(renderDoc(YAML_DOC, yaml()), ['services', 'image'])
 
     expect(tokens.length).toBeGreaterThan(0)
     // The keys are what a reader most needs coloured differently from values.
@@ -61,14 +113,29 @@ describe('CodeMirror language packs resolve against the same @codemirror/languag
     expect(tokens).toContain('image')
   })
 
-  it('still highlights JSON', () => {
+  it('still highlights JSON', async () => {
     // JSON was never broken — lang-json and basicSetup both landed on 6.12.1 —
     // so this is the control saying the dedupe moved lang-json onto 6.12.4
     // without costing anything. This token was produced both before and after
     // the dedupe. (Property names carry no tag of their own under the default
     // highlight style, so the styled tokens are the string values.)
-    const tokens = highlightedTokens(renderDoc(JSON_DOC, json()))
+    const tokens = await settledTokens(renderDoc(JSON_DOC, json()), ['"nginx:latest"'])
 
     expect(tokens).toContain('"nginx:latest"')
+  })
+
+  it('finishes highlighting YAML after an initial parse budget that expired early', async () => {
+    // Positive control for the two waits above: without the stalled clock they
+    // return on their first check and would prove nothing. This arm is the flake
+    // itself, made deterministic — it reproduces the reported failure exactly,
+    // `expected [ 'services' ] to include 'image'` (agent-os-mc7f).
+    const parent = withStalledClock(() => renderDoc(YAML_DOC, yaml()))
+
+    // Reading synchronously, the way this file used to, sees the truncated tree.
+    // Should this ever stop holding, CodeMirror finished the parse inside one
+    // advance() and the race is gone, not that highlighting broke.
+    expect(highlightedTokens(parent)).not.toContain('image')
+
+    expect(await settledTokens(parent, ['services', 'image'])).toContain('image')
   })
 })
