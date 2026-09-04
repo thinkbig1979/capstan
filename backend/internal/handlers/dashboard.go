@@ -138,7 +138,8 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 		// Every return below (stream-error, write-error — ctx-done never
 		// actually fires today, since nothing external ever cancels ctx) left
 		// the socket and its goroutines open until this defer (agent-os-14gr),
-		// same shape as operations.go:91 / logs.go:130.
+		// same shape as every other serveWS call site (operations.go,
+		// logs.go, monitoring.go, terminal.go, update_jobs_ws.go).
 		defer release()
 
 		ctx, cancel := context.WithCancel(context.Background())

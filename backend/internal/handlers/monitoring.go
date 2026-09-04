@@ -96,7 +96,8 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 		// Every return below (stream-error, write-error — ctx-done never
 		// actually fires today, since nothing external ever cancels ctx) left
 		// the socket and its goroutines open until this defer (agent-os-14gr),
-		// same shape as operations.go:91 / logs.go:130.
+		// same shape as every other serveWS call site (operations.go,
+		// logs.go, dashboard.go, handleEventsWebSocket below, update_jobs_ws.go).
 		defer release()
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -220,8 +221,9 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 		// (only this function's own deferred Unsubscribe closes eventChan,
 		// and that runs after this loop has already exited) — but every
 		// exit left the socket and safePingLoop's goroutine open until this
-		// defer (agent-os-iz9w), same shape as handleMetricsWebSocket
-		// (agent-os-14gr) / operations.go:91 / logs.go:130.
+		// defer (agent-os-iz9w), same shape as handleMetricsWebSocket above
+		// (agent-os-14gr) and every other serveWS call site (operations.go,
+		// logs.go, dashboard.go, update_jobs_ws.go).
 		defer release()
 
 		ctx, cancel := context.WithCancel(context.Background())

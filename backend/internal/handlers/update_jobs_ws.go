@@ -63,7 +63,10 @@ func (h *UpdateJobsWSHandler) streamJob(c *gin.Context) {
 		refuseReason: "Connection limit exceeded",
 	})
 	if err != nil {
-		// upgradeConnection already handled the error response.
+		// serveWS already handled the error response either way: an
+		// upgrade/auth failure has its own close frame written by
+		// upgradeConnection, and a registration refusal (errWSRefused) has
+		// its close frame written by serveWS itself. Nothing to do here.
 		return
 	}
 	defer release()
