@@ -143,16 +143,23 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 		// :25; reached from MetricsPanel.tsx:264 and StackDetail.tsx:63).
 		// Sending null throws a TypeError on every tick, and it is not a
 		// contained one: the throw happens inside the setContainers updater,
-		// which React runs during the render phase, so the hook's own
-		// try/catch does not see it and it unwinds past the per-tab
-		// boundaries to the app-level ErrorBoundary (App.tsx:136) — the whole
-		// app is replaced by the error fallback. That would trade this bead's
-		// loud, server-visible redial storm for a silent client-side crash.
+		// which React runs during the render phase, so the parse-time
+		// try/catch at useWebSocket.ts:187-193 never sees it (useMetricsBase
+		// itself has no try/catch at all). The TabErrorBoundary elements
+		// StackDetail renders at :166 and :178 do not catch it either — the
+		// hook is called in that component's own body at :63, ABOVE those
+		// boundaries, so a throw during its render escapes past them to the
+		// app-level ErrorBoundary at App.tsx:171 (the production auth path;
+		// App.tsx:136 is its AUTH_DISABLED twin, inside `if (authDisabled)`
+		// at :133) and the whole app is replaced by the error fallback. That
+		// would trade this bead's loud, server-visible redial storm for a
+		// silent client-side crash.
+		//
 		// The Go half is observed in the wire bytes by the regression test,
 		// not inferred: the nil form emits
-		// `{"timestamp":...,"containers":null}`. The React unwinding above is
-		// not something this package can execute; it was established by a
-		// browser probe recorded on agent-os-74rl and agent-os-5scv.
+		// `{"timestamp":...,"containers":null}`. The React unwinding is not
+		// something this package can execute; it was established by a browser
+		// probe recorded on agent-os-74rl and agent-os-5scv.
 		if len(containerIDs) == 0 {
 			// After this fix an empty stack no longer announces itself as one
 			// WS session per second in the request log, so this line is the
@@ -169,7 +176,11 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 			// interval IS the detection latency. safePingLoop is not a
 			// backstop: on error it returns its own goroutine, not this
 			// handler. An interval past the 30s ping would leave no detector
-			// at all and leak the ConnectionManager slot for good.
+			// at all and leak the ConnectionManager slot for good. The
+			// `return` on write failure below is what makes that true, and is
+			// enforced by
+			// TestMonitoringMetricsWS_EmptyListClientDisconnectClosesConnection
+			// — turning it into a `continue` parks the goroutine forever.
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
 			for {

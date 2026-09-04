@@ -117,3 +117,48 @@ func TestMonitoringMetricsWS_PopulatedListStillStreams(t *testing.T) {
 		t.Fatal("server-side connection was closed while still streaming a populated list")
 	}
 }
+
+// TestMonitoringMetricsWS_EmptyListClientDisconnectClosesConnection pins the
+// invariant the 2s-ticker comment in monitoring.go argues for but nothing
+// previously enforced (agent-os-74rl): on the empty-list path a failed write
+// is the ONLY client-disconnect detector, so the `return` in that loop's
+// safeWriteJSON error branch is load-bearing. Turn it into a `continue` and
+// the handler goroutine and its ConnectionManager slot survive the client
+// forever — a leak, and exactly the failure the comment warns about.
+//
+// The populated path has had this coverage all along via
+// TestMonitoringMetricsWS_ClientDisconnectClosesConnection in
+// monitoring_metrics_close_test.go; the empty path had none, so the whole
+// argument was aspirational. Mutation-checked rather than assumed: run under
+// `go test -overlay` with that `return` swapped for `continue` and this test
+// fails at waitForServerSideClose's "handler never returned" fatal, which is
+// what proves it can fire at all.
+//
+// It also closes the loop on agent-os-14gr for a path that did not exist when
+// 14gr was written: every exit from these handlers must close the server-side
+// socket, and this new ticker loop added one.
+func TestMonitoringMetricsWS_EmptyListClientDisconnectClosesConnection(t *testing.T) {
+	srv := newFakeDockerMetricsServer(t, http.StatusOK, `[]`, nil)
+	monitor := newFakeMonitorService(t, srv)
+	cm := NewConnectionManager(10)
+	wsSrv := newMetricsTestFixture(t, monitor, cm)
+
+	clientConn, resp := dialMetrics(t, wsSrv)
+	resp.Body.Close()
+
+	serverConn := firstConnection(t, cm)
+
+	// Drain one empty frame first, so the handler is provably parked in the
+	// ticker loop — not still in setup — before the client vanishes.
+	frame, _ := readMetricsFrame(t, clientConn, 5*time.Second,
+		"expected an empty metrics frame before disconnecting")
+	require.Empty(t, frame.Containers, "expected the empty-list frame, not a populated one")
+
+	// Simulate the client vanishing: close the raw TCP connection with no
+	// WebSocket close handshake, the same shape as a closed browser tab.
+	clientConn.Close()
+
+	if !waitForServerSideClose(t, serverConn, cm) {
+		t.Error("server-side connection was never closed after the client vanished on the empty-list path")
+	}
+}
