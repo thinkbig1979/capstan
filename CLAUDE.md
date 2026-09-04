@@ -142,3 +142,57 @@ When working with this Agent OS installation:
 4. The configuration in `config.yml` determines which agents are enabled and project structure
 
 This framework enables systematic, repeatable workflows for product development while maintaining consistency across different projects and team members.
+
+## Beads: closing a bug bead
+
+A bug bead does not close on a passing fix alone. The fix is scoped to one diff, but
+most defects in this codebase are scoped to a class: the same mistake repeated at
+every call site that shares its shape. The 2026-08-21..09-04 bug corpus showed this
+concretely, five families covering 22 of 32 filed bugs, and in every family the
+sibling was found only after the first instance was already fixed and merged, each
+one costing a full bead cycle that a grep at close time would have caught in
+minutes. Closing a bug bead therefore requires a class sweep, not just a green test.
+
+### The required close-time block
+
+Every bug bead's close reason states four fields:
+
+1. **Class statement** — one sentence naming the defect class, not this instance
+   ("a WebSocket handler that upgrades but doesn't guarantee close on every exit
+   path", not "dashboard.go leaks a connection").
+2. **Sweep command** — the exact command run, receiver-agnostic (see below).
+3. **Verbatim output** — trimmed to the relevant lines, not paraphrased.
+4. **Verdict** — either "0 further sites" or the list of follow-up bead IDs filed
+   for the sites the sweep found.
+
+### The one principle behind it
+
+A zero, or a short list, is trustworthy only when a positive control shows the
+instrument actually fires on the pattern it's meant to catch. An unproven zero is
+not evidence of absence, it's evidence the search never ran. This shows up in three
+distinct ways, and receiver-only fixes for the first one still miss the other two:
+
+- **Name and receiver variation.** A sweep pinned to one identifier misses
+  siblings that spell the same thing differently. `agent-os-iz9w`: grep for
+  `defer conn.Conn.Close()` misses `logs.go`'s `defer conn.Close()`, a different
+  receiver on the same underlying bug class. `agent-os-jtax`: `durableRun`'s
+  methods use receiver `r`, not `dr`, so `grep "func (dr \*durableRun)"` returns a
+  false zero while the real methods sit under `func (r *durableRun)`.
+- **Truncated multi-value fields.** Piping a wrapped or multi-line field through
+  `head` reads only its first entry. A `FILES:` field wrapped across several
+  paths, read with `grep "^ *FILES:" | head -2`, returned only the first path of
+  four affected beads and produced two wrong scope conclusions.
+- **The command didn't run as typed.** The shell environment can silently rewrite
+  or swallow a command before it reaches the tool it names. `grep -rln "bd show"
+  --include=*.md .` returned nothing in this repo because a shell hook mangled
+  the compound grep; `command grep -rln "bd show" --include=*.md .` returned 10
+  files. A tool wrapping `grep` in this repo means every sweep command in a close
+  reason must use `command grep`, not bare `grep`.
+
+Because of the third failure mode, every sweep in a close reason runs as
+`command grep` (or the local equivalent that bypasses shell rewriting). Because of
+the first and second, every zero or short list needs a positive control run
+alongside it: plant or point at one known instance of the pattern, confirm the
+same command catches it, and only then trust a zero returned elsewhere. A sweep
+that has not been shown to fire is not a sweep, it's an assumption with a command
+line attached.
