@@ -129,13 +129,17 @@ func (s *GitService) getStatusGoGit(dirPath string) (result *models.GitStatusRes
 	}
 
 	return &models.GitStatusResult{
-		Branch:         branchName,
-		Commit:         gitCommit,
-		Dirty:          dirty,
-		DirtyCount:     dirtyCount,
-		Ahead:          ahead,
-		Behind:         behind,
-		RemoteURL:      remoteURL,
+		Branch:     branchName,
+		Commit:     gitCommit,
+		Dirty:      dirty,
+		DirtyCount: dirtyCount,
+		Ahead:      ahead,
+		Behind:     behind,
+		// Redacted here rather than at the handler: RemoteURL carries a json
+		// tag, so any future marshal of GitStatusResult would reopen the leak
+		// (agent-os-57xj). Redacting at the source makes "the struct never
+		// holds a credential" an invariant instead of a per-caller duty.
+		RemoteURL:      RedactURLUserinfo(remoteURL),
 		TrackingBranch: trackingBranch,
 	}, nil
 }
@@ -190,6 +194,10 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	}
 
 	remoteURL, _ := s.gitCommandWithCreds(dirPath, user, token, "remote", "get-url", "origin")
+	// See the go-git path above. redactToken has already run on this value, but
+	// it only removes the token Capstan itself resolved, so a credential the
+	// operator embedded independently survives it (agent-os-57xj).
+	remoteURL = RedactURLUserinfo(remoteURL)
 
 	return &models.GitStatusResult{
 		Branch: branch,

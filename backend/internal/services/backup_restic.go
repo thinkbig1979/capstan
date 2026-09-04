@@ -228,7 +228,7 @@ func (m *ResticManager) EnsureRepository(ctx context.Context) error {
 		return nil // already initialised
 	}
 
-	m.logger.Info("Initialising restic repository", "path", m.cfg.ResticRepository)
+	m.logger.Info("Initialising restic repository", "path", RedactURLUserinfo(m.cfg.ResticRepository))
 
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {

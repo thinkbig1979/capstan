@@ -114,7 +114,7 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 	}
 
 	destination := fmt.Sprintf("%s:%s", remote, path)
-	m.logger.Info("Starting rclone sync", "source", repoPath, "destination", destination, "transfers", transfers)
+	m.logger.Info("Starting rclone sync", "source", RedactURLUserinfo(repoPath), "destination", destination, "transfers", transfers)
 
 	args := append([]string{"sync"}, syncOptions(transfers)...)
 	args = append(args, repoPath, destination)
@@ -382,7 +382,7 @@ func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath
 	}
 
 	source := fmt.Sprintf("%s:%s", remote, path)
-	m.logger.Info("Starting rclone restore", "source", source, "destination", localPath)
+	m.logger.Info("Starting rclone restore", "source", source, "destination", RedactURLUserinfo(localPath))
 
 	args := append([]string{"sync"}, syncOptions(transfers)...)
 	if backupDir != "" {

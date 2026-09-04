@@ -1183,7 +1183,7 @@ func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine)
 		localRepoPath = filepath.Join(s.cfg.DataDir, "restic-repo")
 	}
 	if err := os.MkdirAll(localRepoPath, 0o700); err != nil {
-		return fmt.Errorf("create restic repository directory: %w", err)
+		return fmt.Errorf("create restic repository directory %s: %w", RedactURLUserinfo(localRepoPath), redactErrPath(err, localRepoPath))
 	}
 
 	// backupDir names (but does not yet create -- RestoreRepo creates it only
