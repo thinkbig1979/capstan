@@ -89,6 +89,17 @@ function App() {
     // (this effect is the only call site, and its deps are stable Zustand
     // actions), so a failed boot leaves the user on the login page until they
     // reload by hand. Deliberately minimal; a retry path is agent-os-a4eh.
+    //
+    // DEV ONLY (agent-os-lqsa): StrictMode's dev double-invoke (main.tsx)
+    // can have this effect's setup run twice in close succession (mount,
+    // cleanup, remount) before either probe's network call settles. That
+    // used to mean two independent checkStatus/checkAuth calls racing to
+    // write the store, where a superseded invocation's late result could
+    // clobber the surviving one's. Fixed at the store level instead of here
+    // (authStore.ts's checkStatus/checkAuth now de-duplicate concurrent
+    // calls into a single shared in-flight request), so both invocations of
+    // this effect end up awaiting the SAME promise and applying the SAME
+    // result -- nothing here needs to change to benefit from that.
     const init = async () => {
       try {
         await checkStatus()

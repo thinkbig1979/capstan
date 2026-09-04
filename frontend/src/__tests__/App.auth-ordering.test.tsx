@@ -34,13 +34,19 @@ import { App } from '../App'
 // App's boot effect while statusChecked is still false, when the full-page spinner
 // is the whole tree and there is no mounted AuthenticatedLayout to unmount.
 //
-// That reachability argument holds for a SINGLE boot invocation. It does not hold
-// under StrictMode's dev double-invoke (main.tsx:8), where two init()s can be in
-// flight and App's `ignore` flag guards only setStatusChecked, not the store
-// writes: a late-failing first probe can then write authDisabled false after a
-// successful second probe has already mounted the shell. Dev-only, needs one
-// probe to fail while the other succeeds, and no test can see it because the
-// harness does not render StrictMode. Tracked as agent-os-lqsa; not fixed here.
+// That reachability argument holds for a SINGLE boot invocation. It used to NOT
+// hold under StrictMode's dev double-invoke (main.tsx:8), where two init()s can
+// be in flight: App's `ignore` flag guarded only setStatusChecked, not the store
+// writes, so a late-failing first probe could write authDisabled false after a
+// successful second probe had already mounted the shell -- DEV ONLY (StrictMode
+// never double-invokes in a production build), and only when one probe failed
+// while the other succeeded. Fixed by agent-os-lqsa: checkStatus/checkAuth
+// (authStore.ts) now de-duplicate concurrent calls into a single shared
+// in-flight request, so StrictMode's two invocations always observe the same
+// outcome and there is no second invocation's result left to race against.
+// Exercised directly in App.strictmode-race.test.tsx, not here -- this file
+// mocks `@/hooks/useAuth` wholesale (below) and never touches the real store,
+// so it cannot see this hazard either way, fixed or not.
 //
 // statusChecked holds a full-page spinner
 // until both auth probes resolve, so nothing under AuthenticatedLayout renders
