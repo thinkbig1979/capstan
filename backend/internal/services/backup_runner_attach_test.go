@@ -2,7 +2,6 @@ package services
 
 import (
 	"log/slog"
-	"os"
 	"testing"
 	"testing/synctest"
 
@@ -140,7 +139,7 @@ func TestAttach_JtaxOrphanForwarder_ControlAlreadyDoneRunPasses(t *testing.T) {
 	})
 }
 
-// TestAttach_JtaxOrphanForwarder_TestArmFailsPreJtax is the TEST ARM: a
+// TestAttach_JtaxOrphanForwarder_NilClientGoneStartsNoForwarder is the TEST ARM: a
 // STILL-RUNNING run attached with a nil clientGone (this is the jtax shape —
 // see agent-os-jtax). Attach starts forwardLive, which will only ever exit on
 // dr.done or clientGone, and this arm closes neither. Inside the bubble that
@@ -167,19 +166,17 @@ func TestAttach_JtaxOrphanForwarder_ControlAlreadyDoneRunPasses(t *testing.T) {
 // opt-in-skip pattern already used in this repo for a test that is
 // correct-but-unsafe-by-default.
 //
-// To reproduce the failing evidence on demand:
+// UNGATED 2026-09-04, once agent-os-jtax merged as b5f4272. Before that
+// commit this arm FAILED with "panic: deadlock: main bubble goroutine has
+// exited but blocked goroutines remain"; after it, it PASSES, with the
+// control arm green in BOTH states. That before/after on one instrument is
+// what makes this a regression test rather than an assertion.
 //
-//	CAPSTAN_RUN_JTAX_LEAK_PROBE=1 go test ./internal/services/ \
-//	  -run TestAttach_JtaxOrphanForwarder_TestArmFailsPreJtax -v
-//
-// Flip this test back to running unconditionally once agent-os-jtax merges
-// and this goes green — that is the trigger this bead's parent epic notes
-// as the reason it cannot close yet.
-func TestAttach_JtaxOrphanForwarder_TestArmFailsPreJtax(t *testing.T) {
-	if os.Getenv("CAPSTAN_RUN_JTAX_LEAK_PROBE") == "" {
-		t.Skip("skipping: this test is a synctest deadlock panic that crashes the whole test binary, not a normal t.Fail — it is the pre-agent-os-jtax red half of criterion 3 on agent-os-o1jp.3, and stays red until jtax merges. Set CAPSTAN_RUN_JTAX_LEAK_PROBE=1 to reproduce it on demand (see this test's doc comment), or leave unset to let the rest of the suite run.")
-	}
-
+// jtax's fix is an early return in Attach when clientGone is nil
+// (backup_runner.go:665) -- the pre-flight call site in handlers/backup.go
+// was NOT removed. So a nil-clientGone caller now receives Live == nil and
+// must not read from it.
+func TestAttach_JtaxOrphanForwarder_NilClientGoneStartsNoForwarder(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		reg := newAttachLeakProbeRegistry(t)
 
