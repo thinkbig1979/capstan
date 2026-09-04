@@ -194,11 +194,11 @@ func TestRunScan_BlockedWhileBackgroundScanInFlight(t *testing.T) {
 func TestStop_WaitsForInFlightBackgroundScan(t *testing.T) {
 	// Demonstrates: Stop() cancels the scan's context and waits for the
 	// goroutine to actually observe that cancellation and exit — it does not
-	// return early while the scan is still unwinding. Under the fake clock,
-	// "returns well inside the 10s shutdown bound" becomes an exact claim
-	// (elapsed is ~0, since ctx.Done() fires immediately, not "eventually
-	// within 10s of wall time" — the bound this test exists to prove is the
-	// OTHER test below, TestStop_TimesOutOnStuckScan.
+	// return early while the scan is still unwinding. Under the fake clock
+	// that observation is exact: elapsed is precisely 0, since ctx.Done()
+	// fires immediately and nothing here durably blocks on a timer. The 10s
+	// shutdown bound itself is proved by the OTHER test below,
+	// TestStop_TimesOutOnStuckScan, not by this one.
 	synctest.Test(t, func(t *testing.T) {
 		checker, release := blockedChecker()
 		svc := newTestScheduler(t, checker)
@@ -216,7 +216,7 @@ func TestStop_WaitsForInFlightBackgroundScan(t *testing.T) {
 		svc.Stop()
 		elapsed := time.Since(start)
 
-		assert.Less(t, elapsed, 10*time.Second, "Stop should return well inside the 10-second shutdown bound")
+		assert.Equal(t, time.Duration(0), elapsed, "Stop should return immediately under the fake clock, well inside the 10-second shutdown bound")
 		assert.False(t, svc.IsScanning(), "IsScanning must be false after Stop returns")
 	})
 }
