@@ -10,14 +10,37 @@ interface AuthState {
   login: (username: string, password: string) => Promise<void>
   setup: (username: string, password: string) => Promise<void>
   logout: () => Promise<void>
-  // isStale (agent-os-lqsa): App.tsx's boot effect passes a closure over its
-  // own `ignore` flag. StrictMode's dev double-invoke (main.tsx) can have two
-  // overlapping boot invocations in flight; without this, a superseded
-  // invocation's `set()` could land AFTER a newer invocation's, clobbering it
-  // with a stale answer. Optional and unused by every other call site.
-  checkAuth: (isStale?: () => boolean) => Promise<void>
-  checkStatus: (isStale?: () => boolean) => Promise<void>
+  checkAuth: () => Promise<void>
+  checkStatus: () => Promise<void>
 }
+
+// In-flight de-duplication for checkAuth/checkStatus (agent-os-lqsa).
+//
+// main.tsx wraps <App/> in <StrictMode>, which double-invokes dev mount
+// effects (mount -> cleanup -> remount). App.tsx's boot effect is the sole
+// call site for both actions, so that double-invoke used to mean two
+// independent network requests racing to `set()` the store, with no
+// ordering guarantee between them -- a slow-failing first request could
+// overwrite a fast-succeeding second one's result, or vice versa, well
+// after the app had already rendered based on the first answer to arrive.
+//
+// A guard that simply dropped the "wrong" invocation's write was tried and
+// rejected: checkStatus's failure path deliberately does NOT touch
+// needsSetup (see its own comment below), so whichever invocation actually
+// SUCCEEDS is the one carrying that fact, and a rule like "the second
+// invocation always wins" can discard a genuine success in favour of the
+// other invocation's failure, losing information the app needs (a fresh
+// install could lose its route to /setup).
+//
+// De-duplication removes the race by construction instead: a call made
+// while one is already in flight returns that SAME promise rather than
+// issuing a second request, so both invocations always observe the
+// identical outcome and there is exactly one `set()` per real probe. This
+// also preserves "a first-attempt success issues exactly ONE request"
+// (pinned by App.status-retry.test.tsx and App.auth-retry.test.tsx) across
+// concurrent callers, not just within a single one.
+let checkAuthInFlight: Promise<void> | null = null
+let checkStatusInFlight: Promise<void> | null = null
 
 export const useAuthStore = create<AuthState>()((set) => ({
   token: null,
@@ -64,7 +87,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
     })
   },
 
-  checkAuth: async (isStale) => {
+  checkAuth: () => {
     // agent-os-2cp3. Same shape as checkStatus above (agent-os-a4eh): this is
     // the only production call site (App.tsx's mount effect), its deps are
     // stable Zustand actions so the effect never re-runs, and nothing else
@@ -83,41 +106,50 @@ export const useAuthStore = create<AuthState>()((set) => ({
     // (error-handler.ts:70, classifyError): the api.ts interceptor rejects
     // with a flat object carrying `status` only when error.response existed;
     // `status === undefined` means the server never answered.
+    //
+    // agent-os-lqsa: de-duplicated. A call made while one is already in
+    // flight (StrictMode's double-invoke, chiefly) returns that SAME
+    // promise instead of issuing a second /auth/me request.
+    if (checkAuthInFlight) return checkAuthInFlight
+
     const retryDelaysMs = [250, 750]
 
-    for (let attempt = 0; ; attempt++) {
-      if (isStale?.()) return
-      try {
-        const { authApi } = await import('@/lib/api')
-        const user = await authApi.me()
-        if (isStale?.()) return
-        set({
-          token: 'cookie',
-          user,
-          isAuthenticated: true,
-        })
-        return
-      } catch (error) {
-        const err = error as { status?: number; response?: { status?: number } }
-        const status = err?.status ?? err?.response?.status
-        const gotResponse = status !== undefined
+    checkAuthInFlight = (async () => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const { authApi } = await import('@/lib/api')
+          const user = await authApi.me()
+          set({
+            token: 'cookie',
+            user,
+            isAuthenticated: true,
+          })
+          return
+        } catch (error) {
+          const err = error as { status?: number; response?: { status?: number } }
+          const status = err?.status ?? err?.response?.status
+          const gotResponse = status !== undefined
 
-        if (!gotResponse && attempt < retryDelaysMs.length) {
-          await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
-          continue
+          if (!gotResponse && attempt < retryDelaysMs.length) {
+            await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
+            continue
+          }
+          const isDev = import.meta.env.DEV
+          if (isDev) {
+            console.error('Auth check failed:', error)
+          }
+          set({ token: null, user: null, isAuthenticated: false })
+          return
         }
-        if (isStale?.()) return
-        const isDev = import.meta.env.DEV
-        if (isDev) {
-          console.error('Auth check failed:', error)
-        }
-        set({ token: null, user: null, isAuthenticated: false })
-        return
       }
-    }
+    })().finally(() => {
+      checkAuthInFlight = null
+    })
+
+    return checkAuthInFlight
   },
 
-  checkStatus: async (isStale) => {
+  checkStatus: () => {
     // agent-os-a4eh. A boot probe that failed once used to be final. This is the
     // only production call site (App.tsx's mount effect), its deps are stable
     // Zustand actions so the effect never re-runs, and nothing else re-probes --
@@ -136,58 +168,69 @@ export const useAuthStore = create<AuthState>()((set) => ({
     // fail-closed defaults are exactly as they were: retrying changes how many
     // chances a flaky network gets, never what an unreadable probe is allowed to
     // conclude.
+    //
+    // agent-os-lqsa: de-duplicated, for the same reason as checkAuth above.
+    // This one matters more: the failure path below deliberately leaves
+    // needsSetup untouched, so a rule that discarded one invocation's result
+    // outright (rather than sharing a single request) could throw away a
+    // genuine needsSetup: true learned by the invocation it discarded.
+    if (checkStatusInFlight) return checkStatusInFlight
+
     const retryDelaysMs = [250, 750]
 
-    for (let attempt = 0; ; attempt++) {
-      if (isStale?.()) return
-      try {
-        const { authApi } = await import('@/lib/api')
-        const status = await authApi.status()
-        if (isStale?.()) return
-        set({
-          authDisabled: status.authDisabled,
-          needsSetup: status.needsSetup,
-        })
-        return
-      } catch (error) {
-        if (attempt < retryDelaysMs.length) {
-          await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
-          continue
+    checkStatusInFlight = (async () => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const { authApi } = await import('@/lib/api')
+          const status = await authApi.status()
+          set({
+            authDisabled: status.authDisabled,
+            needsSetup: status.needsSetup,
+          })
+          return
+        } catch (error) {
+          if (attempt < retryDelaysMs.length) {
+            await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
+            continue
+          }
+          // Deliberately NOT dev-gated, unlike :50 and :72 in this file. Those two
+          // report a failed login and a failed logout: the user initiated the
+          // action, has UI feedback, and knows what they attempted. This one
+          // reports a failure the user never initiated and is told nothing about --
+          // the app simply looks logged out. Before this catch existed, a failed
+          // boot probe left exactly one trace in every build, the unhandled
+          // rejection; swallowing it in production and logging only in dev would
+          // make a shipped instance less diagnosable than it was before the fix.
+          console.error('Auth status check failed:', error)
+          // An unreadable probe is not evidence of anything, and the two fields it
+          // would have set need that principle pointed in OPPOSITE directions.
+          //
+          // authDisabled is forced back to the restrictive value, because it is the
+          // only field that grants access on its own: useAuth derives
+          // `canAccess = authDisabled || isAuthenticated`, so a true here opens the
+          // whole app with no session behind it. A failed network call must never
+          // be able to write that. The costs are not symmetric: true costs an
+          // unauthenticated shell, while false costs a login prompt that stands
+          // until the user reloads by hand. Reaching here means the bounded retry
+          // above is already spent, so this value is final for the life of the
+          // page: nothing probes again (see the boot effect in App.tsx).
+          //
+          // needsSetup is deliberately NOT written. It cannot grant access -- it
+          // only routes to /setup (App.tsx:149 is the sole `path="/setup"`) -- so
+          // there is nothing to defend against, and overwriting it would destroy a
+          // fact this failed probe did not re-learn. A stale true at worst shows a
+          // form the backend refuses: POST /auth/setup 409s SETUP_ALREADY_DONE once
+          // any user exists, at the fast path (handlers/auth.go:143) and again
+          // atomically inside database.CreateFirstUser, so the client value cannot
+          // create an account no matter what it says.
+          set({ authDisabled: false })
+          return
         }
-        if (isStale?.()) return
-        // Deliberately NOT dev-gated, unlike :50 and :72 in this file. Those two
-        // report a failed login and a failed logout: the user initiated the
-        // action, has UI feedback, and knows what they attempted. This one
-        // reports a failure the user never initiated and is told nothing about --
-        // the app simply looks logged out. Before this catch existed, a failed
-        // boot probe left exactly one trace in every build, the unhandled
-        // rejection; swallowing it in production and logging only in dev would
-        // make a shipped instance less diagnosable than it was before the fix.
-        console.error('Auth status check failed:', error)
-        // An unreadable probe is not evidence of anything, and the two fields it
-        // would have set need that principle pointed in OPPOSITE directions.
-        //
-        // authDisabled is forced back to the restrictive value, because it is the
-        // only field that grants access on its own: useAuth derives
-        // `canAccess = authDisabled || isAuthenticated`, so a true here opens the
-        // whole app with no session behind it. A failed network call must never
-        // be able to write that. The costs are not symmetric: true costs an
-        // unauthenticated shell, while false costs a login prompt that stands
-        // until the user reloads by hand. Reaching here means the bounded retry
-        // above is already spent, so this value is final for the life of the
-        // page: nothing probes again (see the boot effect in App.tsx).
-        //
-        // needsSetup is deliberately NOT written. It cannot grant access -- it
-        // only routes to /setup (App.tsx:149 is the sole `path="/setup"`) -- so
-        // there is nothing to defend against, and overwriting it would destroy a
-        // fact this failed probe did not re-learn. A stale true at worst shows a
-        // form the backend refuses: POST /auth/setup 409s SETUP_ALREADY_DONE once
-        // any user exists, at the fast path (handlers/auth.go:143) and again
-        // atomically inside database.CreateFirstUser, so the client value cannot
-        // create an account no matter what it says.
-        set({ authDisabled: false })
-        return
       }
-    }
+    })().finally(() => {
+      checkStatusInFlight = null
+    })
+
+    return checkStatusInFlight
   },
 }))

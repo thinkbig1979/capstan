@@ -4,35 +4,40 @@ import { renderWithProviders } from '@/test/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { App } from '../App'
 
-// agent-os-lqsa. main.tsx wraps <App/> in <StrictMode>, and StrictMode
-// double-invokes dev mount effects: mount -> cleanup -> remount. App's boot
-// effect (App.tsx) guards its OWN `ignore` flag around `setStatusChecked`
-// only -- it does not guard the store writes inside checkStatus/checkAuth,
-// which are unguarded `set()` calls on the module-global authStore.
+// agent-os-lqsa. DEV ONLY: main.tsx wraps <App/> in <StrictMode>, and
+// StrictMode double-invokes dev mount effects (mount -> cleanup -> remount).
+// This never happens in a production build.
 //
-// So with two overlapping invocations of the boot effect (call them A, the
-// one StrictMode cleans up, and B, the one that survives), this interleaving
-// was reachable:
+// Before this fix, App's boot effect called checkStatus()/checkAuth()
+// (authStore.ts) with no guard against being called twice concurrently, so
+// StrictMode's double-invoke meant two independent network requests racing
+// to `set()` the module-global authStore, with no ordering guarantee
+// between them. A slow-failing first request could overwrite a
+// fast-succeeding second one's result well after the app had already
+// rendered based on the first answer to arrive -- e.g. a fast checkStatus
+// resolving authDisabled: true (mounting AppShell via App.tsx's `if
+// (authDisabled)` branch), then a slow one later resolving/rejecting and
+// writing authDisabled: false, which flips `canAccess` (authDisabled ||
+// isAuthenticated, useAuth.ts) true -> false with the shell mounted. App
+// re-renders, the authDisabled branch is no longer taken, and the tree
+// falls through to the final `<Routes>` block, whose `path="*"` redirects
+// to /login -- unmounting the shell. (Not an AuthGuard unmount: AuthGuard
+// isn't in the authDisabled branch's tree at all; the teardown is App's own
+// top-level branch switch.)
 //
-//   B's checkStatus resolves fast with authDisabled: true -> shell mounts
-//   A's checkStatus, still retrying, eventually exhausts its retries and
-//     writes authDisabled: false -- LATE, after the shell already mounted
-//   canAccess (authDisabled || isAuthenticated) flips true -> false with the
-//     shell mounted -> AuthGuard's route branch swaps and the shell is
-//     replaced by the login page
+// The fix (authStore.ts) de-duplicates concurrent calls into a single
+// shared in-flight request per action: a call made while one is already
+// in-flight returns that SAME promise instead of issuing a second one. Both
+// StrictMode invocations then observe the identical outcome and there is
+// exactly one `set()` per real probe -- there is no "other" invocation's
+// result left over to race against.
 //
-// That true->false-while-mounted transition is exactly what
-// App.auth-ordering.test.tsx's docblock says is unreachable outside logout.
-// It quietly stopped holding once StrictMode was added; this file exercises
-// it directly rather than relying on that file's mocked-out useAuth to catch
-// it (that file mocks `@/hooks/useAuth` wholesale and never touches the real
-// store, so it cannot see this race either way).
-//
-// Both arms below are on the SAME instrument (authDisabled's final value and
-// which page is on screen), which is what makes them meaningful together: a
-// "fix" that just pins authDisabled true, or that ignores every late write
-// including ones that SHOULD count, would pass the first arm and fail the
-// second.
+// An earlier fix direction (drop whichever invocation's write is
+// "superseded") was tried and rejected during review: checkStatus's failure
+// path deliberately never writes needsSetup (see its own comment), so
+// dropping a whole invocation's result can throw away a genuine
+// needsSetup: true that only THAT invocation's successful probe learned --
+// the second test below pins that.
 
 const { appShellMounts } = vi.hoisted(() => ({ appShellMounts: vi.fn() }))
 
@@ -43,8 +48,8 @@ vi.mock('@/components/layout/AppShell', () => ({
   },
 }))
 
-vi.mock('@/pages/DashboardPage', () => ({
-  DashboardPage: () => <div data-testid="dashboard" />,
+vi.mock('@/pages/SetupPage', () => ({
+  SetupPage: () => <div data-testid="setup-page" />,
 }))
 
 const mockStatus = vi.fn()
@@ -60,8 +65,8 @@ vi.mock('@/lib/api', () => ({
 
 // A definitive server answer, never retried by checkAuth (authStore.ts's
 // checkAuth only retries a no-response failure). Its outcome is irrelevant
-// to every assertion here -- authDisabled alone satisfies canAccess -- so it
-// is fixed to the same immediate 401 in every test to stay out of the way.
+// to every assertion here, so it is fixed to the same immediate 401 in
+// every test to stay out of the way.
 const SESSION_EXPIRED = { status: 401, code: 'SESSION_EXPIRED', message: 'Session expired' }
 
 describe('App boot under StrictMode double-invoke', () => {
@@ -76,61 +81,47 @@ describe('App boot under StrictMode double-invoke', () => {
     })
   })
 
-  it('keeps the shell mounted when the superseded invocation later fails, after the surviving one already succeeded', async () => {
-    // Invocation A is the one StrictMode's synchronous cleanup runs first
-    // (its effect setup executes before B's, so its first network call is
-    // always issued first). It is held open with an externally-controlled
-    // gate so the test decides exactly when it fails, strictly after B's
-    // success has already reached the DOM.
-    let releaseFirstAttempt: () => void = () => {}
-    const firstAttemptGate = new Promise<void>((resolve) => {
-      releaseFirstAttempt = resolve
-    })
-
-    let callIndex = 0
-    mockStatus.mockImplementation(() => {
-      callIndex += 1
-      if (callIndex === 1) {
-        // Invocation A's first attempt: held until the test releases it.
-        return firstAttemptGate.then(() => Promise.reject({ status: undefined }))
-      }
-      if (callIndex === 2) {
-        // Invocation B's only attempt: succeeds immediately.
-        return Promise.resolve({ authDisabled: true, needsSetup: false })
-      }
-      // Invocation A's retries (checkStatus retries on ANY failure, per
-      // authStore.ts). Both fail too, so A's eventual conclusion is a
-      // genuine rejection, not a late lucky success.
-      return Promise.reject({ status: undefined })
-    })
+  it('issues exactly one status/me request despite the double-invoke, and keeps the shell mounted', async () => {
+    mockStatus.mockResolvedValue({ authDisabled: true, needsSetup: false })
     mockMe.mockRejectedValue(SESSION_EXPIRED)
 
     renderWithProviders(<App />, { route: '/', strictMode: true })
 
-    // B has won: the shell is up, driven by authDisabled: true.
     expect(await screen.findByTestId('app-shell')).toBeInTheDocument()
-    expect(useAuthStore.getState().authDisabled).toBe(true)
 
-    // Now let A's held attempt fail, and let it exhaust its own retries
-    // ([250, 750]ms, authStore.ts). Generous headroom past that ~1s budget,
-    // matching this suite's existing convention for the same retry window
-    // (App.status-failure.test.tsx).
-    releaseFirstAttempt()
+    // Let both StrictMode invocations fully settle before counting -- a
+    // broken fix could still schedule a second, later request.
+    await new Promise((resolve) => setTimeout(resolve, 300))
 
-    // A settled window, not a positive condition to poll for: the whole
-    // point is that NOTHING should change from here, so there is nothing to
-    // waitFor. Sleeping past A's full retry budget and then asserting the
-    // end state is the only way to see an absence of a late regression.
-    await new Promise((resolve) => setTimeout(resolve, 1800))
-
-    expect(useAuthStore.getState().authDisabled).toBe(true)
+    // The load-bearing counts: without de-duplication, StrictMode's second
+    // invocation issues its OWN independent request, so this reads 2 on
+    // unfixed code.
+    expect(mockStatus).toHaveBeenCalledTimes(1)
+    expect(mockMe).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('app-shell')).toBeInTheDocument()
     expect(
       screen.queryByText('Enter your credentials to access Capstan'),
     ).not.toBeInTheDocument()
-  }, 10000)
+  })
 
-  it('still reaches the login page when both invocations fail', async () => {
+  it('does not lose a needsSetup: true answer to a discarded invocation -- reaches /setup, not /login', async () => {
+    // checkStatus's failure path deliberately never writes needsSetup
+    // (authStore.ts's own comment), so this is the case an "ignore the
+    // superseded invocation" fix gets wrong: if the invocation carrying the
+    // successful needsSetup: true were the one such a fix discards, a fresh
+    // install would lose its only route to /setup. With a single shared
+    // request there is no second invocation's answer to discard.
+    mockStatus.mockResolvedValue({ authDisabled: false, needsSetup: true })
+    mockMe.mockRejectedValue(SESSION_EXPIRED)
+
+    renderWithProviders(<App />, { route: '/', strictMode: true })
+
+    expect(await screen.findByTestId('setup-page')).toBeInTheDocument()
+    expect(useAuthStore.getState().needsSetup).toBe(true)
+    expect(mockStatus).toHaveBeenCalledTimes(1)
+  })
+
+  it('still reaches the login page, via one shared retry sequence, when the probe never succeeds', async () => {
     mockStatus.mockRejectedValue({ status: undefined })
     mockMe.mockRejectedValue(SESSION_EXPIRED)
 
@@ -145,27 +136,8 @@ describe('App boot under StrictMode double-invoke', () => {
     ).toBeInTheDocument()
     expect(useAuthStore.getState().authDisabled).toBe(false)
     expect(appShellMounts).not.toHaveBeenCalled()
-  })
-
-  it('mounts the shell exactly once when both invocations succeed', async () => {
-    mockStatus.mockResolvedValue({ authDisabled: true, needsSetup: false })
-    mockMe.mockRejectedValue(SESSION_EXPIRED)
-
-    renderWithProviders(<App />, { route: '/', strictMode: true })
-
-    expect(await screen.findByTestId('app-shell')).toBeInTheDocument()
-
-    // Let both StrictMode invocations fully settle (each resolves on its
-    // first attempt, no retries involved here -- this is well past that).
-    await new Promise((resolve) => setTimeout(resolve, 200))
-
-    expect(screen.getByTestId('app-shell')).toBeInTheDocument()
-    expect(
-      screen.queryByText('Enter your credentials to access Capstan'),
-    ).not.toBeInTheDocument()
-    // Exactly one status call per boot-effect invocation (StrictMode's A and
-    // B) -- never a retry storm, and never a third invocation triggered by
-    // the shell itself mounting.
-    expect(mockStatus).toHaveBeenCalledTimes(2)
+    // One shared retry sequence (checkStatus's own [250, 750]ms backoff, 3
+    // attempts total) rather than one per StrictMode invocation (6 calls).
+    expect(mockStatus).toHaveBeenCalledTimes(3)
   })
 })
