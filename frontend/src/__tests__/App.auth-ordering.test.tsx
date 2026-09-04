@@ -26,7 +26,9 @@ import { App } from '../App'
 // on any flicker. It cannot flicker. Established 2026-09-02 by enumerating the
 // writes rather than reasoning about React: isAuthenticated has five write sites
 // in stores/authStore.ts (:30 login, :40 setup, :58 logout, :69/:76 checkAuth)
-// and authDisabled one (:84 checkStatus); statusChecked holds a full-page spinner
+// and authDisabled two, both inside checkStatus (:85 the probe's answer, :103 the
+// restrictive fallback taken when the probe fails, which writes false and so can
+// only lower access, never raise it); statusChecked holds a full-page spinner
 // until both auth probes resolve, so nothing under AuthenticatedLayout renders
 // with auth unresolved; login/setup live on route trees that never mount AppShell;
 // the 401 interceptor navigates the document instead of mutating the store; and

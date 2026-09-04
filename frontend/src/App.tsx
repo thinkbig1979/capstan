@@ -78,12 +78,26 @@ function App() {
 
   useEffect(() => {
     let ignore = false
+    // Nothing in here may leave statusChecked false: the !statusChecked branch
+    // below is a full-page spinner with no retry and no timeout, so a rejection
+    // that skipped the flag stranded the app there until the user reloaded by
+    // hand. Both probes swallow their own failures, and the catch keeps init()
+    // from rejecting unhandled if some future await in here does not -- a
+    // `finally` alone would set the flag but still reject.
     const init = async () => {
-      await checkStatus()
-      await checkAuth()
-      if (!ignore) setStatusChecked(true)
+      try {
+        await checkStatus()
+        await checkAuth()
+      } catch (error) {
+        const isDev = import.meta.env.DEV
+        if (isDev) {
+          console.error('Auth initialisation failed:', error)
+        }
+      } finally {
+        if (!ignore) setStatusChecked(true)
+      }
     }
-    init()
+    void init()
     return () => {
       ignore = true
     }

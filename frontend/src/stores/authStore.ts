@@ -78,11 +78,29 @@ export const useAuthStore = create<AuthState>()((set) => ({
   },
 
   checkStatus: async () => {
-    const { authApi } = await import('@/lib/api')
-    const status = await authApi.status()
-    set({
-      authDisabled: status.authDisabled,
-      needsSetup: status.needsSetup,
-    })
+    try {
+      const { authApi } = await import('@/lib/api')
+      const status = await authApi.status()
+      set({
+        authDisabled: status.authDisabled,
+        needsSetup: status.needsSetup,
+      })
+    } catch (error) {
+      const isDev = import.meta.env.DEV
+      if (isDev) {
+        console.error('Auth status check failed:', error)
+      }
+      // Both defaults are deliberately the restrictive direction, because an
+      // unreadable probe is not evidence of anything. useAuth derives
+      // `canAccess = authDisabled || isAuthenticated`, so authDisabled true on
+      // its own opens the entire app with no session behind it -- a failed
+      // network call must never be able to do that. needsSetup true is the same
+      // shape of mistake one step earlier: it would push a first-run
+      // account-creation form at someone whose backend merely blipped.
+      // False for both costs a login prompt on a transient failure. True for
+      // either costs an unauthenticated shell. Not symmetric, so we take the
+      // side whose failure is only an inconvenience.
+      set({ authDisabled: false, needsSetup: false })
+    }
   },
 }))

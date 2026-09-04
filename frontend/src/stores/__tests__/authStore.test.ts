@@ -151,4 +151,23 @@ describe('authStore checkStatus', () => {
     expect(state.authDisabled).toBe(true)
     expect(state.needsSetup).toBe(true)
   })
+
+  it('resolves rather than rejecting when the status probe fails', async () => {
+    mockStatus.mockRejectedValue(new Error('Network error'))
+
+    // App.tsx awaits this in its boot effect. A rejection there skipped
+    // setStatusChecked(true) and left the whole app on its loading spinner.
+    await expect(useAuthStore.getState().checkStatus()).resolves.toBeUndefined()
+  })
+
+  it('falls back to the locked-down defaults when the status probe fails', async () => {
+    useAuthStore.setState({ authDisabled: true, needsSetup: true })
+    mockStatus.mockRejectedValue(new Error('Network error'))
+
+    await useAuthStore.getState().checkStatus()
+
+    const state = useAuthStore.getState()
+    expect(state.authDisabled).toBe(false)
+    expect(state.needsSetup).toBe(false)
+  })
 })
