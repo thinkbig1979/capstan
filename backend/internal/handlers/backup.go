@@ -149,7 +149,12 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	bc := services.ResolveBackupConfigWithCfg(db, cfg)
 	repoSrc, pwSrc, hasPassword := services.RepoSettingSources(db, cfg)
 
-	repository := bc.ResticRepository
+	// A restic repository URI legitimately embeds credentials
+	// (rest:https://user:pass@host/, s3:https://KEY:SECRET@host/bucket), and
+	// this response is served to every authenticated client. hasPassword and
+	// passwordSource below mask the password FIELD; without this the field that
+	// can carry the same password went out in clear (agent-os-57xj).
+	repository := services.RedactURLUserinfo(bc.ResticRepository)
 
 	keepDaily, _ := db.GetSetting("backup_keep_daily")
 	keepWeekly, _ := db.GetSetting("backup_keep_weekly")
@@ -297,6 +302,28 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 	}
 
 	if req.Repository != nil {
+		// Refuse to persist a value still carrying the redaction marker.
+		//
+		// GET /backup/settings now redacts an embedded credential
+		// (agent-os-57xj), and the UI seeds its editable Repository input from
+		// that response. So an operator who edits any OTHER part of the
+		// field — fixing a typo in the path — would otherwise POST back
+		// "rest:https://***@host/repo/" and DESTROY the stored credential,
+		// with no warning and no way to see what was lost.
+		//
+		// A clear 422 rather than silently ignoring the field: ignoring it
+		// would also discard the path edit they did intend, and tell them
+		// nothing. The adjacent password field solves the same problem with
+		// "leave blank to keep current"; this is that affordance for a field
+		// that cannot be blank.
+		if strings.Contains(*req.Repository, services.UserinfoRedactionMarker) {
+			handleError(c, models.NewAppError(
+				http.StatusUnprocessableEntity,
+				models.ErrValidation,
+				"The repository value still contains the redacted credential marker (***). Re-enter the full repository URI including its credentials, or leave the field unchanged.",
+			))
+			return
+		}
 		if err := db.SetSetting("restic_repository", *req.Repository); err != nil {
 			h.internalError(c, "Failed to save repository setting", err)
 			return
