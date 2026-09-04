@@ -41,7 +41,10 @@ func newTestDockerServiceAgainst(t *testing.T, srv *httptest.Server) *services.D
 // *services.DockerService (not just *services.MonitorService) to reach even
 // this one path, via DOCKER_HOST above.
 func TestDashboardMetricsWS_SetupErrorClosesConnection(t *testing.T) {
-	srv := newFakeDockerMetricsServer(t, http.StatusInternalServerError, `{"message":"boom"}`, nil)
+	// Held, not plain: the handler registers its connection and then fails
+	// GetRunningContainerIDs on the next statement, so an unheld server leaves
+	// the test racing a ~2ms registration window (agent-os-gs7r).
+	srv, releaseContainerList := newHeldFakeDockerMetricsServer(t, http.StatusInternalServerError, `{"message":"boom"}`)
 	docker := newTestDockerServiceAgainst(t, srv)
 
 	db, err := database.NewWithMigrations(":memory:")
@@ -62,7 +65,13 @@ func TestDashboardMetricsWS_SetupErrorClosesConnection(t *testing.T) {
 	defer clientConn.Close()
 	defer resp.Body.Close()
 
+	// The handler is parked on the held list response here, so it is
+	// registered and cannot have been Removed yet.
 	serverConn := firstConnection(t, cm)
+
+	// Now let the 500 through: this is the exact error exit the test asserts
+	// on, unchanged.
+	releaseContainerList()
 
 	if !waitForServerSideClose(t, serverConn, cm) {
 		t.Error("server-side connection was never closed after the GetRunningContainerIDs error path returned")
