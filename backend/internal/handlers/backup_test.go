@@ -1518,9 +1518,71 @@ func TestRegistry_LaunchBackup_PersistsDurableRecord(t *testing.T) {
 	assert.Equal(t, "manual", run.Trigger)
 }
 
+// awaitDurableRun blocks until the durable run identified by runID has
+// finished, then re-Attaches and returns its terminal AttachResult. ok is
+// false when guard elapsed first, i.e. the run had NOT finished.
+//
+// It waits on AttachResult.Finished, which is the run's dr.done: a channel
+// closed exactly once when the op goroutine's defers run
+// (services/backup_runner.go:44-45, closed by `defer close(dr.done)` at
+// backup_runner.go:357). Done is therefore a MONOTONE false->true observable,
+// never a transient one, so waiting on the condition is sound and guard is a
+// hang guard that a passing run never consults. MEASURED, with an overlay
+// probe re-Attaching 20 times at 50ms intervals after completion:
+// durableSamples=20/20 across 3 runs under -race on an idle box.
+//
+// dr.outcome is written BEFORE close(dr.done) (defer LIFO at
+// backup_runner.go:356-358: recoverExec, then close(dr.done), then wg.Done),
+// so the re-Attach below cannot see a closed channel with an unset outcome.
+//
+// WHY THIS REPLACED A POLL. This used to poll Attach every 50ms under a 5s
+// wall-clock budget, which made the goroutine's COMPLETION TIME the assertion:
+// the run takes ~73ms idle (OBSERVED, same probe), so a pass depended on a
+// bound 68x larger than the work, and a loaded runner turned a correct
+// registry red. OBSERVED in CI run 33895843509, "Race detector" job, PR #266:
+// `--- FAIL: TestRegistry_AttachFinishedRun (13.63s)` /
+// `durable run never reached Done=true within 5 s` (agent-os-25ye). Reproduced
+// deterministically here by running the compiled -race test binary under
+// `systemd-run --user --scope -p CPUQuota=1%`: it failed at the same line and
+// then logged `durable backup finished ... outcome=partial` 68s later, proving
+// the run was still legitimately in flight rather than broken.
+func awaitDurableRun(
+	t *testing.T,
+	reg *services.BackupRunnerRegistry,
+	runID string,
+	guard time.Time,
+) (*services.AttachResult, bool) {
+	t.Helper()
+
+	ar, err := reg.Attach(runID, nil)
+	require.NoError(t, err, "Attach(%s)", runID)
+	if ar.Done {
+		return ar, true
+	}
+	require.NotNil(t, ar.Finished,
+		"a still-running Attach with a nil clientGone must expose the completion channel")
+
+	select {
+	case <-ar.Finished:
+	case <-time.After(time.Until(guard)):
+		return nil, false
+	}
+
+	// Re-Attach for the terminal snapshot: Finished only says the goroutine is
+	// done, the outcome comes from the registry (or, after GC eviction, the DB
+	// fallback at backup_runner.go:684-714, which likewise reports Done=true).
+	ar, err = reg.Attach(runID, nil)
+	require.NoError(t, err, "re-Attach(%s) after completion", runID)
+	return ar, ar.Done
+}
+
 // TestRegistry_AttachFinishedRun verifies that Attach on a finished run returns
 // Done=true with the terminal outcome — used by the WS handler to replay the
 // final status to late-joining clients.
+//
+// Its control arm is TestRegistry_AttachUnfinishedRun_IsNotReportedDone below:
+// this test would still pass if awaitDurableRun returned ok unconditionally,
+// so the pair is what shows the assertion was stabilised rather than removed.
 func TestRegistry_AttachFinishedRun(t *testing.T) {
 	t.Parallel()
 
@@ -1532,21 +1594,115 @@ func TestRegistry_AttachFinishedRun(t *testing.T) {
 	runID, err := reg.LaunchBackup(nil, false)
 	require.NoError(t, err)
 
-	// Wait for the goroutine to finish (it will fail — no real restic).
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		ar, aErr := reg.Attach(runID, nil)
-		if aErr != nil {
-			t.Fatalf("Attach error: %v", aErr)
-		}
-		if ar.Done {
-			// Goroutine finished; outcome must be set.
-			assert.NotEmpty(t, ar.Outcome)
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
+	// The goroutine will fail (no real restic), but it must still reach a
+	// terminal state, and Attach must then report that state.
+	ar, ok := awaitDurableRun(t, reg, runID, hangGuardDeadline(t))
+	require.True(t, ok, "durable run never reached Done=true before the hang guard")
+	assert.NotEmpty(t, ar.Outcome)
+}
+
+// blockingResticRunner is a CommandRunner whose Run and Output never return
+// until release is closed. It is the injection that makes the control arm
+// below deterministic rather than timing-dependent.
+//
+// It deliberately IGNORES the context. ResticManager.CheckRepository wraps its
+// ctx with a 30s timeout (services/backup_restic.go:208); honouring that would
+// let the run finish on its own and the control would stop controlling
+// anything. entered is closed on the first call, so the control can prove the
+// run is blocked HERE rather than having failed somewhere earlier for an
+// unrelated reason — a positive control for the injection itself.
+type blockingResticRunner struct {
+	enteredOnce sync.Once
+	entered     chan struct{}
+	release     chan struct{}
+}
+
+func (r *blockingResticRunner) block() {
+	r.enteredOnce.Do(func() { close(r.entered) })
+	<-r.release
+}
+
+func (r *blockingResticRunner) Run(
+	_ context.Context,
+	_ string,
+	_ []string,
+	_ []string,
+	_ chan<- services.StreamLine,
+) error {
+	r.block()
+	return nil
+}
+
+func (r *blockingResticRunner) Output(
+	_ context.Context,
+	_ string,
+	_ []string,
+	_ []string,
+) ([]byte, error) {
+	r.block()
+	return []byte(`{}`), nil
+}
+
+// TestRegistry_AttachUnfinishedRun_IsNotReportedDone is the control arm for
+// TestRegistry_AttachFinishedRun: a durable run that GENUINELY never completes
+// must still be reported as not-Done by awaitDurableRun.
+//
+// Without it, converting the wait from a wall-clock poll to a channel wait
+// could have removed the assertion instead of stabilising it — a waiter that
+// reported the hang guard as success would make the test above pass forever.
+// SEEN FAILING under a -overlay that changes awaitDurableRun's guard branch
+// from `return nil, false` to `return ar, true`: this test failed on its
+// require.False at backup_test.go:1701 while TestRegistry_AttachFinishedRun
+// stayed green in the same run, which is precisely the hole it exists to
+// close (agent-os-25ye, 2026-09-05, `go test -race -count=1`).
+//
+// The 500ms bound below is a wall-clock bound, but it points the SAFE way: the
+// run cannot finish by construction (the injected runner blocks until this
+// test's own cleanup releases it, and that release is proven to be the only
+// exit by the entered handshake), so a slower machine makes "still not done"
+// MORE certain, not less. That is the opposite of the load sensitivity being
+// fixed above, where slowness turned a correct result into a failure.
+func TestRegistry_AttachUnfinishedRun_IsNotReportedDone(t *testing.T) {
+	t.Parallel()
+
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, true) // both bins set; RunSync needs both
+	require.NoError(t, db.SetSetting("rclone_remote", "fakeprovider"))
+	require.NoError(t, db.SetSetting("restic_repository", "/tmp/test-repo"))
+	require.NoError(t, db.SetSetting("restic_password", "control-arm-password"))
+
+	runner := &blockingResticRunner{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
 	}
-	t.Fatal("durable run never reached Done=true within 5 s")
+	svc.SetResticMgrFactory(func(bc services.BackupConfig) *services.ResticManager {
+		return services.NewResticManagerForTest(bc, runner, slog.Default())
+	})
+
+	reg := services.NewBackupRunnerRegistry(db, svc, slog.Default())
+	t.Cleanup(func() {
+		// Release before stopping: Stop waits on the run's WaitGroup, so a
+		// still-blocked runner would deadlock the cleanup.
+		close(runner.release)
+		reg.StopWithTimeout(30 * time.Second)
+	})
+
+	// RunSync reaches the restic manager first: runSyncInternal calls
+	// restic.CheckRepository before it ever builds the rclone manager
+	// (services/backup.go:965).
+	runID, err := reg.LaunchSync()
+	require.NoError(t, err)
+
+	select {
+	case <-runner.entered:
+	case <-time.After(time.Until(hangGuardDeadline(t))):
+		t.Fatal("the injected restic runner was never reached: this control is not blocking where it claims to")
+	}
+
+	_, ok := awaitDurableRun(t, reg, runID, time.Now().Add(500*time.Millisecond))
+	require.False(t, ok,
+		"a durable run that never completes must NOT be reported as Done — "+
+			"if this passes, the wait no longer asserts anything")
 }
 
 // panicRcloneRunner is a fake CommandRunner that panics on Run.
