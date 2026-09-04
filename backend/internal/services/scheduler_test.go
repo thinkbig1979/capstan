@@ -761,7 +761,12 @@ func TestApplyTimer_FiresAndAppliesCachedUpdates(t *testing.T) {
 		// here). Sleeping past two full hops forces genuine time advancement
 		// through the loop's next re-check, deterministically, regardless of
 		// which goroutine happened to be runnable first at the clock.set
-		// instant.
+		// instant. Two hops (not one) is sufficient because this fixture's
+		// checker is succeedingUpdate, so applyNow always returns true on its
+		// first attempt and the loop never takes the "Deferred, not done"
+		// retry branch (scheduler.go:605-612) that would need a further hop
+		// before re-checking — if a future fixture could defer here, this
+		// bound would need to grow with it.
 		time.Sleep(2 * svc.applyMaxSleep)
 		assert.Equal(t, []string{"c1"}, checker.updatedIDs(),
 			"the apply timer must fire once the wall clock passes the scheduled instant")
@@ -976,7 +981,11 @@ func TestReloadApplySchedule_PicksUpASettingsChange(t *testing.T) {
 		// Same reasoning as TestApplyTimer_FiresAndAppliesCachedUpdates: the
 		// loop's post-rearm timer is already armed for a bounded 5ms hop, so
 		// sleep past two full hops rather than calling Wait(), which could
-		// return before that pending hop fires.
+		// return before that pending hop fires. Two hops is sufficient for the
+		// same reason as that test: this fixture is succeedingUpdate, so
+		// applyNow succeeds on its first attempt and never takes the
+		// "Deferred, not done" retry branch (scheduler.go:605-612) that would
+		// need an extra hop.
 		time.Sleep(2 * svc.applyMaxSleep)
 		assert.Equal(t, []string{"c1"}, checker.updatedIDs(),
 			"ReloadApplySchedule must arm the timer without a scheduler restart")
