@@ -62,13 +62,27 @@ describe('App boot when the status probe fails', () => {
 
   it('leaves the spinner for the login path when the status probe rejects', async () => {
     mockStatus.mockRejectedValue(new Error('Network error'))
-    mockMe.mockRejectedValue(new Error('Unauthorized'))
+    // agent-os-2cp3. Shaped as api.ts's interceptor actually rejects a request
+    // that got a response (a flat object carrying `status`), not a bare
+    // Error -- a real /auth/me rejection always carries one. This also
+    // matters for timing: checkAuth only retries a NO-response failure
+    // (authStore.ts's checkAuth comment), so a bare Error here used to make
+    // it retry for another ~1s on top of checkStatus's own ~1s retry below,
+    // pushing this test past the "Loading..." waitFor's budget.
+    mockMe.mockRejectedValue({ status: 401, code: 'SESSION_EXPIRED', message: 'Session expired' })
 
     renderWithProviders(<App />, { route: '/' })
 
     await waitFor(() => expect(mockStatus).toHaveBeenCalled())
-    await waitFor(() =>
-      expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
+    // agent-os-2cp3 (pre-existing flake from agent-os-a4eh, fixed here). This
+    // races checkStatus's own ~1s retry budget ([250, 750]ms) against RTL's
+    // default 1000ms waitFor timeout -- marginal even before this file's
+    // checkAuth fix touched anything else in it. Explicit headroom, not a
+    // narrower fix, because checkStatus's retry window is deliberately sized
+    // independently of this test.
+    await waitFor(
+      () => expect(screen.queryByText('Loading...')).not.toBeInTheDocument(),
+      { timeout: 5000 },
     )
     expect(
       await screen.findByText('Enter your credentials to access Capstan'),

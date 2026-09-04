@@ -60,20 +60,52 @@ export const useAuthStore = create<AuthState>()((set) => ({
   },
 
   checkAuth: async () => {
-    try {
-      const { authApi } = await import('@/lib/api')
-      const user = await authApi.me()
-      set({
-        token: 'cookie',
-        user,
-        isAuthenticated: true,
-      })
-    } catch (error) {
-      const isDev = import.meta.env.DEV
-      if (isDev) {
-        console.error('Auth check failed:', error)
+    // agent-os-2cp3. Same shape as checkStatus above (agent-os-a4eh): this is
+    // the only production call site (App.tsx's mount effect), its deps are
+    // stable Zustand actions so the effect never re-runs, and nothing else
+    // re-probes -- so one transient /auth/me failure permanently logged out a
+    // user whose cookie session was still perfectly valid, until they
+    // reloaded by hand.
+    //
+    // Unlike checkStatus, retrying here must NOT fire on every rejection.
+    // /auth/me is behind AuthMiddleware (api.ts:106-110), so every anonymous
+    // boot -- the common case, not an edge case -- gets a genuine 401
+    // SESSION_EXPIRED. A 401 is a definitive answer the server already gave;
+    // retrying it cannot change the outcome, it can only cost extra requests
+    // and delay the login page. Only a failure that carries no response at
+    // all (network error, timeout) is worth a retry. `status` below follows
+    // this codebase's own convention for telling the two apart
+    // (error-handler.ts:70, classifyError): the api.ts interceptor rejects
+    // with a flat object carrying `status` only when error.response existed;
+    // `status === undefined` means the server never answered.
+    const retryDelaysMs = [250, 750]
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const { authApi } = await import('@/lib/api')
+        const user = await authApi.me()
+        set({
+          token: 'cookie',
+          user,
+          isAuthenticated: true,
+        })
+        return
+      } catch (error) {
+        const err = error as { status?: number; response?: { status?: number } }
+        const status = err?.status ?? err?.response?.status
+        const gotResponse = status !== undefined
+
+        if (!gotResponse && attempt < retryDelaysMs.length) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
+          continue
+        }
+        const isDev = import.meta.env.DEV
+        if (isDev) {
+          console.error('Auth check failed:', error)
+        }
+        set({ token: null, user: null, isAuthenticated: false })
+        return
       }
-      set({ token: null, user: null, isAuthenticated: false })
     }
   },
 
