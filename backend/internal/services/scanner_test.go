@@ -30,6 +30,7 @@ func TestScannerService_ScanAll_EmptyDirectory(t *testing.T) {
 
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -53,6 +54,7 @@ func TestScannerService_ScanAll_WithGlobalEnv(t *testing.T) {
 
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -79,6 +81,7 @@ func TestScannerService_ScanAll_SingleStack(t *testing.T) {
 	cfg := &config.Config{StacksDir: tempDir}
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -113,6 +116,7 @@ func TestScannerService_ScanAll_MultipleStacks(t *testing.T) {
 	cfg := &config.Config{StacksDir: tempDir}
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -138,6 +142,7 @@ func TestScannerService_ScanAll_HiddenDirectories(t *testing.T) {
 	cfg := &config.Config{StacksDir: tempDir}
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -167,6 +172,7 @@ func TestScannerService_ScanAll_MultipleComposeFiles(t *testing.T) {
 	cfg := &config.Config{StacksDir: tempDir}
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -210,6 +216,7 @@ func TestScannerService_ScanAll_DuplicateStackName_SkipsSecondFileDeterministica
 	cfg := &config.Config{StacksDir: tempDir}
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -252,6 +259,7 @@ func TestScannerService_ScanAll_WithGitRepo(t *testing.T) {
 
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -323,6 +331,7 @@ func TestScannerService_ScanAll_WithEnvFile(t *testing.T) {
 	cfg := &config.Config{StacksDir: tempDir}
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -353,6 +362,7 @@ func TestScannerService_ScanAll_WithOverrideFiles(t *testing.T) {
 	cfg := &config.Config{StacksDir: tempDir}
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -374,6 +384,7 @@ func TestScannerService_ScanAll_NonDirectoryEntries(t *testing.T) {
 	cfg := &config.Config{StacksDir: tempDir}
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -398,6 +409,7 @@ func TestScannerService_ScanAll_SingleRootIDIsUnchanged(t *testing.T) {
 
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 	_, err = NewScannerService(&config.Config{StacksDir: root}, db).ScanAll()
 	require.NoError(t, err)
 
@@ -419,6 +431,7 @@ func TestScannerService_ScanAll_SameBasenameRootsGetDistinctIDs(t *testing.T) {
 
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 	cfg := &config.Config{StacksDir: rootA, ExtraStacksDirs: []string{rootB}}
 	_, err = NewScannerService(cfg, db).ScanAll()
 	require.NoError(t, err)
@@ -459,6 +472,7 @@ func TestScannerService_AddingCollidingExtraRootDoesNotReIDPrimary(t *testing.T)
 
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	// Before: the primary root alone.
 	cfg := &config.Config{StacksDir: primary}
@@ -628,6 +642,7 @@ func TestScannerService_ScanDirectory_SiblingPrefixRootIsNotConflated(t *testing
 
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 	cfg := &config.Config{StacksDir: stacksRoot, ExtraStacksDirs: []string{extraRoot}}
 	service := NewScannerService(cfg, db)
 
@@ -667,6 +682,7 @@ func TestScannerService_ScanDirectory_NestedRootResolvesToLongestMatch(t *testin
 
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 	cfg := &config.Config{StacksDir: stacksRoot, ExtraStacksDirs: []string{nestedRoot}}
 	service := NewScannerService(cfg, db)
 
@@ -722,6 +738,7 @@ func TestScannerService_TwoCollidingExtraRootsIDChange_PruneRemovesStaleRow(t *t
 
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	cfg := &config.Config{StacksDir: primary, ExtraStacksDirs: []string{extraA}}
 
@@ -778,6 +795,7 @@ func TestScannerService_RescanWithMultipleStacksInDirectory_AllSurvivePrune(t *t
 	cfg := &config.Config{StacksDir: tempDir}
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	service := NewScannerService(cfg, db)
 
@@ -835,6 +853,7 @@ func TestScannerService_PruneStaleIDStacks_NeitherRowMatchesExpected_BothSurvive
 	cfg := &config.Config{StacksDir: root}
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
 
 	// The directory row a prior (visited) scan would have left behind.
 	require.NoError(t, db.UpsertDirectory(models.Directory{
