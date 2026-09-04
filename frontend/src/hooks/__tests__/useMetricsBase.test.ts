@@ -35,7 +35,7 @@ vi.mock('../useWebSocket', () => ({
 import { useMetricsBase } from '../useMetricsBase'
 
 /** One container's worth of a frame; every numeric field defaults so tests name only what they assert on. */
-function container(overrides: Partial<MetricsMessage['containers'][number]> = {}) {
+function container(overrides: Partial<NonNullable<MetricsMessage['containers']>[number]> = {}) {
   return {
     containerId: 'c1',
     name: 'web',
@@ -53,7 +53,7 @@ function container(overrides: Partial<MetricsMessage['containers'][number]> = {}
   }
 }
 
-function frame(...containers: Array<Partial<MetricsMessage['containers'][number]>>): MetricsMessage {
+function frame(...containers: Array<Partial<NonNullable<MetricsMessage['containers']>[number]>>): MetricsMessage {
   return { timestamp: '2026-08-08T12:00:00Z', containers: containers.map(container) }
 }
 
@@ -257,6 +257,30 @@ describe('useMetricsBase', () => {
     expect(result.current.containers).toEqual([])
     expect(result.current.baseAggregates.totalCpuPercent).toBe(0)
     // The frame still counts as traffic, so the socket stays "connected".
+    expect(result.current.isConnected).toBe(true)
+  })
+
+  it('does not throw when the server sends containers:null (agent-os-5scv)', () => {
+    // Go marshals a nil slice as JSON null, not []. MetricsMessage.containers
+    // is declared nullable for exactly that reason, so this literal type-checks
+    // with no cast — the type now admits the real wire shape a buggy or older
+    // backend can still send, instead of asserting it away.
+    const nullContainersMessage: MetricsMessage = {
+      timestamp: '2026-08-08T12:00:00Z',
+      containers: null,
+    }
+
+    const { result } = renderHook(() => useMetricsBase('/ws/metrics'))
+
+    expect(() => {
+      act(() => {
+        capturedOnMessage!(nullContainersMessage)
+      })
+    }).not.toThrow()
+
+    // A null frame reports no containers, same as an empty-array frame — it
+    // must not leave stale history behind or crash the updater.
+    expect(result.current.containers).toEqual([])
     expect(result.current.isConnected).toBe(true)
   })
 })

@@ -46,7 +46,7 @@ beforeAll(() => {
   }
 })
 
-function container(overrides: Partial<MetricsMessage['containers'][number]> = {}) {
+function container(overrides: Partial<NonNullable<MetricsMessage['containers']>[number]> = {}) {
   return {
     containerId: 'c1',
     name: 'web',
@@ -64,7 +64,7 @@ function container(overrides: Partial<MetricsMessage['containers'][number]> = {}
   }
 }
 
-function frame(...containers: Array<Partial<MetricsMessage['containers'][number]>>): MetricsMessage {
+function frame(...containers: Array<Partial<NonNullable<MetricsMessage['containers']>[number]>>): MetricsMessage {
   return { timestamp: '2026-08-08T12:00:00Z', containers: containers.map(container) }
 }
 

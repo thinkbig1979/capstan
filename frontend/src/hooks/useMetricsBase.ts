@@ -20,22 +20,29 @@ export interface ContainerMetricHistory {
   metrics: ContainerMetric[]
 }
 
+export interface MetricsContainerFrame {
+  containerId: string
+  name: string
+  cpuPercent: number
+  memUsage: number
+  memLimit: number
+  memPercent: number
+  netRx: number
+  netTx: number
+  blockRead: number
+  blockWrite: number
+  memSwap: number
+  pids: number
+}
+
 export interface MetricsMessage {
   timestamp: string
-  containers: Array<{
-    containerId: string
-    name: string
-    cpuPercent: number
-    memUsage: number
-    memLimit: number
-    memPercent: number
-    netRx: number
-    netTx: number
-    blockRead: number
-    blockWrite: number
-    memSwap: number
-    pids: number
-  }>
+  // Nullable on purpose. A Go nil slice marshals to JSON `null`, not `[]`, so
+  // `null` is a shape this socket can genuinely deliver (agent-os-5scv). The
+  // backend no longer sends it, but the type is the wire contract and it has
+  // to stay honest about what the wire can carry: declaring this non-nullable
+  // is what let an unguarded `.forEach` past the compiler in the first place.
+  containers: MetricsContainerFrame[] | null
 }
 
 export interface MetricsBaseOptions {
@@ -57,7 +64,14 @@ export function useMetricsBase(path: string, options: MetricsBaseOptions = {}) {
       const next = { ...prev }
       const activeIds = new Set<string>()
 
-      message.containers.forEach((container) => {
+      // The backend's declared type says this is never null, but the wire
+      // format cannot enforce that: a nil Go slice marshals to JSON `null`
+      // (agent-os-5scv), and this updater runs during React's render phase,
+      // outside the WS layer's try/catch, so an unguarded dereference here
+      // takes down the whole app. Guard it regardless of what the backend
+      // currently sends.
+      const incomingContainers = message.containers ?? []
+      incomingContainers.forEach((container) => {
         activeIds.add(container.containerId)
         const metric: ContainerMetric = {
           cpuPercent: container.cpuPercent,
