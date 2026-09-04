@@ -45,6 +45,45 @@ export function isSessionLoss(code: string | null | undefined): boolean {
   return code === 'SESSION_EXPIRED' || code == null
 }
 
+/**
+ * The one place that knows how to find an HTTP status on a rejection.
+ *
+ * The api.ts interceptor rejects with a FLAT object carrying `status` when
+ * `error.response` existed, and with `{error, code, message}` and NO status
+ * when it did not (api.ts:127-131). The nested `response.status` form is read
+ * too, because test fixtures and any raw AxiosError that reaches us still
+ * carry it. So `undefined` here means exactly one thing: the server never
+ * answered.
+ */
+function readStatus(error: unknown): number | undefined {
+  if (!error) return undefined
+  const err = error as { status?: number; response?: { status?: number } }
+  return err.status ?? err.response?.status
+}
+
+/**
+ * Whether an AUTOMATIC retry could plausibly change the outcome (agent-os-8ett).
+ *
+ * Deliberately NOT `classifyError().retryable`, which answers a different
+ * question: whether to enable the user-facing Retry button (DashboardPage.tsx,
+ * StackPage.tsx, both `disabled={!appError.retryable}`). A person pressing
+ * Retry after a 500 has waited, and may know something we do not; a query
+ * retrying itself a second later knows nothing new. So a 5xx keeps enabling
+ * the button but does not auto-retry -- the same call agent-os-2cp3 made for
+ * `checkAuth`, which retries only when `status === undefined`.
+ *
+ * The rule: retry only when the server gave no definitive answer. That is no
+ * HTTP status at all (network error, timeout, connection refused, offline),
+ * or one of the two statuses that explicitly invite a repeat -- 408 Request
+ * Timeout and 429 Too Many Requests, both of which classifyError also treats
+ * as retryable.
+ */
+export function isAutoRetryable(error: unknown): boolean {
+  const status = readStatus(error)
+  if (status === undefined) return true
+  return status === 408 || status === 429
+}
+
 export function classifyError(error: unknown): AppError {
   if (!error) {
     return {
@@ -67,7 +106,7 @@ export function classifyError(error: unknown): AppError {
   // still work. `details` feeds the 404/409/428 `context` fields and the 422
   // field-level validation messages below — missing it silently degrades
   // those to their generic fallback text.
-  const status = err.status ?? err.response?.status
+  const status = readStatus(error)
   const message = err.response?.data?.error || err.response?.data?.message || err.message || 'An error occurred'
   const details = err.details ?? err.response?.data?.details
   // Nested FIRST, unlike `status` and `details` above, and deliberately so:
