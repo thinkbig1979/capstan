@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -20,14 +21,62 @@ func renderResult(c *gin.Context, r truth.ActionResult) {
 
 // handleError writes err as a JSON error response, using the AppError's
 // status and code when available and falling back to a generic 500.
+//
+// Every 5xx also emits one ERROR line carrying the error chain (agent-os-7z8c).
+// The response body deliberately withholds the cause from the client, and the
+// fallback branch below does not even read err — it mints a fresh generic
+// AppError — so before this, a 500 left no record anywhere of WHY. OBSERVED in
+// production: three /api/v1/git/log 500s across 72h of logs produced zero
+// explanatory lines, and diagnosing them took ssh, docker inspect and a source
+// read that one log line would have replaced.
 func handleError(c *gin.Context, err error) {
 	var appErr *models.AppError
 	if errors.As(err, &appErr) {
+		logServerFault(c, appErr.Status, appErr.Code, err)
 		c.JSON(appErr.Status, appErr)
 		return
 	}
 
+	logServerFault(c, http.StatusInternalServerError, "INTERNAL_ERROR", err)
 	c.JSON(http.StatusInternalServerError, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error"))
+}
+
+// logServerFault emits one ERROR line for a 5xx response, carrying the error
+// chain that the response body withholds from the client.
+//
+// It logs the cause and nothing else that is already recorded elsewhere:
+// middleware.LoggingMiddleware logs method, path, status, duration and
+// request_id at ERROR for every 5xx already, so duplicating those here would
+// add volume without information. Join the two lines on request_id.
+//
+// Silent below 500 on purpose. handleError's callers map validation, auth and
+// not-found conditions through it too; those are the client's fault rather
+// than a server fault, LoggingMiddleware already records them at WARN, and
+// logging all of them at ERROR would bury the 5xx lines this exists to surface.
+//
+// Safe under gin.CreateTestContext, where c.Request is nil: the only thing
+// touched on c is its key/value store, via middleware.RequestIDFrom, which
+// nil-checks c and never reads c.Request. That is also why this is slog.Error
+// and not slog.ErrorContext — the context lives on c.Request, so ErrorContext
+// would reintroduce exactly the nil dereference this avoids.
+//
+// Called BEFORE c.JSON deliberately, and nothing in the tests pins that
+// (a mutation moving it after c.JSON passes). Keep it first anyway: c.JSON is
+// the call that can fail to deliver — it is a no-op on a hijacked WebSocket
+// writer, and it panics on a malformed status — so logging first is the
+// ordering that still produces a diagnostic in precisely the cases where
+// the response does not.
+func logServerFault(c *gin.Context, status int, code string, err error) {
+	if status < http.StatusInternalServerError {
+		return
+	}
+
+	slog.Error("request failed",
+		"request_id", middleware.RequestIDFrom(c),
+		"status", status,
+		"code", code,
+		"error", err,
+	)
 }
 
 // DockerUnavailableMessage is the operator-facing text for a Docker outage. It
