@@ -153,9 +153,35 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 
 	branch, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		// Typed 404 (not generic) so the handler returns "not a git repo" rather
-		// than a 500 when go-git fell back to here for a non-repo directory.
-		return nil, models.NewAppError(404, models.ErrGitNotRepo, "Not a git repository")
+		// This guard used to answer EVERY failure of that command with a flat
+		// 404 "Not a git repository", asserting a diagnosis it had not tested
+		// (agent-os-xmtf). The condition that actually arrives here is the one
+		// it was wrong about: MEASURED, go-git fails a repository with no
+		// commits as "failed to get HEAD: reference not found", which is not a
+		// *models.AppError, so GetStatus falls through to this function — while
+		// a genuinely absent repository is already caught upstream by openRepo
+		// and returned as-is by GetStatus, never reaching here.
+		//
+		// The two are fixed differently. An empty repository needs a commit or
+		// a remote; an absent one needs the stack pointed somewhere else. The
+		// old message sent the first operator looking for the second problem.
+		//
+		// Both questions are put to git as questions, never read out of its
+		// prose, because git translates its messages.
+		if repoErr := s.gitFailure(dirPath, err); repoErr != nil {
+			return nil, repoErr
+		}
+		if s.hasUnbornHead(dirPath) {
+			// ErrNotFound rather than a dedicated GIT_NO_COMMITS: adding a code
+			// means editing internal/models/errors.go, and nothing branches on
+			// git codes on the client side (the frontend renders the message),
+			// so the honest message is the whole of the user-visible fix. The
+			// 404 is unchanged from before, so only the diagnosis moves.
+			return nil, models.NewAppError(404, models.ErrNotFound, "Repository has no commits yet")
+		}
+		// A repository, with a HEAD that resolves, whose branch name still could
+		// not be read: unusual enough that naming it would be another guess.
+		return nil, fmt.Errorf("failed to resolve HEAD: %w", err)
 	}
 
 	commitHash, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
@@ -404,9 +430,25 @@ func (s *GitService) GetLog(dirPath string, limit, offset int) (*models.LogResul
 // message, for two independent reasons. Git translates its output — this host
 // carries 19 catalogs, and LANGUAGE=de turns "not a git repository" into
 // "Kein Git-Repository" — so text matching silently stops firing on a
-// non-English host (agent-os-vq3p). And a failed first command does not imply a
-// missing repository: getDiffCLI's first command is a log of a caller-supplied
-// hash, which fails with "bad object" for a perfectly good repo.
+// non-English host (agent-os-vq3p). That translation has one precondition worth
+// stating, because it is exactly what agent-os-vq3p's LC_ALL=C pin removes:
+// glibc consults LANGUAGE only when the messages locale resolves to a GENERATED
+// locale other than C/POSIX. It is not a precondition about catalogs, and on
+// this host it is satisfied by default. MEASURED, git 2.47.3, LANG=en_US.UTF-8,
+// `locale -a` = {C, C.utf8, en_US.utf8, nl_NL.utf8, POSIX}:
+//
+//	(unset LC_ALL; LANGUAGE=de)  -> "Schwerwiegend: Kein Git-Repository ..."  German
+//	LC_ALL=en_US.utf8 LANGUAGE=de -> "Schwerwiegend: Kein Git-Repository ..."  German
+//	LC_ALL=C          LANGUAGE=de -> "fatal: not a git repository ..."         English
+//	LC_ALL=de_DE.utf8 LANGUAGE=de -> "fatal: not a git repository ..."         English
+//
+// The last arm reads English because de_DE.utf8 is not generated here, so
+// setlocale falls back to C — not because the de catalog is missing; it is
+// installed at /usr/share/locale/de/LC_MESSAGES/git.mo.
+//
+// And a failed first command does not imply a missing repository: getDiffCLI's
+// first command is a log of a caller-supplied hash, which fails with
+// "bad object" for a perfectly good repo.
 //
 // The probe must be the git CLI, not go-git. gitCmd sets cmd.Dir without
 // GIT_CEILING_DIRECTORIES, so git walks up to a parent .git: a directory nested
@@ -417,7 +459,8 @@ func (s *GitService) GetLog(dirPath string, limit, offset int) (*models.LogResul
 //
 // Deliberately narrower than "the repository is usable": a repo with NO COMMITS
 // is a repository, and answering GIT_NOT_REPO for it would turn one lying
-// message into four. Giving that case an honest answer is agent-os-xmtf.
+// message into four. That case now has an honest answer of its own — see
+// hasUnbornHead and its caller in getStatusCLI (agent-os-xmtf).
 //
 // Runs only after a command has already failed, so the happy path pays nothing.
 // Credentials are not resolved for the probe — rev-parse contacts no remote, and
@@ -430,6 +473,43 @@ func (s *GitService) gitFailure(dirPath string, err error) error {
 		return models.NewAppError(404, models.ErrGitNotRepo, "Not a git repository")
 	}
 	return nil
+}
+
+// hasUnbornHead reports whether dirPath's repository has a HEAD pointing at a
+// branch that does not exist yet — the state `git init` leaves behind until the
+// first commit (agent-os-xmtf).
+//
+// Callers must have established that dirPath IS a repository first (gitFailure
+// returning nil); this answers only "and does it have any commits".
+//
+// Two probes, exit codes only, no message text. `rev-parse --verify HEAD`
+// separates "HEAD resolves to a commit" from "it does not"; `symbolic-ref
+// --quiet HEAD` then separates an unborn branch from a HEAD that is broken for
+// some other reason, because a symbolic ref to a branch that has no commits yet
+// is still a perfectly readable symbolic ref. OBSERVED, git 2.47.3 on this host,
+// exit statuses:
+//
+//	                    --git-dir  --verify HEAD  symbolic-ref --quiet HEAD
+//	genuine non-repo    128        128            128
+//	repo, no commits    0 (.git)   128            0 (refs/heads/master)
+//	repo with commits   0          0              0
+//
+// Reading the messages instead would be wrong under any locale whose messages
+// catalog is installed. The same probe run as
+// `LC_ALL=en_US.utf8 LANGUAGE=de git rev-parse --git-dir` prints
+// "Schwerwiegend: Kein Git-Repository ..."; 19 catalogs ship on this host.
+// agent-os-vq3p pins the child to LC_ALL=C, which makes text matching possible
+// but not safe — it would then be correct only for as long as that pin survives.
+// Exit codes need no such pin.
+//
+// Credentials are not resolved: neither probe contacts a remote, and this runs
+// only after a command has already failed.
+func (s *GitService) hasUnbornHead(dirPath string) bool {
+	if _, err := s.gitCommandWithCreds(dirPath, "", "", "rev-parse", "--verify", "HEAD"); err == nil {
+		return false
+	}
+	_, err := s.gitCommandWithCreds(dirPath, "", "", "symbolic-ref", "--quiet", "HEAD")
+	return err == nil
 }
 
 func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogResult, error) {
