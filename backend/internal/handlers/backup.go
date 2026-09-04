@@ -164,11 +164,23 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	// they need a credential they may not have.
 	//
 	// Derived by comparison rather than by re-parsing: RedactURLUserinfo returns
-	// its input byte-for-byte whenever there is no userinfo to strip (see
-	// redact_url.go, including the empty-userinfo and unparseable branches), so
-	// a difference here means, exactly, that a credential was spliced out. That
+	// its input byte-for-byte whenever there is no userinfo to strip, so a
+	// difference here means, exactly, that a credential was spliced out. That
 	// keeps the flag in step with the redactor by construction — a second
-	// detector would be a second thing to get wrong.
+	// detector would be a second implementation that can drift from the first,
+	// silently and in a security-relevant direction.
+	//
+	// THE COUPLING THIS DEPENDS ON, stated because it is not obvious from here:
+	// redact_url.go:109-112 returns `raw`, NOT `u.String()`, on the
+	// no-credential path, and :114-119 does the same for an EMPTY userinfo
+	// ("http://@host/path" — an "@" carrying no secret). A refactor that
+	// returned u.String() instead would re-serialise a credential-free URL
+	// (case-folding a scheme, re-encoding a path), making redacted != raw with
+	// no credential present, and this flag would then warn about a field that
+	// hides nothing. Per redact_url.go:114-116 a false marker is worse than no
+	// marker, and the same is true of a false hint. Pinned by the
+	// empty-userinfo and sftp arms of TestGetSettings_FlagsARedactedRepositoryCredential;
+	// if you change that return, those arms are the ones that will tell you.
 	//
 	// It carries one bit and never the raw value.
 	hasEmbeddedCredential := repository != bc.ResticRepository

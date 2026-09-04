@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,6 +18,23 @@ import (
 // DISCRIMINATOR rather than a constant — a hint that always shows is a worse UI
 // than none, because it teaches operators to ignore it.
 const plainRepoNoCredential = "/data/restic-repo"
+
+// The two shapes that separate a flag DERIVED FROM THE REDACTION from one
+// GUESSED FROM THE STRING. Both contain an "@" and neither hides a secret, so a
+// naive strings.Contains(repo, "@") implementation passes the two arms above and
+// FAILS these — rendering a hint that tells the operator a credential is hidden
+// when none is. redact_url.go:114-116 states the principle these pin: a false
+// marker is worse than no marker, because the marker's whole purpose is that
+// signal.
+const (
+	// An empty userinfo: an "@" with nothing in front of it.
+	emptyUserinfoRepo = "http://@host/path"
+	// restic's documented SFTP form. The more realistic of the two: an operator
+	// can plausibly have this configured, and "user" is a username, not a
+	// secret. RedactURLUserinfo leaves it alone (it has no "://", so the
+	// opaque-part fallback returns it untouched).
+	sftpUserRepo = "sftp:user@host:/srv/restic-repo"
+)
 
 // fetchBackupSettings drives the REAL handler over the real router with
 // storedRepo persisted, and returns the raw response body alongside the decoded
@@ -55,11 +74,22 @@ func assertRepositoryCredentialHidden(t assert.TestingT, body string) {
 		"the repository credential must never appear in the settings response")
 }
 
-// recordingT captures whether a testify assertion fired, without failing the
-// enclosing test. It is the whole mechanism of the positive control.
-type recordingT struct{ failed bool }
+// recordingT captures what a testify assertion said when it fired, without
+// failing the enclosing test. It is the whole mechanism of the positive control.
+//
+// It stores the MESSAGE, not merely a bool. A recorder that stored only "it
+// fired" can show the helper ran but not what it caught — a helper that failed
+// for an unrelated reason (a typo'd key, a changed marker) would look identical
+// to one that caught the credential. Those are different claims, and only the
+// text tells them apart.
+type recordingT struct{ messages []string }
 
-func (r *recordingT) Errorf(string, ...interface{}) { r.failed = true }
+func (r *recordingT) Errorf(format string, args ...interface{}) {
+	r.messages = append(r.messages, fmt.Sprintf(format, args...))
+}
+
+func (r *recordingT) fired() bool  { return len(r.messages) > 0 }
+func (r *recordingT) text() string { return strings.Join(r.messages, "\n") }
 
 // TestGetSettings_FlagsARedactedRepositoryCredential is the discriminating test.
 //
@@ -99,6 +129,31 @@ func TestGetSettings_FlagsARedactedRepositoryCredential(t *testing.T) {
 	// false" and "value is unredacted" are not the same claim.
 	assert.NotContains(t, plainBody, services.UserinfoRedactionMarker,
 		"a repository with no credential must be served byte-for-byte, with no marker spliced in")
+
+	// The arms that kill the impostor. Both values contain an "@" and neither
+	// hides a secret, so an implementation that looked for "@" rather than
+	// asking the redactor what it actually removed would flag both TRUE and
+	// warn about a field that hides nothing.
+	for _, tc := range []struct {
+		name string
+		repo string
+	}{
+		{"empty userinfo", emptyUserinfoRepo},
+		{"sftp username, restic's documented form", sftpUserRepo},
+	} {
+		body, decoded := fetchBackupSettings(t, tc.repo)
+		t.Logf("%-40s -> repository=%q flag=%v", tc.name, decoded["repository"], decoded["hasEmbeddedCredential"])
+
+		flagged, ok := decoded["hasEmbeddedCredential"].(bool)
+		require.True(t, ok, "hasEmbeddedCredential must be a bool in the settings response")
+		assert.False(t, flagged,
+			"%s carries an @ but no secret, so it must NOT be flagged — a hint claiming a hidden credential where there is none is the false marker redact_url.go:114-116 exists to avoid",
+			tc.name)
+		// And the value itself must come back untouched, so "not flagged" and
+		// "nothing was removed" remain the same claim rather than two hopes.
+		assert.Contains(t, body, tc.repo,
+			"%s must be served byte-for-byte", tc.name)
+	}
 }
 
 // TestGetSettings_CredentialLeakAssertionCanFail is the positive control for the
@@ -115,13 +170,20 @@ func TestGetSettings_CredentialLeakAssertionCanFail(t *testing.T) {
 
 	rec := &recordingT{}
 	assertRepositoryCredentialHidden(rec, leaking)
-	require.True(t, rec.failed,
+	require.True(t, rec.fired(),
 		"the leak instrument did not fire on a body containing the raw credential — the green in the test above would be meaningless")
+	t.Logf("FIRED, verbatim:\n%s", rec.text())
+	// It fired for the RIGHT REASON. "An assertion ran" and "the assertion
+	// caught the credential" are different claims, and only the message text
+	// separates them: a helper broken in some unrelated way would also fire.
+	assert.Contains(t, rec.text(), "RESTICSECRET999",
+		"the instrument fired, but not about the credential — it is not the leak that was detected")
 
 	// And the other direction: it must NOT fire on a properly redacted body, or
 	// it would be an assertion that always fails and proves nothing either.
 	rec = &recordingT{}
 	assertRepositoryCredentialHidden(rec, `{"repository":"rest:https://***@backup.example.com/repo/"}`)
-	require.False(t, rec.failed,
-		"the leak instrument fired on a correctly redacted body — it is not discriminating")
+	assert.False(t, rec.fired(),
+		"the leak instrument fired on a correctly redacted body — it is not discriminating; it said: %s", rec.text())
+	t.Logf("DID NOT FIRE on a redacted body, captured messages: %d (%q)", len(rec.messages), rec.text())
 }

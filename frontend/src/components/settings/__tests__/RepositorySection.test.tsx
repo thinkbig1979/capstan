@@ -90,6 +90,28 @@ describe('RepositorySection credential hint', () => {
     expect(screen.queryByText(/credential is embedded/i)).toBeNull()
   })
 
+  it.each([
+    ['an empty userinfo', 'http://@host/path'],
+    ["restic's documented SFTP form", 'sftp:user@host:/srv/restic-repo'],
+  ])(
+    'does NOT render the hint for %s — an @ in the value is not the trigger, the flag is',
+    (_label, repository) => {
+      // The backend already decides this: neither value has anything redacted
+      // out of it, so the flag is false. The arm that matters here is that the
+      // COMPONENT keys off the flag and never off the string it is rendering —
+      // a component that sniffed for "@" itself would warn about a field
+      // hiding nothing, which is the false marker the backend takes care to
+      // avoid.
+      renderSection(makeSettings({ repository, hasEmbeddedCredential: false }), repository)
+
+      expect(credentialHint()).toBeNull()
+      // The value is still shown in full, so this is not passing by hiding it.
+      expect((screen.getByLabelText(/repository path/i) as HTMLInputElement).value).toBe(
+        repository,
+      )
+    },
+  )
+
   it('does NOT render the hint when the server omits the flag entirely', () => {
     // A server predating agent-os-r31s sends no flag. Absent must read as
     // "nothing hidden" rather than warning on every repository.
