@@ -134,10 +134,31 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 			// write into an already-hijacked ResponseWriter. Only an
 			// upgrade/auth failure is reported (agent-os-o1jp.1).
 			if !errors.Is(err, errWSRefused) {
-				// gin.Context.Error's own return (a *gin.Error) is for
-				// chaining, not a failure signal; recording the error is the
-				// point here.
-				_ = c.Error(err)
+				// handleError, not c.Error: this was the ONLY production
+				// c.Error call site in the tree, and NOTHING reads gin's
+				// c.Errors — no gin.Logger (main.go builds a bare gin.New()),
+				// no ErrorLogger, nothing in middleware/logging.go. OBSERVED
+				// 2026-09-04: `command grep -rn "\.Errors" --include=*.go
+				// internal cmd` returns only watcher.go:103 (fsnotify) and
+				// linter.go:33 (yaml), neither of them gin's. So the upgrade
+				// failure was recorded into a sink with no reader and left no
+				// trace anywhere — a 100% silent failure (agent-os-zaor).
+				//
+				// handleError routes it through logServerFault, which is what
+				// the three sibling WS handlers already do under this exact
+				// guard (monitoring.go x2, terminal.go). The divergence was
+				// the defect; a fourth way of reporting this is how it arose.
+				//
+				// KNOWN LIMIT, not an oversight: logServerFault is silent
+				// below 500 by design (respond.go, pinned by
+				// TestHandleError_4xxStaysSilent). upgradeConnection returns a
+				// raw *websocket.HandshakeError for an UPGRADE failure — not
+				// an AppError, so it takes handleError's 500 fallback and does
+				// log — but a 401 *models.AppError for an AUTH failure
+				// (ws.go:543, ws.go:549), which still logs nothing. That gap
+				// is class-wide across all four serveWS call sites and its fix
+				// belongs in respond.go, not here.
+				handleError(c, err)
 			}
 			return
 		}
