@@ -3,11 +3,13 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -22,11 +24,130 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
+
+	// Registers the "sqlite" driver for the raw database/sql handle in
+	// TestBackupSchemaTemplate_CarriesEveryMigration. internal/database imports
+	// it too, but that test exists precisely to check the template WITHOUT
+	// going through internal/database, so it names its own dependency.
+	_ "modernc.org/sqlite"
 )
 
 // ─────────────────────────────────────────────
 // Test infrastructure
 // ─────────────────────────────────────────────
+
+// wantSchemaMigrations is the number of migrations internal/database is
+// expected to define, and therefore the schema version every template copy
+// must be stamped at.
+//
+// Deliberately a literal rather than a reference to the database package's own
+// count: a test that derives the expected value from the thing it is checking
+// cannot fail. Adding migration 15 is meant to fail this test and make someone
+// look at the template — that friction is the feature.
+const wantSchemaMigrations = 14
+
+// backupSchemaTemplate returns the bytes of a fully migrated, empty Capstan
+// database, built exactly once per test binary.
+//
+// WHY THIS EXISTS (agent-os-1kio): under -race every SQLite call in the
+// process serialises on one process-global allocator mutex —
+// modernc.org/libc's allocMu (libc.go:52, taken in Xmalloc/Xfree/Xrealloc).
+// This file has 54 t.Parallel tests, and each one running all 14 migrations
+// turned the parallel phase into a lock stampede: bursts of tests entering
+// migrations separated by multi-second stretches in which nothing completed.
+// Running the migrations once and handing every test a byte-for-byte copy
+// attacks the allocation VOLUME, which is the half of the problem no
+// -parallel cap can touch.
+//
+// OBSERVED on an idle 8-core box, 20 databases opened under -race: 4.42s via
+// migrations, 0.56s via this template (the 0.56s includes building it).
+//
+// VACUUM INTO rather than copying the file: capstan.db runs in WAL mode, so
+// the .db file on its own is not self-contained. See the long note on
+// (*database.DB).VacuumInto for why that matters.
+var backupSchemaTemplate = sync.OnceValues(buildBackupSchemaTemplate)
+
+func buildBackupSchemaTemplate() ([]byte, error) {
+	dir, err := os.MkdirTemp("", "capstan-schema-template-")
+	if err != nil {
+		return nil, err
+	}
+	// The bytes are what callers keep; the scratch directory is not needed
+	// past this function, so nothing outlives the call and no temp directory
+	// leaks for the life of the test binary.
+	defer os.RemoveAll(dir)
+
+	// The encryptor never reaches the file. It encrypts individual column
+	// values at write time, and a freshly migrated database holds schema plus
+	// whatever the migrations seed — no secrets. Each test supplies its own
+	// encryptor when it opens its own copy, which is what lets the null-
+	// encryptor tests below share this same template.
+	src, err := database.NewWithMigrationsAndEncryptor(":memory:", services.NewTokenEncryptorOrDefault("", "test-secret-32-chars-padding-here"))
+	if err != nil {
+		return nil, err
+	}
+	defer src.Close()
+
+	dest := filepath.Join(dir, "template.db")
+	if err := src.VacuumInto(dest); err != nil {
+		return nil, err
+	}
+	//nolint:gosec // dest is filepath.Join of this function's own os.MkdirTemp
+	// directory and a hardcoded constant — it never traces to test input, let
+	// alone request input.
+	return os.ReadFile(dest)
+}
+
+// newMigratedDBDir writes a copy of the migrated template into a fresh
+// temporary directory and returns that directory, ready to hand to
+// database.New / database.NewWithEncryptor — both of which append
+// "/capstan.db" and, unlike their *WithMigrations siblings, do not run the
+// migrations.
+//
+// Note this moves these tests from ":memory:" to a file-backed database, which
+// also moves the connection pool from 1 connection to 25 (database.go, the
+// dataDir == ":memory:" branch). That is the production configuration rather
+// than a weaker one, and it removes a single-connection deadlock hazard rather
+// than adding one; concurrent writers are covered by WAL plus the DSN's
+// busy_timeout(5000).
+func newMigratedDBDir(t *testing.T) string {
+	t.Helper()
+	tmpl, err := backupSchemaTemplate()
+	require.NoError(t, err, "build migrated schema template")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "capstan.db"), tmpl, 0o600))
+	return dir
+}
+
+// TestBackupSchemaTemplate_CarriesEveryMigration guards the template above. A
+// template that silently shipped an older schema would make all 54 tests in
+// this file pass against the wrong tables — a far worse failure than the slow
+// migrations it replaced — so this asserts the copy a test actually opens is
+// stamped at the binary's latest migration.
+//
+// It opens the copied file with database/sql directly instead of through
+// internal/database, so this check uses a different instrument than the code
+// it is checking: a bug in that package's own version reporting cannot make
+// this test agree with it.
+//
+// Seen failing: run under a -overlay that truncates internal/database's
+// migrations slice to 13 and this fails on its assertion (14 != 13), with the
+// package still building — not on a compile error.
+func TestBackupSchemaTemplate_CarriesEveryMigration(t *testing.T) {
+	t.Parallel()
+
+	raw, err := sql.Open("sqlite", filepath.Join(newMigratedDBDir(t), "capstan.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { raw.Close() })
+
+	var maxVersion, applied int
+	require.NoError(t, raw.QueryRow(
+		"SELECT COALESCE(MAX(version), 0), COUNT(*) FROM schema_migrations",
+	).Scan(&maxVersion, &applied))
+
+	assert.Equal(t, wantSchemaMigrations, maxVersion, "schema version stamped on the template copy")
+	assert.Equal(t, wantSchemaMigrations, applied, "migrations recorded in the template copy")
+}
 
 func newBackupHandlerDB(t *testing.T) *database.DB {
 	t.Helper()
@@ -34,7 +155,7 @@ func newBackupHandlerDB(t *testing.T) *database.DB {
 	// git_https_token) can be stored — the DB now refuses to persist secrets in
 	// plaintext (L1).
 	enc := services.NewTokenEncryptorOrDefault("", "test-secret-32-chars-padding-here")
-	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
+	db, err := database.NewWithEncryptor(newMigratedDBDir(t), enc)
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	return db
@@ -435,7 +556,7 @@ func TestUpdateSettings_NoEncryptionKey_ReturnsClearErrorNotPanic(t *testing.T) 
 	// exactly as cmd/server/main.go does at startup when both env vars are
 	// unset.
 	enc := services.NewTokenEncryptorOrDefault("", "")
-	db, err := database.NewWithMigrationsAndEncryptor(":memory:", enc)
+	db, err := database.NewWithEncryptor(newMigratedDBDir(t), enc)
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
@@ -475,10 +596,12 @@ func TestUpdateSettings_NoEncryptionKey_ReturnsClearErrorNotPanic(t *testing.T) 
 func TestUpdateSettings_DatabaseConstructedNoEncryptor_Returns422NotInternalError(t *testing.T) {
 	t.Parallel()
 
-	// database.NewWithMigrations (no encryptor argument) mirrors any caller
-	// that builds a DB directly from the database package rather than via
-	// services.NewTokenEncryptorOrDefault.
-	db, err := database.NewWithMigrations(":memory:")
+	// database.New (no encryptor argument) mirrors any caller that builds a DB
+	// directly from the database package rather than via
+	// services.NewTokenEncryptorOrDefault: both it and NewWithMigrations
+	// install the same package-local noEncryptor, and this path only needs the
+	// encryptor, not the migrations, which the template already carries.
+	db, err := database.New(newMigratedDBDir(t))
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
