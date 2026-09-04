@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -91,6 +92,13 @@ func newTestScheduler(t *testing.T, checker updateChecker) *SchedulerService {
 	t.Helper()
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
+	// Same fix as newTestBackupScheduler (agent-os-o1jp.3 criterion 2, see
+	// backup_scheduler_test.go): database/sql's connection-opener goroutine
+	// exits only on Close, and an unclosed :memory: DB leaks it into any
+	// synctest.Test bubble built on this helper, producing the exact
+	// "deadlock: main bubble goroutine has exited but blocked goroutines
+	// remain" panic string this bead is about — for the wrong reason.
+	t.Cleanup(func() { _ = db.Close() })
 	return NewSchedulerService(checker, db, nil, nil)
 }
 
@@ -126,117 +134,150 @@ func contextIgnoringChecker(release chan struct{}) *fakeUpdateChecker {
 // StartBackgroundScan call while one is already in-flight returns an error
 // containing "already in progress", and that IsScanning transitions correctly.
 func TestStartBackgroundScan_ConcurrentCallReturnsError(t *testing.T) {
-	checker, release := blockedChecker()
-	svc := newTestScheduler(t, checker)
+	// Demonstrates: the single-flight gate rejects a second StartBackgroundScan
+	// while the first is still in-flight, and the flag clears once it finishes.
+	// The bubble makes "still in-flight" and "finished" exact synchronization
+	// points instead of states inferred from a real-time poll.
+	synctest.Test(t, func(t *testing.T) {
+		checker, release := blockedChecker()
+		svc := newTestScheduler(t, checker)
 
-	// First call should succeed and leave scan running.
-	err := svc.StartBackgroundScan()
-	require.NoError(t, err)
-	assert.True(t, svc.IsScanning(), "expected IsScanning to be true while scan is in-flight")
+		// First call should succeed and leave scan running.
+		err := svc.StartBackgroundScan()
+		require.NoError(t, err)
+		assert.True(t, svc.IsScanning(), "expected IsScanning to be true while scan is in-flight")
 
-	// Second concurrent call must be rejected.
-	err = svc.StartBackgroundScan()
-	require.Error(t, err)
-	require.ErrorIs(t, err, ErrScanInProgress)
+		// Second concurrent call must be rejected.
+		err = svc.StartBackgroundScan()
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrScanInProgress)
 
-	// Signal the first scan to complete.
-	close(release)
+		// Signal the first scan to complete.
+		close(release)
 
-	// Wait for scanning flag to clear (up to 2 s).
-	assert.Eventually(t, func() bool {
-		return !svc.IsScanning()
-	}, 2*time.Second, 10*time.Millisecond, "expected IsScanning to become false after scan finishes")
+		synctest.Wait()
+		assert.False(t, svc.IsScanning(), "expected IsScanning to become false after scan finishes")
+	})
 }
 
 // TestRunScan_BlockedWhileBackgroundScanInFlight verifies that the shared gate
 // prevents RunScan from executing while StartBackgroundScan is mid-flight.
 func TestRunScan_BlockedWhileBackgroundScanInFlight(t *testing.T) {
-	checker, release := blockedChecker()
-	svc := newTestScheduler(t, checker)
+	// Demonstrates: the shared single-flight gate blocks a synchronous RunScan
+	// while a background scan holds it, and releases once that scan finishes.
+	synctest.Test(t, func(t *testing.T) {
+		checker, release := blockedChecker()
+		svc := newTestScheduler(t, checker)
 
-	// Start a background scan that will block.
-	err := svc.StartBackgroundScan()
-	require.NoError(t, err)
-	assert.True(t, svc.IsScanning())
+		// Start a background scan that will block.
+		err := svc.StartBackgroundScan()
+		require.NoError(t, err)
+		assert.True(t, svc.IsScanning())
 
-	// RunScan must immediately return "already in progress".
-	_, err = svc.RunScan(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "already in progress",
-		"RunScan should be blocked by the shared gate while background scan is running")
+		// RunScan must immediately return "already in progress".
+		_, err = svc.RunScan(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already in progress",
+			"RunScan should be blocked by the shared gate while background scan is running")
 
-	// Unblock the background scan.
-	close(release)
+		// Unblock the background scan.
+		close(release)
 
-	// Wait for scanning flag to clear.
-	assert.Eventually(t, func() bool {
-		return !svc.IsScanning()
-	}, 2*time.Second, 10*time.Millisecond)
+		synctest.Wait()
+		assert.False(t, svc.IsScanning())
+	})
 }
 
 // TestStop_WaitsForInFlightBackgroundScan verifies that Stop() blocks until the
 // in-flight background scan completes (via context cancellation) and that the
 // whole operation finishes within the 10-second bound.
 func TestStop_WaitsForInFlightBackgroundScan(t *testing.T) {
-	checker, release := blockedChecker()
-	svc := newTestScheduler(t, checker)
+	// Demonstrates: Stop() cancels the scan's context and waits for the
+	// goroutine to actually observe that cancellation and exit — it does not
+	// return early while the scan is still unwinding. Under the fake clock
+	// that observation is exact: elapsed is precisely 0, since ctx.Done()
+	// fires immediately and nothing here durably blocks on a timer. The 10s
+	// shutdown bound itself is proved by the OTHER test below,
+	// TestStop_TimesOutOnStuckScan, not by this one.
+	synctest.Test(t, func(t *testing.T) {
+		checker, release := blockedChecker()
+		svc := newTestScheduler(t, checker)
 
-	err := svc.StartBackgroundScan()
-	require.NoError(t, err)
-	assert.True(t, svc.IsScanning())
+		err := svc.StartBackgroundScan()
+		require.NoError(t, err)
+		assert.True(t, svc.IsScanning())
 
-	// Allow the blocked goroutine to finish once Stop cancels its context.
-	// The checkerFn will unblock on ctx.Done(), so we don't need to close
-	// release manually here — Stop() will cancel parentCtx.
-	_ = release // release is never closed in this test; context cancellation unblocks
+		// Allow the blocked goroutine to finish once Stop cancels its context.
+		// The checkerFn will unblock on ctx.Done(), so we don't need to close
+		// release manually here — Stop() will cancel parentCtx.
+		_ = release // release is never closed in this test; context cancellation unblocks
 
-	start := time.Now()
-	svc.Stop()
-	elapsed := time.Since(start)
+		start := time.Now()
+		svc.Stop()
+		elapsed := time.Since(start)
 
-	assert.Less(t, elapsed, 10*time.Second, "Stop should return within the 10-second shutdown bound")
-	assert.False(t, svc.IsScanning(), "IsScanning must be false after Stop returns")
+		assert.Equal(t, time.Duration(0), elapsed, "Stop should return immediately under the fake clock, well inside the 10-second shutdown bound")
+		assert.False(t, svc.IsScanning(), "IsScanning must be false after Stop returns")
+	})
 }
 
-// TestStop_TimesOutOnStuckScan verifies that Stop() returns within ~10 seconds
-// even when the background scan ignores context cancellation (stuck goroutine).
+// TestStop_TimesOutOnStuckScan verifies that Stop() returns after exactly the
+// 10-second shutdown bound (scheduler.go's time.After(10*time.Second)) even
+// when the background scan ignores context cancellation (stuck goroutine).
 //
-// NOTE: The goroutine intentionally leaks in this test — that is expected
-// behaviour mirroring production: Stop logs a warning and proceeds with
-// shutdown rather than blocking indefinitely.  We signal the release channel
-// at the end to prevent go test from hanging after the test completes.
+// Demonstrates: the shutdown bound is a real timeout, not merely "returns
+// promptly" — Stop is durably blocked on select{wg-done, 10s timer} for the
+// entire fake-clock duration, and the deliberately-stuck scan goroutine is
+// what forces that: with a well-behaved checker (as in the test above) Stop
+// returns almost immediately instead. The exact elapsed assertion below is
+// possible only because the clock is fake here; under real time this test
+// used a "generous 12s to absorb CI variance" allowance that is no longer
+// meaningful.
+//
+// The goroutine intentionally leaks past Stop() — that is expected behaviour
+// mirroring production: Stop logs a warning and proceeds with shutdown rather
+// than blocking indefinitely. t.Cleanup closes release so the leaked
+// goroutine exits and the bubble ends clean rather than panicking on a
+// goroutine still blocked when this test function returns (see
+// testing/synctest: "T.Cleanup functions run inside the bubble, immediately
+// before Test returns").
 func TestStop_TimesOutOnStuckScan(t *testing.T) {
-	release := make(chan struct{})
-	t.Cleanup(func() {
-		// Unblock the leaked goroutine so the process can exit cleanly.
-		select {
-		case <-release:
-		default:
-			close(release)
-		}
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		t.Cleanup(func() {
+			// Unblock the leaked goroutine so the bubble doesn't end with it
+			// still durably blocked.
+			select {
+			case <-release:
+			default:
+				close(release)
+			}
+		})
+
+		checker := contextIgnoringChecker(release)
+		svc := newTestScheduler(t, checker)
+
+		err := svc.StartBackgroundScan()
+		require.NoError(t, err)
+		assert.True(t, svc.IsScanning())
+
+		// Let the scan goroutine actually reach the blocking CheckForUpdates
+		// call before Stop races it. Durably blocking here (rather than
+		// polling) is what makes this deterministic instead of a real sleep
+		// hoping the goroutine got scheduled in time.
+		time.Sleep(20 * time.Millisecond)
+
+		start := time.Now()
+		svc.Stop()
+		elapsed := time.Since(start)
+
+		assert.Equal(t, 10*time.Second, elapsed,
+			"Stop must return at exactly the 10s shutdown bound when the scan never responds to cancellation")
+
+		// After the timeout the goroutine is still stuck, but Stop returned — that is
+		// correct.  IsScanning may still be true in this scenario (the goroutine has
+		// not exited yet), which is also acceptable.
 	})
-
-	checker := contextIgnoringChecker(release)
-	svc := newTestScheduler(t, checker)
-
-	err := svc.StartBackgroundScan()
-	require.NoError(t, err)
-	assert.True(t, svc.IsScanning())
-
-	// Give the goroutine time to enter the blocking CheckForUpdates call.
-	time.Sleep(20 * time.Millisecond)
-
-	start := time.Now()
-	svc.Stop()
-	elapsed := time.Since(start)
-
-	// Should time out within ~10 s (we allow a generous 12 s to absorb CI variance).
-	assert.Less(t, elapsed, 12*time.Second,
-		"Stop must not block forever — it should time out after 10 s and log a warning")
-
-	// After the timeout the goroutine is still stuck, but Stop returned — that is
-	// correct.  IsScanning may still be true in this scenario (the goroutine has
-	// not exited yet), which is also acceptable.
 }
 
 // TestRunScan_SucceedsWhenNoScanInFlight is a basic sanity check that RunScan
@@ -255,18 +296,19 @@ func TestRunScan_SucceedsWhenNoScanInFlight(t *testing.T) {
 // immediately after StartBackgroundScan returns, and returns to false after
 // the goroutine finishes.
 func TestStartBackgroundScan_SetsIsScanning(t *testing.T) {
-	checker, release := blockedChecker()
-	svc := newTestScheduler(t, checker)
+	synctest.Test(t, func(t *testing.T) {
+		checker, release := blockedChecker()
+		svc := newTestScheduler(t, checker)
 
-	err := svc.StartBackgroundScan()
-	require.NoError(t, err)
-	assert.True(t, svc.IsScanning())
+		err := svc.StartBackgroundScan()
+		require.NoError(t, err)
+		assert.True(t, svc.IsScanning())
 
-	close(release)
+		close(release)
 
-	assert.Eventually(t, func() bool {
-		return !svc.IsScanning()
-	}, 2*time.Second, 10*time.Millisecond)
+		synctest.Wait()
+		assert.False(t, svc.IsScanning())
+	})
 }
 
 // TestRunScan_ErrorPropagated verifies that when CheckForUpdates returns an
@@ -286,24 +328,26 @@ func TestRunScan_ErrorPropagated(t *testing.T) {
 }
 
 func TestStartStopStart_Cycle(t *testing.T) {
-	checker := &fakeUpdateChecker{}
-	svc := newTestScheduler(t, checker)
+	synctest.Test(t, func(t *testing.T) {
+		checker := &fakeUpdateChecker{}
+		svc := newTestScheduler(t, checker)
 
-	// First Start
-	svc.Start(100 * time.Millisecond)
-	assert.True(t, svc.IsRunning(), "IsRunning should be true after first Start")
+		// First Start
+		svc.Start(100 * time.Millisecond)
+		assert.True(t, svc.IsRunning(), "IsRunning should be true after first Start")
 
-	// Stop
-	svc.Stop()
-	assert.False(t, svc.IsRunning(), "IsRunning should be false after Stop")
+		// Stop
+		svc.Stop()
+		assert.False(t, svc.IsRunning(), "IsRunning should be false after Stop")
 
-	// Second Start — verifies the cancel context is re-initializable; must not panic
-	svc.Start(100 * time.Millisecond)
-	assert.True(t, svc.IsRunning(), "IsRunning should be true after second Start")
+		// Second Start — verifies the cancel context is re-initializable; must not panic
+		svc.Start(100 * time.Millisecond)
+		assert.True(t, svc.IsRunning(), "IsRunning should be true after second Start")
 
-	// Clean up
-	svc.Stop()
-	assert.False(t, svc.IsRunning(), "IsRunning should be false after second Stop")
+		// Clean up
+		svc.Stop()
+		assert.False(t, svc.IsRunning(), "IsRunning should be false after second Stop")
+	})
 }
 
 // TestStartBackgroundScan_ConcurrentWithStop_NoRace is the regression test for
@@ -322,6 +366,16 @@ func TestStartStopStart_Cycle(t *testing.T) {
 //	  .../internal/services/scheduler.go:124 +0x64    (s.wg.Wait() in Stop)
 //
 // The fix is the `stopped` field: see its doc comment on SchedulerService.
+//
+// DELIBERATELY LEFT OUTSIDE synctest (agent-os-o1jp.3): this test's entire
+// value is real, unpredictable OS-thread interleaving between two goroutines
+// racing for s.mu — "whichever goroutine wins the mutex" only varies because
+// the Go scheduler's timing is nondeterministic. A fake clock does not make
+// mutex-acquisition order deterministic (synctest only fast-forwards
+// time.Sleep/timers/channels, not scheduler interleaving), so bubbling this
+// test would not add discriminating power, and every goroutine here joins via
+// wg.Wait() each iteration, so there is no leak risk motivating the move
+// either.
 func TestStartBackgroundScan_ConcurrentWithStop_NoRace(t *testing.T) {
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
@@ -388,26 +442,29 @@ func TestStartBackgroundScan_ConcurrentWithStop_NoRace(t *testing.T) {
 // StartBackgroundScan refuses rather than calling s.wg.Add behind Stop's back;
 // Start() clears the latch again.
 func TestStartBackgroundScan_RejectedWhileStopped(t *testing.T) {
-	svc := newTestScheduler(t, &fakeUpdateChecker{})
+	synctest.Test(t, func(t *testing.T) {
+		svc := newTestScheduler(t, &fakeUpdateChecker{})
 
-	svc.Start(time.Hour)
-	require.NoError(t, svc.StartBackgroundScan(), "a freshly started scheduler must admit scans")
-	assert.Eventually(t, func() bool { return !svc.IsScanning() }, 2*time.Second, 10*time.Millisecond)
+		svc.Start(time.Hour)
+		require.NoError(t, svc.StartBackgroundScan(), "a freshly started scheduler must admit scans")
+		synctest.Wait()
+		assert.False(t, svc.IsScanning())
 
-	svc.Stop()
+		svc.Stop()
 
-	err := svc.StartBackgroundScan()
-	require.Error(t, err, "a stopped scheduler must refuse to start a background scan")
-	require.ErrorIs(t, err, ErrSchedulerStopping,
-		"the refusal must be the exported sentinel: handlers.checkUpdates matches on it "+
-			"with errors.Is to keep a refresh during the stop window off the 500 path")
-	assert.False(t, svc.IsScanning(), "a refused scan must not leave the scanning flag set")
+		err := svc.StartBackgroundScan()
+		require.Error(t, err, "a stopped scheduler must refuse to start a background scan")
+		require.ErrorIs(t, err, ErrSchedulerStopping,
+			"the refusal must be the exported sentinel: handlers.checkUpdates matches on it "+
+				"with errors.Is to keep a refresh during the stop window off the 500 path")
+		assert.False(t, svc.IsScanning(), "a refused scan must not leave the scanning flag set")
 
-	// Start() must clear the latch, otherwise Restart() would permanently
-	// disable background scans.
-	svc.Start(time.Hour)
-	require.NoError(t, svc.StartBackgroundScan(), "Start must clear the stopped latch")
-	svc.Stop()
+		// Start() must clear the latch, otherwise Restart() would permanently
+		// disable background scans.
+		svc.Start(time.Hour)
+		require.NoError(t, svc.StartBackgroundScan(), "Start must clear the stopped latch")
+		svc.Stop()
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -654,63 +711,99 @@ func TestRunCycle_InvalidStoredSchedule_FallsBackToImmediate(t *testing.T) {
 // armed by Start(), hops on its own timer, and fires only once the wall clock
 // has crossed the scheduled instant. The scan interval is an hour so the scan
 // ticker never contributes; everything applied here came from cached_updates.
+//
+// Demonstrates: the loop's bounded 5ms hops (svc.applyMaxSleep) keep it
+// durably blocked between re-checks rather than busy-polling, and it only
+// acts once the INJECTED applyClock (not the bubble's own fake time.Now — the
+// loop deliberately reads a separate seam, see applySeams) reports the
+// scheduled instant has passed. synctest.Wait() replaces the two
+// assert/require.Eventually real-time polls: each one was waiting for this
+// same goroutine to reach its next durably-blocked point (armed-and-waiting,
+// then fired-and-rearmed), which a bubble can pinpoint exactly instead of
+// polling for.
 func TestApplyTimer_FiresAndAppliesCachedUpdates(t *testing.T) {
-	checker := &fakeUpdateChecker{updateFn: succeedingUpdate}
-	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
-	seedCachedUpdate(t, svc, "c1", "web")
-	enableScheduledApply(t, svc, "03:00")
+	synctest.Test(t, func(t *testing.T) {
+		checker := &fakeUpdateChecker{updateFn: succeedingUpdate}
+		svc := newApplyFixture(t, checker)
+		seedContainerPolicy(t, svc, "c1")
+		seedCachedUpdate(t, svc, "c1", "web")
+		enableScheduledApply(t, svc, "03:00")
 
-	// Just before the scheduled instant, so NextAfter resolves to today 03:00.
-	base := time.Date(2026, 3, 2, 2, 59, 0, 0, time.Local)
-	clock := newTestClock(base)
-	svc.applyClock = clock.Now
-	svc.applyMaxSleep = 5 * time.Millisecond
+		// Just before the scheduled instant, so NextAfter resolves to today 03:00.
+		base := time.Date(2026, 3, 2, 2, 59, 0, 0, time.Local)
+		clock := newTestClock(base)
+		svc.applyClock = clock.Now
+		svc.applyMaxSleep = 5 * time.Millisecond
 
-	svc.Start(time.Hour)
-	defer svc.Stop()
+		svc.Start(time.Hour)
+		defer svc.Stop()
 
-	// The timer is armed and hopping, but the scheduled instant has not arrived.
-	want := time.Date(2026, 3, 2, 3, 0, 0, 0, time.Local)
-	require.Eventually(t, func() bool {
-		return svc.NextApplyAt().Equal(want)
-	}, 2*time.Second, 5*time.Millisecond, "Start must arm the apply timer for today 03:00")
-	time.Sleep(50 * time.Millisecond)
-	require.Empty(t, checker.updatedIDs(),
-		"the apply timer must not fire before the scheduled instant")
+		// The apply loop goroutine has armed its timer and is durably blocked
+		// on its select — this is the same point the old real-time Eventually
+		// was polling for.
+		synctest.Wait()
+		want := time.Date(2026, 3, 2, 3, 0, 0, 0, time.Local)
+		require.True(t, svc.NextApplyAt().Equal(want), "Start must arm the apply timer for today 03:00")
 
-	clock.set(base.Add(2 * time.Minute)) // 03:01 — past 03:00
+		time.Sleep(50 * time.Millisecond)
+		require.Empty(t, checker.updatedIDs(),
+			"the apply timer must not fire before the scheduled instant")
 
-	assert.Eventually(t, func() bool {
-		return len(checker.updatedIDs()) == 1
-	}, 2*time.Second, 5*time.Millisecond,
-		"the apply timer must fire once the wall clock passes the scheduled instant")
-	assert.Equal(t, []string{"c1"}, checker.updatedIDs())
+		clock.set(base.Add(2 * time.Minute)) // 03:01 — past 03:00
+
+		// synctest.Wait() is NOT enough here: the loop's timer is already
+		// armed for a bounded 5ms hop from before clock.set(), and per
+		// testing/synctest's own priority rule ("Wait returns, if it has been
+		// called" takes precedence over "time advances"), Wait() can return
+		// immediately without ever advancing the clock across that pending
+		// hop — which is exactly why this flaked under Wait() (VERIFIED:
+		// ~50% failure rate over 20 runs when this used synctest.Wait()
+		// here). Sleeping past two full hops forces genuine time advancement
+		// through the loop's next re-check, deterministically, regardless of
+		// which goroutine happened to be runnable first at the clock.set
+		// instant. Two hops (not one) is sufficient because this fixture's
+		// checker is succeedingUpdate, so applyNow always returns true on its
+		// first attempt and the loop never takes the "Deferred, not done"
+		// retry branch (scheduler.go:605-612) that would need a further hop
+		// before re-checking — if a future fixture could defer here, this
+		// bound would need to grow with it.
+		time.Sleep(2 * svc.applyMaxSleep)
+		assert.Equal(t, []string{"c1"}, checker.updatedIDs(),
+			"the apply timer must fire once the wall clock passes the scheduled instant")
+	})
 }
 
 // TestApplyTimer_StoppedSchedulerDoesNotFire is the companion: Stop() must halt
 // and drain the apply timer, so crossing the scheduled instant after shutdown
 // applies nothing.
+//
+// Demonstrates: Stop() actually terminates the apply loop goroutine (closes
+// its done channel) rather than merely making it inert — if it were still
+// running-but-idle, this test's own bubble would panic on a goroutine still
+// blocked when the test returns, since nothing else here would unblock it.
+// The bubble ending clean IS the assertion that Stop tore the goroutine down.
 func TestApplyTimer_StoppedSchedulerDoesNotFire(t *testing.T) {
-	checker := &fakeUpdateChecker{updateFn: succeedingUpdate}
-	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
-	seedCachedUpdate(t, svc, "c1", "web")
-	enableScheduledApply(t, svc, "03:00")
+	synctest.Test(t, func(t *testing.T) {
+		checker := &fakeUpdateChecker{updateFn: succeedingUpdate}
+		svc := newApplyFixture(t, checker)
+		seedContainerPolicy(t, svc, "c1")
+		seedCachedUpdate(t, svc, "c1", "web")
+		enableScheduledApply(t, svc, "03:00")
 
-	base := time.Date(2026, 3, 2, 2, 59, 0, 0, time.Local)
-	clock := newTestClock(base)
-	svc.applyClock = clock.Now
-	svc.applyMaxSleep = 5 * time.Millisecond
+		base := time.Date(2026, 3, 2, 2, 59, 0, 0, time.Local)
+		clock := newTestClock(base)
+		svc.applyClock = clock.Now
+		svc.applyMaxSleep = 5 * time.Millisecond
 
-	svc.Start(time.Hour)
-	svc.Stop()
+		svc.Start(time.Hour)
+		svc.Stop()
 
-	clock.set(base.Add(2 * time.Minute))
-	time.Sleep(100 * time.Millisecond)
+		clock.set(base.Add(2 * time.Minute))
+		time.Sleep(100 * time.Millisecond)
 
-	assert.Empty(t, checker.updatedIDs(),
-		"a stopped scheduler's apply timer must not fire")
+		assert.Empty(t, checker.updatedIDs(),
+			"a stopped scheduler's apply timer must not fire")
+	})
 }
 
 // TestScheduledApply_VanishedContainerIsEvictedNotFailed is the headline
@@ -802,87 +895,116 @@ func TestScheduledApply_UninspectableContainerIsSkippedNotEvicted(t *testing.T) 
 // the scan's own policy writes. applyNow takes the same single-flight guard and
 // reports the deferral so the loop retries instead of losing the run.
 func TestScheduledApply_DeferredWhileScanning(t *testing.T) {
-	checker, release := blockedChecker()
-	checker.updateFn = succeedingUpdate
-	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
-	seedCachedUpdate(t, svc, "c1", "web")
-	enableScheduledApply(t, svc, "03:00")
+	// Demonstrates: applyNow and StartBackgroundScan share one single-flight
+	// guard, and the deferred apply is retried successfully once the scan
+	// goroutine actually finishes — not merely once IsScanning flips, but
+	// after the scan's own DELETE-then-INSERT into cached_updates has landed
+	// (the reseed below would fail loudly with a duplicate-row error if the
+	// scan's write hadn't completed yet). synctest.Wait() is safe here: unlike
+	// the apply-timer tests, nothing here is racing an already-armed periodic
+	// timer — StartBackgroundScan's goroutine runs the checker once and exits,
+	// so waiting for it to become durably blocked (i.e. exit) needs no clock
+	// advance.
+	synctest.Test(t, func(t *testing.T) {
+		checker, release := blockedChecker()
+		checker.updateFn = succeedingUpdate
+		svc := newApplyFixture(t, checker)
+		seedContainerPolicy(t, svc, "c1")
+		seedCachedUpdate(t, svc, "c1", "web")
+		enableScheduledApply(t, svc, "03:00")
 
-	require.NoError(t, svc.StartBackgroundScan())
-	require.True(t, svc.IsScanning())
+		require.NoError(t, svc.StartBackgroundScan())
+		require.True(t, svc.IsScanning())
 
-	assert.False(t, svc.applyNow(context.Background()),
-		"an apply must defer, not run, while a scan holds the single-flight guard")
-	assert.Empty(t, checker.updatedIDs())
+		assert.False(t, svc.applyNow(context.Background()),
+			"an apply must defer, not run, while a scan holds the single-flight guard")
+		assert.Empty(t, checker.updatedIDs())
 
-	// Control: once the scan releases the guard, the same call applies.
-	close(release)
-	require.Eventually(t, func() bool { return !svc.IsScanning() }, 2*time.Second, 10*time.Millisecond)
+		// Control: once the scan releases the guard, the same call applies.
+		close(release)
+		synctest.Wait()
+		require.False(t, svc.IsScanning())
 
-	// That scan found nothing, and SetCachedUpdates is a DELETE-then-INSERT, so
-	// it has just emptied the cache — which is precisely the write the guard
-	// exists to keep an apply from interleaving with. Re-seed for the control.
-	seedCachedUpdate(t, svc, "c1", "web")
+		// That scan found nothing, and SetCachedUpdates is a DELETE-then-INSERT, so
+		// it has just emptied the cache — which is precisely the write the guard
+		// exists to keep an apply from interleaving with. Re-seed for the control.
+		seedCachedUpdate(t, svc, "c1", "web")
 
-	assert.True(t, svc.applyNow(context.Background()))
-	assert.Equal(t, []string{"c1"}, checker.updatedIDs())
+		assert.True(t, svc.applyNow(context.Background()))
+		assert.Equal(t, []string{"c1"}, checker.updatedIDs())
+	})
 }
 
 // TestReloadApplySchedule_PicksUpASettingsChange pins the handler's re-arm path:
 // a scheduler started in immediate mode must start applying on the clock after
 // the settings change plus a ReloadApplySchedule, without a restart.
 func TestReloadApplySchedule_PicksUpASettingsChange(t *testing.T) {
-	checker := &fakeUpdateChecker{updateFn: succeedingUpdate}
-	svc := newApplyFixture(t, checker)
-	seedContainerPolicy(t, svc, "c1")
-	seedCachedUpdate(t, svc, "c1", "web")
+	synctest.Test(t, func(t *testing.T) {
+		checker := &fakeUpdateChecker{updateFn: succeedingUpdate}
+		svc := newApplyFixture(t, checker)
+		seedContainerPolicy(t, svc, "c1")
+		seedCachedUpdate(t, svc, "c1", "web")
 
-	base := time.Date(2026, 3, 2, 2, 59, 0, 0, time.Local)
-	clock := newTestClock(base)
-	svc.applyClock = clock.Now
-	svc.applyMaxSleep = 5 * time.Millisecond
+		base := time.Date(2026, 3, 2, 2, 59, 0, 0, time.Local)
+		clock := newTestClock(base)
+		svc.applyClock = clock.Now
+		svc.applyMaxSleep = 5 * time.Millisecond
 
-	// Started in immediate mode: there is no schedule to fire.
-	svc.Start(time.Hour)
-	defer svc.Stop()
+		// Started in immediate mode: there is no schedule to fire.
+		svc.Start(time.Hour)
+		defer svc.Stop()
 
-	clock.set(base.Add(2 * time.Minute))
-	time.Sleep(50 * time.Millisecond)
-	require.Empty(t, checker.updatedIDs(), "immediate mode has no apply timer to fire")
+		clock.set(base.Add(2 * time.Minute))
+		time.Sleep(50 * time.Millisecond)
+		require.Empty(t, checker.updatedIDs(), "immediate mode has no apply timer to fire")
 
-	// Now configure a schedule and re-arm the way the handler does.
-	clock.set(base)
-	enableScheduledApply(t, svc, "03:00")
-	svc.ReloadApplySchedule()
+		// Now configure a schedule and re-arm the way the handler does.
+		clock.set(base)
+		enableScheduledApply(t, svc, "03:00")
+		svc.ReloadApplySchedule()
 
-	// Wait for the loop to have actually picked the re-arm up before moving the
-	// clock. Advancing first would race it: a loop that read the schedule at
-	// 03:01 would resolve the next 03:00 to TOMORROW and correctly never fire,
-	// which would look like the re-arm failing.
-	want := time.Date(2026, 3, 2, 3, 0, 0, 0, time.Local)
-	require.Eventually(t, func() bool {
-		return svc.NextApplyAt().Equal(want)
-	}, 2*time.Second, 5*time.Millisecond, "ReloadApplySchedule must arm the loop for today 03:00")
+		// ReloadApplySchedule's send into the buffered rearm channel makes the
+		// loop goroutine runnable immediately (a channel becoming ready is
+		// ordinary scheduling, not a clock advance), so synctest.Wait() is
+		// safe here — unlike the timer-hop wait below, there is no
+		// already-armed timer whose remaining duration Wait() could skip
+		// past. Waiting for the loop to have actually picked the re-arm up
+		// before moving the clock matters for the same reason the original
+		// comment gave: a loop that read the schedule at 03:01 would resolve
+		// the next 03:00 to TOMORROW and correctly never fire, which would
+		// look like the re-arm failing.
+		synctest.Wait()
+		want := time.Date(2026, 3, 2, 3, 0, 0, 0, time.Local)
+		require.True(t, svc.NextApplyAt().Equal(want), "ReloadApplySchedule must arm the loop for today 03:00")
 
-	clock.set(base.Add(2 * time.Minute))
-	assert.Eventually(t, func() bool {
-		return len(checker.updatedIDs()) == 1
-	}, 2*time.Second, 5*time.Millisecond,
-		"ReloadApplySchedule must arm the timer without a scheduler restart")
+		clock.set(base.Add(2 * time.Minute))
+		// Same reasoning as TestApplyTimer_FiresAndAppliesCachedUpdates: the
+		// loop's post-rearm timer is already armed for a bounded 5ms hop, so
+		// sleep past two full hops rather than calling Wait(), which could
+		// return before that pending hop fires. Two hops is sufficient for the
+		// same reason as that test: this fixture is succeedingUpdate, so
+		// applyNow succeeds on its first attempt and never takes the
+		// "Deferred, not done" retry branch (scheduler.go:605-612) that would
+		// need an extra hop.
+		time.Sleep(2 * svc.applyMaxSleep)
+		assert.Equal(t, []string{"c1"}, checker.updatedIDs(),
+			"ReloadApplySchedule must arm the timer without a scheduler restart")
+	})
 }
 
 // TestReloadApplySchedule_OnStoppedSchedulerIsNoop guards the shutdown window:
 // the handler can call it at any time, including after Stop() cleared the
 // re-arm handle.
 func TestReloadApplySchedule_OnStoppedSchedulerIsNoop(t *testing.T) {
-	svc := newTestScheduler(t, &fakeUpdateChecker{})
+	synctest.Test(t, func(t *testing.T) {
+		svc := newTestScheduler(t, &fakeUpdateChecker{})
 
-	assert.NotPanics(t, svc.ReloadApplySchedule, "a never-started scheduler must tolerate a re-arm")
+		assert.NotPanics(t, svc.ReloadApplySchedule, "a never-started scheduler must tolerate a re-arm")
 
-	svc.Start(time.Hour)
-	svc.Stop()
-	assert.NotPanics(t, svc.ReloadApplySchedule, "a stopped scheduler must tolerate a re-arm")
+		svc.Start(time.Hour)
+		svc.Stop()
+		assert.NotPanics(t, svc.ReloadApplySchedule, "a stopped scheduler must tolerate a re-arm")
+	})
 }
 
 // TestApplyWait_BoundsEveryArming pins the reason the loop uses bounded hops
