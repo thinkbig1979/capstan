@@ -204,7 +204,42 @@ func (s *GitService) gitCmdWithCreds(dirPath, user, token string, args ...string
 	// stripCapstanSecrets for why this is a denylist rather than an
 	// allowlist. Hygiene, consistent with this package's other child-process
 	// call sites (exec_env.go, backup_restic.go).
-	env := append(stripCapstanSecrets(os.Environ()), "GIT_TERMINAL_PROMPT=0")
+	//
+	// LC_ALL=C / LANGUAGE=<cleared> pin the child to English, untranslated
+	// messages: git ships ~19 gettext catalogs, and callers of this command
+	// (pullCLI's "Already up to date" match) parse its stdout/stderr as a
+	// machine interface, not prose for a human. Without this, the same pull
+	// that succeeds in English reports a false 500 on a non-English host
+	// (agent-os-vq3p).
+	//
+	// LC_ALL=C is the load-bearing half; clearing LANGUAGE is defence in
+	// depth, not the mechanism. glibc's gettext consults LANGUAGE only when
+	// the MESSAGES locale resolves to something other than C or POSIX — a
+	// C/POSIX messages locale disables translation outright and LANGUAGE is
+	// then ignored entirely. The empty LANGUAGE costs nothing and keeps the
+	// pin correct if anyone later moves LC_ALL off C, which is the one case
+	// where LANGUAGE would win. OBSERVED, git version 2.47.3 on this host,
+	// `git status --porcelain` run outside a repository in five environments:
+	//
+	//	LC_ALL=C           LANGUAGE=de           -> "fatal: not a git repository ..."       English
+	//	LC_ALL=POSIX       LANGUAGE=de           -> "fatal: not a git repository ..."       English
+	//	LANG=de_DE.UTF-8   LANGUAGE=de (no LC_ALL) -> "fatal: not a git repository ..."     English
+	//	LC_ALL=de_DE.UTF-8 (no LANGUAGE)         -> "fatal: not a git repository ..."       English
+	//	LC_ALL=en_US.utf8  LANGUAGE=de           -> "Schwerwiegend: Kein Git-Repository ..." German
+	//
+	// The last arm is the positive control: the same command, same git, so
+	// the difference is the environment and the catalogs are demonstrably
+	// installed. The fourth arm reads English only because de_DE.UTF-8 is not
+	// generated on this box (`locale -a` lists en_US.utf8 and no de_*), so
+	// setlocale falls back to C — a host artifact, not gettext precedence.
+	//
+	// Appending both here (rather than filtering them out of
+	// stripCapstanSecrets' output first) is sufficient: os/exec's Cmd.Env is
+	// documented to keep only the last value in the slice for a duplicate
+	// key, so these two entries win over whatever stripCapstanSecrets
+	// forwarded from Capstan's own environment.
+	env := append(stripCapstanSecrets(os.Environ()), "GIT_TERMINAL_PROMPT=0",
+		"LC_ALL=C", "LANGUAGE=")
 
 	if token != "" {
 		// The empty assignment first clears any helper inherited from system or
