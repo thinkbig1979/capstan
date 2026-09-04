@@ -382,6 +382,13 @@ export interface BackupSnapshot {
 
 export interface BackupSettings {
   repository: string
+  /**
+   * True when `repository` above had an embedded credential stripped out of it
+   * and replaced with `***`. Optional because a server predating the field
+   * omits it; absent reads the same as false, which is the safe default — it
+   * warns about nothing rather than warning about everything.
+   */
+  hasEmbeddedCredential?: boolean
   repositorySource: 'env' | 'db' | 'default'
   hasPassword: boolean
   passwordSource: 'env' | 'db' | 'default'

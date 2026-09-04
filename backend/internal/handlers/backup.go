@@ -156,6 +156,58 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	// can carry the same password went out in clear (agent-os-57xj).
 	repository := services.RedactURLUserinfo(bc.ResticRepository)
 
+	// Whether that redaction actually removed something. The UI seeds an
+	// ordinary editable input from `repository` above, so without this flag a
+	// value with a credential hidden inside it and one with nothing hidden look
+	// identical to the operator — they only learn the difference from the 422
+	// the guard below returns AFTER they have edited the path, by which point
+	// they need a credential they may not have.
+	//
+	// Derived by comparison rather than by re-parsing: a difference between the
+	// redacted value and the raw one means RedactURLUserinfo spliced a marker in.
+	// That keeps the flag in step with the redactor by construction — a second
+	// detector would be a second implementation free to drift from the first,
+	// silently and in a security-relevant direction.
+	//
+	// It carries one bit and never the raw value.
+	//
+	// WHERE THIS IS EXACT, AND WHERE IT IS NOT. Both stated because a refactor of
+	// redact_url.go is what would move them, and because the flag is only ever as
+	// good as the redactor it is reading:
+	//
+	//   1. Exact on the parse-SUCCESS paths, and only because they return `raw`
+	//      rather than u.String(): redact_url.go:109-112 (no userinfo) and
+	//      :114-119 (an EMPTY userinfo, "http://@host/path"). Returning u.String()
+	//      there would re-serialise a credential-free URL — case-folding a scheme,
+	//      re-encoding a path — making redacted != raw with no credential present,
+	//      and this flag would then warn about a field that hides nothing. Pinned
+	//      by the empty-userinfo and sftp arms of
+	//      TestGetSettings_FlagsARedactedRepositoryCredential.
+	//
+	//   2. NOT exact on the regex-FALLBACK paths (:87, the opaque recursion onto
+	//      it at :106, and the fail-closed branch at :133). Those splice "***@"
+	//      wherever the scheme-anchored pattern matches, secret or not, so the flag
+	//      reads TRUE for a value hiding nothing. OBSERVED via the real function,
+	//      not inferred:
+	//          rest:http://:@host:8000/repo/  ->  rest:http://***@host:8000/repo/
+	//          http://@host/100%discount      ->  http://***@host/100%discount
+	//      The first has an empty user AND an empty password, which u.User.String()
+	//      renders as ":" so the :117 guard does not catch it; the second is
+	//      unparseable, so it never reaches the parse-success paths at all.
+	//      Second-order, and worse than the wrong hint: the SERVED value then
+	//      carries the marker, so the PUT guard below rejects EVERY save of that
+	//      field. The operator is told a credential is embedded in a repository
+	//      that has none, and cannot save an edit without retyping the whole URI.
+	//
+	//   3. The converse gap, which matters more: a credential containing "/"
+	//      survives RedactURLUserinfo untouched (url.Parse fails on it, and the
+	//      fallback's [^/@]* cannot cross a "/"), so it is served in clear AND
+	//      this flag reads FALSE. The absence of the hint is therefore not a
+	//      safety signal. Tracked as agent-os-zzhs; the fix belongs in
+	//      redact_url.go, because moving it here would build the second detector
+	//      this comparison exists to avoid.
+	hasEmbeddedCredential := repository != bc.ResticRepository
+
 	keepDaily, _ := db.GetSetting("backup_keep_daily")
 	keepWeekly, _ := db.GetSetting("backup_keep_weekly")
 	keepMonthly, _ := db.GetSetting("backup_keep_monthly")
@@ -184,6 +236,7 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"repository":              repository,
+		"hasEmbeddedCredential":   hasEmbeddedCredential,
 		"repositorySource":        repoSrc,
 		"hasPassword":             hasPassword,
 		"passwordSource":          pwSrc,

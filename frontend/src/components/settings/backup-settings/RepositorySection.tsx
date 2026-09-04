@@ -3,7 +3,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { HelpHint } from '@/components/ui/help-hint'
-import { CheckCircle2, Eye, EyeOff, XCircle } from 'lucide-react'
+import { CheckCircle2, Eye, EyeOff, KeyRound, XCircle } from 'lucide-react'
 import type { BackupSettings } from '@/types'
 import { SourceBadge } from './SourceBadge'
 
@@ -34,6 +34,20 @@ export function RepositorySection({
   onInitRepo,
   isInitializing,
 }: RepositorySectionProps) {
+  // The flag describes settings.repository — the value the SERVER sent. The
+  // input renders `repository`, the draft. Once the operator types a
+  // replacement the two diverge, and a hint gated on the flag alone would keep
+  // asserting that a credential is hidden behind "***" in a field that now
+  // holds their freshly typed cleartext URI and no marker at all — wrong at
+  // exactly the moment they are acting on it.
+  //
+  // Compared against the same `?? ''` normalisation toDraft uses to seed the
+  // field, so an untouched form matches instead of reading as edited. Typing
+  // the original value back restores the hint, which is correct: the field then
+  // holds "***" again and saving it would be rejected.
+  const showCredentialHint =
+    settings.hasEmbeddedCredential === true && repository === (settings.repository ?? '')
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-1.5">
@@ -67,8 +81,34 @@ export function RepositorySection({
           value={repository}
           onChange={(e) => onRepositoryChange(e.target.value)}
           className="max-w-md"
+          aria-describedby={
+            showCredentialHint
+              ? 'backup-repository-credential-hint backup-repository-hint'
+              : 'backup-repository-hint'
+          }
         />
-        <p className="text-xs text-muted-foreground">
+        {/*
+          The field stays an ordinary editable input; this is the only thing that
+          tells the operator a credential is hidden inside the value they are
+          looking at. Gated on the flag, never always-on: a warning that shows on
+          every repository is one operators learn to skip past, which costs more
+          than it saves on the repositories that do carry a credential.
+        */}
+        {showCredentialHint && (
+          <p
+            id="backup-repository-credential-hint"
+            className="flex items-start gap-1.5 text-xs text-warning"
+          >
+            <KeyRound className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden="true" />
+            <span>
+              A credential is embedded in this value and is shown here as <code>***</code>. To
+              change any part of it, re-enter the full URI including the credential. Saving while{' '}
+              <code>***</code> is still in the field is rejected, so the stored credential stays
+              intact.
+            </span>
+          </p>
+        )}
+        <p id="backup-repository-hint" className="text-xs text-muted-foreground">
           Local path for the restic repository. Must be accessible inside the container.
           Leave blank to revert to the <code>RESTIC_REPOSITORY</code> environment variable.
         </p>
