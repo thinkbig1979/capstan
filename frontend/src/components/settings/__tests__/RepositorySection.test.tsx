@@ -90,6 +90,43 @@ describe('RepositorySection credential hint', () => {
     expect(screen.queryByText(/credential is embedded/i)).toBeNull()
   })
 
+  // The two-sided arm for staleness: the hint must describe the value ON SCREEN,
+  // not the one the server sent. Same instrument, same settings object; only the
+  // draft differs between the arms.
+  describe('once the operator edits the field', () => {
+    const remote = 'rest:https://***@backup.example.com/repo/'
+    const flagged = () =>
+      makeSettings({ repository: remote, hasEmbeddedCredential: true })
+
+    it('renders the hint while the field still holds the redacted value', () => {
+      renderSection(flagged(), remote)
+      expect(credentialHint()).not.toBeNull()
+    })
+
+    it('drops the hint once the draft diverges from what the server sent', () => {
+      // The operator has typed a real URI. The field now holds their cleartext
+      // credential and no "***" at all, so a hint saying one is hidden behind
+      // "***" would be false about the value they are looking at.
+      renderSection(flagged(), 'rest:https://bob:BRANDNEWSECRET@backup.example.com/repo/')
+      expect(credentialHint()).toBeNull()
+    })
+
+    it('drops the hint for a mere path edit, which is when the 422 bites', () => {
+      renderSection(flagged(), 'rest:https://***@backup.example.com/repo-renamed/')
+      expect(credentialHint()).toBeNull()
+    })
+
+    it('restores the hint if the original value is typed back', () => {
+      // Not a curiosity: the field holds "***" again, so saving it WOULD be
+      // rejected, and the hint is the thing that says so.
+      const { unmount } = renderSection(flagged(), 'something else')
+      expect(credentialHint()).toBeNull()
+      unmount()
+      renderSection(flagged(), remote)
+      expect(credentialHint()).not.toBeNull()
+    })
+  })
+
   it.each([
     ['an empty userinfo', 'http://@host/path'],
     ["restic's documented SFTP form", 'sftp:user@host:/srv/restic-repo'],

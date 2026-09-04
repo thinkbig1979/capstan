@@ -34,6 +34,20 @@ export function RepositorySection({
   onInitRepo,
   isInitializing,
 }: RepositorySectionProps) {
+  // The flag describes settings.repository — the value the SERVER sent. The
+  // input renders `repository`, the draft. Once the operator types a
+  // replacement the two diverge, and a hint gated on the flag alone would keep
+  // asserting that a credential is hidden behind "***" in a field that now
+  // holds their freshly typed cleartext URI and no marker at all — wrong at
+  // exactly the moment they are acting on it.
+  //
+  // Compared against the same `?? ''` normalisation toDraft uses to seed the
+  // field, so an untouched form matches instead of reading as edited. Typing
+  // the original value back restores the hint, which is correct: the field then
+  // holds "***" again and saving it would be rejected.
+  const showCredentialHint =
+    settings.hasEmbeddedCredential === true && repository === (settings.repository ?? '')
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-1.5">
@@ -68,7 +82,7 @@ export function RepositorySection({
           onChange={(e) => onRepositoryChange(e.target.value)}
           className="max-w-md"
           aria-describedby={
-            settings.hasEmbeddedCredential
+            showCredentialHint
               ? 'backup-repository-credential-hint backup-repository-hint'
               : 'backup-repository-hint'
           }
@@ -80,7 +94,7 @@ export function RepositorySection({
           every repository is one operators learn to skip past, which costs more
           than it saves on the repositories that do carry a credential.
         */}
-        {settings.hasEmbeddedCredential && (
+        {showCredentialHint && (
           <p
             id="backup-repository-credential-hint"
             className="flex items-start gap-1.5 text-xs text-warning"
