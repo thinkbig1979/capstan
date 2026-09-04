@@ -124,10 +124,11 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 		// report "no containers" on a ticker instead.
 		//
 		// This mirrors handleDashboardMetricsWebSocket's STRUCTURE (guard
-		// before StreamStats, ticker, one frame per tick) and deliberately
-		// differs from it on the empty value — see the Containers note below.
-		// Do not copy that handler's `Containers: nil` here; it is a live
-		// defect over there, tracked as agent-os-5scv, not a model to follow.
+		// before StreamStats, ticker, one frame per tick) and now also matches
+		// it on the empty value — see the Containers note below. That handler
+		// used to send `Containers: nil` here, which was its own defect; it was
+		// fixed under agent-os-5scv and both handlers now emit an empty slice.
+		// Keep it that way in either file.
 		//
 		// Guarding here rather than in StreamStats keeps the change local to
 		// the one caller that lacked it: dashboard.go guards before its own

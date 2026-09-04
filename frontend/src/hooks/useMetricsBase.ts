@@ -20,22 +20,29 @@ export interface ContainerMetricHistory {
   metrics: ContainerMetric[]
 }
 
+export interface MetricsContainerFrame {
+  containerId: string
+  name: string
+  cpuPercent: number
+  memUsage: number
+  memLimit: number
+  memPercent: number
+  netRx: number
+  netTx: number
+  blockRead: number
+  blockWrite: number
+  memSwap: number
+  pids: number
+}
+
 export interface MetricsMessage {
   timestamp: string
-  containers: Array<{
-    containerId: string
-    name: string
-    cpuPercent: number
-    memUsage: number
-    memLimit: number
-    memPercent: number
-    netRx: number
-    netTx: number
-    blockRead: number
-    blockWrite: number
-    memSwap: number
-    pids: number
-  }>
+  // Nullable on purpose. A Go nil slice marshals to JSON `null`, not `[]`, so
+  // `null` is a shape this socket can genuinely deliver (agent-os-5scv). The
+  // backend no longer sends it, but the type is the wire contract and it has
+  // to stay honest about what the wire can carry: declaring this non-nullable
+  // is what let an unguarded `.forEach` past the compiler in the first place.
+  containers: MetricsContainerFrame[] | null
 }
 
 export interface MetricsBaseOptions {

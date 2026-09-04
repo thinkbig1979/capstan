@@ -48,7 +48,14 @@ func (h *DashboardHandler) getDashboardStats() gin.HandlerFunc {
 		containers, err := h.docker.GetAllContainersWithDetails(ctx, h.db)
 		if err != nil {
 			slog.Error("Failed to get containers for dashboard", "error", err)
-			containers = nil
+			// Empty slice, NOT nil: this still serialises under "containers" in
+			// a 200 OK below, and encoding/json renders a nil slice as `null`
+			// while DashboardStats.containers is declared a non-nullable array
+			// on the frontend. Same defect class as the metrics WS empty-host
+			// frame fixed in handleDashboardMetricsWebSocket (agent-os-5scv);
+			// this path survives only because its two current consumers happen
+			// to use `??`/`?.`, which is not a property the type guarantees.
+			containers = []models.DashboardContainerInfo{}
 		}
 
 		// Derive live stack status from the container snapshot we already fetched,

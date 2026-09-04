@@ -47,10 +47,11 @@ func readMetricsFrame(t *testing.T, conn *websocket.Conn, within time.Duration, 
 // per second, forever.
 //
 // The fix takes handleDashboardMetricsWebSocket's STRUCTURE — guard before
-// StreamStats, hold the socket open, emit one frame per tick — but not its
-// empty value. That handler sends `Containers: nil`, which is its own live
-// defect (agent-os-5scv); this one sends an empty slice, and the wire-format
-// assertion below is what pins the difference.
+// StreamStats, hold the socket open, emit one frame per tick. It also matches
+// its empty value: that handler used to send `Containers: nil`, its own defect,
+// fixed under agent-os-5scv, so both handlers now emit an empty slice. The
+// wire-format assertion below is what pins that this one still does, and
+// dashboard_metrics_frame_test.go is its counterpart for the other handler.
 //
 // Scope note: this test says nothing about *why* the list is empty for a
 // stack whose containers exist — that is a separate defect (agent-os-fg55).
