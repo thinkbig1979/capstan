@@ -57,7 +57,14 @@ export function useMetricsBase(path: string, options: MetricsBaseOptions = {}) {
       const next = { ...prev }
       const activeIds = new Set<string>()
 
-      message.containers.forEach((container) => {
+      // The backend's declared type says this is never null, but the wire
+      // format cannot enforce that: a nil Go slice marshals to JSON `null`
+      // (agent-os-5scv), and this updater runs during React's render phase,
+      // outside the WS layer's try/catch, so an unguarded dereference here
+      // takes down the whole app. Guard it regardless of what the backend
+      // currently sends.
+      const incomingContainers = message.containers ?? []
+      incomingContainers.forEach((container) => {
         activeIds.add(container.containerId)
         const metric: ContainerMetric = {
           cpuPercent: container.cpuPercent,

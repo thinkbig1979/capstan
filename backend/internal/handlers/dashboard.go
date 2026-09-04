@@ -166,8 +166,13 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 					return
 				case <-ticker.C:
 					frame := MetricsFrame{
-						Timestamp:  time.Now().Format(time.RFC3339),
-						Containers: nil,
+						Timestamp: time.Now().Format(time.RFC3339),
+						// A nil slice marshals to JSON null, but
+						// MetricsMessage.containers on the frontend is typed as a
+						// non-nullable array (useMetricsBase.ts) and dereferenced
+						// unguarded — an empty slice keeps the wire payload matching
+						// the declared type (agent-os-5scv).
+						Containers: []models.ContainerMetrics{},
 					}
 					if err := safeWriteJSON(conn, frame); err != nil {
 						return

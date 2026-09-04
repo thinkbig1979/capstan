@@ -259,4 +259,29 @@ describe('useMetricsBase', () => {
     // The frame still counts as traffic, so the socket stays "connected".
     expect(result.current.isConnected).toBe(true)
   })
+
+  it('does not throw when the server sends containers:null (agent-os-5scv)', () => {
+    // Go marshals a nil slice as JSON null, not []. MetricsMessage.containers is
+    // typed as a non-nullable array, so this cast is the only way to put the
+    // real wire shape a buggy/older backend can still send through the type
+    // system — the whole point of this test is that the type cannot be
+    // trusted at the wire boundary.
+    const nullContainersMessage = {
+      timestamp: '2026-08-08T12:00:00Z',
+      containers: null,
+    } as unknown as MetricsMessage
+
+    const { result } = renderHook(() => useMetricsBase('/ws/metrics'))
+
+    expect(() => {
+      act(() => {
+        capturedOnMessage!(nullContainersMessage)
+      })
+    }).not.toThrow()
+
+    // A null frame reports no containers, same as an empty-array frame — it
+    // must not leave stale history behind or crash the updater.
+    expect(result.current.containers).toEqual([])
+    expect(result.current.isConnected).toBe(true)
+  })
 })
