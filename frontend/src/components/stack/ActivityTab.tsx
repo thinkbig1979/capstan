@@ -16,6 +16,10 @@ type ActivityView = (typeof VIEWS)[number]
  * Merged History / Updates / Backups tab. The active section is kept in the
  * ?view= search param so old per-tab deep links (redirected by StackPage)
  * land on the right section and the section survives reloads.
+ *
+ * Tab ORDER is JSX position only. The `value` strings are the ?view= contract
+ * shared with StackPage's legacy-route redirects, so they are not display names
+ * and must not be renamed to follow a label.
  */
 export function ActivityTab({ stackId }: ActivityTabProps) {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -31,16 +35,10 @@ export function ActivityTab({ stackId }: ActivityTabProps) {
   return (
     <Tabs value={view} onValueChange={setView}>
       <TabsList>
-        <TabsTrigger value="history">History</TabsTrigger>
         <TabsTrigger value="updates">Updates</TabsTrigger>
         <TabsTrigger value="backups">Backups</TabsTrigger>
+        <TabsTrigger value="history">Git History</TabsTrigger>
       </TabsList>
-
-      <TabsContent value="history" className="mt-4">
-        <TabErrorBoundary>
-          <GitHistory stackId={stackId} />
-        </TabErrorBoundary>
-      </TabsContent>
 
       <TabsContent value="updates" className="mt-4">
         <TabErrorBoundary>
@@ -51,6 +49,12 @@ export function ActivityTab({ stackId }: ActivityTabProps) {
       <TabsContent value="backups" className="mt-4">
         <TabErrorBoundary>
           <BackupsTab stackId={stackId} />
+        </TabErrorBoundary>
+      </TabsContent>
+
+      <TabsContent value="history" className="mt-4">
+        <TabErrorBoundary>
+          <GitHistory stackId={stackId} />
         </TabErrorBoundary>
       </TabsContent>
     </Tabs>
