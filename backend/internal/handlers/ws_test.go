@@ -194,6 +194,42 @@ func TestConnectionManager_CloseForUser_AnonymousIsNoop(t *testing.T) {
 	assert.True(t, present, `userID "anonymous" (what AUTH_DISABLED assigns) must close nothing`)
 }
 
+// TestConnectionManagers_CloseForSession_SkipsNilManager and its CloseForUser
+// sibling below cover the "if cm != nil" guard inside ConnectionManagers'
+// fan-out (ws.go), which had no test arm anywhere before agent-os-o1jp.1: a
+// third manager slot left nil (not wired via main.go, e.g. a handler whose
+// ConnectionManager is optional) must not panic the whole revocation fan-out
+// and must not stop it from reaching the real managers alongside it.
+func TestConnectionManagers_CloseForSession_SkipsNilManager(t *testing.T) {
+	real := NewConnectionManager(10)
+	revoked := &Connection{ID: uuid.New().String(), UserID: "user1", SessionID: "sess-revoked"}
+	require.NoError(t, real.Add(revoked.ID, revoked))
+
+	cms := ConnectionManagers{nil, real}
+
+	assert.NotPanics(t, func() {
+		cms.CloseForSession("sess-revoked")
+	}, "a nil element in the slice must not panic the fan-out")
+
+	_, present := real.Get(revoked.ID)
+	assert.False(t, present, "the real manager alongside the nil one must still process the close")
+}
+
+func TestConnectionManagers_CloseForUser_SkipsNilManager(t *testing.T) {
+	real := NewConnectionManager(10)
+	revoked := &Connection{ID: uuid.New().String(), UserID: "user1", SessionID: "sess-revoked"}
+	require.NoError(t, real.Add(revoked.ID, revoked))
+
+	cms := ConnectionManagers{nil, real}
+
+	assert.NotPanics(t, func() {
+		cms.CloseForUser("user1", "")
+	}, "a nil element in the slice must not panic the fan-out")
+
+	_, present := real.Get(revoked.ID)
+	assert.False(t, present, "the real manager alongside the nil one must still process the close")
+}
+
 // TestSafeWriteMessage_SurvivesConcurrentRevocationClose is the regression for
 // the crash hazard measured on agent-os-teop: closing a live connection via
 // CloseForSession/CloseForUser while another goroutine is mid-write to the

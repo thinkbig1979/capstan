@@ -1030,12 +1030,6 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 			return
 		}
 
-		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
-		if err != nil {
-			return
-		}
-		defer conn.Conn.Close()
-
 		// Register so a session revocation (logout, password change) can reach
 		// this connection — see SetConnectionManager. Nil cm (not wired) skips
 		// registration rather than failing the attach.
@@ -1052,10 +1046,11 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 		// an under-cap connection's Add still incremented userCounts, spending a
 		// slot the other five handlers refuse at (agent-os-pu4y, formerly
 		// documented as a known limit of agent-os-teop's fix).
-		if h.cm != nil {
-			h.cm.AddUnmetered(conn.ID, conn)
-			defer h.cm.Remove(conn.ID)
+		conn, release, err := serveWS(c, h.db, jwtSecret, authDisabled, h.cm, wsRegistration{unmetered: true})
+		if err != nil {
+			return
 		}
+		defer release()
 
 		// wsCtx is cancelled on client disconnect; it governs only the write loop.
 		// The underlying operation runs on context.Background() and is not affected.

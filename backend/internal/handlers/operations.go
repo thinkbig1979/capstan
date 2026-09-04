@@ -84,22 +84,21 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			return
 		}
 
-		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
-		if err != nil {
-			return
-		}
-		defer conn.Conn.Close()
-
 		// After authentication, so the cap keys on a real user ID. Operations
 		// streams were the other endpoint missing from the ConnectionManager
 		// every other WebSocket handler already uses (agent-os-a0y).
-		if err := h.cm.Add(conn.ID, conn); err != nil {
-			slog.Warn("Operations connection refused: per-user limit reached",
-				"user_id", conn.UserID, "stack_id", stackID, "action", action)
-			writeCloseMessage(conn.Conn, CloseCodeRateLimit, "Too many open connections")
+		conn, release, err := serveWS(c, h.db, jwtSecret, authDisabled, h.cm, wsRegistration{
+			refuseCode:   CloseCodeRateLimit,
+			refuseReason: "Too many open connections",
+			onRefuse: func(conn *Connection) {
+				slog.Warn("Operations connection refused: per-user limit reached",
+					"user_id", conn.UserID, "stack_id", stackID, "action", action)
+			},
+		})
+		if err != nil {
 			return
 		}
-		defer h.cm.Remove(conn.ID)
+		defer release()
 
 		// The whole streaming body is wrapped in an IIFE so that every return
 		// path below — not just the final fallthrough — releases the stack

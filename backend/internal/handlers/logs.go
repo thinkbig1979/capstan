@@ -111,20 +111,16 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 		return
 	}
 
-	wsConn, err := upgradeConnection(c, h.db, h.jwtSecret, h.authDisabled)
+	wsConn, release, err := serveWS(c, h.db, h.jwtSecret, h.authDisabled, h.cm, wsRegistration{
+		refuseCode:   websocket.CloseNormalClosure,
+		refuseReason: "Connection limit exceeded",
+	})
 	if err != nil {
 		return
 	}
-
-	if err := h.cm.Add(wsConn.ID, wsConn); err != nil {
-		writeCloseMessage(wsConn.Conn, websocket.CloseNormalClosure, "Connection limit exceeded")
-		wsConn.Conn.Close()
-		return
-	}
-	defer h.cm.Remove(wsConn.ID)
+	defer release()
 
 	conn := wsConn.Conn
-	defer conn.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

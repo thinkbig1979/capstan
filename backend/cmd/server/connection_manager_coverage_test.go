@@ -20,11 +20,15 @@ import (
 // with no seam a behavioural test could exercise, and the whole point of
 // agent-os-teop's design (an explicit slice built once, next to where the
 // managers are constructed, rather than self-registration) was that the
-// omission must be loud, not silent. A test that only calls
-// ConnectionManagers.CloseForSession/CloseForUser (ws_test.go) proves the
-// mechanism works on whatever managers happen to be in the slice — it cannot
-// see a manager that was never added to it in the first place. Only reading
-// main.go itself can.
+// omission must be loud, not silent. A test that only exercises
+// ConnectionManagers.CloseForSession/CloseForUser directly — the nil-element
+// skip covered by TestConnectionManagers_CloseForSession_SkipsNilManager and
+// its CloseForUser sibling (ws_test.go), or the real two-sided revocation
+// exercised end-to-end via Logout/ChangePassword in
+// auth_logout_revocation_test.go and settings_password_revocation_test.go —
+// proves the mechanism works on whatever managers happen to be in the slice
+// it is given. It cannot see a manager that was never added to that slice in
+// the first place. Only reading main.go itself can.
 //
 // Follows the precedent already set by auth_wiring_test.go's
 // TestAuthMiddlewareIsWiredToTheAuthDisabledAllowlist for the same reason:

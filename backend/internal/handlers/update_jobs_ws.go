@@ -58,18 +58,15 @@ type wsJobFrame struct {
 func (h *UpdateJobsWSHandler) streamJob(c *gin.Context) {
 	jobID := c.Param("jobId")
 
-	conn, err := upgradeConnection(c, h.db, h.jwtSecret, h.authDisabled)
+	conn, release, err := serveWS(c, h.db, h.jwtSecret, h.authDisabled, h.cm, wsRegistration{
+		refuseCode:   websocket.CloseNormalClosure,
+		refuseReason: "Connection limit exceeded",
+	})
 	if err != nil {
 		// upgradeConnection already handled the error response.
 		return
 	}
-	defer conn.Conn.Close()
-
-	if err := h.cm.Add(conn.ID, conn); err != nil {
-		writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Connection limit exceeded")
-		return
-	}
-	defer h.cm.Remove(conn.ID)
+	defer release()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

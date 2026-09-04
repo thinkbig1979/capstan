@@ -598,3 +598,75 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 
 	return connection, nil
 }
+
+// wsRegistration carries the per-site registration policy serveWS enforces on
+// a caller's behalf: whether the connection is metered against the per-user
+// cap, and what to do when it is refused. The eight WS handlers sharing a
+// ConnectionManager are NOT interchangeable here — four distinct close codes
+// and reason strings are wire-visible behaviour (frontend/src/lib/ws.ts
+// branches on 4401/4429 to suppress its reconnect ladder) and one caller
+// (backup.go's wsAttach) must never refuse at all — so this stays a
+// per-call-site value, never a single shared default.
+type wsRegistration struct {
+	// unmetered registers the connection without consuming a per-user cap
+	// slot (see ConnectionManager.AddUnmetered) and never refuses. Only
+	// backup.go's wsAttach sets this (agent-os-pu4y): abandoning an
+	// already-running durable operation's only viewer at the cap is worse
+	// than leaving it uncapped.
+	unmetered    bool
+	refuseCode   int
+	refuseReason string
+	// onRefuse runs before the refusal close frame is written, e.g. to log
+	// the refusal with site-specific fields. Optional.
+	onRefuse func(conn *Connection)
+}
+
+// serveWS upgrades the connection (see upgradeConnection) and, unless cm is
+// nil, registers it per reg, returning a release func that undoes exactly
+// what was done: a nil cm skips registration and release only closes the
+// socket; otherwise release closes the socket and removes the registration.
+//
+// On any error the connection is already fully torn down (upgradeConnection
+// itself closes on every one of its own error returns; a registration
+// refusal here writes the refusal close frame and closes before returning)
+// and the returned release is nil — callers must not call it.
+//
+// cm == nil skips registration entirely rather than failing, matching
+// backup.go's pre-existing nil tolerance (the only one of the eight sites
+// that guarded cm before this helper existed) rather than the other seven
+// sites' unguarded h.cm.Add — extending the more defensive shape everywhere
+// is a pure widening, since no test fixture for any of the eight sites
+// passes a nil cm.
+func serveWS(c *gin.Context, db *database.DB, jwtSecret string, authDisabled bool, cm *ConnectionManager, reg wsRegistration) (*Connection, func(), error) {
+	conn, err := upgradeConnection(c, db, jwtSecret, authDisabled)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if cm == nil {
+		return conn, sync.OnceFunc(func() {
+			conn.Conn.Close()
+		}), nil
+	}
+
+	if reg.unmetered {
+		cm.AddUnmetered(conn.ID, conn)
+	} else if err := cm.Add(conn.ID, conn); err != nil {
+		if reg.onRefuse != nil {
+			reg.onRefuse(conn)
+		}
+		writeCloseMessage(conn.Conn, reg.refuseCode, reg.refuseReason)
+		conn.Conn.Close()
+		return nil, nil, err
+	}
+
+	// Close-then-Remove, not the other way round: waitForServerSideClose
+	// (monitoring_metrics_close_test.go) polls cm.Count()==0 as
+	// synchronisation and then asserts the underlying socket is actually
+	// closed. Remove-then-Close would let Count() reach 0 before the socket
+	// closes, narrowing that test's margin (agent-os-o1jp.1, H8).
+	return conn, sync.OnceFunc(func() {
+		conn.Conn.Close()
+		cm.Remove(conn.ID)
+	}), nil
+}
