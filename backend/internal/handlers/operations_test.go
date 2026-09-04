@@ -85,7 +85,15 @@ func dialOperations(t *testing.T, srv *httptest.Server, stackID, action string) 
 		return nil
 	})
 
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	// Hang guard, and the bound here is subtler than it looks: this is ONE
+	// ABSOLUTE deadline covering the ENTIRE loop below, not a per-read one.
+	// The 5s it replaces was therefore a budget on the CALLER's progress, not
+	// on any single read — TestOperationsOccupiesThenFreesItsSlot runs this
+	// loop in a goroutine while the test body polls for registration and only
+	// then closes `release`, so a slow box could expire this deadline before
+	// the stream it is reading had been allowed to start. The loop's exit is
+	// the server closing; the PASS is the close CODE, never its arrival time.
+	require.NoError(t, conn.SetReadDeadline(hangGuardDeadline(t)))
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			if ce, ok := err.(*websocket.CloseError); ok && closeCode == 0 {
@@ -124,8 +132,15 @@ func TestOperationsOccupiesThenFreesItsSlot(t *testing.T) {
 	done := make(chan struct{})
 	go func() { defer close(done); dialOperations(t, srv, "stack-a", "pull") }()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for cm.CountByUser("anonymous") == 0 && time.Now().Before(deadline) {
+	// Hang guard on a durable observable: fakeStreamer{block: release} parks
+	// the handler inside RunStreaming, so once the connection is registered it
+	// STAYS registered until this test itself closes `release` below. That is
+	// the precondition firstConnection's doc comment names (agent-os-gs7r) —
+	// a poll cannot catch a registration that has already been removed, and
+	// widening the bound would not save it. Here the test owns the release, so
+	// the wait is sound and the bound is only the "it never registered" answer.
+	guard := hangGuardDeadline(t)
+	for cm.CountByUser("anonymous") == 0 && time.Now().Before(guard) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if n := cm.CountByUser("anonymous"); n != 1 {
