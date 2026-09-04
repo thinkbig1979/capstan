@@ -59,23 +59,29 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 		stackID := c.Param("id")
 		containerName := c.Param("container")
 
-		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
-		if err != nil {
-			handleError(c, err)
-			return
-		}
-		defer conn.Conn.Close()
-
 		// After authentication, so the cap keys on a real user ID rather than an
 		// unauthenticated placeholder. Terminals get their own manager with a
 		// lower cap than the shared one — see main.go (agent-os-a0y).
-		if err := h.cm.Add(conn.ID, conn); err != nil {
-			slog.Warn("Terminal connection refused: per-user limit reached",
-				"user_id", conn.UserID, "stack_id", stackID, "container", containerName)
-			writeCloseMessage(conn.Conn, CloseCodeRateLimit, "Too many open terminal sessions")
+		conn, release, err := serveWS(c, h.db, jwtSecret, authDisabled, h.cm, wsRegistration{
+			refuseCode:   CloseCodeRateLimit,
+			refuseReason: "Too many open terminal sessions",
+			onRefuse: func(conn *Connection) {
+				slog.Warn("Terminal connection refused: per-user limit reached",
+					"user_id", conn.UserID, "stack_id", stackID, "container", containerName)
+			},
+		})
+		if err != nil {
+			// A registration refusal already wrote its own close frame and
+			// closed the socket inside serveWS — reporting it here too would
+			// write into an already-hijacked ResponseWriter. Only an
+			// upgrade/auth failure is reported (agent-os-o1jp.1).
+			if !errors.Is(err, errWSRefused) {
+				handleError(c, err)
+			}
 			return
 		}
-		defer h.cm.Remove(conn.ID)
+		// release() closes the connection and deregisters it, in that order.
+		defer release()
 
 		stack, err := h.db.GetStack(stackID)
 		if err != nil || stack == nil {

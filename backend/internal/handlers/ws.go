@@ -598,3 +598,116 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 
 	return connection, nil
 }
+
+// wsRegistration carries the per-site registration policy serveWS enforces on
+// a caller's behalf: whether the connection is metered against the per-user
+// cap, and what to do when it is refused. The eight WS handlers sharing a
+// ConnectionManager are NOT interchangeable here — four distinct close codes
+// and reason strings are wire-visible behaviour (frontend/src/lib/ws.ts
+// branches on 4401/4429 to suppress its reconnect ladder) and one caller
+// (backup.go's wsAttach) must never refuse at all — so this stays a
+// per-call-site value, never a single shared default.
+type wsRegistration struct {
+	// unmetered registers the connection without consuming a per-user cap
+	// slot (see ConnectionManager.AddUnmetered) and never refuses. Only
+	// backup.go's wsAttach sets this (agent-os-pu4y): abandoning an
+	// already-running durable operation's only viewer at the cap is worse
+	// than leaving it uncapped.
+	unmetered bool
+	// refuseCode and refuseReason are REQUIRED whenever unmetered is false:
+	// they are unused (and left at their zero values) on the one unmetered
+	// call site, backup.go, but a metered site that omits them would send an
+	// RFC 6455-invalid close code (0 is outside the valid 1000-4999 range)
+	// the moment its cm.Add ever refuses.
+	refuseCode   int
+	refuseReason string
+	// onRefuse runs before the refusal close frame is written, e.g. to log
+	// the refusal with site-specific fields. Optional.
+	onRefuse func(conn *Connection)
+}
+
+// errWSRefused marks a serveWS error as a registration refusal (the
+// per-user cap via cm.Add), as opposed to an upgrade/auth failure from
+// upgradeConnection. Callers distinguish the two with errors.Is(err,
+// errWSRefused): by the time serveWS returns a refusal error it has already
+// run reg.onRefuse, written the refusal close frame, and closed the socket,
+// so a caller must NOT additionally report it the way it reports an
+// upgrade/auth failure (e.g. handleError/c.Error) — by that point
+// upgrader.Upgrade has already hijacked the connection, so writing a JSON
+// error body would hit an already-hijacked ResponseWriter (http.ErrHijacked)
+// (agent-os-o1jp.1, adversary-caught: collapsing the two error branches
+// without this distinction silently routed cap refusals through the
+// upgrade-failure handling at 4 sites that never did that before).
+var errWSRefused = errors.New("websocket connection refused: registration limit")
+
+// serveWS upgrades the connection (see upgradeConnection) and, unless cm is
+// nil, registers it per reg, returning a release func that undoes exactly
+// what was done: a nil cm skips registration and release only closes the
+// socket; otherwise release closes the socket and removes the registration.
+//
+// On any error the connection is already fully torn down (upgradeConnection
+// itself closes on every one of its own error returns; a registration
+// refusal here writes the refusal close frame and closes before returning)
+// and the returned release is nil — callers must not call it. See
+// errWSRefused for how callers must distinguish the two error causes.
+//
+// cm == nil skips registration entirely rather than failing, matching
+// backup.go's pre-existing nil tolerance (the only one of the eight sites
+// that guarded cm before this helper existed) rather than the other seven
+// sites' unguarded h.cm.Add — extending the nil tolerance everywhere is not
+// quite a pure widening, though: pre-refactor, a nil cm at any of those seven
+// metered sites panicked (a visible 500). Here it instead registers the
+// connection in NO manager, silently unrevocable by CloseForSession/
+// CloseForUser — the agent-os-teop/agent-os-pu4y failure class one level
+// down. Latent today (every handler constructor takes cm, main.go wires both
+// managers unconditionally, and every test fixture passes non-nil), but a
+// metered site given a nil cm is unambiguously a wiring bug, so that case
+// alone is logged below rather than left silent. reg.unmetered stays quiet:
+// backup.go's nil cm is legitimate optional wiring (SetConnectionManager is
+// opt-in, and its own test suite routinely runs with cm nil), and warning
+// there would train readers to ignore the warning.
+func serveWS(c *gin.Context, db *database.DB, jwtSecret string, authDisabled bool, cm *ConnectionManager, reg wsRegistration) (*Connection, func(), error) {
+	conn, err := upgradeConnection(c, db, jwtSecret, authDisabled)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if cm == nil {
+		if !reg.unmetered {
+			slog.Warn("WebSocket connection registered with no ConnectionManager: unrevocable by session/user logout",
+				"connection_id", conn.ID, "user_id", conn.UserID)
+		}
+		return conn, sync.OnceFunc(func() {
+			conn.Conn.Close()
+		}), nil
+	}
+
+	if reg.unmetered {
+		cm.AddUnmetered(conn.ID, conn)
+	} else if err := cm.Add(conn.ID, conn); err != nil {
+		if reg.onRefuse != nil {
+			reg.onRefuse(conn)
+		}
+		writeCloseMessage(conn.Conn, reg.refuseCode, reg.refuseReason)
+		conn.Conn.Close()
+		return nil, nil, errors.Join(errWSRefused, err)
+	}
+
+	// Close-then-Remove, not the other way round: waitForServerSideClose
+	// (monitoring_metrics_close_test.go) polls cm.Count()==0 as
+	// synchronisation and then asserts the underlying socket is actually
+	// closed. Remove-then-Close would let Count() reach 0 before the socket
+	// closes, narrowing that test's margin (agent-os-o1jp.1, H8).
+	//
+	// This order is unchanged (pre-refactor already registered Remove before
+	// Close, so LIFO already gave Close-then-Remove) at dashboard.go,
+	// logs.go, and both monitoring.go sites — the four with a close-ordering
+	// test. It is REVERSED (pre-refactor registered Close before Remove, so
+	// LIFO gave Remove-then-Close) at operations.go, terminal.go,
+	// update_jobs_ws.go, and backup.go — the four with no such test and no
+	// assertion depending on the old order.
+	return conn, sync.OnceFunc(func() {
+		conn.Conn.Close()
+		cm.Remove(conn.ID)
+	}), nil
+}

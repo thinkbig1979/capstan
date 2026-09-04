@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -77,25 +78,27 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 			return
 		}
 
-		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
+		conn, release, err := serveWS(c, h.db, jwtSecret, authDisabled, h.cm, wsRegistration{
+			refuseCode:   websocket.CloseNormalClosure,
+			refuseReason: "Connection limit exceeded",
+		})
 		if err != nil {
-			handleError(c, err)
+			// A registration refusal already wrote its own close frame and
+			// closed the socket inside serveWS — reporting it here too would
+			// write into an already-hijacked ResponseWriter. Only an
+			// upgrade/auth failure is reported (agent-os-o1jp.1).
+			if !errors.Is(err, errWSRefused) {
+				handleError(c, err)
+			}
 			return
 		}
-
-		if err := h.cm.Add(conn.ID, conn); err != nil {
-			writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Connection limit exceeded")
-			conn.Conn.Close()
-			return
-		}
-
-		defer h.cm.Remove(conn.ID)
 		// gorilla's Upgrade hijacks the connection, so net/http never closes it.
 		// Every return below (stream-error, write-error — ctx-done never
 		// actually fires today, since nothing external ever cancels ctx) left
 		// the socket and its goroutines open until this defer (agent-os-14gr),
-		// same shape as operations.go:91 / logs.go:130.
-		defer conn.Conn.Close()
+		// same shape as every other serveWS call site (operations.go,
+		// logs.go, dashboard.go, handleEventsWebSocket below, update_jobs_ws.go).
+		defer release()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -197,19 +200,20 @@ func DefaultEventBus() *EventBus {
 
 func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
+		conn, release, err := serveWS(c, h.db, jwtSecret, authDisabled, h.cm, wsRegistration{
+			refuseCode:   websocket.CloseNormalClosure,
+			refuseReason: "Connection limit exceeded",
+		})
 		if err != nil {
-			handleError(c, err)
+			// A registration refusal already wrote its own close frame and
+			// closed the socket inside serveWS — reporting it here too would
+			// write into an already-hijacked ResponseWriter. Only an
+			// upgrade/auth failure is reported (agent-os-o1jp.1).
+			if !errors.Is(err, errWSRefused) {
+				handleError(c, err)
+			}
 			return
 		}
-
-		if err := h.cm.Add(conn.ID, conn); err != nil {
-			writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Connection limit exceeded")
-			conn.Conn.Close()
-			return
-		}
-
-		defer h.cm.Remove(conn.ID)
 		// gorilla's Upgrade hijacks the connection, so net/http never closes
 		// it. The only reachable exit below is the write-error case (client
 		// vanishes mid-stream) — ctx.Done() never fires (nothing external
@@ -217,9 +221,10 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 		// (only this function's own deferred Unsubscribe closes eventChan,
 		// and that runs after this loop has already exited) — but every
 		// exit left the socket and safePingLoop's goroutine open until this
-		// defer (agent-os-iz9w), same shape as handleMetricsWebSocket
-		// (agent-os-14gr) / operations.go:91 / logs.go:130.
-		defer conn.Conn.Close()
+		// defer (agent-os-iz9w), same shape as handleMetricsWebSocket above
+		// (agent-os-14gr) and every other serveWS call site (operations.go,
+		// logs.go, dashboard.go, update_jobs_ws.go).
+		defer release()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()

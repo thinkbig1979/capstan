@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -116,27 +117,30 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 			return
 		}
 
-		conn, err := upgradeConnection(c, h.db, jwtSecret, authDisabled)
+		conn, release, err := serveWS(c, h.db, jwtSecret, authDisabled, h.cm, wsRegistration{
+			refuseCode:   4401,
+			refuseReason: "Connection limit exceeded",
+		})
 		if err != nil {
-			// gin.Context.Error's own return (a *gin.Error) is for chaining,
-			// not a failure signal; recording the error is the point here.
-			_ = c.Error(err)
+			// A registration refusal already wrote its own close frame and
+			// closed the socket inside serveWS — reporting it here too would
+			// write into an already-hijacked ResponseWriter. Only an
+			// upgrade/auth failure is reported (agent-os-o1jp.1).
+			if !errors.Is(err, errWSRefused) {
+				// gin.Context.Error's own return (a *gin.Error) is for
+				// chaining, not a failure signal; recording the error is the
+				// point here.
+				_ = c.Error(err)
+			}
 			return
 		}
-
-		if err := h.cm.Add(conn.ID, conn); err != nil {
-			writeCloseMessage(conn.Conn, 4401, "Connection limit exceeded")
-			conn.Conn.Close()
-			return
-		}
-
-		defer h.cm.Remove(conn.ID)
 		// gorilla's Upgrade hijacks the connection, so net/http never closes it.
 		// Every return below (stream-error, write-error — ctx-done never
 		// actually fires today, since nothing external ever cancels ctx) left
 		// the socket and its goroutines open until this defer (agent-os-14gr),
-		// same shape as operations.go:91 / logs.go:130.
-		defer conn.Conn.Close()
+		// same shape as every other serveWS call site (operations.go,
+		// logs.go, monitoring.go, terminal.go, update_jobs_ws.go).
+		defer release()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
