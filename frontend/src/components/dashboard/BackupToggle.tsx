@@ -66,11 +66,15 @@ export function BackupToggle({ stackId }: BackupToggleProps) {
     )
   }
 
-  // Last backup result for this stack derived from the run items embedded in status.
-  // BackupStatus does not carry per-stack run items directly; we surface nothing
-  // here and leave it for the dedicated Backups tab (later task). The spec says
-  // "small status affordance shows last backup result", so we derive it from
-  // statusData.lastRun only when it relates to this stack.
+  // NOT scoped to this stack. statusData.lastRun is the single most recent run
+  // across the whole install, of any kind, so it may be a restore, a prune, or a
+  // backup of a different stack. Every stack's BackupToggle therefore renders the
+  // same icon below. BackupStatus carries no per-stack outcome at all: the
+  // per-stack records are BackupRunItem, which the status payload does not include.
+  // Not tested -- inferred from GetBackupRuns (backend/internal/database/backup.go),
+  // which selects ORDER BY started_at DESC LIMIT ? with no kind and no stack
+  // predicate, and getStatus (backend/internal/handlers/backup.go), which takes
+  // runs[0]. A per-stack affordance is unimplemented; see agent-os-26pi.
   const lastRunStatus = statusData?.lastRun?.status ?? null
 
   if (engineUnavailable) {
