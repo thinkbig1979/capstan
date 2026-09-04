@@ -115,6 +115,96 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 			return
 		}
 
+		// An empty container list used to fall straight into StreamStats,
+		// whose own empty-list branch hands back an already-closed channel
+		// (services/monitor.go); the loop below then took its `!ok` exit and
+		// the socket died within a millisecond of opening. The frontend
+		// reconnects on close, so that read as a redial storm — one open and
+		// exit per second, forever (agent-os-74rl). Hold the socket open and
+		// report "no containers" on a ticker instead.
+		//
+		// This mirrors handleDashboardMetricsWebSocket's STRUCTURE (guard
+		// before StreamStats, ticker, one frame per tick) and deliberately
+		// differs from it on the empty value — see the Containers note below.
+		// Do not copy that handler's `Containers: nil` here; it is a live
+		// defect over there, tracked as agent-os-5scv, not a model to follow.
+		//
+		// Guarding here rather than in StreamStats keeps the change local to
+		// the one caller that lacked it: dashboard.go guards before its own
+		// call, so making StreamStats emit instead of close would leave that
+		// guard unreachable. StreamStats keeps its empty-list branch as the
+		// defensive contract of an exported method.
+		//
+		// Containers is a non-nil empty slice, NOT nil, and the difference is
+		// load-bearing: encoding/json renders a nil slice as `null` and an
+		// empty one as `[]`, while the frontend hook on the other end of this
+		// socket calls .forEach on the field with no null guard and types it
+		// non-nullable (frontend/src/hooks/useMetricsBase.ts:60, declared at
+		// :25; reached from MetricsPanel.tsx:264 and StackDetail.tsx:63).
+		// Sending null throws a TypeError on every tick, and it is not a
+		// contained one: the throw happens inside the setContainers updater,
+		// which React runs during the render phase, so the parse-time
+		// try/catch at useWebSocket.ts:187-193 never sees it (useMetricsBase
+		// itself has no try/catch at all). The TabErrorBoundary elements
+		// StackDetail renders at :166 and :178 do not catch it either — the
+		// hook is called in that component's own body at :63, ABOVE those
+		// boundaries, so a throw during its render escapes past them to the
+		// app-level ErrorBoundary at App.tsx:171 (the production auth path;
+		// App.tsx:136 is its AUTH_DISABLED twin, inside `if (authDisabled)`
+		// at :133) and the whole app is replaced by the error fallback. That
+		// would trade this bead's loud, server-visible redial storm for a
+		// silent client-side crash.
+		//
+		// The Go half is observed in the wire bytes by the regression test,
+		// not inferred: the nil form emits
+		// `{"timestamp":...,"containers":null}`. The React unwinding is not
+		// something this package can execute; it was established by a browser
+		// probe recorded on agent-os-74rl and agent-os-5scv.
+		if len(containerIDs) == 0 {
+			// After this fix an empty stack no longer announces itself as one
+			// WS session per second in the request log, so this line is the
+			// replacement signal for agent-os-fg55 — the still-open question
+			// of why the list is empty for a stack whose containers exist.
+			// Once at branch entry, never per tick: a per-tick line would be
+			// the same storm in a different colour.
+			slog.Info("metrics stream has no containers; holding socket open",
+				"stackId", stackID, "projectName", stack.ProjectName)
+
+			// 2s is a deliberate ceiling, not a tuning knob. This handler has
+			// no reader goroutine and ctx.Done() never fires, so a failed
+			// write is the ONLY client-disconnect detector — the ticker
+			// interval IS the detection latency. safePingLoop is not a
+			// backstop: on error it returns its own goroutine, not this
+			// handler. An interval past the 30s ping would leave no detector
+			// at all and leak the ConnectionManager slot for good. The
+			// `return` on write failure below is what makes that true, and is
+			// enforced by
+			// TestMonitoringMetricsWS_EmptyListClientDisconnectClosesConnection
+			// — turning it into a `continue` parks the goroutine forever.
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					frame := MetricsFrame{
+						Timestamp:  time.Now().Format(time.RFC3339),
+						Containers: []models.ContainerMetrics{},
+					}
+					// safePingLoop is already running on this connection, so
+					// this second writer must go through the WriteMutex-guarded
+					// helper rather than a raw write (agent-os-1jzj). The
+					// enclosing `defer release()` covers this loop's exits too
+					// (agent-os-14gr).
+					if err := safeWriteJSON(conn, frame); err != nil {
+						slog.Debug("Failed to write empty metrics frame", "stackId", stackID, "error", err)
+						return
+					}
+				}
+			}
+		}
+
 		statsChan, err := h.monitor.StreamStats(ctx, containerIDs)
 		if err != nil {
 			slog.Error("Failed to start stats stream", "stackId", stackID, "error", err)
