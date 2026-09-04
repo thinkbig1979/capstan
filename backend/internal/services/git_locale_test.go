@@ -32,6 +32,50 @@ import (
 // that precedence BACKWARDS: it made the test insensitive to LC_ALL=C, the
 // load-bearing half of the fix, and sensitive only to the redundant half.
 //
+// DO NOT "FIX" THE ORACLE TO MATCH THIS MACHINE. It deliberately treats a
+// de_* messages locale as translated even though real git ON THIS BOX prints
+// English there. That divergence IS the guard, and the reason is measured, not
+// assumed: no locale generated here has a git catalog, and no git catalog here
+// has a generated locale. OBSERVED, git 2.47.3:
+//
+//	$ locale -a
+//	C  C.utf8  en_US.utf8  nl_NL.utf8  POSIX
+//
+//	$ ls /usr/share/locale/*/LC_MESSAGES/git.mo          # 19 catalogs, no nl, no en
+//	bg ca de el es fr id is it ko pl pt_PT ru sv tr uk vi zh_CN zh_TW
+//
+//	$ for l in $(locale -a); do base=${l%%.*}; base=${base%%_*}; \
+//	    [ -f /usr/share/locale/$base/LC_MESSAGES/git.mo ] && echo "MATCH: $l"; done
+//	(no output — the intersection over all five locales and all nineteen
+//	 catalogs is EMPTY; this is the whole-set form, not two spot checks)
+//
+// So the messages-locale route to a translated git message is unreachable on
+// this host, and de_DE.UTF-8 reads English here only because that locale is
+// not generated — a host artifact, not gettext precedence:
+//
+//	LC_ALL=nl_NL.utf8   (no LANGUAGE)  -> "fatal: ..."  English: locale, no catalog
+//	LC_ALL=de_DE.UTF-8  (no LANGUAGE)  -> "fatal: ..."  English: catalog, no locale
+//	LC_ALL=nl_NL.utf8   LANGUAGE=de    -> "Schwerwiegend: Kein Git-Repository ..."  GERMAN
+//	LC_ALL=en_US.utf8   LANGUAGE=nl    -> "fatal: ..."  English: no nl catalog exists
+//
+// The third arm shows the messages locale need only be NON-C and need not
+// relate to the catalog at all. The fourth is the negative control that kills
+// the lazy reading "LANGUAGE set means translated". The precise rule is
+// therefore: a non-C messages locale AND an installed catalog for the selected
+// language.
+//
+// Two consequences, and the second is why this comment exists. First, the
+// oracle models git-in-general rather than git-on-this-machine, because a
+// properly configured German host DOES translate via the messages locale.
+// Second, because LANGUAGE= (the redundant half) is still cleared under the
+// mutant that removes LC_ALL=C, and because the LANGUAGE route is the ONLY
+// translation route available here, a REAL-git behavioural arm could not
+// distinguish that mutant on this box at all. The fake git is not a
+// convenience; it is the only instrument that can exercise the messages-locale
+// route this host cannot. Narrowing the oracle to this box's observed output
+// would silently restore the state where deleting LC_ALL=C keeps the test
+// green — a check that cannot fail, arriving disguised as a cleanup.
+//
 // A stand-in binary is necessary because a real, modern git CLI does not
 // actually exercise this branch: `git pull --ff-only` on a truly up-to-date
 // repository exits 0 (OBSERVED directly against git 2.47.3: `git pull
