@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/cgi" //nolint:gosec // hosts git-http-backend as a local, non-network-exposed httptest server for the credential regression harness (agent-os-qqw) below — the Httpoxy CVE this rule flags needs an actual exposed proxy, not a local test double
@@ -294,12 +295,24 @@ func TestHTTPSCredentials_SSHAuthType_NoHTTPSCredentialApplies(t *testing.T) {
 
 // captureSlog redirects the process-wide slog default to a buffer for the
 // duration of the test and restores the previous default on cleanup.
+//
+// The stdlib log package must be restored explicitly, and its writer and flags
+// read BEFORE the swap: slog.SetDefault also does log.SetOutput(handlerWriter{})
+// and log.SetFlags(0), and slog.SetDefault(prev) undoes neither, so restoring
+// slog alone leaks the redirect and every later stdlib-log write in this test
+// binary lands in a dead buffer (agent-os-ac0o). TestCaptureSlog_RestoresStdlibLog
+// below is the ratchet that keeps this from being simplified back to one line.
 func captureSlog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
+	prevSlog := slog.Default()
+	prevWriter, prevFlags := log.Writer(), log.Flags()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Cleanup(func() {
+		slog.SetDefault(prevSlog)
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
 	return &buf
 }
 
@@ -664,3 +677,36 @@ func TestHTTPSCredentials_SettingsBeatEnvironment(t *testing.T) {
 // existing gitServiceWithUndecryptableGlobalCredential fixture that already
 // does the same reopen-under-a-different-key setup this would otherwise
 // duplicate (agent-os-oyj).
+
+// TestCaptureSlog_RestoresStdlibLog guards the helper above, not the
+// production code. slog.SetDefault silently re-points the stdlib log package
+// (log.SetOutput + log.SetFlags(0)), and slog.SetDefault(prev) does not undo
+// either, because prev's handler is slog's internal defaultHandler and the
+// restore path skips the re-pointing branch. So a cleanup that restores only
+// slog leaks the redirect for the rest of this test binary: every later
+// stdlib-log write lands in a dead buffer instead of stderr.
+//
+// That is not theoretical in this package. The git-http-backend harness above
+// runs an httptest server, and an http.Server with a nil ErrorLog reports
+// through the stdlib log package — so a leaked redirect swallows exactly the
+// "superfluous WriteHeader" warnings, hijack complaints and serving-goroutine
+// panic traces that harness would otherwise surface. Nothing fails when that
+// happens; the diagnostics simply stop arriving. This is what notices.
+//
+// The check is safe to run serially alongside this package's 221 t.Parallel
+// tests: all nine captureSlog call sites are in serial tests (OBSERVED), and
+// Go releases the parallel barrier only after every serial test has returned,
+// so no parallel test can be mutating the stdlib log writer during the two
+// comparisons below.
+func TestCaptureSlog_RestoresStdlibLog(t *testing.T) {
+	writerBefore, flagsBefore := log.Writer(), log.Flags()
+
+	t.Run("capture", func(t *testing.T) { _ = captureSlog(t) })
+
+	if log.Writer() != writerBefore {
+		t.Errorf("stdlib log writer not restored: the capture leaked its redirect, so later log output in this binary is swallowed")
+	}
+	if log.Flags() != flagsBefore {
+		t.Errorf("stdlib log flags not restored: got %d, want %d", log.Flags(), flagsBefore)
+	}
+}
