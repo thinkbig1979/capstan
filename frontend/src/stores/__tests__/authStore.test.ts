@@ -151,4 +151,31 @@ describe('authStore checkStatus', () => {
     expect(state.authDisabled).toBe(true)
     expect(state.needsSetup).toBe(true)
   })
+
+  it('resolves rather than rejecting when the status probe fails', async () => {
+    mockStatus.mockRejectedValue(new Error('Network error'))
+
+    // App.tsx awaits this in its boot effect. A rejection there skipped
+    // setStatusChecked(true) and left the whole app on its loading spinner.
+    await expect(useAuthStore.getState().checkStatus()).resolves.toBeUndefined()
+  })
+
+  it('forces authDisabled false but preserves needsSetup when the probe fails', async () => {
+    // Seeding both true is what makes this discriminate: the store's initial
+    // state is already authDisabled false / needsSetup false (authStore.ts:21-22),
+    // so against the defaults this would pass with the catch's set() deleted.
+    useAuthStore.setState({ authDisabled: true, needsSetup: true })
+    mockStatus.mockRejectedValue(new Error('Network error'))
+
+    await useAuthStore.getState().checkStatus()
+
+    const state = useAuthStore.getState()
+    // Forced: authDisabled alone satisfies useAuth's canAccess, so a failed
+    // probe must not be able to leave it granting access.
+    expect(state.authDisabled).toBe(false)
+    // Preserved: a probe that failed learned nothing, and needsSetup routes to
+    // /setup rather than granting access, so there is nothing to defend by
+    // overwriting a value an earlier successful probe established.
+    expect(state.needsSetup).toBe(true)
+  })
 })

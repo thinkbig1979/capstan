@@ -1015,8 +1015,12 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 
 		// Validate the run exists BEFORE upgrading so a 404 can still be sent as
 		// plain HTTP (once upgraded, only WS close frames are possible).
-		// Use nil clientGone for the pre-flight check — forwardLive is not started
-		// at this stage, so there is no goroutine to leak.
+		// nil clientGone: this is an existence check, not a stream. Attach
+		// answers it from state alone and starts no forwarder — the real
+		// attach below, which has a client to forward to, starts the only one.
+		// (Before agent-os-jtax, Attach ignored clientGone and started a
+		// forwarder here too, on every attach to a still-running backup: an
+		// orphan whose never-closed clientGone meant it could not be stopped.)
 		if _, err := h.registry.Attach(runID, nil); err != nil {
 			c.JSON(http.StatusNotFound, models.NewAppError(
 				http.StatusNotFound,
@@ -1112,7 +1116,19 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 
 			case line, ok := <-attached.Live:
 				if !ok {
-					// Live channel closed — run finished; fetch terminal outcome.
+					// Live is closed, which does NOT mean the run finished:
+					// forwardLive closes it from a defer on BOTH its exits, the
+					// run-done one and the clientGone one. So on a client
+					// disconnect this case and the wsCtx.Done() case above are
+					// ready at the same instant and Go picks between them
+					// uniformly at random — this branch runs for a live run
+					// roughly half the time a client goes away.
+					//
+					// Since agent-os-jtax the lookup below is safe when that
+					// happens: a nil clientGone starts no forwarder, so this
+					// branch can no longer spawn one for a run still in
+					// flight. It does still report an empty outcome for such a
+					// run — tracked separately as agent-os-b53l.
 					outcome, reason := h.outcomeFromRegistry(runID)
 					h.sendDoneFrame(conn, runID, outcome, reason)
 					return
@@ -1129,8 +1145,13 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 // outcomeFromRegistry retrieves the terminal outcome for runID from the
 // registry (in-memory) or the DB (if evicted).
 func (h *BackupHandler) outcomeFromRegistry(runID string) (outcome, reason string) {
-	// Read-only terminal-outcome lookup for an already-finished run; no live
-	// stream is started, so clientGone is nil (matches the kickoff-path usage).
+	// nil clientGone: this reads terminal state, it never streams, so Attach
+	// starts no forwarder. That is a property of Attach, not of the callers —
+	// which matters, because this is reachable for a run that is still going.
+	// forwardLive closes Live on its clientGone exit as well as on run-done,
+	// so on a client disconnect the caller's select sees wsCtx.Done() and a
+	// closed Live ready at once and may pick either. (The empty outcome that
+	// branch then reports for a live run is a separate cosmetic defect.)
 	attached, err := h.registry.Attach(runID, nil)
 	if err != nil {
 		return "failed", "could not read run outcome: " + err.Error()

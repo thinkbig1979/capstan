@@ -613,8 +613,11 @@ type AttachResult struct {
 	Outcome string
 	Reason  string
 
-	// Live receives future lines (only when Done is false). It is closed when
-	// the run finishes.
+	// Live receives future lines and is closed when the run finishes or the
+	// client goes away. It is nil when Done is true, and also when the caller
+	// passed a nil clientGone (a state-only lookup, which starts no forwarder
+	// — see Attach). Callers that pass a real clientGone and see Done=false
+	// are the only ones that may read from it.
 	Live <-chan StreamLine
 
 	// Finished is closed when the run goroutine exits (only when Done is false).
@@ -629,9 +632,16 @@ type AttachResult struct {
 // clientGone must be a channel that is closed when the WS client disconnects
 // (typically wsCtx.Done()). It is forwarded to forwardLive so the fan-out
 // goroutine exits promptly on disconnect instead of blocking on a full buffer.
-// For callers that do not need live streaming (e.g. status-only lookups), pass
-// a nil channel (forwardLive treats it as "never closed" and exits only on
-// dr.done, which is harmless since Done=true runs skip forwardLive entirely).
+//
+// A nil clientGone means "there is no client", and is how status-only callers
+// (the WS pre-flight existence check, terminal-outcome lookups) ask for state
+// without a stream: no fan-out goroutine is started and Live is nil. Starting
+// one for a nil clientGone is not merely wasteful, it is unstoppable — a nil
+// channel would have to be replaced by one nobody ever closes, so the
+// forwarder could never be told the client had left and would live for the
+// whole run, holding a 256-slot buffer no one drains, one orphan per call.
+// That was agent-os-jtax; see TestAttach_NilClientGone_StartsNoForwarder,
+// whose control arm pins that a real clientGone still gets its forwarder.
 func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}) (*AttachResult, error) {
 	reg.mu.Lock()
 	dr, inReg := reg.runs[runID]
@@ -648,11 +658,18 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 			}, nil
 		}
 
-		// Still running: spin up a fan-out goroutine for this client.
-		// clientGone lets forwardLive exit immediately when the WS client leaves.
+		// Still running. Only a caller with a real client gets a fan-out
+		// goroutine: clientGone is what lets forwardLive exit when that client
+		// leaves, so with no clientGone there is nothing to forward to and no
+		// way to stop forwarding. State-only callers get Live=nil instead.
 		if clientGone == nil {
-			clientGone = make(chan struct{}) // never closed — safe default
+			return &AttachResult{
+				ReplayLines: lines,
+				Done:        false,
+				Finished:    dr.done,
+			}, nil
 		}
+
 		live := make(chan StreamLine, 256)
 		go reg.forwardLive(dr, len(lines), clientGone, live)
 
