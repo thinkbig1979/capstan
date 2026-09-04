@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -43,12 +44,23 @@ const (
 // assertions are checking the format most deployments actually emit — but a
 // runbook that tells an operator to grep for "elapsed=" is wrong for the JSON
 // deployments, where the same field is "elapsed":"...".
+// The stdlib log package must be restored explicitly, and its writer and flags
+// read BEFORE the swap: slog.SetDefault also does log.SetOutput(handlerWriter{})
+// and log.SetFlags(0), and slog.SetDefault(prev) undoes neither, so restoring
+// slog alone leaks the redirect and every later stdlib-log write in this test
+// binary lands in a dead buffer (agent-os-ac0o). TestCaptureSlog_RestoresStdlibLog
+// below is the ratchet that keeps this from being simplified back to one line.
 func captureSlog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
+	prevSlog := slog.Default()
+	prevWriter, prevFlags := log.Writer(), log.Flags()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Cleanup(func() {
+		slog.SetDefault(prevSlog)
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
 	return &buf
 }
 
@@ -857,5 +869,32 @@ func TestUntrustedWarnBudget_CarryOverStaysBoundedUnderAdversarialOrdering(t *te
 	if peers, _, _ := budgetState(&reach); peers != untrustedWarnNamedCeiling {
 		t.Errorf("peers after fresh-then-carry-over = %d, want %d - the 2N bound must be REACHABLE, or the ceiling assertion above proves nothing",
 			peers, untrustedWarnNamedCeiling)
+	}
+}
+
+// TestCaptureSlog_RestoresStdlibLog guards the helper above, not the
+// production code. slog.SetDefault silently re-points the stdlib log package
+// (log.SetOutput + log.SetFlags(0)), and slog.SetDefault(prev) does not undo
+// either, because prev's handler is slog's internal defaultHandler and the
+// restore path skips the re-pointing branch. So a cleanup that restores only
+// slog leaks the redirect for the rest of this test binary: every later
+// stdlib-log write lands in a dead buffer instead of stderr.
+//
+// This package stands up no httptest server of its own (OBSERVED: 0 hits for
+// httptest.NewServer under internal/middleware), so the blast radius here is
+// smaller than in internal/handlers. The ratchet still earns its place: 18
+// captureSlog call sites make this the package most likely to be copied from,
+// and the leak is invisible while it does damage — nothing fails, the
+// diagnostics simply stop arriving. This is what notices.
+func TestCaptureSlog_RestoresStdlibLog(t *testing.T) {
+	writerBefore, flagsBefore := log.Writer(), log.Flags()
+
+	t.Run("capture", func(t *testing.T) { _ = captureSlog(t) })
+
+	if log.Writer() != writerBefore {
+		t.Errorf("stdlib log writer not restored: the capture leaked its redirect, so later log output in this binary is swallowed")
+	}
+	if log.Flags() != flagsBefore {
+		t.Errorf("stdlib log flags not restored: got %d, want %d", log.Flags(), flagsBefore)
 	}
 }

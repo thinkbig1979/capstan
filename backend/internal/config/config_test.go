@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"log"
 	"log/slog"
 	"strings"
 	"testing"
@@ -255,12 +256,24 @@ func TestLoad_HonoursAuthDisabledAllowedNetworksFromEnvironment(t *testing.T) {
 // captureSlog redirects the process-wide slog default to a buffer for the
 // duration of the test and restores the previous default on cleanup. Mirrors
 // internal/services/git_credentials_test.go's helper of the same name.
+//
+// The stdlib log package must be restored explicitly, and its writer and flags
+// read BEFORE the swap: slog.SetDefault also does log.SetOutput(handlerWriter{})
+// and log.SetFlags(0), and slog.SetDefault(prev) undoes neither, so restoring
+// slog alone leaks the redirect and every later stdlib-log write in this test
+// binary lands in a dead buffer (agent-os-ac0o). TestCaptureSlog_RestoresStdlibLog
+// below is the ratchet that keeps this from being simplified back to one line.
 func captureSlog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
+	prevSlog := slog.Default()
+	prevWriter, prevFlags := log.Writer(), log.Flags()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Cleanup(func() {
+		slog.SetDefault(prevSlog)
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
 	return &buf
 }
 
@@ -391,5 +404,33 @@ func TestLoad_RejectsImplausibleAPIRateLimit(t *testing.T) {
 				t.Errorf("error should name the offending variable, got: %v", err)
 			}
 		})
+	}
+}
+
+// TestCaptureSlog_RestoresStdlibLog guards the helper above, not the
+// production code. slog.SetDefault silently re-points the stdlib log package
+// (log.SetOutput + log.SetFlags(0)), and slog.SetDefault(prev) does not undo
+// either, because prev's handler is slog's internal defaultHandler and the
+// restore path skips the re-pointing branch. So a cleanup that restores only
+// slog leaks the redirect for the rest of this test binary: every later
+// stdlib-log write lands in a dead buffer instead of stderr.
+//
+// Blast radius in THIS package is small and the comment should not pretend
+// otherwise: internal/config stands up no httptest server (OBSERVED: 0 hits
+// for httptest.NewServer under internal/config), so nothing here is currently
+// writing to the stdlib logger after a capture. The ratchet exists because the
+// helper is declared a mirror of internal/services' one, whose blast radius is
+// real, and a mirror that silently stops matching is how the fixed form gets
+// copied back out of existence.
+func TestCaptureSlog_RestoresStdlibLog(t *testing.T) {
+	writerBefore, flagsBefore := log.Writer(), log.Flags()
+
+	t.Run("capture", func(t *testing.T) { _ = captureSlog(t) })
+
+	if log.Writer() != writerBefore {
+		t.Errorf("stdlib log writer not restored: the capture leaked its redirect, so later log output in this binary is swallowed")
+	}
+	if log.Flags() != flagsBefore {
+		t.Errorf("stdlib log flags not restored: got %d, want %d", log.Flags(), flagsBefore)
 	}
 }
