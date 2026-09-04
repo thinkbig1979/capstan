@@ -621,6 +621,20 @@ type wsRegistration struct {
 	onRefuse func(conn *Connection)
 }
 
+// errWSRefused marks a serveWS error as a registration refusal (the
+// per-user cap via cm.Add), as opposed to an upgrade/auth failure from
+// upgradeConnection. Callers distinguish the two with errors.Is(err,
+// errWSRefused): by the time serveWS returns a refusal error it has already
+// run reg.onRefuse, written the refusal close frame, and closed the socket,
+// so a caller must NOT additionally report it the way it reports an
+// upgrade/auth failure (e.g. handleError/c.Error) — by that point
+// upgrader.Upgrade has already hijacked the connection, so writing a JSON
+// error body would hit an already-hijacked ResponseWriter (http.ErrHijacked)
+// (agent-os-o1jp.1, adversary-caught: collapsing the two error branches
+// without this distinction silently routed cap refusals through the
+// upgrade-failure handling at 4 sites that never did that before).
+var errWSRefused = errors.New("websocket connection refused: registration limit")
+
 // serveWS upgrades the connection (see upgradeConnection) and, unless cm is
 // nil, registers it per reg, returning a release func that undoes exactly
 // what was done: a nil cm skips registration and release only closes the
@@ -629,7 +643,8 @@ type wsRegistration struct {
 // On any error the connection is already fully torn down (upgradeConnection
 // itself closes on every one of its own error returns; a registration
 // refusal here writes the refusal close frame and closes before returning)
-// and the returned release is nil — callers must not call it.
+// and the returned release is nil — callers must not call it. See
+// errWSRefused for how callers must distinguish the two error causes.
 //
 // cm == nil skips registration entirely rather than failing, matching
 // backup.go's pre-existing nil tolerance (the only one of the eight sites
@@ -657,7 +672,7 @@ func serveWS(c *gin.Context, db *database.DB, jwtSecret string, authDisabled boo
 		}
 		writeCloseMessage(conn.Conn, reg.refuseCode, reg.refuseReason)
 		conn.Conn.Close()
-		return nil, nil, err
+		return nil, nil, errors.Join(errWSRefused, err)
 	}
 
 	// Close-then-Remove, not the other way round: waitForServerSideClose

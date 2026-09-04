@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -82,7 +83,13 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 			refuseReason: "Connection limit exceeded",
 		})
 		if err != nil {
-			handleError(c, err)
+			// A registration refusal already wrote its own close frame and
+			// closed the socket inside serveWS — reporting it here too would
+			// write into an already-hijacked ResponseWriter. Only an
+			// upgrade/auth failure is reported (agent-os-o1jp.1).
+			if !errors.Is(err, errWSRefused) {
+				handleError(c, err)
+			}
 			return
 		}
 		// gorilla's Upgrade hijacks the connection, so net/http never closes it.
@@ -197,7 +204,13 @@ func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled
 			refuseReason: "Connection limit exceeded",
 		})
 		if err != nil {
-			handleError(c, err)
+			// A registration refusal already wrote its own close frame and
+			// closed the socket inside serveWS — reporting it here too would
+			// write into an already-hijacked ResponseWriter. Only an
+			// upgrade/auth failure is reported (agent-os-o1jp.1).
+			if !errors.Is(err, errWSRefused) {
+				handleError(c, err)
+			}
 			return
 		}
 		// gorilla's Upgrade hijacks the connection, so net/http never closes

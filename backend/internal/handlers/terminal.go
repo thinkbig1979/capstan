@@ -71,7 +71,13 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 			},
 		})
 		if err != nil {
-			handleError(c, err)
+			// A registration refusal already wrote its own close frame and
+			// closed the socket inside serveWS — reporting it here too would
+			// write into an already-hijacked ResponseWriter. Only an
+			// upgrade/auth failure is reported (agent-os-o1jp.1).
+			if !errors.Is(err, errWSRefused) {
+				handleError(c, err)
+			}
 			return
 		}
 		defer release()

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -121,9 +122,16 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 			refuseReason: "Connection limit exceeded",
 		})
 		if err != nil {
-			// gin.Context.Error's own return (a *gin.Error) is for chaining,
-			// not a failure signal; recording the error is the point here.
-			_ = c.Error(err)
+			// A registration refusal already wrote its own close frame and
+			// closed the socket inside serveWS — reporting it here too would
+			// write into an already-hijacked ResponseWriter. Only an
+			// upgrade/auth failure is reported (agent-os-o1jp.1).
+			if !errors.Is(err, errWSRefused) {
+				// gin.Context.Error's own return (a *gin.Error) is for
+				// chaining, not a failure signal; recording the error is the
+				// point here.
+				_ = c.Error(err)
+			}
 			return
 		}
 		// gorilla's Upgrade hijacks the connection, so net/http never closes it.
