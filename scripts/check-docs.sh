@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -721,6 +721,40 @@ check_networkidle_probes() {
   return 1
 }
 
+# check_locator_count_guard delegates to scripts/check-locator-count-guard.sh
+# for the same reason line-continuation and networkidle-probes do: the rule
+# stays runnable on its own, and folding it in here makes it a required gate
+# without a workflow edit (agent-os-o1jp.5).
+check_locator_count_guard() {
+  local script="$SCRIPT_DIR/check-locator-count-guard.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: locator-count-guard - $script not found"
+    return 1
+  fi
+
+  # Prove the check still fires, both ways, before believing its verdict on
+  # the tree -- same reasoning as networkidle-probes's self-test-first order.
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: locator-count-guard - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: locator-count-guard - ${self#locator-count-guard }; ${out#locator-count-guard: }"
+    return 0
+  fi
+  echo "FAIL: locator-count-guard - a count()-guard in testing/tests/playwright/ wraps an expect(...) call that can be silently skipped:"
+  echo "$out"
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # dispatch
 # ---------------------------------------------------------------------------
@@ -739,6 +773,7 @@ Valid check names:
   env-coverage   every backend os.Getenv var is documented
   line-continuation  no comment line follows a backslash continuation
   networkidle-probes the E2E settle helper's debounce constant still matches the app's
+  locator-count-guard no count()-guard in testing/tests/playwright/ wraps an expect(...)
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -755,6 +790,7 @@ run_check() {
     env-coverage) check_env_coverage ;;
     line-continuation) check_line_continuation ;;
     networkidle-probes) check_networkidle_probes ;;
+    locator-count-guard) check_locator_count_guard ;;
     *) return 2 ;;
   esac
 }
