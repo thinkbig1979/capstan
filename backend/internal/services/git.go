@@ -380,6 +380,50 @@ func (s *GitService) GetLog(dirPath string, limit, offset int) (*models.LogResul
 	return s.getLogCLI(dirPath, limit, offset)
 }
 
+// gitFailure classifies a failed git invocation in dirPath.
+//
+// It returns the error the caller should surface, or nil when the failure is not
+// attributable to the directory's repository state and the caller should wrap
+// generically as before (agent-os-pawv).
+//
+// Before this, a stack directory that was not a git repository produced a typed
+// 404 from GET /git and a generic 500 from /git/log, /git/diff and the file-log
+// path — one condition, two answers. The 500 told an operator "the server is
+// broken, file a bug"; the 404 told them "this is not a repository, point it
+// elsewhere". Only the second was true.
+//
+// It asks git the question directly rather than reading the failed command's
+// message, for two independent reasons. Git translates its output — this host
+// carries 19 catalogs, and LANGUAGE=de turns "not a git repository" into
+// "Kein Git-Repository" — so text matching silently stops firing on a
+// non-English host (agent-os-vq3p). And a failed first command does not imply a
+// missing repository: getDiffCLI's first command is a log of a caller-supplied
+// hash, which fails with "bad object" for a perfectly good repo.
+//
+// The probe must be the git CLI, not go-git. gitCmd sets cmd.Dir without
+// GIT_CEILING_DIRECTORIES, so git walks up to a parent .git: a directory nested
+// inside a repo, and a bare repo, both serve logs correctly today. go-git's
+// PlainOpen reports neither as a repository, so a go-git probe would turn two
+// working shapes into 404s. Using the same tool the endpoints use means the
+// probe cannot disagree with them.
+//
+// Deliberately narrower than "the repository is usable": a repo with NO COMMITS
+// is a repository, and answering GIT_NOT_REPO for it would turn one lying
+// message into four. Giving that case an honest answer is agent-os-xmtf.
+//
+// Runs only after a command has already failed, so the happy path pays nothing.
+// Credentials are not resolved for the probe — rev-parse contacts no remote, and
+// resolving them would add a database read to an error path.
+func (s *GitService) gitFailure(dirPath string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, probeErr := s.gitCommandWithCreds(dirPath, "", "", "rev-parse", "--git-dir"); probeErr != nil {
+		return models.NewAppError(404, models.ErrGitNotRepo, "Not a git repository")
+	}
+	return nil
+}
+
 func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogResult, error) {
 	// Resolved once for the whole log request (agent-os-9ha) — see
 	// getStatusCLI for why.
@@ -387,6 +431,9 @@ func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogRe
 
 	totalStr, err := s.gitCommandWithCreds(dirPath, user, token, "rev-list", "--count", "HEAD")
 	if err != nil {
+		if repoErr := s.gitFailure(dirPath, err); repoErr != nil {
+			return nil, repoErr
+		}
 		return nil, fmt.Errorf("failed to count commits: %w", err)
 	}
 	total, _ := strconv.Atoi(totalStr)
@@ -440,6 +487,9 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 
 	logOutput, err := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%H%n%h%n%an%n%ae%n%s%n%aI", commitHash)
 	if err != nil {
+		if repoErr := s.gitFailure(dirPath, err); repoErr != nil {
+			return nil, repoErr
+		}
 		return nil, fmt.Errorf("failed to get commit: %w", err)
 	}
 
@@ -485,6 +535,9 @@ func (s *GitService) GetLogForFile(dirPath, filePath string, limit int) (*models
 	logFormat := "%H%n%h%n%an%n%ae%n%s%n%aI%n---COMMIT_SEP---"
 	output, err := s.gitCommand(dirPath, "log", fmt.Sprintf("--max-count=%d", limit), fmt.Sprintf("--format=%s", logFormat), "--", filePath)
 	if err != nil {
+		if repoErr := s.gitFailure(dirPath, err); repoErr != nil {
+			return nil, repoErr
+		}
 		return nil, fmt.Errorf("failed to get log: %w", err)
 	}
 
