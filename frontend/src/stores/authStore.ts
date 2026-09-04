@@ -60,20 +60,41 @@ export const useAuthStore = create<AuthState>()((set) => ({
   },
 
   checkAuth: async () => {
-    try {
-      const { authApi } = await import('@/lib/api')
-      const user = await authApi.me()
-      set({
-        token: 'cookie',
-        user,
-        isAuthenticated: true,
-      })
-    } catch (error) {
-      const isDev = import.meta.env.DEV
-      if (isDev) {
-        console.error('Auth check failed:', error)
+    // agent-os-2cp3. Same shape as checkStatus above (agent-os-a4eh): this is
+    // the only production call site (App.tsx's mount effect), its deps are
+    // stable Zustand actions so the effect never re-runs, and nothing else
+    // re-probes -- so one transient /auth/me failure permanently logged out a
+    // user whose cookie session was still perfectly valid, until they
+    // reloaded by hand.
+    //
+    // Bounded, and only on failure: a first-attempt success returns
+    // immediately, so the happy path still issues exactly ONE request. On
+    // exhaustion the catch below runs unchanged, so agent-os-6hux's
+    // fail-closed defaults are exactly as they were.
+    const retryDelaysMs = [250, 750]
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const { authApi } = await import('@/lib/api')
+        const user = await authApi.me()
+        set({
+          token: 'cookie',
+          user,
+          isAuthenticated: true,
+        })
+        return
+      } catch (error) {
+        if (attempt < retryDelaysMs.length) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
+          continue
+        }
+        const isDev = import.meta.env.DEV
+        if (isDev) {
+          console.error('Auth check failed:', error)
+        }
+        set({ token: null, user: null, isAuthenticated: false })
+        return
       }
-      set({ token: null, user: null, isAuthenticated: false })
     }
   },
 
