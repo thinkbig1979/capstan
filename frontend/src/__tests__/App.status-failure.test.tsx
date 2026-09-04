@@ -11,9 +11,14 @@ import { App } from '../App'
 // that overlapped a page load bricked that tab until the user reloaded by hand,
 // and the only trace was an unhandled rejection in the console.
 //
-// The load-bearing assertion is the ABSENCE of 'Loading...', not the presence of
-// the login page. 'Loading...' is the string the stranded user is staring at, so
-// a failure here names the real symptom instead of reporting that some other
+// The load-bearing assertion is the PRESENCE of the login page. Absence of
+// 'Loading...' is satisfied by a crashed tree, by an empty DOM, and by the
+// ErrorBoundary fallback (ErrorBoundary.tsx:126 renders 'Something went wrong',
+// which contains no 'Loading...'), so on its own it proves only that the app is
+// not on the spinner -- not that it got anywhere. The findByText anchor is what
+// proves it reached a real destination. The absence check earns its place as a
+// secondary: it is the string the stranded user is staring at, so when this test
+// fails the message names the real symptom instead of reporting that some other
 // element did not turn up.
 //
 // Both directions are tested on the same instrument: a rejecting probe must reach

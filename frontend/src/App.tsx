@@ -84,6 +84,11 @@ function App() {
     // hand. Both probes swallow their own failures, and the catch keeps init()
     // from rejecting unhandled if some future await in here does not -- a
     // `finally` alone would set the flag but still reject.
+    //
+    // This reaches a renderable state; it does not recover. Nothing re-probes
+    // (this effect is the only call site, and its deps are stable Zustand
+    // actions), so a failed boot leaves the user on the login page until they
+    // reload by hand. Deliberately minimal; a retry path is agent-os-a4eh.
     const init = async () => {
       try {
         await checkStatus()

@@ -26,12 +26,23 @@ import { App } from '../App'
 // on any flicker. It cannot flicker. Established 2026-09-02 by enumerating the
 // writes rather than reasoning about React: isAuthenticated has five write sites
 // in stores/authStore.ts (:30 login, :40 setup, :58 logout, :69/:76 checkAuth)
-// and authDisabled two, both inside checkStatus (:85 the probe's answer, :103 the
-// restrictive fallback taken when the probe fails, added 2026-09-04 -- it writes
-// false, so it can only lower access, never raise it, and like :85 it fires inside
+// and authDisabled two, both inside checkStatus (:85 the probe's answer, :118 the
+// restrictive fallback taken when the probe fails, added 2026-09-04). The second
+// one is safe on REACHABILITY, not on direction: it writes false, which in this
+// docblock's terms is the HAZARDOUS direction, since a canAccess true->false is
+// exactly what unmounts the shell. What makes it harmless is that it fires inside
 // App's boot effect while statusChecked is still false, when the full-page spinner
-// IS the whole tree and there is no mounted AuthenticatedLayout for either write
-// to unmount); statusChecked holds a full-page spinner
+// is the whole tree and there is no mounted AuthenticatedLayout to unmount.
+//
+// That reachability argument holds for a SINGLE boot invocation. It does not hold
+// under StrictMode's dev double-invoke (main.tsx:8), where two init()s can be in
+// flight and App's `ignore` flag guards only setStatusChecked, not the store
+// writes: a late-failing first probe can then write authDisabled false after a
+// successful second probe has already mounted the shell. Dev-only, needs one
+// probe to fail while the other succeeds, and no test can see it because the
+// harness does not render StrictMode. Tracked as agent-os-lqsa; not fixed here.
+//
+// statusChecked holds a full-page spinner
 // until both auth probes resolve, so nothing under AuthenticatedLayout renders
 // with auth unresolved; login/setup live on route trees that never mount AppShell;
 // the 401 interceptor navigates the document instead of mutating the store; and
