@@ -230,6 +230,64 @@ func TestConnectionManagers_CloseForUser_SkipsNilManager(t *testing.T) {
 	assert.False(t, present, "the real manager alongside the nil one must still process the close")
 }
 
+// TestConnectionManager_AuthDisabled_GuardsAreNoopOnly is agent-os-hj54's
+// two-sided-on-one-instrument coverage for the config the E2E fixture
+// actually runs under: AUTH_DISABLED. TestConnectionManager_CloseForSession
+// and its CloseForUser sibling already prove the guards individually, but
+// each is one-sided in a way that cannot distinguish "the guard fires" from
+// "closeMatching never closes anything at all" — a fix that broke closing
+// entirely would also make those tests pass. This test rules that out on the
+// SAME ConnectionManager and the SAME two Connection objects:
+//
+//   - AUTH_DISABLED arm: both connections carry UserID "anonymous" and
+//     SessionID "" (what upgradeConnection assigns in that mode).
+//     CloseForSession("") and CloseForUser("anonymous", "sess-other") must
+//     leave BOTH open — exceptSessionID is deliberately non-empty
+//     ("sess-other"), not "", per the hazard note on
+//     TestConnectionManager_CloseForUser_AnonymousIsNoop above: with both
+//     SessionID and exceptSessionID equal to "", the except-clause
+//     ("" != "") already evaluates false on its own, so the connection would
+//     be excluded whether or not the anonymous guard exists, and the check
+//     would pass even with that guard deleted.
+//   - AUTH ENABLED arm, same instrument: the identical two Connection
+//     pointers are then mutated in place to a real jti/session and a real
+//     userID (closeMatching reads fields live through the stored pointer, so
+//     this is legal), and the identical two calls — now with real values —
+//     must close the revoked one and leave the excepted one open. This is
+//     the side that proves closing actually works, so arm one's "both stay
+//     open" is evidence of the guard, not of a manager that never closes.
+func TestConnectionManager_AuthDisabled_GuardsAreNoopOnly(t *testing.T) {
+	cm := NewConnectionManager(10)
+
+	revokedConn := &Connection{ID: uuid.New().String(), UserID: "anonymous", SessionID: ""}
+	otherConn := &Connection{ID: uuid.New().String(), UserID: "anonymous", SessionID: ""}
+	require.NoError(t, cm.Add(revokedConn.ID, revokedConn))
+	require.NoError(t, cm.Add(otherConn.ID, otherConn))
+
+	// AUTH_DISABLED arm.
+	cm.CloseForSession("")
+	cm.CloseForUser("anonymous", "sess-other")
+
+	_, revokedStillPresent := cm.Get(revokedConn.ID)
+	assert.True(t, revokedStillPresent, `AUTH_DISABLED: CloseForSession("") must not close an anonymous connection`)
+	_, otherStillPresent := cm.Get(otherConn.ID)
+	assert.True(t, otherStillPresent, `AUTH_DISABLED: CloseForUser("anonymous", ...) must not close an anonymous connection`)
+
+	// AUTH ENABLED arm: same two Connection objects, now given real values.
+	revokedConn.UserID = "user1"
+	revokedConn.SessionID = "sess-revoked"
+	otherConn.UserID = "user1"
+	otherConn.SessionID = "sess-other"
+
+	cm.CloseForSession("sess-revoked")
+	cm.CloseForUser("user1", "sess-other")
+
+	_, revokedPresentAfter := cm.Get(revokedConn.ID)
+	assert.False(t, revokedPresentAfter, "AUTH ENABLED: the revoked session's connection must close")
+	_, otherPresentAfter := cm.Get(otherConn.ID)
+	assert.True(t, otherPresentAfter, "AUTH ENABLED: the non-revoked, excepted session must stay open")
+}
+
 // TestSafeWriteMessage_SurvivesConcurrentRevocationClose is the regression for
 // the crash hazard measured on agent-os-teop: closing a live connection via
 // CloseForSession/CloseForUser while another goroutine is mid-write to the
