@@ -10,15 +10,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// readMetricsFrame reads one WebSocket DATA message off the client and decodes
-// it as a MetricsFrame. Using ReadMessage (not the raw frame layer) is what
-// makes the assertion unfakeable by the scaffolding around it: gorilla never
-// returns control frames from ReadMessage — a ping, a pong or a close frame
-// surfaces as an *error*, never as a message — so a handler that merely
-// answers safePingLoop or writes a close frame cannot satisfy this. The
-// Timestamp check pins it further: an empty frame the handler never built
-// would decode to the zero MetricsFrame (agent-os-74rl).
-func readMetricsFrame(t *testing.T, conn *websocket.Conn, within time.Duration, why string) MetricsFrame {
+// readMetricsFrame reads one WebSocket DATA message off the client and returns
+// both the decoded MetricsFrame and the raw wire payload. Using ReadMessage
+// (not the raw frame layer) is what makes the assertion unfakeable by the
+// scaffolding around it: gorilla never returns control frames from
+// ReadMessage — a ping, a pong or a close frame surfaces as an *error*, never
+// as a message — so a handler that merely answers safePingLoop or writes a
+// close frame cannot satisfy this. The Timestamp check pins it further: an
+// empty frame the handler never built would decode to the zero MetricsFrame.
+//
+// The raw payload is returned because the decoded struct erases the one
+// distinction the empty-list test most needs: json.Unmarshal turns both
+// `null` and `[]` into a zero-length Go slice, so no assertion on
+// frame.Containers can tell them apart. Only the bytes can (agent-os-74rl).
+func readMetricsFrame(t *testing.T, conn *websocket.Conn, within time.Duration, why string) (MetricsFrame, []byte) {
 	t.Helper()
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(within)))
 	_, payload, err := conn.ReadMessage()
@@ -27,7 +32,7 @@ func readMetricsFrame(t *testing.T, conn *websocket.Conn, within time.Duration, 
 	var frame MetricsFrame
 	require.NoError(t, json.Unmarshal(payload, &frame), "metrics frame did not decode: %s", payload)
 	require.NotEmpty(t, frame.Timestamp, "metrics frame carried no timestamp: %s", payload)
-	return frame
+	return frame, payload
 }
 
 // TestMonitoringMetricsWS_EmptyContainerListStaysOpen is the regression test
@@ -61,9 +66,22 @@ func TestMonitoringMetricsWS_EmptyContainerListStaysOpen(t *testing.T) {
 
 	serverConn := firstConnection(t, cm)
 
-	frame := readMetricsFrame(t, clientConn, 5*time.Second,
+	frame, payload := readMetricsFrame(t, clientConn, 5*time.Second,
 		"expected an empty metrics frame instead of an immediate close on an empty container list")
 	require.Empty(t, frame.Containers, "empty container list must yield a frame with no containers")
+
+	// The wire format, not the decoded struct, is the load-bearing assertion.
+	// A nil Go slice marshals to `"containers":null`, and the frontend hook
+	// consuming this socket calls .forEach on the field with no null guard
+	// (frontend/src/hooks/useMetricsBase.ts:60, typed non-nullable at :25),
+	// so a null here throws a TypeError in the browser every tick — trading a
+	// loud redial storm for a silent client-side crash. json.Unmarshal decodes
+	// both null and [] to a zero-length slice, so require.Empty above passes
+	// either way and cannot catch this; only the bytes can.
+	require.Contains(t, string(payload), `"containers":[]`,
+		"empty frame must serialise containers as [] for the unguarded frontend forEach")
+	require.NotContains(t, string(payload), `"containers":null`,
+		"empty frame must not serialise containers as null")
 
 	if isServerSideClosed(serverConn) {
 		t.Fatal("server-side connection was closed even though the client was still connected")
@@ -90,7 +108,7 @@ func TestMonitoringMetricsWS_PopulatedListStillStreams(t *testing.T) {
 
 	serverConn := firstConnection(t, cm)
 
-	frame := readMetricsFrame(t, clientConn, 5*time.Second,
+	frame, _ := readMetricsFrame(t, clientConn, 5*time.Second,
 		"expected a real metrics frame for a stack with two running containers")
 	require.Len(t, frame.Containers, 2, "populated container list must still stream every container")
 

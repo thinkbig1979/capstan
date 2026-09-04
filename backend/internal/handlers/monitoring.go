@@ -129,6 +129,17 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 		// call, so making StreamStats emit instead of close would leave that
 		// guard unreachable. StreamStats keeps its empty-list branch as the
 		// defensive contract of an exported method.
+		//
+		// Containers is a non-nil empty slice, NOT nil, and the difference is
+		// load-bearing: encoding/json renders a nil slice as `null` and an
+		// empty one as `[]`, while the frontend hook on the other end of this
+		// socket calls .forEach on the field with no null guard and types it
+		// non-nullable (frontend/src/hooks/useMetricsBase.ts:60, declared at
+		// :25; reached from MetricsPanel.tsx:264 and StackDetail.tsx:63).
+		// Sending null would throw a TypeError in the browser on every tick —
+		// swapping this bead's loud redial storm for a silent client-side
+		// crash. Observed in the wire bytes by the regression test, not
+		// inferred: the nil form emits `{"timestamp":...,"containers":null}`.
 		if len(containerIDs) == 0 {
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
@@ -139,7 +150,7 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 				case <-ticker.C:
 					frame := MetricsFrame{
 						Timestamp:  time.Now().Format(time.RFC3339),
-						Containers: nil,
+						Containers: []models.ContainerMetrics{},
 					}
 					// safePingLoop is already running on this connection, so
 					// this second writer must go through the WriteMutex-guarded
