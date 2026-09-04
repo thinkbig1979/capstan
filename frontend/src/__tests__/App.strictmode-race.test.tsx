@@ -52,6 +52,10 @@ vi.mock('@/pages/SetupPage', () => ({
   SetupPage: () => <div data-testid="setup-page" />,
 }))
 
+vi.mock('@/pages/DashboardPage', () => ({
+  DashboardPage: () => <div data-testid="dashboard" />,
+}))
+
 const mockStatus = vi.fn()
 const mockMe = vi.fn()
 
@@ -90,7 +94,9 @@ describe('App boot under StrictMode double-invoke', () => {
     expect(await screen.findByTestId('app-shell')).toBeInTheDocument()
 
     // Let both StrictMode invocations fully settle before counting -- a
-    // broken fix could still schedule a second, later request.
+    // broken fix could still schedule a second, later request. This also
+    // gives the authDisabled branch's lazy DashboardPage chunk (App.tsx:15,
+    // rendered at route "/") time to resolve and mount for real.
     await new Promise((resolve) => setTimeout(resolve, 300))
 
     // The load-bearing counts: without de-duplication, StrictMode's second
@@ -102,6 +108,14 @@ describe('App boot under StrictMode double-invoke', () => {
     expect(
       screen.queryByText('Enter your credentials to access Capstan'),
     ).not.toBeInTheDocument()
+    // A crashed tree and a not-yet-rendered one both fail getByTestId the
+    // same way (CI red 2026-09-04: an unmocked DashboardPage threw for
+    // wanting DashboardMetricsProvider, ErrorBoundary swallowed it, and the
+    // resulting fallback was indistinguishable from "shell not up yet"
+    // until this line named it). Asserting the fallback's absence turns
+    // that failure mode into an immediately legible one instead of a
+    // flaky-looking "unable to find" timeout.
+    expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument()
   })
 
   it('does not lose a needsSetup: true answer to a discarded invocation -- reaches /setup, not /login', async () => {
@@ -119,6 +133,7 @@ describe('App boot under StrictMode double-invoke', () => {
     expect(await screen.findByTestId('setup-page')).toBeInTheDocument()
     expect(useAuthStore.getState().needsSetup).toBe(true)
     expect(mockStatus).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument()
   })
 
   it('still reaches the login page, via one shared retry sequence, when the probe never succeeds', async () => {
@@ -136,6 +151,7 @@ describe('App boot under StrictMode double-invoke', () => {
     ).toBeInTheDocument()
     expect(useAuthStore.getState().authDisabled).toBe(false)
     expect(appShellMounts).not.toHaveBeenCalled()
+    expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument()
     // One shared retry sequence (checkStatus's own [250, 750]ms backoff, 3
     // attempts total) rather than one per StrictMode invocation (6 calls).
     expect(mockStatus).toHaveBeenCalledTimes(3)
