@@ -90,17 +90,25 @@ export const useAuthStore = create<AuthState>()((set) => ({
       if (isDev) {
         console.error('Auth status check failed:', error)
       }
-      // Both defaults are deliberately the restrictive direction, because an
-      // unreadable probe is not evidence of anything. useAuth derives
-      // `canAccess = authDisabled || isAuthenticated`, so authDisabled true on
-      // its own opens the entire app with no session behind it -- a failed
-      // network call must never be able to do that. needsSetup true is the same
-      // shape of mistake one step earlier: it would push a first-run
-      // account-creation form at someone whose backend merely blipped.
-      // False for both costs a login prompt on a transient failure. True for
-      // either costs an unauthenticated shell. Not symmetric, so we take the
-      // side whose failure is only an inconvenience.
-      set({ authDisabled: false, needsSetup: false })
+      // An unreadable probe is not evidence of anything, and the two fields it
+      // would have set need that principle pointed in OPPOSITE directions.
+      //
+      // authDisabled is forced back to the restrictive value, because it is the
+      // only field that grants access on its own: useAuth derives
+      // `canAccess = authDisabled || isAuthenticated`, so a true here opens the
+      // whole app with no session behind it. A failed network call must never
+      // be able to write that. False costs a login prompt on a transient
+      // failure; true costs an unauthenticated shell. Not symmetric.
+      //
+      // needsSetup is deliberately NOT written. It cannot grant access -- it
+      // only routes to /setup (App.tsx:144 is the sole `path="/setup"`) -- so
+      // there is nothing to defend against, and overwriting it would destroy a
+      // fact this failed probe did not re-learn. A stale true at worst shows a
+      // form the backend refuses: POST /auth/setup 409s SETUP_ALREADY_DONE once
+      // any user exists, at the fast path (handlers/auth.go:143) and again
+      // atomically inside database.CreateFirstUser, so the client value cannot
+      // create an account no matter what it says.
+      set({ authDisabled: false })
     }
   },
 }))

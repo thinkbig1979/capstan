@@ -160,14 +160,22 @@ describe('authStore checkStatus', () => {
     await expect(useAuthStore.getState().checkStatus()).resolves.toBeUndefined()
   })
 
-  it('falls back to the locked-down defaults when the status probe fails', async () => {
+  it('forces authDisabled false but preserves needsSetup when the probe fails', async () => {
+    // Seeding both true is what makes this discriminate: the store's initial
+    // state is already authDisabled false / needsSetup false (authStore.ts:21-22),
+    // so against the defaults this would pass with the catch's set() deleted.
     useAuthStore.setState({ authDisabled: true, needsSetup: true })
     mockStatus.mockRejectedValue(new Error('Network error'))
 
     await useAuthStore.getState().checkStatus()
 
     const state = useAuthStore.getState()
+    // Forced: authDisabled alone satisfies useAuth's canAccess, so a failed
+    // probe must not be able to leave it granting access.
     expect(state.authDisabled).toBe(false)
-    expect(state.needsSetup).toBe(false)
+    // Preserved: a probe that failed learned nothing, and needsSetup routes to
+    // /setup rather than granting access, so there is nothing to defend by
+    // overwriting a value an earlier successful probe established.
+    expect(state.needsSetup).toBe(true)
   })
 })
