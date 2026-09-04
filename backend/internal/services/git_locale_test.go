@@ -17,9 +17,20 @@ import (
 //   - status --porcelain -> success, no output (clean working tree)
 //   - rev-parse HEAD     -> success, a fixed fake hash
 //   - pull --ff-only     -> exit 1, printing git's own "already up to date"
-//     message -- in English, unless the child's LANGUAGE variable says
-//     otherwise, so the test can observe exactly what pullCLI's callers
-//     observe against a translated locale.
+//     message, translated or not according to a faithful model of glibc
+//     gettext's catalog selection (see the script), so the test observes
+//     exactly what pullCLI's callers observe against a translated locale.
+//
+// The oracle models the REAL selection order, which is the whole point of the
+// test: the messages locale is LC_ALL, else LC_MESSAGES, else LANG, else C;
+// a C/POSIX messages locale disables translation outright and LANGUAGE is
+// ignored; only for a non-C messages locale does LANGUAGE select the catalog.
+// OBSERVED against git 2.47.3 (`git status --porcelain` outside a repo):
+// LC_ALL=C LANGUAGE=de and LC_ALL=POSIX LANGUAGE=de both print English, while
+// LC_ALL=en_US.utf8 LANGUAGE=de prints "Schwerwiegend: Kein Git-Repository".
+// An earlier version of this script branched on $LANGUAGE alone, which models
+// that precedence BACKWARDS: it made the test insensitive to LC_ALL=C, the
+// load-bearing half of the fix, and sensitive only to the redundant half.
 //
 // A stand-in binary is necessary because a real, modern git CLI does not
 // actually exercise this branch: `git pull --ff-only` on a truly up-to-date
@@ -46,11 +57,27 @@ func writeFakeGit(t *testing.T) string {
 	}
 	dir := t.TempDir()
 	script := `#!/bin/sh
+# Resolve the messages locale the way glibc setlocale does, then pick a
+# catalog the way gettext does. Empty is unset, per setlocale.
+msgloc="$LC_ALL"
+[ -n "$msgloc" ] || msgloc="$LC_MESSAGES"
+[ -n "$msgloc" ] || msgloc="$LANG"
+[ -n "$msgloc" ] || msgloc=C
+catalog=en
+case "$msgloc" in
+  C|POSIX) ;;                      # translation off; LANGUAGE is not consulted
+  *)
+    sel="$msgloc"
+    [ -z "$LANGUAGE" ] || sel="${LANGUAGE%%:*}"   # LANGUAGE wins, non-C only
+    case "$sel" in de*) catalog=de ;; esac
+    ;;
+esac
+
 case "$*" in
   *'status --porcelain'*) exit 0 ;;
   *'rev-parse HEAD'*) echo 'deadbeefcafefeed0000000000000000000000'; exit 0 ;;
   *'pull --ff-only'*)
-    if [ "$LANGUAGE" = "de" ]; then
+    if [ "$catalog" = de ]; then
       echo 'Bereits aktuell.' >&2
     else
       echo 'Already up to date.' >&2
@@ -67,17 +94,31 @@ esac
 	return dir
 }
 
-// TestPullCLI_UpToDateIsLocaleIndependent pins agent-os-vq3p: pullCLI detects
-// the "nothing to pull" case by string-matching git's own message ("Already
-// up to date") in the child's combined output. git translates that message
-// via gettext according to the child's LANGUAGE/LC_ALL/LANG (19 catalogs ship
-// on a typical Linux box), and gitCmdWithCreds never pinned the child locale
-// -- so on a non-English host this reachable-in-principle branch would
-// silently misfire.
+// TestPullCLI_UpToDateIsLocaleIndependent pins agent-os-vq3p: gitCmdWithCreds
+// pins the git child's locale, so pullCLI's string match on git's own message
+// ("Already up to date") gives the same answer whatever locale Capstan itself
+// is running under. That, not a particular HTTP status, is what this test
+// pins: the bead's headline symptom (an up-to-date pull surfacing as a 500) is
+// NOT reproducible on git 2.47.3, where `git pull --ff-only` on an up-to-date
+// repository exits 0 and the string match is never reached -- see writeFakeGit
+// for the evidence and for why the branch is nonetheless live production code.
+// What generalises, and what the downstream beads depend on, is that the child
+// environment is locale-pinned so no text match on git's output can drift with
+// the host's language.
 //
-// The regression arm sets LANGUAGE to a translated locale exactly as an
-// operator's shell/systemd unit would on a non-English host. The control arm
-// proves the English path is unaffected by the fix, on the same instrument.
+// The arms are chosen so each half of the pin is separately observable:
+//
+//   - "translated messages locale" sets LC_ALL to a German locale with no
+//     LANGUAGE. Only LC_ALL=C in the child suppresses the translation, so this
+//     arm goes RED if the LC_ALL=C pin is removed. It is the arm that protects
+//     the load-bearing half of the fix.
+//   - "LANGUAGE overrides a non-C locale" reproduces the environment that
+//     actually produces German output from real git (OBSERVED: LC_ALL=en_US.utf8
+//     LANGUAGE=de -> "Schwerwiegend: Kein Git-Repository"). It goes RED only if
+//     BOTH halves are removed, i.e. against the pre-fix code.
+//   - "english locale (control)" is the must-pass side: the fix makes the
+//     behaviour locale-INDEPENDENT rather than merely moving which string is
+//     matched.
 func TestPullCLI_UpToDateIsLocaleIndependent(t *testing.T) {
 	fakeGitDir := writeFakeGit(t)
 	t.Setenv("PATH", fakeGitDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -85,31 +126,47 @@ func TestPullCLI_UpToDateIsLocaleIndependent(t *testing.T) {
 	dir := t.TempDir()
 	svc := NewGitService(&config.Config{}, nil)
 
-	t.Run("translated locale (regression arm)", func(t *testing.T) {
-		t.Setenv("LANGUAGE", "de")
-
+	// assertNoChange drives Pull and asserts the up-to-date branch was taken.
+	assertNoChange := func(t *testing.T, env string) {
+		t.Helper()
 		result, err := svc.Pull(dir)
 		if err != nil {
-			t.Fatalf("Pull under LANGUAGE=de (git's own message would be 'Bereits aktuell.' unless "+
-				"the child locale is pinned): expected the no-change result, got error: %v", err)
+			t.Fatalf("Pull under %s: expected the no-change result; got error: %v. Git's message "+
+				"is only 'Already up to date.' while the child locale stays pinned.", env, err)
 		}
 		if result.PreviousCommit != result.CurrentCommit {
-			t.Errorf("expected no-op pull (PreviousCommit == CurrentCommit), got %q != %q",
-				result.PreviousCommit, result.CurrentCommit)
+			t.Errorf("Pull under %s: expected no-op pull (PreviousCommit == CurrentCommit), got %q != %q",
+				env, result.PreviousCommit, result.CurrentCommit)
 		}
+	}
+
+	t.Run("translated messages locale (regression arm)", func(t *testing.T) {
+		// No LANGUAGE: the translation is selected by the messages locale
+		// alone, so clearing LANGUAGE cannot mask a missing LC_ALL=C.
+		t.Setenv("LC_ALL", "de_DE.UTF-8")
+		t.Setenv("LC_MESSAGES", "")
+		t.Setenv("LANG", "")
+		t.Setenv("LANGUAGE", "")
+
+		assertNoChange(t, "LC_ALL=de_DE.UTF-8")
+	})
+
+	t.Run("LANGUAGE overrides a non-C locale", func(t *testing.T) {
+		t.Setenv("LC_ALL", "en_US.utf8")
+		t.Setenv("LC_MESSAGES", "")
+		t.Setenv("LANG", "")
+		t.Setenv("LANGUAGE", "de")
+
+		assertNoChange(t, "LC_ALL=en_US.utf8 LANGUAGE=de")
 	})
 
 	t.Run("english locale (control)", func(t *testing.T) {
-		t.Setenv("LANGUAGE", "en_US")
+		t.Setenv("LC_ALL", "en_US.utf8")
+		t.Setenv("LC_MESSAGES", "")
+		t.Setenv("LANG", "")
+		t.Setenv("LANGUAGE", "")
 
-		result, err := svc.Pull(dir)
-		if err != nil {
-			t.Fatalf("Pull under LANGUAGE=en_US: expected the no-change result, got error: %v", err)
-		}
-		if result.PreviousCommit != result.CurrentCommit {
-			t.Errorf("expected no-op pull (PreviousCommit == CurrentCommit), got %q != %q",
-				result.PreviousCommit, result.CurrentCommit)
-		}
+		assertNoChange(t, "LC_ALL=en_US.utf8")
 	})
 }
 
