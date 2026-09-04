@@ -148,10 +148,22 @@ func kickOffBackupRun(t *testing.T, srv *httptest.Server) string {
 }
 
 // dialBackupWS dials a backup WS route (optionally cookie-authenticated) and
-// reads past the {"type":"start",...} frame before returning. That frame is
-// written AFTER wsAttach's registration step (Add/AddUnmetered), so seeing it
-// is proof registration has already happened — the same role
-// requireSlotsReleased/`entered` channels play in terminal_scope_test.go.
+// returns as soon as the handshake completes. It deliberately reads NOTHING.
+//
+// It used to read past the {"type":"start",...} frame under a 5-second
+// SetReadDeadline, using that frame as a proxy for "registration has already
+// happened". That made the frame's ARRIVAL TIME the assertion: on a loaded
+// runner the frame missed the budget and a correct handler went red —
+// OBSERVED in CI on PR #256 @ 8aed205, where the plain unit job failed with
+// `read tcp 127.0.0.1:55412->127.0.0.1:39467: i/o timeout` / "reading the
+// start frame" and a rerun of the IDENTICAL SHA passed, while the SLOWER
+// race-detector job passed both times (agent-os-fzqb). A failure that appears
+// only in the faster job is pointing at load, not at code.
+//
+// Callers now wait on the registration itself (requireConnRegistered), the
+// precondition they actually depend on, which is one causal step shorter:
+// serveWS registers before wsAttach spawns its read pump and ping loop and
+// before it marshals and writes the start frame.
 func dialBackupWS(t *testing.T, srv *httptest.Server, path, cookieToken string) *websocket.Conn {
 	t.Helper()
 
@@ -165,12 +177,133 @@ func dialBackupWS(t *testing.T, srv *httptest.Server, path, cookieToken string) 
 	if resp != nil {
 		resp.Body.Close()
 	}
+	return conn
+}
 
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+// wsHangGuardCeiling bounds every hang-guard in this file. 60s is NOT a
+// latency budget: it is ~550x the 0.11s the slower of these two tests takes
+// end to end (OBSERVED idle), and 12x the 5s constant that demonstrably fired
+// in CI against a strictly LONGER causal path — the start frame needs two
+// goroutine spawns, a JSON marshal, a TCP write and a client-side read that
+// registration does not. It is also far enough under both CI ceilings (unit
+// job timeout-minutes: 10, race job 20) that a hang reports as an assertion
+// with minutes to spare instead of as a killed runner.
+const wsHangGuardCeiling = 60 * time.Second
+
+// hangGuardDeadline returns an absolute deadline for a wait that must NEVER
+// fire in a correct run:
+//
+//	min(t.Deadline() - reporting margin, now + wsHangGuardCeiling)
+//
+// Both halves are load-bearing; neither alone is enough.
+//
+// WHY THIS IS NOT "JUST A BIGGER NUMBER". What the bead forbids is a bound the
+// test's PASS depends on in normal operation. That is exactly what the 5s this
+// file used to carry was: the start frame's ARRIVAL TIME was the assertion, so
+// a busy runner turned correct code red and reported it as "not revocable"
+// (agent-os-fzqb; OBSERVED in CI on PR #256 @ 8aed205 — plain unit job red,
+// rerun of the IDENTICAL SHA green, and the SLOWER race job green both times,
+// which is load pointing at itself). The waits below instead block on a
+// CONDITION — registration in the ConnectionManager — that is satisfied in
+// milliseconds under any realistic load, so no passing run ever consults this
+// deadline at all.
+//
+// The distinction is semantic, not syntactic, and switching the observable
+// alone does NOT fix the class: firstConnection
+// (monitoring_metrics_close_test.go:130) polls the SAME registration
+// observable on a 5s constant, and the orchestrator OBSERVED it firing under
+// concurrent load on CLEAN main as `dashboard_metrics_close_test.go:65: no
+// connection registered in cm within 5s`. The bound is the defect, not the
+// signal.
+//
+// WHY THE t.Deadline() HALF. A bare constant is a number picked against an
+// imagined machine. Deriving from the binary's own -timeout makes the guard
+// adapt to what the invoker actually allowed, so a short -timeout run reports
+// promptly instead of outliving the binary it belongs to. Its bool is FALSE
+// under -timeout 0 (no deadline at all), a routine way to run this suite
+// locally, which is why the ceiling has to stand on its own.
+//
+// WHY THE CEILING HALF — the part t.Deadline() alone gets WRONG.
+// .github/workflows/backend.yml runs `go test ./... -count=1` with NO -timeout
+// flag (line 116; the race job at line 156 likewise), so Go's default 10m
+// package timeout applies — and the unit job's own `timeout-minutes: 10`
+// (line 72) is the SAME NUMBER. A guard at t.Deadline() minus a small margin
+// would fire at ~9m55s, inside the window where GitHub is already killing the
+// runner: on a real hang the likely outcome is a cancelled job with NO test
+// output, which is strictly worse for diagnosis than the 5s failure this
+// change removes. The ceiling keeps a hang inside the job, as a named
+// assertion. (OBSERVED by the orchestrator reading backend.yml, 2026-09-04.)
+//
+// COST, stated so it is chosen and not discovered by whoever is on call: a
+// genuinely broken signal costs up to wsHangGuardCeiling before it reports.
+// MEASURED, with SetConnectionManager disabled so registration never happens:
+// 60.00s per test at the default -timeout, and 25.00s under `-timeout 30s`
+// (the t.Deadline() half binding instead). Seconds, not minutes, either way.
+func hangGuardDeadline(t *testing.T) time.Time {
+	t.Helper()
+
+	guard := time.Now().Add(wsHangGuardCeiling)
+	if d, ok := t.Deadline(); ok {
+		if reportBy := d.Add(-5 * time.Second); reportBy.Before(guard) {
+			guard = reportBy // room to report before the runtime's own panic
+		}
+	}
+	// A -timeout shorter than the reporting margin would put the guard in the
+	// past and fail instantly; a floor keeps the failure a real timeout rather
+	// than an artefact of the margin.
+	if floor := time.Now().Add(time.Second); guard.Before(floor) {
+		guard = floor
+	}
+	return guard
+}
+
+// requireConnRegistered blocks until cm holds a connection satisfying match —
+// that is, until the precondition the caller is about to depend on holds.
+//
+// Reading cm.connections directly is the established pattern in this package
+// (firstConnection, monitoring_metrics_close_test.go:117, documents why: this
+// file is `package handlers`, same as ws.go).
+//
+// match is a parameter rather than a hardcoded "any connection" because each
+// caller depends on a DIFFERENT registration. In the revocation test an "any"
+// match would be satisfied by the `control` connection that test adds itself,
+// before the handler has run at all — a wait its own setup already satisfied
+// is not a wait.
+func requireConnRegistered(t *testing.T, cm *ConnectionManager, match func(*Connection) bool, what string) {
+	t.Helper()
+
+	guard := hangGuardDeadline(t)
+	for {
+		cm.mu.RLock()
+		for _, c := range cm.connections {
+			if match(c) {
+				cm.mu.RUnlock()
+				return
+			}
+		}
+		cm.mu.RUnlock()
+
+		if !time.Now().Before(guard) {
+			t.Fatalf("%s: no matching connection was ever registered in the ConnectionManager "+
+				"(wsAttach never reached serveWS's registration step)", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// requireBackupStartFrame reads and asserts the {"type":"start"} frame wsAttach
+// sends. This is the package's ONLY assertion of that protocol step
+// (`command grep -rn '"start"' *_test.go` finds no other), which is why it
+// survived the removal of the read from dialBackupWS — but it now lives here,
+// called at a point of the caller's choosing, so it is never sitting on the
+// path of something being raced against.
+func requireBackupStartFrame(t *testing.T, conn *websocket.Conn) {
+	t.Helper()
+
+	require.NoError(t, conn.SetReadDeadline(hangGuardDeadline(t)))
 	var startFrame map[string]interface{}
 	require.NoError(t, conn.ReadJSON(&startFrame), "reading the start frame")
 	require.Equal(t, "start", startFrame["type"])
-	return conn
 }
 
 // TestBackupWSAttach_RevokesConnectionEvenAtCap is arms 1 and 2 together: a
@@ -213,12 +346,28 @@ func TestBackupWSAttach_RevokesConnectionEvenAtCap(t *testing.T) {
 	conn := dialBackupWS(t, srv, "/api/ws/backups/run/"+runID, token)
 	defer conn.Close()
 
+	// The precondition for everything below: CloseForSession(revokedJTI) can
+	// only close what is registered, so wait for the backup connection to be
+	// registered CARRYING THAT SessionID. Matching on the session id (not on
+	// "any connection", which `control` above already satisfies) is what makes
+	// this a real wait, and registration — not the start frame — is what the
+	// revocation depends on.
+	requireConnRegistered(t, cm, func(c *Connection) bool {
+		return c.SessionID == revokedJTI
+	}, "backup WS attach at the per-user cap")
+
 	closeCode := 0
 	conn.SetCloseHandler(func(code int, text string) error {
 		closeCode = code
 		return nil
 	})
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(3*time.Second)))
+	// Hang-guard, not a budget. CloseForSession writes every close frame and
+	// closes every socket before it returns (ws.go closeMatching), so in a
+	// correct run the read loop below completes in microseconds. A constant
+	// here would be the same defect the 5s in dialBackupWS was: if it fired,
+	// closeCode would stay 0 and the failure would be reported by the
+	// require.Equal below as "not revocable" rather than "the runner was slow".
+	require.NoError(t, conn.SetReadDeadline(hangGuardDeadline(t)))
 
 	// The exact call a real logout/password-change makes (see
 	// auth_logout_revocation_test.go / settings_password_revocation_test.go).
@@ -261,6 +410,14 @@ func TestBackupWSAttach_DoesNotConsumeSharedCapBudget(t *testing.T) {
 	conn := dialBackupWS(t, srv, "/api/ws/backups/run/"+runID, "") // authDisabled -> userID "anonymous"
 	defer conn.Close()
 
+	// Wait for the backup stream's own registration before asking a
+	// hard-refusing handler what the cap looks like. Without this the
+	// operations dial can win the race and measure a cap the backup stream has
+	// not touched yet, which passes whether or not wsAttach meters.
+	requireConnRegistered(t, cm, func(c *Connection) bool {
+		return c.UserID == "anonymous"
+	}, "backup WS attach under AUTH_DISABLED")
+
 	// Same manager, same user ("anonymous" under authDisabled), a handler that
 	// DOES hard-refuse at the cap (operations_test.go's own fixture/helpers).
 	opSrv, _ := newOperationsFixtureWith(t, cm, &fakeStreamer{})
@@ -268,4 +425,10 @@ func TestBackupWSAttach_DoesNotConsumeSharedCapBudget(t *testing.T) {
 
 	require.NotEqual(t, CloseCodeRateLimit, code,
 		"operations WS refused (%d %q) — the backup stream consumed a cap slot a hard-refusing handler needed", code, text)
+
+	// Protocol coverage carried over from dialBackupWS, asserted here because
+	// this is the one place in the file where nothing races with it: the run is
+	// blocked (buildBlockingBackupSvc) so the stream stays open, and every
+	// timing-sensitive step of both tests is already done.
+	requireBackupStartFrame(t, conn)
 }
