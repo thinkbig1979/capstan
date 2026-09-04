@@ -46,10 +46,11 @@ func readMetricsFrame(t *testing.T, conn *websocket.Conn, within time.Duration, 
 // symptom was a redial storm: the metrics WS opening and exiting roughly once
 // per second, forever.
 //
-// The fix mirrors handleDashboardMetricsWebSocket, which has carried this
-// guard all along: hold the socket open and emit an empty frame on a ticker,
-// so the client sees "this stack has no containers to report" instead of a
-// dead connection.
+// The fix takes handleDashboardMetricsWebSocket's STRUCTURE — guard before
+// StreamStats, hold the socket open, emit one frame per tick — but not its
+// empty value. That handler sends `Containers: nil`, which is its own live
+// defect (agent-os-5scv); this one sends an empty slice, and the wire-format
+// assertion below is what pins the difference.
 //
 // Scope note: this test says nothing about *why* the list is empty for a
 // stack whose containers exist — that is a separate defect (agent-os-fg55).

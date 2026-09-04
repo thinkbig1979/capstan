@@ -121,8 +121,13 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 		// the socket died within a millisecond of opening. The frontend
 		// reconnects on close, so that read as a redial storm — one open and
 		// exit per second, forever (agent-os-74rl). Hold the socket open and
-		// report "no containers" on a ticker instead, mirroring
-		// handleDashboardMetricsWebSocket, which has always guarded this.
+		// report "no containers" on a ticker instead.
+		//
+		// This mirrors handleDashboardMetricsWebSocket's STRUCTURE (guard
+		// before StreamStats, ticker, one frame per tick) and deliberately
+		// differs from it on the empty value — see the Containers note below.
+		// Do not copy that handler's `Containers: nil` here; it is a live
+		// defect over there, tracked as agent-os-5scv, not a model to follow.
 		//
 		// Guarding here rather than in StreamStats keeps the change local to
 		// the one caller that lacked it: dashboard.go guards before its own
@@ -136,11 +141,35 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 		// socket calls .forEach on the field with no null guard and types it
 		// non-nullable (frontend/src/hooks/useMetricsBase.ts:60, declared at
 		// :25; reached from MetricsPanel.tsx:264 and StackDetail.tsx:63).
-		// Sending null would throw a TypeError in the browser on every tick —
-		// swapping this bead's loud redial storm for a silent client-side
-		// crash. Observed in the wire bytes by the regression test, not
-		// inferred: the nil form emits `{"timestamp":...,"containers":null}`.
+		// Sending null throws a TypeError on every tick, and it is not a
+		// contained one: the throw happens inside the setContainers updater,
+		// which React runs during the render phase, so the hook's own
+		// try/catch does not see it and it unwinds past the per-tab
+		// boundaries to the app-level ErrorBoundary (App.tsx:136) — the whole
+		// app is replaced by the error fallback. That would trade this bead's
+		// loud, server-visible redial storm for a silent client-side crash.
+		// The Go half is observed in the wire bytes by the regression test,
+		// not inferred: the nil form emits
+		// `{"timestamp":...,"containers":null}`. The React unwinding above is
+		// not something this package can execute; it was established by a
+		// browser probe recorded on agent-os-74rl and agent-os-5scv.
 		if len(containerIDs) == 0 {
+			// After this fix an empty stack no longer announces itself as one
+			// WS session per second in the request log, so this line is the
+			// replacement signal for agent-os-fg55 — the still-open question
+			// of why the list is empty for a stack whose containers exist.
+			// Once at branch entry, never per tick: a per-tick line would be
+			// the same storm in a different colour.
+			slog.Info("metrics stream has no containers; holding socket open",
+				"stackId", stackID, "projectName", stack.ProjectName)
+
+			// 2s is a deliberate ceiling, not a tuning knob. This handler has
+			// no reader goroutine and ctx.Done() never fires, so a failed
+			// write is the ONLY client-disconnect detector — the ticker
+			// interval IS the detection latency. safePingLoop is not a
+			// backstop: on error it returns its own goroutine, not this
+			// handler. An interval past the 30s ping would leave no detector
+			// at all and leak the ConnectionManager slot for good.
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
 			for {
