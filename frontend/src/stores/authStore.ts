@@ -10,8 +10,13 @@ interface AuthState {
   login: (username: string, password: string) => Promise<void>
   setup: (username: string, password: string) => Promise<void>
   logout: () => Promise<void>
-  checkAuth: () => Promise<void>
-  checkStatus: () => Promise<void>
+  // isStale (agent-os-lqsa): App.tsx's boot effect passes a closure over its
+  // own `ignore` flag. StrictMode's dev double-invoke (main.tsx) can have two
+  // overlapping boot invocations in flight; without this, a superseded
+  // invocation's `set()` could land AFTER a newer invocation's, clobbering it
+  // with a stale answer. Optional and unused by every other call site.
+  checkAuth: (isStale?: () => boolean) => Promise<void>
+  checkStatus: (isStale?: () => boolean) => Promise<void>
 }
 
 export const useAuthStore = create<AuthState>()((set) => ({
@@ -59,7 +64,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
     })
   },
 
-  checkAuth: async () => {
+  checkAuth: async (isStale) => {
     // agent-os-2cp3. Same shape as checkStatus above (agent-os-a4eh): this is
     // the only production call site (App.tsx's mount effect), its deps are
     // stable Zustand actions so the effect never re-runs, and nothing else
@@ -81,9 +86,11 @@ export const useAuthStore = create<AuthState>()((set) => ({
     const retryDelaysMs = [250, 750]
 
     for (let attempt = 0; ; attempt++) {
+      if (isStale?.()) return
       try {
         const { authApi } = await import('@/lib/api')
         const user = await authApi.me()
+        if (isStale?.()) return
         set({
           token: 'cookie',
           user,
@@ -99,6 +106,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
           await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
           continue
         }
+        if (isStale?.()) return
         const isDev = import.meta.env.DEV
         if (isDev) {
           console.error('Auth check failed:', error)
@@ -109,7 +117,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
     }
   },
 
-  checkStatus: async () => {
+  checkStatus: async (isStale) => {
     // agent-os-a4eh. A boot probe that failed once used to be final. This is the
     // only production call site (App.tsx's mount effect), its deps are stable
     // Zustand actions so the effect never re-runs, and nothing else re-probes --
@@ -131,9 +139,11 @@ export const useAuthStore = create<AuthState>()((set) => ({
     const retryDelaysMs = [250, 750]
 
     for (let attempt = 0; ; attempt++) {
+      if (isStale?.()) return
       try {
         const { authApi } = await import('@/lib/api')
         const status = await authApi.status()
+        if (isStale?.()) return
         set({
           authDisabled: status.authDisabled,
           needsSetup: status.needsSetup,
@@ -144,6 +154,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
           await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
           continue
         }
+        if (isStale?.()) return
         // Deliberately NOT dev-gated, unlike :50 and :72 in this file. Those two
         // report a failed login and a failed logout: the user initiated the
         // action, has UI feedback, and knows what they attempted. This one
