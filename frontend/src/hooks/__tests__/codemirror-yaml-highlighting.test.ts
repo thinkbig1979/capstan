@@ -63,6 +63,18 @@ function highlightedTokens(parent: HTMLElement): string[] {
  * So poll for the tokens instead of reading them once. The wait is observable,
  * not a fixed sleep — it returns on the first check whenever the parse already
  * finished, which is every run on an unloaded box.
+ *
+ * On the wall-clock budget below, since this repo has been busy REMOVING those
+ * from tests (agent-os-fzqb, agent-os-gs7r): what those beads forbid is a bound
+ * the test's PASS depends on in normal operation. This one is hang-guard duty,
+ * not assertion duty. Nothing passes because the budget elapsed — the poll exits
+ * the moment the tokens are there, and the budget only exists so that a parse
+ * which genuinely got descheduled fails with the tokens it saw instead of
+ * hanging. Its size is set by the library, not by taste: recovery is pinned to
+ * that fixed setTimeout(…, 500), `Work.MaxPause` in CodeMirror's own source, so
+ * 5s is ~10x the pause it has to clear, and the describe() timeout below sits
+ * above the poll so the runner never wins the race and hides what was seen.
+ * Please don't tidy either number down.
  */
 const SETTLE_TIMEOUT_MS = 5_000
 
