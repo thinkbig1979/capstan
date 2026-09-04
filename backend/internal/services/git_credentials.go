@@ -204,7 +204,22 @@ func (s *GitService) gitCmdWithCreds(dirPath, user, token string, args ...string
 	// stripCapstanSecrets for why this is a denylist rather than an
 	// allowlist. Hygiene, consistent with this package's other child-process
 	// call sites (exec_env.go, backup_restic.go).
-	env := append(stripCapstanSecrets(os.Environ()), "GIT_TERMINAL_PROMPT=0")
+	//
+	// LC_ALL=C / LANGUAGE=<cleared> pin the child to English, untranslated
+	// messages: git ships ~19 gettext catalogs, and callers of this command
+	// (pullCLI's "Already up to date" match) parse its stdout/stderr as a
+	// machine interface, not prose for a human. Without this, the same pull
+	// that succeeds in English reports a false 500 on a non-English host
+	// (agent-os-vq3p). LC_ALL=C alone pins every LC_* category, but GNU
+	// gettext's LANGUAGE variable is consulted ahead of LC_ALL for
+	// message-catalog selection and is not a category LC_ALL overrides, so an
+	// inherited LANGUAGE must be cleared explicitly too. Appending both here
+	// (rather than filtering them out of stripCapstanSecrets' output first)
+	// is sufficient: os/exec's Cmd.Env is documented to keep only the last
+	// value in the slice for a duplicate key, so these two entries win over
+	// whatever stripCapstanSecrets forwarded from Capstan's own environment.
+	env := append(stripCapstanSecrets(os.Environ()), "GIT_TERMINAL_PROMPT=0",
+		"LC_ALL=C", "LANGUAGE=")
 
 	if token != "" {
 		// The empty assignment first clears any helper inherited from system or
