@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,11 +85,13 @@ func NewTempStack(t *testing.T, composeYAML string) (dir string, project string,
 	}
 
 	// Build a project name that is:
-	//   - unique per test (avoids collisions when tests run in parallel)
+	//   - unique per test AND per call within a test (avoids collisions when
+	//     a single test calls NewTempStack more than once, and when tests
+	//     run in parallel)
 	//   - valid for Docker Compose (lowercase alphanumeric + hyphens)
 	//   - short enough to stay under container-name limits (keep to ≤40 chars
 	//     so the combined "<project>-<service>-1" stays under 63 chars)
-	project = sanitizeProjectName("it-" + t.Name())
+	project = uniqueProjectName("it-"+t.Name(), nextStackSeq(t.Name()))
 
 	var once sync.Once
 	cleanup = func() {
@@ -248,10 +251,12 @@ func containerState(t *testing.T, dir, project, service string) string {
 	return ""
 }
 
-// sanitizeProjectName converts a test name (which may contain '/', spaces,
-// uppercase letters, underscores) into a valid Docker Compose project name:
-// lowercase, only [a-z0-9-], collapsed hyphens, truncated to 40 characters.
-func sanitizeProjectName(name string) string {
+// sanitizeChars lowercases name and replaces every character outside
+// [a-z0-9] with a hyphen, then collapses runs of hyphens and trims leading/
+// trailing ones. It performs no length truncation and no uniqueness
+// disambiguation — see sanitizeProjectName and uniqueProjectName, which
+// build on it for their respective callers.
+func sanitizeChars(name string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(name) {
 		switch {
@@ -269,7 +274,21 @@ func sanitizeProjectName(name string) string {
 	for strings.Contains(s, "--") {
 		s = strings.ReplaceAll(s, "--", "-")
 	}
-	s = strings.Trim(s, "-")
+	return strings.Trim(s, "-")
+}
+
+// sanitizeProjectName converts a test name (which may contain '/', spaces,
+// uppercase letters, underscores) into a valid Docker Compose project name:
+// lowercase, only [a-z0-9-], collapsed hyphens, truncated to 40 characters.
+//
+// This is used directly by a handful of tests that build their own project
+// names outside of NewTempStack; it is kept byte-for-byte compatible with
+// its historical behavior (including the truncation collision it does not
+// guard against) since those callers are outside this fix's scope. Callers
+// that go through NewTempStack get uniqueProjectName instead, which layers
+// collision resistance on top of the same character-sanitization rules.
+func sanitizeProjectName(name string) string {
+	s := sanitizeChars(name)
 	if len(s) > 40 {
 		s = s[:40]
 	}
@@ -278,4 +297,65 @@ func sanitizeProjectName(name string) string {
 		s = fmt.Sprintf("it-%d", time.Now().UnixNano()%1_000_000)
 	}
 	return s
+}
+
+// stackSeqMu and stackSeq give each NewTempStack call within the same test a
+// distinct, deterministic sequence number (1, 2, 3, ...), so two stacks
+// created by one test — which share t.Name() — don't collide on the same
+// compose project. The counter is deterministic given a fixed call order in
+// the test's source code, which is fixed across runs.
+var (
+	stackSeqMu sync.Mutex
+	stackSeq   = map[string]int{}
+)
+
+func nextStackSeq(testName string) int {
+	stackSeqMu.Lock()
+	defer stackSeqMu.Unlock()
+	stackSeq[testName]++
+	return stackSeq[testName]
+}
+
+// uniqueProjectName builds a Docker Compose project name for NewTempStack
+// that stays valid (lowercase [a-z0-9-] only, <=40 chars so
+// "<project>-<service>-1" stays under the 63-char container-name limit —
+// see the constraint this cap protects, documented above on NewTempStack)
+// while remaining unique in the two ways sanitizeProjectName alone was not:
+//
+//   - Across different tests whose names agree on their first N sanitized
+//     characters: sanitizeProjectName's plain truncate-to-40 made those
+//     collide. Here, a short FNV-1a hash of the *untruncated* sanitized name
+//     is appended after truncation, so two different full names hash
+//     differently even when their truncated prefixes match.
+//   - Across multiple NewTempStack calls within the *same* test, which share
+//     t.Name() and therefore the same hash too: the caller-supplied seq
+//     (from nextStackSeq) is appended alongside the hash to disambiguate.
+//
+// Both the hash and seq are deterministic given a fixed test suite and a
+// fixed call order within each test, so a leaked container's name can still
+// be traced back to the test (and call) that created it.
+func uniqueProjectName(rawName string, seq int) string {
+	full := sanitizeChars(rawName)
+	if full == "" {
+		full = "it"
+	}
+
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(full))
+	suffix := fmt.Sprintf("-%08x-%d", h.Sum32(), seq)
+
+	baseLimit := 40 - len(suffix)
+	if baseLimit < 1 {
+		baseLimit = 1
+	}
+	base := full
+	if len(base) > baseLimit {
+		base = base[:baseLimit]
+	}
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = "it"
+	}
+
+	return base + suffix
 }
