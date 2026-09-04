@@ -156,6 +156,23 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	// can carry the same password went out in clear (agent-os-57xj).
 	repository := services.RedactURLUserinfo(bc.ResticRepository)
 
+	// Whether that redaction actually removed something. The UI seeds an
+	// ordinary editable input from `repository` above, so without this flag a
+	// value with a credential hidden inside it and one with nothing hidden look
+	// identical to the operator — they only learn the difference from the 422
+	// the guard below returns AFTER they have edited the path, by which point
+	// they need a credential they may not have.
+	//
+	// Derived by comparison rather than by re-parsing: RedactURLUserinfo returns
+	// its input byte-for-byte whenever there is no userinfo to strip (see
+	// redact_url.go, including the empty-userinfo and unparseable branches), so
+	// a difference here means, exactly, that a credential was spliced out. That
+	// keeps the flag in step with the redactor by construction — a second
+	// detector would be a second thing to get wrong.
+	//
+	// It carries one bit and never the raw value.
+	hasEmbeddedCredential := repository != bc.ResticRepository
+
 	keepDaily, _ := db.GetSetting("backup_keep_daily")
 	keepWeekly, _ := db.GetSetting("backup_keep_weekly")
 	keepMonthly, _ := db.GetSetting("backup_keep_monthly")
@@ -184,6 +201,7 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"repository":              repository,
+		"hasEmbeddedCredential":   hasEmbeddedCredential,
 		"repositorySource":        repoSrc,
 		"hasPassword":             hasPassword,
 		"passwordSource":          pwSrc,
