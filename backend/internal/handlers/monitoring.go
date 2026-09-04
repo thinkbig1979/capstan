@@ -115,6 +115,45 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 			return
 		}
 
+		// An empty container list used to fall straight into StreamStats,
+		// whose own empty-list branch hands back an already-closed channel
+		// (services/monitor.go); the loop below then took its `!ok` exit and
+		// the socket died within a millisecond of opening. The frontend
+		// reconnects on close, so that read as a redial storm — one open and
+		// exit per second, forever (agent-os-74rl). Hold the socket open and
+		// report "no containers" on a ticker instead, mirroring
+		// handleDashboardMetricsWebSocket, which has always guarded this.
+		//
+		// Guarding here rather than in StreamStats keeps the change local to
+		// the one caller that lacked it: dashboard.go guards before its own
+		// call, so making StreamStats emit instead of close would leave that
+		// guard unreachable. StreamStats keeps its empty-list branch as the
+		// defensive contract of an exported method.
+		if len(containerIDs) == 0 {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					frame := MetricsFrame{
+						Timestamp:  time.Now().Format(time.RFC3339),
+						Containers: nil,
+					}
+					// safePingLoop is already running on this connection, so
+					// this second writer must go through the WriteMutex-guarded
+					// helper rather than a raw write (agent-os-1jzj). The
+					// enclosing `defer release()` covers this loop's exits too
+					// (agent-os-14gr).
+					if err := safeWriteJSON(conn, frame); err != nil {
+						slog.Debug("Failed to write empty metrics frame", "stackId", stackID, "error", err)
+						return
+					}
+				}
+			}
+		}
+
 		statsChan, err := h.monitor.StreamStats(ctx, containerIDs)
 		if err != nil {
 			slog.Error("Failed to start stats stream", "stackId", stackID, "error", err)
