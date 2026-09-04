@@ -169,15 +169,21 @@ Every bug bead's close reason states four fields:
 
 A zero, or a short list, is trustworthy only when a positive control shows the
 instrument actually fires on the pattern it's meant to catch. An unproven zero is
-not evidence of absence, it's evidence the search never ran. This shows up in three
-distinct ways, and receiver-only fixes for the first one still miss the other two:
+not evidence of absence, it's evidence the search never ran. This shows up in four
+distinct ways, and receiver-only fixes for the first one still miss the other
+three:
 
 - **Name and receiver variation.** A sweep pinned to one identifier misses
   siblings that spell the same thing differently. `agent-os-iz9w`: grep for
   `defer conn.Conn.Close()` misses `logs.go`'s `defer conn.Close()`, a different
   receiver on the same underlying bug class. `agent-os-jtax`: `durableRun`'s
   methods use receiver `r`, not `dr`, so `grep "func (dr \*durableRun)"` returns a
-  false zero while the real methods sit under `func (r *durableRun)`.
+  false zero while the real methods sit under `func (r *durableRun)`. `logs.go`
+  is worth reading closed, not skimmed, for the same reason: it has two different
+  receiver expressions in one file, an undeferred `wsConn.Conn.Close()` inside an
+  error-return branch and the real guard, a deferred `conn.Close()` a few lines
+  later. A sweep that stops at the first hit, or a reader who eyeballs only that
+  line, misclassifies a correct file as defective.
 - **Truncated multi-value fields.** Piping a wrapped or multi-line field through
   `head` reads only its first entry. A `FILES:` field wrapped across several
   paths, read with `grep "^ *FILES:" | head -2`, returned only the first path of
@@ -188,11 +194,20 @@ distinct ways, and receiver-only fixes for the first one still miss the other tw
   the compound grep; `command grep -rln "bd show" --include=*.md .` returned 10
   files. A tool wrapping `grep` in this repo means every sweep command in a close
   reason must use `command grep`, not bare `grep`.
+- **Scope too narrow, result generalized.** The sweep runs correctly and returns
+  a true answer about the wrong scope, then gets reported as if it covered more
+  than it did. A `Loading` string was checked in one file and reported as unique
+  across the app; it wasn't: `command grep -rln "Loading" frontend/src
+  --include=*.tsx` returns 58 files. The command worked, so neither
+  receiver-agnosticism nor `command grep` catches this one — the fix is stating
+  the scope actually swept, not the scope the claim implies.
 
 Because of the third failure mode, every sweep in a close reason runs as
 `command grep` (or the local equivalent that bypasses shell rewriting). Because of
 the first and second, every zero or short list needs a positive control run
 alongside it: plant or point at one known instance of the pattern, confirm the
-same command catches it, and only then trust a zero returned elsewhere. A sweep
-that has not been shown to fire is not a sweep, it's an assumption with a command
-line attached.
+same command catches it, and only then trust a zero returned elsewhere. Because of
+the fourth, a verdict names the exact directory or file set the sweep covered, not
+a generalization from it. A sweep that has not been shown to fire, or whose
+verdict claims a wider scope than it ran against, is not a sweep, it's an
+assumption with a command line attached.
