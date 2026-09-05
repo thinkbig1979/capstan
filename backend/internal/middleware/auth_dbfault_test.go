@@ -191,6 +191,16 @@ func TestAuthMiddleware_SessionLookupDBFaultIs500WithLoggedCause(t *testing.T) {
 	captured := buf.String()
 	requireDBFaultPlantLanded(t, captured)
 	lines := dbFaultErrorLines(captured, "request_id="+requestID)
+	// Exactly 1 because THIS router mounts only RequestID + AuthMiddleware.
+	// A full production router produces TWO ERROR lines joined on the same
+	// request_id for a 500: this one, and LoggingMiddleware's "HTTP request"
+	// line, which selects slog.LevelError for any status >= 500
+	// (logging.go:35-37) and carries "request_id", RequestIDFrom(c)
+	// (logging.go:39-40). It does wrap this guard in production — main.go
+	// chains RequestID -> LoggingMiddleware at :369-370, outside the
+	// AuthMiddleware mounted on the protected group at :422. So do NOT copy
+	// this "want 1" onto a full-router fixture; there the discriminated count
+	// for a server fault is 2.
 	if len(lines) != 1 {
 		t.Fatalf("the session-lookup fault produced %d ERROR line(s) carrying this request's id, want exactly 1. captured = %q", len(lines), captured)
 	}
@@ -237,6 +247,10 @@ func TestAuthMiddleware_MissingSessionStillIs401AndSilent(t *testing.T) {
 
 	captured := buf.String()
 	requireDBFaultPlantLanded(t, captured)
+	// Unlike the fault arm's count, this 0 survives a full production router:
+	// LoggingMiddleware logs a 4xx at slog.LevelWarn, not Error
+	// (logging.go:33-34), so its "HTTP request" line for this 401 is not an
+	// ERROR line at all and cannot perturb the count either way.
 	if n := len(dbFaultErrorLines(captured, "request_id="+requestID)); n != 0 {
 		t.Fatalf("a genuinely missing session produced %d ERROR line(s) carrying this request's id, want 0. captured = %q", n, captured)
 	}
