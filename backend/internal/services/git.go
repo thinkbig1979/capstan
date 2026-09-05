@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -58,13 +59,50 @@ func (s *GitService) GetStatus(dirPath string) (*models.GitStatusResult, error) 
 		// A typed AppError (e.g. the not-a-git-repo 404 from openRepo) is
 		// definitive — returning it as-is keeps GET /git a clean 404 instead of
 		// masking it behind the CLI fallback, whose generic error becomes a 500.
-		if appErr, ok := err.(*models.AppError); ok {
+		if appErr, ok := definitiveStatusError(err); ok {
 			return nil, appErr
 		}
 		slog.Debug("go-git failed, falling back to CLI", "path", dirPath, "error", err)
 		return s.getStatusCLI(dirPath)
 	}
 	return result, nil
+}
+
+// definitiveStatusError reports whether err IS, or WRAPS, a typed
+// *models.AppError (agent-os-5s9j).
+//
+// This was a bare `err.(*models.AppError)` type assertion, which does not
+// traverse a `%w` wrap. handlers/respond.go:34 uses errors.As for exactly this
+// reason, and handlers/respond_test.go pins it with a comment recording that it
+// was seen failing first against the assertion form; the fix landed there and
+// the same form stayed live here.
+//
+// The cost of a miss here is worse than a wrong status code. The caller does
+// not fall through to handleError with the typed error still in hand —
+// GetStatus DISCARDS it and returns getStatusCLI's answer instead, so
+// respond.go's errors.As never sees it. For a directory that is not a
+// repository the two answers coincide (both 404 GIT_NOT_REPO, via gitFailure);
+// for anything else the operator gets the fallback's generic error and the
+// definitive one is gone without a trace.
+//
+// LATENT, not live: MEASURED against this file, the errors that can reach the
+// branch today are openRepo's bare *models.AppError, openRepo's
+// `failed to open repository: %w` over a go-git error, wrapped go-git errors
+// from repo.Head/getDivergence, and the recover() defer's
+// `go-git panic: %v` — none of them a wrapped AppError. The next `%w` added
+// anywhere upstream of getStatusGoGit converts that into a wrong answer
+// silently, which is why this is fixed before it bites rather than after.
+//
+// It is a named function rather than three inline lines because that same
+// measurement makes the wrapped case unreachable from GetStatus's only input, a
+// path string. This is the seam the wrapped arm is testable through; see
+// TestDefinitiveStatusError_TraversesWrap.
+func definitiveStatusError(err error) (*models.AppError, bool) {
+	var appErr *models.AppError
+	if errors.As(err, &appErr) {
+		return appErr, true
+	}
+	return nil, false
 }
 
 func (s *GitService) getStatusGoGit(dirPath string) (result *models.GitStatusResult, err error) {
