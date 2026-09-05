@@ -42,7 +42,7 @@ func renderedBody(t *testing.T, r truth.ActionResult) string {
 
 // logLineContaining returns the single captured line holding needle, so a
 // test can assert on attrs of THAT line rather than anywhere in the buffer.
-func logLineContaining(t *testing.T, buf *bytes.Buffer, needle string) string {
+func logLineContaining(t *testing.T, buf *syncLogBuffer, needle string) string {
 	t.Helper()
 	for _, line := range strings.Split(buf.String(), "\n") {
 		if strings.Contains(line, needle) {
