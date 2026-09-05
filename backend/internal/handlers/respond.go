@@ -71,12 +71,26 @@ func logServerFault(c *gin.Context, status int, code string, err error) {
 		return
 	}
 
-	slog.Error("request failed",
+	attrs := []any{
 		"request_id", middleware.RequestIDFrom(c),
 		"status", status,
 		"code", code,
 		"error", err,
-	)
+	}
+
+	// An AppError's Error() returns only its sanitised, client-facing
+	// Message (models/errors.go), so when one carries a Cause (set by
+	// respondDockerErr / respondIfEncryptionUnavailable below), surface it
+	// here too — otherwise the log line is no more informative than the
+	// response body it is meant to supplement. "error", err above is left
+	// exactly as-is so the existing agent-os-7z8c assertions on it are
+	// unaffected; this only ever adds an attr, never replaces one.
+	var appErr *models.AppError
+	if errors.As(err, &appErr) && appErr.Cause != nil {
+		attrs = append(attrs, "cause", appErr.Cause)
+	}
+
+	slog.Error("request failed", attrs...)
 }
 
 // DockerUnavailableMessage is the operator-facing text for a Docker outage. It
@@ -106,10 +120,12 @@ func renderDockerResult(c *gin.Context, err error, r truth.ActionResult) {
 // becomes an actionable HTTP response instead of a generic 500.
 func respondDockerErr(c *gin.Context, err error, status int, code, message string) {
 	if errors.Is(err, services.ErrDockerUnavailable) {
-		handleError(c, models.NewAppError(http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage))
+		appErr := models.NewAppErrorWithCause(http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage, err)
+		handleError(c, appErr)
 		return
 	}
-	handleError(c, models.NewAppError(status, code, message))
+	appErr := models.NewAppErrorWithCause(status, code, message, err)
+	handleError(c, appErr)
 }
 
 // EncryptionUnavailableMessage is the operator-facing text for a missing
@@ -128,7 +144,8 @@ func respondIfEncryptionUnavailable(c *gin.Context, err error) bool {
 	if !errors.Is(err, services.ErrEncryptionUnavailable) {
 		return false
 	}
-	handleError(c, models.NewAppError(http.StatusUnprocessableEntity, models.ErrEncryptionUnavailable, EncryptionUnavailableMessage))
+	appErr := models.NewAppErrorWithCause(http.StatusUnprocessableEntity, models.ErrEncryptionUnavailable, EncryptionUnavailableMessage, err)
+	handleError(c, appErr)
 	return true
 }
 
