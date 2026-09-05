@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -486,13 +487,17 @@ func (s *ScannerService) ScanAll() (hasGlobalEnv bool, err error) {
 	_, err = os.Stat(filepath.Join(s.config.DataDir, "global.env"))
 	hasGlobalEnv = !os.IsNotExist(err)
 
-	scanDepth := 1
-	if s.db != nil {
-		if depthStr, dbErr := s.db.GetSetting("scan_depth"); dbErr == nil && depthStr != "" {
-			if v, parseErr := strconv.Atoi(depthStr); parseErr == nil && v >= 1 {
-				scanDepth = v
-			}
-		}
+	scanDepth, depthErr := s.readScanDepth()
+	if depthErr != nil {
+		// Refuse rather than scan shallow. handlers/directories.go:68 already
+		// maps this error to a 500 carrying the cause, and an operator-
+		// triggered rescan that silently visited one level and reported 200 OK
+		// is a wrong answer presented as success. cmd/server/main.go:311
+		// discards the error, so boot only skips this pass; the scan path
+		// upserts and never deletes, so nothing is lost that the watcher's next
+		// pass does not recover.
+		slog.Error("Refusing to scan: the scan depth setting could not be read, so the scan would silently visit only the top level and under-report which stacks exist", "cause", depthErr)
+		return hasGlobalEnv, depthErr
 	}
 
 	for _, stacksDir := range allDirs {
@@ -579,16 +584,68 @@ func (s *ScannerService) scanDirectoryRecursive(path string, rootDir string, max
 	}
 }
 
+// defaultScanDepth is the depth used when scan_depth carries no usable value:
+// one level below each stacks root, which is the behaviour a fresh install has
+// always had.
+const defaultScanDepth = 1
+
+// readScanDepth resolves the configured scan depth, separating "no row" from
+// "this database could not answer".
+//
+// db.GetSetting returns the bare Scan error (database/settings.go:14-19), so an
+// absent row arrives as sql.ErrNoRows. Mapping that — and only that — to the
+// default keeps the fresh-install path byte-for-byte, while every other failure
+// becomes an error the caller must handle. Same split as
+// services/backup_config.go's readSetting (agent-os-7lg1, agent-os-l42o).
+//
+// Before agent-os-obgr both callers bound the error and then tested only
+// `err == nil && v != ""`, on the same line as the GetSetting call, so an
+// unreadable database and an unconfigured setting were the same event. In
+// pruneStaleStacks that silently collapsed the depth to 1 and then DELETED the
+// directories row — git_auth_type, git_ssh_key_path, git_https_user and the
+// encrypted git_https_token with it — of every stack below depth 1, plus their
+// stack rows by the ON DELETE CASCADE at migrations.go:151. A transient lock
+// (busy_timeout is 5000 ms, database.go:98) was enough to trigger it.
+//
+// The old line is described above rather than quoted: quoting it verbatim would
+// make this comment a permanent false positive for the single-line sweep this
+// family of defects is found with.
+func (s *ScannerService) readScanDepth() (int, error) {
+	if s.db == nil {
+		return defaultScanDepth, nil
+	}
+	depthStr, err := s.db.GetSetting("scan_depth")
+	switch {
+	case err == nil:
+	case errors.Is(err, sql.ErrNoRows):
+		return defaultScanDepth, nil
+	default:
+		return 0, fmt.Errorf("read scan_depth setting: %w", err)
+	}
+	// An empty, non-numeric or out-of-range stored value is a value this code
+	// cannot use, not a database fault: keep the pre-existing silent fallback
+	// rather than turning a bad setting into a refusal to scan.
+	if v, parseErr := strconv.Atoi(depthStr); parseErr == nil && v >= 1 {
+		return v, nil
+	}
+	return defaultScanDepth, nil
+}
+
 func (s *ScannerService) pruneStaleStacks() error {
 	allDirs := s.config.GetAllStacksDirs()
 
-	scanDepth := 1
-	if s.db != nil {
-		if depthStr, err := s.db.GetSetting("scan_depth"); err == nil && depthStr != "" {
-			if v, parseErr := strconv.Atoi(depthStr); parseErr == nil && v >= 1 {
-				scanDepth = v
-			}
-		}
+	// Guarded BEFORE activeDirs is built, not merely before the delete loops:
+	// activeDirs is also the input to pruneStaleIDStacks at the tail of this
+	// function, which deletes rows too. Refusing after building a wrong
+	// activeDirs is not refusing.
+	scanDepth, depthErr := s.readScanDepth()
+	if depthErr != nil {
+		// This ERROR is emitted here, where the cause is known, and not left to
+		// the caller: ScanAll logs a prune failure as a WARN naming no cause
+		// (:502), which tells an operator nothing about a fault that would
+		// otherwise have destroyed credentials.
+		slog.Error("Refusing to prune stale stacks: the scan depth setting could not be read, and pruning at the default depth would delete the directory row of every stack below depth 1, taking its stacks by cascade and its git credentials permanently", "cause", depthErr)
+		return depthErr
 	}
 
 	activeDirs := make(map[string]bool)
