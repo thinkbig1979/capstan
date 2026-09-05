@@ -147,8 +147,20 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	db := h.db
 	cfg := h.svc.Config()
 
-	bc := services.ResolveBackupConfigWithCfg(db, cfg)
-	repoSrc, pwSrc, hasPassword := services.RepoSettingSources(db, cfg)
+	// agent-os-l42o: both of these now separate "no such setting" from "this
+	// database could not answer". Reporting the defaults as the effective
+	// configuration on a fault would tell the operator their remote repository
+	// is a local path they never chose.
+	bc, err := services.ResolveBackupConfigWithCfg(db, cfg)
+	if err != nil {
+		h.internalError(c, "Failed to read backup settings", err)
+		return
+	}
+	repoSrc, pwSrc, hasPassword, err := services.RepoSettingSources(db, cfg)
+	if err != nil {
+		h.internalError(c, "Failed to read backup settings", err)
+		return
+	}
 
 	// A restic repository URI legitimately embeds credentials
 	// (rest:https://user:pass@host/, s3:https://KEY:SECRET@host/bucket), and
@@ -1062,7 +1074,11 @@ func (h *BackupHandler) repoInit(c *gin.Context) {
 		return
 	}
 
-	restic := h.svc.NewResticManager()
+	restic, err := h.svc.NewResticManager()
+	if err != nil {
+		h.internalError(c, "Failed to read backup settings", err)
+		return
+	}
 
 	if err := restic.EnsureRepository(ctx); err != nil {
 		h.internalError(c, "Failed to initialise repository", err)
@@ -1083,7 +1099,11 @@ func (h *BackupHandler) cloudTest(c *gin.Context) {
 		return
 	}
 
-	bc := h.svc.ResolveConfig()
+	bc, err := h.svc.ResolveConfig()
+	if err != nil {
+		h.internalError(c, "Failed to read backup settings", err)
+		return
+	}
 
 	if bc.RcloneRemote == "" {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
@@ -1097,7 +1117,11 @@ func (h *BackupHandler) cloudTest(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	rclone := h.svc.NewRcloneManager()
+	rclone, err := h.svc.NewRcloneManager()
+	if err != nil {
+		h.internalError(c, "Failed to read backup settings", err)
+		return
+	}
 	if err := rclone.TestConnectivity(ctx, bc.RcloneRemote); err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
@@ -1408,13 +1432,19 @@ func (h *BackupHandler) respondForLaunchError(c *gin.Context, action string, err
 // listSnapshotsViaRestic builds a ResticManager and returns all snapshots for
 // the given tag (empty = all).
 func (h *BackupHandler) listSnapshotsViaRestic(ctx context.Context, stackID string) ([]models.BackupSnapshot, error) {
-	restic := h.svc.NewResticManager()
+	restic, err := h.svc.NewResticManager()
+	if err != nil {
+		return nil, err
+	}
 	return restic.ListSnapshots(ctx, stackID, 0)
 }
 
 // previewSnapshotViaRestic runs restic ls and collects the output lines.
 func (h *BackupHandler) previewSnapshotViaRestic(ctx context.Context, snapshotID string) ([]string, error) {
-	restic := h.svc.NewResticManager()
+	restic, err := h.svc.NewResticManager()
+	if err != nil {
+		return nil, err
+	}
 
 	out := make(chan services.StreamLine, 256)
 	done := make(chan error, 1)

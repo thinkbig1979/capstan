@@ -43,7 +43,10 @@ func TestResolveBackupConfig_Defaults(t *testing.T) {
 	db := newTestDB(t)
 	cfg := baseCfg("/app/data")
 
-	bc := resolveBackupConfig(db, cfg)
+	bc, err := resolveBackupConfig(db, cfg)
+	if err != nil {
+		t.Fatalf("resolveBackupConfig: %v", err)
+	}
 
 	if bc.ResticRepository != "/app/data/restic-repo" {
 		t.Errorf("ResticRepository = %q; want /app/data/restic-repo", bc.ResticRepository)
@@ -98,7 +101,10 @@ func TestResolveBackupConfig_EnvFallback(t *testing.T) {
 	cfg.RcloneTransfers = "8"
 	cfg.BackupHostname = "myserver"
 
-	bc := resolveBackupConfig(db, cfg)
+	bc, err := resolveBackupConfig(db, cfg)
+	if err != nil {
+		t.Fatalf("resolveBackupConfig: %v", err)
+	}
 
 	if bc.ResticRepository != "/mnt/backup/repo" {
 		t.Errorf("ResticRepository = %q; want /mnt/backup/repo", bc.ResticRepository)
@@ -163,7 +169,10 @@ func TestResolveBackupConfig_DBOverridesEnv(t *testing.T) {
 		t.Fatalf("SetSetting backup_hostname: %v", err)
 	}
 
-	bc := resolveBackupConfig(db, cfg)
+	bc, err := resolveBackupConfig(db, cfg)
+	if err != nil {
+		t.Fatalf("resolveBackupConfig: %v", err)
+	}
 
 	if bc.ResticRepository != "/db/repo" {
 		t.Errorf("ResticRepository = %q; want /db/repo (DB should win)", bc.ResticRepository)
@@ -194,7 +203,10 @@ func TestResolveBackupConfig_PasswordRoundTrip(t *testing.T) {
 		t.Fatalf("SetSetting restic_password: %v", err)
 	}
 
-	bc := resolveBackupConfig(db, cfg)
+	bc, err := resolveBackupConfig(db, cfg)
+	if err != nil {
+		t.Fatalf("resolveBackupConfig: %v", err)
+	}
 
 	if bc.ResticPassword != plainPwd {
 		t.Errorf("ResticPassword round-trip failed: got %q; want %q", bc.ResticPassword, plainPwd)
@@ -209,7 +221,10 @@ func TestResolveBackupConfig_PasswordEnvFallback(t *testing.T) {
 	cfg := baseCfg("/data")
 	cfg.ResticPassword = "env-password"
 
-	bc := resolveBackupConfig(db, cfg)
+	bc, err := resolveBackupConfig(db, cfg)
+	if err != nil {
+		t.Fatalf("resolveBackupConfig: %v", err)
+	}
 
 	if bc.ResticPassword != "env-password" {
 		t.Errorf("ResticPassword env fallback failed: got %q; want env-password", bc.ResticPassword)
@@ -227,7 +242,10 @@ func TestResolveBackupConfig_DBPasswordOverridesEnv(t *testing.T) {
 		t.Fatalf("SetSetting restic_password: %v", err)
 	}
 
-	bc := resolveBackupConfig(db, cfg)
+	bc, err := resolveBackupConfig(db, cfg)
+	if err != nil {
+		t.Fatalf("resolveBackupConfig: %v", err)
+	}
 
 	if bc.ResticPassword != "db-password" {
 		t.Errorf("ResticPassword DB override failed: got %q; want db-password", bc.ResticPassword)
@@ -243,7 +261,10 @@ func TestResolveBackupConfig_HostnameFromOS(t *testing.T) {
 	// No cfg.BackupHostname set.
 
 	sysHostname, _ := os.Hostname()
-	bc := resolveBackupConfig(db, cfg)
+	bc, err := resolveBackupConfig(db, cfg)
+	if err != nil {
+		t.Fatalf("resolveBackupConfig: %v", err)
+	}
 
 	if bc.BackupHostname != sysHostname {
 		t.Errorf("BackupHostname = %q; want system hostname %q", bc.BackupHostname, sysHostname)
@@ -260,7 +281,10 @@ func TestRepoSettingSources_AllDefault(t *testing.T) {
 	db := newTestDB(t)
 	cfg := baseCfg("/data")
 
-	repoSrc, pwSrc, hasPassword := RepoSettingSources(db, cfg)
+	repoSrc, pwSrc, hasPassword, err := RepoSettingSources(db, cfg)
+	if err != nil {
+		t.Fatalf("RepoSettingSources: %v", err)
+	}
 
 	if repoSrc != settingSourceDefault {
 		t.Errorf("repoSource = %q; want %q", repoSrc, settingSourceDefault)
@@ -286,7 +310,10 @@ func TestRepoSettingSources_DBSources(t *testing.T) {
 		t.Fatalf("SetSetting restic_password: %v", err)
 	}
 
-	repoSrc, pwSrc, hasPassword := RepoSettingSources(db, cfg)
+	repoSrc, pwSrc, hasPassword, err := RepoSettingSources(db, cfg)
+	if err != nil {
+		t.Fatalf("RepoSettingSources: %v", err)
+	}
 
 	if repoSrc != settingSourceDB {
 		t.Errorf("repoSource = %q; want %q", repoSrc, settingSourceDB)
@@ -307,7 +334,10 @@ func TestRepoSettingSources_EnvSources(t *testing.T) {
 	cfg.ResticRepository = "/env/repo"
 	cfg.ResticPassword = "env-secret"
 
-	repoSrc, pwSrc, hasPassword := RepoSettingSources(db, cfg)
+	repoSrc, pwSrc, hasPassword, err := RepoSettingSources(db, cfg)
+	if err != nil {
+		t.Fatalf("RepoSettingSources: %v", err)
+	}
 
 	if repoSrc != settingSourceEnv {
 		t.Errorf("repoSource = %q; want %q", repoSrc, settingSourceEnv)
@@ -336,7 +366,10 @@ func TestRepoSettingSources_DBWinsOverEnv(t *testing.T) {
 		t.Fatalf("SetSetting restic_password: %v", err)
 	}
 
-	repoSrc, pwSrc, hasPassword := RepoSettingSources(db, cfg)
+	repoSrc, pwSrc, hasPassword, err := RepoSettingSources(db, cfg)
+	if err != nil {
+		t.Fatalf("RepoSettingSources: %v", err)
+	}
 
 	if repoSrc != settingSourceDB {
 		t.Errorf("repoSource = %q; want %q (DB must win over env)", repoSrc, settingSourceDB)
@@ -361,7 +394,10 @@ func TestRepoSettingSources_MixedSources(t *testing.T) {
 		t.Fatalf("SetSetting restic_repository: %v", err)
 	}
 
-	repoSrc, pwSrc, hasPassword := RepoSettingSources(db, cfg)
+	repoSrc, pwSrc, hasPassword, err := RepoSettingSources(db, cfg)
+	if err != nil {
+		t.Fatalf("RepoSettingSources: %v", err)
+	}
 
 	if repoSrc != settingSourceDB {
 		t.Errorf("repoSource = %q; want %q", repoSrc, settingSourceDB)

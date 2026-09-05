@@ -200,21 +200,53 @@ func (s *BackupService) Config() *config.Config {
 // agent-os-9au. Routing every caller through the service makes that class of
 // mistake unrepresentable: there is no longer a way to resolve without the live
 // config.
-func (s *BackupService) ResolveConfig() BackupConfig {
+// It returns an error when a backup setting could not be read at all, so a
+// database fault can never be answered with the same defaults as an
+// unconfigured install (agent-os-l42o).
+func (s *BackupService) ResolveConfig() (BackupConfig, error) {
 	return resolveBackupConfig(s.db, s.cfg)
+}
+
+// resolveOrRefuse resolves the effective backup config and, on failure, records
+// exactly one ERROR line naming the operation that was refused and the cause.
+//
+// The cause is safe to log verbatim: resolveBackupConfig reports an unreadable
+// restic_password as the fixed ErrResticPasswordUnreadable sentinel, which
+// wraps neither the decrypt error nor the value (see its doc comment).
+func (s *BackupService) resolveOrRefuse(operation string) (BackupConfig, error) {
+	bc, err := resolveBackupConfig(s.db, s.cfg)
+	if err != nil {
+		s.logger.Error("Refusing backup operation: the backup settings could not be read",
+			"operation", operation, "cause", err)
+		return BackupConfig{}, err
+	}
+	return bc, nil
 }
 
 // NewResticManager builds a ResticManager from the effective backup config,
 // honouring the test factory seam. Handlers use this instead of constructing a
 // manager directly, which bypassed both the live config and the seam.
-func (s *BackupService) NewResticManager() *ResticManager {
-	return s.newResticMgr(s.ResolveConfig())
+//
+// It refuses rather than returning a manager built on defaults: its callers
+// include repo init, which CREATES a repository, and snapshot listing, which
+// feeds the restore UI. Silently pointing either at <DataDir>/restic-repo is
+// agent-os-9au's failure mode returning by a different route.
+func (s *BackupService) NewResticManager() (*ResticManager, error) {
+	bc, err := s.resolveOrRefuse("build restic manager")
+	if err != nil {
+		return nil, err
+	}
+	return s.newResticMgr(bc), nil
 }
 
 // NewRcloneManager builds an RcloneManager from the effective backup config,
 // honouring the test factory seam. See NewResticManager.
-func (s *BackupService) NewRcloneManager() *RcloneManager {
-	return s.newRcloneMgr(s.ResolveConfig())
+func (s *BackupService) NewRcloneManager() (*RcloneManager, error) {
+	bc, err := s.resolveOrRefuse("build rclone manager")
+	if err != nil {
+		return nil, err
+	}
+	return s.newRcloneMgr(bc), nil
 }
 
 // SetBins overrides the cached binary paths resolved at construction time.
@@ -260,7 +292,16 @@ func (s *BackupService) StartScheduler() {
 	if s.sched == nil {
 		return
 	}
-	bc := resolveBackupConfig(s.db, s.cfg)
+	// Signature stays func(): main.go:600 and handlers/backup.go:527 both call
+	// this for effect. The refusal is carried by NOT scheduling and by the one
+	// ERROR line resolveOrRefuse writes — never by silence, which the comment
+	// on the fallback below calls the worst available outcome. Scheduling from
+	// a defaulted config is worse still: it would fire real backups into a
+	// repository the operator never configured.
+	bc, err := s.resolveOrRefuse("start scheduler")
+	if err != nil {
+		return
+	}
 
 	if bc.ScheduleMode == ScheduleModeScheduled {
 		sched, err := ParseDailySchedule(bc.ScheduleTime, bc.ScheduleDays)
@@ -327,7 +368,14 @@ func (s *BackupService) NextRunAt() *time.Time {
 	if !s.schedulerActive.Load() {
 		return nil
 	}
-	bc := resolveBackupConfig(s.db, s.cfg)
+	// Unreadable settings mean there is no next instant to report. Not logged:
+	// this is polled by the status endpoint, and StartScheduler already records
+	// the same fault once, loudly — the same reasoning as the ParseDailySchedule
+	// branch below.
+	bc, err := resolveBackupConfig(s.db, s.cfg)
+	if err != nil {
+		return nil
+	}
 
 	if bc.ScheduleMode == ScheduleModeScheduled {
 		sched, err := ParseDailySchedule(bc.ScheduleTime, bc.ScheduleDays)
@@ -374,7 +422,10 @@ func (s *BackupService) RepoSizeBytes(ctx context.Context) *int64 {
 	if s.resticBin == "" {
 		return nil
 	}
-	bc := resolveBackupConfig(s.db, s.cfg)
+	bc, err := s.resolveOrRefuse("read repository size")
+	if err != nil {
+		return nil
+	}
 	restic := s.newResticMgr(bc)
 
 	size, err := restic.Stats(ctx)
@@ -410,7 +461,18 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 		return av
 	}
 
-	bc := resolveBackupConfig(s.db, s.cfg)
+	// Signature stays BackupAvailability: the refusal is carried by the value.
+	// This is not a display — it is the gate the restore pre-check
+	// (handlers/backup.go:1059) and Prune consult, so reporting the local
+	// default as reachable while the configured repository was never read would
+	// green-light a restore from the wrong repository.
+	bc, err := s.resolveOrRefuse("check repository")
+	if err != nil {
+		av.RepoReachable = false
+		av.Available = false
+		av.Message = "backup settings could not be read; repository state is unknown"
+		return av
+	}
 	restic := s.newResticMgr(bc)
 	if err := restic.CheckRepository(ctx); err != nil {
 		av.RepoReachable = false
@@ -484,7 +546,10 @@ func (s *BackupService) RunBackup(
 		return nil, ErrBackupUnavailable
 	}
 
-	bc := resolveBackupConfig(s.db, s.cfg)
+	bc, err := s.resolveOrRefuse("run backup")
+	if err != nil {
+		return nil, err
+	}
 	restic := s.newResticMgr(bc)
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -652,7 +717,10 @@ func (s *BackupService) RunBackupWithRunID(
 		return nil, ErrBackupUnavailable
 	}
 
-	bc := resolveBackupConfig(s.db, s.cfg)
+	bc, err := s.resolveOrRefuse("run backup")
+	if err != nil {
+		return nil, err
+	}
 	restic := s.newResticMgr(bc)
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -913,7 +981,10 @@ func (s *BackupService) RunSync(ctx context.Context, out chan<- StreamLine) erro
 		return ErrBackupUnavailable
 	}
 
-	bc := resolveBackupConfig(s.db, s.cfg)
+	bc, err := s.resolveOrRefuse("run rclone sync")
+	if err != nil {
+		return err
+	}
 	stream(out, "info", "Starting rclone sync")
 	if err := s.runSyncInternal(ctx, bc, out); err != nil {
 		return err
@@ -1019,7 +1090,10 @@ func (s *BackupService) RunRestore(
 		return ErrBackupUnavailable
 	}
 
-	bc := resolveBackupConfig(s.db, s.cfg)
+	bc, err := s.resolveOrRefuse("run restore")
+	if err != nil {
+		return err
+	}
 	restic := s.newResticMgr(bc)
 
 	// Validate that the snapshot is tagged with the stack ID.
@@ -1162,7 +1236,10 @@ func (s *BackupService) RunDRRestore(ctx context.Context, out chan<- StreamLine)
 		return ErrBackupUnavailable
 	}
 
-	bc := resolveBackupConfig(s.db, s.cfg)
+	bc, err := s.resolveOrRefuse("run DR restore")
+	if err != nil {
+		return err
+	}
 	if bc.RcloneRemote == "" {
 		return fmt.Errorf("rclone remote is not configured")
 	}
@@ -1253,7 +1330,10 @@ func (s *BackupService) Prune(ctx context.Context, dryRun bool, out chan<- Strea
 		return ErrBackupUnavailable
 	}
 
-	bc := resolveBackupConfig(s.db, s.cfg)
+	bc, err := s.resolveOrRefuse("run prune")
+	if err != nil {
+		return err
+	}
 	restic := s.newResticMgr(bc)
 
 	stream(out, "info", fmt.Sprintf("Starting prune (dryRun=%v)", dryRun))
