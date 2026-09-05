@@ -279,16 +279,21 @@ func isParseableAuthority(s string) bool {
 //   - "s3:KEY:PW@host/bucket": restic reads everything before the first "/"
 //     as the endpoint and never reads a URL userinfo; credentials come from
 //     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in the environment.
-//   - "rclone:user:PW@remote:path": rclone looks for a remote named "user"
-//     (OBSERVED: `didn't find section in config file`).
+//   - "rclone:user:PW@remote:path": NOT a credential position at all. rclone's
+//     grammar is remote:path; a remote name cannot contain ":" or "@", so the
+//     first ":" always ends the remote and everything after it is PATH, where
+//     "@" and ":" are legal. rclone reads this as remote "user" with path
+//     "PW@remote:path" (OBSERVED: `didn't find section in config file`, i.e.
+//     it looked the remote up). It is left alone. The only place an rclone
+//     value can carry a secret is a connection-string parameter.
 //   - "rclone::sftp,host=h,user=u,pass=OBSCURED:path": a documented rclone
 //     connection string, which restic passes through verbatim and rclone DOES
 //     consume (OBSERVED: `input too short when revealing password`). The only
 //     corpus shape that is a real form with an inline credential.
 //
-// So the first three are misconfigurations, and starring them out on read
-// would make a backup that cannot work look handled. ValidateRepositoryForm
-// refuses all four at save with a message naming the supported form; the
+// So the sftp and s3 shapes are misconfigurations, and starring them out on
+// read would make a backup that cannot work look handled. ValidateRepositoryForm
+// refuses them at save with a message naming the supported form; the
 // connection string is refused too because rclone.conf is where rclone puts
 // that secret and where Capstan's credential store argues it belongs.
 // redactOpaqueCredential covers rows persisted BEFORE the validator existed:
@@ -300,17 +305,24 @@ func isParseableAuthority(s string) bool {
 // THE HARD PART IS DISCRIMINATING, not redacting more. Over-starring a value
 // that carries no secret is a LOCKOUT: the marker trips the save guard in
 // BackupHandler.updateSettings and the field becomes unsavable (agent-os-zzhs
-// arm 2). So the rules below are BOUNDED — three schemes, one shape each —
-// rather than a general "colon before at-sign" rule, which would star
-// "rclone:gdrive:edwin@example.com" (a folder named after an email address)
-// and "sftp:host:/path/with@sign". Both are pinned as negative arms.
+// arm 2). The rules below are therefore POSITIONAL, not lexical: they ask
+// where a credential CAN sit in each backend's grammar, never merely whether
+// a ":" appears left of an "@". The first cut of this code got that wrong —
+// "a ':' somewhere left of some '@'" — and in restic's [user@]host:path the
+// host separator ":" is always left of any "@" inside the path, so
+// "sftp:user@host:/backups/nginx@sha256:abc123" (an image digest),
+// "sftp:host:/a@b:c" and "rclone:remote:backups/nginx@sha256:abc123" were all
+// starred and then locked out (reviewer OBSERVED at 5cacb66). Every one of
+// those is now a pinned negative arm, alongside "rclone:gdrive:edwin@example.com"
+// and "sftp:host:/path/with@sign".
 //
-// Known ambiguity, stated rather than discovered later: a path that itself
-// reads "...@word:..." after the first ":" ("sftp:host:/a@b:c",
-// "rclone:gdrive:edwin@example.com:sub") is indistinguishable from a
-// credential by shape alone and is over-starred. Pathological, untested,
-// documented — the same posture agent-os-zzhs took for "/" in a password
-// combined with a later "@" in the path. Over-redaction is the safe side.
+// Known limitation, stated rather than discovered later: an sftp opaque
+// password containing "/" ("sftp:user:AB/CD@host:/path") is NOT detected,
+// because a "/" before the first "@" is what marks that "@" as path content.
+// Preferring that over the digest lockout is deliberate: the form is
+// malformed for restic anyway (it reads host "user"), while the digest path
+// is a valid one. The documented "s3:https://..." form, where a "/" in the
+// secret is common, is covered by the URL branch (agent-os-zzhs).
 
 // opaqueSchemeRe matches "scheme:" at the start of a value. Deliberately NOT
 // url.Parse: the fallback needs to work on values url.Parse rejects too, and
@@ -336,36 +348,40 @@ func splitOpaque(raw string) (scheme, opaque string, ok bool) {
 // "user:pw@" credential in an opaque part, per the bounded per-scheme grammar,
 // or ok=false when the part carries none.
 //
-//   - sftp, rclone: the LAST "@" whose right side reads "host:" (`[^/:@]+:`)
-//     and whose left side contains a ":". The right-side test is the
-//     discriminator: in "sftp:user@host:/path" the left side has no ":", in
-//     "rclone:gdrive:edwin@example.com" the right side has no ":", and in
-//     "sftp:host:/path/with@sign" neither holds. Taking the LAST qualifying
-//     "@" lets a password contain "@"; not excluding "/" from the left side
-//     lets it contain "/" (an AWS secret does, ~46% of the time).
-//   - s3: the endpoint is everything before the first "/", and a
-//     well-formed endpoint (host[:port]) never contains "@". So the last "@"
-//     inside that segment ends a userinfo, and a ":" before it means
-//     "KEY:SECRET". A "/" in the secret is NOT covered here (the documented
-//     "s3:https://..." form, which is, takes the URL branch).
+//   - sftp ([user@]host:path): a credential can only sit in front of the
+//     host, so only the FIRST "@" can end one, and only if no "/" precedes
+//     it (a "/" means the "@" is inside the path) and the text before it
+//     holds the user:pw split (a ":"). Also required: a ":" somewhere after
+//     it, because a credential is followed by "host:path" — that is what
+//     separates "sftp:user:@host:/p" (empty password, starred) from
+//     "sftp:nas:@backups" (a btrfs-style relative path, left alone). Detection
+//     is decided at the first "@"; the SPLICE runs to the last "@" before the
+//     first "/", so a password containing "@" is starred whole rather than
+//     leaving its tail in clear.
+//   - s3: the endpoint is everything before the first "/", and a well-formed
+//     endpoint (host[:port]) never contains "@". So the last "@" inside that
+//     segment ends a userinfo, and a ":" before it means "KEY:SECRET".
+//   - rclone: deliberately ABSENT. remote:path has no credential position;
+//     see the section comment. Connection strings are handled separately.
 //
 // A userinfo with no non-empty component (":@") is not a credential, for the
 // reason spliceUserinfo gives.
 func opaqueCredentialBoundary(scheme, opaque string) (at int, ok bool) {
 	switch strings.ToLower(scheme) {
-	case "sftp", "rclone":
-		for i := strings.LastIndex(opaque, "@"); i >= 0; i = strings.LastIndex(opaque[:i], "@") {
-			right := opaque[i+1:]
-			colon := strings.IndexAny(right, "/:@")
-			if colon <= 0 || right[colon] != ':' {
-				continue
-			}
-			if strings.Contains(opaque[:i], ":") {
-				at = i
-				ok = true
-				break
-			}
+	case "sftp":
+		first := strings.Index(opaque, "@")
+		if first < 0 {
+			return 0, false
 		}
+		userinfo := opaque[:first]
+		if strings.Contains(userinfo, "/") || !strings.Contains(userinfo, ":") || !strings.Contains(opaque[first+1:], ":") {
+			return 0, false
+		}
+		end := strings.Index(opaque, "/")
+		if end < 0 {
+			end = len(opaque)
+		}
+		at, ok = strings.LastIndex(opaque[:end], "@"), true
 	case "s3":
 		seg := opaque
 		if slash := strings.Index(seg, "/"); slash >= 0 {
@@ -488,15 +504,19 @@ func parseRcloneConnectionString(opaque string) (params []rcloneParam, ok bool) 
 
 // rcloneSecretParamWords are the last "_"-separated words of an rclone option
 // name that hold a secret. Enumerated from `rclone config providers` (rclone
-// v1.60.1): every IsPassword option (pass, password, password2, secret,
-// api_password, file_password, folder_password, key_file_pass, library_key,
-// plex_password) plus the names that are plainly secrets without that flag
-// (token, access_token, refresh_token, permanent_token, plex_token,
-// auth_token, bearer_token, session_token, client_secret,
-// application_credential_secret, secret_access_key, private_access_key, key,
-// key_pem, sse_customer_key, service_account_credentials). Names ending in
-// _id, _file, _url, _command, _expiry, _md5 and _agent fall outside by
-// construction; the two exact names below do not fit the word rule.
+// v1.60.1 on the build box): the word rule matches 32 option names across all
+// backends, 31 of them string secrets (every IsPassword option: pass,
+// password, password2, secret, api_password, file_password, folder_password,
+// key_file_pass, library_key, plex_password; plus token, access_token,
+// refresh_token, permanent_token, plex_token, auth_token, bearer_token,
+// session_token, client_secret, application_credential_secret,
+// secret_access_key, private_access_key, key, key_pem, sse_customer_key,
+// service_account_credentials, api_key, link_password, resource_key) and
+// exactly ONE non-secret, ask_password, a boolean ("Allow asking for SFTP
+// password when needed"), which is why rcloneNotSecretParams exists. Names
+// ending in _id, _file, _url, _command, _expiry, _md5 and _agent fall outside
+// by construction; the two exact names in rcloneSecretParamExact do not fit
+// the word rule.
 var rcloneSecretParamWords = map[string]struct{}{
 	"pass": {}, "password": {}, "password2": {}, "passphrase": {},
 	"token": {}, "secret": {}, "key": {}, "pem": {}, "credentials": {},
@@ -506,8 +526,18 @@ var rcloneSecretParamExact = map[string]struct{}{
 	"sas_url": {}, "sse_customer_key_base64": {},
 }
 
+// rcloneNotSecretParams are option names the word rule matches that carry no
+// secret. Refusing one of these is the zzhs lockout: the operator cannot save
+// a documented boolean.
+var rcloneNotSecretParams = map[string]struct{}{
+	"ask_password": {},
+}
+
 func isRcloneSecretParam(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
+	if _, ok := rcloneNotSecretParams[name]; ok {
+		return false
+	}
 	if _, ok := rcloneSecretParamExact[name]; ok {
 		return true
 	}
@@ -584,9 +614,8 @@ func ValidateRepositoryForm(raw string) error {
 				return errors.New("s3: credentials are not accepted in the repository field; use s3:host/bucket or s3:https://host/bucket and supply AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the backup environment")
 			}
 		case "rclone":
-			if _, found := opaqueCredentialBoundary(scheme, opaque); found {
-				return errors.New("rclone: credentials are not accepted in the repository field; define the remote in rclone.conf and use rclone:remote:path")
-			}
+			// remote:path has no credential position (see the section
+			// comment), so only a connection-string parameter is checked.
 			if name := rcloneInlineSecret(opaque); name != "" {
 				return fmt.Errorf("rclone: connection-string parameter %q carries a credential, which is not accepted in the repository field; define the remote in rclone.conf and use rclone:remote:path", name)
 			}

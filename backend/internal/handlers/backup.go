@@ -196,19 +196,22 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	//      mattered: the flag read FALSE for a repository shape the redactor
 	//      could not reach at all — an opaque form embedding a password with
 	//      no "//" ("sftp:user:SECRET@host:/path", "s3:KEY:SECRET@host/bucket",
-	//      "rclone:user:SECRET@remote:path", and the rclone connection string
-	//      "rclone::sftp,...,pass=OBSCURED:path") was served in clear and
-	//      unflagged. agent-os-qonw closed it at two layers: none of those is
-	//      a form the backend reads a credential from, so updateSettings
-	//      below now refuses them at save via services.ValidateRepositoryForm,
-	//      and for rows stored before that the redactor stars them, which
-	//      flips this flag to TRUE by derivation. The discrimination from
-	//      "sftp:user@host:/path", "b2:bucket:path", "rclone:remote:path" and
-	//      "rclone:gdrive:edwin@example.com" — which carry no secret, and
-	//      over-starring any of which would reproduce the zzhs lockout — is
-	//      pinned in redact_url_test.go and in this handler's tests. The
-	//      validator and the redactor read ONE grammar table, so "refused at
-	//      save" and "starred on read" cannot drift apart for those shapes.
+	//      and the rclone connection string "rclone::sftp,...,pass=OBSCURED:path")
+	//      was served in clear and unflagged. agent-os-qonw closed it at two
+	//      layers: none of those is a form the backend reads a credential
+	//      from, so updateSettings below now refuses them at save via
+	//      services.ValidateRepositoryForm, and for rows stored before that
+	//      the redactor stars them, which flips this flag to TRUE by
+	//      derivation. ("rclone:user:SECRET@remote:path" is NOT among them:
+	//      rclone's remote:path grammar has no credential position, so it is
+	//      a path and is left alone.) The discrimination from
+	//      "sftp:user@host:/path", "b2:bucket:path", "rclone:remote:path",
+	//      "rclone:gdrive:edwin@example.com" and paths holding an image digest
+	//      ("sftp:user@host:/backups/nginx@sha256:abc") — which carry no
+	//      secret, and over-starring any of which would reproduce the zzhs
+	//      lockout — is pinned in redact_url_test.go and in this handler's
+	//      tests. The validator and the redactor read ONE grammar table, so
+	//      "refused at save" and "starred on read" cannot drift apart.
 	//
 	//   3. Also not exact the other way on the parse-error fallback: it splices
 	//      the marker wherever it finds a userinfo boundary with a non-empty

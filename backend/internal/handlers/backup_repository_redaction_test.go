@@ -186,8 +186,6 @@ var qonwRejectCorpus = []struct {
 		"sftp:***@host:/path", "sftp:", "sftp:user@host:/path"},
 	{"s3 opaque with key and secret", "s3:AKIAKEY:RESTICSECRET999@host/bucket",
 		"s3:***@host/bucket", "s3:", "AWS_SECRET_ACCESS_KEY"},
-	{"rclone opaque with password", "rclone:user:RESTICSECRET999@remote:path",
-		"rclone:***@remote:path", "rclone:", "rclone.conf"},
 	{"rclone connection string with an inline credential", "rclone::sftp,host=h,user=u,pass=RESTICSECRET999:path",
 		"rclone::sftp,host=h,user=u,pass=***:path", `"pass"`, "rclone.conf"},
 }
@@ -205,6 +203,17 @@ var qonwLeaveCorpus = []string{
 	"s3:https://s3.host/bucket",
 	"/var/backups/repo",
 	"rclone::sftp,host=h,user=u:path",
+	// rclone's remote:path grammar has no credential position: this is
+	// remote "user" with path "PW@remote:path". Only connection-string
+	// parameters can carry a secret.
+	"rclone:user:PW@remote:path",
+	// Reviewer rows at 5cacb66: paths a container-tooling product WILL have,
+	// every one starred by the first rule and then locked out by the marker
+	// guard.
+	"sftp:user@host:/backups/nginx@sha256:abc123",
+	"sftp:host:/a@b:c",
+	"rclone:remote:backups/nginx@sha256:abc123",
+	"rclone::sftp,host=h,user=u,ask_password=true:path",
 }
 
 // qonwRedactedAsTodayCorpus: saved 2xx, served STARRED, flag true, unchanged by
