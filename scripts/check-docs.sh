@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -755,6 +755,68 @@ check_locator_count_guard() {
   return 1
 }
 
+# check_ws_registration delegates to scripts/check-ws-registration.sh: exactly
+# one upgrader.Upgrade( site in backend/internal/handlers/, exactly one caller
+# of upgradeConnection, and no ConnectionManager registration outside serveWS
+# (agent-os-o1jp.2, the ratchet for agent-os-o1jp.1's serveWS refactor). Same
+# self-test-first shape as networkidle-probes: a scanner that has silently
+# stopped firing looks exactly like a clean tree.
+check_ws_registration() {
+  local script="$SCRIPT_DIR/check-ws-registration.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: ws-registration - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: ws-registration - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: ws-registration - ${self#ws-registration }; ${out#ws-registration: }"
+    return 0
+  fi
+  echo "FAIL: ws-registration - a WebSocket upgrade or ConnectionManager registration exists outside serveWS (agent-os-o1jp.1 routes every WS handler through it):"
+  echo "$out"
+  return 1
+}
+
+# check_close_reason runs ONLY the self-test of scripts/check-close-reason.sh.
+# The check itself gates `bd close` on a bug bead's close reason carrying the
+# four class-sweep fields (agent-os-o1jp.6), and it needs the beads tracker,
+# which a CI runner does not have (.beads/ is gitignored, the dolt remote is
+# ssh-only, and a bead closes ~30 s AFTER its PR merges, so a PR-time gate
+# could never read the reason anyway). What CI CAN prove is that the checker
+# still discriminates: its fixtures are files, so the self-test runs here and
+# a broken checker turns this gate red rather than silently passing every
+# close it is later asked to gate (as a local PreToolUse hook on `bd close`).
+check_close_reason() {
+  local script="$SCRIPT_DIR/check-close-reason.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: close-reason - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: close-reason - the check's own self-test failed, so its verdict on any close reason cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+  echo "PASS: close-reason - ${self#close-reason }"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # dispatch
 # ---------------------------------------------------------------------------
@@ -774,6 +836,8 @@ Valid check names:
   line-continuation  no comment line follows a backslash continuation
   networkidle-probes the E2E settle helper's debounce constant still matches the app's
   locator-count-guard no count()-guard in testing/tests/playwright/ wraps an expect(...)
+  ws-registration one WS upgrade path and no ConnectionManager registration outside serveWS
+  close-reason   the bug-bead close-reason checker's self-test (the checker itself needs the tracker)
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -791,6 +855,8 @@ run_check() {
     line-continuation) check_line_continuation ;;
     networkidle-probes) check_networkidle_probes ;;
     locator-count-guard) check_locator_count_guard ;;
+    ws-registration) check_ws_registration ;;
+    close-reason) check_close_reason ;;
     *) return 2 ;;
   esac
 }
