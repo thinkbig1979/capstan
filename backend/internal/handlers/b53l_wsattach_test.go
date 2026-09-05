@@ -174,7 +174,21 @@ func TestBackupWSAttach_ClientDisconnectNeverSendsPrematureDoneFrame(t *testing.
 	// disconnect path also carry run_id for the same run (e.g. "WS client
 	// disconnected; op continues"), so a bare run_id check would
 	// false-positive on the very state this test wants to see.
-	marker := fmt.Sprintf(`msg="Backup WS operation completed" run_id=%s`, runID)
+	//
+	// The marker ALSO pins outcome="" (the run has no outcome yet, so the
+	// premature branch reports an empty one): since agent-os-nt0m, Attach
+	// admits at most services.MaxAttachersPerRun live attachers per run and
+	// refuses the surplus BY RESULT, a Done frame with outcome "failed" and a
+	// reason naming the limit. That refusal is a legitimate terminal frame
+	// for a surplus viewer and logs `outcome=failed`, so with 150 concurrent
+	// attaches most of them are refused and a bare run_id marker turned this
+	// test red on main the moment #297 (b53l) and #298 (nt0m) were both
+	// merged, each green alone. The empty outcome is what distinguishes the
+	// defect this test pins from that refusal. The count stays at 150 on
+	// purpose: the race is only reachable under contention (the sequential
+	// form never reproduced it; 24 concurrent attaches did not either under
+	// a reverted guard, 5/5 green), so do not slim it.
+	marker := fmt.Sprintf(`msg="Backup WS operation completed" run_id=%s outcome=""`, runID)
 	if strings.Contains(buf.String(), marker) {
 		t.Fatalf("a done frame was logged for run %q while it was still executing "+
 			"(its restic call stays blocked for the whole test), across %d concurrent attaches — captured: %q",
