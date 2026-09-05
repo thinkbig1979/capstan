@@ -1219,19 +1219,36 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 
 			case line, ok := <-attached.Live:
 				if !ok {
-					// Live is closed, which does NOT mean the run finished:
-					// forwardLive closes it from a defer on BOTH its exits, the
-					// run-done one and the clientGone one. So on a client
-					// disconnect this case and the wsCtx.Done() case above are
-					// ready at the same instant and Go picks between them
-					// uniformly at random — this branch runs for a live run
-					// roughly half the time a client goes away.
+					// Live closing does NOT mean the run finished: forwardLive
+					// closes it from a defer on BOTH its exits, the run-done
+					// one and the clientGone one. So on a client disconnect
+					// this case and the wsCtx.Done() case above become ready
+					// at the same instant and Go picks between them uniformly
+					// at random — this branch used to run for a live run
+					// roughly half the time a client went away, reporting a
+					// premature "done" with an empty outcome (agent-os-b53l).
 					//
+					// The two triggers are distinguishable from here: Live
+					// closes on genuine completion ONLY after forwardLive has
+					// flushed every buffered line through this same case with
+					// ok=true (its <-dr.done branch drains dr.log before
+					// returning), so on that path wsCtx is still live when
+					// this fires — wsCtx.Err() == nil. On a client
+					// disconnect, forwardLive's <-clientGone branch closes
+					// Live immediately with no flush, but wsCtx.Done() is
+					// exactly what the client's own disconnect just closed —
+					// wsCtx.Err() != nil. So a non-nil wsCtx.Err() here means
+					// "the client left", and is handled the same way the
+					// wsCtx.Done() case above handles it: stop writing, the
+					// op continues on its own, nothing to report to a client
+					// that is already gone.
+					if wsCtx.Err() != nil {
+						return
+					}
 					// Since agent-os-jtax the lookup below is safe when that
 					// happens: a nil clientGone starts no forwarder, so this
 					// branch can no longer spawn one for a run still in
-					// flight. It does still report an empty outcome for such a
-					// run — tracked separately as agent-os-b53l.
+					// flight.
 					outcome, reason := h.outcomeFromRegistry(runID)
 					h.sendDoneFrame(conn, runID, outcome, reason)
 					return
