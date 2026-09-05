@@ -133,6 +133,15 @@ func TestWSAuthFailure_LogsExactlyOnceAtASilentSite(t *testing.T) {
 	<-plantDone
 
 	got := buf.String()
+	// The class this pin guards against, stated on the same buffer: the OLD
+	// undiscriminated count (every level=ERROR token in the shared sink)
+	// reads 2 here, because the plant's line counts the same as serveWS's.
+	// If this ever reads 1 the plant did not land in the window and the
+	// discriminated assertion below is no longer proving anything.
+	if bare := strings.Count(got, "level=ERROR"); bare != 2 {
+		t.Fatalf("the undiscriminated count over the shared sink read %d, want 2 (serveWS's line + the planted stray line): "+
+			"that over-count is the class agent-os-737f pins; the plant is not in the window, so the discriminated count below proves nothing. captured = %q", bare, got)
+	}
 	n := countErrorLines(got, sentinel)
 	if n != 1 {
 		t.Fatalf("a WS auth failure at logs.go (a silent call site) produced %d ERROR line(s) carrying %s, want exactly 1. captured = %q", n, sentinel, got)
