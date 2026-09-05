@@ -44,6 +44,13 @@ import (
 // syncLogBuffer holds a mutex of its own, so the two writers do not race
 // (OBSERVED: the -count=3 -race gate on all eight tests stays clean with the
 // plant in place).
+// strayPlantMarker identifies the planted line specifically. The guards below
+// look for THIS text rather than for a bare level=ERROR token, so that a plant
+// which never ran cannot be masked by some other goroutine's ERROR line
+// happening to be in the buffer. Shared between the planter and the guards on
+// purpose: the two cannot drift apart.
+const strayPlantMarker = "planted by agent-os-nho7"
+
 func plantStrayServerFaultLine(t *testing.T) <-chan struct{} {
 	t.Helper()
 	done := make(chan struct{})
@@ -53,9 +60,47 @@ func plantStrayServerFaultLine(t *testing.T) <-chan struct{} {
 			"request_id", uuid.NewString(),
 			"status", 500,
 			"code", "INTERNAL_ERROR",
-			"error", "planted by agent-os-nho7: a stray line from a goroutine this test did not synchronise with")
+			"error", strayPlantMarker+": a stray line from a goroutine this test did not synchronise with")
 	}()
 	return done
+}
+
+// requirePlantLanded fails unless the planted stray is in the capture window,
+// on a level=ERROR line.
+//
+// It is not decoration, and it is not the proof either: it is the tripwire that
+// keeps the proof honest. An absence assertion passes when the instrument is
+// dead exactly as it passes when the behaviour is correct, so the plant has to
+// be shown present before any absence check below it means anything.
+//
+// It matches the plant's OWN marker, not a bare level=ERROR token. Counting
+// bare tokens would let ANY other ERROR line stand in for a plant that never
+// logged — the two are indistinguishable to a count, which is the very
+// substitution this whole bead is about.
+//
+// At the nine sites whose handler is silent on the path under test, ordering
+// alone would have been enough (captureHandlerLogs runs before the plant, and
+// the caller receives from the plant's channel before reading the buffer), so
+// there the marker is a tripwire against a later reordering. At the tenth,
+// TestDashboardMetricsWS_UpgradeFailureLogsTheCause, it is not a tripwire but
+// the actual fix: serveWS legitimately logs its own ERROR line for that
+// request, so a bare count is satisfied whether or not the plant ever ran.
+// OBSERVED, two-sided, on one instrument: with the plant disarmed, a bare
+// level=ERROR count guard at that site stays GREEN while this marker guard
+// goes RED.
+//
+// countErrorLines, so the match is required to be ON a level=ERROR line. That
+// is what carries the second half of the claim: the buffer demonstrably holds
+// an ERROR line here, so the undiscriminated assertion this replaced would
+// have been RED on this very run, and any site that reaches the discriminated
+// check below is a site where the old form was failing.
+func requirePlantLanded(t *testing.T, captured string) {
+	t.Helper()
+	if n := countErrorLines(captured, strayPlantMarker); n != 1 {
+		t.Fatalf("the planted stray line is not in the capture window as a level=ERROR line (found %d carrying %q, want 1): "+
+			"the undiscriminated assertion this replaced would still PASS here, so the discriminated check that follows proves nothing. captured = %q",
+			n, strayPlantMarker, captured)
+	}
 }
 
 // requireNoOwnErrorLines is agent-os-nho7's discriminated replacement for the
@@ -64,24 +109,28 @@ func plantStrayServerFaultLine(t *testing.T) <-chan struct{} {
 // request's sentinel, which is the claim each of those sites actually wanted
 // to make.
 //
-// The first check is not decoration. An absence assertion passes when the
-// instrument is dead exactly as it passes when the behaviour is correct, so
-// the planted stray from plantStrayServerFaultLine has to be shown to be
-// inside the capture window before the second check means anything. It is
-// also the old assertion's failing arm, kept permanently: NotContains(buf,
-// "level=ERROR") fails precisely when strings.Count(buf, "level=ERROR") >= 1,
-// so a run that reaches the second check is a run in which the undiscriminated
-// form would have been red.
+// errorLinesFor returns the captured level=ERROR lines carrying mustContain —
+// countErrorLines' selection, handed back instead of tallied.
 //
-// strings.Count, not strings.Contains: an exact count would itself be the
-// perturbable quantity this bead is about (a second stray line would make it
-// 2), so the assertion is only that at least the plant landed.
+// A count alone pins how MANY lines a request produced, never WHICH. That gap
+// is reachable by a single double mutation: demote the line under test below
+// ERROR and let a different ERROR line for the same request take its place,
+// and the count is unchanged while the thing being asserted is gone. Callers
+// that care which line they got assert on the line itself.
+func errorLinesFor(captured, mustContain string) []string {
+	var lines []string
+	for _, line := range strings.Split(captured, "\n") {
+		if strings.Contains(line, "level=ERROR") && strings.Contains(line, mustContain) {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// requirePlantLanded runs first, for the reasons stated on it.
 func requireNoOwnErrorLines(t *testing.T, captured, sentinel, what string) {
 	t.Helper()
-	if bare := strings.Count(captured, "level=ERROR"); bare < 1 {
-		t.Fatalf("the planted stray ERROR line is not in the capture window (bare level=ERROR count = %d, want >= 1): "+
-			"the undiscriminated NotContains this replaced would still PASS here, so the discriminated check below proves nothing. captured = %q", bare, captured)
-	}
+	requirePlantLanded(t, captured)
 	if n := countErrorLines(captured, sentinel); n != 0 {
 		t.Fatalf("%s produced %d ERROR line(s) carrying %s, want 0. captured = %q", what, n, sentinel, captured)
 	}

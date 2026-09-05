@@ -75,13 +75,7 @@ func TestDashboardMetricsWS_UpgradeFailureLogsTheCause(t *testing.T) {
 	<-plantDone
 
 	got := buf.String()
-	if !strings.Contains(got, "not using the websocket protocol") {
-		t.Errorf("a WebSocket upgrade failure produced no log naming the cause; "+
-			"the operator has no record at all that it happened. captured = %q", got)
-	}
-	if !strings.Contains(got, "WebSocket upgrade failed") {
-		t.Errorf("the line is not serveWS's own (agent-os-94yx); captured = %q", got)
-	}
+	requirePlantLanded(t, got)
 	// The "handleError's line is back" claim (agent-os-lukw), discriminated on
 	// this request's own id (agent-os-nho7). It used to be an absence check on
 	// the bare substring "request failed" over captureHandlerLogs's buffer,
@@ -91,15 +85,32 @@ func TestDashboardMetricsWS_UpgradeFailureLogsTheCause(t *testing.T) {
 	//
 	// Counting instead of excluding: exactly ONE ERROR line may carry this
 	// request's id, serveWS's own. handleError's line would carry the same id
-	// (logServerFault stamps it from the same context) and make it two. That
-	// is strictly stronger than the old check — it also catches a second line
-	// for this request that is neither of those two — and it subsumes the
-	// separate level=ERROR presence assertion this replaces, since
-	// countErrorLines only counts level=ERROR lines. Same pin, same site, as
-	// TestUpgradeFailure_HandleErrorSiteLogsOnce (ws_upgrade_failure_log_test.go).
-	if n := countErrorLines(got, sentinel); n != 1 {
+	// (logServerFault stamps it from the same context) and make it two. Same
+	// pin, same site, as TestUpgradeFailure_HandleErrorSiteLogsOnce
+	// (ws_upgrade_failure_log_test.go).
+	//
+	// The count alone is not enough, and this is not hypothetical: a DOUBLE
+	// mutation defeats it. Demote serveWS's line to WARN and let handleError's
+	// ERROR line come back, and the count is still 1 while everything the test
+	// exists to protect is gone — and the two old undiscriminated presence
+	// checks that used to sit here (on "WebSocket upgrade failed" and on the
+	// cause text, both against the whole buffer) would ALSO still pass, since
+	// the demoted line carries both at WARN. So the assertions are made about
+	// the LINE, not about the buffer: the one ERROR line for this request must
+	// be serveWS's, and must carry the cause. OBSERVED red under exactly that
+	// double mutation.
+	lines := errorLinesFor(got, sentinel)
+	if len(lines) != 1 {
 		t.Errorf("the upgrade failure produced %d ERROR line(s) carrying %s, want exactly 1 (serveWS's own; "+
-			"handleError's line must not be back after serveWS, agent-os-lukw). captured = %q", n, sentinel, got)
+			"handleError's line must not be back after serveWS, agent-os-lukw). captured = %q", len(lines), sentinel, got)
+		return
+	}
+	if !strings.Contains(lines[0], "WebSocket upgrade failed") {
+		t.Errorf("the one ERROR line for this request is not serveWS's own (agent-os-94yx): %s", lines[0])
+	}
+	if !strings.Contains(lines[0], "not using the websocket protocol") {
+		t.Errorf("the one ERROR line for this request does not name the cause; "+
+			"the operator has no record of WHAT failed: %s", lines[0])
 	}
 	// The sink with no reader must stay empty, or the defect is back in a
 	// second copy alongside the fix.
