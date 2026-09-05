@@ -311,7 +311,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 
 	// Refuse if the file already exists.
 	if _, statErr := os.Stat(envPath); statErr == nil {
-		c.JSON(http.StatusConflict, truth.NoChange("env file already exists",
+		renderResultWithStatus(c, http.StatusConflict, truth.NoChange("env file already exists",
 			truth.KV("filename", envFileName),
 		))
 		return
@@ -358,7 +358,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 
 	h.logAction(c, id, "create_env", "Created env file: "+envFileName)
 
-	c.JSON(http.StatusCreated, truth.Success("env file created",
+	renderResultWithStatus(c, http.StatusCreated, truth.Success("env file created",
 		truth.KV("filename", envFileName),
 	))
 }

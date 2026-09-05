@@ -483,7 +483,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		details["lintResults"] = lintResults
 	}
 
-	c.JSON(http.StatusOK, truth.ActionResult{
+	renderResultWithStatus(c, http.StatusOK, truth.ActionResult{
 		Outcome: truth.OutcomeSuccess,
 		Reason:  "compose and env saved",
 		Details: details,

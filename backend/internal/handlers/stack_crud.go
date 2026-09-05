@@ -288,7 +288,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	// unreachable", which tells the operator more than silently skipping it
 	// would (agent-os-xay).
 	if !req.Deploy {
-		c.JSON(http.StatusCreated, truth.ActionResult{
+		renderResultWithStatus(c, http.StatusCreated, truth.ActionResult{
 			Outcome: truth.OutcomeSuccess,
 			Reason:  "stack created",
 			Details: map[string]any{
@@ -322,7 +322,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	case truth.OutcomeSuccess:
 		// Both create and deploy succeeded and are verified running.
 		details["deployed"] = true
-		c.JSON(http.StatusCreated, truth.ActionResult{
+		renderResultWithStatus(c, http.StatusCreated, truth.ActionResult{
 			Outcome: truth.OutcomeSuccess,
 			Reason:  "stack created and deployed",
 			Details: details,
@@ -337,7 +337,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		if deployAR.Err != nil {
 			details["deployError"] = deployAR.Err.Error()
 		}
-		c.JSON(http.StatusMultiStatus, truth.ActionResult{
+		renderResultWithStatus(c, http.StatusMultiStatus, truth.ActionResult{
 			Outcome: truth.OutcomePartial,
 			Reason:  "stack created but not deployed: " + deployAR.Reason,
 			Details: details,
