@@ -86,13 +86,10 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 			},
 		})
 		if err != nil {
-			// A registration refusal already wrote its own close frame and
-			// closed the socket inside serveWS — reporting it here too would
-			// write into an already-hijacked ResponseWriter. Only an
-			// upgrade/auth failure is reported (agent-os-o1jp.1).
-			if !errors.Is(err, errWSRefused) {
-				handleError(c, err)
-			}
+			// serveWS already logged this upgrade/auth failure itself
+			// (agent-os-94yx). Nothing may be written to the connection here:
+			// the 401 auth-frame shape arrives on a writer upgrader.Upgrade
+			// has already hijacked (agent-os-lukw, agent-os-o1jp.1).
 			return
 		}
 		// release() closes the connection and deregisters it, in that order.

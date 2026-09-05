@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
@@ -50,15 +51,28 @@ func TestTerminalWS_MissingStackClosesWithNotFoundNotRetryableCode(t *testing.T)
 // is already closed: every query fails with "sql: database is closed",
 // proven NOT to be sql.ErrNoRows by
 // TestFaultyDB_FailsDifferentlyFromHealthyNotFound in that file.
+//
+// Asserts the POSITIVE shape the transient branch writes (1000 + "Failed to
+// load stack"), not "code is outside the suppressed set". The complement was
+// satisfiable by a crash: with the branch deleted (go test -overlay,
+// agent-os-hd91) the handler fell through to stack.ProjectName on a nil stack,
+// net/http recovered the panic, the client saw 1006, and 1006 is not
+// suppressed either — a crashed handler passed. 1006 is exactly what this
+// assertion now rejects.
 func TestTerminalWS_DatabaseFaultClosesWithRetryableCode(t *testing.T) {
 	cm := NewConnectionManager(10)
 	f := newTerminalFaultyDBFixture(t, cm)
 
 	code, text := dialTerminal(t, f, "any-stack-id", "irrelevant-container")
 
-	if code == CloseCodeAuthFailure || code == CloseCodeRateLimit || code == CloseCodeNotFound {
-		t.Fatalf("close code = %d (%q) is one of the frontend's suppressed codes — a transient "+
-			"database fault must still let the client reconnect (agent-os-vi0o)", code, text)
+	if code != websocket.CloseNormalClosure {
+		t.Fatalf("close code = %d (%q), want %d (CloseNormalClosure) — the transient branch's own "+
+			"code, which frontend/src/lib/ws.ts's shouldReconnectAfter does not suppress; anything "+
+			"else (a suppressed code, or 1006 from a crashed handler) is not that branch (agent-os-vi0o, agent-os-hd91)",
+			code, text, websocket.CloseNormalClosure)
+	}
+	if text != "Failed to load stack" {
+		t.Errorf("close reason = %q, want %q", text, "Failed to load stack")
 	}
 }
 

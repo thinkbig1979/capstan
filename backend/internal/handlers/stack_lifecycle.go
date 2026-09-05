@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -13,13 +15,19 @@ import (
 func (h *StacksHandler) Start(c *gin.Context) {
 	id := c.Param("id")
 
+	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
+	// always returns either &stack or a non-nil err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrStackNotFound,
+				"Stack not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
@@ -59,13 +67,19 @@ func (h *StacksHandler) Start(c *gin.Context) {
 func (h *StacksHandler) Stop(c *gin.Context) {
 	id := c.Param("id")
 
+	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
+	// always returns either &stack or a non-nil err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrStackNotFound,
+				"Stack not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
@@ -105,13 +119,19 @@ func (h *StacksHandler) Stop(c *gin.Context) {
 func (h *StacksHandler) Restart(c *gin.Context) {
 	id := c.Param("id")
 
+	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
+	// always returns either &stack or a non-nil err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrStackNotFound,
+				"Stack not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
@@ -151,13 +171,19 @@ func (h *StacksHandler) Restart(c *gin.Context) {
 func (h *StacksHandler) Pull(c *gin.Context) {
 	id := c.Param("id")
 
+	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
+	// always returns either &stack or a non-nil err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrStackNotFound,
+				"Stack not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
