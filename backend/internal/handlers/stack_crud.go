@@ -54,6 +54,20 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// The charset above admits "---" and "_._", from which Docker Compose
+	// derives an EMPTY project name and then refuses every -p (agent-os-f3ah).
+	// Refuse it here, naming the rule, rather than persisting a row that can
+	// never start. Same producer as the row below, so the check cannot drift
+	// from what gets stored.
+	if services.ComposeProjectName(req.Name, "default") == "" {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Stack name must contain at least one letter or digit: Docker Compose derives the project name from it by keeping only lowercase letters, digits, '-' and '_' and trimming leading '-' and '_'",
+		))
+		return
+	}
+
 	targetDir := h.config.StacksDir
 	if req.Directory != "" {
 		if !h.isValidStacksDir(req.Directory) {

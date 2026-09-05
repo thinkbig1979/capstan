@@ -1,11 +1,16 @@
 package services
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -883,4 +888,269 @@ func TestScannerService_PruneStaleIDStacks_NeitherRowMatchesExpected_BothSurvive
 	}
 	assert.ElementsMatch(t, []string{staleA, staleB}, ids,
 		"neither row carries the ID the scanner would currently mint, so this reads as 'not visited this pass', not 'stale' -- both must survive")
+}
+
+// ───────────────────────────────────────────
+// agent-os-f3ah: persisted project_name must be what compose derives
+// ───────────────────────────────────────────
+
+// writeComposeStack creates <root>/<dirName>/compose.yaml and returns the
+// directory path.
+func writeComposeStack(t *testing.T, root, dirName string) string {
+	t.Helper()
+	dir := filepath.Join(root, dirName)
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644))
+	return dir
+}
+
+// TestComposeProjectName_MatchesComposeNormalisation is the PIN for the
+// normaliser, not its implementation: ComposeProjectName delegates to
+// compose-go's loader.NormalizeProjectName, the function compose itself uses
+// to derive a project name from a directory basename, so the two cannot drift.
+//
+// Before agent-os-f3ah the directory basename was persisted VERBATIM. A
+// directory "MyStack" started outside Capstan is labelled "mystack" by
+// compose, so Capstan's label filter found 0 containers (status stopped,
+// empty metrics) and its `-p MyStack` was rejected by compose on Start.
+func TestComposeProjectName_MatchesComposeNormalisation(t *testing.T) {
+	cases := []struct {
+		dirName, name, want, why string
+	}{
+		{"MyStack", "default", "mystack", "the filed defect: compose lower-cases"},
+		{"my.stack", "default", "mystack", "compose drops the dot; -p my.stack is rejected"},
+		{"my_stack", "default", "my_stack", "CONTROL: underscore is legal, byte-for-byte"},
+		{"ok-normal", "default", "ok-normal", "CONTROL: already normal, byte-for-byte"},
+		{"-leading", "default", "leading", "compose trims leading '-'"},
+		{"_leading", "default", "leading", "compose trims leading '_'"},
+		{"--x_", "default", "x_", "only LEADING punctuation is trimmed"},
+		{"Café", "default", "caf", "compose's class is ASCII; the é is dropped, not transliterated"},
+		{"", "default", "", "nothing to derive from"},
+		{"---", "default", "", "a name made only of trimmed punctuation normalises to nothing; the scanner skips it and the create endpoint refuses it"},
+		{"MyStack", "API", "mystack-api", "the profile suffix is normalised too: -p is passed the whole string"},
+		{"myapp", "web:2", "myapp-web-2", "CONTROL: the existing colon rule (agent-os-07x) still applies before normalising"},
+		{"myapp", "api", "myapp-api", "CONTROL"},
+	}
+	for _, tc := range cases {
+		if got := ComposeProjectName(tc.dirName, tc.name); got != tc.want {
+			t.Errorf("ComposeProjectName(%q, %q):\n  got  = %q\n  want = %q\n  why  = %s", tc.dirName, tc.name, got, tc.want, tc.why)
+		}
+	}
+
+	// The property the table pins: for the default profile the result IS
+	// compose's own derivation, byte-for-byte.
+	for _, dirName := range []string{"MyStack", "my.stack", "my_stack", "ok-normal", "-leading", "Café", "---", "A.B-C_d"} {
+		if got, want := ComposeProjectName(dirName, "default"), loader.NormalizeProjectName(dirName); got != want {
+			t.Errorf("ComposeProjectName(%q) = %q but compose derives %q", dirName, got, want)
+		}
+	}
+}
+
+// TestScannerService_ScanAll_RewritesALegacyProjectName pins the migration
+// story: UpsertStack is INSERT OR REPLACE keyed on the stack ID, and the ID
+// carries no project_name, so the first scan after the fix rewrites an
+// existing "MyStack" row in place. No migration, no new row.
+func TestScannerService_ScanAll_RewritesALegacyProjectName(t *testing.T) {
+	tempDir := t.TempDir()
+	stackDir := writeComposeStack(t, tempDir, "MyStack")
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	// Seed the row exactly as the pre-fix scanner persisted it.
+	id := StackID(tempDir, tempDir, nil, "MyStack", "default")
+	require.NoError(t, db.UpsertDirectory(models.Directory{Path: stackDir, Name: "MyStack", RootDir: tempDir}))
+	require.NoError(t, db.UpsertStack(models.Stack{
+		ID: id, Directory: stackDir, ComposeFile: "compose.yaml", ProjectName: "MyStack", Status: "unknown",
+	}))
+
+	_, err = NewScannerService(&config.Config{StacksDir: tempDir}, db).ScanAll()
+	require.NoError(t, err)
+
+	row, err := db.GetStack(id)
+	require.NoError(t, err, "the legacy row must keep its ID; a re-ID would orphan every reference to it")
+	assert.Equal(t, "mystack", row.ProjectName, "the next scan must rewrite the legacy value in place")
+
+	all, err := db.ListStacks()
+	require.NoError(t, err)
+	assert.Len(t, all, 1, "one directory, one row: the rewrite must not leave the legacy row beside a new one")
+}
+
+// newLabelFilteringDockerAPI serves a Docker Engine API double that answers
+// GET /containers/json honouring the `label` filter the way the daemon does,
+// and returns a DockerService whose real SDK client points at it. That drives
+// GetContainerList's actual filter path (docker.go), not a stub of it.
+//
+// Every container carries label com.docker.compose.project=<project>.
+func newLabelFilteringDockerAPI(t *testing.T, containers map[string]string) *DockerService {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/containers/json") {
+			http.NotFound(w, r)
+			return
+		}
+		var f map[string]map[string]bool
+		_ = json.Unmarshal([]byte(r.URL.Query().Get("filters")), &f)
+		want := ""
+		for k := range f["label"] {
+			want = strings.TrimPrefix(k, "com.docker.compose.project=")
+		}
+		out := make([]map[string]any, 0)
+		for name, project := range containers {
+			if project != want {
+				continue
+			}
+			out = append(out, map[string]any{
+				"Id": name, "Names": []string{"/" + name}, "Image": "nginx", "State": "running", "Status": "Up",
+				"Labels": map[string]string{"com.docker.compose.project": project},
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}))
+	t.Cleanup(srv.Close)
+
+	cli, err := client.NewClientWithOpts(
+		client.WithHost("tcp://"+strings.TrimPrefix(srv.URL, "http://")),
+		client.WithVersion("1.44"),
+	)
+	require.NoError(t, err)
+	return &DockerService{config: &config.Config{}, client: cli}
+}
+
+// TestScannerService_ScanAll_NormalisedNameFindsTheLiveContainers is the
+// POSITIVE arm end to end inside the unit suite: a directory "MyStack" whose
+// containers were started outside Capstan carry label
+// com.docker.compose.project=mystack. After the scan, the stored row's
+// project name must be what the label filter needs to find them.
+func TestScannerService_ScanAll_NormalisedNameFindsTheLiveContainers(t *testing.T) {
+	tempDir := t.TempDir()
+	writeComposeStack(t, tempDir, "MyStack")
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = NewScannerService(&config.Config{StacksDir: tempDir}, db).ScanAll()
+	require.NoError(t, err)
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+
+	docker := newLabelFilteringDockerAPI(t, map[string]string{
+		"mystack-alpha-1": "mystack",
+		"mystack-beta-1":  "mystack",
+		"other-web-1":     "other",
+	})
+
+	// The instrument discriminates: the value the pre-fix scanner persisted
+	// finds nothing, which is exactly the "stopped, 0 containers" symptom.
+	pre, err := docker.GetContainerList("MyStack")
+	require.NoError(t, err)
+	require.Empty(t, pre, "control: the un-normalised name must find nothing, or the filter double is not filtering")
+
+	got, err := docker.GetContainerList(stacks[0].ProjectName)
+	require.NoError(t, err)
+	names := make([]string, 0, len(got))
+	for _, c := range got {
+		names = append(names, c.Name)
+	}
+	assert.ElementsMatch(t, []string{"mystack-alpha-1", "mystack-beta-1"}, names,
+		"stored project_name %q must match the compose label so the stack's containers are visible", stacks[0].ProjectName)
+}
+
+// TestScannerService_ScanAll_AlreadyNormalNameIsUntouched is the NEGATIVE arm:
+// a directory compose would not rename is persisted byte-for-byte and a rescan
+// leaves the whole row identical (the stacks table has no updated_at, so the
+// row itself is the evidence).
+func TestScannerService_ScanAll_AlreadyNormalNameIsUntouched(t *testing.T) {
+	tempDir := t.TempDir()
+	writeComposeStack(t, tempDir, "ok-normal")
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	svc := NewScannerService(&config.Config{StacksDir: tempDir}, db)
+
+	_, err = svc.ScanAll()
+	require.NoError(t, err)
+	id := StackID(tempDir, tempDir, nil, "ok-normal", "default")
+	first, err := db.GetStack(id)
+	require.NoError(t, err)
+	assert.Equal(t, "ok-normal", first.ProjectName)
+
+	_, err = svc.ScanAll()
+	require.NoError(t, err)
+	second, err := db.GetStack(id)
+	require.NoError(t, err)
+	assert.Equal(t, *first, *second, "a rescan of an already-normal directory must not churn the row")
+}
+
+// TestScannerService_ScanAll_CollidingDirectoriesArePersistedAndWarned is the
+// COLLISION arm: "MyStack" and "my.stack" both normalise to "mystack". Compose
+// itself would run them as ONE project, so Capstan cannot separate them; it
+// persists both rows (distinct IDs, since the ID is path-based) and logs one
+// WARN naming the shared project and both directories.
+func TestScannerService_ScanAll_CollidingDirectoriesArePersistedAndWarned(t *testing.T) {
+	tempDir := t.TempDir()
+	dirA := writeComposeStack(t, tempDir, "MyStack")
+	dirB := writeComposeStack(t, tempDir, "my.stack")
+	// A bystander: must not appear in the warning.
+	writeComposeStack(t, tempDir, "ok-normal")
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	logs := captureSlog(t)
+	_, err = NewScannerService(&config.Config{StacksDir: tempDir}, db).ScanAll()
+	require.NoError(t, err)
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	byDir := map[string]string{}
+	for _, s := range stacks {
+		byDir[s.Directory] = s.ProjectName
+	}
+	assert.Equal(t, "mystack", byDir[dirA])
+	assert.Equal(t, "mystack", byDir[dirB], "both colliding directories must be persisted; dropping one silently hides a directory")
+	assert.Len(t, stacks, 3)
+
+	out := logs.String()
+	warnLines := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "level=WARN") && strings.Contains(line, "collision") {
+			warnLines++
+			assert.Contains(t, line, "mystack")
+			assert.Contains(t, line, dirA)
+			assert.Contains(t, line, dirB)
+			assert.NotContains(t, line, "ok-normal", "the bystander is not part of the collision")
+		}
+	}
+	assert.Equal(t, 1, warnLines, "exactly one collision warning, naming the shared project and both directories; log was:\n%s", out)
+}
+
+// TestScannerService_ScanAll_EmptyProjectNameIsSkippedWithAWarning: a directory
+// whose name normalises to nothing ("---") cannot be a compose project at all
+// (compose refuses an empty project name), so no row is written and a WARN
+// names the directory. Note the scanner already skips dot-prefixed entries, so
+// "..." never reaches this rule; "---" does.
+func TestScannerService_ScanAll_EmptyProjectNameIsSkippedWithAWarning(t *testing.T) {
+	tempDir := t.TempDir()
+	dir := writeComposeStack(t, tempDir, "---")
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	logs := captureSlog(t)
+	_, err = NewScannerService(&config.Config{StacksDir: tempDir}, db).ScanAll()
+	require.NoError(t, err)
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	assert.Empty(t, stacks, "an empty project_name is unlistable and unstartable; the row must not be written")
+	assert.Contains(t, logs.String(), "level=WARN")
+	assert.Contains(t, logs.String(), dir, "the warning must name the directory so the operator can rename it")
 }

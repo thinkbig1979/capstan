@@ -5,11 +5,15 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -60,11 +64,31 @@ func StackID(root, primaryRoot string, extraRoots []string, pathID, name string)
 // name is the compose profile as extractStackName returns it ("default" for
 // compose.yaml). Colons are not legal in a compose project name, so a profile
 // carrying one is flattened to "-".
+//
+// The result is then passed through compose-go's loader.NormalizeProjectName,
+// the function Docker Compose itself applies to a directory basename before
+// labelling containers: lower-case, keep only [a-z0-9_-], trim leading "-"
+// and "_" (agent-os-f3ah). Before that, the basename was persisted VERBATIM,
+// so a directory "MyStack" started outside Capstan was labelled "mystack" by
+// compose while Capstan filtered on "MyStack": zero containers, status
+// stopped, empty metrics, and Start could not repair it because compose
+// rejects `-p MyStack` outright. Delegating to compose-go rather than copying
+// its rule means the two cannot drift; a compose-go bump moves both.
+//
+// The result can be EMPTY ("---", "..."): compose refuses to run such a
+// directory at all (loader.go: "project name must not be empty"), so no
+// compose project can exist for it. Callers decide what to do with that: the
+// scanner skips the row with a warning, the create endpoint refuses the name.
+//
+// Two directories can normalise to one name ("MyStack", "my.stack"). Compose
+// would run them as ONE project, so Capstan cannot separate them either; the
+// scanner persists both rows and warns (see warnProjectNameCollisions).
 func ComposeProjectName(dirName, name string) string {
-	if name == "default" {
-		return dirName
+	raw := dirName
+	if name != "default" {
+		raw = fmt.Sprintf("%s-%s", dirName, strings.ReplaceAll(name, ":", "-"))
 	}
-	return fmt.Sprintf("%s-%s", dirName, strings.ReplaceAll(name, ":", "-"))
+	return loader.NormalizeProjectName(raw)
 }
 
 // StackIDRootPrefix returns the root component of a stack ID.
@@ -186,8 +210,46 @@ func (s *ScannerService) ScanAll() (hasGlobalEnv bool, err error) {
 		slog.Warn("Failed to prune stale stacks", "error", err)
 	}
 
+	s.warnProjectNameCollisions()
+
 	slog.Info("Directory scan complete", "scanDepth", scanDepth)
 	return hasGlobalEnv, nil
+}
+
+// warnProjectNameCollisions logs one WARN per compose project name that more
+// than one directory normalises to ("MyStack" and "my.stack" both become
+// "mystack"; so do /a/stacks/web and /b/stacks/web across two roots).
+//
+// Compose itself would treat those directories as ONE project — same label,
+// same `-p` — so this is not something Capstan can fix, only surface. Both
+// rows are kept: their IDs are path-based and distinct, and dropping one would
+// hide a directory that is on disk. It reads the persisted rows after the
+// scan rather than threading state through ScanDirectoryWithRoot, so a
+// collision between a directory scanned now and one persisted earlier is
+// reported too, and single-directory rescans need no extra state.
+func (s *ScannerService) warnProjectNameCollisions() {
+	stacks, err := s.db.ListStacks()
+	if err != nil {
+		slog.Warn("Failed to list stacks for project name collision check", "error", err)
+		return
+	}
+
+	dirsByProject := make(map[string][]string)
+	for _, stack := range stacks {
+		if !slices.Contains(dirsByProject[stack.ProjectName], stack.Directory) {
+			dirsByProject[stack.ProjectName] = append(dirsByProject[stack.ProjectName], stack.Directory)
+		}
+	}
+
+	for _, project := range slices.Sorted(maps.Keys(dirsByProject)) {
+		dirs := dirsByProject[project]
+		if len(dirs) < 2 {
+			continue
+		}
+		sort.Strings(dirs)
+		slog.Warn("Compose project name collision: several directories normalise to one project name; Docker Compose treats them as ONE project, so they share containers and Start/Stop on either acts on both",
+			"project", project, "directories", dirs)
+	}
 }
 
 func (s *ScannerService) scanDirectoryRecursive(path string, rootDir string, maxDepth int, currentDepth int) {
@@ -645,6 +707,17 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 			stackID := StackID(effectiveRoot, s.config.StacksDir, s.config.ExtraStacksDirs, stackPathID, name)
 
 			projectName := ComposeProjectName(dirName, name)
+			if projectName == "" {
+				// Compose derives NOTHING from this directory name, and refuses
+				// to run with an empty project name, so no compose project can
+				// exist for it. A row with project_name "" would be unlistable
+				// (the label filter matches nothing) and unstartable (-p ""
+				// relays compose's error with less context). Warn and skip.
+				slog.Warn("Directory name yields an empty compose project name, skipping",
+					"directory", path, "file", filename,
+					"rule", "compose keeps only lowercase letters, digits, '-' and '_' and trims leading '-'/'_'")
+				continue
+			}
 
 			stack := models.Stack{
 				ID:          stackID,
