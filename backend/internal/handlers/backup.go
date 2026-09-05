@@ -192,24 +192,26 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	//      old u.User.String() == "" guard missed it), and a credential
 	//      containing "/" survived untouched while this flag read FALSE.
 	//
-	//   2. Still NOT exact in one direction, and it is the direction that
-	//      matters: the flag reads FALSE for a repository shape the redactor
-	//      cannot reach at all. RedactURLUserinfo only handles an authority
-	//      announced by "//", so an opaque form that embeds a password without
-	//      one is served in clear and unflagged. OBSERVED, post-fix:
-	//          sftp:user:SECRET@host:/path      ->  unchanged, flag false
-	//          s3:KEY:SECRET@host/bucket        ->  unchanged, flag false
-	//          rclone:user:SECRET@remote:path   ->  unchanged, flag false
-	//      None is a documented restic form (restic's sftp form is
-	//      "sftp:user@host:/path", which authenticates by key and has no
-	//      password field; s3 credentials go in the environment or in the
-	//      "s3:https://..." form, which IS covered), but the absence of the hint
-	//      is still not a safety proof. Tracked as agent-os-qonw, split out of
-	//      agent-os-zzhs deliberately rather than deferred: the hard part there
-	//      is DISCRIMINATING those from "sftp:user@host:/path",
-	//      "b2:bucket:path" and "rclone:remote:path", which carry no secret,
-	//      and over-redacting one of THOSE would reproduce the lockout
-	//      agent-os-zzhs just fixed.
+	//   2. Was NOT exact in one direction, and it was the direction that
+	//      mattered: the flag read FALSE for a repository shape the redactor
+	//      could not reach at all — an opaque form embedding a password with
+	//      no "//" ("sftp:user:SECRET@host:/path", "s3:KEY:SECRET@host/bucket",
+	//      and the rclone connection string "rclone::sftp,...,pass=OBSCURED:path")
+	//      was served in clear and unflagged. agent-os-qonw closed it at two
+	//      layers: none of those is a form the backend reads a credential
+	//      from, so updateSettings below now refuses them at save via
+	//      services.ValidateRepositoryForm, and for rows stored before that
+	//      the redactor stars them, which flips this flag to TRUE by
+	//      derivation. ("rclone:user:SECRET@remote:path" is NOT among them:
+	//      rclone's remote:path grammar has no credential position, so it is
+	//      a path and is left alone.) The discrimination from
+	//      "sftp:user@host:/path", "b2:bucket:path", "rclone:remote:path",
+	//      "rclone:gdrive:edwin@example.com" and paths holding an image digest
+	//      ("sftp:user@host:/backups/nginx@sha256:abc") — which carry no
+	//      secret, and over-starring any of which would reproduce the zzhs
+	//      lockout — is pinned in redact_url_test.go and in this handler's
+	//      tests. The validator and the redactor read ONE grammar table, so
+	//      "refused at save" and "starred on read" cannot drift apart.
 	//
 	//   3. Also not exact the other way on the parse-error fallback: it splices
 	//      the marker wherever it finds a userinfo boundary with a non-empty
@@ -389,6 +391,19 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 				http.StatusUnprocessableEntity,
 				models.ErrValidation,
 				"The repository value still contains the redacted credential marker (***). Re-enter the full repository URI including its credentials, or leave the field unchanged.",
+			))
+			return
+		}
+		// Refuse an inline credential the backend would never read
+		// (agent-os-qonw): "sftp:user:PW@host:/path" is a misconfiguration
+		// restic reads as host "user", and storing it only to star it out on
+		// read would make a backup that cannot work look handled. The
+		// grammar lives with the redactor so the two agree on every shape.
+		if err := services.ValidateRepositoryForm(*req.Repository); err != nil {
+			handleError(c, models.NewAppError(
+				http.StatusUnprocessableEntity,
+				models.ErrValidation,
+				err.Error(),
 			))
 			return
 		}
