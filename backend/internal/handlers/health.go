@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 // readinessProbeTimeout bounds the dependency check. A hung Docker daemon
@@ -142,6 +143,17 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 		body["status"] = "degraded"
 		body["degraded"] = degraded
 		slog.Warn("Readiness probe degraded", "degraded", degraded, "error", dockerErr)
+		// Deliberately NOT routed through handleError (agent-os-ua4y): that would
+		// replace this endpoint's documented {status, checks, degraded} body with
+		// the generic AppError {code, message} shape, breaking
+		// TestReadinessNamesDockerWhenDegraded and TestReadinessRedactsRawDockerError,
+		// for a probe /health/ready that no browser client reads .code from (it is
+		// outside the protected group and unused by frontend/src). logServerFault is
+		// called directly instead, so this 503 still gets the same structured ERROR
+		// line (request_id/status/code/cause) as every handleError site, without
+		// touching the wire body. The slog.Warn above stays too, double logging is
+		// an accepted outcome elsewhere in this bead.
+		logServerFault(c, http.StatusServiceUnavailable, models.ErrDockerUnavailable, dockerErr)
 		c.JSON(http.StatusServiceUnavailable, body)
 		return
 	}

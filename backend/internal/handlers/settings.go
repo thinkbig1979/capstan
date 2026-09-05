@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -167,10 +168,11 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to hash password",
+			err,
 		))
 		return
 	}
@@ -180,10 +182,11 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 
 	if err := h.db.UpdateUserPassword(user.ID, string(hashedPassword), time.Now()); err != nil {
 		slog.Error("Failed to update password", "error", err)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to update password",
+			err,
 		))
 		return
 	}
@@ -191,10 +194,11 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 	verifiedUser, err := h.db.GetUserByID(user.ID)
 	if err != nil || verifiedUser == nil {
 		slog.Error("Failed to verify password update", "error", err, "userID", userID)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to verify password update",
+			err,
 		))
 		return
 	}
@@ -202,10 +206,11 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 	err = bcrypt.CompareHashAndPassword([]byte(verifiedUser.Password), []byte(req.NewPassword))
 	if err != nil {
 		slog.Error("Password verification failed after update", "error", err, "userID", userID)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Password verification failed",
+			err,
 		))
 		return
 	}
@@ -253,11 +258,12 @@ func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
 
 	envVars, err := parseEnvFile(globalEnvPath)
 	if err != nil {
-		if !strings.Contains(err.Error(), "no such file") {
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+		if !errors.Is(err, fs.ErrNotExist) {
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to read global environment file",
+				err,
 			))
 			return
 		}
@@ -338,10 +344,11 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 
 	if err := writeEnvFileAtomic(globalEnvPath, content); err != nil {
 		slog.Error("Failed to write global environment file", "error", err)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to write global environment file",
+			err,
 		))
 		return
 	}
@@ -437,10 +444,11 @@ func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {
 		}
 		if err := h.db.SetSetting(u.key, strconv.Itoa(*u.value)); err != nil {
 			slog.Error("Failed to update retention setting", "setting", u.label, "error", err)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to update retention setting",
+				err,
 			))
 			return
 		}
@@ -648,10 +656,11 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 
 		if err := h.db.SetSetting("update_scan_interval", fmt.Sprintf("%d", *req.ScanIntervalMinutes)); err != nil {
 			slog.Error("Failed to update scan interval", "error", err)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to update scan interval",
+				err,
 			))
 			return
 		}
@@ -673,10 +682,11 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 		}
 		if err := h.db.SetSetting("auto_update_enabled", autoUpdateVal); err != nil {
 			slog.Error("Failed to update auto-update setting", "error", err)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to update auto-update setting",
+				err,
 			))
 			return
 		}
@@ -690,10 +700,11 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	if req.ApplyMode != nil {
 		if err := h.db.SetSetting("update_apply_mode", *req.ApplyMode); err != nil {
 			slog.Error("Failed to update apply mode", "error", err)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to update apply mode",
+				err,
 			))
 			return
 		}
@@ -703,10 +714,11 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	if req.ApplyTime != nil {
 		if err := h.db.SetSetting("update_apply_time", *req.ApplyTime); err != nil {
 			slog.Error("Failed to update apply time", "error", err)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to update apply time",
+				err,
 			))
 			return
 		}
@@ -716,10 +728,11 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	if req.ApplyDays != nil {
 		if err := h.db.SetSetting("update_apply_days", applyDaysCSV); err != nil {
 			slog.Error("Failed to update apply days", "error", err)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to update apply days",
+				err,
 			))
 			return
 		}
@@ -829,10 +842,11 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 		}
 		if err := h.db.SetSetting("git_ssh_key", req.SSHKey); err != nil {
 			slog.Error("Failed to update git SSH key setting", "error", err)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to update git SSH key",
+				err,
 			))
 			return
 		}
@@ -841,10 +855,11 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 	if req.HTTPSUser != "" {
 		if err := h.db.SetSetting("git_https_user", req.HTTPSUser); err != nil {
 			slog.Error("Failed to update git HTTPS user setting", "error", err)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to update git HTTPS user",
+				err,
 			))
 			return
 		}
@@ -856,10 +871,11 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 				return
 			}
 			slog.Error("Failed to update git HTTPS token setting", "error", err)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to update git HTTPS token",
+				err,
 			))
 			return
 		}
@@ -937,20 +953,22 @@ func (h *SettingsHandler) UpdateConfiguredDirectories(c *gin.Context) {
 		}
 
 		if err := os.MkdirAll(absDir, 0755); err != nil {
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to create directory",
+				err,
 			))
 			return
 		}
 
 		if err := h.db.SetSetting("default_stacks_dir", absDir); err != nil {
 			slog.Error("Failed to update default stacks dir", "error", err)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
+			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
 				"Failed to update default stacks directory",
+				err,
 			))
 			return
 		}
@@ -1004,10 +1022,11 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 
 	actions, total, err := h.db.ListActionLogsFiltered(pageSize, offset, filter)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to retrieve audit log",
+			err,
 		))
 		return
 	}
@@ -1029,10 +1048,11 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 func (h *SettingsHandler) GetScanDepth(c *gin.Context) {
 	depthStr, err := h.db.GetSetting("scan_depth")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to get scan depth setting",
+			err,
 		))
 		return
 	}
@@ -1065,10 +1085,11 @@ func (h *SettingsHandler) UpdateScanDepth(c *gin.Context) {
 
 	if err := h.db.SetSetting("scan_depth", fmt.Sprintf("%d", req.ScanDepth)); err != nil {
 		slog.Error("Failed to update scan depth setting", "error", err)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to update scan depth setting",
+			err,
 		))
 		return
 	}
