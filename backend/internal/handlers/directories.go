@@ -108,7 +108,23 @@ func (h *DirectoriesHandler) UpdateCredentials(c *gin.Context) {
 	}
 
 	directory, err := h.db.GetDirectory(req.Path)
-	if err != nil || directory == nil {
+	if err != nil {
+		// agent-os-3h9x (the generalised agent-os-7lg1 class): db.GetDirectory
+		// returns the bare Scan error (database/directories.go:97-110), so a
+		// closed or broken connection reached this 404 indistinguishably from an
+		// unregistered path, and logged nothing. The `|| directory == nil` arm
+		// this replaces was dead for the same reason 7lg1 dropped `stack == nil`
+		// at 17 sites: GetDirectory returns either &dir or a non-nil err, never
+		// both zero.
+		if !errors.Is(err, sql.ErrNoRows) {
+			handleError(c, models.NewAppErrorWithCause(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to load directory",
+				err,
+			))
+			return
+		}
 		c.JSON(http.StatusNotFound, models.NewAppError(
 			http.StatusNotFound,
 			models.ErrNotFound,
@@ -216,8 +232,28 @@ func (h *DirectoriesHandler) CredentialStatus(c *gin.Context) {
 		return
 	}
 
-	directory, err := h.db.GetDirectory(path)
-	if err != nil || directory == nil {
+	// The row itself is never read here — this call exists only to establish
+	// that a directory IS registered at path, which the "none" fall-through
+	// below relies on (see the GetDirectoryCredentials switch).
+	if _, err := h.db.GetDirectory(path); err != nil {
+		// agent-os-3h9x, same class and same dead `|| directory == nil` arm as
+		// UpdateCredentials above. The errors.Is(err, sql.ErrNoRows) a few lines
+		// below is NOT a guard on this call — it discriminates the SEPARATE
+		// GetDirectoryCredentials read that follows. That adjacency is why this
+		// site survived 7lg1's close sweep: OBSERVED 2026-09-05, a
+		// `grep -nE -A12 'GetDirectory\(' directories.go` window opened at this
+		// line reaches the sibling's guard and reads the site as already
+		// discriminated. Any sweep for this class must stop its window at the
+		// next getter call, or it borrows the next call's guard.
+		if !errors.Is(err, sql.ErrNoRows) {
+			handleError(c, models.NewAppErrorWithCause(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to load directory",
+				err,
+			))
+			return
+		}
 		c.JSON(http.StatusNotFound, models.NewAppError(
 			http.StatusNotFound,
 			models.ErrNotFound,

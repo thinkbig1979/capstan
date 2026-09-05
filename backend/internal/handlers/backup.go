@@ -697,6 +697,14 @@ func (h *BackupHandler) getRunDetail(c *gin.Context) {
 
 	run, err := h.db.GetBackupRunByID(runID)
 	if err != nil {
+		// agent-os-3h9x (the generalised agent-os-7lg1 class): db.GetBackupRunByID
+		// returns the bare Scan error (database/backup.go:122-135), so ANY failure
+		// — a closed connection, a corrupt file — arrives here looking exactly
+		// like an absent run and would otherwise become a silent 404.
+		if !errors.Is(err, sql.ErrNoRows) {
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load backup run", err))
+			return
+		}
 		c.JSON(http.StatusNotFound, models.NewAppError(
 			http.StatusNotFound,
 			models.ErrNotFound,
