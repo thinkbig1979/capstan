@@ -49,32 +49,61 @@ import (
 //	(no output — the intersection over all five locales and all nineteen
 //	 catalogs is EMPTY; this is the whole-set form, not two spot checks)
 //
-// So the messages-locale route to a translated git message is unreachable on
-// this host, and de_DE.UTF-8 reads English here only because that locale is
-// not generated — a host artifact, not gettext precedence:
+// That empty intersection retires exactly ONE of the two routes to a translated
+// git message, and naming which one is the whole point. An earlier revision of
+// this comment summarised it as a flat statement that translation could not be
+// reached here at all, and that summary was then read back -- by its own author
+// -- as a general fact about this host (agent-os-6cg8). It is not one:
 //
+//   - ROUTE 1, the messages locale itself selects the catalog (LANGUAGE unset).
+//     Needs a GENERATED locale that ALSO has a git catalog. The intersection
+//     measured above is empty, so route 1 is genuinely unreachable on this host.
+//   - ROUTE 2, LANGUAGE selects the catalog and the messages locale only has to
+//     be non-C. Needs any generated non-C locale plus a catalog for the language
+//     LANGUAGE names; the two need not be related to each other. Route 2 IS
+//     reachable here, by default, because the ambient LANG is en_US.UTF-8.
+//
+// OBSERVED, git 2.47.3, ambient LANG=en_US.UTF-8 with LC_ALL unset, running
+// `git rev-parse --git-dir` outside a repository:
+//
+//	(unset LC_ALL; LANGUAGE=de)        -> "Schwerwiegend: Kein Git-Repository ..."  GERMAN
+//	LANG=de_DE.UTF-8 LANGUAGE=de       -> "fatal: ..."  English
+//	LC_ALL=nl_NL.utf8   LANGUAGE=de    -> "Schwerwiegend: Kein Git-Repository ..."  GERMAN
 //	LC_ALL=nl_NL.utf8   (no LANGUAGE)  -> "fatal: ..."  English: locale, no catalog
 //	LC_ALL=de_DE.UTF-8  (no LANGUAGE)  -> "fatal: ..."  English: catalog, no locale
-//	LC_ALL=nl_NL.utf8   LANGUAGE=de    -> "Schwerwiegend: Kein Git-Repository ..."  GERMAN
 //	LC_ALL=en_US.utf8   LANGUAGE=nl    -> "fatal: ..."  English: no nl catalog exists
 //
-// The third arm shows the messages locale need only be NON-C and need not
-// relate to the catalog at all. The fourth is the negative control that kills
-// the lazy reading "LANGUAGE set means translated". The precise rule is
-// therefore: a non-C messages locale AND an installed catalog for the selected
-// language.
+// The first two arms are the pair that has to be read together: they differ
+// only in LANG and they come out opposite. The first is route 2 firing on the
+// host's own default environment, which is why translation is emphatically
+// reachable here. The second reads English NOT because LANG outranked LANGUAGE
+// -- it does not -- but because de_DE.UTF-8 is not generated on this box, so
+// setlocale falls back to C, and a C messages locale disables translation
+// outright and stops LANGUAGE being consulted at all. Pinning LANG to an
+// ungenerated locale therefore destroys the very signal such an arm looks like
+// it is testing; that reading is a host artifact, not gettext precedence.
+//
+// Arms three and four are route 1 failing in each direction, a locale with no
+// catalog and a catalog with no locale, and arm three additionally shows the
+// messages locale need only be NON-C and need not relate to the catalog at all.
+// The last arm is the negative control that kills the lazy reading "LANGUAGE
+// set means translated". The precise rule is therefore: a non-C messages locale
+// AND an installed catalog for the language selected -- NOT a generated locale
+// that itself carries a catalog.
 //
 // Two consequences, and the second is why this comment exists. First, the
 // oracle models git-in-general rather than git-on-this-machine, because a
-// properly configured German host DOES translate via the messages locale.
-// Second, because LANGUAGE= (the redundant half) is still cleared under the
-// mutant that removes LC_ALL=C, and because the LANGUAGE route is the ONLY
-// translation route available here, a REAL-git behavioural arm could not
-// distinguish that mutant on this box at all. The fake git is not a
-// convenience; it is the only instrument that can exercise the messages-locale
-// route this host cannot. Narrowing the oracle to this box's observed output
-// would silently restore the state where deleting LC_ALL=C keeps the test
-// green — a check that cannot fail, arriving disguised as a cleanup.
+// properly configured German host DOES translate via route 1.
+//
+// Second, a REAL-git behavioural arm cannot distinguish mutant A -- LC_ALL=C
+// deleted from gitCmdWithCreds' child env -- on this box, under ANY parent
+// environment. The mutant still clears LANGUAGE in the child, which shuts
+// route 2 whatever the parent sets; route 1 is unreachable here by the
+// measurement above; with both routes shut the child prints English either way,
+// so the arm becomes a check that cannot fail. The fake git is not a
+// convenience, it is the only instrument that can exercise route 1, which this
+// host cannot. Narrowing the oracle to this box's observed output would
+// silently restore that cannot-fail state, arriving disguised as a cleanup.
 //
 // A stand-in binary is necessary because a real, modern git CLI does not
 // actually exercise this branch: `git pull --ff-only` on a truly up-to-date
