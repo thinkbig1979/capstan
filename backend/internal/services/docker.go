@@ -433,6 +433,9 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 
 	result := make([]models.DashboardContainerInfo, 0, len(containers))
 
+	// One ERROR per call, not per container — see the stackErr branch below.
+	stackLookupFailed := false
+
 	for _, c := range containers {
 		projectName := c.Labels["com.docker.compose.project"]
 
@@ -448,11 +451,22 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 		}
 
 		var stackID string
-		if db != nil && projectName != "" {
-			stack, err := db.GetStackByProjectName(projectName)
-			if err == nil && stack != nil {
-				stackID = stack.ID
+		stack, stackErr := lookupStackByProject(db, projectName)
+		switch {
+		case stackErr != nil:
+			// agent-os-g482. This one IS a display: stackID reaches
+			// DashboardContainerInfo and nothing else (BuildStackStatuses below
+			// buckets by ProjectName, not by StackID), so it defaults rather than
+			// refuses. It still logs, because a dashboard silently missing every
+			// stack association is indistinguishable from a host with no stacks.
+			// Once per call, not once per container: this is the dashboard poll.
+			if !stackLookupFailed {
+				stackLookupFailed = true
+				slog.Error("Cannot resolve compose stacks for the container list; containers are reported with no stack id",
+					"project", projectName, "cause", stackErr)
 			}
+		case stack != nil:
+			stackID = stack.ID
 		}
 
 		name := ""
