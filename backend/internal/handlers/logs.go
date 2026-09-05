@@ -156,6 +156,12 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 
 	cmd := h.buildLogsCmd(ctx, *stack)
 
+	// TRANSIENT, CORRECT AS-IS (agent-os-vi0o classified both of the next two
+	// close sites, did not change either): an OS-level pipe/fork fault (fd
+	// exhaustion, a momentarily busy host), not a structural one. Retrying is
+	// correct, and CloseInternalServerErr (1011) is already outside
+	// frontend/src/lib/ws.ts's shouldReconnectAfter suppression list, so
+	// these need no code change — the bead narrows to terminal.go here.
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		slog.Error("Failed to create stdout pipe", "error", err)

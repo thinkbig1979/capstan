@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { WSClient, WS_CLOSE_AUTH_FAILURE, WS_CLOSE_RATE_LIMIT } from '@/lib/ws'
+import { WSClient, WS_CLOSE_AUTH_FAILURE, WS_CLOSE_RATE_LIMIT, WS_CLOSE_NOT_FOUND } from '@/lib/ws'
 import { useAuthStore } from '@/stores/authStore'
 
 // A refused connection used to trigger the ordinary reconnect path, so a client
@@ -72,6 +72,16 @@ describe('WSClient close-code policy', () => {
     expect(FakeSocket.instances).toHaveLength(1)
   })
 
+  // agent-os-vi0o: a permanent failure (e.g. a deleted stack) must not redial
+  // either — retrying cannot change that the resource is gone.
+  it('does not reconnect after a not-found close', () => {
+    connect()
+    FakeSocket.instances[0].fireClose(WS_CLOSE_NOT_FOUND)
+    vi.advanceTimersByTime(120000)
+
+    expect(FakeSocket.instances).toHaveLength(1)
+  })
+
   it('still reconnects after an ordinary abnormal close', () => {
     connect()
     FakeSocket.instances[0].fireClose(1006)
@@ -138,6 +148,18 @@ describe('WSClient close-code policy', () => {
     connect()
     FakeSocket.instances[0].onopen?.()
     FakeSocket.instances[0].fireClose(WS_CLOSE_RATE_LIMIT)
+    vi.advanceTimersByTime(120000)
+
+    expect(FakeSocket.instances).toHaveLength(1)
+  })
+
+  // Same upgrade-before-close mechanism as the 4429 case above, for the
+  // permanent-failure code (agent-os-vi0o): terminal.go's GetStack close runs
+  // after serveWS upgrades, so onopen has fired before this close arrives too.
+  it('upgrade-then-refuse with 4404 does not redial at all', () => {
+    connect()
+    FakeSocket.instances[0].onopen?.()
+    FakeSocket.instances[0].fireClose(WS_CLOSE_NOT_FOUND)
     vi.advanceTimersByTime(120000)
 
     expect(FakeSocket.instances).toHaveLength(1)

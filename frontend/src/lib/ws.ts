@@ -3,9 +3,14 @@ import { useAuthStore } from '@/stores/authStore'
 export type WSState = 'CONNECTING' | 'OPEN' | 'CLOSING' | 'CLOSED' | 'RECONNECTING'
 
 /** Close codes the server uses for policy refusals. Mirrors
- *  CloseCodeAuthFailure / CloseCodeRateLimit in backend/internal/handlers/ws.go. */
+ *  CloseCodeAuthFailure / CloseCodeRateLimit / CloseCodeNotFound in
+ *  backend/internal/handlers/ws.go. */
 export const WS_CLOSE_AUTH_FAILURE = 4401
 export const WS_CLOSE_RATE_LIMIT = 4429
+/** A permanent failure: the resource the client asked for structurally does
+ *  not exist (e.g. a deleted stack), so retrying cannot change the outcome
+ *  (agent-os-vi0o). */
+export const WS_CLOSE_NOT_FOUND = 4404
 
 /** A policy refusal is a decision, not a blip. Retrying cannot change the
  *  outcome, and for the connection cap the retry loop *is* the problem the cap
@@ -14,14 +19,14 @@ export const WS_CLOSE_RATE_LIMIT = 4429
 // A missing code means we cannot tell, so reconnect — the reconnect ladder is
 // the safe default and only an explicit policy code suppresses it.
 function shouldReconnectAfter(code: number | undefined): boolean {
-  return code !== WS_CLOSE_AUTH_FAILURE && code !== WS_CLOSE_RATE_LIMIT
+  return code !== WS_CLOSE_AUTH_FAILURE && code !== WS_CLOSE_RATE_LIMIT && code !== WS_CLOSE_NOT_FOUND
 }
 
 export interface WSClientOptions {
   binary?: boolean
   onOpen?: () => void
   /** Receives the close event so callers can distinguish a policy refusal
-   *  (4401/4429) from an ordinary disconnect. */
+   *  (4401/4429/4404) from an ordinary disconnect. */
   onClose?: (event: CloseEvent) => void
   onError?: (error: Event) => void
   onReconnecting?: (attempt: number) => void
