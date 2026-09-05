@@ -305,6 +305,14 @@ export function BackupStatusCard() {
         {streaming.status === 'error' && streaming.error && streaming.lines.length === 0 && (
           <p className="text-xs text-destructive">{streaming.error}</p>
         )}
+
+        {/* Refused stream, not a failed run (agent-os-mjrl): the backup is
+            still going, this viewer was turned away at the per-run limit. */}
+        {streaming.status === 'unavailable' && streaming.error && (
+          <p className="text-xs text-muted-foreground">
+            Live output unavailable: {streaming.error}. The backup continues on the server.
+          </p>
+        )}
       </CardContent>
     </Card>
   )

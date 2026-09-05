@@ -41,7 +41,7 @@ vi.mock('sonner', () => ({
 const mockStreamConnect = vi.fn()
 const mockStreamReset = vi.fn()
 const mockStreamState = {
-  status: 'idle' as 'idle' | 'running' | 'success' | 'partial' | 'error',
+  status: 'idle' as 'idle' | 'running' | 'success' | 'partial' | 'error' | 'unavailable',
   lines: [] as string[],
   error: null as string | null,
   connect: mockStreamConnect,
@@ -470,5 +470,25 @@ describe('BackupsTab — restore progress panel', () => {
     await waitFor(() => {
       expect(screen.getByText('Restore partially completed')).toBeInTheDocument()
     })
+  })
+
+  // agent-os-mjrl: a viewer refused at the per-run attacher bound is a refused
+  // STREAM, not a failed run. The panel must say so, name the limit and the
+  // action, and must not show the failure header.
+  it('renders a non-alarming "Live output unavailable" panel when stream status is unavailable', async () => {
+    const reason = 'too many viewers attached to this run (limit 24); close another viewer and reconnect'
+    mockStreamState.status = 'unavailable'
+    mockStreamState.error = reason
+    mockStreamState.lines = [`Stream unavailable: ${reason}`]
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('restore-progress-header')).toHaveTextContent('Live output unavailable')
+    })
+    expect(screen.getByTestId('restore-progress-unavailable')).toHaveTextContent(
+      'too many viewers attached to this run (limit 24); close another viewer and reconnect. The restore continues on the server; check Recent runs for its result.',
+    )
+    expect(screen.queryByText('Restore failed')).not.toBeInTheDocument()
   })
 })

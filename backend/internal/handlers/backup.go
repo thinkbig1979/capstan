@@ -1093,7 +1093,12 @@ func (h *BackupHandler) cloudTest(c *gin.Context) {
 //
 // Terminal WS frame shape:
 //
-//	{"type":"done","outcome":"success"|"partial"|"failed","reason":"..."}
+//	{"type":"done","outcome":"success"|"partial"|"failed"|"interrupted"|"refused","reason":"..."}
+//
+// "refused" is not a run status: it is the registry turning THIS viewer away
+// because the run already has maxAttachersPerRun live attachers
+// (services/backup_runner.go, agent-os-nt0m / agent-os-mjrl). The run itself
+// is unaffected and its reason names the limit.
 //
 // A client disconnect DOES NOT cancel the underlying operation.
 func (h *BackupHandler) RegisterWSRoutes(group *gin.RouterGroup, jwtSecret string, authDisabled bool) {
@@ -1280,7 +1285,8 @@ func (h *BackupHandler) outcomeFromRegistry(runID string) (outcome, reason strin
 }
 
 // sendDoneFrame writes the terminal WS frame and logs completion.
-// Shape: {"type":"done","outcome":"success"|"partial"|"failed","reason":"..."}
+// Shape: {"type":"done","outcome":"success"|"partial"|"failed"|"interrupted"|"refused","reason":"..."}
+// (the value set is documented on RegisterWSRoutes).
 func (h *BackupHandler) sendDoneFrame(conn *Connection, runID, outcome, reason string) {
 	if err := safeWriteJSON(conn, gin.H{
 		"type":    "done",

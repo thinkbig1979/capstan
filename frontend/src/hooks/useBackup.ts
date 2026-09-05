@@ -223,8 +223,13 @@ export function useStackBackupRuns(stackId: string, limit = 20) {
  * - partial   : completed with partial success (render as warning)
  * - error     : failed (maps from outcome:'failed', legacy success:false,
  *               or a genuine WS connection error — NOT a bare disconnect)
+ * - unavailable : the stream was refused, not the run (maps from
+ *               outcome:'refused'): the run already has its maximum number
+ *               of live viewers and is still going for them. Render it as a
+ *               refused stream that names the limit, never as a failed run
+ *               (agent-os-mjrl).
  */
-type BackupStreamStatus = 'idle' | 'running' | 'success' | 'partial' | 'error'
+export type BackupStreamStatus = 'idle' | 'running' | 'success' | 'partial' | 'error' | 'unavailable'
 
 export interface BackupStreamState {
   status: BackupStreamStatus
@@ -242,7 +247,7 @@ export interface BackupStreamState {
  * deal with frontend-level status names.
  */
 function doneFrameToStatus(msg: {
-  outcome?: 'success' | 'no_change' | 'partial' | 'failed' | 'interrupted'
+  outcome?: 'success' | 'no_change' | 'partial' | 'failed' | 'interrupted' | 'refused'
   success?: boolean
 }): BackupStreamStatus {
   if (msg.outcome) {
@@ -251,6 +256,13 @@ function doneFrameToStatus(msg: {
       case 'no_change':   return 'success'  // treat no_change as success for backup ops
       case 'partial':     return 'partial'
       case 'failed':      return 'error'
+      // 'refused' (agent-os-mjrl): the registry turned THIS viewer away because
+      // the run already has its maximum number of live attachers
+      // (services/backup_runner.go). The run is fine and still streaming to
+      // the others, so this must not land in the error bucket, which every
+      // consumer renders as "the run failed". The reason names the limit and
+      // the action (close another viewer).
+      case 'refused':     return 'unavailable'
       // 'interrupted' (agent-os-pid): a run swept to this status by a
       // previous-process crash or restore, reported via Attach's DB fallback
       // when a client reconnects after a restart. The live-stream widget has
@@ -328,7 +340,7 @@ export function useBackupStreaming(): BackupStreamState {
             line?: string
             message?: string
             // Action Truth Contract fields (B5 backend, migrated backends)
-            outcome?: 'success' | 'no_change' | 'partial' | 'failed'
+            outcome?: 'success' | 'no_change' | 'partial' | 'failed' | 'interrupted' | 'refused'
             reason?: string
             // Legacy fields (pre-migration backends)
             success?: boolean
@@ -356,6 +368,14 @@ export function useBackupStreaming(): BackupStreamState {
               setStatus('partial')
               const label = msg.reason || 'Backup partially completed.'
               setLines((prev) => [...prev, label])
+            } else if (finalStatus === 'unavailable') {
+              // Refused stream, not a failed run: keep the reason (it names
+              // the limit and what to do) but do not prefix the line with
+              // "Error:", which consumers paint as a failure.
+              const why = msg.reason || 'too many viewers attached to this run'
+              setStatus('unavailable')
+              setError(why)
+              setLines((prev) => [...prev, `Stream unavailable: ${why}`])
             } else {
               // error / failed
               const errMsg = msg.error || msg.reason || 'Backup failed'

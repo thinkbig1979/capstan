@@ -215,7 +215,8 @@ func TestAttach_BoundsAttachersPerRun(t *testing.T) {
 	assert.True(t, surplus.Done,
 		"OVER-BOUND (agent-os-nt0m): attacher %d must be refused as Done, the run already has %d live attachers",
 		maxAttachersPerRun+1, maxAttachersPerRun)
-	assert.Equal(t, "failed", surplus.Outcome, "OVER-BOUND: a refusal reports a failed outcome")
+	assert.Equal(t, "refused", surplus.Outcome,
+		"OVER-BOUND (agent-os-mjrl): a refusal reports outcome \"refused\", not \"failed\" -- the run is fine, only this viewer was turned away")
 	assert.Equal(t, tooManyAttachersReason, surplus.Reason,
 		"OVER-BOUND: the reason must name the limit so the viewer knows what to do")
 	assert.Nil(t, surplus.Live, "OVER-BOUND: a refused attach must get no live stream")

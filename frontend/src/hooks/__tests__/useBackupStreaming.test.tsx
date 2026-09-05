@@ -352,3 +352,73 @@ describe('useBackupStreaming — reset', () => {
     expect(result.current.error).toBeNull()
   })
 })
+
+// ─── Refused attach (agent-os-mjrl) ──────────────────────────────────────────
+//
+// Attach refuses the 25th live viewer of one run BY RESULT: a done frame with
+// outcome 'refused' and a reason naming the limit (services/backup_runner.go,
+// agent-os-nt0m). The run itself is fine and still streaming to the other 24
+// viewers, so the widget must NOT report the run as failed. Two-sided on one
+// instrument: the same done-frame path still maps a genuine failure, an
+// interrupted run and a success to their own buckets.
+
+const REFUSED_REASON =
+  'too many viewers attached to this run (limit 24); close another viewer and reconnect'
+
+describe('useBackupStreaming — refused attach is a refused stream, not a failed run', () => {
+  it('maps outcome:refused to status unavailable with the limit reason', async () => {
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper })
+    const onDone = vi.fn()
+
+    act(() => { result.current.connect('/ws/backups/run/abc', onDone) })
+    act(() => { send({ type: 'data', line: 'replayed line' }) })
+    act(() => { send({ type: 'done', outcome: 'refused', reason: REFUSED_REASON }) })
+
+    await waitFor(() => expect(result.current.status).toBe('unavailable'))
+    expect(result.current.error).toBe(REFUSED_REASON)
+    expect(onDone).toHaveBeenCalledWith('unavailable')
+    // The refusal must not be painted as an error line in the log.
+    expect(result.current.lines.some((l) => l.startsWith('Error:'))).toBe(false)
+    expect(result.current.lines.some((l) => l.includes(REFUSED_REASON))).toBe(true)
+  })
+
+  it('CONTROL: outcome:failed still maps to error', async () => {
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper })
+    const onDone = vi.fn()
+
+    act(() => { result.current.connect('/ws/backups/run/abc', onDone) })
+    act(() => { send({ type: 'done', outcome: 'failed', reason: 'Repository unreachable' }) })
+
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(result.current.error).toBe('Repository unreachable')
+    expect(onDone).toHaveBeenCalledWith('error')
+  })
+
+  it('CONTROL: outcome:interrupted still maps to error', async () => {
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper })
+    const onDone = vi.fn()
+
+    act(() => { result.current.connect('/ws/backups/run/abc', onDone) })
+    act(() => { send({ type: 'done', outcome: 'interrupted', reason: 'interrupted by server restart' }) })
+
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(result.current.error).toBe('interrupted by server restart')
+    expect(onDone).toHaveBeenCalledWith('error')
+  })
+
+  it('CONTROL: outcome:success still maps to success', async () => {
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper })
+    const onDone = vi.fn()
+
+    act(() => { result.current.connect('/ws/backups/run/abc', onDone) })
+    act(() => { send({ type: 'done', outcome: 'success', reason: 'All stacks backed up' }) })
+
+    await waitFor(() => expect(result.current.status).toBe('success'))
+    expect(result.current.error).toBeNull()
+    expect(onDone).toHaveBeenCalledWith('success')
+  })
+})

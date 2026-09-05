@@ -642,6 +642,17 @@ var tooManyAttachersReason = fmt.Sprintf(
 	"too many viewers attached to this run (limit %d); close another viewer and reconnect",
 	maxAttachersPerRun)
 
+// attachRefusedOutcome is the Outcome a surplus attacher receives alongside
+// tooManyAttachersReason. It is its own value, not "failed": the run is fine
+// and still streaming to the admitted viewers, only THIS viewer was turned
+// away, and the frontend renders the two differently (a refused stream
+// versus a failed run, agent-os-mjrl). It is never persisted: the refusal
+// touches neither the durableRun nor the DB row, so the dashboard badge and
+// run history cannot see it. A frontend built before the value existed
+// falls through its outcome switch to the error bucket, which is what it
+// showed before, so the two halves can ship in either order.
+const attachRefusedOutcome = "refused"
+
 // AttachResult is returned by Attach and carries everything the WS handler
 // needs to stream output to the client.
 type AttachResult struct {
@@ -654,8 +665,10 @@ type AttachResult struct {
 
 	// Outcome and Reason are set only when Done is true. Done is also how a
 	// refused attach is reported: a run already at maxAttachersPerRun live
-	// attachers answers with Done=true, Outcome "failed" and a Reason naming
-	// the limit, so the caller sends a terminal frame instead of streaming.
+	// attachers answers with Done=true, Outcome attachRefusedOutcome
+	// ("refused") and a Reason naming the limit, so the caller sends a
+	// terminal frame instead of streaming. Every other Done carries a run
+	// status: "success", "partial", "failed" or "interrupted".
 	Outcome string
 	Reason  string
 
@@ -719,8 +732,8 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 		// Bound the fan-out: every admitted client costs a goroutine and a
 		// 256-slot buffer, and nothing upstream limits how many clients may
 		// watch one run (agent-os-nt0m). The surplus caller is refused BY
-		// RESULT, as a finished run with a failed outcome and a reason that
-		// names the limit, and nothing is allocated for it. That shape is
+		// RESULT, as a Done result with the "refused" outcome and a reason
+		// that names the limit, and nothing is allocated for it. That shape is
 		// chosen for the one caller that streams, wsAttach: it replays the
 		// lines and sends a terminal done frame on Done, so the surplus
 		// viewer learns why with no handler change and does not redial. An
@@ -732,7 +745,7 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 			return &AttachResult{
 				ReplayLines: lines,
 				Done:        true,
-				Outcome:     "failed",
+				Outcome:     attachRefusedOutcome,
 				Reason:      tooManyAttachersReason,
 			}, nil
 		}
