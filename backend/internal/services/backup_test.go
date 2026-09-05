@@ -2181,7 +2181,8 @@ func TestResolveBackupConfig_ExportedVariantReadsMergedConfig(t *testing.T) {
 	db := newBackupTestDB(t)
 	require.NoError(t, db.SetSetting("restic_repository", "/exported/repo"))
 
-	bc := ResolveBackupConfigWithCfg(db, &config.Config{DataDir: t.TempDir()})
+	bc, err := ResolveBackupConfigWithCfg(db, &config.Config{DataDir: t.TempDir()})
+	require.NoError(t, err)
 	assert.Equal(t, "/exported/repo", bc.ResticRepository)
 }
 
@@ -2200,7 +2201,8 @@ func TestResolveBackupConfig_DefaultRepositoryIsAbsoluteUnderDataDir(t *testing.
 	db := newBackupTestDB(t)
 	dataDir := t.TempDir()
 
-	bc := ResolveBackupConfigWithCfg(db, &config.Config{DataDir: dataDir})
+	bc, err := ResolveBackupConfigWithCfg(db, &config.Config{DataDir: dataDir})
+	require.NoError(t, err)
 
 	assert.Equal(t, filepath.Join(dataDir, "restic-repo"), bc.ResticRepository,
 		"the default repository must sit under DataDir")
@@ -2220,7 +2222,9 @@ func TestBackupService_ResolveConfig_UsesLiveDataDir(t *testing.T) {
 	cfg := &config.Config{DataDir: dataDir}
 	svc := NewBackupService(cfg, db, nil, NewOperationLock(), NewActionLogger(db))
 
-	assert.Equal(t, filepath.Join(dataDir, "restic-repo"), svc.ResolveConfig().ResticRepository)
+	bc, err := svc.ResolveConfig()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(dataDir, "restic-repo"), bc.ResticRepository)
 }
 
 // ============================================================

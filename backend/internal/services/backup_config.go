@@ -1,6 +1,9 @@
 package services
 
 import (
+	"database/sql"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -77,18 +80,99 @@ type BackupConfig struct {
 	BackupHostname string
 }
 
+// resticPasswordSettingKey is the one key this file reads that the DB layer
+// encrypts (sensitiveSettingKeys, database/settings.go:9-12).
+const resticPasswordSettingKey = "restic_password"
+
+// ErrResticPasswordUnreadable is the fixed cause reported when the stored
+// restic password cannot be read.
+//
+// It deliberately wraps NOTHING. restic_password is decrypted inside
+// db.GetSetting, so the error it returns for that key can be crypto output, and
+// handlers/directories.go:281-282 refuses to log such an error in as many
+// words: it "can wrap crypto output, and logging it risks writing ciphertext or
+// derived key material to disk for no operator benefit". Callers log the
+// resolver's error as the cause, so this sentinel is what makes a plain
+// `"cause", err` at the log site safe.
+//
+// SCOPE: only restic_password is encrypted here. restic_repository and the rest
+// are stored in clear, so a STORAGE_KEY rotation produces this fault for the
+// PASSWORD key alone; an unreadable repository key means a closed, locked or
+// otherwise broken database.
+//
+// TWO IN-REPO CONVENTIONS MEET HERE, AND THIS FILE DELIBERATELY SPLITS THEM.
+// services/git_credentials.go:139-157 is the model for the SHAPE: the
+// errors.Is switch over the failure branches, and the fail-closed return that
+// refuses instead of falling through to the env/config value. It is NOT the
+// model for the PAYLOAD: its decrypt branch logs `"error", err`, and this file
+// does not, because handlers/directories.go:281-282 governs that half. Do not
+// "unify" the two by copying git_credentials.go's `"error", err` into this
+// file — the divergence is the point, and the mutation test in
+// TestResolveBackupConfig_PasswordRefusalDoesNotStringifyDecryptError fails if
+// it is reintroduced.
+//
+// The literal key name is inside the message so an operator grepping logs for
+// `restic_password` finds this incident. It is the KEY name only: never the
+// value, and never the wrapped error.
+var ErrResticPasswordUnreadable = errors.New(
+	"the stored restic_password setting could not be read or decrypted (STORAGE_KEY may have been rotated)")
+
+// readSetting reads one DB setting and separates "no such row" from "this
+// database could not answer".
+//
+// db.GetSetting returns the bare Scan error (database/settings.go:14-19), so an
+// absent row arrives as sql.ErrNoRows. Mapping that — and only that — to
+// ("", nil) keeps the existing env/default fallback chain byte-for-byte, while
+// every other failure becomes an error the caller must handle. Before
+// agent-os-l42o both were discarded, which made a database fault and an
+// unconfigured setting the same event.
+func readSetting(db *database.DB, key string) (string, error) {
+	v, err := db.GetSetting(key)
+	switch {
+	case err == nil:
+		return v, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case key == resticPasswordSettingKey:
+		return "", ErrResticPasswordUnreadable
+	default:
+		// Setting KEYS are not secret and naming the one that failed is the
+		// only thing that makes the refusal actionable. The VALUE never
+		// reaches the error: a driver error does not echo the row it failed
+		// to read, and the one key whose error could carry key material is
+		// handled by the branch above.
+		return "", fmt.Errorf("read backup setting %q: %w", key, err)
+	}
+}
+
 // resolveBackupConfig builds a BackupConfig by merging DB settings over env
 // fallbacks over hard-coded defaults. The precedence order matches GetGitSettings
 // in handlers/settings.go: DB value wins, env var is the fallback, then default.
 //
+// It returns an error on the FIRST unreadable setting and stops. The hazard is
+// not any single default but a PARTIAL config — real values mixed with defaults
+// — handed to restic as if it were whole: the repository decides where bytes
+// are written, the password what they are encrypted with, the retention keys
+// reach `restic forget --prune` (backup_restic.go:442-464), the rclone keys
+// decide where a sync goes and where a DR restore is read FROM, and the
+// hostname decides which snapshots a forget policy covers, because restic
+// groups forget by host. No key here is log-and-default (agent-os-l42o).
+//
 // restic_password is decrypted transparently by db.GetSetting (the DB layer
 // uses TokenEncryptor for sensitive keys). The plaintext password is held only
-// in the returned struct and must not be logged.
-func resolveBackupConfig(db *database.DB, cfg *config.Config) BackupConfig {
+// in the returned struct and must not be logged; see ErrResticPasswordUnreadable
+// for why the failure path carries a fixed sentinel instead of the real error.
+func resolveBackupConfig(db *database.DB, cfg *config.Config) (BackupConfig, error) {
 	var bc BackupConfig
 
 	// --- restic_repository ---
-	repo, _ := db.GetSetting("restic_repository")
+	// Read first, and unencrypted: a closed or locked database refuses here and
+	// never reaches the password read below, so ErrResticPasswordUnreadable
+	// fires in practice only on a genuine decrypt failure.
+	repo, err := readSetting(db, "restic_repository")
+	if err != nil {
+		return BackupConfig{}, err
+	}
 	if repo == "" {
 		repo = cfg.ResticRepository
 	}
@@ -98,29 +182,44 @@ func resolveBackupConfig(db *database.DB, cfg *config.Config) BackupConfig {
 	bc.ResticRepository = repo
 
 	// --- restic_password (decrypted by GetSetting) ---
-	pwd, _ := db.GetSetting("restic_password")
+	pwd, err := readSetting(db, resticPasswordSettingKey)
+	if err != nil {
+		return BackupConfig{}, err
+	}
 	if pwd == "" {
 		pwd = cfg.ResticPassword // from RESTIC_PASSWORD env; never logged
 	}
 	bc.ResticPassword = pwd
 
 	// --- backup_keep_daily (default 7) ---
-	bc.KeepDaily = resolveIntSetting(db, "backup_keep_daily", cfg.BackupKeepDaily, 7)
+	if bc.KeepDaily, err = resolveIntSetting(db, "backup_keep_daily", cfg.BackupKeepDaily, 7); err != nil {
+		return BackupConfig{}, err
+	}
 
 	// --- backup_keep_weekly (default 4) ---
-	bc.KeepWeekly = resolveIntSetting(db, "backup_keep_weekly", cfg.BackupKeepWeekly, 4)
+	if bc.KeepWeekly, err = resolveIntSetting(db, "backup_keep_weekly", cfg.BackupKeepWeekly, 4); err != nil {
+		return BackupConfig{}, err
+	}
 
 	// --- backup_keep_monthly (default 6) ---
-	bc.KeepMonthly = resolveIntSetting(db, "backup_keep_monthly", cfg.BackupKeepMonthly, 6)
+	if bc.KeepMonthly, err = resolveIntSetting(db, "backup_keep_monthly", cfg.BackupKeepMonthly, 6); err != nil {
+		return BackupConfig{}, err
+	}
 
 	// --- backup_keep_yearly (default 0) ---
-	bc.KeepYearly = resolveIntSetting(db, "backup_keep_yearly", cfg.BackupKeepYearly, 0)
+	if bc.KeepYearly, err = resolveIntSetting(db, "backup_keep_yearly", cfg.BackupKeepYearly, 0); err != nil {
+		return BackupConfig{}, err
+	}
 
 	// --- backup_auto_prune (default true) ---
-	bc.AutoPrune = resolveBoolSetting(db, "backup_auto_prune", cfg.BackupAutoPrune, true)
+	if bc.AutoPrune, err = resolveBoolSetting(db, "backup_auto_prune", cfg.BackupAutoPrune, true); err != nil {
+		return BackupConfig{}, err
+	}
 
 	// --- backup_schedule_interval (default 0 = disabled) ---
-	bc.ScheduleInterval = resolveIntSetting(db, "backup_schedule_interval", cfg.BackupScheduleInterval, 0)
+	if bc.ScheduleInterval, err = resolveIntSetting(db, "backup_schedule_interval", cfg.BackupScheduleInterval, 0); err != nil {
+		return BackupConfig{}, err
+	}
 
 	// --- backup_schedule_mode / _time / _days ---
 	//
@@ -128,41 +227,63 @@ func resolveBackupConfig(db *database.DB, cfg *config.Config) BackupConfig {
 	// resolveIntSetting) returns a non-empty DB value BEFORE consulting the env
 	// fallback, so seeding a row would make the matching BACKUP_SCHEDULE_* env
 	// var permanently dead on every install.
-	bc.ScheduleMode = resolveStringSetting(db, "backup_schedule_mode", cfg.BackupScheduleMode, ScheduleModeInterval)
-	bc.ScheduleTime = resolveStringSetting(db, "backup_schedule_time", cfg.BackupScheduleTime, DefaultScheduleTime)
-	bc.ScheduleDays = resolveStringSetting(db, "backup_schedule_days", cfg.BackupScheduleDays, DefaultScheduleDays)
+	if bc.ScheduleMode, err = resolveStringSetting(db, "backup_schedule_mode", cfg.BackupScheduleMode, ScheduleModeInterval); err != nil {
+		return BackupConfig{}, err
+	}
+	if bc.ScheduleTime, err = resolveStringSetting(db, "backup_schedule_time", cfg.BackupScheduleTime, DefaultScheduleTime); err != nil {
+		return BackupConfig{}, err
+	}
+	if bc.ScheduleDays, err = resolveStringSetting(db, "backup_schedule_days", cfg.BackupScheduleDays, DefaultScheduleDays); err != nil {
+		return BackupConfig{}, err
+	}
 
 	// --- backup_sync_after (default false) ---
-	bc.SyncAfter = resolveBoolSetting(db, "backup_sync_after", cfg.BackupSyncAfter, false)
+	if bc.SyncAfter, err = resolveBoolSetting(db, "backup_sync_after", cfg.BackupSyncAfter, false); err != nil {
+		return BackupConfig{}, err
+	}
 
 	// --- rclone_remote ---
-	rcloneRemote, _ := db.GetSetting("rclone_remote")
+	rcloneRemote, err := readSetting(db, "rclone_remote")
+	if err != nil {
+		return BackupConfig{}, err
+	}
 	if rcloneRemote == "" {
 		rcloneRemote = cfg.RcloneRemote
 	}
 	bc.RcloneRemote = rcloneRemote
 
 	// --- rclone_path ---
-	rclonePath, _ := db.GetSetting("rclone_path")
+	rclonePath, err := readSetting(db, "rclone_path")
+	if err != nil {
+		return BackupConfig{}, err
+	}
 	if rclonePath == "" {
 		rclonePath = cfg.RclonePath
 	}
 	bc.RclonePath = rclonePath
 
 	// --- rclone_transfers (default 4) ---
-	bc.RcloneTransfers = resolveIntSetting(db, "rclone_transfers", cfg.RcloneTransfers, 4)
+	if bc.RcloneTransfers, err = resolveIntSetting(db, "rclone_transfers", cfg.RcloneTransfers, 4); err != nil {
+		return BackupConfig{}, err
+	}
 
 	// --- backup_hostname (default: system hostname) ---
-	hostname, _ := db.GetSetting("backup_hostname")
+	hostname, err := readSetting(db, "backup_hostname")
+	if err != nil {
+		return BackupConfig{}, err
+	}
 	if hostname == "" {
 		hostname = cfg.BackupHostname
 	}
 	if hostname == "" {
+		// os.Hostname's error stays discarded: it is not a database fault, and
+		// the empty string it leaves behind means "let restic pick the host",
+		// which is the historical behaviour.
 		hostname, _ = os.Hostname()
 	}
 	bc.BackupHostname = hostname
 
-	return bc
+	return bc, nil
 }
 
 // ResolveBackupConfig is the exported variant of resolveBackupConfig for use
@@ -186,7 +307,7 @@ func resolveBackupConfig(db *database.DB, cfg *config.Config) BackupConfig {
 // ResolveBackupConfigWithCfg is like ResolveBackupConfig but accepts a
 // config.Config so env-var fallbacks are applied. Use this when the caller
 // has access to the live Config (e.g. from BackupService.Config()).
-func ResolveBackupConfigWithCfg(db *database.DB, cfg *config.Config) BackupConfig {
+func ResolveBackupConfigWithCfg(db *database.DB, cfg *config.Config) (BackupConfig, error) {
 	return resolveBackupConfig(db, cfg)
 }
 
@@ -209,8 +330,16 @@ const (
 // repoSource is "db" / "env" / "default".
 // pwSource  is "db" / "env" / "default".
 // hasPassword is true when any source provides a non-empty password.
-func RepoSettingSources(db *database.DB, cfg *config.Config) (repoSource, pwSource settingSourceKind, hasPassword bool) {
-	dbRepo, _ := db.GetSetting("restic_repository")
+//
+// It returns an error rather than reporting "default" for a setting it could
+// not read: this is the operator's only view of what is configured, and
+// answering an unreadable database with "nothing is configured" is the same
+// silent substitution resolveBackupConfig used to make (agent-os-l42o).
+func RepoSettingSources(db *database.DB, cfg *config.Config) (repoSource, pwSource settingSourceKind, hasPassword bool, err error) {
+	dbRepo, err := readSetting(db, "restic_repository")
+	if err != nil {
+		return "", "", false, err
+	}
 	switch {
 	case dbRepo != "":
 		repoSource = settingSourceDB
@@ -220,7 +349,10 @@ func RepoSettingSources(db *database.DB, cfg *config.Config) (repoSource, pwSour
 		repoSource = settingSourceDefault
 	}
 
-	dbPw, _ := db.GetSetting("restic_password")
+	dbPw, err := readSetting(db, resticPasswordSettingKey)
+	if err != nil {
+		return "", "", false, err
+	}
 	switch {
 	case dbPw != "":
 		pwSource = settingSourceDB
@@ -233,50 +365,61 @@ func RepoSettingSources(db *database.DB, cfg *config.Config) (repoSource, pwSour
 		hasPassword = false
 	}
 
-	return repoSource, pwSource, hasPassword
+	return repoSource, pwSource, hasPassword, nil
 }
 
 // resolveIntSetting reads a DB setting, falls back to envVal string, then to
-// defaultVal. It silently ignores parse errors and uses the default.
-func resolveIntSetting(db *database.DB, key, envVal string, defaultVal int) int {
-	dbVal, _ := db.GetSetting(key)
+// defaultVal. It silently ignores PARSE errors and uses the default — a stored
+// value that is not a number is a malformed setting, not a database fault — but
+// an unreadable database is returned as an error.
+func resolveIntSetting(db *database.DB, key, envVal string, defaultVal int) (int, error) {
+	dbVal, err := readSetting(db, key)
+	if err != nil {
+		return 0, err
+	}
 	if dbVal != "" {
-		if v, err := strconv.Atoi(dbVal); err == nil {
-			return v
+		if v, atoiErr := strconv.Atoi(dbVal); atoiErr == nil {
+			return v, nil
 		}
 	}
 	if envVal != "" {
-		if v, err := strconv.Atoi(envVal); err == nil {
-			return v
+		if v, atoiErr := strconv.Atoi(envVal); atoiErr == nil {
+			return v, nil
 		}
 	}
-	return defaultVal
+	return defaultVal, nil
 }
 
 // resolveStringSetting reads a DB setting, falls back to envVal, then to
 // defaultVal. Mirrors resolveIntSetting/resolveBoolSetting: a non-empty DB
 // value always wins, so no caller should seed one for a key that also has an
 // env fallback.
-func resolveStringSetting(db *database.DB, key, envVal, defaultVal string) string {
-	dbVal, _ := db.GetSetting(key)
+func resolveStringSetting(db *database.DB, key, envVal, defaultVal string) (string, error) {
+	dbVal, err := readSetting(db, key)
+	if err != nil {
+		return "", err
+	}
 	if dbVal != "" {
-		return dbVal
+		return dbVal, nil
 	}
 	if envVal != "" {
-		return envVal
+		return envVal, nil
 	}
-	return defaultVal
+	return defaultVal, nil
 }
 
 // resolveBoolSetting reads a DB setting, falls back to envVal string, then to
 // defaultVal. "true" (case-insensitive) is the only truthy string value.
-func resolveBoolSetting(db *database.DB, key, envVal string, defaultVal bool) bool {
-	dbVal, _ := db.GetSetting(key)
+func resolveBoolSetting(db *database.DB, key, envVal string, defaultVal bool) (bool, error) {
+	dbVal, err := readSetting(db, key)
+	if err != nil {
+		return false, err
+	}
 	if dbVal != "" {
-		return dbVal == "true"
+		return dbVal == "true", nil
 	}
 	if envVal != "" {
-		return envVal == "true"
+		return envVal == "true", nil
 	}
-	return defaultVal
+	return defaultVal, nil
 }
