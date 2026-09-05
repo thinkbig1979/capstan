@@ -48,10 +48,23 @@ type AppError struct {
 	Message string      `json:"message"`
 	Details interface{} `json:"details,omitempty"`
 	Status  int         `json:"-"`
+	// Cause is the underlying error that produced this AppError, kept out of
+	// the wire format on purpose (agent-os-2mhb): the response body
+	// deliberately withholds it from the client, but handlers/respond.go's
+	// logServerFault reads it so a 5xx still leaves a diagnostic record
+	// instead of only the sanitised Message constant. Never serialized.
+	Cause error `json:"-"`
 }
 
 func (e *AppError) Error() string {
 	return e.Message
+}
+
+// Unwrap exposes Cause to errors.Is/errors.As/errors.Unwrap so a caller that
+// wraps or inspects the chain (rather than reading Cause directly) still
+// finds it.
+func (e *AppError) Unwrap() error {
+	return e.Cause
 }
 
 func NewAppError(status int, code string, message string) *AppError {
@@ -68,5 +81,25 @@ func NewAppErrorWithDetails(status int, code string, message string, details int
 		Message: message,
 		Details: details,
 		Status:  status,
+	}
+}
+
+// NewAppErrorWithCause is like NewAppError but keeps the underlying error
+// that produced it, so a 5xx still lets logServerFault emit the real failure
+// even when the AppError itself carries only a sanitised, client-facing
+// Message (agent-os-2mhb).
+//
+// Because Unwrap exposes Cause, errors.Is/errors.As on the returned AppError
+// now see straight through it to cause. Attach the cause at the HTTP
+// response boundary (handlers/respond.go), not inside a service or database
+// call that returns the error upward — an AppError minted early and passed
+// through several layers turns every later errors.Is/As check against it
+// into an implicit check against cause too, which is easy to get wrong.
+func NewAppErrorWithCause(status int, code string, message string, cause error) *AppError {
+	return &AppError{
+		Code:    code,
+		Message: message,
+		Status:  status,
+		Cause:   cause,
 	}
 }

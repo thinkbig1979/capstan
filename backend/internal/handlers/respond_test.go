@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
 // TestHandleError_WrappedAppErrorKeepsStatus pins N9 (agent-os-4pa.3): handleError
@@ -183,6 +184,124 @@ func TestHandleError_4xxStaysSilent(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "quiet-sentinel-1a3b") {
 		t.Fatalf("a 4xx emitted an ERROR line; only 5xx should. captured = %q", buf.String())
+	}
+}
+
+// TestHandleError_AppErrorCauseIsLogged pins agent-os-2mhb: AppError.Cause,
+// set by NewAppErrorWithCause, was previously invisible everywhere — Error()
+// returns only Message, and for an AppError passed to handleError unwrapped
+// (as respondDockerErr/respondIfEncryptionUnavailable do), "error", err in
+// logServerFault logs exactly that sanitised Message, never the real cause.
+//
+// Distinguishes from TestHandleError_AppError5xxLogsTheCause above, which
+// wraps the AppError with fmt.Errorf("%w", ...) — a different mechanism
+// (the wrapping error's own Error() string already contains the sentinel).
+// This test's AppError is unwrapped; only a change that reads .Cause off it
+// can pass this one.
+func TestHandleError_AppErrorCauseIsLogged(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureHandlerLogs(t)
+
+	cause := errors.New("cause-sentinel-2mhb")
+	appErr := models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", cause)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	handleError(c, appErr)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+	if !strings.Contains(buf.String(), "cause-sentinel-2mhb") {
+		t.Fatalf("AppError.Cause not logged; a fresh 500 built by NewAppErrorWithCause left no record of the real failure. captured = %q", buf.String())
+	}
+	if strings.Contains(w.Body.String(), "cause-sentinel-2mhb") {
+		t.Fatalf("the cause leaked into the response body: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `"cause"`) {
+		t.Fatalf("response body must never carry a %q key: %s", "cause", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"message":"Internal server error"`) {
+		t.Fatalf("Message must stay unchanged in the body: %s", w.Body.String())
+	}
+}
+
+// TestRespondDockerErr_FallbackCarriesCauseToLog pins agent-os-2mhb: the
+// fallback branch of respondDockerErr minted a fresh AppError from
+// status/code/message alone and discarded err entirely, so a 500 reached
+// through this helper left no record of the real docker failure anywhere.
+func TestRespondDockerErr_FallbackCarriesCauseToLog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureHandlerLogs(t)
+
+	cause := errors.New("fallback-cause-2mhb")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	respondDockerErr(c, cause, http.StatusInternalServerError, "SOME_CODE", "generic failure")
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+	if !strings.Contains(buf.String(), "fallback-cause-2mhb") {
+		t.Fatalf("respondDockerErr's fallback branch discarded err; log has no cause. captured = %q", buf.String())
+	}
+	if strings.Contains(w.Body.String(), "fallback-cause-2mhb") {
+		t.Fatalf("the cause leaked into the response body: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"message":"generic failure"`) {
+		t.Fatalf("Message must stay unchanged in the body: %s", w.Body.String())
+	}
+}
+
+// TestRespondDockerErr_DockerUnavailableCarriesCauseToLog is the sibling for
+// respondDockerErr's other branch: the ErrDockerUnavailable sentinel case
+// also minted a fresh AppError without the original err.
+func TestRespondDockerErr_DockerUnavailableCarriesCauseToLog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureHandlerLogs(t)
+
+	cause := fmt.Errorf("stack start: %w", services.ErrDockerUnavailable)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	respondDockerErr(c, cause, http.StatusInternalServerError, "IGNORED", "ignored")
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+	if !strings.Contains(buf.String(), "stack start") {
+		t.Fatalf("respondDockerErr's docker-unavailable branch discarded err; log has no cause. captured = %q", buf.String())
+	}
+	if strings.Contains(w.Body.String(), "stack start") {
+		t.Fatalf("the cause leaked into the response body: %s", w.Body.String())
+	}
+}
+
+// TestRespondIfEncryptionUnavailable_CauseNotLoggedBelow500 is the 422 arm.
+// respondIfEncryptionUnavailable now also carries err as Cause, but
+// logServerFault is silent below 500 on purpose (see its doc comment), so
+// this must NOT produce a log line — only the body-safety guarantee holds
+// here. Do not read this as "the cause is unused"; it is carried for future
+// callers (agent-os-2mhb brief).
+func TestRespondIfEncryptionUnavailable_CauseNotLoggedBelow500(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureHandlerLogs(t)
+
+	cause := fmt.Errorf("store token: %w", services.ErrEncryptionUnavailable)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	handled := respondIfEncryptionUnavailable(c, cause)
+
+	if !handled {
+		t.Fatalf("respondIfEncryptionUnavailable did not recognize the sentinel")
+	}
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", w.Code)
+	}
+	if strings.Contains(buf.String(), "store token") {
+		t.Fatalf("a 422 must stay silent per logServerFault's <500 guard, but the cause was logged: %q", buf.String())
+	}
+	if strings.Contains(w.Body.String(), "store token") {
+		t.Fatalf("the cause leaked into the response body: %s", w.Body.String())
 	}
 }
 
