@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
@@ -323,16 +324,24 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
-	_, err = s.gitCommandWithCreds(dirPath, user, token, "pull", "--ff-only")
-	if err != nil {
-		if strings.Contains(err.Error(), "Already up to date") || strings.Contains(err.Error(), "Already up-to-date") {
-			return &models.PullResult{
-				PreviousCommit: previousCommit,
-				CurrentCommit:  previousCommit,
-				ChangedFiles:   []string{},
-			}, nil
-		}
-		return nil, models.NewAppErrorWithDetails(500, models.ErrGitConflict, "Failed to pull", err.Error())
+	if _, err = s.gitCommandWithCreds(dirPath, user, token, "pull", "--ff-only"); err != nil {
+		// Two defects left here together (agent-os-fv2j). Every failure used
+		// to become one 500 GIT_CONFLICT, and the up-to-date case was
+		// recognised by matching git's own prose. pullFailure replaces the
+		// first by asking git what went wrong; the second needed no
+		// replacement at all, because an up-to-date pull never reaches this
+		// branch. OBSERVED, git 2.47.3, on an up-to-date clone:
+		//
+		//	$ git pull --ff-only; echo $?
+		//	Already up to date.
+		//	0
+		//
+		// err is nil, so the fall-through below reads HEAD again, finds it
+		// equal to previousCommit and returns the no-change result on its
+		// own. The string match was a leftover from the go-git implementation
+		// this replaced, where the no-op was signalled by a non-nil
+		// NoErrAlreadyUpToDate sentinel rather than by success.
+		return nil, s.pullFailure(dirPath, user, token, err)
 	}
 
 	currentCommit, _ := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
@@ -350,6 +359,122 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		CurrentCommit:  currentCommit,
 		ChangedFiles:   changedFiles,
 	}, nil
+}
+
+// pullFailure classifies a failed `git pull --ff-only` in dirPath into the error
+// its caller should surface (agent-os-fv2j).
+//
+// Before this, every failure of that one command returned 500 GIT_CONFLICT
+// "Failed to pull". A rotated token, a DNS outage, a deleted remote, a branch
+// tracking nothing and a genuinely diverged branch were one answer. Only the
+// last is a conflict, and an operator reading GIT_CONFLICT goes looking for a
+// divergence that is not there while the real cause — usually an expired token
+// — sits in the log.
+//
+// Same discipline as gitFailure and hasUnbornHead: put the questions to git and
+// read EXIT CODES, never its prose. Git translates its messages, and the fact
+// that agent-os-vq3p pins the child to LC_ALL=C makes text matching possible
+// rather than safe — it would then be correct only for as long as that pin
+// survives, and any future call path that builds its own child env re-arms it
+// silently.
+//
+// The exit status of `git pull` itself is not enough to split these. MEASURED,
+// six failure shapes driven through the real command: a divergence exits 128
+// while auth, DNS, a missing remote and a missing upstream ALL exit 1. So the
+// classification is three follow-up probes, whose exit codes do separate them
+// cleanly.
+//
+// The table below is MEASURED IN THREE ENVIRONMENTS and is IDENTICAL in all
+// three, cell for cell:
+//
+//	git 2.47.3, developer host, host global git config in effect
+//	git 2.47.3, developer host, GIT_CONFIG_GLOBAL=/dev/null
+//	git 2.43.7, alpine:3.19 container (the version family CI runs)
+//
+// Naming the environment next to the numbers is deliberate. The first row is
+// the only one that was originally measured, and it is the one CI does not
+// share -- init.defaultBranch is ambient user config, and a measurement taken
+// only under it can be true and still not generalise. Every probe below is
+// driven against an explicitly named branch, so that setting does not
+// participate; the other two rows are what establish that rather than assume
+// it.
+//
+// The version spread matters because a classifier tuned to one git would be a
+// version-dependent misclassification, worse than the flat GIT_CONFLICT it
+// replaced -- wrong only sometimes. It also settles a specific false lead: a
+// CI failure on this test was hypothesised to be a 2.43-vs-2.47 exit-code
+// difference. There is no such difference. The cause was the test fixture, not
+// the probes; see pullFixture.
+//
+//	                         ls-remote  rev-parse @{u}  is-ancestor HEAD @{u}
+//	diverged, non-ff             0            0                1
+//	remote path missing        128            0                0
+//	no remote configured       128            1              128
+//	DNS failure                128            0                0
+//	auth failure               128            0                0
+//	up to date                   0            0                0
+//	reachable, no upstream       0            1              128
+//
+// Read in order, that is: can the remote be read at all; if so does this branch
+// track anything; if so is HEAD merely behind it. The upstream probe is not
+// redundant — the last row is a branch with no upstream, where `is-ancestor`
+// exits 128 for want of a revision to resolve, and without that probe the
+// failure would be reported as a divergence.
+//
+// Auth and network are deliberately not separated. Git does not distinguish
+// them by exit code, only in the message text, and splitting them would mean
+// exactly the prose matching this change removes. They share one answer:
+// GIT_REMOTE_UNREACHABLE, 502, "the far end could not be read". Not 401 — that
+// is the one status frontend/src/lib/api.ts branches on, and a git credential
+// failure is not a Capstan session failure (agent-os-318).
+//
+// The unclassified cases return a plain wrapped error rather than inventing a
+// diagnosis, which handleError turns into a 500 INTERNAL_ERROR and logs
+// (agent-os-7z8c) — the same choice getStatusCLI makes for a HEAD that resolves
+// but whose branch name will not read.
+//
+// ls-remote contacts the remote, so this costs a round trip. It runs only after
+// a pull has already failed, so the happy path pays nothing, and
+// GIT_TERMINAL_PROMPT=0 in the child env keeps it from blocking on a prompt.
+func (s *GitService) pullFailure(dirPath, user, token string, err error) error {
+	if _, probeErr := s.gitCommandWithCreds(dirPath, user, token, "ls-remote", "--quiet"); probeErr != nil {
+		return models.NewAppErrorWithDetails(502, models.ErrGitRemoteUnreachable,
+			"Could not read from the git remote", err.Error())
+	}
+	if _, upstreamErr := s.gitCommandWithCreds(dirPath, user, token,
+		"rev-parse", "--verify", "--quiet", "@{upstream}"); upstreamErr != nil {
+		return fmt.Errorf("git pull failed and the branch tracks no upstream: %w", err)
+	}
+	if _, ancestorErr := s.gitCommandWithCreds(dirPath, user, token,
+		"merge-base", "--is-ancestor", "HEAD", "@{upstream}"); ancestorErr != nil {
+		// EXIT 1 SPECIFICALLY, never "any non-zero". git documents 1 as "HEAD
+		// is not an ancestor of the upstream" and reserves other non-zero
+		// codes for errors -- an unresolvable revision exits 128, not 1.
+		// Reading any failure as a divergence would repeat this bead's own
+		// defect one level down: asserting a specific diagnosis from a generic
+		// failure, which is the thing pullFailure exists to stop doing.
+		if gitExitCode(ancestorErr) == 1 {
+			return models.NewAppErrorWithDetails(409, models.ErrGitConflict,
+				"Local branch has diverged from the remote and cannot be fast-forwarded", err.Error())
+		}
+		return fmt.Errorf("git pull failed and the divergence probe could not run: %w", err)
+	}
+	return fmt.Errorf("git pull failed: %w", err)
+}
+
+// gitExitCode returns the exit status of the git process behind err, or -1 when
+// err did not come from a process that ran and exited.
+//
+// gitCommandWithCreds wraps CombinedOutput's error with %w, so the underlying
+// *exec.ExitError survives the wrap. VERIFIED against that exact wrapping:
+// errors.As returns true through it and recovers 128 from a failed
+// `merge-base --is-ancestor`.
+func gitExitCode(err error) int {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
 }
 
 // PullVerified performs a git pull and, if redeploy is requested, redeploys every
