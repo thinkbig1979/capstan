@@ -79,7 +79,7 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 		}
 
 		conn, release, err := serveWS(c, h.db, jwtSecret, authDisabled, h.cm, wsRegistration{
-			refuseCode:   websocket.CloseNormalClosure,
+			refuseCode:   CloseCodeRateLimit,
 			refuseReason: "Connection limit exceeded",
 		})
 		if err != nil {
@@ -292,7 +292,7 @@ func DefaultEventBus() *EventBus {
 func (h *MonitoringHandler) handleEventsWebSocket(jwtSecret string, authDisabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		conn, release, err := serveWS(c, h.db, jwtSecret, authDisabled, h.cm, wsRegistration{
-			refuseCode:   websocket.CloseNormalClosure,
+			refuseCode:   CloseCodeRateLimit,
 			refuseReason: "Connection limit exceeded",
 		})
 		if err != nil {

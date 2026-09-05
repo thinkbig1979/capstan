@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
@@ -59,7 +58,7 @@ func (h *UpdateJobsWSHandler) streamJob(c *gin.Context) {
 	jobID := c.Param("jobId")
 
 	conn, release, err := serveWS(c, h.db, h.jwtSecret, h.authDisabled, h.cm, wsRegistration{
-		refuseCode:   websocket.CloseNormalClosure,
+		refuseCode:   CloseCodeRateLimit,
 		refuseReason: "Connection limit exceeded",
 	})
 	if err != nil {

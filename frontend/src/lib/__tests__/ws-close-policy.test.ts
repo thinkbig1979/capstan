@@ -80,6 +80,69 @@ describe('WSClient close-code policy', () => {
     expect(FakeSocket.instances.length).toBeGreaterThan(1)
   })
 
+  // 1000 specifically, not 1006. The case above uses an abnormal close, but the
+  // code four metered handlers actually sent on a cap refusal was
+  // CloseNormalClosure (agent-os-jj8u), and 1000 is the one that has to keep
+  // reconnecting — it is a legitimate ordinary disconnect from any handler that
+  // is not refusing. Pinning it here means a future edit to shouldReconnectAfter's
+  // code list cannot quietly turn every clean server close into a dead socket.
+  it('still reconnects after a normal close (1000)', () => {
+    connect()
+    FakeSocket.instances[0].fireClose(1000)
+    vi.advanceTimersByTime(120000)
+
+    expect(FakeSocket.instances.length).toBeGreaterThan(1)
+  })
+
+  // THE RECONNECT LADDER IS NOT BOUNDED ON A REFUSAL, which is why the backend
+  // close code carries the whole weight of stopping the loop.
+  //
+  // maxReconnects is 5, so a 1000 close looks like it costs at most 5 retries.
+  // It does not, because serveWS UPGRADES BEFORE IT REFUSES: upgradeConnection
+  // completes the handshake, and only then does cm.Add fail and a close frame
+  // get written (backend/internal/handlers/ws.go). The 101 is already on the
+  // wire, so onopen fires, ws.ts:68 zeroes reconnectAttempts, and the close
+  // lands against a counter that was just reset. The ladder re-enters at
+  // attempt 1 forever, at Math.random() * 2000 ms — mean 1s, matching the
+  // ~1/second refusal storm observed against a live server.
+  //
+  // The two arms differ ONLY in whether onopen fires. Same close code, same
+  // client. Without that control the first arm would just be "reconnects a lot"
+  // and would not identify the reset as the mechanism.
+  function refuseTimes(n: number, code: number, fireOpen: boolean) {
+    for (let i = 0; i < n; i++) {
+      const socket = FakeSocket.instances[FakeSocket.instances.length - 1]
+      if (fireOpen) socket.onopen?.()
+      socket.fireClose(code)
+      vi.advanceTimersByTime(60000)
+    }
+  }
+
+  it('upgrade-then-refuse with 1000 redials past maxReconnects, unbounded', () => {
+    connect()
+    refuseTimes(12, 1000, true)
+
+    // 13 = the initial socket plus one redial per refusal. maxReconnects is 5,
+    // so anything above 6 proves the cap is never reached.
+    expect(FakeSocket.instances.length).toBe(13)
+  })
+
+  it('CONTROL: the same 1000 close WITHOUT onopen stops at the 5-attempt cap', () => {
+    connect()
+    refuseTimes(12, 1000, false)
+
+    expect(FakeSocket.instances.length).toBe(6)
+  })
+
+  it('upgrade-then-refuse with 4429 does not redial at all', () => {
+    connect()
+    FakeSocket.instances[0].onopen?.()
+    FakeSocket.instances[0].fireClose(WS_CLOSE_RATE_LIMIT)
+    vi.advanceTimersByTime(120000)
+
+    expect(FakeSocket.instances).toHaveLength(1)
+  })
+
   it('passes the close event through so callers can read the code', () => {
     const onClose = vi.fn()
     connect(onClose)

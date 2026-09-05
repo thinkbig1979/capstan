@@ -112,7 +112,7 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 	}
 
 	wsConn, release, err := serveWS(c, h.db, h.jwtSecret, h.authDisabled, h.cm, wsRegistration{
-		refuseCode:   websocket.CloseNormalClosure,
+		refuseCode:   CloseCodeRateLimit,
 		refuseReason: "Connection limit exceeded",
 	})
 	if err != nil {

@@ -125,7 +125,7 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 		}
 
 		conn, release, err := serveWS(c, h.db, jwtSecret, authDisabled, h.cm, wsRegistration{
-			refuseCode:   4401,
+			refuseCode:   CloseCodeRateLimit,
 			refuseReason: "Connection limit exceeded",
 		})
 		if err != nil {
