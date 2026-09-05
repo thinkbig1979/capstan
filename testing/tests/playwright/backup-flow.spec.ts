@@ -578,7 +578,36 @@ test.describe.serial('Backup flow E2E', () => {
     // The ConfirmDialog renders confirmText="Restore" as a red/destructive button.
     const confirmBtn = page.getByRole('button', { name: /^restore$/i })
     await expect(confirmBtn).toBeVisible({ timeout: 5_000 })
+
+    // Armed (not awaited) BEFORE the click, so the 202 cannot be missed.
+    // Matched on pathname EQUALITY, for the two reasons BACKUP-PW-004:324
+    // gives: the page dials BASE_URL (:3001) and vite proxies /api through to
+    // API_URL (:5001), so a predicate built from API_URL would match nothing
+    // the page itself sends; and `url().includes('/api/v1/backups/restore')`
+    // would also match a /api/v1/backups/restore/<sub-route> if one is ever
+    // added. The request this matches is the UI's own — frontend/src/lib/
+    // api.ts:810 posts the relative '/backups/restore' against the axios
+    // baseURL '/api/v1' (:50, :58). No second, API-initiated restore is
+    // started anywhere in this test: the point of the UI path is that it is
+    // not silently replaced by an API path (agent-os-59r0).
+    const kickoff = page.waitForResponse(
+      (r) =>
+        r.request().method() === 'POST' &&
+        new URL(r.url()).pathname === '/api/v1/backups/restore',
+    )
+
     await confirmBtn.click()
+
+    // Pin THIS restore's ID before anything races ahead — the correlation key
+    // for the history check at the end of this test. runId is a top-level
+    // field of the 202 body (backend/internal/handlers/backup.go:908-911).
+    // Reading the body here relies on nothing navigating the page between the
+    // click above and this await; a page.goto in between would tear down the
+    // in-flight response listener.
+    const kickoffResp = await kickoff
+    expect(kickoffResp.status()).toBe(202)
+    const { runId } = await kickoffResp.json()
+    expect(runId, 'POST /backups/restore did not return a runId').toBeTruthy()
 
     // Wait for the RestoreProgress panel itself to report completion.
     // Targeted via a dedicated data-testid (BackupsTab.tsx:174,
@@ -613,6 +642,48 @@ test.describe.serial('Backup flow E2E', () => {
     // substring match.
     const restoreHeader = page.getByTestId('restore-progress-header')
     await expect(restoreHeader).toHaveText('Restore completed', { timeout: 90_000 })
+
+    // ── Correlate the DB record to THIS run, not the most recent one ───────
+    // The green header above is necessary but not sufficient, and this is the
+    // one thing the UI genuinely cannot tell us. execRestore
+    // (backend/internal/services/backup_runner.go:466) calls
+    // finaliseRunStatus(dr.runID, "success", "") BEFORE the deferred
+    // close(dr.done) at :444 releases the WS client, and finaliseRunStatus
+    // (:918-931) only LOGS its fetch and its update error. A failed DB write
+    // therefore still produces a done frame with outcome success, a green
+    // "Restore completed" header, and — without this check — a passing test,
+    // while the persisted run says something else or nothing at all.
+    //
+    // OBSERVED (agent-os-k38e) rather than argued: with a
+    // `BEFORE UPDATE ON backup_runs ... RAISE(ABORT)` SQLite trigger
+    // installed in the E2E fixture DB before the confirm click, this test
+    // passed green in 11.0s, the backend logged
+    // `finaliseRunStatus: update ... error="constraint failed: k38e (1811)"`,
+    // and the persisted row stayed `status=running` with a NULL finished_at.
+    // That run is what this block turns red. The INSERT of the running row
+    // (:428-437) is the only other backup_runs write on the restore path —
+    // finaliseRun (backup.go:1369) belongs to RunBackup/RunBackupWithRunID
+    // and is never reached by RunRestore — so nothing mid-run is masking it.
+    //
+    // /backups/history is a plain GetBackupRuns SELECT with no kind filter
+    // (backend/internal/database/backup.go), so restore runs appear in it. It
+    // is used here rather than /backups/status for BACKUP-PW-004's reason:
+    // /backups/status shells out to restic twice and would compete for the
+    // repo lock.
+    const historyResp = await apiGet(request, '/api/v1/backups/history')
+    expect(historyResp.ok()).toBe(true)
+    const { runs } = (await historyResp.json()) as {
+      runs: Array<{ id: string; kind: string; status: string }>
+    }
+    // Correlated by runId, never by "the latest row": a concurrent scheduled
+    // run would be indistinguishable from this one. And never
+    // `if (run) expect(...)` or a bare `?.status` on its own — both are
+    // silently vacuous on a missed find, which is exactly the signature of an
+    // absent record. Assert the record exists first, loudly (-004:420-424).
+    const thisRun = runs.find((r) => r.id === runId)
+    expect(thisRun, `No history record found for restore runId ${runId}`).toBeTruthy()
+    expect(thisRun?.kind).toBe('restore')
+    expect(thisRun?.status).toBe('success')
   })
 
   // ── 007: Post-restore verification ────────────────────────────────────────
