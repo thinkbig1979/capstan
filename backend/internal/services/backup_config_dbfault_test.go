@@ -505,3 +505,156 @@ func TestResolveBackupConfig_HealthyDBConfiguredRepoIsUsed(t *testing.T) {
 		t.Fatalf("a healthy configured read must not log an ERROR:\n%s", logs.String())
 	}
 }
+
+// --- the typed helpers and RepoSettingSources, on their own instrument ------
+//
+// The two fault arms above both trip on the resolver's FIRST or SECOND read
+// (restic_repository under a closed DB, restic_password under a rotated key),
+// so neither ever drives an error INTO resolveIntSetting / resolveStringSetting
+// / resolveBoolSetting or into RepoSettingSources. That left eight of the ten
+// converted keys — retention, auto-prune, the four schedule keys, sync-after,
+// rclone transfers — and the whole of RepoSettingSources pinned by nothing: a
+// mutation restoring the pre-fix `dbVal, _ := db.GetSetting(key)` in those four
+// functions passed the entire suite.
+//
+// A fixture that faults ONE key part-way through the resolver is not
+// constructible against the current schema: only restic_password is encrypted,
+// so the rotated-key trick reaches no other key, and settings.value is NOT NULL,
+// so a per-row unreadable value cannot be stored (probed: the INSERT is rejected
+// with "NOT NULL constraint failed: settings.value"). These functions are
+// unexported and this test is in their own package, so the direct call is both
+// available and the tightest instrument: it exercises exactly the units a
+// mutation would target.
+
+// TestTypedSettingHelpers_RefuseOnUnreadableDB is the fault arm for the three
+// typed helpers. Each must propagate the error rather than answer an unreadable
+// database with its default.
+func TestTypedSettingHelpers_RefuseOnUnreadableDB(t *testing.T) {
+	broken := closedDBWithSettings(t, nil)
+
+	t.Run("resolveIntSetting", func(t *testing.T) {
+		got, err := resolveIntSetting(broken, "backup_keep_daily", "9", 7)
+		if err == nil {
+			t.Fatalf("resolveIntSetting returned no error on an unreadable database; got %d", got)
+		}
+		// The value must not be a plausible retention: a caller that ignores
+		// the error should get something obviously wrong, not the default.
+		if got != 0 {
+			t.Fatalf("resolveIntSetting = %d on failure; want the zero value", got)
+		}
+	})
+
+	t.Run("resolveStringSetting", func(t *testing.T) {
+		got, err := resolveStringSetting(broken, "backup_schedule_mode", "scheduled", ScheduleModeInterval)
+		if err == nil {
+			t.Fatalf("resolveStringSetting returned no error on an unreadable database; got %q", got)
+		}
+		if got != "" {
+			t.Fatalf("resolveStringSetting = %q on failure; want the zero value", got)
+		}
+	})
+
+	t.Run("resolveBoolSetting", func(t *testing.T) {
+		got, err := resolveBoolSetting(broken, "backup_auto_prune", "true", true)
+		if err == nil {
+			t.Fatalf("resolveBoolSetting returned no error on an unreadable database; got %v", got)
+		}
+		if got {
+			t.Fatalf("resolveBoolSetting = %v on failure; want the zero value", got)
+		}
+	})
+}
+
+// TestTypedSettingHelpers_AbsentRowKeepsFallbackChain is the other side of the
+// same instrument. Without it "returns an error" and "always fails" would be
+// indistinguishable, and the fault arm above would pass against a helper that
+// had simply stopped working.
+func TestTypedSettingHelpers_AbsentRowKeepsFallbackChain(t *testing.T) {
+	healthy := newTestDB(t)
+
+	t.Run("resolveIntSetting/env", func(t *testing.T) {
+		got, err := resolveIntSetting(healthy, "backup_keep_daily", "9", 7)
+		if err != nil {
+			t.Fatalf("absent row must not be an error: %v", err)
+		}
+		if got != 9 {
+			t.Fatalf("resolveIntSetting = %d; want the env fallback 9", got)
+		}
+	})
+
+	t.Run("resolveIntSetting/default", func(t *testing.T) {
+		got, err := resolveIntSetting(healthy, "backup_keep_daily", "", 7)
+		if err != nil {
+			t.Fatalf("absent row must not be an error: %v", err)
+		}
+		if got != 7 {
+			t.Fatalf("resolveIntSetting = %d; want the default 7", got)
+		}
+	})
+
+	t.Run("resolveStringSetting/default", func(t *testing.T) {
+		got, err := resolveStringSetting(healthy, "backup_schedule_mode", "", ScheduleModeInterval)
+		if err != nil {
+			t.Fatalf("absent row must not be an error: %v", err)
+		}
+		if got != ScheduleModeInterval {
+			t.Fatalf("resolveStringSetting = %q; want %q", got, ScheduleModeInterval)
+		}
+	})
+
+	t.Run("resolveBoolSetting/default", func(t *testing.T) {
+		got, err := resolveBoolSetting(healthy, "backup_auto_prune", "", true)
+		if err != nil {
+			t.Fatalf("absent row must not be an error: %v", err)
+		}
+		if !got {
+			t.Fatalf("resolveBoolSetting = %v; want the default true", got)
+		}
+	})
+}
+
+// TestRepoSettingSources_RefusesOnUnreadableDB is the fault arm for
+// RepoSettingSources, whose five existing tests are all healthy-DB. Reporting
+// "default"/"no password" for a database that could not be read would tell the
+// operator nothing is configured when a repository and a password are.
+func TestRepoSettingSources_RefusesOnUnreadableDB(t *testing.T) {
+	broken := closedDBWithSettings(t, map[string]string{
+		"restic_repository": dbFaultConfiguredRepo,
+	})
+	cfg := &config.Config{ResticRepository: "env-repo", ResticPassword: dbFaultEnvPassword}
+
+	repoSrc, pwSrc, hasPassword, err := RepoSettingSources(broken, cfg)
+	if err == nil {
+		t.Fatalf("RepoSettingSources returned no error on an unreadable database; "+
+			"repoSource=%q pwSource=%q hasPassword=%v", repoSrc, pwSrc, hasPassword)
+	}
+	// The classifications must not be reported alongside the error: an "env"
+	// or "default" verdict derived from a read that never happened is the
+	// silent substitution this bead exists to remove.
+	if repoSrc != "" || pwSrc != "" || hasPassword {
+		t.Fatalf("RepoSettingSources reported classifications on failure: repoSource=%q pwSource=%q hasPassword=%v",
+			repoSrc, pwSrc, hasPassword)
+	}
+}
+
+// TestRepoSettingSources_HealthyDBStillClassifies is the passing side of the
+// same instrument: the fault arm above must not be satisfiable by a function
+// that has simply stopped classifying anything.
+func TestRepoSettingSources_HealthyDBStillClassifies(t *testing.T) {
+	healthy := newTestDB(t)
+	cfg := &config.Config{ResticRepository: "env-repo", ResticPassword: dbFaultEnvPassword}
+
+	repoSrc, pwSrc, hasPassword, err := RepoSettingSources(healthy, cfg)
+	if err != nil {
+		t.Fatalf("healthy database must classify without an error: %v", err)
+	}
+	if repoSrc != settingSourceEnv {
+		t.Fatalf("repoSource = %q; want %q", repoSrc, settingSourceEnv)
+	}
+	if pwSrc != settingSourceEnv {
+		t.Fatalf("pwSource = %q; want %q", pwSrc, settingSourceEnv)
+	}
+	if !hasPassword {
+		t.Fatal("hasPassword = false; the env password must still be seen")
+	}
+}

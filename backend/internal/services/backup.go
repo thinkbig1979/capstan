@@ -292,8 +292,11 @@ func (s *BackupService) StartScheduler() {
 	if s.sched == nil {
 		return
 	}
-	// Signature stays func(): main.go:600 and handlers/backup.go:527 both call
-	// this for effect. The refusal is carried by NOT scheduling and by the one
+	// Signature stays func(): cmd/server/main.go:600 and the updateSettings
+	// handler (handlers/backup.go:539 at this commit — this diff itself shifted
+	// it from :527, so treat the number as a hint and the caller name as the
+	// identifier) both call this for effect.
+	// The refusal is carried by NOT scheduling and by the one
 	// ERROR line resolveOrRefuse writes — never by silence, which the comment
 	// on the fallback below calls the worst available outcome. Scheduling from
 	// a defaulted config is worse still: it would fire real backups into a
@@ -462,10 +465,21 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 	}
 
 	// Signature stays BackupAvailability: the refusal is carried by the value.
-	// This is not a display — it is the gate the restore pre-check
-	// (handlers/backup.go:1059) and Prune consult, so reporting the local
-	// default as reachable while the configured repository was never read would
-	// green-light a restore from the wrong repository.
+	//
+	// This is not a display. Its five callers, all in handlers/backup.go
+	// (getSettings, getStatus, listSnapshots, previewSnapshot, repoInit —
+	// OBSERVED at this commit with
+	// `awk '/^func /{fn=$0} /h\.svc\.CheckRepository\(/{print NR": "fn}'`),
+	// include two that gate destructive or restore-facing work: repoInit
+	// CREATES a repository when this reports unreachable, and
+	// listSnapshots/previewSnapshot produce the snapshot list an operator then
+	// restores FROM. Reporting <DataDir>/restic-repo as reachable while the
+	// configured repository was never read would point all three at the wrong
+	// repository.
+	//
+	// Note the name collision: ResticManager also has a CheckRepository
+	// (backup_restic.go:201), and it is that one — not this method — that
+	// RunDRRestore and runSyncInternal call. Do not read those as callers here.
 	bc, err := s.resolveOrRefuse("check repository")
 	if err != nil {
 		av.RepoReachable = false
