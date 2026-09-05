@@ -99,8 +99,23 @@ const resticPasswordSettingKey = "restic_password"
 // are stored in clear, so a STORAGE_KEY rotation produces this fault for the
 // PASSWORD key alone; an unreadable repository key means a closed, locked or
 // otherwise broken database.
+//
+// TWO IN-REPO CONVENTIONS MEET HERE, AND THIS FILE DELIBERATELY SPLITS THEM.
+// services/git_credentials.go:139-157 is the model for the SHAPE: the
+// errors.Is switch over the failure branches, and the fail-closed return that
+// refuses instead of falling through to the env/config value. It is NOT the
+// model for the PAYLOAD: its decrypt branch logs `"error", err`, and this file
+// does not, because handlers/directories.go:281-282 governs that half. Do not
+// "unify" the two by copying git_credentials.go's `"error", err` into this
+// file — the divergence is the point, and the mutation test in
+// TestResolveBackupConfig_PasswordRefusalDoesNotStringifyDecryptError fails if
+// it is reintroduced.
+//
+// The literal key name is inside the message so an operator grepping logs for
+// `restic_password` finds this incident. It is the KEY name only: never the
+// value, and never the wrapped error.
 var ErrResticPasswordUnreadable = errors.New(
-	"the stored restic password could not be read or decrypted (STORAGE_KEY may have been rotated)")
+	"the stored restic_password setting could not be read or decrypted (STORAGE_KEY may have been rotated)")
 
 // readSetting reads one DB setting and separates "no such row" from "this
 // database could not answer".
