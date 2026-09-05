@@ -1698,3 +1698,106 @@ func TestResolveComposeProjectName_MalformedDotEnvWarnsButStillResolves(t *testi
 	assert.Equal(t, ProjectNameSourceComposeName, source)
 	assert.Equal(t, 0, countWarns(logs.String(), envPath), "log was:\n%s", logs.String())
 }
+
+// TestResolveComposeProjectName_InterpolatesOnlyTheName is the agent-os-89z2
+// revision: the project name must be resolved from the `name:` field ALONE,
+// with compose's complete variable syntax, and nothing else in the file may
+// affect it.
+//
+// Two defects made this necessary, both found by review on 44fa57b, both from
+// one cause — the loader interpolated the WHOLE file and unset variables were
+// forced to resolve as "set to empty":
+//
+//  1. `${SECRET:?required}` in a SERVICE aborted the load, so the file's own
+//     `name:` was thrown away and the stack fell back to the directory name.
+//     That is the standard compose secrets idiom, and Capstan's global-env
+//     feature exists precisely because such variables are often NOT in the
+//     stack's .env — so shape S2 was inert for exactly the stacks most likely
+//     to hit it, with nothing but a server-side WARN to show for it.
+//  2. `${NAME-dflt}` and `${NAME?msg}` (the forms WITHOUT a colon, which treat
+//     an empty value as set) gave silently wrong answers: "" rather than
+//     "dflt", and "" rather than an error. A wrong project name with no warning
+//     is worse than the divergence this bead set out to close.
+//
+// Every arm here states what `docker compose` itself does, because that is the
+// only thing the persisted name is allowed to agree with.
+func TestResolveComposeProjectName_InterpolatesOnlyTheName(t *testing.T) {
+	base := t.TempDir()
+	write := func(dirName, body, envContent string) string {
+		dir := filepath.Join(base, dirName)
+		require.NoError(t, os.MkdirAll(dir, 0755))
+		p := filepath.Join(dir, "compose.yaml")
+		require.NoError(t, os.WriteFile(p, []byte(body), 0644))
+		if envContent != "" {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(envContent), 0644))
+		}
+		return p
+	}
+
+	cases := []struct {
+		label, path, dirName string
+		wantName, wantSource string
+		wantWarns            int
+		why                  string
+	}{
+		{
+			label:   "required variable in a SERVICE does not touch the name",
+			path:    write("secret", "name: custom\nservices:\n  web:\n    image: nginx\n    environment:\n      PW: ${SECRET:?required}\n", ""),
+			dirName: "secret", wantName: "custom", wantSource: ProjectNameSourceComposeName, wantWarns: 0,
+			why: "compose labels this project `custom`; the secrets idiom elsewhere in the file is none of the name's business",
+		},
+		{
+			label:   "${NAME-dflt}, unset, no colon",
+			path:    write("dash", "name: ${NAME-dflt}\nservices:\n  web:\n    image: nginx\n", ""),
+			dirName: "dash", wantName: "dflt", wantSource: ProjectNameSourceComposeName, wantWarns: 0,
+			why: "docker compose substitutes the default when the variable is UNSET; forcing it to 'set to empty' returned \"\"",
+		},
+		{
+			label:   "${NAME?msg}, unset, no colon",
+			path:    write("question", "name: ${NAME?msg}\nservices:\n  web:\n    image: nginx\n", ""),
+			dirName: "question", wantName: "question", wantSource: ProjectNameSourceFallback, wantWarns: 1,
+			why: "docker compose ERRORS on an unset required variable; a silent \"\" is the wrong answer with no warning",
+		},
+		{
+			label:   "CONTROL ${NAME:-dflt}, unset, with colon",
+			path:    write("colondash", "name: ${NAME:-dflt}\nservices:\n  web:\n    image: nginx\n", ""),
+			dirName: "colondash", wantName: "dflt", wantSource: ProjectNameSourceComposeName, wantWarns: 0,
+			why: "CONTROL: this form was already correct, so the table discriminates between the forms rather than moving all of them",
+		},
+		{
+			label:   "CONTROL ${NAME-dflt} with NAME set in .env",
+			path:    write("dashset", "name: ${NAME-dflt}\nservices:\n  web:\n    image: nginx\n", "NAME=fromdotenv\n"),
+			dirName: "dashset", wantName: "fromdotenv", wantSource: ProjectNameSourceComposeName, wantWarns: 0,
+			why: "CONTROL: a SET variable still wins over its default, so the arm above is 'unset handled', not 'default always'",
+		},
+		{
+			label:   "CONTROL ${NAME:?msg} in the name still errors",
+			path:    write("colonq", "name: ${NAME:?msg}\nservices:\n  web:\n    image: nginx\n", ""),
+			dirName: "colonq", wantName: "colonq", wantSource: ProjectNameSourceFallback, wantWarns: 1,
+			why: "CONTROL: a required variable IN the name is still a loud fallback, unchanged",
+		},
+		{
+			label:   "CONTROL interpolated short-form port does not break the name",
+			path:    write("ports", "name: custom\nservices:\n  web:\n    image: nginx\n    ports:\n      - \"${PORT}:80\"\n", ""),
+			dirName: "ports", wantName: "custom", wantSource: ProjectNameSourceComposeName, wantWarns: 0,
+			why: "CONTROL: `ports: \"${PORT}:80\"` is a common idiom and must not decide the project name either way",
+		},
+	}
+
+	for _, tc := range cases {
+		logs := captureSlog(t)
+		name, source := ResolveComposeProjectName(context.Background(), tc.path, tc.dirName, "default")
+		assert.Equal(t, tc.wantName, name, "%s: name — %s", tc.label, tc.why)
+		assert.Equal(t, tc.wantSource, source, "%s: source — %s", tc.label, tc.why)
+
+		warns := 0
+		for _, line := range strings.Split(logs.String(), "\n") {
+			// Discriminated by this case's own compose path, never by level
+			// alone: captureSlog swaps a SHARED default sink (agent-os-8w92).
+			if strings.Contains(line, "level=WARN") && strings.Contains(line, tc.path) {
+				warns++
+			}
+		}
+		assert.Equal(t, tc.wantWarns, warns, "%s: warnings naming %s; log was:\n%s", tc.label, tc.path, logs.String())
+	}
+}

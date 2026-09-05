@@ -1,10 +1,13 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"os"
@@ -16,10 +19,11 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/loader"
-	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"gopkg.in/yaml.v3"
 )
 
 // StackID is the single producer of stack IDs. Both the scanner (discovering a
@@ -142,26 +146,31 @@ const (
 // row a create writes and the row the scan immediately after it rewrites agree
 // by construction (agent-os-07x is the bug that invariant exists to prevent).
 //
-// It answers the question "what would `docker compose` call this?" by ASKING
-// compose-go rather than by reimplementing its rules. Compose derives a project
-// name from three sources, in order: an explicit -p / COMPOSE_PROJECT_NAME,
-// else a top-level `name:` in the compose file, else the directory basename —
-// all through NormalizeProjectName, and NEVER from the compose FILE's name.
-// agent-os-f3ah made Capstan agree with compose on the THIRD source;
-// this makes it agree on the second (shape S2), which is the one with teeth: a
-// directory "other" whose file says `name: custom` is labelled "custom" by
-// compose, so Capstan filtering on "other" saw zero containers and a Start from
-// Capstan built a SECOND project beside the operator's.
+// It answers the question "what would `docker compose` call this?". Compose
+// derives a project name from three sources, in order: an explicit -p /
+// COMPOSE_PROJECT_NAME, else a top-level `name:` in the compose file, else the
+// directory basename — all through NormalizeProjectName, and NEVER from the
+// compose FILE's name. agent-os-f3ah made Capstan agree with compose on the
+// THIRD source; this makes it agree on the second (shape S2), which is the one
+// with teeth: a directory "other" whose file says `name: custom` is labelled
+// "custom" by compose, so Capstan filtering on "other" saw zero containers and
+// a Start from Capstan built a SECOND project beside the operator's.
 //
-// The FIRST source is deliberately not honoured. COMPOSE_PROJECT_NAME in the
-// directory's .env is VISIBLE here (we load that file), and the loader ignores
-// it by construction — it only WRITES that key back into Environment
-// (loader.go:688-692), it never reads it as a source. Adopting it would be a
-// choice, and the choice is no: Capstan passes its own -p on every start
-// (docker.go:297, logs.go:303), so honouring an env override at scan time would
-// make the scanned name and the started name differ, which is the exact class
-// of divergence this function exists to close. An explicit -p typed by an
-// operator outside Capstan (shape S4) is not visible here at all.
+// Every RULE is still compose-go's: substitution is its template.Substitute,
+// normalisation its NormalizeProjectName, so a compose-go bump moves Capstan
+// with it. What composeFileProjectName owns is only the EXTRACTION of the
+// `name:` string, for the reasons documented on that function — handing the
+// whole file to the loader let anything in it decide the project name.
+//
+// The FIRST source is deliberately not honoured, and the reason is a choice,
+// not an inability. The directory's .env is read, so a COMPOSE_PROJECT_NAME in
+// it is plainly VISIBLE here; it is used only as a substitution mapping for the
+// `name:` field and is never consulted as a source of the name itself. Capstan
+// passes its own -p on every start (docker.go:297, logs.go:303), so honouring
+// an env override at scan time would make the scanned name and the started name
+// differ, which is the exact class of divergence this function exists to close.
+// An explicit -p typed by an operator outside Capstan (shape S4) is not visible
+// here at all.
 //
 // A top-level `name:` wins for EVERY compose file, named files included. What
 // the OWNER POLICY (Edwin, 2026-09-05 16:05: KEEP Capstan's "<dir>-<profile>"
@@ -223,106 +232,156 @@ func ResolveComposeProjectName(ctx context.Context, composePath, dirName, profil
 	return loaded, ProjectNameSourceComposeName
 }
 
-// composeFileProjectName returns the project name compose-go resolves from this
+// composeFileProjectName returns the project name compose derives from this
 // one file, or "" if the file names no project. The error is returned rather
 // than absorbed so the caller can warn about it exactly once.
 //
-// The option set is chosen to make the load NAME-ONLY, and it is not the one
-// LinterService uses: linter.go:63-64 skips NOTHING, because the linter's whole
-// job is to report the failures this function must survive. compose-go resolves
-// the project name at loader.go:378, BEFORE load() and therefore before schema
-// validation, the consistency check, include, extends and default values — so
-// the name is knowable for a file that fails all of them, and a full load throws
-// it away. MEASURED on compose-go v2.14.0 (throwaway probe, 2026-09-05): with
-// the skips below, `image: ${IMAGE}` with no build, a missing `include:` target
-// and a missing `extends.file` all resolve their name; the linter's set errors
-// on all three. What remains is a YAML parse error and a required-variable
-// error (`${X:?msg}`) inside `name:` itself — both cases where compose refuses
-// the file too, and both routed to the caller's WARN and fallback.
+// It reads the top-level `name:` and interpolates THAT STRING ONLY. An earlier
+// revision handed the whole file to loader.LoadWithContext and read
+// project.Name off the result; review found two defects in that, with one
+// cause — the loader interpolates the WHOLE file (loader.go:477), so anything
+// anywhere in it could decide the project name (OBSERVED on compose-go
+// v2.14.0, 2026-09-05):
 //
-// Interpolation and normalisation stay ON: compose applies both to `name:`
-// (loader.go:740-752), so skipping either would silently change the answer.
+//   - `PW: ${SECRET:?required}` in a SERVICE aborted the load with
+//     "required variable SECRET is missing a value", so the file's own `name:`
+//     was thrown away and the stack fell back to its directory name. That is
+//     the standard compose secrets idiom, and Capstan's global-env feature
+//     exists because such variables are often NOT in the stack's own .env, so
+//     the fix for shape S2 was inert for exactly the stacks most likely to need
+//     it.
+//   - Suppressing the resulting log spam by resolving an unset variable as
+//     ("", true) turned "unset" into "set to empty", which is a DIFFERENT
+//     question in compose's substitution syntax. `${NAME-dflt}` returned ""
+//     instead of "dflt", and `${NAME?msg}` returned "" instead of erroring —
+//     silently wrong names, reported as source "directory", with no warning.
+//
+// Loading with SkipInterpolation to get the raw string back does not fix it
+// either: `ports: - "${PORT}:80"` then fails ModelToProject with
+// 'services[web].ports[0]' expected a map or struct, got "string" (OBSERVED),
+// which would have reintroduced the same inert-feature defect on a different,
+// equally common idiom.
+//
+// So the extraction is done here. What is NOT reimplemented is the part with
+// rules: substitution is compose-go's own template.Substitute, and
+// normalisation is its NormalizeProjectName, so `-`, `:-`, `?` and `:?` behave
+// exactly as `docker compose` does and a compose-go bump moves both. The only
+// logic owned here is "the last non-empty top-level `name:` across the
+// document stream", which mirrors loader.go:703-737.
+//
+// Two deliberate differences from that loop, both toward being loud:
+// compose swallows a YAML decode error there and gives up on the name
+// ("it'll get caught downstream"); this returns it, so the caller warns and
+// falls back visibly. And compose reads with go.yaml.in/yaml/v4 while this uses
+// gopkg.in/yaml.v3, already a direct dependency: for a top-level scalar key the
+// two agree, and a file only v4 accepts would warn and fall back rather than
+// resolve — the conservative direction.
 func composeFileProjectName(ctx context.Context, composePath string) (string, error) {
-	dir := filepath.Dir(composePath)
-
-	// `docker compose` resolves ${VAR} against the directory's .env, so a
-	// `name: ${PROJECT}` must see it too or it interpolates blank and falls
-	// through to the directory name.
-	//
-	// A MISSING .env is the common case and is silent. A PRESENT but unparseable
-	// one is warned about exactly once, naming the file: compose refuses to run
-	// on it at all, so leaving `name: ${PROJECT}` to fall quietly to the
-	// directory name would be the same silent divergence this producer exists to
-	// close. It is still only a warning — the name stays resolvable, with the
-	// variables unset, which is compose's own behaviour for a variable it cannot
-	// find.
-	//
-	// The two are told apart by an os.Stat rather than by matching dotenv's
-	// error text, so a reworded compose-go message cannot silently turn a
-	// malformed file into a missing one.
-	//
-	// The process environment is deliberately NOT merged in. It keeps the
-	// scanned name a pure function of what is on disk, so two Capstan instances
-	// walking the same tree agree, and it keeps the backend's own environment
-	// out of project names. Cost: a `name:` interpolated from a host variable
-	// alone resolves blank and falls back to the directory.
-	environment := map[string]string{}
-	envPath := filepath.Join(dir, ".env")
-	if _, statErr := os.Stat(envPath); statErr == nil {
-		fromDotEnv, err := dotenv.GetEnvFromFile(map[string]string{}, []string{envPath})
-		if err != nil {
-			slog.Warn("Could not parse the stack's .env; compose project name resolved without it",
-				"file", envPath, "error", err)
-		} else {
-			environment = fromDotEnv
-		}
+	// The scan walks every directory at boot; a cancelled create or shutdown
+	// should stop it rather than read the rest of the tree.
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 
-	details := types.ConfigDetails{
-		WorkingDir:  dir,
-		ConfigFiles: []types.ConfigFile{{Filename: composePath}},
-		Environment: environment,
+	// composePath is bounded by both callers, not by this function: the scanner
+	// passes a filepath.Glob match taken under a configured stacks root
+	// (ScanDirectoryWithRoot's patterns loop), and POST /api/v1/stacks passes
+	// filepath.Join(stackDir, "compose.yaml") for a stackDir that already
+	// cleared isValidStacksDir (exact match against a configured root) and the
+	// filepath.Rel traversal guard, and whose file the handler itself just
+	// wrote — see README.md "Command execution and file access".
+	//nolint:gosec // path bounded by the configured stacks roots at both call sites, cited above
+	content, err := os.ReadFile(composePath)
+	if err != nil {
+		return "", err
 	}
 
-	project, err := loader.LoadWithContext(ctx, details, func(o *loader.Options) {
-		o.SkipValidation = true
-		o.SkipConsistencyCheck = true
-		o.SkipInclude = true
-		o.SkipExtends = true
-		o.SkipResolveEnvironment = true
-		o.SkipDefaultValues = true
-		o.SkipResolveLabels = true
-		// Nothing downstream of the name needs paths resolved against
-		// WorkingDir, and ToOptions defaults this to true.
-		o.ResolvePaths = false
+	raw, err := topLevelComposeName(content)
+	if err != nil {
+		return "", err
+	}
+	if raw == "" {
+		return "", nil
+	}
 
-		// Interpolation of the whole file still runs, and every unset variable
-		// in any field emits a logrus warning straight to stderr — once per
-		// variable, per file, per scan, at every boot, in a format that is not
-		// Capstan's slog. Resolving a miss to ("", true) suppresses that with no
-		// semantic change: compose already defaults a missing variable to a
-		// blank string (template.go:209). MEASURED: `name:` still resolves from
-		// .env, and a required `${X:?msg}` still errors.
-		o.Interpolate.LookupValue = func(key string) (string, bool) {
-			if v, ok := environment[key]; ok {
-				return v, true
-			}
-			return "", true
-		}
+	// The .env is read only now, when a name actually needs interpolating. That
+	// keeps the warning below truthful — it is about resolving THIS name — and
+	// costs nothing for the overwhelming majority of files, which name no
+	// project at all.
+	environment := stackDotEnv(filepath.Dir(composePath))
 
-		// No SetProjectName. Compose's default here is the directory basename;
-		// Capstan's is ComposeProjectName, which the CALLER applies. Leaving the
-		// default EMPTY is behaviourally identical — loader.go:753-756 consumes
-		// the default on exactly the branch where the caller substitutes — and it
-		// makes "" mean precisely "this file names no project", which is what
-		// lets the caller report an honest source. Passing the derived name here
-		// instead would make `name: other` in directory "other" indistinguishable
-		// from no `name:` at all.
+	// Reporting a miss as ABSENT rather than as empty is the whole point: compose
+	// distinguishes "unset" from "set but empty", and the `-` and `?` forms
+	// (without a colon) answer the first question. Collapsing them is what
+	// produced silently wrong names.
+	substituted, err := template.Substitute(raw, func(key string) (string, bool) {
+		value, ok := environment[key]
+		return value, ok
 	})
 	if err != nil {
 		return "", err
 	}
-	return project.Name, nil
+
+	return loader.NormalizeProjectName(substituted), nil
+}
+
+// topLevelComposeName returns the last non-empty top-level `name:` in the
+// document stream, mirroring compose's own extraction (loader.go:703-737):
+// later documents win, which is how a multi-document file behaves there.
+func topLevelComposeName(content []byte) (string, error) {
+	type named struct {
+		Name string `yaml:"name"`
+	}
+
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+	name := ""
+	for {
+		var doc named
+		err := decoder.Decode(&doc)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if doc.Name != "" {
+			name = doc.Name
+		}
+	}
+	return name, nil
+}
+
+// stackDotEnv reads the variables `docker compose` would resolve ${VAR} against
+// for a stack in dir: its own .env, and nothing else.
+//
+// A MISSING .env is the common case and is silent. A PRESENT but unparseable
+// one is warned about exactly once, naming the file: compose refuses to run on
+// it at all, so letting a `name: ${PROJECT}` fall quietly to the directory name
+// would be the same silent divergence this producer exists to close. It is
+// still only a warning — the name stays resolvable, with the variables unset.
+//
+// The two are told apart by an os.Stat rather than by matching dotenv's error
+// text, so a reworded compose-go message cannot silently turn a malformed file
+// into a missing one.
+//
+// The process environment is deliberately NOT merged in. It keeps the scanned
+// name a pure function of what is on disk, so two Capstan instances walking the
+// same tree agree, and it keeps the backend's own environment out of project
+// names. Cost: a `name:` interpolated from a host variable alone falls back to
+// the directory.
+func stackDotEnv(dir string) map[string]string {
+	envPath := filepath.Join(dir, ".env")
+	if _, err := os.Stat(envPath); err != nil {
+		return map[string]string{}
+	}
+
+	environment, err := dotenv.GetEnvFromFile(map[string]string{}, []string{envPath})
+	if err != nil {
+		slog.Warn("Could not parse the stack's .env; compose project name resolved without it",
+			"file", envPath, "error", err)
+		return map[string]string{}
+	}
+	return environment
 }
 
 // StackIDRootPrefix returns the root component of a stack ID.
