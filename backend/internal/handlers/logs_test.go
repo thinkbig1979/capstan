@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -54,6 +55,10 @@ func TestLogsHandler_GetLogs_LogsCauseOn500(t *testing.T) {
 // above: a genuinely missing stack must still be a silent 404 (client fault,
 // not logged at ERROR), so the split doesn't turn ordinary not-found traffic
 // into log noise.
+//
+// The silence half is discriminated on this request's own id (agent-os-nho7):
+// RequestID() puts the sentinel on the context and logServerFault stamps it on
+// any line it writes. See requireNoOwnErrorLines (ua4y_7lg1_cause_test.go).
 func TestLogsHandler_GetLogs_NotFoundStaysSilent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	buf := captureHandlerLogs(t)
@@ -64,18 +69,24 @@ func TestLogsHandler_GetLogs_NotFoundStaysSilent(t *testing.T) {
 
 	handler := NewLogsHandler(nil, db, "test-secret-key-32-chars-long!!!", true, t.TempDir(), NewConnectionManager(10))
 	router := gin.New()
+	router.Use(middleware.RequestID())
 	handler.RegisterRoutes(router.Group("/api"))
 
+	plantDone := plantStrayServerFaultLine(t)
+	reqID, sentinel := requestIDSentinel()
+
 	req := httptest.NewRequest(http.MethodGet, "/api/stacks/no-such-stack/logs", nil)
+	req.Header.Set(middleware.RequestIDHeader, reqID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
+	<-plantDone
 
 	require.Equal(t, http.StatusNotFound, w.Code)
 	// Not assert.Empty: db construction itself logs an INFO "database schema
 	// version" line (process-wide slog default). The claim is narrower — no
-	// ERROR line for an ordinary client-fault 404 — so check for that
-	// specifically.
-	assert.NotContains(t, buf.String(), "level=ERROR", "an ordinary not-found must not log at ERROR")
+	// ERROR line for an ordinary client-fault 404, and specifically not one
+	// for THIS request — so check for that.
+	requireNoOwnErrorLines(t, buf.String(), sentinel, "an ordinary not-found")
 }
 
 // TestLogsHandler_StreamLogs_LogsCauseOn500 is StreamLogs' counterpart to

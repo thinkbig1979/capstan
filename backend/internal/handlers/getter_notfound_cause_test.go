@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -44,6 +45,21 @@ func newFaultyBackupHandler(t *testing.T) *gin.Engine {
 	h := NewBackupHandler(nil, faultyDB(t), slog.Default())
 	t.Cleanup(h.Stop)
 	return newBackupRouter(h)
+}
+
+// newBackupRouterWithRequestID is newBackupRouter (backup_test.go) plus the
+// RequestID middleware, so logServerFault's line carries the caller's
+// X-Request-ID sentinel and an absence assertion can be about THIS request
+// rather than about the shared sink (agent-os-nho7).
+//
+// A local twin rather than one line added to newBackupRouter: that helper is
+// called from 50+ tests across 7 files, none of which asked for the extra
+// middleware, and backup_test.go is outside this bead's FILES.
+func newBackupRouterWithRequestID(h *BackupHandler) *gin.Engine {
+	r := gin.New()
+	r.Use(middleware.RequestID())
+	h.RegisterRoutes(r.Group("/api"))
+	return r
 }
 
 // TestGetRunDetail_DBFaultReturns500WithLoggedCause is the failing-first arm
@@ -85,24 +101,35 @@ func TestGetRunDetail_HealthyMissingRunKeeps404(t *testing.T) {
 	db := newBackupHandlerDB(t)
 	h := NewBackupHandler(nil, db, slog.Default())
 	t.Cleanup(h.Stop)
-	r := newBackupRouter(h)
+	r := newBackupRouterWithRequestID(h)
+
+	plantDone := plantStrayServerFaultLine(t)
+	reqID, sentinel := requestIDSentinel()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/backups/runs/unknown-run-id", nil)
+	req.Header.Set(middleware.RequestIDHeader, reqID)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
+	<-plantDone
 
 	require.Equal(t, http.StatusNotFound, w.Code)
 	body := decodeBody(t, w)
 	assert.Equal(t, models.ErrNotFound, body["code"])
 	assert.Equal(t, "Backup run not found", body["message"])
-	assert.NotContains(t, buf.String(), "level=ERROR",
-		"an ordinary missing run is not a server fault; captured=%q", buf.String())
+	requireNoOwnErrorLines(t, buf.String(), sentinel, "an ordinary missing run (not a server fault)")
 }
 
 // newDirectoriesRouter mounts the real route table so the two GetDirectory
 // sites are reached through the same paths production uses.
+//
+// RequestID() runs the way it does in production, so logServerFault stamps
+// the caller's X-Request-ID sentinel on its line and the healthy arms below
+// can assert the absence of an ERROR line for THIS request rather than the
+// absence of any ERROR line at all in the process-global sink (agent-os-nho7).
+// This helper is local to this file, so adding it affects nothing else.
 func newDirectoriesRouter(db *database.DB) *gin.Engine {
 	r := gin.New()
+	r.Use(middleware.RequestID())
 	NewDirectoriesHandler(nil, db).RegisterRoutes(r.Group("/api/directories"))
 	return r
 }
@@ -153,16 +180,20 @@ func TestCredentialStatus_HealthyMissingDirectoryKeeps404(t *testing.T) {
 
 	r := newDirectoriesRouter(db)
 
+	plantDone := plantStrayServerFaultLine(t)
+	reqID, sentinel := requestIDSentinel()
+
 	req := httptest.NewRequest(http.MethodGet, "/api/directories/credential-status?path=/opt/stacks/absent", nil)
+	req.Header.Set(middleware.RequestIDHeader, reqID)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
+	<-plantDone
 
 	require.Equal(t, http.StatusNotFound, w.Code)
 	body := decodeBody(t, w)
 	assert.Equal(t, models.ErrNotFound, body["code"])
 	assert.Equal(t, "Directory not found", body["message"])
-	assert.NotContains(t, buf.String(), "level=ERROR",
-		"captured=%q", buf.String())
+	requireNoOwnErrorLines(t, buf.String(), sentinel, "an ordinary missing directory on CredentialStatus")
 }
 
 // TestUpdateCredentials_DBFaultReturns500WithLoggedCause is the failing-first
@@ -204,16 +235,20 @@ func TestUpdateCredentials_HealthyMissingDirectoryKeeps404(t *testing.T) {
 
 	r := newDirectoriesRouter(db)
 
+	plantDone := plantStrayServerFaultLine(t)
+	reqID, sentinel := requestIDSentinel()
+
 	req := httptest.NewRequest(http.MethodPut, "/api/directories/credentials",
 		strings.NewReader(`{"path":"/opt/stacks/absent","authType":"ssh"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(middleware.RequestIDHeader, reqID)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
+	<-plantDone
 
 	require.Equal(t, http.StatusNotFound, w.Code)
 	body := decodeBody(t, w)
 	assert.Equal(t, models.ErrNotFound, body["code"])
 	assert.Equal(t, "Directory not found", body["message"])
-	assert.NotContains(t, buf.String(), "level=ERROR",
-		"captured=%q", buf.String())
+	requireNoOwnErrorLines(t, buf.String(), sentinel, "an ordinary missing directory on UpdateCredentials")
 }
