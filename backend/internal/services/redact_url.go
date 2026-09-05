@@ -316,13 +316,17 @@ func isParseableAuthority(s string) bool {
 // those is now a pinned negative arm, alongside "rclone:gdrive:edwin@example.com"
 // and "sftp:host:/path/with@sign".
 //
-// Two narrow residues, stated rather than discovered later, both in the
-// sftp opaque form and both malformed for restic anyway (it reads host
-// "user"): a password that BEGINS with "/" ("sftp:user:/pw@host:/path") is
-// not detected, because ":/" is what marks the host:path separator; and a
-// password containing "@" followed by ":" ("sftp:user:p@w:x@host:/path") is
-// spliced at the wrong "@". The documented "s3:https://..." form, where a
-// "/" in the secret is common, is covered by the URL branch (agent-os-zzhs).
+// Three narrow residues, stated rather than discovered later, all in the
+// sftp opaque form and all malformed for restic anyway (it reads host
+// "user" and fails loudly): a password that BEGINS with "/"
+// ("sftp:user:/pw@host:/path") is not detected, because ":/" is what marks
+// the host:path separator; a password containing "@" followed by ":"
+// ("sftp:user:p@w:x@host:/path") is spliced at the wrong "@"; and a value
+// with NO ":" after the host ("sftp:user:pw@host", "sftp:user:pw@host/path")
+// is not detected, because that ":" is the positional fact that keeps a
+// relative path such as "sftp:nas:x@backups" out of the rule. The documented
+// "s3:https://..." form, where a "/" in the secret is common, is covered by
+// the URL branch (agent-os-zzhs).
 
 // opaqueSchemeRe matches "scheme:" at the start of a value. Deliberately NOT
 // url.Parse: the fallback needs to work on values url.Parse rejects too, and
@@ -618,7 +622,17 @@ func ValidateRepositoryForm(raw string) error {
 			}
 		case "s3":
 			if _, found := opaqueCredentialBoundary(scheme, opaque); found {
-				return errors.New("s3: credentials are not accepted in the repository field; use s3:host/bucket or s3:https://host/bucket and supply AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the backup environment")
+				return errors.New(s3CredentialRefused)
+			}
+			// The documented URL form ("s3:https://host/bucket") with a
+			// userinfo: the redactor already stars it via the nested-URL
+			// recursion, and restic's s3 parser never reads url.User, so an
+			// inline password is inert. Refused on save for parity with
+			// sftp://user:PW@; a username alone is accepted (starred as today).
+			if u, err := url.Parse(opaque); err == nil && u.User != nil {
+				if password, _ := u.User.Password(); password != "" {
+					return errors.New(s3CredentialRefused)
+				}
 			}
 		case "rclone":
 			// remote:path has no credential position (see the section
@@ -638,6 +652,8 @@ func ValidateRepositoryForm(raw string) error {
 }
 
 const sftpPasswordRefused = "sftp: a password is not accepted in the repository field; use sftp:user@host:/path or sftp://user@host:port/path with key authentication"
+
+const s3CredentialRefused = "s3: credentials are not accepted in the repository field; use s3:host/bucket or s3:https://host/bucket and supply AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the backup environment"
 
 // redactErrPath rewrites any occurrence of path inside err's message with its
 // redacted form.

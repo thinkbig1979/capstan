@@ -190,6 +190,8 @@ var qonwRejectCorpus = []struct {
 		"sftp:***@host:dir@2024", "sftp:", "sftp:user@host:/path"},
 	{"s3 opaque with key and secret", "s3:AKIAKEY:RESTICSECRET999@host/bucket",
 		"s3:***@host/bucket", "s3:", "AWS_SECRET_ACCESS_KEY"},
+	{"s3 URL form with key and secret", "s3:https://AKIAKEY:RESTICSECRET999@host/bucket",
+		"s3:https://***@host/bucket", "s3:", "AWS_SECRET_ACCESS_KEY"},
 	{"rclone connection string with an inline credential", "rclone::sftp,host=h,user=u,pass=RESTICSECRET999:path",
 		"rclone::sftp,host=h,user=u,pass=***:path", `"pass"`, "rclone.conf"},
 }
@@ -231,6 +233,7 @@ var qonwLeaveCorpus = []string{
 var qonwRedactedAsTodayCorpus = []struct{ stored, served string }{
 	{"rest:https://user:pw@host/", "rest:https://***@host/"},
 	{"sftp://user@host:2222/path", "sftp://***@host:2222/path"},
+	{"s3:https://user@host/bucket", "s3:https://***@host/bucket"},
 }
 
 func putRepository(t *testing.T, r http.Handler, repo string) *httptest.ResponseRecorder {

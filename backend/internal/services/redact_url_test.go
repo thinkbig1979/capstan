@@ -440,6 +440,11 @@ func TestValidateRepositoryForm(t *testing.T) {
 		{"sftp:user:pw@host:dir@2024", "sftp:", "sftp:user@host:/path"},
 		{"sftp://user:PW@host:2222/path", "sftp:", "sftp:user@host:/path"},
 		{"s3:KEY:PW@host/bucket", "s3:", "AWS_SECRET_ACCESS_KEY"},
+		// The documented s3 URL form with a userinfo: restic's s3 parser never
+		// reads url.User (credentials are env-only), so an inline password
+		// is inert on read AND refused on save, like sftp://user:PW@.
+		{"s3:https://KEY:PW@host/bucket", "s3:", "AWS_SECRET_ACCESS_KEY"},
+		{"s3:http://KEY:PW@localhost:9000/bucket", "s3:", "AWS_SECRET_ACCESS_KEY"},
 		{"rclone::sftp,host=h,user=u,pass=OBSCURED:path", `"pass"`, "rclone.conf"},
 		{"rclone::sftp,host=h,user=u,key_file_pass=OBSCURED:path", `"key_file_pass"`, "rclone.conf"},
 		{"rclone::s3,provider=AWS,access_key_id=AKIA,secret_access_key=SECRET:bucket", `"secret_access_key"`, "rclone.conf"},
@@ -483,6 +488,9 @@ func TestValidateRepositoryForm(t *testing.T) {
 		"s3:s3.us-east-1.amazonaws.com/bucket_name",
 		"s3:http://localhost:9000/restic",
 		"s3:localhost:9000/bucket",
+		// Username-only userinfo: starred on read by design, accepted on save
+		// (same as sftp://user@host).
+		"s3:https://user@host/bucket",
 		"azure:foo:/",
 		"gs:foo:/",
 		"swift:container_name:/path",
@@ -533,6 +541,7 @@ func TestValidateRepositoryForm_AgreesWithTheRedactor(t *testing.T) {
 		"sftp:nas:@backups:sub",
 		"s3:KEY:PW@host/bucket",
 		"s3:KEY:@host/bucket",
+		"s3:https://KEY:PW@host/bucket",
 		"rclone::sftp,host=h,user=u,pass=OBSCURED:path",
 		"rclone:user:PW@remote:path",
 		"sftp:user@host:/srv/backups",
