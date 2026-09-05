@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,9 +11,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -57,6 +60,36 @@ func waitHandled(t *testing.T, handled <-chan struct{}) {
 	}
 }
 
+// countErrorLines counts the captured lines that are BOTH level=ERROR and
+// carry mustContain (agent-os-737f). captureHandlerLogs's buffer is slog's
+// PROCESS-GLOBAL default sink for as long as the test runs, so a bare
+// count of every level=ERROR token in it is perturbed by any goroutine
+// that logs ERROR in the window (a leak from an earlier test, net/http
+// teardown): a logical race the race detector can never report. Every
+// count in this file therefore discriminates on the test's own request_id
+// sentinel, which the fixtures' RequestID middleware puts on serveWS's line
+// (ws.go, "request_id", middleware.RequestIDFrom(c)) and logServerFault's
+// (respond.go), and which no other goroutine can carry.
+func countErrorLines(captured, mustContain string) int {
+	n := 0
+	for _, line := range strings.Split(captured, "\n") {
+		if strings.Contains(line, "level=ERROR") && strings.Contains(line, mustContain) {
+			n++
+		}
+	}
+	return n
+}
+
+// requestIDSentinel returns a fresh per-test request ID and the attr text
+// serveWS/logServerFault will emit for it. A well-formed UUID, because
+// middleware.RequestID only honours an inbound X-Request-ID that parses as
+// one (requestid.go); anything else is replaced with a random ID and the
+// discriminator would never match.
+func requestIDSentinel() (id, attr string) {
+	id = uuid.NewString()
+	return id, "request_id=" + id
+}
+
 // TestWSAuthFailure_LogsExactlyOnceAtASilentSite is the seen-failing-first
 // regression for agent-os-94yx: logs.go is one of the four serveWS call
 // sites (agent-os-o1jp.1) that report NOTHING when upgradeConnection fails --
@@ -81,16 +114,37 @@ func TestWSAuthFailure_LogsExactlyOnceAtASilentSite(t *testing.T) {
 	cm := NewConnectionManager(10)
 	srv, handled := newLogsAuthEnabledFixture(t, cm)
 
-	code, text := dialWSAndSendInvalidToken(t, srv, "/api/ws/logs/stack-a")
+	// PLANT (agent-os-737f): a stray ERROR line from a goroutine this test
+	// did not synchronise with, logged through slog.Default() inside the
+	// capture window -- the buffer is the PROCESS-GLOBAL sink for the
+	// duration of the test, so a goroutine leaked by an earlier test, or
+	// net/http teardown, can land a line here. Same msg, same code, a
+	// DIFFERENT request_id: only a count that discriminates on this test's
+	// own request_id stays at 1. Seen failing first: with the bare
+	// count of every level=ERROR token in the buffer this reads 2.
+	plantDone := plantStrayUpgradeFailureLine(t)
+
+	reqID, sentinel := requestIDSentinel()
+	code, text := dialWSAndSendInvalidToken(t, srv, "/api/ws/logs/stack-a", reqID)
 	if code != CloseCodeAuthFailure {
 		t.Fatalf("close code = %d (%q), want %d (CloseCodeAuthFailure) -- the auth failure itself didn't happen the way this test assumes", code, text, CloseCodeAuthFailure)
 	}
 	waitHandled(t, handled)
+	<-plantDone
 
 	got := buf.String()
-	n := strings.Count(got, "level=ERROR")
+	// The class this pin guards against, stated on the same buffer: the OLD
+	// undiscriminated count (every level=ERROR token in the shared sink)
+	// reads 2 here, because the plant's line counts the same as serveWS's.
+	// If this ever reads 1 the plant did not land in the window and the
+	// discriminated assertion below is no longer proving anything.
+	if bare := strings.Count(got, "level=ERROR"); bare != 2 {
+		t.Fatalf("the undiscriminated count over the shared sink read %d, want 2 (serveWS's line + the planted stray line): "+
+			"that over-count is the class agent-os-737f pins; the plant is not in the window, so the discriminated count below proves nothing. captured = %q", bare, got)
+	}
+	n := countErrorLines(got, sentinel)
 	if n != 1 {
-		t.Fatalf("a WS auth failure at logs.go (a silent call site) produced %d ERROR line(s), want exactly 1. captured = %q", n, got)
+		t.Fatalf("a WS auth failure at logs.go (a silent call site) produced %d ERROR line(s) carrying %s, want exactly 1. captured = %q", n, sentinel, got)
 	}
 	if !strings.Contains(got, "WebSocket upgrade failed") {
 		t.Errorf("the ERROR line doesn't name what happened. captured = %q", got)
@@ -134,28 +188,33 @@ func TestHandleError_NeverLogsA401AfterAWSAuthFailure(t *testing.T) {
 	cm := NewConnectionManager(10)
 	srv, handled := newLogsAuthEnabledFixture(t, cm)
 
-	code, text := dialWSAndSendInvalidToken(t, srv, "/api/ws/logs/stack-a")
+	reqID, sentinel := requestIDSentinel()
+	code, text := dialWSAndSendInvalidToken(t, srv, "/api/ws/logs/stack-a", reqID)
 	if code != CloseCodeAuthFailure {
 		t.Fatalf("close code = %d (%q), want %d (CloseCodeAuthFailure)", code, text, CloseCodeAuthFailure)
 	}
 	waitHandled(t, handled)
 
 	before := buf.String()
-	nBefore := strings.Count(before, "level=ERROR")
+	nBefore := countErrorLines(before, sentinel)
 	if nBefore != 1 {
-		t.Fatalf("serveWS's own log (the thing under test) produced %d ERROR line(s), want exactly 1 before checking handleError. captured = %q", nBefore, before)
+		t.Fatalf("serveWS's own log (the thing under test) produced %d ERROR line(s) carrying %s, want exactly 1 before checking handleError. captured = %q", nBefore, sentinel, before)
 	}
 
 	// The exact shape upgradeConnection's auth-failure branch returns
 	// (ws.go's authenticateToken, "otherwise invalid" case), fed straight to
 	// handleError the way monitoring.go/dashboard.go/terminal.go do. Single
 	// goroutine, no real hijack: safe to read buf immediately afterward.
+	// The SAME request ID is set on this context so that a logServerFault
+	// line, if it ever fired, would carry the sentinel and be counted below
+	// -- the discriminated delta keeps its teeth (agent-os-737f).
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	c.Set(middleware.RequestIDKey, reqID)
 	handleError(c, &models.AppError{Code: models.ErrSessionExpired, Message: "Invalid token", Status: http.StatusUnauthorized})
 
 	after := buf.String()
-	nAfter := strings.Count(after, "level=ERROR")
+	nAfter := countErrorLines(after, sentinel)
 	if nAfter != nBefore {
 		t.Fatalf("handleError(401 AppError) added %d ERROR line(s) (went from %d to %d) -- "+
 			"logServerFault must stay silent below 500. captured = %q", nAfter-nBefore, nBefore, nAfter, after)
@@ -177,15 +236,14 @@ func TestUpgradeFailure_SilentSiteLogsExactlyOnce(t *testing.T) {
 	cm := NewConnectionManager(10)
 	srv, handled := newLogsAuthEnabledFixture(t, cm)
 
-	resp, err := http.Get(srv.URL + "/api/ws/logs/stack-a")
-	require.NoError(t, err)
-	resp.Body.Close()
+	reqID, sentinel := requestIDSentinel()
+	rawGETWithRequestID(t, srv.URL+"/api/ws/logs/stack-a", reqID)
 	waitHandled(t, handled)
 
 	got := buf.String()
-	n := strings.Count(got, "level=ERROR")
+	n := countErrorLines(got, sentinel)
 	if n != 1 {
-		t.Fatalf("a raw upgrade failure at logs.go (a silent call site) produced %d ERROR line(s), want exactly 1. captured = %q", n, got)
+		t.Fatalf("a raw upgrade failure at logs.go (a silent call site) produced %d ERROR line(s) carrying %s, want exactly 1. captured = %q", n, sentinel, got)
 	}
 	if !strings.Contains(got, "not using the websocket protocol") {
 		t.Errorf("the ERROR line doesn't carry the underlying cause. captured = %q", got)
@@ -216,16 +274,15 @@ func TestUpgradeFailure_HandleErrorSiteLogsOnce(t *testing.T) {
 	cm := NewConnectionManager(4)
 	srv, handled, _ := newDashboardAuthEnabledFixture(t, cm)
 
-	resp, err := http.Get(srv.URL + "/api/ws/dashboard/metrics")
-	require.NoError(t, err)
-	resp.Body.Close()
+	reqID, sentinel := requestIDSentinel()
+	rawGETWithRequestID(t, srv.URL+"/api/ws/dashboard/metrics", reqID)
 	waitHandled(t, handled)
 
 	got := buf.String()
-	n := strings.Count(got, "level=ERROR")
+	n := countErrorLines(got, sentinel)
 	if n != 1 {
-		t.Fatalf("a raw upgrade failure at dashboard.go (a former handleError call site) produced %d ERROR line(s), want exactly 1 "+
-			"(serveWS's line only; handleError's 500 fallback no longer runs after serveWS, agent-os-lukw). captured = %q", n, got)
+		t.Fatalf("a raw upgrade failure at dashboard.go (a former handleError call site) produced %d ERROR line(s) carrying %s, want exactly 1 "+
+			"(serveWS's line only; handleError's 500 fallback no longer runs after serveWS, agent-os-lukw). captured = %q", n, sentinel, got)
 	}
 	if !strings.Contains(got, "UPGRADE_FAILED") {
 		t.Errorf(`the one line must be serveWS's, coded "UPGRADE_FAILED". captured = %q`, got)
@@ -264,15 +321,16 @@ func TestWSAuthFailure_HandleErrorSiteNeverWritesToTheHijackedConnection(t *test
 	cm := NewConnectionManager(4)
 	srv, handled, probe := newDashboardAuthEnabledFixture(t, cm)
 
-	code, text := dialWSAndSendInvalidToken(t, srv, "/api/ws/dashboard/metrics")
+	reqID, sentinel := requestIDSentinel()
+	code, text := dialWSAndSendInvalidToken(t, srv, "/api/ws/dashboard/metrics", reqID)
 	if code != CloseCodeAuthFailure {
 		t.Fatalf("close code = %d (%q), want %d (CloseCodeAuthFailure) -- the auth failure itself didn't happen the way this test assumes", code, text, CloseCodeAuthFailure)
 	}
 	waitHandled(t, handled)
 
 	got := buf.String()
-	if n := strings.Count(got, "level=ERROR"); n != 1 {
-		t.Errorf("a WS auth failure at dashboard.go produced %d ERROR line(s), want exactly 1 (serveWS's own). captured = %q", n, got)
+	if n := countErrorLines(got, sentinel); n != 1 {
+		t.Errorf("a WS auth failure at dashboard.go produced %d ERROR line(s) carrying %s, want exactly 1 (serveWS's own). captured = %q", n, sentinel, got)
 	}
 	if !strings.Contains(got, "WebSocket upgrade failed") {
 		t.Errorf("the ERROR line is not serveWS's. captured = %q", got)
@@ -316,6 +374,51 @@ func (p *hijackProbe) GinErrors() int {
 	return p.ginErrors
 }
 
+// rawGETWithRequestID is http.Get with an X-Request-ID header: a plain,
+// non-WebSocket GET against a WS route makes upgrader.Upgrade itself fail,
+// and the header makes serveWS's resulting log line carry the test's
+// sentinel (agent-os-737f). The response is a 4xx and is not asserted on
+// here; the tests read the log instead.
+func rawGETWithRequestID(t *testing.T, url, requestID string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Header.Set(middleware.RequestIDHeader, requestID)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+}
+
+// plantStrayUpgradeFailureLine models the hazard agent-os-737f pins: some
+// goroutine this test never started or joined (a leak from an earlier test,
+// net/http teardown) logging an ERROR through the shared default sink while
+// this test's capture buffer is that sink. It logs serveWS's exact line
+// shape (same msg, same code) under a request_id that is NOT this test's,
+// from its own goroutine, and returns a channel closed after the write.
+//
+// The write is inside the capture window by construction: the goroutine
+// starts after captureHandlerLogs swapped the sink, and the caller receives
+// from the returned channel before reading the buffer, so the read is
+// ordered after the write no matter how the scheduler interleaves it with
+// the server goroutine. slog's TextHandler serialises concurrent Handle
+// calls under its own mutex, so the two writers do not race each other
+// (OBSERVED: the -race gate on this test stays clean with the plant in
+// place); the channel close gives the test goroutine's read its
+// happens-before edge, exactly as withHandlerDoneSignal does for the
+// server's write.
+func plantStrayUpgradeFailureLine(t *testing.T) <-chan struct{} {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		slog.Default().Error("WebSocket upgrade failed",
+			"request_id", uuid.NewString(),
+			"code", "UPGRADE_FAILED",
+			"error", "planted by agent-os-737f: a stray line from a goroutine this test did not synchronise with")
+	}()
+	return done
+}
+
 // newLogsAuthEnabledFixture is newLogsCapFixture's authDisabled=false twin,
 // with a done-signal middleware (see withHandlerDoneSignal): the named
 // fixture in ws_cap_refusal_close_code_test.go hardcodes true (never reaches
@@ -339,6 +442,7 @@ func newLogsAuthEnabledFixture(t *testing.T, cm *ConnectionManager) (*httptest.S
 	handler := NewLogsHandler(docker, db, "test-secret-key-32-chars-long!!!", false, t.TempDir(), cm)
 
 	router, handled := withHandlerDoneSignal(gin.New())
+	router.Use(middleware.RequestID()) // puts the test's sentinel on serveWS's line (countErrorLines)
 	handler.RegisterRoutes(router.Group("/api"))
 
 	srv := httptest.NewServer(router)
@@ -369,6 +473,7 @@ func newDashboardAuthEnabledFixture(t *testing.T, cm *ConnectionManager) (*httpt
 
 	probe := &hijackProbe{}
 	router, handled := withHandlerDoneSignal(gin.New())
+	router.Use(middleware.RequestID()) // puts the test's sentinel on serveWS's line (countErrorLines)
 	router.Use(func(c *gin.Context) {
 		c.Next()
 		probe.mu.Lock()
@@ -389,12 +494,14 @@ func newDashboardAuthEnabledFixture(t *testing.T, cm *ConnectionManager) (*httpt
 // obviously-invalid token, and returns the close code the server sends back.
 // Same shape as readRefusalCloseCode (ws_cap_refusal_close_code_test.go),
 // reused rather than adding a distinct dial helper, extended with the one
-// extra step (WriteJSON) this bead's auth handshake needs.
-func dialWSAndSendInvalidToken(t *testing.T, srv *httptest.Server, path string) (int, string) {
+// extra step (WriteJSON) this bead's auth handshake needs. requestID goes
+// out as X-Request-ID so the fixture's RequestID middleware stamps it on the
+// context and serveWS's log line carries it (agent-os-737f).
+func dialWSAndSendInvalidToken(t *testing.T, srv *httptest.Server, path, requestID string) (int, string) {
 	t.Helper()
 
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + path
-	conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(url, http.Header{middleware.RequestIDHeader: {requestID}})
 	require.NoError(t, err, "dialing %s", url)
 	defer conn.Close()
 	defer resp.Body.Close()
