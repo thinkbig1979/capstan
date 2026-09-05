@@ -80,9 +80,23 @@ func StackID(root, primaryRoot string, extraRoots []string, pathID, name string)
 // compose project can exist for it. Callers decide what to do with that: the
 // scanner skips the row with a warning, the create endpoint refuses the name.
 //
-// Two directories can normalise to one name ("MyStack", "my.stack"). Compose
-// would run them as ONE project, so Capstan cannot separate them either; the
-// scanner persists both rows and warns (see warnProjectNameCollisions).
+// What normalising the whole "<dir>-<profile>" string does and does not buy,
+// stated because it is easy to over-claim: compose derives a project name
+// from exactly three sources, all normalised — explicit -p (loader.go:695,
+// which must already be normal), top-level `name:` (loader.go:752), else the
+// directory basename (cli/options.go:561-567) — and NEVER from the compose
+// FILE's name. So "<dir>-<profile>" is Capstan's own namespace for a named
+// file; normalising it makes the `-p` Capstan passes acceptable to compose
+// (the whole string has to satisfy loader.go:695), but a named file started
+// OUTSIDE Capstan with -f is labelled by the directory alone and is not found
+// under "<dir>-<profile>" (S6 in agent-os-f3ah's notes; not this bead). Label
+// parity holds for the DEFAULT file, which is what this bead promises.
+//
+// Two stacks can normalise to one name: two directories ("MyStack",
+// "my.stack") or two named files in one directory ("compose.api.v2.yaml",
+// "compose.apiv2.yaml"). Compose would run them as ONE project, so Capstan
+// cannot separate them either; the scanner persists every row and warns
+// (see warnProjectNameCollisions).
 func ComposeProjectName(dirName, name string) string {
 	raw := dirName
 	if name != "default" {
@@ -217,16 +231,22 @@ func (s *ScannerService) ScanAll() (hasGlobalEnv bool, err error) {
 }
 
 // warnProjectNameCollisions logs one WARN per compose project name that more
-// than one directory normalises to ("MyStack" and "my.stack" both become
-// "mystack"; so do /a/stacks/web and /b/stacks/web across two roots).
+// than one persisted stack normalises to.
 //
-// Compose itself would treat those directories as ONE project — same label,
-// same `-p` — so this is not something Capstan can fix, only surface. Both
-// rows are kept: their IDs are path-based and distinct, and dropping one would
-// hide a directory that is on disk. It reads the persisted rows after the
-// scan rather than threading state through ScanDirectoryWithRoot, so a
-// collision between a directory scanned now and one persisted earlier is
-// reported too, and single-directory rescans need no extra state.
+// Keyed on the NORMALISED NAME over every row, not on directory pairs: the
+// collision can be two directories ("MyStack" and "my.stack" both become
+// "mystack"; /a/stacks/web and /b/stacks/web across two roots) OR two named
+// compose files in ONE directory ("compose.api.v2.yaml" and
+// "compose.apiv2.yaml" both become "mystack-apiv2"), and a directory-keyed
+// check is silent on the second.
+//
+// Compose itself would treat the colliding stacks as ONE project — same
+// label, same `-p` — so this is not something Capstan can fix, only surface.
+// Every row is kept: their IDs are path-and-profile based and distinct, and
+// dropping one would hide a compose file that is on disk. It reads the
+// persisted rows after the scan rather than threading state through
+// ScanDirectoryWithRoot, so a collision with a stack persisted by an earlier
+// scan is reported too, and single-directory rescans need no extra state.
 func (s *ScannerService) warnProjectNameCollisions() {
 	stacks, err := s.db.ListStacks()
 	if err != nil {
@@ -234,21 +254,20 @@ func (s *ScannerService) warnProjectNameCollisions() {
 		return
 	}
 
-	dirsByProject := make(map[string][]string)
+	sourcesByProject := make(map[string][]string)
 	for _, stack := range stacks {
-		if !slices.Contains(dirsByProject[stack.ProjectName], stack.Directory) {
-			dirsByProject[stack.ProjectName] = append(dirsByProject[stack.ProjectName], stack.Directory)
-		}
+		source := filepath.Join(stack.Directory, stack.ComposeFile)
+		sourcesByProject[stack.ProjectName] = append(sourcesByProject[stack.ProjectName], source)
 	}
 
-	for _, project := range slices.Sorted(maps.Keys(dirsByProject)) {
-		dirs := dirsByProject[project]
-		if len(dirs) < 2 {
+	for _, project := range slices.Sorted(maps.Keys(sourcesByProject)) {
+		sources := sourcesByProject[project]
+		if len(sources) < 2 {
 			continue
 		}
-		sort.Strings(dirs)
-		slog.Warn("Compose project name collision: several directories normalise to one project name; Docker Compose treats them as ONE project, so they share containers and Start/Stop on either acts on both",
-			"project", project, "directories", dirs)
+		sort.Strings(sources)
+		slog.Warn("Compose project name collision: several stacks normalise to one project name; Docker Compose treats them as ONE project, so they share containers and Start/Stop on any of them acts on all",
+			"project", project, "stacks", sources)
 	}
 }
 

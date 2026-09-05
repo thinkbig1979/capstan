@@ -1154,3 +1154,55 @@ func TestScannerService_ScanAll_EmptyProjectNameIsSkippedWithAWarning(t *testing
 	assert.Contains(t, logs.String(), "level=WARN")
 	assert.Contains(t, logs.String(), dir, "the warning must name the directory so the operator can rename it")
 }
+
+// TestScannerService_ScanAll_SameDirectoryNamedFilesCollideToo: the collision
+// check must key on the NORMALISED NAME over every row the scan produced, not
+// on directory pairs. compose.api.v2.yaml and compose.apiv2.yaml in ONE
+// directory yield profiles "api.v2" and "apiv2" (distinct, so both rows are
+// persisted with distinct IDs) that both normalise to "mystack-apiv2": one
+// -p value, two rows, and a directory-keyed check is silent on it.
+//
+// Note what this does NOT claim: Capstan's "<dir>-<profile>" name for a named
+// compose file is Capstan's own namespace, not a compose derivation. Compose
+// derives a project name from -p, top-level `name:` or the directory basename
+// only, never from the file name (compose-go v2.14.0 loader.go:695-697, :752;
+// cli/options.go:561-567), so a named file started OUTSIDE Capstan with -f
+// is labelled by the directory alone (S6 in the bead, not this bead).
+func TestScannerService_ScanAll_SameDirectoryNamedFilesCollideToo(t *testing.T) {
+	tempDir := t.TempDir()
+	dir := writeComposeStack(t, tempDir, "MyStack")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.api.v2.yaml"), []byte("services: {}\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.apiv2.yaml"), []byte("services: {}\n"), 0644))
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	logs := captureSlog(t)
+	_, err = NewScannerService(&config.Config{StacksDir: tempDir}, db).ScanAll()
+	require.NoError(t, err)
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	byFile := map[string]string{}
+	for _, s := range stacks {
+		byFile[s.ComposeFile] = s.ProjectName
+	}
+	assert.Equal(t, "mystack", byFile["compose.yaml"])
+	assert.Equal(t, "mystack-apiv2", byFile["compose.api.v2.yaml"])
+	assert.Equal(t, "mystack-apiv2", byFile["compose.apiv2.yaml"], "both named files must be persisted; the collision is surfaced, not resolved by dropping one")
+	assert.Len(t, stacks, 3)
+
+	out := logs.String()
+	warnLines := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "level=WARN") && strings.Contains(line, "collision") {
+			warnLines++
+			assert.Contains(t, line, "mystack-apiv2")
+			assert.Contains(t, line, "compose.api.v2.yaml")
+			assert.Contains(t, line, "compose.apiv2.yaml")
+			assert.NotContains(t, line, "project=mystack ", "the default file's project is not part of this collision")
+		}
+	}
+	assert.Equal(t, 1, warnLines, "one collision warning keyed on the normalised name, naming both compose files; log was:\n%s", out)
+}
