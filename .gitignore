@@ -112,3 +112,10 @@ skills-lock.json
 # Stray restic repository skeletons (a relative-path restic init bug once
 # created one in a package dir during tests; agent-os-4pa.1)
 restic-repo/
+
+# scripts/check-getter-errors.sh --cross-check DERIVES its layer A config at
+# run time (the committed backend/.golangci.yml plus errcheck check-blank) and
+# removes it on exit. golangci-lint resolves a `-c` path's directory as the
+# reporting base, so the derived file has to sit inside backend/ rather than in
+# a temp dir. This entry is the seatbelt for a SIGKILLed run leaking one.
+backend/.golangci-derived-*.yml

@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -789,6 +789,59 @@ check_ws_registration() {
   return 1
 }
 
+# check_getter_errors delegates to scripts/check-getter-errors.sh: no file in
+# backend/internal/ may hold more discarded (`x, _ := f()`) or softened
+# (`x, e := f()` used only as `e == nil`) call sites than the committed
+# baseline records (agent-os-zhe9, the ratchet for the family behind
+# agent-os-7lg1/3h9x/8tqd/1gqn/l42o/obgr/g482/r1by/xzoe). Detection is by AST
+# shape only -- not the receiver expression, not the error-variable name, not
+# the callee prefix -- because every one of those anchors has already returned
+# a false zero on this tree.
+#
+# Same self-test-first shape as ws-registration, and here it is the entire
+# point of the check: a scanner that has silently stopped firing looks exactly
+# like a clean tree, and a close reason will cite it.
+check_getter_errors() {
+  local script="$SCRIPT_DIR/check-getter-errors.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: getter-errors - $script not found"
+    return 1
+  fi
+
+  # The scanner is a go/ast program, and this workflow is otherwise
+  # dependency-free bash by design (.github/workflows/docs.yml). Where Go is
+  # absent the check reports SKIP and returns 3, which main() counts
+  # separately: a silent PASS on a runner that cannot run the scanner is the
+  # same false zero the check exists to prevent, wearing a third costume.
+  if ! command -v go >/dev/null 2>&1; then
+    echo "SKIP: getter-errors - 'go' is not on PATH, so the AST scanner did not run."
+    echo "  This is NOT a pass. The ratchet is enforced wherever Go is present"
+    echo "  (every developer machine, and the backend CI jobs); run it there with"
+    echo "  bash scripts/check-getter-errors.sh"
+    return 3
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: getter-errors - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: getter-errors - ${self#self-test: }; ${out#getter-errors: }"
+    return 0
+  fi
+  echo "FAIL: getter-errors - a new discarded or softened error site was added; a DB or daemon fault at one of these is silently read as a default or as 'not found':"
+  echo "$out"
+  return 1
+}
+
 # check_close_reason runs ONLY the self-test of scripts/check-close-reason.sh.
 # The check itself gates `bd close` on a bug bead's close reason carrying the
 # four class-sweep fields (agent-os-o1jp.6), and it needs the beads tracker,
@@ -838,6 +891,7 @@ Valid check names:
   locator-count-guard no count()-guard in testing/tests/playwright/ wraps an expect(...)
   ws-registration one WS upgrade path and no ConnectionManager registration outside serveWS
   close-reason   the bug-bead close-reason checker's self-test (the checker itself needs the tracker)
+  getter-errors  no new discarded (`x, _ := f()`) or softened (`err == nil` only) call site
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -857,6 +911,7 @@ run_check() {
     locator-count-guard) check_locator_count_guard ;;
     ws-registration) check_ws_registration ;;
     close-reason) check_close_reason ;;
+    getter-errors) check_getter_errors ;;
     *) return 2 ;;
   esac
 }
@@ -889,16 +944,28 @@ main() {
     exit $?
   fi
 
-  local failed=0 name
+  local failed=0 skipped=0 name rc
   for name in $CHECK_NAMES; do
-    run_check "$name" || failed=$((failed + 1))
+    run_check "$name"
+    rc=$?
+    case "$rc" in
+      0) ;;
+      # 3 = the check could not run here and said so out loud (see
+      # check_getter_errors). Not a pass, not a failure; counted and named.
+      3) skipped=$((skipped + 1)) ;;
+      *) failed=$((failed + 1)) ;;
+    esac
   done
 
   set -- $CHECK_NAMES
   local total="$#"
 
   echo "----"
-  echo "Summary: $((total - failed))/$total checks passed"
+  if [ "$skipped" -gt 0 ]; then
+    echo "Summary: $((total - failed - skipped))/$total checks passed, $skipped skipped (see SKIP above)"
+  else
+    echo "Summary: $((total - failed))/$total checks passed"
+  fi
   [ "$failed" -eq 0 ]
 }
 
