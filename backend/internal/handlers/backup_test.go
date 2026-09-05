@@ -1705,28 +1705,36 @@ func TestRegistry_AttachUnfinishedRun_IsNotReportedDone(t *testing.T) {
 			"if this passes, the wait no longer asserts anything")
 }
 
-// panicRcloneRunner is a fake CommandRunner that panics on Run.
+// panicCommandRunner is a fake CommandRunner that panics on every call.
 // It is used to verify that recoverExec catches a panic inside an exec goroutine
 // and finalises the run as "failed" rather than crashing the process.
-type panicRcloneRunner struct{}
+//
+// Output panics too, not just Run: the first thing RunSync reaches is
+// ResticManager.CheckRepository -> runner.Run (services/backup.go:967,
+// backup_restic.go:216), but if that ordering ever changes the panic must
+// still fire on whichever method is hit first, or this test silently stops
+// reaching its subject again (agent-os-ev4m).
+type panicCommandRunner struct{}
 
-func (r *panicRcloneRunner) Run(
+const injectedPanicValue = "injected panic for recoverExec test"
+
+func (r *panicCommandRunner) Run(
 	_ context.Context,
 	_ string,
 	_ []string,
 	_ []string,
 	_ chan<- services.StreamLine,
 ) error {
-	panic("injected panic for recoverExec test")
+	panic(injectedPanicValue)
 }
 
-func (r *panicRcloneRunner) Output(
+func (r *panicCommandRunner) Output(
 	_ context.Context,
 	_ string,
 	_ []string,
 	_ []string,
 ) ([]byte, error) {
-	return []byte(`{}`), nil
+	panic(injectedPanicValue)
 }
 
 // TestRegistry_PanicInExec_RunTerminatesAsFailed verifies that a panic inside
@@ -1739,21 +1747,43 @@ func (r *panicRcloneRunner) Output(
 // goroutine panic would propagate out of the goroutine and crash the test
 // binary (Go panics that escape a goroutine are fatal). The test would never
 // reach the assertions.
+//
+// HISTORY (agent-os-ev4m). This test used to build its service with
+// resticPresent=false and inject the panicking runner only at the rclone
+// seam. That was correct when written, but agent-os-h0my later made RunSync
+// require BOTH binaries (services/backup.go:912), so RunSync returned
+// ErrBackupUnavailable before any runner was constructed — and "failed" was
+// still asserted true, because ErrBackupUnavailable ALSO produces "failed".
+// PROBED, not read: with atomic counters in the fake runner, Run calls=0,
+// Output calls=0, ErrorMessage="backup engine unavailable", test PASS. The
+// assertion could not tell the two paths apart, so recoverExec went untested
+// while looking tested. Hence the exact-reason assertions below: only
+// recoverExec writes the "panic: " prefix (backup_runner.go:901), every
+// other failure path writes err.Error() verbatim.
 func TestRegistry_PanicInExec_RunTerminatesAsFailed(t *testing.T) {
 	// Not parallel — injects a panicking runner; must not interfere with other tests.
 
 	db := newBackupHandlerDB(t)
-	svc := buildBackupSvc(t, db, false, true) // rcloneBin set → sync is "available"
+	svc := buildBackupSvc(t, db, true, true) // BOTH bins set: RunSync gates on both (services/backup.go:912)
 
-	// Inject a rclone manager factory whose runner panics on every Run call.
+	// Inject the panicking runner at BOTH manager seams. CheckRepository (via
+	// the restic manager) is reached first; the rclone seat stays armed so a
+	// reordering cannot un-reach the panic (see panicCommandRunner).
+	svc.SetResticMgrFactory(func(bc services.BackupConfig) *services.ResticManager {
+		return services.NewResticManagerForTest(bc, &panicCommandRunner{}, slog.Default())
+	})
 	svc.SetRcloneMgrFactory(func(bc services.BackupConfig) *services.RcloneManager {
-		return services.NewRcloneManagerForTest(bc, &panicRcloneRunner{}, slog.Default())
+		return services.NewRcloneManagerForTest(bc, &panicCommandRunner{}, slog.Default())
 	})
 
-	// Provide the minimum rclone config so RunSync does not return early with
-	// ErrBackupUnavailable or "remote not configured" before reaching the runner.
+	// Provide the minimum config so RunSync does not return early before
+	// reaching the runner: the remote (runSyncInternal's first check) and a
+	// restic password (CheckRepository calls withPasswordFile BEFORE
+	// runner.Run and refuses an empty one — a second "failed the easy way"
+	// path this test must not be satisfied by).
 	require.NoError(t, db.SetSetting("rclone_remote", "fakeprovider"))
 	require.NoError(t, db.SetSetting("restic_repository", "/tmp/test-repo"))
+	require.NoError(t, db.SetSetting("restic_password", "panic-test-password"))
 
 	reg := services.NewBackupRunnerRegistry(db, svc, slog.Default())
 	t.Cleanup(reg.Stop)
@@ -1787,11 +1817,25 @@ func TestRegistry_PanicInExec_RunTerminatesAsFailed(t *testing.T) {
 	assert.Equal(t, "failed", finalAR.Outcome,
 		"outcome must be 'failed' when the exec goroutine panics")
 
-	// Confirm the DB record was also updated.
+	// The discriminating assertion: recoverExec formats the recovered value as
+	// "panic: %v" (backup_runner.go:901) and that exact string is what Attach
+	// reports as Reason. ErrBackupUnavailable ("backup engine unavailable"),
+	// a missing password, or a runner that merely RETURNS an error all reach
+	// "failed" through execSync's normal error branch, which stores
+	// err.Error() verbatim and never carries the "panic: " prefix. Seen
+	// failing with the panic replaced by a returned error of the same text:
+	// Reason = "cannot access restic repository: injected panic ...".
+	wantReason := "panic: " + injectedPanicValue
+	assert.Equal(t, wantReason, finalAR.Reason,
+		"Attach must report the recovered panic value; anything else means the run failed without ever panicking")
+
+	// Confirm the DB record was also updated, with the same recovered value.
 	dbRun, dbErr := db.GetBackupRunByID(runID)
 	require.NoError(t, dbErr)
 	assert.Equal(t, "failed", dbRun.Status,
 		"DB status must be 'failed', not 'running', after a panic in the exec goroutine")
+	assert.Equal(t, wantReason, dbRun.ErrorMessage,
+		"finaliseRunStatus must persist the recovered panic value as the run's error message")
 	assert.NotNil(t, dbRun.FinishedAt,
 		"FinishedAt must be set after recoverExec finalises the run")
 }

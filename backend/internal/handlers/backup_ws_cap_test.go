@@ -180,14 +180,39 @@ func dialBackupWS(t *testing.T, srv *httptest.Server, path, cookieToken string) 
 	return conn
 }
 
-// wsHangGuardCeiling bounds every hang-guard in this file. 60s is NOT a
-// latency budget: it is ~550x the 0.11s the slower of these two tests takes
-// end to end (OBSERVED idle), and 12x the 5s constant that demonstrably fired
-// in CI against a strictly LONGER causal path — the start frame needs two
-// goroutine spawns, a JSON marshal, a TCP write and a client-side read that
-// registration does not. It is also far enough under both CI ceilings (unit
-// job timeout-minutes: 10, race job 20) that a hang reports as an assertion
-// with minutes to spare instead of as a killed runner.
+// wsHangGuardCeiling bounds every hang-guard in this PACKAGE: the WS-read
+// waits in this file and the registration/close waits in
+// monitoring_metrics_close_test.go (firstConnection, waitForServerSideClose)
+// and their callers. 60s is NOT a latency budget and no passing run ever
+// reaches it: every wait blocks on a CONDITION its caller has arranged to be
+// durable, and every observed satisfaction is in microseconds to low
+// milliseconds. 60s is a hang guard — the answer to "the signal never came
+// at all", not to "the box is busy".
+//
+// MEASURED registration latency on this box (agent-os-fzqb, n=40): min=0,
+// p50=1us, p90=2430us, max=6667us. 60s is ~9,000x the worst observed wait,
+// ~550x the 0.11s the slower of this file's two tests takes end to end
+// (OBSERVED idle), 12x the 5s constant that demonstrably fired in CI against
+// a strictly LONGER causal path — the start frame needs two goroutine spawns,
+// a JSON marshal, a TCP write and a client-side read that registration does
+// not — and one sixth of the unit job's ceiling, far enough under both CI
+// ceilings (unit job timeout-minutes: 10, race job 20) that a hang reports as
+// an assertion with minutes to spare instead of as a killed runner. That is
+// what makes 60s hang-guard duty rather than assertion duty.
+//
+// NAMING HISTORY (agent-os-5t69). agent-os-fzqb (this file) and agent-os-gs7r
+// (monitoring_metrics_close_test.go) were developed CONCURRENTLY in separate
+// worktrees on the same night, each needing this helper. Identical
+// package-scope names would have broken main the moment both merged,
+// invisibly to both worktrees (the agent-os-wd2p class), so gs7r deliberately
+// spelled its pair with a `wsRegistration` prefix (the names are gone now,
+// so a grep for them stays a clean zero),
+// verified compatibility by simulating the merge (fzqb's diff applied on top
+// of its commit, go vet and all four affected tests green, then reverted),
+// and flagged the collapse as a post-merge cleanup rather than doing it
+// blind. The two bodies were byte-identical in logic; this pair survived
+// because its name is the more general one and because in-flight branches
+// already called it. Both justification comments are merged here.
 const wsHangGuardCeiling = 60 * time.Second
 
 // hangGuardDeadline returns an absolute deadline for a wait that must NEVER
@@ -203,18 +228,20 @@ const wsHangGuardCeiling = 60 * time.Second
 // a busy runner turned correct code red and reported it as "not revocable"
 // (agent-os-fzqb; OBSERVED in CI on PR #256 @ 8aed205 — plain unit job red,
 // rerun of the IDENTICAL SHA green, and the SLOWER race job green both times,
-// which is load pointing at itself). The waits below instead block on a
-// CONDITION — registration in the ConnectionManager — that is satisfied in
-// milliseconds under any realistic load, so no passing run ever consults this
-// deadline at all.
+// which is load pointing at itself). The waits instead block on a
+// CONDITION — registration in the ConnectionManager, or the handler's
+// return — that is satisfied in milliseconds under any realistic load, so no
+// passing run ever consults this deadline at all.
 //
 // The distinction is semantic, not syntactic, and switching the observable
 // alone does NOT fix the class: firstConnection
-// (monitoring_metrics_close_test.go:130) polls the SAME registration
+// (monitoring_metrics_close_test.go) used to poll the SAME registration
 // observable on a 5s constant, and the orchestrator OBSERVED it firing under
 // concurrent load on CLEAN main as `dashboard_metrics_close_test.go:65: no
 // connection registered in cm within 5s`. The bound is the defect, not the
-// signal.
+// signal; firstConnection now bounds itself with this helper too, and its
+// callers hold the handler open so the registration it waits for is durable
+// (agent-os-gs7r, see newHeldFakeDockerMetricsServer).
 //
 // WHY THE t.Deadline() HALF. A bare constant is a number picked against an
 // imagined machine. Deriving from the binary's own -timeout makes the guard
@@ -232,7 +259,8 @@ const wsHangGuardCeiling = 60 * time.Second
 // runner: on a real hang the likely outcome is a cancelled job with NO test
 // output, which is strictly worse for diagnosis than the 5s failure this
 // change removes. The ceiling keeps a hang inside the job, as a named
-// assertion. (OBSERVED by the orchestrator reading backend.yml, 2026-09-04.)
+// assertion. (OBSERVED by the orchestrator reading backend.yml, 2026-09-04;
+// re-verified unchanged at the collapse, 2026-09-05.)
 //
 // COST, stated so it is chosen and not discovered by whoever is on call: a
 // genuinely broken signal costs up to wsHangGuardCeiling before it reports.

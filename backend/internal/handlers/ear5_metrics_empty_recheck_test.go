@@ -90,7 +90,7 @@ func TestMonitoringMetricsWS_EmptyHostThenPopulated_LaterFrameCarriesContainer(t
 	defer clientConn.Close()
 	defer resp.Body.Close()
 
-	deadline := wsRegistrationHangGuard(t)
+	deadline := hangGuardDeadline(t)
 	raw := readFramesUntil(t, clientConn, deadline, "monitoring empty-then-populated", func(raw []byte) bool {
 		return bytes.Contains(raw, []byte(`"containerId":"c1"`))
 	})
