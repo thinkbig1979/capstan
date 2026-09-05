@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,20 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
+
+// CloseCodeNotFound marks a permanent WS failure the frontend must not
+// redial: the resource the client asked for structurally does not exist
+// (e.g. a deleted stack), so a retry cannot change the outcome. Mirrors
+// WS_CLOSE_NOT_FOUND in frontend/src/lib/ws.ts, which extends
+// shouldReconnectAfter's suppression list for it (agent-os-vi0o).
+//
+// Declared here rather than beside CloseCodeAuthFailure/CloseCodeRateLimit
+// in ws.go (its natural home) because the WS chain worker (agent-os-94yx)
+// is editing ws.go concurrently on a sibling branch; a second writer there
+// would cost that chain a rebase. Move it to ws.go once that chain lands —
+// tracked as a follow-up, not a design decision (orchestrator bud4,
+// 2026-09-05).
+const CloseCodeNotFound = 4404
 
 // ContainerLister resolves the containers belonging to a compose project. It is
 // the terminal handler's view of DockerService, narrow enough to fake in tests
@@ -83,10 +98,34 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 		// release() closes the connection and deregisters it, in that order.
 		defer release()
 
+		// Split per agent-os-7lg1 (the same err/nil collapse at 22 other
+		// db.GetStack sites), WS-shaped: `if err != nil || stack == nil` used
+		// to close both a genuinely missing stack AND a faulted database with
+		// the same retryable code (agent-os-vi0o). GetStack (database/stacks.go)
+		// returns (&stack, nil) or (nil, err), never (nil, nil), so the old
+		// nil-arm was dead — dropped here, not just at the HTTP sites.
 		stack, err := h.db.GetStack(stackID)
-		if err != nil || stack == nil {
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				// PERMANENT: the stack does not exist and retrying cannot
+				// change that. CloseCodeNotFound (ws.go) is in
+				// shouldReconnectAfter's suppression list (frontend/src/lib/
+				// ws.ts) — without it the client redials a stack that will
+				// never exist at ~1/second, the same upgrade-before-refuse
+				// mechanism agent-os-jj8u measured. Silent below 500,
+				// matching handleError's "client's fault" convention
+				// (respond.go) — this is not a server fault.
+				writeCloseMessage(conn.Conn, CloseCodeNotFound, "Stack not found")
+				return
+			}
+			// TRANSIENT: the database itself faulted (a locked file, a
+			// decrypt failure), not a missing row. Retrying is correct, so
+			// this keeps a code shouldReconnectAfter does NOT suppress. A DB
+			// fault reaching here was invisible before this split (the old
+			// code logged unconditionally, including for the ordinary
+			// not-found case) — logged only on this branch now.
 			slog.Error("Failed to get stack", "stack_id", stackID, "error", err)
-			writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Stack not found")
+			writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Failed to load stack")
 			return
 		}
 
@@ -107,6 +146,15 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 				writeCloseMessage(conn.Conn, CloseCodeRateLimit, "Too many open terminal sessions")
 				return
 			}
+			// TRANSIENT, CORRECT AS-IS (agent-os-vi0o classified, did not
+			// change): the remaining failure here is pty.Start failing for
+			// both shell attempts (services/terminal.go) — a docker-exec/
+			// fork-level fault, not a structural one. invalidContainerNameError
+			// is not reachable at this point: assertContainerInStack above
+			// already validated containerName against the stack's real
+			// containers. A resource/exec-level fault is worth retrying, and
+			// CloseNormalClosure is already outside shouldReconnectAfter's
+			// suppression list, so this needs no code change.
 			slog.Error("Failed to create terminal session", "stack_id", stackID, "container", containerName, "error", err)
 			writeCloseMessage(conn.Conn, websocket.CloseNormalClosure, "Failed to create terminal session")
 			return
