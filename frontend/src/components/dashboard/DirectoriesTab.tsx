@@ -347,7 +347,7 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
           {node.dir?.isGitRepo && (
             <Badge variant="outline" className="flex items-center gap-1 text-xs w-fit">
               <GitBranch className="h-3 w-3" />
-              {node.dir.gitBranch || 'main'}
+              {node.dir.gitBranch || '—'}
             </Badge>
           )}
           {node.dir?.isGitRepo && (node.dir.gitBehind ?? 0) > 0 && (

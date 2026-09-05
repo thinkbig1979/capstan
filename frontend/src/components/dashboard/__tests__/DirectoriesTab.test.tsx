@@ -165,13 +165,32 @@ describe('DirectoriesTab — git badges', () => {
     expect(screen.getByText('release')).toBeInTheDocument()
   })
 
-  it('falls back to "main" when the branch is unknown', () => {
+  /**
+   * The scanner leaves gitBranch empty for a detached HEAD, an unreadable HEAD,
+   * and a git worktree or submodule checkout (where .git is a file, so
+   * .git/HEAD does not exist). Rendering a literal 'main' there states a branch
+   * name the UI never learned. StackDetail.tsx:90 already renders the em dash
+   * for the same unknown; this badge now says the same thing.
+   */
+  it('renders the unknown marker, not a fabricated "main", when the branch is empty', () => {
+    const { unmount } = renderTab({
+      directories: [dir('/srv/stacks/web', { isGitRepo: true, gitBranch: '' })],
+      configuredDirs: ['/srv/stacks'],
+    })
+
+    expect(screen.queryByText('main')).not.toBeInTheDocument()
+    expect(screen.getByText('\u2014')).toBeInTheDocument()
+    unmount()
+    localStorage.clear()
+
+    // ConfiguredDir declares gitBranch?: string, so absent reaches the same ||.
     renderTab({
       directories: [dir('/srv/stacks/web', { isGitRepo: true })],
       configuredDirs: ['/srv/stacks'],
     })
 
-    expect(screen.getByText('main')).toBeInTheDocument()
+    expect(screen.queryByText('main')).not.toBeInTheDocument()
+    expect(screen.getByText('\u2014')).toBeInTheDocument()
   })
 
   it('shows the behind-count only when there is something to pull', () => {
@@ -197,6 +216,19 @@ describe('DirectoriesTab — git badges', () => {
     })
 
     expect(screen.queryByText('main')).not.toBeInTheDocument()
+  })
+
+  // The fixture above carries a real branch name, so dropping the isGitRepo
+  // gate is caught there by 'main' appearing. A non-git directory with NO
+  // branch is the case only the unknown marker can catch, so it gets its own
+  // arm rather than an extra line on a test that already discriminates.
+  it('shows no git badge for a plain directory that has no branch either', () => {
+    renderTab({
+      directories: [dir('/srv/stacks/web', { isGitRepo: false, gitBranch: '' })],
+      configuredDirs: ['/srv/stacks'],
+    })
+
+    expect(screen.queryByText('\u2014')).not.toBeInTheDocument()
   })
 })
 
