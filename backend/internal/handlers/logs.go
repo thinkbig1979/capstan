@@ -112,14 +112,17 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 	// cause. h.docker is the concrete *services.DockerService here, so the nil
 	// check means what it says (agent-os-xay).
 	if h.docker == nil {
-		// Routed through handleError, not writeJSONError: a 503 is a 5xx, and
-		// writeJSONError's plain c.JSON bypassed handleError's logServerFault
-		// entirely, so this outage was silent (same class as agent-os-7z8c/
-		// agent-os-7lg1 — a server fault that never logs). No `err` value
-		// exists here (this is a nil check, not a wrapped error), so
-		// NewAppError, not NewAppErrorWithCause. The writer is not hijacked
-		// yet (before serveWS), so c.JSON here is safe.
-		handleError(c, models.NewAppError(http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage))
+		// Routed through respondDockerErr, not writeJSONError: a 503 is a
+		// 5xx, and writeJSONError's plain c.JSON bypassed handleError's
+		// logServerFault entirely, so this outage was silent (same class as
+		// agent-os-7z8c/agent-os-7lg1 — a server fault that never logs).
+		// services.ErrDockerUnavailable stands in for the missing `err`
+		// value (this is a nil check, not a wrapped error) so this site
+		// reads identically to dashboard.go's matching fix (worker C,
+		// agent-os-vi0o/dashboard.go:123) in the package sweep — status,
+		// code and message stay byte-for-byte what writeJSONError sent. The
+		// writer is not hijacked yet (before serveWS), so this is safe.
+		respondDockerErr(c, services.ErrDockerUnavailable, http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage)
 		return
 	}
 

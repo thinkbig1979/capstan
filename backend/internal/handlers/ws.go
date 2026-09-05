@@ -22,12 +22,6 @@ import (
 const (
 	CloseCodeAuthFailure = 4401
 	CloseCodeRateLimit   = 4429
-	// CloseCodeNotFound marks a permanent WS failure the frontend must not
-	// redial: the resource the client asked for structurally does not exist
-	// (e.g. a deleted stack), so a retry cannot change the outcome. Mirrors
-	// WS_CLOSE_NOT_FOUND in frontend/src/lib/ws.ts, which extends
-	// shouldReconnectAfter's suppression list for it (agent-os-vi0o).
-	CloseCodeNotFound = 4404
 )
 
 const (

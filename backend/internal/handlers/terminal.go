@@ -16,6 +16,20 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
+// CloseCodeNotFound marks a permanent WS failure the frontend must not
+// redial: the resource the client asked for structurally does not exist
+// (e.g. a deleted stack), so a retry cannot change the outcome. Mirrors
+// WS_CLOSE_NOT_FOUND in frontend/src/lib/ws.ts, which extends
+// shouldReconnectAfter's suppression list for it (agent-os-vi0o).
+//
+// Declared here rather than beside CloseCodeAuthFailure/CloseCodeRateLimit
+// in ws.go (its natural home) because the WS chain worker (agent-os-94yx)
+// is editing ws.go concurrently on a sibling branch; a second writer there
+// would cost that chain a rebase. Move it to ws.go once that chain lands —
+// tracked as a follow-up, not a design decision (orchestrator bud4,
+// 2026-09-05).
+const CloseCodeNotFound = 4404
+
 // ContainerLister resolves the containers belonging to a compose project. It is
 // the terminal handler's view of DockerService, narrow enough to fake in tests
 // without a daemon.
