@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net"
@@ -233,8 +234,35 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, authAl
 			return
 		}
 		session, err := db.GetSession(jti)
-		if err != nil || session == nil {
-			c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Session not found or expired"))
+		if err != nil {
+			// Only a genuinely missing row is session loss. Every other error
+			// -- a closed, locked or unreadable database -- used to be
+			// answered with this same silent 401, which made a transient fault
+			// log EVERY authenticated operator out with nothing recorded
+			// server-side: the widest member of agent-os-8tqd's class, since
+			// this guard runs on every non-public request. The
+			// `|| session == nil` arm this replaces was dead — GetSession
+			// returns the bare Scan error and never (nil, nil)
+			// (database/users.go).
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Session not found or expired"))
+				c.Abort()
+				return
+			}
+			// handlers.handleError and handlers.logServerFault are
+			// unreachable from here: handlers imports middleware, so the
+			// reverse direction is an import cycle. This is logServerFault's
+			// message and its attribute keys in its order (handlers/
+			// respond.go), so an operator's log grep finds both the same way.
+			appErr := models.NewAppErrorWithCause(500, "INTERNAL_ERROR", "Session lookup failed", err)
+			slog.Error("request failed",
+				"request_id", RequestIDFrom(c),
+				"status", 500,
+				"code", "INTERNAL_ERROR",
+				"error", appErr,
+				"cause", err,
+			)
+			c.JSON(500, appErr)
 			c.Abort()
 			return
 		}
