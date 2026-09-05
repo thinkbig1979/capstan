@@ -384,14 +384,27 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 // classification is three follow-up probes, whose exit codes do separate them
 // cleanly.
 //
-// The table below is MEASURED ON TWO GIT VERSIONS and is IDENTICAL on both:
-// 2.47.3 (developer host) and 2.43.7 (the version family CI runs), the second
-// in an alpine:3.19 container. That matters because a classifier tuned to one
-// git would be a version-dependent misclassification, which is worse than the
-// flat GIT_CONFLICT it replaced -- it would be wrong only sometimes. It also
-// settles a specific false lead: a CI failure on this test was hypothesised to
-// be a 2.43-vs-2.47 exit-code difference, and there is no such difference. The
-// cause was the fixture, not the probes; see pullFixture.
+// The table below is MEASURED IN THREE ENVIRONMENTS and is IDENTICAL in all
+// three, cell for cell:
+//
+//	git 2.47.3, developer host, host global git config in effect
+//	git 2.47.3, developer host, GIT_CONFIG_GLOBAL=/dev/null
+//	git 2.43.7, alpine:3.19 container (the version family CI runs)
+//
+// Naming the environment next to the numbers is deliberate. The first row is
+// the only one that was originally measured, and it is the one CI does not
+// share -- init.defaultBranch is ambient user config, and a measurement taken
+// only under it can be true and still not generalise. Every probe below is
+// driven against an explicitly named branch, so that setting does not
+// participate; the other two rows are what establish that rather than assume
+// it.
+//
+// The version spread matters because a classifier tuned to one git would be a
+// version-dependent misclassification, worse than the flat GIT_CONFLICT it
+// replaced -- wrong only sometimes. It also settles a specific false lead: a
+// CI failure on this test was hypothesised to be a 2.43-vs-2.47 exit-code
+// difference. There is no such difference. The cause was the test fixture, not
+// the probes; see pullFixture.
 //
 //	                         ls-remote  rev-parse @{u}  is-ancestor HEAD @{u}
 //	diverged, non-ff             0            0                1

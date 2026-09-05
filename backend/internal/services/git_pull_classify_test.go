@@ -3,7 +3,9 @@ package services
 import (
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -51,7 +53,8 @@ func pullFixture(t *testing.T) (work, seed, root string) {
 	// HEAD happens to point at either.
 	mustGit(t, root, "clone", "-q", "-b", fixtureBranch, upstream, "work")
 
-	// PRECONDITIONS, ASSERTED RATHER THAN ASSUMED.
+	// PRECONDITIONS, ASSERTED RATHER THAN ASSUMED. These three lines are the
+	// most important thing in this file.
 	//
 	// `git clone` EXITS 0 when it cannot check anything out. It prints
 	// "warning: remote HEAD refers to nonexistent ref, unable to checkout" and
@@ -59,16 +62,44 @@ func pullFixture(t *testing.T) (work, seed, root string) {
 	// with the global config ignored: clone exit 0, zero files in the work
 	// tree, `rev-parse HEAD` fatal.
 	//
-	// Without these two lines a broken fixture reaches the arms below as a
-	// repository that tracks no upstream, and the divergence arm then fails as
-	// a MISCLASSIFICATION -- "got INTERNAL_ERROR, want GIT_CONFLICT" -- which
-	// reads as a bug in pullFailure and is not one. Asserting the setup here
-	// turns that into a loud, honest fixture failure at the line that caused
-	// it.
+	// What that cost, MEASURED on the pre-fix commit in that same environment:
+	// the divergence arm failed as a MISCLASSIFICATION ("got INTERNAL_ERROR,
+	// want GIT_CONFLICT"), which reads as a bug in pullFailure and is not one.
+	// Worse, the OTHER TWO ARMS PASSED, and passed VACUOUSLY -- they assert
+	// "not GIT_CONFLICT", and this is the error they were actually asserting
+	// against:
+	//
+	//	ARM 1 actual error: failed to get HEAD: git rev-parse: exit status 128
+	//	  (fatal: ambiguous argument 'HEAD': unknown revision or path ...
+	//
+	// That is pullCLI bailing at its own `rev-parse HEAD`, BEFORE pullFailure
+	// is ever called. Two green arms, and the code under test never ran. An
+	// assertion satisfied by more than one path, only one of which is the
+	// subject, is not a test -- and green is exactly when nobody looks.
+	//
+	// So the upstream check names the branch it expects rather than merely
+	// resolving something: "it tracks an upstream" is true of the broken
+	// fixture too, once HEAD exists.
 	mustGit(t, work, "rev-parse", "--verify", "HEAD")
-	mustGit(t, work, "rev-parse", "--verify", "@{upstream}")
+	if got := gitOut(t, work, "rev-parse", "--abbrev-ref", "@{upstream}"); got != "origin/"+fixtureBranch {
+		t.Fatalf("fixture precondition: work tracks %q, want %q. The clone did not set up the "+
+			"branch this fixture depends on, so every arm below would be testing the wrong repository.",
+			got, "origin/"+fixtureBranch)
+	}
 
 	return work, seed, root
+}
+
+// gitOut is mustGit for the cases that need the command's output, not just its
+// exit status.
+func gitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	//nolint:gosec // test helper, explicit argv, not a shell string
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v (%s)", args, dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // advanceUpstream puts one more commit on the upstream's main branch.
