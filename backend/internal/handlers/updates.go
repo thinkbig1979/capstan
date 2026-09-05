@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -40,7 +41,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 			err := h.scheduler.StartBackgroundScan()
 			if !scanStartIsBenign(err) {
 				slog.Error("Failed to start background scan", "error", err)
-				handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to start update scan"))
+				handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to start update scan", err))
 				return
 			}
 			logActionFromContext(h.actionLog, c, nil, services.ActionScan, gin.H{"trigger": "manual"})
@@ -101,7 +102,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 	cachedUpdates, err := h.db.GetCachedUpdates()
 	if err != nil {
 		slog.Error("Failed to get cached updates", "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get cached updates"))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get cached updates", err))
 		return
 	}
 
@@ -384,7 +385,7 @@ func (h *ResourcesHandler) updateContainerSync(c *gin.Context, id string) {
 		}); histErr != nil {
 			slog.Warn("Failed to update update history", "historyID", historyID, "error", histErr)
 		}
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to update container"))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to update container", ar.Err))
 		return
 	}
 
@@ -475,8 +476,18 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 
 	stackID := c.Param("id")
 	stack, err := h.db.GetStack(stackID)
-	if err != nil || stack == nil {
-		handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
+	if err != nil {
+		// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless the
+		// non-not-found case is split out here and logged with its cause.
+		// A separate not-a-pointer guard on the success path is dropped, not
+		// kept as a defensive no-op: database/stacks.go's GetStack always
+		// returns either &stack or a non-nil err, never both zero — nil arm
+		// dropped, dead per GetStack's return shape.
+		if errors.Is(err, sql.ErrNoRows) {
+			handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
@@ -484,7 +495,7 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 	cachedUpdates, err := h.db.GetCachedUpdates()
 	if err != nil {
 		slog.Error("Failed to get cached updates for stack", "stackId", stackID, "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get cached updates"))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get cached updates", err))
 		return
 	}
 
@@ -714,7 +725,7 @@ func (h *ResourcesHandler) getUpdateHistory(c *gin.Context) {
 	entries, total, err := h.db.GetUpdateHistory(filters)
 	if err != nil {
 		slog.Error("Failed to get update history", "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get update history"))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get update history", err))
 		return
 	}
 
@@ -752,7 +763,7 @@ func (h *ResourcesHandler) clearUpdateHistory(c *gin.Context) {
 	deleted, err := h.db.DeleteUpdateHistoryOlderThan(t)
 	if err != nil {
 		slog.Error("Failed to clear update history", "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to clear update history"))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to clear update history", err))
 		return
 	}
 
@@ -763,7 +774,7 @@ func (h *ResourcesHandler) listAutoUpdatePolicies(c *gin.Context) {
 	policies, err := h.db.GetAutoUpdatePolicies()
 	if err != nil {
 		slog.Error("Failed to get auto-update policies", "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get auto-update policies"))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get auto-update policies", err))
 		return
 	}
 
@@ -827,7 +838,7 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 
 	if err := h.db.UpsertAutoUpdatePolicy(policy); err != nil {
 		slog.Error("Failed to upsert auto-update policy", "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to save auto-update policy"))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to save auto-update policy", err))
 		return
 	}
 
@@ -846,7 +857,7 @@ func (h *ResourcesHandler) deleteAutoUpdatePolicy(c *gin.Context) {
 
 	if err := h.db.DeleteAutoUpdatePolicy(targetType, targetId); err != nil {
 		slog.Error("Failed to delete auto-update policy", "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to delete auto-update policy"))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to delete auto-update policy", err))
 		return
 	}
 

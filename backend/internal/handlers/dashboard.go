@@ -41,7 +41,13 @@ func (h *DashboardHandler) getDashboardStats() gin.HandlerFunc {
 		stacks, err := h.db.ListStacks()
 		if err != nil {
 			slog.Error("Failed to list stacks for dashboard", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get dashboard stats"})
+			// agent-os-ua4y: was a direct c.JSON write with a bespoke {"error":
+			// ...} body, bypassing handleError (so logServerFault never ran)
+			// and diverging from the AppError {code,message} shape every other
+			// endpoint uses. frontend/src/lib/error-handler.ts:110 reads
+			// response.data.error falling back to response.data.message, so
+			// the AppError shape's Message satisfies the same consumer.
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get dashboard stats", err))
 			return
 		}
 
@@ -119,8 +125,16 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 	return func(c *gin.Context) {
 		// Refuse before the upgrade so the caller gets a 503 naming the cause
 		// rather than a socket that opens and closes (agent-os-xay).
+		//
+		// respondDockerErr, not writeJSONError (agent-os-ua4y): this runs
+		// before serveWS's upgrade, so the writer is plain HTTP, not yet
+		// hijacked — writeJSONError's raw c.JSON bypassed handleError and so
+		// never reached logServerFault. services.ErrDockerUnavailable is
+		// itself the sentinel error respondDockerErr checks for, passed as the
+		// cause since there is no distinct triggering error here (the
+		// condition is h.docker == nil, not a call that returned one).
 		if h.docker == nil {
-			writeJSONError(c, http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage)
+			respondDockerErr(c, services.ErrDockerUnavailable, http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage)
 			return
 		}
 
@@ -188,11 +202,34 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 		if len(containerIDs) == 0 {
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
+		emptyHostLoop:
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+					// agent-os-ear5: re-check the host on every tick instead of
+					// trusting the list fetched once at connect — same class as
+					// monitoring.go's identical shape (agent-os-74rl). Before this
+					// fix a container started after connect never appeared for
+					// the life of the socket. A re-check failure is treated as
+					// "still empty" (best-effort — a transient Docker hiccup on
+					// a HEALTHY, already-open socket must not tear it down; the
+					// initial GetRunningContainerIDs error path above still owns
+					// the "refuse before streaming" behaviour for a genuine
+					// setup failure).
+					ids, err := h.docker.GetRunningContainerIDs(ctx)
+					if err == nil && len(ids) > 0 {
+						// The host stopped being empty: leave this branch with
+						// the now-populated list and fall through to the real
+						// streaming setup below — same shared code path a
+						// non-empty connect would have taken.
+						containerIDs = ids
+						break emptyHostLoop
+					}
+					if err != nil {
+						slog.Debug("re-check for empty dashboard metrics stream failed; still holding socket open", "error", err)
+					}
 					frame := MetricsFrame{
 						Timestamp: time.Now().Format(time.RFC3339),
 						// A nil slice marshals to JSON null, but

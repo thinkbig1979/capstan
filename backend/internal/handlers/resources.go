@@ -163,7 +163,7 @@ func (h *ResourcesHandler) inspectContainer(c *gin.Context) {
 	formatted, err := json.MarshalIndent(inspect, "", "  ")
 	if err != nil {
 		slog.Error("Failed to format inspect output", "id", id, "error", err)
-		handleError(c, models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to format inspect output"))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to format inspect output", err))
 		return
 	}
 
