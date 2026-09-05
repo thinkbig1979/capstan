@@ -203,7 +203,12 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	//      "sftp:user@host:/path", which authenticates by key and has no
 	//      password field; s3 credentials go in the environment or in the
 	//      "s3:https://..." form, which IS covered), but the absence of the hint
-	//      is still not a safety proof.
+	//      is still not a safety proof. Tracked as agent-os-qonw, split out of
+	//      agent-os-zzhs deliberately rather than deferred: the hard part there
+	//      is DISCRIMINATING those from "sftp:user@host:/path",
+	//      "b2:bucket:path" and "rclone:remote:path", which carry no secret,
+	//      and over-redacting one of THOSE would reproduce the lockout
+	//      agent-os-zzhs just fixed.
 	//
 	//   3. Also not exact the other way on the parse-error fallback: it splices
 	//      the marker wherever it finds a userinfo boundary with a non-empty
