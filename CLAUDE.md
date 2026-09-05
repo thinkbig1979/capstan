@@ -165,13 +165,18 @@ Every bug bead's close reason states four fields:
 4. **Verdict** — either "0 further sites" or the list of follow-up bead IDs filed
    for the sites the sweep found.
 
+A count in any of these four fields is pinned to the SHA it was measured on.
+Re-measure at close time and name the SHA: `agent-os-nho7`'s brief carried
+"10 lines, 5 in class" from `3dbaef2`, and the same command returned 14 and 8 on
+`25f192c` three commits later.
+
 ### The one principle behind it
 
-A zero, or a short list, is trustworthy only when a positive control shows the
-instrument actually fires on the pattern it's meant to catch. An unproven zero is
-not evidence of absence, it's evidence the search never ran. This shows up in four
-distinct ways, and receiver-only fixes for the first one still miss the other
-three:
+A zero, or a short list, is trustworthy only when the instrument has been run in
+the direction where it MUST report hits, and did. An unproven zero is not evidence
+of absence, it's evidence the search never ran. A pattern cannot tell you it is
+blind; an arm pointed the other way can. This shows up in four distinct ways, and
+receiver-only fixes for the first one still miss the other three:
 
 - **Name and receiver variation.** A sweep pinned to one identifier misses
   siblings that spell the same thing differently. `agent-os-iz9w`: grep for
@@ -203,11 +208,43 @@ three:
   the scope actually swept, not the scope the claim implies.
 
 Because of the third failure mode, every sweep in a close reason runs as
-`command grep` (or the local equivalent that bypasses shell rewriting). Because of
-the first and second, every zero or short list needs a positive control run
-alongside it: plant or point at one known instance of the pattern, confirm the
-same command catches it, and only then trust a zero returned elsewhere. Because of
-the fourth, a verdict names the exact directory or file set the sweep covered, not
-a generalization from it. A sweep that has not been shown to fire, or whose
-verdict claims a wider scope than it ran against, is not a sweep, it's an
-assumption with a command line attached.
+`command grep` (or the local equivalent that bypasses shell rewriting), and the
+command printed in the close reason is the command that was run: copy it from the
+shell, never retype it. Because of the fourth, a verdict names the exact directory
+or file set the sweep covered, not a generalization from it.
+
+Because of the first and second, a positive control is not enough. A control that
+fires on one known instance proves the pattern matches SOMETHING; it does not prove
+it covers the CLASS. `agent-os-o1jp.7` is the proof: its
+`NewWithMigrations(":memory:")` control fired, and the class was 33 sites, not 26,
+the extra seven sitting under the sibling constructor
+`NewWithMigrationsAndEncryptor`. So every zero or short list carries a **negative
+arm**, in three parts:
+
+1. **RECALL over the known set.** Run the same instrument against the pre-fix
+   state, a `git show <base>:<file>` or a `git archive <base>`, and require it to
+   report EVERY site the diff fixed, by line, not one of them. Cheap, mechanical,
+   always possible. A control that fires on a single site is what let
+   `directories.go:219` through.
+2. **CLASS COVERAGE over the unknown set.** Run a deliberately WIDER sibling of
+   the verdict instrument (receiver-agnostic, anchor-relaxed, one identifier
+   looser, or a different syntactic route to the same thing, such as a struct tag
+   where the first read a literal map key) and READ its extra hits one by one,
+   dispositioning each. Every class this repo has found larger was found larger
+   this way and never by part 1. Count the extras only after you have read them:
+   an over-wide instrument fires correctly on everything it matches, so it
+   manufactures false positives that no arm will catch for you (`agent-os-8ett`).
+3. **BOUND THE AGGREGATION.** If the instrument decides membership by proximity
+   (a `-A6`/`-A12` window, a "within N lines" rule, a count over a shared buffer),
+   state the rule and show it truncating. A window must stop at the next call of
+   the same shape, or it borrows the NEXT site's guard and reports a defective
+   site as clean: that is exactly what made `handlers/directories.go:219` read
+   GUARDED in `agent-os-7lg1`'s close reason, in a handoff, and in the
+   `agent-os-3h9x` brief, where it was nominated as the positive control while
+   being a third unguarded site. Both arms above were present and neither could
+   see it. A corollary: never nominate an in-class site as a control; it flips
+   when the fix lands, which is the opposite of a control.
+
+A sweep that has not been shown to fire, that has not been probed wider than its
+own verdict, or whose membership rule has never been shown to stop where it
+claims, is not a sweep. It is an assumption with a command line attached.
