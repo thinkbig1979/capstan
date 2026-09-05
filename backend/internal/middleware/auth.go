@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"log/slog"
 	"net"
 	"strings"
@@ -202,9 +203,14 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, authAl
 			return
 		}
 
-		claims, err := ValidateJWT(token, jwtSecret)
+		claims, err := validateJWT(token, jwtSecret)
 		if err != nil {
-			if strings.Contains(err.Error(), "expired") {
+			// Classified by sentinel identity, not by error text: golang-jwt/v5
+			// joins ErrTokenExpired into every past-"exp" failure, and a release
+			// that rewords the message must not demote it to the generic
+			// message (agent-os-ih0i). Status and code are the same on both
+			// branches; only the message differs.
+			if errors.Is(err, jwt.ErrTokenExpired) {
 				c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Session expired"))
 			} else {
 				c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Invalid authorization token"))
@@ -274,6 +280,12 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, authAl
 // jwtIssuer must match handlers.jwtIssuer; tokens are required to carry this
 // "iss" claim (L2).
 const jwtIssuer = "capstan"
+
+// validateJWT is the seam AuthMiddleware parses through. Production never
+// reassigns it; auth_expiry_test.go swaps it to present the middleware with an
+// expiry error whose text a library bump has changed, which the real parser
+// cannot be made to produce from outside (agent-os-ih0i).
+var validateJWT = ValidateJWT
 
 // WithExpirationRequired: without it, a token that omits "exp" entirely
 // parses as valid and never expires (the library only checks expiry when the

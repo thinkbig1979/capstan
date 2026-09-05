@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -50,6 +52,20 @@ func (h *StacksHandler) Create(c *gin.Context) {
 			http.StatusBadRequest,
 			models.ErrValidation,
 			"Stack name must contain only alphanumeric characters, dots, underscores, and hyphens",
+		))
+		return
+	}
+
+	// The charset above admits "---" and "_._", from which Docker Compose
+	// derives an EMPTY project name and then refuses every -p (agent-os-f3ah).
+	// Refuse it here, naming the rule, rather than persisting a row that can
+	// never start. Same producer as the row below, so the check cannot drift
+	// from what gets stored.
+	if services.ComposeProjectName(req.Name, "default") == "" {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Stack name must contain at least one letter or digit: Docker Compose derives the project name from it by keeping only lowercase letters, digits, '-' and '_' and trimming leading '-' and '_'",
 		))
 		return
 	}
@@ -123,21 +139,13 @@ func (h *StacksHandler) Create(c *gin.Context) {
 
 	absTargetDir, err := filepath.Abs(targetDir)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to resolve target directory",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve target directory", err))
 		return
 	}
 
 	absStackDir, err := filepath.Abs(stackDir)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to resolve stack directory",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve stack directory", err))
 		return
 	}
 
@@ -153,11 +161,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 
 	lintResults, err := h.linter.Lint(req.ComposeContent)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"LINT_ERROR",
-			"Failed to lint compose file",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 
@@ -182,22 +186,14 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	}
 
 	if err := os.MkdirAll(stackDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"MKDIR_ERROR",
-			"Failed to create stack directory",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "MKDIR_ERROR", "Failed to create stack directory", err))
 		return
 	}
 
 	composePath := filepath.Join(stackDir, "compose.yaml")
 	if err := os.WriteFile(composePath, []byte(req.ComposeContent), 0644); err != nil {
 		os.RemoveAll(stackDir)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"WRITE_ERROR",
-			"Failed to write compose file",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "WRITE_ERROR", "Failed to write compose file", err))
 		return
 	}
 
@@ -206,11 +202,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		envPath := filepath.Join(stackDir, ".env")
 		if err := os.WriteFile(envPath, []byte(req.EnvContent), 0600); err != nil {
 			os.RemoveAll(stackDir)
-			c.JSON(http.StatusInternalServerError, models.NewAppError(
-				http.StatusInternalServerError,
-				"WRITE_ERROR",
-				"Failed to write env file",
-			))
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "WRITE_ERROR", "Failed to write env file", err))
 			return
 		}
 		envFile = ".env"
@@ -241,11 +233,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	registeredDir, err := h.scanner.RegisterDirectory(stackDir, targetDir)
 	if err != nil {
 		os.RemoveAll(stackDir)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"DB_ERROR",
-			"Failed to register stack directory in database",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "DB_ERROR", "Failed to register stack directory in database", err))
 		return
 	}
 
@@ -280,20 +268,12 @@ func (h *StacksHandler) Create(c *gin.Context) {
 			}
 		}
 		os.RemoveAll(stackDir)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"DB_ERROR",
-			"Failed to register stack in database",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "DB_ERROR", "Failed to register stack in database", err))
 		return
 	}
 
 	if err := h.scanner.ScanDirectoryWithRoot(stackDir, targetDir); err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"SCANNER_ERROR",
-			"Failed to scan new stack directory",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "SCANNER_ERROR", "Failed to scan new stack directory", err))
 		return
 	}
 
@@ -393,13 +373,19 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
+	// always returns either &stack or a non-nil err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrStackNotFound,
+				"Stack not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
