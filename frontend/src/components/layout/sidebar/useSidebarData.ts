@@ -16,7 +16,6 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
   const { data: stacks = [], isLoading } = useQuery({
     queryKey: queryKeys.stacks(),
     queryFn: () => stacksApi.list(),
-    staleTime: 30_000,
   })
 
   const { data: config } = useQuery({
