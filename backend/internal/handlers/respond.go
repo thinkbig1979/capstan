@@ -16,7 +16,41 @@ import (
 // appropriate HTTP status code. All action endpoints should use this
 // to ensure consistent wire format across domains.
 func renderResult(c *gin.Context, r truth.ActionResult) {
-	c.JSON(r.HTTPStatus(), r)
+	renderResultWithStatus(c, r.HTTPStatus(), r)
+}
+
+// renderResultWithStatus is the one place an ActionResult becomes a response,
+// and therefore the one place a failed one is logged (agent-os-7lic).
+//
+// ActionResult.Err is json:"-" by design (truth/outcome.go), so the body never
+// carries the cause; before this, a Failed result (500 via HTTPStatus, or the
+// 503 substitution in renderDockerResult) left no record of WHY anywhere —
+// the exact gap agent-os-7z8c closed for handleError. The log is keyed on the
+// rendered STATUS, not on how r was built: truth.Failed constructions, the
+// ActionResult literals that copy Outcome and Err off a service result in
+// stack_lifecycle.go / stack_crud.go, and results passed through unchanged
+// from a service (git.go's Pull) all arrive here with the same shape, and a
+// log keyed on the constructor would miss the latter two.
+//
+// The Reason is the message and Err is the cause. Err may be nil on a Failed
+// result (a refusal with a Reason and nothing underneath, e.g. the
+// path-outside-root guard in stack_crud.go); logServerFault adds the cause
+// attr only when the AppError carries one, so a nil Err degrades to "no cause
+// attr" without any gating on Err != nil here. The AppError is built solely
+// to reuse logServerFault's line shape and never escapes this function, so
+// the Unwrap hazard documented on NewAppErrorWithCause (errors.Is seeing
+// through a travelling AppError) cannot apply.
+//
+// Partial (207) is deliberately not logged: logServerFault's < 500 guard
+// excludes it, and a 207 already names its failed subset in Details.
+//
+// Status, code and body are unchanged by this function: the only effect
+// beyond c.JSON is the log line.
+func renderResultWithStatus(c *gin.Context, status int, r truth.ActionResult) {
+	if status >= http.StatusInternalServerError {
+		logServerFault(c, status, "ACTION_FAILED", models.NewAppErrorWithCause(status, "ACTION_FAILED", r.Reason, r.Err))
+	}
+	c.JSON(status, r)
 }
 
 // handleError writes err as a JSON error response, using the AppError's
@@ -104,7 +138,7 @@ const DockerUnavailableMessage = "Docker daemon unreachable: the server started 
 // plain error endpoints use respondDockerErr.
 func renderDockerResult(c *gin.Context, err error, r truth.ActionResult) {
 	if errors.Is(err, services.ErrDockerUnavailable) {
-		c.JSON(http.StatusServiceUnavailable, truth.Failed(DockerUnavailableMessage, err))
+		renderResultWithStatus(c, http.StatusServiceUnavailable, truth.Failed(DockerUnavailableMessage, err))
 		return
 	}
 	renderResult(c, r)
