@@ -64,6 +64,71 @@ func TestRedactURLUserinfo(t *testing.T) {
 			"CONTROL: never round-trip through url.String(), it re-encodes the space to %20"},
 		{"port preserved", "http://host:8080/a/b.git", "http://host:8080/a/b.git", "CONTROL"},
 		{"file scheme", "file:///srv/repo.git", "file:///srv/repo.git", "CONTROL"},
+
+		// --- agent-os-qonw: an inline credential in an OPAQUE part, no "://" ---
+		//
+		// None of these is a form restic can use (restic 0.18.0 reads
+		// "sftp:user:PW@host:/path" as host "user"; its s3 and sftp parsers
+		// never read a URL password; rclone finds no remote called "user"), so
+		// ValidateRepositoryForm refuses them at save. These arms cover rows
+		// stored BEFORE that validator existed, which were served in clear
+		// with an ordinary password and no "/" at all.
+		{"qonw sftp opaque with password", "sftp:user:SECRET999@host:/path",
+			"sftp:***@host:/path",
+			"parses as scheme sftp + Opaque with NO userinfo, so the parse-success path returned it unchanged"},
+		{"qonw s3 opaque with key and secret", "s3:AKIAKEY:SECRET999@host/bucket",
+			"s3:***@host/bucket",
+			"same mechanism: opaque, no '://', so the nested-URL recursion never fired"},
+		{"qonw rclone opaque with password", "rclone:user:SECRET999@remote:path",
+			"rclone:***@remote:path",
+			"same mechanism"},
+		{"qonw rclone connection string with an obscured password", "rclone::sftp,host=h,user=u,pass=SECRET999:path",
+			"rclone::sftp,host=h,user=u,pass=***:path",
+			"a documented rclone form that restic passes through and rclone consumes; the credential sits in a parameter, not a userinfo"},
+		{"qonw sftp opaque, password containing a slash", "sftp:user:AB/CD+SECRET999@host:/path",
+			"sftp:***@host:/path",
+			"the boundary is the '@' whose right side reads host:, so a '/' in the password does not move it"},
+		{"qonw sftp opaque, password containing an at-sign", "sftp:user:P@SS+SECRET999@host:/path",
+			"sftp:***@host:/path",
+			"the LAST '@' followed by host: is the boundary"},
+		{"qonw upper-case scheme kept byte-for-byte", "SFTP:user:SECRET999@host:/path",
+			"SFTP:***@host:/path",
+			"the prefix is taken from the input, not from url.Parse, which lower-cases it"},
+		{"qonw surrounding whitespace preserved", "  sftp:user:SECRET999@host:/path\n",
+			"  sftp:***@host:/path\n",
+			"the opaque rule runs after the trim block, which reattaches what it trimmed"},
+
+		// --- agent-os-qonw LEAVE corpus: the discriminating half, byte-for-byte ---
+		//
+		// Over-starring any of these is a LOCKOUT, not a cosmetic bug: the
+		// marker trips the save guard in BackupHandler.updateSettings and the
+		// field becomes permanently unsavable (agent-os-zzhs arm 2).
+		{"qonw LEAVE s3 documented https form, no credential", "s3:https://s3.host/bucket", "s3:https://s3.host/bucket",
+			"CONTROL: the ':' before the '@'-less authority is the URL's own"},
+		{"qonw LEAVE local path", "/var/backups/repo", "/var/backups/repo", "CONTROL"},
+		{"qonw LEAVE rclone connection string without a credential", "rclone::sftp,host=h,user=u:path",
+			"rclone::sftp,host=h,user=u:path",
+			"CONTROL: host= and user= are not secrets; only a secret-bearing parameter is starred"},
+		{"qonw LEAVE rclone connection string, secret parameter left blank", "rclone::sftp,host=h,user=u,pass=:path",
+			"rclone::sftp,host=h,user=u,pass=:path",
+			"CONTROL: rclone's sftp docs say 'leave blank to use ssh-agent'; an empty value hides nothing (the zzhs empty-userinfo principle)"},
+		{"qonw LEAVE rclone path that is an email address", "rclone:gdrive:edwin@example.com",
+			"rclone:gdrive:edwin@example.com",
+			"CONTROL: a naive 'colon before at-sign' rule stars this; the text after the '@' is not host:, so it is a path"},
+		{"qonw LEAVE sftp path containing an at-sign", "sftp:host:/path/with@sign",
+			"sftp:host:/path/with@sign",
+			"CONTROL: same discriminator, the '@' is inside the path"},
+		{"qonw LEAVE s3 endpoint with a port", "s3:localhost:9000/bucket", "s3:localhost:9000/bucket",
+			"CONTROL: a ':' with no '@' at all is a port"},
+		{"qonw LEAVE rest opaque with no credential", "rest:http://host:8000/repo/", "rest:http://host:8000/repo/",
+			"CONTROL"},
+		// Not a LEAVE row and not a qonw change: the documented sftp URL form
+		// carries a username-only userinfo, which agent-os-57xj redacts BY
+		// DESIGN (precedent: ssh://git@host/repo.git). Pinned here so a later
+		// "fix" to the opaque sftp rule cannot quietly move this one.
+		{"qonw unchanged behaviour: sftp URL form, username only", "sftp://user@host:2222/path",
+			"sftp://***@host:2222/path",
+			"redacted as today, by design (agent-os-57xj); not a byte-for-byte row"},
 	}
 
 	for _, tc := range cases {
@@ -318,6 +383,123 @@ func TestRedactURLUserinfo_LeavesAnAtSignInThePathAlone(t *testing.T) {
 	} {
 		if got := RedactURLUserinfo(in); got != in {
 			t.Errorf("the @ here is not a credential boundary:\n  in  = %q\n  got = %q", in, got)
+		}
+	}
+}
+
+// TestValidateRepositoryForm pins agent-os-qonw's save-time layer.
+//
+// The three opaque "user:pw@" shapes and the rclone connection string with an
+// inline secret are the corpus that was served in clear. None is a form the
+// backend can use (see the research in the bead), so the right answer at save
+// time is a refusal that names the supported form, rather than storing a
+// misconfiguration and starring it out on read so it looks handled.
+//
+// The accept half is the load-bearing one: a validator that rejects
+// "sftp:user@host:/srv/backups" or "b2:bucketname:path/to/repo" is a worse
+// outcome than the leak. Every documented form and every LEAVE row must pass.
+func TestValidateRepositoryForm(t *testing.T) {
+	reject := []struct {
+		in       string
+		mustSay  string
+		mustName string
+	}{
+		{"sftp:user:PW@host:/path", "sftp:", "sftp:user@host:/path"},
+		{"sftp:user:AB/CD+PW@host:/path", "sftp:", "sftp:user@host:/path"},
+		{"sftp://user:PW@host:2222/path", "sftp:", "sftp:user@host:/path"},
+		{"s3:KEY:PW@host/bucket", "s3:", "AWS_SECRET_ACCESS_KEY"},
+		{"rclone:user:PW@remote:path", "rclone:", "rclone.conf"},
+		{"rclone::sftp,host=h,user=u,pass=OBSCURED:path", `"pass"`, "rclone.conf"},
+		{"rclone::sftp,host=h,user=u,key_file_pass=OBSCURED:path", `"key_file_pass"`, "rclone.conf"},
+		{"rclone::s3,provider=AWS,access_key_id=AKIA,secret_access_key=SECRET:bucket", `"secret_access_key"`, "rclone.conf"},
+		{"rclone::drive,token=OBSCUREDTOKEN:path", `"token"`, "rclone.conf"},
+		{"rclone:myremote,pass=OBSCURED:path", `"pass"`, "rclone.conf"},
+		// Quoted value: the ":" inside the quotes must not end the remote
+		// spec early, or the parameter is never seen.
+		{`rclone::sftp,host=h,pass="a:b,c":path`, `"pass"`, "rclone.conf"},
+	}
+	for _, tc := range reject {
+		err := ValidateRepositoryForm(tc.in)
+		if err == nil {
+			t.Errorf("%q: accepted, must be refused with a message naming the supported form", tc.in)
+			continue
+		}
+		if !contains(err.Error(), tc.mustSay) || !contains(err.Error(), tc.mustName) {
+			t.Errorf("%q: refused, but the message does not name the scheme and the supported form:\n  got = %q\n  must contain %q and %q", tc.in, err.Error(), tc.mustSay, tc.mustName)
+		}
+	}
+
+	// A refusal must never echo the secret back: the message reaches the
+	// response body and the browser.
+	if err := ValidateRepositoryForm("sftp:user:SECRET999@host:/path"); err != nil && contains(err.Error(), "SECRET999") {
+		t.Errorf("the refusal echoes the credential: %q", err.Error())
+	}
+
+	accept := []string{
+		// The LEAVE corpus, verbatim.
+		"sftp:user@host:/srv/backups",
+		"b2:bucketname:path/to/repo",
+		"rclone:remote:path",
+		"git@github.com:org/repo.git",
+		"s3:https://s3.host/bucket",
+		"/var/backups/repo",
+		"rclone::sftp,host=h,user=u:path",
+		// Redacted-as-today, not refused: documented forms.
+		"rest:https://user:pw@host/",
+		"sftp://user@host:2222/path",
+		// Documented forms per backend.
+		"sftp://user@[::1]:2222//srv/restic-repo",
+		"s3:s3.us-east-1.amazonaws.com/bucket_name",
+		"s3:http://localhost:9000/restic",
+		"s3:localhost:9000/bucket",
+		"azure:foo:/",
+		"gs:foo:/",
+		"swift:container_name:/path",
+		"rclone:b2prod:yggdrasil/foo/bar/baz",
+		"rclone:gdrive,shared_with_me:path/to/dir",
+		"rclone::sftp,host=h,user=u,pass=:path",
+		"rclone::sftp,host=h,user=u,key_file=/root/.ssh/id_ed25519:path",
+		"rclone:gdrive:edwin@example.com",
+		"sftp:host:/path/with@sign",
+		"rest:http://:@host:8000/repo/",
+		"",
+		"  /srv/restic  ",
+	}
+	for _, in := range accept {
+		if err := ValidateRepositoryForm(in); err != nil {
+			t.Errorf("%q: refused, must be accepted (a validator that rejects a supported form is a worse outcome than the leak):\n  err = %v", in, err)
+		}
+	}
+}
+
+// TestValidateRepositoryForm_AgreesWithTheRedactor pins the property that
+// makes R1 safe for rows stored before the validator existed: an opaque value
+// is refused at save if and only if the redactor would star it on read. A
+// legacy row is therefore served starred, its round-trip is refused by the
+// marker guard, and the operator's way out is a form the validator accepts —
+// exactly what a legacy rest:https://user:pw@host/ row gets today.
+//
+// Scoped to the opaque "user:pw@" shapes: the "://" forms are documented with
+// a credential (rest:) or redacted by design (sftp://user@), so there the two
+// deliberately disagree.
+func TestValidateRepositoryForm_AgreesWithTheRedactor(t *testing.T) {
+	for _, in := range []string{
+		"sftp:user:PW@host:/path",
+		"s3:KEY:PW@host/bucket",
+		"rclone:user:PW@remote:path",
+		"rclone::sftp,host=h,user=u,pass=OBSCURED:path",
+		"sftp:user@host:/srv/backups",
+		"b2:bucketname:path/to/repo",
+		"rclone:remote:path",
+		"rclone::sftp,host=h,user=u:path",
+		"rclone:gdrive:edwin@example.com",
+		"sftp:host:/path/with@sign",
+		"s3:localhost:9000/bucket",
+	} {
+		refused := ValidateRepositoryForm(in) != nil
+		starred := RedactURLUserinfo(in) != in
+		if refused != starred {
+			t.Errorf("%q: refused at save = %v but starred on read = %v; the two layers read one grammar table and must agree", in, refused, starred)
 		}
 	}
 }
