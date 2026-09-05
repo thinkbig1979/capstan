@@ -42,6 +42,63 @@ interface AuthState {
 let checkAuthInFlight: Promise<void> | null = null
 let checkStatusInFlight: Promise<void> | null = null
 
+// Per-attempt bound for the boot probes (agent-os-mhqf).
+//
+// The retry budget below and the client's request timeout used to be unrelated
+// numbers. api.ts:62 sets one 120000ms timeout for the whole client, sized for
+// pull/start (see its comment), and a backend that ACCEPTS the connection but
+// never answers fails in exactly the shape both loops retry -- a rejection
+// carrying no HTTP status. So a hang cost 120s per attempt, three attempts per
+// probe, two probes in sequence behind one full-page spinner (App.tsx:105-106,
+// :113): ~720s. Bounding the attempt instead of shortening the shared client
+// timeout keeps long stack operations working and makes the boot budget
+// ~3 x 8s + 250ms + 750ms ~= 25s per probe, ~50s for the boot.
+//
+// 8000ms is a JUDGEMENT, not a measurement of the thing it has to survive.
+// Measured on a loopback production-serve fixture, slowest of 40 requests:
+// /auth/status 0.46ms, /auth/me 0.75ms. That bounds the server's own work and
+// says nothing about a slow link, so the number is chosen as ~10,000x the
+// observed server time -- far above any plausible cold-start-plus-slow-network
+// round trip for two liveness checks, and far below the 120s it replaces.
+// These two are liveness probes, not data fetches: one that has not answered
+// in eight seconds has answered.
+const BOOT_PROBE_TIMEOUT_MS = 8000
+
+/**
+ * Bounds ONE probe attempt, rejecting in the shape a no-response failure
+ * already has.
+ *
+ * The rejection deliberately carries no `status`, because that is the field
+ * both loops read to tell "the server answered" from "the server never
+ * answered" (api.ts:127-131, error-handler.ts:58-62). A hang IS the second
+ * case, so checkAuth's status-aware predicate keeps retrying it and
+ * agent-os-2cp3's narrowing is unaffected.
+ *
+ * The abandoned request stays in flight until axios drops it at the client
+ * timeout. That is deliberate: a discarded GET against a backend that is
+ * already hanging costs nothing, and the alternative -- a second timeout
+ * mechanism on the same number, in api.ts -- would make this one dead code in
+ * production while leaving it the only one the tests can reach.
+ */
+function withBootProbeTimeout<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const bound = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject({
+        error: 'Boot probe timed out',
+        code: 'ETIMEDOUT',
+        message: `No response within ${BOOT_PROBE_TIMEOUT_MS}ms`,
+      })
+    }, BOOT_PROBE_TIMEOUT_MS)
+  })
+  // Once the bound wins the race nothing is listening to `work` any more, and
+  // its eventual rejection would surface as an unhandled one. Claim it here.
+  void work.catch(() => {})
+  return Promise.race([work, bound]).finally(() => {
+    clearTimeout(timer)
+  })
+}
+
 export const useAuthStore = create<AuthState>()((set) => ({
   token: null,
   user: null,
@@ -118,7 +175,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
       for (let attempt = 0; ; attempt++) {
         try {
           const { authApi } = await import('@/lib/api')
-          const user = await authApi.me()
+          const user = await withBootProbeTimeout(authApi.me())
           set({
             token: 'cookie',
             user,
@@ -182,7 +239,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
       for (let attempt = 0; ; attempt++) {
         try {
           const { authApi } = await import('@/lib/api')
-          const status = await authApi.status()
+          const status = await withBootProbeTimeout(authApi.status())
           set({
             authDisabled: status.authDisabled,
             needsSetup: status.needsSetup,
