@@ -145,11 +145,23 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 	// exists (deleted admin, DB restored from an older snapshot). That session
 	// can never resolve a user, so it is session loss, not a bad credential.
 	user, err := h.db.GetUserByID(userID.(string))
-	if err != nil || user == nil {
-		c.JSON(http.StatusUnauthorized, models.NewAppError(
-			http.StatusUnauthorized,
-			models.ErrSessionExpired,
-			"User not found",
+	if err != nil {
+		// Not-found only; any other failure is a server fault carrying its
+		// cause, not an expired session (agent-os-8tqd; auth.go's Me carries
+		// the full reasoning and the dead-`|| user == nil`-arm evidence).
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusUnauthorized, models.NewAppError(
+				http.StatusUnauthorized,
+				models.ErrSessionExpired,
+				"User not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to load user",
+			err,
 		))
 		return
 	}
@@ -191,8 +203,16 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 
+	// Out of agent-os-8tqd's class: this site already answers 500 with the
+	// cause attached, and ErrNoRows here (the row deleted mid-request) is
+	// itself a server fault, so it is deliberately NOT split off. Only the
+	// dead `|| verifiedUser == nil` arm is dropped, for the reason every
+	// sibling site dropped it: GetUserByID never returns (nil, nil). The
+	// slog.Error below is left in place even though the cause-carrying
+	// AppError makes logServerFault log too — it is the only line that
+	// carries userID, so removing it would lose an attribute.
 	verifiedUser, err := h.db.GetUserByID(user.ID)
-	if err != nil || verifiedUser == nil {
+	if err != nil {
 		slog.Error("Failed to verify password update", "error", err, "userID", userID)
 		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,

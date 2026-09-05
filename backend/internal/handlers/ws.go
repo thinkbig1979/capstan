@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -379,12 +380,28 @@ func authenticateToken(token string, db *database.DB, jwtSecret string) (string,
 	}
 
 	session, err := db.GetSession(jti)
-	if err != nil || session == nil {
-		return "", &models.AppError{
-			Code:    models.ErrSessionExpired,
-			Message: "Session not found or expired",
-			Status:  http.StatusUnauthorized,
+	if err != nil {
+		// Only a genuinely missing row is session loss (agent-os-8tqd). Any
+		// other failure is a server fault: it returns Status 500 with the
+		// cause attached, which makes serveWS's existing "WebSocket upgrade
+		// failed" line report it (errors.As + "cause", appErr.Cause, below)
+		// instead of printing SESSION_EXPIRED with a nil cause, and which
+		// wsAuthCloseFor turns into a 1011 rather than a reconnect-suppressing
+		// 4401. The `|| session == nil` arm this replaces was dead: GetSession
+		// returns the bare Scan error and never (nil, nil) (database/users.go).
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", &models.AppError{
+				Code:    models.ErrSessionExpired,
+				Message: "Session not found or expired",
+				Status:  http.StatusUnauthorized,
+			}
 		}
+		return "", models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Session lookup failed",
+			err,
+		)
 	}
 
 	if time.Now().After(session.ExpiresAt) {
@@ -520,6 +537,28 @@ func safeWriteCloseMessage(c *Connection, closeCode int, reason string) {
 	}
 }
 
+// wsAuthCloseFor picks the close frame for an authenticateToken failure.
+//
+// Every auth failure used to close with CloseCodeAuthFailure (4401), and the
+// frontend's shouldReconnectAfter (frontend/src/lib/ws.ts) suppresses the
+// reconnect ladder on 4401/4429/4404 — deliberately, because a policy refusal
+// is a decision retrying cannot change. A transient database fault is not a
+// decision, so closing it as 4401 left the stream dead until the operator
+// reloaded the page. A server fault closes with RFC 6455's 1011 "unexpected
+// condition" instead: it is outside that suppression list, so the ladder runs,
+// and it is already this codebase's close code for a server-side WebSocket
+// failure (logs.go, monitoring.go, dashboard.go), which ws.ts's own comment
+// names as reconnect-eligible (agent-os-8tqd).
+//
+// A genuine 401 keeps 4401 "Auth failed" byte for byte.
+func wsAuthCloseFor(err error) (int, string) {
+	var appErr *models.AppError
+	if errors.As(err, &appErr) && appErr.Status >= http.StatusInternalServerError {
+		return websocket.CloseInternalServerErr, "Auth check failed"
+	}
+	return CloseCodeAuthFailure, "Auth failed"
+}
+
 func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDisabled bool) (*Connection, error) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -553,7 +592,8 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 		if cookieErr == nil && cookieToken != "" {
 			userID, err = authenticateToken(cookieToken, db, jwtSecret)
 			if err != nil {
-				writeCloseMessage(conn, CloseCodeAuthFailure, "Auth failed")
+				closeCode, closeReason := wsAuthCloseFor(err)
+				writeCloseMessage(conn, closeCode, closeReason)
 				conn.Close()
 				return nil, err
 			}
@@ -579,7 +619,8 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 
 			userID, err = authenticateToken(authMsg.Token, db, jwtSecret)
 			if err != nil {
-				writeCloseMessage(conn, CloseCodeAuthFailure, "Auth failed")
+				closeCode, closeReason := wsAuthCloseFor(err)
+				writeCloseMessage(conn, closeCode, closeReason)
 				conn.Close()
 				return nil, err
 			}

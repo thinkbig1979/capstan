@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -279,6 +281,28 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	user, lookupErr := h.db.GetUserByUsername(req.Username)
 
+	// A lookup that failed for any reason OTHER than "no such user" is a
+	// server fault, and it has to reach the operator's log -- but never the
+	// caller (agent-os-8tqd). The 401 below is deliberately identical on both
+	// arms: the unconditional bcrypt comparison immediately after this closes
+	// the username-enumeration timing oracle (H3), and a distinguishable 500
+	// here would reopen the same oracle by another route. So this is log-only,
+	// and deliberately not handleError -- logServerFault is silent below 500
+	// and this request is answered 401. The message and attribute keys match
+	// logServerFault's (respond.go) so one grep finds both; "status" reports
+	// what the caller actually got rather than claiming a 500 that never
+	// happened. It cannot become a log-volume oracle either: a username that
+	// simply does not exist is sql.ErrNoRows and logs nothing.
+	if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+		slog.Error("request failed",
+			"request_id", middleware.RequestIDFrom(c),
+			"status", http.StatusUnauthorized,
+			"code", models.ErrUnauthorized,
+			"error", "user lookup failed; answered as invalid credentials to keep the login timing oracle closed",
+			"cause", lookupErr,
+		)
+	}
+
 	// Always perform a bcrypt comparison, even when the user does not exist, so
 	// the user-exists and user-missing paths take comparable time. This removes
 	// the username-enumeration timing oracle (H3). On the missing-user path we
@@ -440,11 +464,27 @@ func (h *AuthHandler) Me(c *gin.Context) {
 	// valid session pointing at a user row that no longer exists is session
 	// loss, not a bad credential, and can never resolve.
 	user, err := h.db.GetUserByID(userID.(string))
-	if err != nil || user == nil {
-		c.JSON(http.StatusUnauthorized, models.NewAppError(
-			http.StatusUnauthorized,
-			models.ErrSessionExpired,
-			"User not found",
+	if err != nil {
+		// Only a genuinely missing row is session loss. EVERY other error --
+		// a closed, locked or unreadable database -- used to be answered with
+		// this same silent 401, so a transient fault logged the operator out
+		// and left no server-side record at all: agent-os-8tqd, the 401
+		// sibling of agent-os-7lg1/3h9x's 404 collapse. The `|| user == nil`
+		// arm this replaces was dead — GetUserByID returns the bare Scan error
+		// and never (nil, nil) (database/users.go).
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusUnauthorized, models.NewAppError(
+				http.StatusUnauthorized,
+				models.ErrSessionExpired,
+				"User not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to load user",
+			err,
 		))
 		return
 	}
@@ -503,11 +543,23 @@ func (h *AuthHandler) VerifyPassword(c *gin.Context) {
 	// exists (deleted admin, DB restored from an older snapshot). That session
 	// can never resolve a user, so it is session loss, not a bad credential.
 	user, err := h.db.GetUserByID(userID.(string))
-	if err != nil || user == nil {
-		c.JSON(http.StatusUnauthorized, models.NewAppError(
-			http.StatusUnauthorized,
-			models.ErrSessionExpired,
-			"User not found",
+	if err != nil {
+		// Not-found only; any other failure is a server fault carrying its
+		// cause, not an expired session (agent-os-8tqd; see Me above for the
+		// full reasoning and for why the `|| user == nil` arm was dead).
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusUnauthorized, models.NewAppError(
+				http.StatusUnauthorized,
+				models.ErrSessionExpired,
+				"User not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to load user",
+			err,
 		))
 		return
 	}
