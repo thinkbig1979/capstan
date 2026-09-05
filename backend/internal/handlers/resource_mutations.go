@@ -272,7 +272,7 @@ func (h *ResourcesHandler) createNetwork(c *gin.Context) {
 
 	logActionFromContext(h.actionLog, c, nil, services.ActionCreateNetwork, gin.H{"name": req.Name, "driver": driver})
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "network_create", Timestamp: time.Now()})
-	c.JSON(http.StatusCreated, truth.ActionResult{
+	renderResultWithStatus(c, http.StatusCreated, truth.ActionResult{
 		Outcome: truth.OutcomeSuccess,
 		Reason:  "network created",
 		Details: map[string]any{
