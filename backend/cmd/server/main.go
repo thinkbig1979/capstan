@@ -446,7 +446,28 @@ func main() {
 	gitGroup := protected.Group("/git")
 	gitHandler.RegisterRoutes(gitGroup)
 
-	connectionManager := handlers.NewConnectionManager(10)
+	// 24, not 10: a per-user cap of 10 was regularly exhausted by ordinary use
+	// (agent-os-8uuw). This is a COMBINED worst case, not two alternative
+	// numbers to pick the larger of -- steady load and churn overlap can
+	// stack on the same user at the same moment. Steady state: 4
+	// concurrently open stack-detail tabs with the Metrics view active x 4
+	// slots/tab (dashboard-metrics + stack-events, always mounted, + 2
+	// metrics sockets per agent-os-w3i7) = 16, held indefinitely, no
+	// switching required. On top of that, navigating between stack pages in
+	// any ONE of those tabs briefly double-counts that tab's ~4 sockets for
+	// ~2s after the old ones' client leaves (MEASURED 2026-09-05: the
+	// handler has no read pump, so a failed WRITE is its only disconnect
+	// detector, and every churn-test socket held 2001-2004ms past client
+	// close regardless of how briefly it was open) -- call that +4 for one
+	// navigating tab. 16 + 4 = 20; 24 leaves a further +4 of margin for a
+	// second simultaneous navigation, or for the ~2s figure (labelled
+	// INFERRED, not directly instrumented, in the bead) running a little
+	// long. Since agent-os-jj8u, a breach past this is a clean 4429 the
+	// client does not redial into (frontend/src/lib/ws.ts), so a cap that
+	// is occasionally a little low degrades gracefully; the margin buys
+	// headroom, not perfect precision, and 24 stays a bounded cap, not an
+	// unbounded one.
+	connectionManager := handlers.NewConnectionManager(24)
 
 	// Terminals get their own, lower cap. Every terminal connection is a real
 	// `docker exec` process with a PTY held for up to 30 minutes, which is

@@ -59,7 +59,11 @@ func TestDashboardMetricsWS_CapRefusalReportsNoGinError(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 
 	cm := NewConnectionManager(1)
-	require.NoError(t, cm.Add("already-open", &Connection{ID: "already-open", UserID: "anonymous"}))
+	// "anon:127.0.0.1", not the literal "anonymous": since agent-os-8uuw,
+	// upgradeConnection assigns "anon:"+c.ClientIP() under AUTH_DISABLED, and
+	// every httptest dial below is unauthenticated default-dialer traffic
+	// from 127.0.0.1, so this is the identity that actually collides with it.
+	require.NoError(t, cm.Add("already-open", &Connection{ID: "already-open", UserID: "anon:127.0.0.1"}))
 
 	handler := NewDashboardHandler(nil, docker, db, cm)
 

@@ -407,7 +407,10 @@ func TestBackupWSAttach_DoesNotConsumeSharedCapBudget(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 
 	runID := kickOffBackupRun(t, srv)
-	conn := dialBackupWS(t, srv, "/api/ws/backups/run/"+runID, "") // authDisabled -> userID "anonymous"
+	// authDisabled -> userID "anon:"+c.ClientIP(), "anon:127.0.0.1" for this
+	// default-dialer httptest client (agent-os-8uuw; was the literal
+	// "anonymous" before that fix).
+	conn := dialBackupWS(t, srv, "/api/ws/backups/run/"+runID, "")
 	defer conn.Close()
 
 	// Wait for the backup stream's own registration before asking a
@@ -415,11 +418,13 @@ func TestBackupWSAttach_DoesNotConsumeSharedCapBudget(t *testing.T) {
 	// operations dial can win the race and measure a cap the backup stream has
 	// not touched yet, which passes whether or not wsAttach meters.
 	requireConnRegistered(t, cm, func(c *Connection) bool {
-		return c.UserID == "anonymous"
+		return c.UserID == "anon:127.0.0.1"
 	}, "backup WS attach under AUTH_DISABLED")
 
-	// Same manager, same user ("anonymous" under authDisabled), a handler that
-	// DOES hard-refuse at the cap (operations_test.go's own fixture/helpers).
+	// Same manager, same user ("anon:127.0.0.1" under authDisabled, both
+	// dials being unauthenticated default-dialer loopback traffic), a
+	// handler that DOES hard-refuse at the cap (operations_test.go's own
+	// fixture/helpers).
 	opSrv, _ := newOperationsFixtureWith(t, cm, &fakeStreamer{})
 	code, text := dialOperations(t, opSrv, "stack-a", "start")
 

@@ -84,8 +84,10 @@ func newTerminalFixture(t *testing.T, cm *ConnectionManager, docker ContainerLis
 
 	terminal := services.NewTerminalService(&config.Config{})
 
-	// authDisabled=true so upgradeConnection assigns the "anonymous" user
-	// without a JWT; the cap and the scoping check are what these tests are
+	// authDisabled=true so upgradeConnection assigns a per-client "anon:"+
+	// c.ClientIP() user without a JWT ("anon:127.0.0.1" for every dial in
+	// this file, all unauthenticated default-dialer loopback traffic, since
+	// agent-os-8uuw); the cap and the scoping check are what these tests are
 	// about, and both run after authentication either way.
 	handler := NewTerminalHandler(terminal, docker, db, cm, services.NewActionLogger(db))
 
@@ -277,8 +279,9 @@ func TestTerminalDeniesWhenContainerLookupFails(t *testing.T) {
 func TestTerminalRefusesBeyondPerUserCap(t *testing.T) {
 	cm := NewConnectionManager(1)
 	// Occupy the single slot for the user upgradeConnection will assign
-	// (authDisabled -> "anonymous").
-	require.NoError(t, cm.Add("already-open", &Connection{ID: "already-open", UserID: "anonymous"}))
+	// (authDisabled -> "anon:"+c.ClientIP(), "anon:127.0.0.1" for this
+	// default-dialer httptest client, since agent-os-8uuw).
+	require.NoError(t, cm.Add("already-open", &Connection{ID: "already-open", UserID: "anon:127.0.0.1"}))
 
 	lister := &fakeContainerLister{containersByProject: map[string][]string{"proj-a": {"proj-a-web-1"}}}
 	f := newTerminalFixture(t, cm, lister)
@@ -327,13 +330,13 @@ func TestTerminalOccupiesThenFreesItsSlot(t *testing.T) {
 		t.Fatal("handler never reached the membership lookup")
 	}
 
-	if n := cm.CountByUser("anonymous"); n != 1 {
+	if n := cm.CountByUser("anon:127.0.0.1"); n != 1 {
 		t.Errorf("while the connection is live the user holds %d slot(s), want 1 — the connection was never registered", n)
 	}
 
 	close(release)
 	<-done
-	requireSlotsReleased(t, cm, "anonymous", "after the connection ended")
+	requireSlotsReleased(t, cm, "anon:127.0.0.1", "after the connection ended")
 }
 
 // TestTerminalFreesSlotOnAbnormalTermination is the assertion the issue singles
@@ -351,12 +354,12 @@ func TestTerminalFreesSlotOnAbnormalTermination(t *testing.T) {
 
 	// Exit path 1: rejected by the scoping check.
 	dialTerminal(t, f, "stack-a", "proj-b-db-1")
-	requireSlotsReleased(t, cm, "anonymous", "after a rejected connection")
+	requireSlotsReleased(t, cm, "anon:127.0.0.1", "after a rejected connection")
 
 	// Exit path 2: allowed through, then the session ends (no daemon in test, or
 	// the PTY exits immediately). Either way the handler returns abnormally.
 	dialTerminal(t, f, "stack-a", "proj-a-web-1")
-	requireSlotsReleased(t, cm, "anonymous", "after an abnormally terminated connection")
+	requireSlotsReleased(t, cm, "anon:127.0.0.1", "after an abnormally terminated connection")
 
 	// The freed slot is genuinely reusable: with a cap of 1, a third connection
 	// must not be refused.
