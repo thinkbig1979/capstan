@@ -112,7 +112,25 @@ func waitForCMCount(t *testing.T, cm *ConnectionManager, want int, what string) 
 // twice among the 150 concurrent disconnects. Against the fix, 5/5 runs and a
 // -race run all passed with zero occurrences.
 func TestBackupWSAttach_ClientDisconnectNeverSendsPrematureDoneFrame(t *testing.T) {
+	// SAMPLE SIZE, and why it is batched (agent-os-nt0m collision, 2026-09-05).
+	// Since nt0m, Attach admits at most services.MaxAttachersPerRun (24) live
+	// attachers to one run and refuses the surplus BY RESULT (a Done frame with
+	// outcome "failed"). So a single 150-wide fan-out no longer means 150
+	// racing disconnects: 24 are admitted and race, the rest are refused
+	// instantly. The refused clients are NOT useless though: the race this
+	// test pins only fires under contention (the handler goroutine must be
+	// delayed until forwardLive has already closed Live), and 126 extra dials
+	// per batch are that contention. MEASURED on this head with the b53l
+	// guard (the wsCtx.Err() check in wsAttach's Live-closed branch) reverted
+	// via go test -overlay, 8 runs each: 24 concurrent -> 0 FAIL of 8; one
+	// 150-wide fan-out with the outcome="" marker -> 1-2 FAIL of 10; 8
+	// sequential batches of 24 -> 3 FAIL of 8; 8 sequential batches of 150 ->
+	// 6 FAIL of 8, with and without -race. With the guard in place: 20 of 20
+	// PASS. So: keep 150 per batch (contention), keep the batches (sample),
+	// and do not slim either. Each batch's waitForCMCount(0) below releases
+	// the admitted slots before the next batch dials.
 	const concurrency = 150
+	const batches = 8
 
 	cm := NewConnectionManager(concurrency + 10)
 	release := make(chan struct{})
@@ -131,40 +149,42 @@ func TestBackupWSAttach_ClientDisconnectNeverSendsPrematureDoneFrame(t *testing.
 	// busy flag, which would refuse a second concurrent LaunchBackup call).
 	runID := kickOffBackupRun(t, srv)
 
-	errCh := make(chan error, concurrency)
-	var wg sync.WaitGroup
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			conn := dialBackupWS(t, srv, "/api/ws/backups/run/"+runID, "")
-			require.NoError(t, conn.SetReadDeadline(hangGuardDeadline(t)))
-			var startFrame map[string]interface{}
-			if err := conn.ReadJSON(&startFrame); err != nil {
-				errCh <- fmt.Errorf("goroutine %d: reading start frame: %w", i, err)
-				return
-			}
-			if startFrame["type"] != "start" {
-				errCh <- fmt.Errorf("goroutine %d: first frame type = %v, want \"start\"", i, startFrame["type"])
-				return
-			}
-			// Simulate the client vanishing: close the raw TCP connection
-			// with no WebSocket close handshake — the same technique
-			// TestMonitoringMetricsWS_ClientDisconnectClosesConnection
-			// (monitoring_metrics_close_test.go) uses for the identical
-			// purpose. Not calling t.Fatal/require from here on purpose:
-			// testing.T does not support FailNow from a non-test goroutine,
-			// so failures are reported to errCh and asserted after wg.Wait().
-			conn.Close()
-		}(i)
-	}
-	wg.Wait()
-	close(errCh)
-	for err := range errCh {
-		t.Error(err)
-	}
+	for batch := 0; batch < batches; batch++ {
+		errCh := make(chan error, concurrency)
+		var wg sync.WaitGroup
+		for i := 0; i < concurrency; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				conn := dialBackupWS(t, srv, "/api/ws/backups/run/"+runID, "")
+				require.NoError(t, conn.SetReadDeadline(hangGuardDeadline(t)))
+				var startFrame map[string]interface{}
+				if err := conn.ReadJSON(&startFrame); err != nil {
+					errCh <- fmt.Errorf("goroutine %d: reading start frame: %w", i, err)
+					return
+				}
+				if startFrame["type"] != "start" {
+					errCh <- fmt.Errorf("goroutine %d: first frame type = %v, want \"start\"", i, startFrame["type"])
+					return
+				}
+				// Simulate the client vanishing: close the raw TCP connection
+				// with no WebSocket close handshake — the same technique
+				// TestMonitoringMetricsWS_ClientDisconnectClosesConnection
+				// (monitoring_metrics_close_test.go) uses for the identical
+				// purpose. Not calling t.Fatal/require from here on purpose:
+				// testing.T does not support FailNow from a non-test goroutine,
+				// so failures are reported to errCh and asserted after wg.Wait().
+				conn.Close()
+			}(i)
+		}
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			t.Error(err)
+		}
 
-	waitForCMCount(t, cm, 0, fmt.Sprintf("all %d concurrent disconnects", concurrency))
+		waitForCMCount(t, cm, 0, fmt.Sprintf("batch %d: all %d concurrent disconnects", batch, concurrency))
+	}
 
 	// sendDoneFrame's own log line: `msg="Backup WS operation completed"
 	// run_id=<runID> outcome=...`. Checking for the combined literal (msg
@@ -191,8 +211,8 @@ func TestBackupWSAttach_ClientDisconnectNeverSendsPrematureDoneFrame(t *testing.
 	marker := fmt.Sprintf(`msg="Backup WS operation completed" run_id=%s outcome=""`, runID)
 	if strings.Contains(buf.String(), marker) {
 		t.Fatalf("a done frame was logged for run %q while it was still executing "+
-			"(its restic call stays blocked for the whole test), across %d concurrent attaches — captured: %q",
-			runID, concurrency, buf.String())
+			"(its restic call stays blocked for the whole test), across %d batches of %d concurrent attaches — captured: %q",
+			runID, batches, concurrency, buf.String())
 	}
 }
 
