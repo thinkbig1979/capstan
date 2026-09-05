@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -62,13 +65,19 @@ func (h *ComposeHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *ComposeHandler) Get(c *gin.Context) {
 	id := c.Param("id")
 
+	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
+	// always returns either &stack or a non-nil err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrStackNotFound,
+				"Stack not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
@@ -94,21 +103,13 @@ func (h *ComposeHandler) Get(c *gin.Context) {
 			))
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"READ_ERROR",
-			"Failed to read compose file",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "READ_ERROR", "Failed to read compose file", err))
 		return
 	}
 
 	fileInfo, err := os.Stat(composePath)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"STAT_ERROR",
-			"Failed to get file info",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "STAT_ERROR", "Failed to get file info", err))
 		return
 	}
 
@@ -123,13 +124,19 @@ func (h *ComposeHandler) Get(c *gin.Context) {
 func (h *ComposeHandler) Put(c *gin.Context) {
 	id := c.Param("id")
 
+	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
+	// always returns either &stack or a non-nil err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrStackNotFound,
+				"Stack not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
@@ -145,11 +152,7 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 
 	lintResults, err := h.linter.LintWithDir(req.Content, stack.Directory)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"LINT_ERROR",
-			"Failed to lint compose file",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 
@@ -186,11 +189,7 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 	}
 
 	if err := os.WriteFile(composePath, []byte(req.Content), 0644); err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"WRITE_ERROR",
-			"Failed to write compose file",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "WRITE_ERROR", "Failed to write compose file", err))
 		return
 	}
 
@@ -205,7 +204,17 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 func (h *ComposeHandler) Lint(c *gin.Context) {
 	id := c.Param("id")
 
-	stack, _ := h.db.GetStack(id)
+	stack, err := h.db.GetStack(id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		// agent-os-7lg1 judgement call: Lint works standalone — a genuine DB
+		// fault here only degrades the working directory used for linting
+		// (falls back to /tmp below), so it is worth an operator-visible log
+		// line but not worth failing a lint request that never required the
+		// stack to exist. Unlike the other 13 db.GetStack sites in this
+		// package, there is no 404 arm here to preserve: this call never
+		// returned one before, and still doesn't.
+		slog.Error("failed to load stack for compose lint", "stack_id", id, "error", err)
+	}
 
 	var req ComposeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -224,11 +233,7 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 
 	lintResults, err := h.linter.LintWithDir(req.Content, workingDir)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"LINT_ERROR",
-			"Failed to lint compose file",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 
@@ -297,13 +302,19 @@ type ComposeEnvRequest struct {
 func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	id := c.Param("id")
 
+	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
+	// always returns either &stack or a non-nil err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrStackNotFound,
+				"Stack not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
@@ -349,11 +360,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	// ── Lint compose before touching disk ──────────────────────────────────
 	lintResults, err := h.linter.LintWithDir(req.ComposeContent, stack.Directory)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"LINT_ERROR",
-			"Failed to lint compose file",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 	for _, r := range lintResults {

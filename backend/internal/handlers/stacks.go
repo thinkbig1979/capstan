@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -121,11 +123,7 @@ func (h *StacksHandler) Lint(c *gin.Context) {
 
 	lintResults, err := h.linter.Lint(req.Compose)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"LINT_ERROR",
-			"Failed to lint compose file",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "LINT_ERROR", "Failed to lint compose file", err))
 		return
 	}
 
@@ -146,11 +144,7 @@ func (h *StacksHandler) Lint(c *gin.Context) {
 func (h *StacksHandler) List(c *gin.Context) {
 	stacks, err := h.db.ListStacks()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to list stacks",
-		))
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list stacks", err))
 		return
 	}
 
@@ -194,7 +188,7 @@ func applyLiveStatus(stack *models.Stack, statuses map[string]services.LiveStatu
 		stack.Containers = ls.Containers
 		return
 	}
-	stack.Containers = nil
+	stack.Containers = []models.Container{}
 	if composeUnreadable(*stack) {
 		stack.Status = "error"
 	} else {
@@ -205,13 +199,19 @@ func applyLiveStatus(stack *models.Stack, statuses map[string]services.LiveStatu
 func (h *StacksHandler) Get(c *gin.Context) {
 	id := c.Param("id")
 
+	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
+	// always returns either &stack or a non-nil err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrStackNotFound,
+				"Stack not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
