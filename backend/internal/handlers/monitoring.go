@@ -199,11 +199,34 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 			// — turning it into a `continue` parks the goroutine forever.
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
+		emptyHostLoop:
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+					// agent-os-ear5: re-check the host on every tick instead of
+					// trusting the list fetched once at connect. Before this fix
+					// a container started after connect never appeared for the
+					// life of the socket. A re-check failure is treated as
+					// "still empty" (best-effort — a transient Docker hiccup on
+					// a HEALTHY, already-open socket must not tear it down; the
+					// initial GetContainersForStack error path above still owns
+					// the "refuse before streaming" behaviour for a genuine
+					// setup failure).
+					ids, err := h.monitor.GetContainersForStack(ctx, stack.ProjectName)
+					if err == nil && len(ids) > 0 {
+						// The host stopped being empty: leave this branch with
+						// the now-populated list and fall through to the real
+						// streaming setup below — same shared code path a
+						// non-empty connect would have taken.
+						containerIDs = ids
+						break emptyHostLoop
+					}
+					if err != nil {
+						slog.Debug("re-check for empty metrics stream failed; still holding socket open",
+							"stackId", stackID, "error", err)
+					}
 					frame := MetricsFrame{
 						Timestamp:  time.Now().Format(time.RFC3339),
 						Containers: []models.ContainerMetrics{},
