@@ -762,7 +762,16 @@ func TestStacksHandler_Get_DBFaultLogsCause(t *testing.T) {
 	})
 
 	// CONTROL, same instrument: a healthy DB with a genuinely missing stack
-	// must keep its exact existing 404 and emit no ERROR line.
+	// must keep its exact existing 404 and emit no ERROR line for THIS
+	// request.
+	//
+	// The silence half is discriminated on the request's own id
+	// (agent-os-nho7). It used to test the bare token "ERROR" against
+	// captureHandlerLogs's buffer, which is slog's PROCESS-GLOBAL sink for the
+	// duration of the subtest, so any ERROR line from any goroutine in the
+	// binary turned it red — the same defect as the eight sites nho7 pins,
+	// and broader than those, since "ERROR" matches strictly more than
+	// "level=ERROR" does. See requireNoOwnErrorLines (ua4y_7lg1_cause_test.go).
 	t.Run("control: healthy DB, missing stack, stays a silent 404 with no ERROR log", func(t *testing.T) {
 		buf := captureHandlerLogs(t)
 		db, err := database.NewWithMigrations(":memory:")
@@ -771,18 +780,22 @@ func TestStacksHandler_Get_DBFaultLogsCause(t *testing.T) {
 		handler := NewStacksHandler(nil, nil, nil, db, cfg, services.NewActionLogger(db), services.NewOperationLock())
 
 		router := gin.New()
+		router.Use(middleware.RequestID())
 		router.GET("/stacks/:id", handler.Get)
 
+		plantDone := plantStrayServerFaultLine(t)
+		reqID, sentinel := requestIDSentinel()
+
 		req := httptest.NewRequest(http.MethodGet, "/stacks/whatever", nil)
+		req.Header.Set(middleware.RequestIDHeader, reqID)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
+		<-plantDone
 
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("status = %d, want 404 (missing row must keep its existing shape)", w.Code)
 		}
-		if strings.Contains(buf.String(), "ERROR") {
-			t.Fatalf("a genuine not-found logged an ERROR line; it must stay silent. captured = %q", buf.String())
-		}
+		requireNoOwnErrorLines(t, buf.String(), sentinel, "a genuine not-found")
 	})
 }
 

@@ -23,9 +23,15 @@ import (
 // after the ENTIRE handler chain (c.Next()) returns, and returns router so
 // callers can chain it directly into RegisterRoutes.
 //
-// REQUIRED, not decorative: a plain *bytes.Buffer (captureHandlerLogs) has no
-// internal synchronization, and the WS/HTTP handler runs on httptest.Server's
-// OWN goroutine, separate from the test goroutine that reads the buffer.
+// REQUIRED, not decorative: the WS/HTTP handler runs on httptest.Server's OWN
+// goroutine, separate from the test goroutine that reads the buffer, so
+// without a signal the read can simply happen before the write and see an
+// empty buffer. (This comment used to say captureHandlerLogs hands back "a
+// plain *bytes.Buffer with no internal synchronization"; that stopped being
+// true at PR #308 / agent-os-2h1r, which made it return a mutex-guarded
+// *syncLogBuffer, respond_test.go:79-94. The mutex removes the DATA RACE on
+// the buffer; it cannot tell the reader the handler has finished writing,
+// which is what the done signal is for, so the conclusion below is unchanged.)
 // dashboard_ws_refusal_test.go documents the identical hazard and uses the
 // identical fix ("the channel send gives the read a happens-before edge").
 // An EARLIER version of this file polled buf.String() in a loop instead

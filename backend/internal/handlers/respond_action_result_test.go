@@ -268,8 +268,18 @@ const actionLogRequestID = "3f2b9c1e-7a4d-4e8b-9c6a-1d2e3f4a5b6c"
 
 func (f *actionLogFixture) deleteStack(t *testing.T, id string) *httptest.ResponseRecorder {
 	t.Helper()
+	return f.deleteStackWithRequestID(t, id, actionLogRequestID)
+}
+
+// deleteStackWithRequestID is deleteStack with a caller-chosen request ID.
+// actionLogRequestID is a single constant shared by every test in this
+// fixture, which discriminates a log line against OTHER files but not against
+// a sibling test in this one; the silent-path control below needs an id no
+// other test can carry (agent-os-nho7).
+func (f *actionLogFixture) deleteStackWithRequestID(t *testing.T, id, requestID string) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodDelete, "/stacks/"+id+"?confirm=true", nil)
-	req.Header.Set(middleware.RequestIDHeader, actionLogRequestID)
+	req.Header.Set(middleware.RequestIDHeader, requestID)
 	w := httptest.NewRecorder()
 	f.router.ServeHTTP(w, req)
 	return w
@@ -335,16 +345,20 @@ func TestStacksHandler_Delete_DockerFailed_LogsCauseWithRequestID(t *testing.T) 
 
 // TestStacksHandler_Delete_Success_StaysSilent is the endpoint-level control
 // on the same instrument: a Delete that succeeds renders 200 and must not
-// emit an ERROR line.
+// emit an ERROR line for THIS request (agent-os-nho7 — the fixture already
+// runs middleware.RequestID(), so the only thing missing was an id no sibling
+// test in this fixture shares; see requireNoOwnErrorLines in
+// ua4y_7lg1_cause_test.go).
 func TestStacksHandler_Delete_Success_StaysSilent(t *testing.T) {
 	f := newActionLogFixture(t, &fakeStackDocker{})
 	stack := f.createStack(t, "happy")
 
 	buf := captureHandlerLogs(t)
-	w := f.deleteStack(t, stack.ID)
+	plantDone := plantStrayServerFaultLine(t)
+	reqID, sentinel := requestIDSentinel()
+	w := f.deleteStackWithRequestID(t, stack.ID, reqID)
+	<-plantDone
 
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-	if strings.Contains(buf.String(), "level=ERROR") {
-		t.Fatalf("a successful delete emitted an ERROR line: %q", buf.String())
-	}
+	requireNoOwnErrorLines(t, buf.String(), sentinel, "a successful delete")
 }
