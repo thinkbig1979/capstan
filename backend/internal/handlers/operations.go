@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -51,13 +53,33 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 		// way the checks below already do. (Same shape as agent-os-ck4; the
 		// wider audit of nil-docker paths is agent-os-xay.)
 		if h.docker == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Docker is unavailable"})
+			// agent-os-ua4y owner decision 2026-09-05: normalise this site's
+			// ad-hoc gin.H body to the AppError {code,message} shape used
+			// everywhere else. Status 503 is unchanged; DOCKER_UNAVAILABLE is a
+			// new code (there was no machine-readable code here before).
+			// NO-CAUSE: h.docker == nil is a boolean condition, not an error —
+			// there is nothing in scope to attach, and services.ErrDockerUnavailable
+			// is not minted here since that sentinel represents a different
+			// condition (a wired but nil-receiver *DockerService, see dockerSvc's
+			// doc comment in stacks.go) that did not occur on this path.
+			// frontend consumer checked: hooks/useStreamingOperation.ts's
+			// WSClient (lib/ws.ts) speaks raw WS frames only and never parses a
+			// failed-upgrade JSON body (respond.go's renderDockerResult doc
+			// comment: "a browser cannot read a failed handshake"), so this body
+			// change is invisible to any current caller.
+			handleError(c, models.NewAppError(http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage))
 			return
 		}
 
+		// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
+		// always returns either &stack or a non-nil err, never (nil, nil)).
 		stack, err := h.db.GetStack(stackID)
-		if err != nil || stack == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Stack not found"})
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Stack not found"})
+				return
+			}
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 			return
 		}
 

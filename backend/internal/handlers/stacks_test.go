@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -666,4 +667,114 @@ func TestStackID_DisambiguatedIDPassesRouteValidation(t *testing.T) {
 
 	require.NotEqual(t, "stacks~my-stack:default", id, "guard is only meaningful for a disambiguated ID")
 	assert.True(t, middleware.ValidateStackID(id), "disambiguated stack ID %q is rejected by ValidateStackID", id)
+}
+
+// TestStacksHandler_Create_MkdirFailureLogsCause is the SEEN-FAILING-FIRST test
+// for agent-os-ua4y at stack_crud.go's MKDIR_ERROR site (StacksHandler.Create):
+// before the fix this wrote c.JSON(500, ...) directly and logged nothing, so an
+// operator saw a 500 with no record of why. cfg.StacksDir is pointed at a
+// regular FILE rather than a directory, so os.MkdirAll(stackDir, ...) fails
+// deterministically with a real OS error — no fake needed for this one.
+// CONTROL: response status and code are unchanged by routing through
+// handleError instead of c.JSON directly.
+func TestStacksHandler_Create_MkdirFailureLogsCause(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureHandlerLogs(t)
+
+	tempDir := t.TempDir()
+	blockingFile := filepath.Join(tempDir, "not-a-directory")
+	require.NoError(t, os.WriteFile(blockingFile, []byte("x"), 0644))
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+
+	cfg := &config.Config{StacksDir: blockingFile}
+	linter := services.NewLinterService()
+	scanner := services.NewScannerService(cfg, db)
+	handler := NewStacksHandler(nil, scanner, linter, db, cfg, services.NewActionLogger(db), services.NewOperationLock())
+
+	router := gin.New()
+	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+
+	user := models.User{ID: "test-user-id", Username: "testuser", Password: "", CreatedAt: testTime, UpdatedAt: testTime}
+	require.NoError(t, db.CreateUser(user))
+
+	reqBody := map[string]interface{}{
+		"name":           "my-stack",
+		"composeContent": "services:\n  web:\n    image: nginx:1.21\n    restart: unless-stopped",
+	}
+	reqBytes, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/stacks", bytes.NewReader(reqBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (routing must be unchanged by the fix)", w.Code)
+	}
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	if resp["code"] != "MKDIR_ERROR" {
+		t.Fatalf("code = %v, want MKDIR_ERROR (routing must be unchanged by the fix)", resp["code"])
+	}
+	if !strings.Contains(buf.String(), "not a directory") {
+		t.Fatalf("500 emitted with no log of the underlying MkdirAll cause. captured = %q", buf.String())
+	}
+}
+
+// TestStacksHandler_Get_DBFaultLogsCause is the SEEN-FAILING-FIRST test for
+// agent-os-7lg1 at stacks.go's db.GetStack site (StacksHandler.Get): before the
+// fix, ANY GetStack error — a genuine database fault, not just a missing row —
+// was mapped to the same silent 404, discarding the real error. faultyDB(t)
+// (faulty_db_test.go, agent-os-2mhb) fails with "sql: database is closed",
+// which is NOT sql.ErrNoRows (proven by
+// TestFaultyDB_FailsDifferentlyFromHealthyNotFound).
+func TestStacksHandler_Get_DBFaultLogsCause(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("db fault surfaces as 500 with the cause logged", func(t *testing.T) {
+		buf := captureHandlerLogs(t)
+		broken := faultyDB(t)
+		cfg := &config.Config{StacksDir: "/tmp/test"}
+		handler := NewStacksHandler(nil, nil, nil, broken, cfg, services.NewActionLogger(broken), services.NewOperationLock())
+
+		router := gin.New()
+		router.GET("/stacks/:id", handler.Get)
+
+		req := httptest.NewRequest(http.MethodGet, "/stacks/whatever", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want 500 (a real DB fault must not present as 404)", w.Code)
+		}
+		if !strings.Contains(buf.String(), "database is closed") {
+			t.Fatalf("500 emitted with no log of the underlying db fault. captured = %q", buf.String())
+		}
+	})
+
+	// CONTROL, same instrument: a healthy DB with a genuinely missing stack
+	// must keep its exact existing 404 and emit no ERROR line.
+	t.Run("control: healthy DB, missing stack, stays a silent 404 with no ERROR log", func(t *testing.T) {
+		buf := captureHandlerLogs(t)
+		db, err := database.NewWithMigrations(":memory:")
+		require.NoError(t, err)
+		cfg := &config.Config{StacksDir: "/tmp/test"}
+		handler := NewStacksHandler(nil, nil, nil, db, cfg, services.NewActionLogger(db), services.NewOperationLock())
+
+		router := gin.New()
+		router.GET("/stacks/:id", handler.Get)
+
+		req := httptest.NewRequest(http.MethodGet, "/stacks/whatever", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404 (missing row must keep its existing shape)", w.Code)
+		}
+		if strings.Contains(buf.String(), "ERROR") {
+			t.Fatalf("a genuine not-found logged an ERROR line; it must stay silent. captured = %q", buf.String())
+		}
+	})
 }
