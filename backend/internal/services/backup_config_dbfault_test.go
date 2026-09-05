@@ -83,6 +83,23 @@ func closedDBWithSettings(t *testing.T, settings map[string]string) *database.DB
 // rotation produces this fault for the password key ONLY.
 func rotatedKeyDB(t *testing.T, repo string) *database.DB {
 	t.Helper()
+	return reopenSeededDB(t, seedUnderKeyOne(t, repo), dbFaultKeyTwo)
+}
+
+// intactKeyDB is rotatedKeyDB's control: the same directory, the same two
+// settings, reopened under the SAME key it was written with. Everything except
+// the fault is identical, so a fault arm built on rotatedKeyDB and a control
+// built on this one differ in exactly one variable.
+func intactKeyDB(t *testing.T, repo string) *database.DB {
+	t.Helper()
+	return reopenSeededDB(t, seedUnderKeyOne(t, repo), dbFaultKeyOne)
+}
+
+// seedUnderKeyOne writes restic_repository (plaintext) and restic_password
+// (encrypted under key one) into a fresh migrated database, closes it, and
+// returns the directory.
+func seedUnderKeyOne(t *testing.T, repo string) string {
+	t.Helper()
 	dataDir := t.TempDir()
 
 	db1, err := database.NewWithMigrationsAndEncryptor(dataDir, NewTokenEncryptorOrDefault(dbFaultKeyOne, ""))
@@ -100,13 +117,18 @@ func rotatedKeyDB(t *testing.T, repo string) *database.DB {
 	if err := db1.Close(); err != nil {
 		t.Fatalf("close database under key one: %v", err)
 	}
+	return dataDir
+}
 
-	db2, err := database.NewWithMigrationsAndEncryptor(dataDir, NewTokenEncryptorOrDefault(dbFaultKeyTwo, ""))
+// reopenSeededDB reopens a seeded directory under the given STORAGE_KEY.
+func reopenSeededDB(t *testing.T, dataDir, key string) *database.DB {
+	t.Helper()
+	db, err := database.NewWithMigrationsAndEncryptor(dataDir, NewTokenEncryptorOrDefault(key, ""))
 	if err != nil {
-		t.Fatalf("reopen database under key two: %v", err)
+		t.Fatalf("reopen database under key %q: %v", key, err)
 	}
-	t.Cleanup(func() { _ = db2.Close() })
-	return db2
+	t.Cleanup(func() { _ = db.Close() })
+	return db
 }
 
 // dbFaultSvc builds a BackupService whose restic and rclone managers are built
@@ -635,6 +657,22 @@ func TestRepoSettingSources_RefusesOnUnreadableDB(t *testing.T) {
 		t.Fatalf("RepoSettingSources reported classifications on failure: repoSource=%q pwSource=%q hasPassword=%v",
 			repoSrc, pwSrc, hasPassword)
 	}
+	// The error must IDENTIFY the restic_repository read (backup_config.go:144
+	// names the failing key deliberately). "some error" is not enough here: a
+	// closed database fails BOTH reads, so a mutant discarding only the
+	// repository read's error is answered by the password read's error a few
+	// lines later and this test still sees a non-nil err. Measured on d7c686f:
+	// that mutant built clean and left the whole package green. Naming the key
+	// discriminates the two, because a password-key failure returns the
+	// ErrResticPasswordUnreadable sentinel instead (backup_config.go:136-137).
+	if !strings.Contains(err.Error(), "restic_repository") {
+		t.Fatalf("err = %v; want an error naming restic_repository. An error that does not name it "+
+			"means the repository read's failure was swallowed and this refusal came from a later read.", err)
+	}
+	if errors.Is(err, ErrResticPasswordUnreadable) {
+		t.Fatalf("err is ErrResticPasswordUnreadable, so the refusal came from the restic_password read; " +
+			"the restic_repository read's own error was discarded")
+	}
 }
 
 // TestRepoSettingSources_HealthyDBStillClassifies is the passing side of the
@@ -656,5 +694,76 @@ func TestRepoSettingSources_HealthyDBStillClassifies(t *testing.T) {
 	}
 	if !hasPassword {
 		t.Fatal("hasPassword = false; the env password must still be seen")
+	}
+}
+
+// TestRepoSettingSources_RefusesWhenOnlyThePasswordIsUnreadable pins the SECOND
+// of RepoSettingSources' two reads (backup_config.go:352).
+// TestRepoSettingSources_RefusesOnUnreadableDB above uses a CLOSED database,
+// which trips on restic_repository (backup_config.go:339) and RETURNS before
+// the password read is ever reached, so it cannot discriminate the two sites.
+// Measured on d7c686f: a mutant discarding only the password read's error built
+// clean and left the whole package green.
+//
+// rotatedKeyDB is the only fixture that reaches the site. restic_repository is
+// not in sensitiveSettingKeys (database/settings.go:9-12) so it is stored
+// plaintext and survives the key rotation; only restic_password enters
+// GetSetting's decrypt branch (database/settings.go:21-24) and fails there.
+//
+// The state assertion comes BEFORE the error assertion deliberately: under the
+// mutant it is the one that fires, and its message names repoSource="db" —
+// positive evidence that read #1 SUCCEEDED and only read #2 was discarded.
+func TestRepoSettingSources_RefusesWhenOnlyThePasswordIsUnreadable(t *testing.T) {
+	rotated := rotatedKeyDB(t, dbFaultConfiguredRepo)
+	cfg := &config.Config{ResticRepository: "env-repo", ResticPassword: dbFaultEnvPassword}
+
+	repoSrc, pwSrc, hasPassword, err := RepoSettingSources(rotated, cfg)
+
+	if repoSrc != "" || pwSrc != "" || hasPassword {
+		t.Fatalf("RepoSettingSources reported classifications despite an unreadable restic_password: "+
+			"repoSource=%q pwSource=%q hasPassword=%v (err=%v). A repoSource of %q proves the "+
+			"restic_repository read succeeded and the password read's error was the one dropped.",
+			repoSrc, pwSrc, hasPassword, err, settingSourceDB)
+	}
+	if err == nil {
+		t.Fatal("RepoSettingSources returned no error when restic_password could not be decrypted")
+	}
+	// The sentinel, not merely "some error": readSetting maps a password-key
+	// failure to ErrResticPasswordUnreadable (backup_config.go:136-137) and
+	// every other key to a wrapped driver error (backup_config.go:144). So this
+	// assertion CANNOT be satisfied by an error arriving from the
+	// restic_repository read, which is what makes the two sites independently
+	// pinned rather than one covering for the other.
+	if !errors.Is(err, ErrResticPasswordUnreadable) {
+		t.Fatalf("err = %v; want ErrResticPasswordUnreadable, which is the only error that "+
+			"identifies the restic_password read as the failing one", err)
+	}
+	// Never assert the plaintext; assert its absence. The error string is the
+	// only output this function produces, so it is the whole capture surface.
+	if msg := err.Error(); strings.Contains(msg, dbFaultTestPassword) || strings.Contains(msg, dbFaultEnvPassword) {
+		t.Fatalf("the refusal leaked a password plaintext: %s", msg)
+	}
+}
+
+// TestRepoSettingSources_IntactKeyStillClassifies is the control on the SAME
+// instrument. Without it, the fault arm above would be satisfied by a
+// RepoSettingSources that had simply stopped classifying anything.
+func TestRepoSettingSources_IntactKeyStillClassifies(t *testing.T) {
+	intact := intactKeyDB(t, dbFaultConfiguredRepo)
+	cfg := &config.Config{ResticRepository: "env-repo", ResticPassword: dbFaultEnvPassword}
+
+	repoSrc, pwSrc, hasPassword, err := RepoSettingSources(intact, cfg)
+	if err != nil {
+		t.Fatalf("an intact STORAGE_KEY must classify without an error: %v", err)
+	}
+	if repoSrc != settingSourceDB {
+		t.Fatalf("repoSource = %q; want %q (the seeded remote must win over the env value)", repoSrc, settingSourceDB)
+	}
+	if pwSrc != settingSourceDB {
+		t.Fatalf("pwSource = %q; want %q (the stored password decrypts under the key it was written with)",
+			pwSrc, settingSourceDB)
+	}
+	if !hasPassword {
+		t.Fatal("hasPassword = false; the stored password must be seen")
 	}
 }
