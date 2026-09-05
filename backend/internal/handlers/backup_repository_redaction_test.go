@@ -221,6 +221,7 @@ var qonwLeaveCorpus = []string{
 	// An EMPTY password is no secret; starring it locks the field.
 	"sftp:user:@host:/path",
 	"sftp:nas:@backups:sub",
+	"s3:KEY:@host/bucket",
 }
 
 // qonwRedactedAsTodayCorpus: saved 2xx, served STARRED, flag true, unchanged by
