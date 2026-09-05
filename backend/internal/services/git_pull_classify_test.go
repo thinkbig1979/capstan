@@ -10,11 +10,25 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
+// fixtureBranch is the branch name every step of pullFixture states outright.
+const fixtureBranch = "main"
+
 // pullFixture builds a real, entirely offline upstream/clone pair and returns
 // the working clone plus the seed clone that can advance the upstream. No
 // network: the "remote" is a bare repository on disk, so the unreachable arm is
 // produced by pointing origin at a path that does not exist rather than by
 // waiting for DNS to fail.
+// fixtureBranch is named explicitly at every step below instead of being left
+// to git's default, and that is the whole point of it.
+//
+// `git init` takes the branch name from init.defaultBranch, which is AMBIENT
+// USER CONFIGURATION. A box that sets it to "main" and a box that does not
+// build different fixtures out of identical code. That is not hypothetical:
+// this file passed locally and went red in CI for exactly that reason, and the
+// local pass was the accident. On a box with no init.defaultBranch the seed
+// repo and the bare upstream are both born on "master", the push creates
+// "main" on the upstream while its HEAD still points at the absent "master",
+// and the clone below then checks nothing out.
 func pullFixture(t *testing.T) (work, seed, root string) {
 	t.Helper()
 	root = t.TempDir()
@@ -23,14 +37,37 @@ func pullFixture(t *testing.T) (work, seed, root string) {
 	if err := os.Mkdir(seed, 0o755); err != nil {
 		t.Fatalf("mkdir seed: %v", err)
 	}
-	repoWithCommit(t, seed)
+	mustGit(t, seed, "init", "-q", "-b", fixtureBranch)
+	mustGit(t, seed, "-c", "user.email=t@t", "-c", "user.name=t",
+		"commit", "-q", "--allow-empty", "-m", "seed")
 
 	upstream := filepath.Join(root, "upstream.git")
-	mustGit(t, root, "init", "-q", "--bare", "upstream.git")
-	mustGit(t, seed, "push", "-q", upstream, "HEAD:refs/heads/main")
+	mustGit(t, root, "init", "-q", "--bare", "-b", fixtureBranch, "upstream.git")
+	mustGit(t, seed, "push", "-q", upstream, "HEAD:refs/heads/"+fixtureBranch)
 
 	work = filepath.Join(root, "work")
-	mustGit(t, root, "clone", "-q", upstream, "work")
+	// -b pins the checked-out branch to the one just pushed rather than taking
+	// it from the remote's HEAD, so the clone does not depend on what that
+	// HEAD happens to point at either.
+	mustGit(t, root, "clone", "-q", "-b", fixtureBranch, upstream, "work")
+
+	// PRECONDITIONS, ASSERTED RATHER THAN ASSUMED.
+	//
+	// `git clone` EXITS 0 when it cannot check anything out. It prints
+	// "warning: remote HEAD refers to nonexistent ref, unable to checkout" and
+	// returns success, so mustGit cannot see the failure. OBSERVED, git 2.47.3
+	// with the global config ignored: clone exit 0, zero files in the work
+	// tree, `rev-parse HEAD` fatal.
+	//
+	// Without these two lines a broken fixture reaches the arms below as a
+	// repository that tracks no upstream, and the divergence arm then fails as
+	// a MISCLASSIFICATION -- "got INTERNAL_ERROR, want GIT_CONFLICT" -- which
+	// reads as a bug in pullFailure and is not one. Asserting the setup here
+	// turns that into a loud, honest fixture failure at the line that caused
+	// it.
+	mustGit(t, work, "rev-parse", "--verify", "HEAD")
+	mustGit(t, work, "rev-parse", "--verify", "@{upstream}")
+
 	return work, seed, root
 }
 
@@ -39,7 +76,7 @@ func advanceUpstream(t *testing.T, seed, root string) {
 	t.Helper()
 	mustGit(t, seed, "-c", "user.email=t@t", "-c", "user.name=t",
 		"commit", "-q", "--allow-empty", "-m", "remote advances")
-	mustGit(t, seed, "push", "-q", filepath.Join(root, "upstream.git"), "HEAD:refs/heads/main")
+	mustGit(t, seed, "push", "-q", filepath.Join(root, "upstream.git"), "HEAD:refs/heads/"+fixtureBranch)
 }
 
 // TestPullCLI_DiscriminatesPullFailures pins agent-os-fv2j.

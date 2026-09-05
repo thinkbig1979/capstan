@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
@@ -378,10 +379,19 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 // silently.
 //
 // The exit status of `git pull` itself is not enough to split these. MEASURED,
-// git 2.47.3, six failure shapes driven through the real command: a divergence
-// exits 128 while auth, DNS, a missing remote and a missing upstream ALL exit
-// 1. So the classification is three follow-up probes, whose exit codes do
-// separate them cleanly:
+// six failure shapes driven through the real command: a divergence exits 128
+// while auth, DNS, a missing remote and a missing upstream ALL exit 1. So the
+// classification is three follow-up probes, whose exit codes do separate them
+// cleanly.
+//
+// The table below is MEASURED ON TWO GIT VERSIONS and is IDENTICAL on both:
+// 2.47.3 (developer host) and 2.43.7 (the version family CI runs), the second
+// in an alpine:3.19 container. That matters because a classifier tuned to one
+// git would be a version-dependent misclassification, which is worse than the
+// flat GIT_CONFLICT it replaced -- it would be wrong only sometimes. It also
+// settles a specific false lead: a CI failure on this test was hypothesised to
+// be a 2.43-vs-2.47 exit-code difference, and there is no such difference. The
+// cause was the fixture, not the probes; see pullFixture.
 //
 //	                         ls-remote  rev-parse @{u}  is-ancestor HEAD @{u}
 //	diverged, non-ff             0            0                1
@@ -424,10 +434,34 @@ func (s *GitService) pullFailure(dirPath, user, token string, err error) error {
 	}
 	if _, ancestorErr := s.gitCommandWithCreds(dirPath, user, token,
 		"merge-base", "--is-ancestor", "HEAD", "@{upstream}"); ancestorErr != nil {
-		return models.NewAppErrorWithDetails(409, models.ErrGitConflict,
-			"Local branch has diverged from the remote and cannot be fast-forwarded", err.Error())
+		// EXIT 1 SPECIFICALLY, never "any non-zero". git documents 1 as "HEAD
+		// is not an ancestor of the upstream" and reserves other non-zero
+		// codes for errors -- an unresolvable revision exits 128, not 1.
+		// Reading any failure as a divergence would repeat this bead's own
+		// defect one level down: asserting a specific diagnosis from a generic
+		// failure, which is the thing pullFailure exists to stop doing.
+		if gitExitCode(ancestorErr) == 1 {
+			return models.NewAppErrorWithDetails(409, models.ErrGitConflict,
+				"Local branch has diverged from the remote and cannot be fast-forwarded", err.Error())
+		}
+		return fmt.Errorf("git pull failed and the divergence probe could not run: %w", err)
 	}
 	return fmt.Errorf("git pull failed: %w", err)
+}
+
+// gitExitCode returns the exit status of the git process behind err, or -1 when
+// err did not come from a process that ran and exited.
+//
+// gitCommandWithCreds wraps CombinedOutput's error with %w, so the underlying
+// *exec.ExitError survives the wrap. VERIFIED against that exact wrapping:
+// errors.As returns true through it and recovers 128 from a failed
+// `merge-base --is-ancestor`.
+func gitExitCode(err error) int {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
 }
 
 // PullVerified performs a git pull and, if redeploy is requested, redeploys every
