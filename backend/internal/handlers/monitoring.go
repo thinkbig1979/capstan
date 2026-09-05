@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -51,6 +52,12 @@ func (h *MonitoringHandler) getStackContainers(jwtSecret string, authDisabled bo
 		stackID := c.Param("id")
 		stack, err := h.db.GetStack(stackID)
 		if err != nil {
+			// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless
+			// the non-not-found case is split out and logged with its cause.
+			if !errors.Is(err, sql.ErrNoRows) {
+				handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+				return
+			}
 			handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
 			return
 		}
@@ -74,6 +81,14 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 
 		stack, err := h.db.GetStack(stackID)
 		if err != nil {
+			// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless
+			// the non-not-found case is split out and logged with its cause.
+			// Plain HTTP here — this runs before serveWS's upgrade, so the
+			// writer is not yet hijacked.
+			if !errors.Is(err, sql.ErrNoRows) {
+				handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+				return
+			}
 			handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
 			return
 		}

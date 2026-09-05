@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -539,6 +540,12 @@ func (h *BackupHandler) upsertPolicy(c *gin.Context) {
 	stackID := c.Param("stackId")
 
 	if _, err := h.db.GetStack(stackID); err != nil {
+		// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless the
+		// non-not-found case is split out and logged with its cause.
+		if !errors.Is(err, sql.ErrNoRows) {
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+			return
+		}
 		c.JSON(http.StatusNotFound, models.NewAppError(
 			http.StatusNotFound,
 			models.ErrStackNotFound,
@@ -875,6 +882,12 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 	}
 
 	if _, err := h.db.GetStack(req.StackID); err != nil {
+		// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless the
+		// non-not-found case is split out and logged with its cause.
+		if !errors.Is(err, sql.ErrNoRows) {
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+			return
+		}
 		c.JSON(http.StatusNotFound, models.NewAppError(
 			http.StatusNotFound,
 			models.ErrStackNotFound,
@@ -1296,14 +1309,15 @@ func (h *BackupHandler) requireAvailable(c *gin.Context) error {
 }
 
 func (h *BackupHandler) internalError(c *gin.Context, msg string, err error) {
+	// agent-os-ua4y: was a direct c.JSON write, bypassing handleError (and so
+	// logServerFault's request_id-correlated ERROR line) for every one of this
+	// method's callers at once. h.logger.Error stays: agent-os-2mhb's own
+	// precedent is that an already-logging site logs twice rather than losing
+	// its existing log line.
 	if err != nil {
 		h.logger.Error(msg, "error", err)
 	}
-	c.JSON(http.StatusInternalServerError, models.NewAppError(
-		http.StatusInternalServerError,
-		"INTERNAL_ERROR",
-		msg,
-	))
+	handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", msg, err))
 }
 
 // respondForLaunchError writes the response for a failed registry.LaunchX
@@ -1314,10 +1328,12 @@ func (h *BackupHandler) internalError(c *gin.Context, msg string, err error) {
 // other error (e.g. a DB write failure) keeps the existing 500 behaviour.
 func (h *BackupHandler) respondForLaunchError(c *gin.Context, action string, err error) {
 	if errors.Is(err, services.ErrRegistryStopping) {
-		c.JSON(http.StatusServiceUnavailable, models.NewAppError(
+		// agent-os-ua4y: same direct-c.JSON bypass as internalError above.
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusServiceUnavailable,
 			"SERVER_SHUTTING_DOWN",
 			"Server is shutting down; "+action+" cannot be started",
+			err,
 		))
 		return
 	}

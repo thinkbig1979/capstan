@@ -41,7 +41,13 @@ func (h *DashboardHandler) getDashboardStats() gin.HandlerFunc {
 		stacks, err := h.db.ListStacks()
 		if err != nil {
 			slog.Error("Failed to list stacks for dashboard", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get dashboard stats"})
+			// agent-os-ua4y: was a direct c.JSON write with a bespoke {"error":
+			// ...} body, bypassing handleError (so logServerFault never ran)
+			// and diverging from the AppError {code,message} shape every other
+			// endpoint uses. frontend/src/lib/error-handler.ts:110 reads
+			// response.data.error falling back to response.data.message, so
+			// the AppError shape's Message satisfies the same consumer.
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get dashboard stats", err))
 			return
 		}
 
@@ -119,8 +125,16 @@ func (h *DashboardHandler) handleDashboardMetricsWebSocket(jwtSecret string, aut
 	return func(c *gin.Context) {
 		// Refuse before the upgrade so the caller gets a 503 naming the cause
 		// rather than a socket that opens and closes (agent-os-xay).
+		//
+		// respondDockerErr, not writeJSONError (agent-os-ua4y): this runs
+		// before serveWS's upgrade, so the writer is plain HTTP, not yet
+		// hijacked — writeJSONError's raw c.JSON bypassed handleError and so
+		// never reached logServerFault. services.ErrDockerUnavailable is
+		// itself the sentinel error respondDockerErr checks for, passed as the
+		// cause since there is no distinct triggering error here (the
+		// condition is h.docker == nil, not a call that returned one).
 		if h.docker == nil {
-			writeJSONError(c, http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage)
+			respondDockerErr(c, services.ErrDockerUnavailable, http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage)
 			return
 		}
 
