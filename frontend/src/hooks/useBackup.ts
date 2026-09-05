@@ -12,7 +12,6 @@ export function useBackupSettings() {
   return useQuery({
     queryKey: queryKeys.backup.settings(),
     queryFn: () => backupApi.getSettings(),
-    retry: 1,
   })
 }
 
@@ -34,7 +33,6 @@ export function useBackupPolicies() {
   return useQuery({
     queryKey: queryKeys.backup.policies(),
     queryFn: () => backupApi.getPolicies(),
-    retry: 1,
   })
 }
 
@@ -121,7 +119,6 @@ export function useBackupStatus() {
   return useQuery({
     queryKey: queryKeys.backup.status(),
     queryFn: () => backupApi.getStatus(),
-    retry: 1,
   })
 }
 
@@ -132,7 +129,6 @@ export function useBackupSnapshots(stackId: string) {
     queryKey: queryKeys.backup.snapshots(stackId),
     queryFn: () => backupApi.listSnapshots(stackId),
     enabled: !!stackId,
-    retry: 1,
   })
 }
 
@@ -191,7 +187,6 @@ export function usePreviewSnapshot(snapshotId: string) {
     queryKey: queryKeys.backup.snapshotPreview(snapshotId),
     queryFn: () => backupApi.previewSnapshot(snapshotId),
     enabled: !!snapshotId,
-    retry: 1,
   })
 }
 
@@ -209,7 +204,6 @@ export function useStackBackupRuns(stackId: string, limit = 20) {
     queryKey: queryKeys.backup.stackHistory(limit, stackId),
     queryFn: () => backupApi.getHistory(limit),
     enabled: !!stackId,
-    retry: 1,
   })
 
   return {

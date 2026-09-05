@@ -137,7 +137,9 @@ describe('BackupSettingsContent — loading / error states', () => {
     const wrapper = createWrapper()
     render(<BackupSettingsContent />, { wrapper })
 
-    // useBackupSettings has retry:1 so allow up to 3s for the retry + error render.
+    // useBackupSettings no longer restates `retry: 1` over the wrapper's
+    // `retry: false` (agent-os-tdts), so this settles on the first failure. The
+    // timeout is headroom for a loaded box, not a retry backoff.
     await waitFor(
       () => {
         expect(screen.getByText(/failed to load backup settings/i)).toBeInTheDocument()

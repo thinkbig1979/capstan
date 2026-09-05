@@ -69,9 +69,10 @@ describe('StackUpdatesTab — load states', () => {
     const user = userEvent.setup()
     renderWithProviders(<StackUpdatesTab stackId="stack-1" />)
 
-    // useUpdateHistory sets `retry: 1`, which overrides the test client's
-    // `retry: false`, so the error state only lands after react-query's retry
-    // delay — past the 1s default here.
+    // useUpdateHistory no longer restates `retry: 1`, so the test client's
+    // `retry: false` is no longer being REPLACED by it (agent-os-tdts). The
+    // error state lands on the first failure; the timeout is headroom for a
+    // loaded box, not a retry backoff.
     expect(
       await screen.findByText('Failed to Load Update History', {}, { timeout: 5000 }),
     ).toBeInTheDocument()

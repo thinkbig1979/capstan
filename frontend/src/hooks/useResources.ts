@@ -34,7 +34,6 @@ export function useImages() {
   return useQuery({
     queryKey: queryKeys.resources.images(),
     queryFn: resourcesApi.images,
-    retry: 1,
   })
 }
 
@@ -42,7 +41,6 @@ export function useVolumes() {
   return useQuery({
     queryKey: queryKeys.resources.volumes(),
     queryFn: resourcesApi.volumes,
-    retry: 1,
   })
 }
 
@@ -50,7 +48,6 @@ export function useNetworks() {
   return useQuery({
     queryKey: queryKeys.resources.networks(),
     queryFn: resourcesApi.networks,
-    retry: 1,
   })
 }
 
@@ -58,7 +55,6 @@ export function useBuildCache() {
   return useQuery({
     queryKey: queryKeys.resources.buildCache(),
     queryFn: resourcesApi.buildCache,
-    retry: 1,
   })
 }
 
@@ -462,7 +458,6 @@ export function useUpdateJobs() {
       useUpdateJobStore.getState().hydrate(data.jobs)
       return data
     },
-    retry: 1,
   })
 }
 
@@ -470,7 +465,6 @@ export function useUpdateHistory(filters: UpdateHistoryFilters) {
   return useQuery({
     queryKey: queryKeys.updateHistory.list(filters),
     queryFn: () => resourcesApi.getUpdateHistory(filters),
-    retry: 1,
   })
 }
 
@@ -478,7 +472,6 @@ export function useAutoUpdatePolicies() {
   return useQuery({
     queryKey: queryKeys.autoUpdatePolicies(),
     queryFn: () => autoUpdateApi.getPolicies(),
-    retry: 1,
   })
 }
 
@@ -499,7 +492,6 @@ export function useUpdateSettings() {
   return useQuery({
     queryKey: queryKeys.settings.updates(),
     queryFn: () => settingsApi.getUpdates(),
-    retry: 1,
   })
 }
 
@@ -518,7 +510,6 @@ export function useGitSettings() {
   return useQuery({
     queryKey: queryKeys.settings.git(),
     queryFn: () => settingsApi.getGit(),
-    retry: 1,
   })
 }
 
@@ -526,7 +517,6 @@ export function useGlobalEnv() {
   return useQuery({
     queryKey: queryKeys.settings.globalEnv(),
     queryFn: () => settingsApi.getGlobalEnv(),
-    retry: 1,
   })
 }
 
@@ -545,7 +535,6 @@ export function useRetentionSettings() {
   return useQuery({
     queryKey: queryKeys.settings.retention(),
     queryFn: () => settingsApi.getRetention(),
-    retry: 1,
   })
 }
 

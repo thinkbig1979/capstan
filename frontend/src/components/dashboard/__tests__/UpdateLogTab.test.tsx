@@ -87,8 +87,11 @@ describe('UpdateLogTab — loading, error and empty', () => {
     mockGetUpdateHistory.mockRejectedValue(new Error('boom'))
     renderTab()
 
-    // useUpdateHistory sets retry: 1, so the error state needs a second
-    // attempt plus its backoff before it settles.
+    // The wrapper's `retry: false` now actually applies: useUpdateHistory no
+    // longer restates `retry: 1` per-query, which used to REPLACE that default
+    // rather than compose with it (agent-os-tdts). So the error settles on the
+    // first failure; the timeout below is headroom for a loaded box, not for a
+    // retry backoff.
     expect(
       await screen.findByText('Failed to Load Update History', {}, { timeout: 5000 }),
     ).toBeInTheDocument()

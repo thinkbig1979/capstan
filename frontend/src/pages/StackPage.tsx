@@ -92,7 +92,6 @@ export function StackPage() {
     queryKey: queryKeys.stack.detail(id ?? ''),
     queryFn: () => stacksApi.get(id || ''),
     enabled: !!id,
-    retry: 1,
   })
 
   const deleteMutation = useMutation({
