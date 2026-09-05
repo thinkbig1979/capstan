@@ -697,6 +697,39 @@ var errWSRefused = errors.New("websocket connection refused: registration limit"
 func serveWS(c *gin.Context, db *database.DB, jwtSecret string, authDisabled bool, cm *ConnectionManager, reg wsRegistration) (*Connection, func(), error) {
 	conn, err := upgradeConnection(c, db, jwtSecret, authDisabled)
 	if err != nil {
+		// One ERROR line for EVERY upgrade/auth failure, at every call site,
+		// independent of handleError/logServerFault (respond.go's 4xx-silent
+		// contract is untouched -- this never calls either) (agent-os-94yx).
+		// Before this, a WS auth failure (no auth frame, invalid/expired
+		// token) was invisible everywhere: 4 of the 8 call sites (logs,
+		// operations, update_jobs, backup) never reported it at all, and the
+		// 4 that DO call handleError (monitoring x2, dashboard, terminal)
+		// still produced nothing for this shape, because handleError's
+		// logServerFault is silent below 500 and every one of these AppErrors
+		// is a 401. The raw HandshakeError shape (upgrader.Upgrade itself
+		// failing, not an auth failure) is NOT an AppError, so handleError's
+		// fallback treats it as a generic 500 and DOES log via logServerFault
+		// at those same 4 sites -- this line then runs there too, so that
+		// shape logs TWICE at a handleError site. That double line is a
+		// known, accepted precedent (agent-os-ua4y) pending a follow-up once
+		// the call sites are free of other in-flight work; it is not
+		// suppressed here on purpose, since suppressing it would require
+		// coordinating a change across handleError's 4 call sites, which are
+		// other owners' files this wave.
+		code := "UPGRADE_FAILED"
+		var appErr *models.AppError
+		if errors.As(err, &appErr) {
+			code = appErr.Code
+		}
+		attrs := []any{
+			"request_id", middleware.RequestIDFrom(c),
+			"code", code,
+			"error", err,
+		}
+		if appErr != nil && appErr.Cause != nil {
+			attrs = append(attrs, "cause", appErr.Cause)
+		}
+		slog.Error("WebSocket upgrade failed", attrs...)
 		return nil, nil, err
 	}
 
