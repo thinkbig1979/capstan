@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 )
 
 // TestDashboardMetricsWS_UpgradeFailureLogsTheCause is the regression for
@@ -61,21 +62,44 @@ func TestDashboardMetricsWS_UpgradeFailureLogsTheCause(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/api/ws/dashboard/metrics", nil)
 
+	// No router here, so no RequestID middleware runs: the sentinel goes onto
+	// the context directly, exactly as ws_upgrade_failure_log_test.go's
+	// TestHandleError_NeverLogsA401AfterAWSAuthFailure does it. serveWS reads
+	// it back through middleware.RequestIDFrom (ws.go, "request_id"), so its
+	// ERROR line carries the sentinel and logServerFault's would too.
+	plantDone := plantStrayServerFaultLine(t)
+	reqID, sentinel := requestIDSentinel()
+	c.Set(middleware.RequestIDKey, reqID)
+
 	h.handleDashboardMetricsWebSocket("test-secret-key-32-chars-long!!!", true)(c)
+	<-plantDone
 
 	got := buf.String()
 	if !strings.Contains(got, "not using the websocket protocol") {
 		t.Errorf("a WebSocket upgrade failure produced no log naming the cause; "+
 			"the operator has no record at all that it happened. captured = %q", got)
 	}
-	if !strings.Contains(got, "level=ERROR") {
-		t.Errorf("the upgrade failure was logged below ERROR; captured = %q", got)
-	}
 	if !strings.Contains(got, "WebSocket upgrade failed") {
 		t.Errorf("the line is not serveWS's own (agent-os-94yx); captured = %q", got)
 	}
-	if strings.Contains(got, "request failed") {
-		t.Errorf("handleError's line is back after serveWS; the site must log nothing of its own (agent-os-lukw); captured = %q", got)
+	// The "handleError's line is back" claim (agent-os-lukw), discriminated on
+	// this request's own id (agent-os-nho7). It used to be an absence check on
+	// the bare substring "request failed" over captureHandlerLogs's buffer,
+	// which is slog's PROCESS-GLOBAL sink for the test's duration, and
+	// "request failed" is logServerFault's fixed msg for EVERY 5xx anywhere in
+	// the binary — so any other goroutine's fault line turned this red.
+	//
+	// Counting instead of excluding: exactly ONE ERROR line may carry this
+	// request's id, serveWS's own. handleError's line would carry the same id
+	// (logServerFault stamps it from the same context) and make it two. That
+	// is strictly stronger than the old check — it also catches a second line
+	// for this request that is neither of those two — and it subsumes the
+	// separate level=ERROR presence assertion this replaces, since
+	// countErrorLines only counts level=ERROR lines. Same pin, same site, as
+	// TestUpgradeFailure_HandleErrorSiteLogsOnce (ws_upgrade_failure_log_test.go).
+	if n := countErrorLines(got, sentinel); n != 1 {
+		t.Errorf("the upgrade failure produced %d ERROR line(s) carrying %s, want exactly 1 (serveWS's own; "+
+			"handleError's line must not be back after serveWS, agent-os-lukw). captured = %q", n, sentinel, got)
 	}
 	// The sink with no reader must stay empty, or the defect is back in a
 	// second copy alongside the fix.

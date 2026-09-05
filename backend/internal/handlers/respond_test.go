@@ -108,11 +108,17 @@ func (s *syncLogBuffer) String() string {
 // in exactly the WebSocket tests most likely to need them.
 //
 // Assertions on the buffer use strings.Contains, never equality or a line
-// count. Not because of t.Parallel: all 55 parallel tests in this package are
-// in backup_test.go, and Go releases the parallel barrier only after every
-// serial test has returned, so they cannot overlap these. The reason is
-// narrower — an unrelated goroutine writing one line must not break an
-// assertion about a sentinel.
+// count. Not because of t.Parallel: Go releases the parallel barrier only
+// after every serial test has returned, so no parallel test can overlap these
+// wherever it lives. (That barrier argument is the load-bearing half and is
+// unchanged. The file attribution this comment used to carry — "all 55
+// parallel tests in this package are in backup_test.go" — was stale, and is
+// corrected here rather than left to be re-derived: OBSERVED 2026-09-05,
+// `command grep -c 't.Parallel()'` gives backup_test.go 56,
+// backup_repository_redaction_test.go 10, backup_repository_credential_flag_test.go 2,
+// so 68 across three files. Do not re-derive the barrier claim from the file
+// list; it never depended on it.) The reason is narrower — an unrelated
+// goroutine writing one line must not break an assertion about a sentinel.
 func captureHandlerLogs(t *testing.T) *syncLogBuffer {
 	t.Helper()
 	var buf syncLogBuffer
