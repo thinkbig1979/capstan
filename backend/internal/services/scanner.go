@@ -641,9 +641,10 @@ func (s *ScannerService) pruneStaleStacks() error {
 	scanDepth, depthErr := s.readScanDepth()
 	if depthErr != nil {
 		// This ERROR is emitted here, where the cause is known, and not left to
-		// the caller: ScanAll logs a prune failure as a WARN naming no cause
-		// (:502), which tells an operator nothing about a fault that would
-		// otherwise have destroyed credentials.
+		// the caller: ScanAll logs a prune failure as
+		// slog.Warn("Failed to prune stale stacks", ...) (scanner.go:508), a
+		// WARN naming no cause, which tells an operator nothing about a fault
+		// that would otherwise have destroyed credentials.
 		slog.Error("Refusing to prune stale stacks: the scan depth setting could not be read, and pruning at the default depth would delete the directory row of every stack below depth 1, taking its stacks by cascade and its git credentials permanently", "cause", depthErr)
 		return depthErr
 	}

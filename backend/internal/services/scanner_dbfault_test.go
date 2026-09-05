@@ -19,8 +19,8 @@ import (
 // Why this shape and not faultyDB / closedDBWithSettings: a closed or
 // hard-broken database SELF-PROTECTS against this defect. pruneStaleStacks
 // reads scan_depth, builds activeDirs, and only then calls
-// s.db.ListDirectories() (scanner.go:598), whose error check returns before any
-// delete. The destructive window is a TRANSIENT read fault -- scan_depth fails
+// ScannerService.pruneStaleStacks' own `s.db.ListDirectories()` (scanner.go:657),
+// whose error check returns before any delete. The destructive window is a TRANSIENT read fault -- scan_depth fails
 // while directories still answers -- which is what a writer holding the lock
 // past busy_timeout(5000) (database.go:98) produces in production.
 //
@@ -116,16 +116,20 @@ func depth2Tree(t *testing.T) (root, parent, child string) {
 // rather than a nuisance. migrations.go:151 declares
 // `FOREIGN KEY (directory) REFERENCES directories(path) ON DELETE CASCADE` and
 // foreign_keys(1) is set on every connection (database.go:98), so deleting a
-// directory row takes its stacks with it. The stack rows are recoverable -- the
-// next successful scan re-mints them under the SAME path-derived IDs -- but the
-// DIRECTORY row is not: it carries git_auth_type, git_ssh_key_path,
+// directory row takes its stacks with it. The stack rows are recoverable, but
+// only CONDITIONALLY: a later scan re-mints them under the SAME path-derived
+// IDs, and it does so only once the fault has ended AND that scan actually
+// reaches depth 2 again. While the fault persists they stay gone. The DIRECTORY
+// row is not recoverable at all: it carries git_auth_type, git_ssh_key_path,
 // git_https_user and the ENCRYPTED git_https_token (migrations.go:255-258).
 // A transient lock therefore permanently destroys the per-directory git
 // credentials for every directory below depth 1.
 //
 // This is why every assertion below is on the DIRECTORY rows and their
 // credentials, not only on the stack rows: a stack-only assertion passes
-// against the live defect, because the stacks come back.
+// against the live defect, because the stacks come back once the fault ends and
+// a scan reaches them again. The unrecoverable directory row is the whole P1
+// argument, and overstating the stack rows' recovery only weakens it.
 const (
 	obgrGitUser  = "obgr-https-user"
 	obgrGitToken = "obgr-https-token-not-recoverable-by-a-rescan"
@@ -179,7 +183,8 @@ func directoryPaths(t *testing.T, db *database.DB) []string {
 // TestPruneStaleStacks_TransientScanDepthFault_DeletesNothing is the failing-first
 // arm of agent-os-obgr.
 //
-// Before the fix, scanner.go:587 read scan_depth as
+// Before the fix, pruneStaleStacks read scan_depth (scanner.go:587 as measured
+// on the base commit 5e7bbc5; the line is gone from this tree) as
 // `if depthStr, err := s.db.GetSetting("scan_depth"); err == nil && depthStr != ""`,
 // so an unreadable database and an absent row were the same event: scanDepth
 // silently fell back to 1, collectActiveDirs marked only the root and its
@@ -209,7 +214,7 @@ func TestPruneStaleStacks_TransientScanDepthFault_DeletesNothing(t *testing.T) {
 	require.Error(t, err, "a scan depth that could not be read must abort the prune, not fall back to 1")
 
 	out := buf.String()
-	require.Contains(t, out, "level=ERROR", "the refusal must be an ERROR, not the caller's causeless WARN at scanner.go:502")
+	require.Contains(t, out, "level=ERROR", "the refusal must be an ERROR, not ScanAll's causeless slog.Warn(\"Failed to prune stale stacks\") at scanner.go:508")
 	require.Contains(t, out, "cause=", "the ERROR must carry the discriminated cause")
 	require.Contains(t, out, "no such table: settings", "the cause must be the underlying driver error")
 
@@ -268,9 +273,10 @@ func TestPruneStaleStacks_HealthyScanDepth2_PrunesOnlyWhatIsGone(t *testing.T) {
 }
 
 // TestScanAll_TransientScanDepthFault_RefusesAndLogsCause covers the sibling
-// site at scanner.go:491, which read the same key with the same shape (receiver
-// dbErr). There the immediate consequence was only a silently shallow scan --
-// but ScanAll calls pruneStaleStacks at :502, so on a persistent fault both
+// site in ScanAll (scanner.go:491 as measured on the base commit 5e7bbc5),
+// which read the same key with the same shape (receiver dbErr). There the
+// immediate consequence was only a silently shallow scan -- but ScanAll calls
+// pruneStaleStacks (scanner.go:507), so on a persistent fault both
 // reads fault together and the shallow scan agrees with the deep delete.
 //
 // ScanAll REFUSES rather than only logging: handlers/directories.go:68 already
