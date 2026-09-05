@@ -1,0 +1,826 @@
+// getter-errors: an identifier-free detector for the discarded / softened
+// getter family, plus a reachability reporter for the sites already converted.
+//
+// WHY THIS EXISTS. Every sweep this defect family has used was anchored on an
+// identifier -- a receiver expression (`h.db.`), an error-variable name
+// (`err`), or a `Get*` callee prefix -- and every one of those anchors has
+// already produced a FALSE ZERO on this tree: sErr / dbErr / pErr evaded the
+// name anchor (agent-os-g482, obgr, r1by), `List*` evaded the verb anchor
+// (agent-os-l42o, handlers/directories.go:55/:79/:81), and `UserCount` has no
+// verb at all (handlers/auth.go:127/:144 at 4b569a6). This program is anchored
+// on SHAPE only: the last value of a two-or-more-value assignment whose RHS is
+// a single call.
+//
+// THREE COMMANDS:
+//
+//	scan <dir>              list every DISCARD / SOFT site under <dir>
+//	counts <dir>            the same, aggregated per file (the ratchet baseline)
+//	reach <dir> <profile>   list converted sites and whether a test drives a
+//	                        fault into each (layer C; needs a coverage profile)
+//
+// SHAPES.
+//
+//	DISCARD  x, _ := f()          the error is thrown away outright
+//	SOFT     x, e := f()          e is only ever compared `e == nil`; the error
+//	         if e == nil { ... }  is softened into an "absent" signal
+//
+// SCOPE RULE, and it is the whole substance of this program. bud5's prototype
+// classified a candidate by walking the ENTIRE enclosing function body after
+// the assignment and calling any later ident of the same spelling a hard use.
+// That is a FIFTH ANCHOR, and the worst one, because it makes the tool blind
+// exactly where the family's commonest spelling -- plain `err` -- lives. At
+// 4b569a6 it missed services/docker_update.go:204 and handlers/updates.go:179,
+// :325 and :812, all textbook members, because each function reuses or shadows
+// `err` further down. Here a candidate's REGION is the statements that follow
+// it IN ITS OWN STATEMENT LIST (or, for an if-init, that if's cond/body/else),
+// and within the region:
+//
+//   - an if/for/switch/range whose init or key/value DEFINES the same name is
+//     a SHADOW: its RHS is scanned for uses of the outer variable, the rest of
+//     it is skipped, and scanning resumes after it. That is what makes
+//     handlers/updates.go:812 a hit despite the `if err := h.db.Upsert...` at
+//     :838.
+//   - `e = ...` anywhere, or `e, x := ...` in the region's own list, is a
+//     BOUNDARY: the variable's value has been replaced, so nothing after it
+//     says anything about the value read here.
+//   - `e := ...` in a NESTED list is a shadow for that list only; scanning
+//     resumes after the nested block.
+//
+// A candidate is found by exactly ONE code path -- the statement list that
+// contains it, or the if/for/switch that owns it as an init -- so a site is
+// reported once. The prototype visited an if-init assignment twice (once as
+// the IfStmt, once as the AssignStmt) and printed five of its thirteen SOFT
+// rows in duplicate; "13" was never a site count.
+//
+// WHAT IS DELIBERATELY NOT DONE. No type information: loading go/types needs
+// the module's dependencies, and the required check that runs this has a
+// checkout and nothing else. So `v, _ := m[k]`-style non-error second values
+// would be false positives if their RHS were a call. The type-aware arm is
+// layer A -- `errcheck` with `check-blank: true` in backend/.golangci.yml --
+// and check-getter-errors.sh --cross-check compares the two instruments'
+// DISCARD sets rather than trusting either alone.
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+type site struct {
+	kind   string // DISCARD | SOFT
+	file   string // slash path relative to the scanned root
+	line   int
+	callee string // reporting only -- never a filter in the committed verdict
+	fn     string // enclosing function, reporting only
+}
+
+// ---------------------------------------------------------------- use scan --
+
+// useScan walks a region and classifies every use of one variable.
+type useScan struct {
+	name    string
+	soft    int  // `name == nil`
+	hard    int  // anything else at all
+	stopped bool // a boundary was reached; nothing later can be a use
+}
+
+func isIdent(e ast.Expr, name string) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+// definesName reports whether an assignment DECLARES name on its left side.
+func definesName(a *ast.AssignStmt, name string) bool {
+	if a == nil || a.Tok != token.DEFINE {
+		return false
+	}
+	for _, l := range a.Lhs {
+		if isIdent(l, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// initShadows reports whether a statement's init clause declares name.
+func (u *useScan) initShadows(init ast.Stmt) bool {
+	a, ok := init.(*ast.AssignStmt)
+	return ok && definesName(a, u.name)
+}
+
+// scanInitRHS records uses of the outer variable inside a shadowing init's
+// right-hand side, which are real uses of the OUTER variable.
+func (u *useScan) scanInitRHS(init ast.Stmt) {
+	if a, ok := init.(*ast.AssignStmt); ok {
+		for _, r := range a.Rhs {
+			u.expr(r)
+		}
+	}
+}
+
+// stmts walks a statement list. topLevel is true only for the list that
+// physically contains the candidate assignment: there a `:=` of the same name
+// re-uses the same variable, while in a nested list it declares a new one.
+func (u *useScan) stmts(list []ast.Stmt, topLevel bool) {
+	for _, s := range list {
+		if u.stopped {
+			return
+		}
+		if u.stmt(s, topLevel) {
+			return
+		}
+	}
+}
+
+// stmt returns endList when the REST OF THE ENCLOSING LIST must be skipped
+// because the name was shadowed there. u.stopped is the stronger, global form.
+func (u *useScan) stmt(s ast.Stmt, topLevel bool) bool {
+	switch n := s.(type) {
+	case nil:
+		return false
+
+	case *ast.AssignStmt:
+		for _, r := range n.Rhs {
+			u.expr(r)
+		}
+		hit := false
+		for _, l := range n.Lhs {
+			if isIdent(l, u.name) {
+				hit = true
+			} else {
+				u.expr(l) // `m[err] = x` is a use
+			}
+		}
+		if !hit {
+			return false
+		}
+		if n.Tok == token.DEFINE && !topLevel {
+			return true // shadow: this list is done, the outer var lives on after it
+		}
+		u.stopped = true // reassignment, or a same-list `:=` of the same variable
+		return false
+
+	case *ast.DeclStmt:
+		gd, ok := n.Decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			return false
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, v := range vs.Values {
+				u.expr(v)
+			}
+			for _, nm := range vs.Names {
+				if nm.Name == u.name {
+					if topLevel {
+						u.stopped = true
+						return false
+					}
+					return true
+				}
+			}
+		}
+		return false
+
+	case *ast.BlockStmt:
+		u.stmts(n.List, false)
+		return false
+
+	case *ast.IfStmt:
+		if u.initShadows(n.Init) {
+			u.scanInitRHS(n.Init)
+			return false // skip cond/body/else entirely; resume after
+		}
+		if n.Init != nil && u.stmt(n.Init, topLevel) {
+			return true
+		}
+		if u.stopped {
+			return false
+		}
+		u.expr(n.Cond)
+		u.stmts(n.Body.List, false)
+		if n.Else != nil {
+			u.stmt(n.Else, false)
+		}
+		return false
+
+	case *ast.ForStmt:
+		if u.initShadows(n.Init) {
+			u.scanInitRHS(n.Init)
+			return false
+		}
+		if n.Init != nil && u.stmt(n.Init, topLevel) {
+			return true
+		}
+		if n.Cond != nil {
+			u.expr(n.Cond)
+		}
+		if n.Post != nil {
+			u.stmt(n.Post, false)
+		}
+		u.stmts(n.Body.List, false)
+		return false
+
+	case *ast.RangeStmt:
+		if n.Tok == token.DEFINE && (isIdent(n.Key, u.name) || isIdent(n.Value, u.name)) {
+			u.expr(n.X)
+			return false
+		}
+		u.expr(n.X)
+		u.stmts(n.Body.List, false)
+		return false
+
+	case *ast.SwitchStmt:
+		if u.initShadows(n.Init) {
+			u.scanInitRHS(n.Init)
+			return false
+		}
+		if n.Init != nil && u.stmt(n.Init, topLevel) {
+			return true
+		}
+		if n.Tag != nil {
+			u.expr(n.Tag)
+		}
+		u.stmts(n.Body.List, false)
+		return false
+
+	case *ast.TypeSwitchStmt:
+		if a, ok := n.Assign.(*ast.AssignStmt); ok && definesName(a, u.name) {
+			for _, r := range a.Rhs {
+				u.expr(r)
+			}
+			return false
+		}
+		if n.Init != nil && u.stmt(n.Init, topLevel) {
+			return true
+		}
+		u.stmt(n.Assign, false)
+		u.stmts(n.Body.List, false)
+		return false
+
+	case *ast.CaseClause:
+		for _, e := range n.List {
+			u.expr(e)
+		}
+		u.stmts(n.Body, false)
+		return false
+
+	case *ast.CommClause:
+		if n.Comm != nil {
+			u.stmt(n.Comm, false)
+		}
+		u.stmts(n.Body, false)
+		return false
+
+	case *ast.SelectStmt:
+		u.stmts(n.Body.List, false)
+		return false
+
+	case *ast.LabeledStmt:
+		return u.stmt(n.Stmt, topLevel)
+
+	default:
+		u.expr(s)
+		return false
+	}
+}
+
+// expr counts uses of the name inside an expression or a simple statement.
+// `name == nil` is the one soft shape; every other appearance is hard.
+func (u *useScan) expr(n ast.Node) {
+	if n == nil {
+		return
+	}
+	ast.Inspect(n, func(x ast.Node) bool {
+		switch e := x.(type) {
+		case *ast.BinaryExpr:
+			if e.Op != token.EQL && e.Op != token.NEQ {
+				return true
+			}
+			lhsIsName := isIdent(e.X, u.name) && isIdent(e.Y, "nil")
+			rhsIsName := isIdent(e.Y, u.name) && isIdent(e.X, "nil")
+			if !lhsIsName && !rhsIsName {
+				return true
+			}
+			if e.Op == token.EQL {
+				u.soft++
+			} else {
+				u.hard++
+			}
+			return false
+		case *ast.FuncLit:
+			for _, fl := range e.Type.Params.List {
+				for _, nm := range fl.Names {
+					if nm.Name == u.name {
+						return false // the closure's own parameter shadows ours
+					}
+				}
+			}
+			u.stmts(e.Body.List, false)
+			return false
+		case *ast.Ident:
+			if e.Name == u.name {
+				u.hard++
+			}
+			return false
+		}
+		return true
+	})
+}
+
+// ------------------------------------------------------------- candidates --
+
+func calleeName(c *ast.CallExpr) string {
+	switch f := c.Fun.(type) {
+	case *ast.SelectorExpr:
+		return f.Sel.Name
+	case *ast.Ident:
+		return f.Name
+	case *ast.IndexExpr: // generic instantiation
+		return calleeName(&ast.CallExpr{Fun: f.X})
+	}
+	return ""
+}
+
+// candidate returns the call and the last-position identifier of an assignment
+// of the shape `a, b, ..., last := call()`. Position, not spelling, picks the
+// error: Go returns it last, and a name test is exactly the anchor this
+// program exists to avoid.
+func candidate(a *ast.AssignStmt) (*ast.CallExpr, *ast.Ident, bool) {
+	if a == nil || len(a.Lhs) < 2 || len(a.Rhs) != 1 {
+		return nil, nil, false
+	}
+	call, ok := a.Rhs[0].(*ast.CallExpr)
+	if !ok {
+		return nil, nil, false
+	}
+	last, ok := a.Lhs[len(a.Lhs)-1].(*ast.Ident)
+	if !ok {
+		return nil, nil, false
+	}
+	return call, last, true
+}
+
+type scanner struct {
+	fset  *token.FileSet
+	rel   string
+	fn    string
+	sites *[]site
+}
+
+func (s *scanner) record(kind string, a *ast.AssignStmt, call *ast.CallExpr) {
+	*s.sites = append(*s.sites, site{
+		kind:   kind,
+		file:   s.rel,
+		line:   s.fset.Position(a.Pos()).Line,
+		callee: calleeName(call),
+		fn:     s.fn,
+	})
+}
+
+// classify handles one candidate given the region that follows it.
+func (s *scanner) classify(a *ast.AssignStmt, region func(*useScan)) {
+	call, last, ok := candidate(a)
+	if !ok {
+		return
+	}
+	if last.Name == "_" {
+		s.record("DISCARD", a, call)
+		return
+	}
+	if a.Tok != token.DEFINE {
+		return // `x, err = f()` reuses an existing variable; not this shape
+	}
+	u := &useScan{name: last.Name}
+	region(u)
+	if u.soft > 0 && u.hard == 0 {
+		s.record("SOFT", a, call)
+	}
+}
+
+// list handles every candidate that sits directly in a statement list.
+func (s *scanner) list(stmts []ast.Stmt) {
+	for i, st := range stmts {
+		a, ok := st.(*ast.AssignStmt)
+		if !ok {
+			continue
+		}
+		rest := stmts[i+1:]
+		s.classify(a, func(u *useScan) { u.stmts(rest, true) })
+	}
+}
+
+// initOf handles a candidate that is the init clause of an if/for/switch: its
+// region is that statement's own cond/body/else.
+func (s *scanner) initOf(init ast.Stmt, region func(*useScan)) {
+	a, ok := init.(*ast.AssignStmt)
+	if !ok {
+		return
+	}
+	s.classify(a, region)
+}
+
+func (s *scanner) file(f *ast.File) {
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			s.fn = x.Name.Name
+		case *ast.BlockStmt:
+			s.list(x.List)
+		case *ast.CaseClause:
+			s.list(x.Body)
+		case *ast.CommClause:
+			s.list(x.Body)
+		case *ast.IfStmt:
+			s.initOf(x.Init, func(u *useScan) {
+				u.expr(x.Cond)
+				u.stmts(x.Body.List, false)
+				if x.Else != nil {
+					u.stmt(x.Else, false)
+				}
+			})
+		case *ast.ForStmt:
+			s.initOf(x.Init, func(u *useScan) {
+				if x.Cond != nil {
+					u.expr(x.Cond)
+				}
+				u.stmts(x.Body.List, false)
+			})
+		case *ast.SwitchStmt:
+			s.initOf(x.Init, func(u *useScan) {
+				if x.Tag != nil {
+					u.expr(x.Tag)
+				}
+				u.stmts(x.Body.List, false)
+			})
+		}
+		return true
+	})
+}
+
+// -------------------------------------------------------------- traversal --
+
+func goFiles(root string) ([]string, error) {
+	var out []string
+	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			base := filepath.Base(p)
+			if base == "vendor" || base == "testdata" || base == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		out = append(out, p)
+		return nil
+	})
+	sort.Strings(out)
+	return out, err
+}
+
+func scanTree(root string) ([]site, error) {
+	files, err := goFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	fset := token.NewFileSet()
+	var sites []site
+	for _, p := range files {
+		f, perr := parser.ParseFile(fset, p, nil, 0)
+		if perr != nil {
+			return nil, fmt.Errorf("parse %s: %w", p, perr)
+		}
+		rel, rerr := filepath.Rel(root, p)
+		if rerr != nil {
+			rel = p
+		}
+		s := &scanner{fset: fset, rel: filepath.ToSlash(rel), sites: &sites}
+		s.file(f)
+	}
+	sort.Slice(sites, func(i, j int) bool {
+		if sites[i].file != sites[j].file {
+			return sites[i].file < sites[j].file
+		}
+		if sites[i].line != sites[j].line {
+			return sites[i].line < sites[j].line
+		}
+		return sites[i].kind < sites[j].kind
+	})
+	return sites, nil
+}
+
+func cmdScan(root string) error {
+	sites, err := scanTree(root)
+	if err != nil {
+		return err
+	}
+	d, s := 0, 0
+	for _, h := range sites {
+		if h.kind == "DISCARD" {
+			d++
+		} else {
+			s++
+		}
+		fmt.Printf("%-7s %s:%d %s (%s)\n", h.kind, h.file, h.line, h.callee, h.fn)
+	}
+	fmt.Printf("TOTAL SITES=%d DISCARD=%d SOFT=%d\n", len(sites), d, s)
+	return nil
+}
+
+// cmdCounts prints the ratchet baseline: per-file counts, never file:line.
+// Line numbers rot -- services/backup.go:1084 at 4b569a6 is :1172 on 5e7bbc5,
+// pure code motion -- and a line-keyed baseline reports that as a new site.
+func cmdCounts(root string) error {
+	sites, err := scanTree(root)
+	if err != nil {
+		return err
+	}
+	type pair struct{ d, s int }
+	per := map[string]*pair{}
+	var order []string
+	for _, h := range sites {
+		p, ok := per[h.file]
+		if !ok {
+			p = &pair{}
+			per[h.file] = p
+			order = append(order, h.file)
+		}
+		if h.kind == "DISCARD" {
+			p.d++
+		} else {
+			p.s++
+		}
+	}
+	sort.Strings(order)
+	td, ts := 0, 0
+	for _, f := range order {
+		p := per[f]
+		td += p.d
+		ts += p.s
+		fmt.Printf("%s DISCARD=%d SOFT=%d\n", f, p.d, p.s)
+	}
+	fmt.Printf("TOTAL FILES=%d DISCARD=%d SOFT=%d\n", len(order), td, ts)
+	return nil
+}
+
+// ----------------------------------------------------------------- layer C --
+
+// converted is a site of the shape this family's fixes produce:
+//
+//	x, err := call()
+//	if err != nil { ... }
+//
+// Layers A and B answer "is every site converted". This answers the DIFFERENT
+// question "does any test drive a fault into each converted site" -- the one
+// that read clean at 0 while eight of ten converted sites in backup_config.go
+// were pinned by nothing (agent-os-l42o).
+type converted struct {
+	file           string
+	line           int // the assignment
+	callee         string
+	fn             string
+	bodyLo, bodyHi int // line range of the `if err != nil` body
+}
+
+// displayPath keys a site by its path under backend/internal, not by its base
+// name: middleware/auth.go and handlers/auth.go are different files with the
+// same base, and collapsing them merges two functions' verdicts into one row.
+func displayPath(p string) string {
+	p = filepath.ToSlash(p)
+	const marker = "/backend/internal/"
+	if i := strings.Index(p, marker); i >= 0 {
+		return p[i+len(marker):]
+	}
+	return filepath.Base(p)
+}
+
+func convertedSites(fset *token.FileSet, f *ast.File, rel string) []converted {
+	var out []converted
+	fn := ""
+	guard := func(next ast.Stmt, name string) (*ast.IfStmt, bool) {
+		ifs, ok := next.(*ast.IfStmt)
+		if !ok || ifs.Init != nil {
+			return nil, false
+		}
+		be, ok := ifs.Cond.(*ast.BinaryExpr)
+		if !ok || be.Op != token.NEQ {
+			return nil, false
+		}
+		if (isIdent(be.X, name) && isIdent(be.Y, "nil")) || (isIdent(be.Y, name) && isIdent(be.X, "nil")) {
+			return ifs, true
+		}
+		return nil, false
+	}
+	scanList := func(list []ast.Stmt) {
+		for i, st := range list {
+			a, ok := st.(*ast.AssignStmt)
+			if !ok || i+1 >= len(list) {
+				continue
+			}
+			call, last, ok := candidate(a)
+			if !ok || last.Name == "_" || a.Tok != token.DEFINE {
+				continue
+			}
+			ifs, ok := guard(list[i+1], last.Name)
+			if !ok {
+				continue
+			}
+			out = append(out, converted{
+				file:   rel,
+				line:   fset.Position(a.Pos()).Line,
+				callee: calleeName(call),
+				fn:     fn,
+				bodyLo: fset.Position(ifs.Body.Lbrace).Line,
+				bodyHi: fset.Position(ifs.Body.Rbrace).Line,
+			})
+		}
+	}
+	// Only inside a FuncDecl: a converted site in a package-level var
+	// initializer has no function to name, and an unnamed row in the baseline
+	// cannot be acted on.
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		fn = fd.Name.Name
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.BlockStmt:
+				scanList(x.List)
+			case *ast.CaseClause:
+				scanList(x.Body)
+			case *ast.CommClause:
+				scanList(x.Body)
+			}
+			return true
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].line < out[j].line })
+	return out
+}
+
+type covBlock struct {
+	lo, hi int
+	count  int
+}
+
+// readProfile parses a Go coverage profile, keyed by the profile's own path
+// suffix so it matches regardless of the module's import path.
+func readProfile(path string) (map[string][]covBlock, error) {
+	fh, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = fh.Close() }()
+	out := map[string][]covBlock{}
+	sc := bufio.NewScanner(fh)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "mode:") {
+			continue
+		}
+		// path:lo.col,hi.col numstmt count
+		colon := strings.LastIndex(line, ":")
+		if colon < 0 {
+			continue
+		}
+		file := line[:colon]
+		fields := strings.Fields(line[colon+1:])
+		if len(fields) != 3 {
+			continue
+		}
+		rangePart := fields[0]
+		comma := strings.Index(rangePart, ",")
+		if comma < 0 {
+			continue
+		}
+		lo, err1 := strconv.Atoi(strings.SplitN(rangePart[:comma], ".", 2)[0])
+		hi, err2 := strconv.Atoi(strings.SplitN(rangePart[comma+1:], ".", 2)[0])
+		cnt, err3 := strconv.Atoi(fields[2])
+		if err1 != nil || err2 != nil || err3 != nil {
+			continue
+		}
+		out[file] = append(out[file], covBlock{lo: lo, hi: hi, count: cnt})
+	}
+	return out, sc.Err()
+}
+
+func blocksFor(prof map[string][]covBlock, rel string) []covBlock {
+	for k, v := range prof {
+		if strings.HasSuffix(k, "/"+rel) || k == rel {
+			return v
+		}
+	}
+	return nil
+}
+
+// cmdReach reports, for every converted site in the named source files,
+// whether the coverage profile shows its error branch executed at least once.
+func cmdReach(profile string, files []string) error {
+	prof, err := readProfile(profile)
+	if err != nil {
+		return err
+	}
+	fset := token.NewFileSet()
+	total, reached := 0, 0
+	var misses []string
+	for _, p := range files {
+		f, perr := parser.ParseFile(fset, p, nil, 0)
+		if perr != nil {
+			return fmt.Errorf("parse %s: %w", p, perr)
+		}
+		rel := displayPath(p)
+		blocks := blocksFor(prof, filepath.ToSlash(filepath.Base(p)))
+		if blocks == nil {
+			blocks = blocksFor(prof, filepath.ToSlash(p))
+		}
+		if blocks == nil {
+			return fmt.Errorf("no coverage blocks for %s in %s -- the profile does not cover this file, which is a blind instrument, not a clean result", rel, profile)
+		}
+		for _, c := range convertedSites(fset, f, rel) {
+			total++
+			// MEMBERSHIP RULE, stated because a proximity window that does not
+			// stop borrows the NEXT construct's evidence. A block counts only
+			// when it lies WHOLLY inside the `if err != nil` body: lo >= the
+			// brace line AND hi <= the closing brace line. The lo-only form is
+			// wrong -- Go's cover profile starts the block AFTER the body at
+			// the closing brace's own line, so `lo <= bodyHi` alone reports a
+			// never-executed error branch as covered whenever the statement
+			// following it ran. testdata/reach/cov_partial.txt pins that: the
+			// second site's branch is 0 while the block immediately after it
+			// is 1, and the self-test requires the answer to be MISS.
+			hit := false
+			for _, b := range blocks {
+				if b.lo >= c.bodyLo && b.hi <= c.bodyHi && b.count > 0 {
+					hit = true
+					break
+				}
+			}
+			label := "MISS   "
+			if hit {
+				label = "REACHED"
+				reached++
+			} else {
+				misses = append(misses, fmt.Sprintf("%s:%d %s (%s)", c.file, c.line, c.callee, c.fn))
+			}
+			fmt.Printf("%s %s:%d %s (%s)\n", label, c.file, c.line, c.callee, c.fn)
+		}
+	}
+	fmt.Printf("TOTAL CONVERTED=%d REACHED=%d MISS=%d\n", total, reached, total-reached)
+	for _, m := range misses {
+		fmt.Printf("MISSLINE %s\n", m)
+	}
+	return nil
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: getter-errors scan|counts <dir> | reach <profile> <file.go...>")
+		os.Exit(2)
+	}
+	var err error
+	switch os.Args[1] {
+	case "scan":
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: getter-errors scan <dir>")
+			os.Exit(2)
+		}
+		err = cmdScan(os.Args[2])
+	case "counts":
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: getter-errors counts <dir>")
+			os.Exit(2)
+		}
+		err = cmdCounts(os.Args[2])
+	case "reach":
+		if len(os.Args) < 4 {
+			fmt.Fprintln(os.Stderr, "usage: getter-errors reach <profile> <file.go...>")
+			os.Exit(2)
+		}
+		err = cmdReach(os.Args[2], os.Args[3:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
+		os.Exit(2)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+}
