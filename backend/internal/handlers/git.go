@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -47,11 +49,20 @@ func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error
 	if stackID != "" {
 		stack, err := h.db.GetStack(stackID)
 		if err != nil {
+			// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless
+			// the non-not-found case is split out and logged with its cause.
+			// Returned upward to the four callers below, which all pass
+			// straight to handleError(c, err) with no errors.Is/As in
+			// between — safe to attach the cause here (models/errors.go's
+			// NewAppErrorWithCause hazard note).
+			if !errors.Is(err, sql.ErrNoRows) {
+				return "", "", models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err)
+			}
 			return "", "", models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found")
 		}
 		normalizedDir, err := filepath.Abs(stack.Directory)
 		if err != nil {
-			return "", "", models.NewAppError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve stack directory")
+			return "", "", models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve stack directory", err)
 		}
 		return normalizedDir, stackID, nil
 	}

@@ -1,7 +1,9 @@
 package services
 
 import (
+	"fmt"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,3 +134,172 @@ func TestAttach_NilClientGone_StartsNoForwarder(t *testing.T) {
 	assert.LessOrEqual(t, settledGoroutines(t), before,
 		"forwardLive must exit once the client is gone")
 }
+
+// TestAttach_BoundsAttachersPerRun pins agent-os-nt0m: Attach admits at most
+// maxAttachersPerRun concurrent live attachers to one running run and refuses
+// the surplus BY RESULT (Done=true, Outcome "failed", a Reason naming the
+// limit, no Live), allocating nothing for it. Before the fix every attach to a
+// still-running run unconditionally allocated a 256-slot channel and a
+// forwardLive goroutine; the only gates were an authenticated session and a
+// valid runID, and the WS route registers unmetered so the per-user
+// connection cap never applied (agent-os-pu4y).
+//
+// Four arms on one instrument (settledGoroutines delta + the AttachResult
+// shape + line delivery on Live), in one function so the arms share a
+// baseline:
+//   - UNDER-BOUND proves the bound admits exactly maxAttachersPerRun callers
+//     and that every one of them still streams. Without this a bound that
+//     refuses everything would pass the next arm.
+//   - OVER-BOUND is the defect: the (max+1)th Attach must come back Done with
+//     the limit reason and the goroutine count must not move. This arm read
+//     Done=false and delta max+1 before the fix.
+//   - RELEASE proves the counter decrements when a forwarder exits on
+//     clientGone, so the bound is on CONCURRENT attachers, not on lifetime
+//     attaches. A counter that never decrements passes the first two arms.
+//   - CONCURRENT proves the check and the increment share one critical
+//     section: bound+k callers starting together must yield exactly bound
+//     admissions. A check-then-increment under two separate locks passes the
+//     three sequential arms and fails only here.
+//
+// forwardLive releases the slot from a defer that runs BEFORE its deferred
+// close(live), so draining Live to closure is a deterministic signal that
+// the slot is free again; the release arm relies on that ordering.
+func TestAttach_BoundsAttachersPerRun(t *testing.T) {
+	reg := newBareRegistry()
+
+	dr := &durableRun{runID: "arm-bound", kind: RunKindBackup, done: make(chan struct{})}
+	reg.runs[dr.runID] = dr
+	// Ends every forwarder this test starts, so an unfixed build cannot leak
+	// its surplus into the tests that follow.
+	t.Cleanup(func() { close(dr.done) })
+
+	waitLine := func(t *testing.T, live <-chan StreamLine, want string, who string) {
+		t.Helper()
+		select {
+		case line, ok := <-live:
+			require.True(t, ok, "%s: Live must not be closed while the run is in flight", who)
+			assert.Equal(t, want, line.Line, "%s: wrong line delivered", who)
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s: forwardLive did not deliver %q within 3s", who, want)
+		}
+	}
+
+	// --- UNDER-BOUND: exactly maxAttachersPerRun clients, all admitted, all streaming.
+	before := settledGoroutines(t)
+	gone := make([]chan struct{}, 0, maxAttachersPerRun)
+	lives := make([]<-chan StreamLine, 0, maxAttachersPerRun)
+	for i := 0; i < maxAttachersPerRun; i++ {
+		cg := make(chan struct{})
+		res, err := reg.Attach(dr.runID, cg)
+		require.NoError(t, err, "UNDER-BOUND: attacher %d of %d must be admitted", i+1, maxAttachersPerRun)
+		require.False(t, res.Done)
+		require.NotNil(t, res.Live, "UNDER-BOUND: attacher %d must get a live stream", i+1)
+		gone = append(gone, cg)
+		lives = append(lives, res.Live)
+	}
+	underDelta := settledGoroutines(t) - before
+	assert.Equal(t, maxAttachersPerRun, underDelta,
+		"UNDER-BOUND: each admitted attacher must get exactly one forwardLive goroutine")
+
+	dr.appendLog(StreamLine{Type: "data", Line: "under"})
+	for i, live := range lives {
+		waitLine(t, live, "under", "UNDER-BOUND attacher "+itoa(i+1))
+	}
+
+	// --- OVER-BOUND: the (max+1)th client is refused by result and costs nothing.
+	surplusGone := make(chan struct{})
+	defer close(surplusGone)
+	surplus, err := reg.Attach(dr.runID, surplusGone)
+	require.NoError(t, err, "OVER-BOUND: a refusal is a result, not an error")
+	require.NotNil(t, surplus)
+	assert.True(t, surplus.Done,
+		"OVER-BOUND (agent-os-nt0m): attacher %d must be refused as Done, the run already has %d live attachers",
+		maxAttachersPerRun+1, maxAttachersPerRun)
+	assert.Equal(t, "failed", surplus.Outcome, "OVER-BOUND: a refusal reports a failed outcome")
+	assert.Equal(t, tooManyAttachersReason, surplus.Reason,
+		"OVER-BOUND: the reason must name the limit so the viewer knows what to do")
+	assert.Nil(t, surplus.Live, "OVER-BOUND: a refused attach must get no live stream")
+	assert.Len(t, surplus.ReplayLines, 1,
+		"OVER-BOUND: the refused viewer still gets the replay it can show")
+	overDelta := settledGoroutines(t) - before
+	assert.Equal(t, maxAttachersPerRun, overDelta,
+		"OVER-BOUND: a refused attach must start no forwardLive goroutine")
+
+	// --- RELEASE: one client leaves, its slot comes back, the newcomer streams.
+	close(gone[0])
+	deadline := time.After(3 * time.Second)
+	for open := true; open; {
+		select {
+		case _, ok := <-lives[0]:
+			open = ok
+		case <-deadline:
+			t.Fatal("RELEASE: forwardLive did not exit within 3s of its client going away")
+		}
+	}
+
+	againGone := make(chan struct{})
+	defer close(againGone)
+	again, err := reg.Attach(dr.runID, againGone)
+	require.NoError(t, err)
+	require.False(t, again.Done,
+		"RELEASE: once an attacher's forwarder has exited its slot must be free again; a counter that never decrements fails here")
+	require.NotNil(t, again.Live)
+	releaseDelta := settledGoroutines(t) - before
+	assert.Equal(t, maxAttachersPerRun, releaseDelta,
+		"RELEASE: after one exit and one re-admission the goroutine count must be back at the bound")
+
+	dr.appendLog(StreamLine{Type: "data", Line: "again"})
+	waitLine(t, again.Live, "again", "RELEASE newcomer")
+	// The survivors from the first arm still stream too: the release touched
+	// only the departed attacher's slot.
+	waitLine(t, lives[1], "again", "RELEASE survivor")
+
+	// --- CONCURRENT: bound+k callers start together on a fresh run; exactly
+	// bound are admitted. Each goroutine parks on start so they contend for
+	// the counter at the same instant rather than trickling in.
+	const surplusK = 8
+	drRace := &durableRun{runID: "arm-race", kind: RunKindBackup, done: make(chan struct{})}
+	reg.runs[drRace.runID] = drRace
+	t.Cleanup(func() { close(drRace.done) })
+	raceGone := make(chan struct{})
+	defer close(raceGone)
+
+	raceBefore := settledGoroutines(t)
+	start := make(chan struct{})
+	results := make(chan *AttachResult, maxAttachersPerRun+surplusK)
+	var wg sync.WaitGroup
+	for i := 0; i < maxAttachersPerRun+surplusK; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			res, err := reg.Attach(drRace.runID, raceGone)
+			assert.NoError(t, err, "CONCURRENT: Attach never errors on a run in the registry")
+			results <- res
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	admitted, refused := 0, 0
+	for res := range results {
+		require.NotNil(t, res)
+		if res.Done {
+			refused++
+			assert.Nil(t, res.Live, "CONCURRENT: a refused attach must get no live stream")
+		} else {
+			admitted++
+			assert.NotNil(t, res.Live, "CONCURRENT: an admitted attach must get a live stream")
+		}
+	}
+	assert.Equal(t, maxAttachersPerRun, admitted,
+		"CONCURRENT: exactly the bound may be admitted when callers race; more means the check and the increment are not in one critical section")
+	assert.Equal(t, surplusK, refused, "CONCURRENT: every caller beyond the bound must be refused")
+	raceDelta := settledGoroutines(t) - raceBefore
+	assert.Equal(t, maxAttachersPerRun, raceDelta,
+		"CONCURRENT: one forwardLive goroutine per admitted attacher, none for the refused")
+}
+
+// itoa avoids pulling strconv in for a test label.
+func itoa(n int) string { return fmt.Sprint(n) }

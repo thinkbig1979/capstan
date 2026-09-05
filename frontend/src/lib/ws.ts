@@ -3,9 +3,14 @@ import { useAuthStore } from '@/stores/authStore'
 export type WSState = 'CONNECTING' | 'OPEN' | 'CLOSING' | 'CLOSED' | 'RECONNECTING'
 
 /** Close codes the server uses for policy refusals. Mirrors
- *  CloseCodeAuthFailure / CloseCodeRateLimit in backend/internal/handlers/ws.go. */
+ *  CloseCodeAuthFailure / CloseCodeRateLimit / CloseCodeNotFound in
+ *  backend/internal/handlers/ws.go. */
 export const WS_CLOSE_AUTH_FAILURE = 4401
 export const WS_CLOSE_RATE_LIMIT = 4429
+/** A permanent failure: the resource the client asked for structurally does
+ *  not exist (e.g. a deleted stack), so retrying cannot change the outcome
+ *  (agent-os-vi0o). */
+export const WS_CLOSE_NOT_FOUND = 4404
 
 /** A policy refusal is a decision, not a blip. Retrying cannot change the
  *  outcome, and for the connection cap the retry loop *is* the problem the cap
@@ -14,14 +19,14 @@ export const WS_CLOSE_RATE_LIMIT = 4429
 // A missing code means we cannot tell, so reconnect — the reconnect ladder is
 // the safe default and only an explicit policy code suppresses it.
 function shouldReconnectAfter(code: number | undefined): boolean {
-  return code !== WS_CLOSE_AUTH_FAILURE && code !== WS_CLOSE_RATE_LIMIT
+  return code !== WS_CLOSE_AUTH_FAILURE && code !== WS_CLOSE_RATE_LIMIT && code !== WS_CLOSE_NOT_FOUND
 }
 
 export interface WSClientOptions {
   binary?: boolean
   onOpen?: () => void
   /** Receives the close event so callers can distinguish a policy refusal
-   *  (4401/4429) from an ordinary disconnect. */
+   *  (4401/4429/4404) from an ordinary disconnect. */
   onClose?: (event: CloseEvent) => void
   onError?: (error: Event) => void
   onReconnecting?: (attempt: number) => void
@@ -32,6 +37,25 @@ export interface WSClientOptions {
 // waiting minutes between attempts.
 export const MAX_RECONNECT_DELAY_MS = 30000
 
+/** How long a socket must stay OPEN before its reconnect ladder is forgiven.
+ *
+ *  serveWS upgrades before any handler logic runs (backend/internal/handlers/
+ *  ws.go: upgradeConnection, then cm.Add, then the handler's own first request),
+ *  so onopen has already fired when a handler-level close arrives — terminal.go's
+ *  "Failed to create terminal session" (1000), logs.go's 1011s, a transient DB
+ *  fault in GetStack. Zeroing the counter in onopen therefore let every such
+ *  close re-enter the ladder at attempt 1 forever, ~1/s (agent-os-jj8u measured
+ *  it, agent-os-hpe9 bounds it). Only a socket that survives this long counts as
+ *  a recovery. 5 s is sized by reasoning, not measured: those closes all happen
+ *  inside the first request's work, well under 1 s, so the margin is wide.
+ *
+ *  Why a duration and not "first server message": the browser WebSocket API
+ *  never surfaces ping/pong, and the events route (monitoring.go) writes only
+ *  inside its docker-event loop, so a quiet host sends NOTHING after open. A
+ *  message-gated reset would count every genuine reconnect there as a failed
+ *  attempt and give up after five in one page lifetime. */
+export const RECONNECT_RESET_AFTER_MS = 5000
+
 export class WSClient {
   private ws: WebSocket | null = null
   private reconnectAttempts = 0
@@ -41,10 +65,20 @@ export class WSClient {
   private currentOnMessage: ((data: string | ArrayBuffer) => void) | null = null
   private currentOptions: WSClientOptions | null = null
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
+  private resetAttemptsTimer: ReturnType<typeof setTimeout> | null = null
   private recoveryListenersAttached = false
   private readonly handleRecoverySignal = () => this.attemptRecovery()
 
+  /** A caller-initiated connect is a fresh ladder: close() leaves the counter
+   *  at maxReconnects so nothing redials after it, and useWebSocket's manual
+   *  reconnect() is close() followed by connect(). Only the redial path
+   *  (scheduleReconnect -> openSocket) carries the count across attempts. */
   connect(path: string, onMessage: (data: string | ArrayBuffer) => void, options: WSClientOptions = {}): boolean {
+    this.reconnectAttempts = 0
+    return this.openSocket(path, onMessage, options)
+  }
+
+  private openSocket(path: string, onMessage: (data: string | ArrayBuffer) => void, options: WSClientOptions): boolean {
     const token = useAuthStore.getState().token
     const authDisabled = useAuthStore.getState().authDisabled
 
@@ -65,7 +99,13 @@ export class WSClient {
     this.ws.binaryType = options.binary ? 'arraybuffer' : 'blob'
 
     this.ws.onopen = () => {
-      this.reconnectAttempts = 0
+      // Not a reset yet: see RECONNECT_RESET_AFTER_MS. A close before the timer
+      // fires clears it, so an upgrade-then-close still counts as an attempt.
+      this.clearResetAttemptsTimer()
+      this.resetAttemptsTimer = setTimeout(() => {
+        this.resetAttemptsTimer = null
+        this.reconnectAttempts = 0
+      }, RECONNECT_RESET_AFTER_MS)
       if (token && token !== 'cookie') {
         this.ws!.send(JSON.stringify({ type: 'auth', token }))
       }
@@ -78,6 +118,7 @@ export class WSClient {
     }
 
     this.ws.onclose = (event) => {
+      this.clearResetAttemptsTimer()
       this.ws = null
       options.onClose?.(event)
       if (!shouldReconnectAfter(event?.code)) {
@@ -93,11 +134,19 @@ export class WSClient {
     }
 
     this.ws.onerror = (error) => {
+      this.clearResetAttemptsTimer()
       this.ws = null
       options.onError?.(error)
     }
 
     return true
+  }
+
+  private clearResetAttemptsTimer() {
+    if (this.resetAttemptsTimer) {
+      clearTimeout(this.resetAttemptsTimer)
+      this.resetAttemptsTimer = null
+    }
   }
 
   private scheduleReconnect() {
@@ -118,7 +167,7 @@ export class WSClient {
       this.reconnectTimeout = setTimeout(() => {
         this.reconnectTimeout = null
         if (this.currentPath && this.currentOnMessage) {
-          this.connect(this.currentPath, this.currentOnMessage, this.currentOptions || {})
+          this.openSocket(this.currentPath, this.currentOnMessage, this.currentOptions || {})
         }
       }, delay)
     } else {
@@ -163,7 +212,7 @@ export class WSClient {
     // already scheduled — nothing to resume.
     if (this.ws || this.reconnectTimeout) return
 
-    this.reconnectAttempts = 0
+    // connect() starts a fresh ladder.
     this.connect(this.currentPath, this.currentOnMessage, this.currentOptions || {})
   }
 
@@ -175,6 +224,7 @@ export class WSClient {
 
   close() {
     this.detachRecoveryListeners()
+    this.clearResetAttemptsTimer()
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout)
       this.reconnectTimeout = null

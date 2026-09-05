@@ -2,14 +2,141 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
+	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
+
+// TestLogsHandler_GetLogs_LogsCauseOn500 is the seen-failing-first test for
+// agent-os-7lg1's db.GetStack collapse at logs.go's GetLogs: before the
+// split, `if err != nil || stack == nil` mapped ANY error — including a
+// faulted database, not just a missing row — to the same silent 404, so a
+// database outage never logged and never even reported the correct status
+// code. faultyDB (faulty_db_test.go) forces GetStack to fail with "sql:
+// database is closed", never sql.ErrNoRows.
+//
+// Two-sided per the brief: TestLogsHandler_GetLogs_NotFoundStaysSilent below
+// is the control proving the ordinary 404 path is unchanged and still silent.
+func TestLogsHandler_GetLogs_LogsCauseOn500(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureHandlerLogs(t)
+
+	db := faultyDB(t)
+	handler := NewLogsHandler(nil, db, "test-secret-key-32-chars-long!!!", true, t.TempDir(), NewConnectionManager(10))
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/api"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stacks/any-id/logs", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	var appErr models.AppError
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &appErr))
+	require.Equal(t, "INTERNAL_ERROR", appErr.Code)
+
+	if !strings.Contains(buf.String(), "database is closed") {
+		t.Fatalf("500 emitted with no log of the underlying cause. captured = %q", buf.String())
+	}
+}
+
+// TestLogsHandler_GetLogs_NotFoundStaysSilent is the control for the test
+// above: a genuinely missing stack must still be a silent 404 (client fault,
+// not logged at ERROR), so the split doesn't turn ordinary not-found traffic
+// into log noise.
+func TestLogsHandler_GetLogs_NotFoundStaysSilent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureHandlerLogs(t)
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	handler := NewLogsHandler(nil, db, "test-secret-key-32-chars-long!!!", true, t.TempDir(), NewConnectionManager(10))
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/api"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/stacks/no-such-stack/logs", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+	// Not assert.Empty: db construction itself logs an INFO "database schema
+	// version" line (process-wide slog default). The claim is narrower — no
+	// ERROR line for an ordinary client-fault 404 — so check for that
+	// specifically.
+	assert.NotContains(t, buf.String(), "level=ERROR", "an ordinary not-found must not log at ERROR")
+}
+
+// TestLogsHandler_StreamLogs_LogsCauseOn500 is StreamLogs' counterpart to
+// TestLogsHandler_GetLogs_LogsCauseOn500 above — same db.GetStack collapse,
+// reached before serveWS (plain HTTP JSON, no upgrade attempted), so a plain
+// httptest GET without upgrade headers observes the response directly.
+func TestLogsHandler_StreamLogs_LogsCauseOn500(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureHandlerLogs(t)
+
+	docker := newTestDockerServiceAgainst(t, newFakeDockerMetricsServer(t, http.StatusOK, "[]", nil))
+	db := faultyDB(t)
+	handler := NewLogsHandler(docker, db, "test-secret-key-32-chars-long!!!", true, t.TempDir(), NewConnectionManager(10))
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/api"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/ws/logs/any-id", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	var appErr models.AppError
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &appErr))
+	require.Equal(t, "INTERNAL_ERROR", appErr.Code)
+
+	if !strings.Contains(buf.String(), "database is closed") {
+		t.Fatalf("500 emitted with no log of the underlying cause. captured = %q", buf.String())
+	}
+}
+
+// TestLogsHandler_StreamLogs_DockerUnavailableLogsCause is the seen-failing-
+// first test for logs.go:104: before routing through handleError, a 503
+// DOCKER_UNAVAILABLE response was written via writeJSONError's plain c.JSON,
+// bypassing handleError's logServerFault entirely — a 5xx that never logged
+// (same class as agent-os-7z8c/agent-os-7lg1: a server fault silently
+// discarded, just via a bypassed logger instead of a discarded err).
+func TestLogsHandler_StreamLogs_DockerUnavailableLogsCause(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureHandlerLogs(t)
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	handler := NewLogsHandler(nil, db, "test-secret-key-32-chars-long!!!", true, t.TempDir(), NewConnectionManager(10))
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/api"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/ws/logs/any-id", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	var appErr models.AppError
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &appErr))
+	require.Equal(t, "DOCKER_UNAVAILABLE", appErr.Code)
+
+	if !strings.Contains(buf.String(), "Docker daemon unreachable") {
+		t.Fatalf("503 emitted with no log line. captured = %q", buf.String())
+	}
+}
 
 // TestBuildLogsCmd_DoesNotLeakCapstanSecrets covers StreamLogs' `docker
 // compose logs` child (buildLogsCmd, extracted from StreamLogs so this test

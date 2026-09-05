@@ -3,7 +3,7 @@ import type { Terminal as XTerm } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
 import type { SearchAddon } from '@xterm/addon-search'
 import { useWebSocketBinary } from '@/hooks/useWebSocket'
-import { WS_CLOSE_AUTH_FAILURE, WS_CLOSE_RATE_LIMIT } from '@/lib/ws'
+import { WS_CLOSE_AUTH_FAILURE, WS_CLOSE_RATE_LIMIT, WS_CLOSE_NOT_FOUND } from '@/lib/ws'
 import { toast } from 'sonner'
 import type { Stack } from '@/types'
 import { useXtermLifecycle } from './useXtermLifecycle'
@@ -85,6 +85,14 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
           toast.error(event.reason || 'Terminal session refused')
           terminal?.writeln(
             `\r\n\x1b[31m${event.reason || 'Terminal session refused.'}\x1b[0m\r\n`,
+          )
+        } else if (event?.code === WS_CLOSE_NOT_FOUND) {
+          // A permanent condition (agent-os-vi0o): the stack is gone, so
+          // "Press Reconnect" below would be misleading — reconnecting can't
+          // fix an absent stack.
+          toast.error(event.reason || 'Stack not found')
+          terminal?.writeln(
+            `\r\n\x1b[31m${event.reason || 'Stack not found.'}\x1b[0m\r\n`,
           )
         } else {
           terminal?.writeln('\r\n\x1b[31mDisconnected. Press Reconnect to continue.\x1b[0m\r\n')

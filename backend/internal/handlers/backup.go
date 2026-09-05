@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -539,6 +540,12 @@ func (h *BackupHandler) upsertPolicy(c *gin.Context) {
 	stackID := c.Param("stackId")
 
 	if _, err := h.db.GetStack(stackID); err != nil {
+		// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless the
+		// non-not-found case is split out and logged with its cause.
+		if !errors.Is(err, sql.ErrNoRows) {
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+			return
+		}
 		c.JSON(http.StatusNotFound, models.NewAppError(
 			http.StatusNotFound,
 			models.ErrStackNotFound,
@@ -875,6 +882,12 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 	}
 
 	if _, err := h.db.GetStack(req.StackID); err != nil {
+		// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless the
+		// non-not-found case is split out and logged with its cause.
+		if !errors.Is(err, sql.ErrNoRows) {
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+			return
+		}
 		c.JSON(http.StatusNotFound, models.NewAppError(
 			http.StatusNotFound,
 			models.ErrStackNotFound,
@@ -1206,19 +1219,36 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 
 			case line, ok := <-attached.Live:
 				if !ok {
-					// Live is closed, which does NOT mean the run finished:
-					// forwardLive closes it from a defer on BOTH its exits, the
-					// run-done one and the clientGone one. So on a client
-					// disconnect this case and the wsCtx.Done() case above are
-					// ready at the same instant and Go picks between them
-					// uniformly at random — this branch runs for a live run
-					// roughly half the time a client goes away.
+					// Live closing does NOT mean the run finished: forwardLive
+					// closes it from a defer on BOTH its exits, the run-done
+					// one and the clientGone one. So on a client disconnect
+					// this case and the wsCtx.Done() case above become ready
+					// at the same instant and Go picks between them uniformly
+					// at random — this branch used to run for a live run
+					// roughly half the time a client went away, reporting a
+					// premature "done" with an empty outcome (agent-os-b53l).
 					//
+					// The two triggers are distinguishable from here: Live
+					// closes on genuine completion ONLY after forwardLive has
+					// flushed every buffered line through this same case with
+					// ok=true (its <-dr.done branch drains dr.log before
+					// returning), so on that path wsCtx is still live when
+					// this fires — wsCtx.Err() == nil. On a client
+					// disconnect, forwardLive's <-clientGone branch closes
+					// Live immediately with no flush, but wsCtx.Done() is
+					// exactly what the client's own disconnect just closed —
+					// wsCtx.Err() != nil. So a non-nil wsCtx.Err() here means
+					// "the client left", and is handled the same way the
+					// wsCtx.Done() case above handles it: stop writing, the
+					// op continues on its own, nothing to report to a client
+					// that is already gone.
+					if wsCtx.Err() != nil {
+						return
+					}
 					// Since agent-os-jtax the lookup below is safe when that
 					// happens: a nil clientGone starts no forwarder, so this
 					// branch can no longer spawn one for a run still in
-					// flight. It does still report an empty outcome for such a
-					// run — tracked separately as agent-os-b53l.
+					// flight.
 					outcome, reason := h.outcomeFromRegistry(runID)
 					h.sendDoneFrame(conn, runID, outcome, reason)
 					return
@@ -1296,14 +1326,15 @@ func (h *BackupHandler) requireAvailable(c *gin.Context) error {
 }
 
 func (h *BackupHandler) internalError(c *gin.Context, msg string, err error) {
+	// agent-os-ua4y: was a direct c.JSON write, bypassing handleError (and so
+	// logServerFault's request_id-correlated ERROR line) for every one of this
+	// method's callers at once. h.logger.Error stays: agent-os-2mhb's own
+	// precedent is that an already-logging site logs twice rather than losing
+	// its existing log line.
 	if err != nil {
 		h.logger.Error(msg, "error", err)
 	}
-	c.JSON(http.StatusInternalServerError, models.NewAppError(
-		http.StatusInternalServerError,
-		"INTERNAL_ERROR",
-		msg,
-	))
+	handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", msg, err))
 }
 
 // respondForLaunchError writes the response for a failed registry.LaunchX
@@ -1314,10 +1345,12 @@ func (h *BackupHandler) internalError(c *gin.Context, msg string, err error) {
 // other error (e.g. a DB write failure) keeps the existing 500 behaviour.
 func (h *BackupHandler) respondForLaunchError(c *gin.Context, action string, err error) {
 	if errors.Is(err, services.ErrRegistryStopping) {
-		c.JSON(http.StatusServiceUnavailable, models.NewAppError(
+		// agent-os-ua4y: same direct-c.JSON bypass as internalError above.
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusServiceUnavailable,
 			"SERVER_SHUTTING_DOWN",
 			"Server is shutting down; "+action+" cannot be started",
+			err,
 		))
 		return
 	}

@@ -47,9 +47,34 @@ type durableRun struct {
 	// outcome and reason are written once (before done closes) then immutable.
 	outcome string // "success" | "partial" | "failed"
 	reason  string
+
+	// attachers counts the forwardLive goroutines currently streaming this run
+	// (guarded by mu). Attach increments it before starting a forwarder and
+	// refuses at maxAttachersPerRun; forwardLive decrements it on every exit.
+	attachers int
 }
 
 const replayBufMax = 4096
+
+// acquireAttacher reserves an attacher slot, or reports false when the run is
+// already at maxAttachersPerRun. The caller must start exactly one forwardLive
+// for every true it gets back, since only forwardLive's exit releases it.
+func (r *durableRun) acquireAttacher() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.attachers >= maxAttachersPerRun {
+		return false
+	}
+	r.attachers++
+	return true
+}
+
+// releaseAttacher gives back a slot taken by acquireAttacher.
+func (r *durableRun) releaseAttacher() {
+	r.mu.Lock()
+	r.attachers--
+	r.mu.Unlock()
+}
 
 func (r *durableRun) appendLog(line StreamLine) {
 	r.mu.Lock()
@@ -599,6 +624,24 @@ func (reg *BackupRunnerRegistry) execPrune(dr *durableRun, dryRun bool) {
 
 // --- Attach ---
 
+// maxAttachersPerRun bounds how many clients may stream ONE running run at
+// once. Each attacher costs a forwardLive goroutine and a 256-slot channel,
+// and nothing else bounds them: the WS route registers unmetered (see
+// wsAttach in handlers/backup.go, agent-os-pu4y), so the per-user connection
+// cap never applies. 24 is one user's whole metered WS budget
+// (NewConnectionManager(24) in cmd/server/main.go, agent-os-8uuw): a run with
+// more concurrent viewers than one operator's entire socket budget is not a
+// legitimate pattern in a single-operator product. Sized by that figure, not
+// by memory (~26 KB per attacher) (agent-os-nt0m).
+const maxAttachersPerRun = 24
+
+// tooManyAttachersReason is the terminal Reason a surplus attacher receives.
+// It names the limit so the viewer knows what to do, and it is a done frame,
+// not an error, so the frontend does not redial into the same refusal.
+var tooManyAttachersReason = fmt.Sprintf(
+	"too many viewers attached to this run (limit %d); close another viewer and reconnect",
+	maxAttachersPerRun)
+
 // AttachResult is returned by Attach and carries everything the WS handler
 // needs to stream output to the client.
 type AttachResult struct {
@@ -609,7 +652,10 @@ type AttachResult struct {
 	// Done is true when the run has already finished.
 	Done bool
 
-	// Outcome and Reason are set only when Done is true.
+	// Outcome and Reason are set only when Done is true. Done is also how a
+	// refused attach is reported: a run already at maxAttachersPerRun live
+	// attachers answers with Done=true, Outcome "failed" and a Reason naming
+	// the limit, so the caller sends a terminal frame instead of streaming.
 	Outcome string
 	Reason  string
 
@@ -670,6 +716,26 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 			}, nil
 		}
 
+		// Bound the fan-out: every admitted client costs a goroutine and a
+		// 256-slot buffer, and nothing upstream limits how many clients may
+		// watch one run (agent-os-nt0m). The surplus caller is refused BY
+		// RESULT, as a finished run with a failed outcome and a reason that
+		// names the limit, and nothing is allocated for it. That shape is
+		// chosen for the one caller that streams, wsAttach: it replays the
+		// lines and sends a terminal done frame on Done, so the surplus
+		// viewer learns why with no handler change and does not redial. An
+		// error would reach the same handler's "run evicted" branch with a
+		// misleading reason, and a nil Live would leave the viewer silent
+		// until it disconnected (its stream loop selects only on Live and its
+		// own context).
+		if !dr.acquireAttacher() {
+			return &AttachResult{
+				ReplayLines: lines,
+				Done:        true,
+				Outcome:     "failed",
+				Reason:      tooManyAttachersReason,
+			}, nil
+		}
 		live := make(chan StreamLine, 256)
 		go reg.forwardLive(dr, len(lines), clientGone, live)
 
@@ -724,8 +790,14 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 // the forwarder stops immediately instead of blocking on a full buffer.
 // This prevents the goroutine+buffer leak that occurs when a disconnected
 // client's 256-line buffer fills and the send loop blocks indefinitely.
+//
+// Every exit path releases the attacher slot Attach reserved. The release is
+// deferred AFTER close(live) so that (LIFO) it runs BEFORE live closes: a
+// caller that sees Live closed can rely on the slot already being free, which
+// is what lets a reconnecting client's Attach succeed without a retry.
 func (reg *BackupRunnerRegistry) forwardLive(dr *durableRun, cursor int, clientGone <-chan struct{}, live chan<- StreamLine) {
 	defer close(live)
+	defer dr.releaseAttacher()
 
 	pollInterval := 50 * time.Millisecond
 
