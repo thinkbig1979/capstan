@@ -155,8 +155,51 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 			slog.Error("cannot read the global git credential: the stored value could not be read; STORAGE_KEY may have been rotated", "setting", "git_https_token", "error", err)
 			return "", ""
 		}
-		if v, err := s.db.GetSetting("git_https_user"); err == nil {
-			user = v
+		// git_https_user is NOT in sensitiveSettingKeys (database/settings.go:9-12
+		// = {git_https_token, restic_password}), so unlike the token above it is
+		// never decrypted and its only possible failure is a database-level one.
+		//
+		// This read used to be `if v, err := s.db.GetSetting("git_https_user");
+		// err == nil { user = v }` — a fault and an absent row were the same
+		// event, and a fault fell through to s.config.GitHTTPSUser below. That is
+		// the "authenticate with a DIFFERENT credential than the one the operator
+		// believes is configured" failure mode the token branch above exists to
+		// prevent, applied to the other half of the same credential: two halves,
+		// two standards, one function (agent-os-xzoe).
+		//
+		// NOT TESTED BY A FAULT ROUTE INTO THIS BRANCH, because no such route
+		// exists: every branch of the token switch above that is neither nil nor
+		// sql.ErrNoRows has already returned "", "", and a database-level fault
+		// would have hit that read first. Verified by reading the switch at
+		// :128-157, and OBSERVED: a `go test -overlay` mutant that swallows this
+		// default branch entirely leaves ./internal/services GREEN, 0 `--- FAIL`,
+		// with `go build ./...` exit 0. (scripts/check-getter-fault-reach.sh
+		// cannot answer this one: its site shape is an `if err != nil` guard, so
+		// a switch-based conversion is not in its site set at all.)
+		// That unreachability is an accident of statement ORDER,
+		// not a property of this site — move this read above the token read, or
+		// weaken either `return "", ""`, and the old fall-through becomes live. So
+		// the order is itself pinned, by
+		// TestHTTPSCredentials_UnreadableSettings_TokenReadRefusesBeforeUserRead
+		// in git_credentials_dbfault_test.go.
+		storedUser, err := s.db.GetSetting("git_https_user")
+		switch {
+		case err == nil:
+			user = storedUser
+		case errors.Is(err, sql.ErrNoRows):
+			// No username was ever stored — the healthy default. The config/env
+			// value below, then defaultGitHTTPSUser, are the intended fallbacks
+			// and this must stay silent (agent-os-2tt, same reasoning as the
+			// token read's sql.ErrNoRows branch above).
+		default:
+			// Same fail-closed shape as the two token branches above, for the
+			// same reason. The error is logged as "error", err following this
+			// file's own convention: git_https_user is never encrypted, so this
+			// error cannot carry ciphertext or key material, and neither can the
+			// two token branches' (services/crypto.go:157-194 returns only fixed
+			// literals and openWith swallows the AEAD error).
+			slog.Error("cannot read the stored git https username: the stored value could not be read", "setting", "git_https_user", "error", err)
+			return "", ""
 		}
 	}
 	if s.config != nil {

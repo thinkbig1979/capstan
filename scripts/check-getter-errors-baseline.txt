@@ -21,10 +21,9 @@ services/docker.go DISCARD=1 SOFT=3
 services/docker_update.go DISCARD=3 SOFT=3
 services/exec_env.go DISCARD=1 SOFT=0
 services/git.go DISCARD=12 SOFT=5
-services/git_credentials.go DISCARD=0 SOFT=1
 services/linter.go DISCARD=0 SOFT=1
 services/redact_url.go DISCARD=5 SOFT=3
 services/scanner.go DISCARD=0 SOFT=9
 services/schedule.go DISCARD=2 SOFT=0
 services/watcher.go DISCARD=0 SOFT=1
-TOTAL FILES=29 DISCARD=68 SOFT=59
+TOTAL FILES=28 DISCARD=68 SOFT=58
