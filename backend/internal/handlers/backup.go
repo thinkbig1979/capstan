@@ -175,37 +175,46 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	// redact_url.go is what would move them, and because the flag is only ever as
 	// good as the redactor it is reading:
 	//
-	//   1. Exact on the parse-SUCCESS paths, and only because they return `raw`
-	//      rather than u.String(): redact_url.go:109-112 (no userinfo) and
-	//      :114-119 (an EMPTY userinfo, "http://@host/path"). Returning u.String()
-	//      there would re-serialise a credential-free URL — case-folding a scheme,
-	//      re-encoding a path — making redacted != raw with no credential present,
-	//      and this flag would then warn about a field that hides nothing. Pinned
-	//      by the empty-userinfo and sftp arms of
-	//      TestGetSettings_FlagsARedactedRepositoryCredential.
+	//   1. Exact wherever the redactor returns `raw` rather than u.String():
+	//      the no-userinfo and empty-userinfo guards in RedactURLUserinfo, and
+	//      spliceUserinfo. Returning u.String() in any of those would
+	//      re-serialise a credential-free URL — case-folding a scheme,
+	//      re-encoding a path — making redacted != raw with no credential
+	//      present, and this flag would then warn about a field that hides
+	//      nothing. Pinned by the empty-userinfo, sftp and empty-user-AND-
+	//      password arms of TestGetSettings_FlagsARedactedRepositoryCredential.
 	//
-	//   2. NOT exact on the regex-FALLBACK paths (:87, the opaque recursion onto
-	//      it at :106, and the fail-closed branch at :133). Those splice "***@"
-	//      wherever the scheme-anchored pattern matches, secret or not, so the flag
-	//      reads TRUE for a value hiding nothing. OBSERVED via the real function,
-	//      not inferred:
-	//          rest:http://:@host:8000/repo/  ->  rest:http://***@host:8000/repo/
-	//          http://@host/100%discount      ->  http://***@host/100%discount
-	//      The first has an empty user AND an empty password, which u.User.String()
-	//      renders as ":" so the :117 guard does not catch it; the second is
-	//      unparseable, so it never reaches the parse-success paths at all.
-	//      Second-order, and worse than the wrong hint: the SERVED value then
-	//      carries the marker, so the PUT guard below rejects EVERY save of that
-	//      field. The operator is told a credential is embedded in a repository
-	//      that has none, and cannot save an edit without retyping the whole URI.
+	//      agent-os-zzhs fixed two ways this was previously inexact, both
+	//      OBSERVED at the time and both now pinned by tests rather than
+	//      described here: "rest:http://:@host:8000/repo/" was marked despite
+	//      carrying nothing (Go reports that password as empty but SET, so the
+	//      old u.User.String() == "" guard missed it), and a credential
+	//      containing "/" survived untouched while this flag read FALSE.
 	//
-	//   3. The converse gap, which matters more: a credential containing "/"
-	//      survives RedactURLUserinfo untouched (url.Parse fails on it, and the
-	//      fallback's [^/@]* cannot cross a "/"), so it is served in clear AND
-	//      this flag reads FALSE. The absence of the hint is therefore not a
-	//      safety signal. Tracked as agent-os-zzhs; the fix belongs in
-	//      redact_url.go, because moving it here would build the second detector
-	//      this comparison exists to avoid.
+	//   2. Still NOT exact in one direction, and it is the direction that
+	//      matters: the flag reads FALSE for a repository shape the redactor
+	//      cannot reach at all. RedactURLUserinfo only handles an authority
+	//      announced by "//", so an opaque form that embeds a password without
+	//      one is served in clear and unflagged. OBSERVED, post-fix:
+	//          sftp:user:SECRET@host:/path      ->  unchanged, flag false
+	//          s3:KEY:SECRET@host/bucket        ->  unchanged, flag false
+	//          rclone:user:SECRET@remote:path   ->  unchanged, flag false
+	//      None is a documented restic form (restic's sftp form is
+	//      "sftp:user@host:/path", which authenticates by key and has no
+	//      password field; s3 credentials go in the environment or in the
+	//      "s3:https://..." form, which IS covered), but the absence of the hint
+	//      is still not a safety proof.
+	//
+	//   3. Also not exact the other way on the parse-error fallback: it splices
+	//      the marker wherever it finds a userinfo boundary with a non-empty
+	//      component, without judging whether that component is secret. An
+	//      unparseable "ssh://git@host/..." is flagged though "git" is not a
+	//      secret — the same deliberate choice RedactURLUserinfo documents for
+	//      the parse-success path, since the alternative is an allowlist of
+	//      usernames judged safe.
+	//
+	//   The fix for any of these belongs in redact_url.go, never here: moving it
+	//   here would build the second detector this comparison exists to avoid.
 	hasEmbeddedCredential := repository != bc.ResticRepository
 
 	keepDaily, _ := db.GetSetting("backup_keep_daily")

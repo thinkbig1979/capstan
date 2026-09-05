@@ -23,7 +23,7 @@ const plainRepoNoCredential = "/data/restic-repo"
 // GUESSED FROM THE STRING. Both contain an "@" and neither hides a secret, so a
 // naive strings.Contains(repo, "@") implementation passes the two arms above and
 // FAILS these — rendering a hint that tells the operator a credential is hidden
-// when none is. redact_url.go:114-116 states the principle these pin: a false
+// when none is. RedactURLUserinfo states the principle these pin: a false
 // marker is worse than no marker, because the marker's whole purpose is that
 // signal.
 const (
@@ -34,7 +34,23 @@ const (
 	// secret. RedactURLUserinfo leaves it alone (it has no "://", so the
 	// opaque-part fallback returns it untouched).
 	sftpUserRepo = "sftp:user@host:/srv/restic-repo"
+	// An empty username AND an empty password: what a compose template renders
+	// when both variables are unset. Go parses that password as empty but SET,
+	// so u.User.String() is ":" rather than "", the empty-userinfo guard missed
+	// it, and the marker was spliced into a URI carrying nothing
+	// (agent-os-zzhs).
+	emptyBothUserinfoRepo = "rest:http://:@backup.example.com:8000/repo/"
 )
+
+// slashCredRepo is agent-os-zzhs arm 1 at the HTTP boundary: the SAME secret as
+// embeddedCredRepo, with a "/" in front of it. url.Parse reads that "/" as
+// ending the authority, so the parse fails and the whole credential was served
+// in clear. An AWS secret access key contains a "/" about 46% of the time.
+//
+// It reuses RESTICSECRET999 deliberately, so assertRepositoryCredentialHidden
+// is literally the same instrument that is already proven to fire, by
+// TestGetSettings_CredentialLeakAssertionCanFail.
+const slashCredRepo = "rest:https://bob:AB/CD+RESTICSECRET999@backup.example.com/repo/"
 
 // fetchBackupSettings drives the REAL handler over the real router with
 // storedRepo persisted, and returns the raw response body alongside the decoded
@@ -105,6 +121,7 @@ func TestGetSettings_FlagsARedactedRepositoryCredential(t *testing.T) {
 
 	redactedBody, redacted := fetchBackupSettings(t, embeddedCredRepo)
 	plainBody, plain := fetchBackupSettings(t, plainRepoNoCredential)
+	slashBody, slashed := fetchBackupSettings(t, slashCredRepo)
 
 	// Baseline probe artifact: the two responses as the client actually sees
 	// them. Logged so the "before" state is legible in the failing run.
@@ -114,6 +131,16 @@ func TestGetSettings_FlagsARedactedRepositoryCredential(t *testing.T) {
 	// The security half comes FIRST: this code path's entire purpose is keeping
 	// the credential out of the body, and a new field must not weaken that.
 	assertRepositoryCredentialHidden(t, redactedBody)
+
+	// agent-os-zzhs arm 1. Same instrument, same secret, one "/" added — which
+	// is the whole difference between a credential that was stripped and one
+	// that reached the browser DOM in clear.
+	t.Logf("slashed credential repo  -> repository=%q flag=%v", slashed["repository"], slashed["hasEmbeddedCredential"])
+	assertRepositoryCredentialHidden(t, slashBody)
+	slashFlagged, ok := slashed["hasEmbeddedCredential"].(bool)
+	require.True(t, ok, "hasEmbeddedCredential must be a bool in the settings response")
+	assert.True(t, slashFlagged,
+		"a credential containing a / must be redacted AND flagged; before agent-os-zzhs the flag read false while the secret sat in the response, so the ABSENCE of the hint was an affirmative and wrong all-clear")
 
 	withCred, ok := redacted["hasEmbeddedCredential"].(bool)
 	require.True(t, ok, "hasEmbeddedCredential must be a bool in the settings response")
@@ -140,6 +167,7 @@ func TestGetSettings_FlagsARedactedRepositoryCredential(t *testing.T) {
 	}{
 		{"empty userinfo", emptyUserinfoRepo},
 		{"sftp username, restic's documented form", sftpUserRepo},
+		{"empty username AND empty password", emptyBothUserinfoRepo},
 	} {
 		body, decoded := fetchBackupSettings(t, tc.repo)
 		t.Logf("%-40s -> repository=%q flag=%v", tc.name, decoded["repository"], decoded["hasEmbeddedCredential"])
@@ -147,7 +175,7 @@ func TestGetSettings_FlagsARedactedRepositoryCredential(t *testing.T) {
 		flagged, ok := decoded["hasEmbeddedCredential"].(bool)
 		require.True(t, ok, "hasEmbeddedCredential must be a bool in the settings response")
 		assert.False(t, flagged,
-			"%s carries an @ but no secret, so it must NOT be flagged — a hint claiming a hidden credential where there is none is the false marker redact_url.go:114-116 exists to avoid",
+			"%s carries an @ but no secret, so it must NOT be flagged — a hint claiming a hidden credential where there is none is the false marker RedactURLUserinfo's empty-userinfo guard exists to avoid",
 			tc.name)
 		// And the value itself must come back untouched, so "not flagged" and
 		// "nothing was removed" remain the same claim rather than two hopes.

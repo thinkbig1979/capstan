@@ -111,3 +111,55 @@ func TestUpdateSettings_AcceptsARealRepository(t *testing.T) {
 	assert.Equal(t, replacement, stored, "a genuine repository write must be persisted verbatim")
 	assert.False(t, strings.Contains(stored, "***"), "the stored value must be the real one")
 }
+
+// TestUpdateSettings_AcceptsARepositoryThatHidesNothing is agent-os-zzhs arm 2
+// at the HTTP boundary, and it is a LOCKOUT test rather than a leak test.
+//
+// "rest:http://:@host:8000/repo/" is what a compose template renders when both
+// the user and the password variable are unset. It carries no secret, but the
+// redactor spliced the marker into it anyway, so the served value contained
+// "***@" — and the agent-os-57xj guard above then rejected EVERY save of that
+// field. The operator was told a credential was embedded in a repository that
+// has none, and could not save an edit to it. No attacker involved.
+//
+// This drives the operator's actual flow: GET the settings, PUT back exactly
+// what the API served. Asserting on the STORED value, not just the status, for
+// the same reason as the guard test above.
+func TestUpdateSettings_AcceptsARepositoryThatHidesNothing(t *testing.T) {
+	t.Parallel()
+
+	const repo = "rest:http://:@backup.example.com:8000/repo/"
+
+	db := newBackupHandlerDB(t)
+	require.NoError(t, db.SetSetting("restic_repository", repo))
+
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	t.Cleanup(h.Stop)
+	r := newBackupRouter(h)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/settings/backup", nil)
+	getW := httptest.NewRecorder()
+	r.ServeHTTP(getW, getReq)
+	require.Equal(t, http.StatusOK, getW.Code)
+
+	served, ok := decodeBody(t, getW)["repository"].(string)
+	require.True(t, ok, "repository must be a string in the settings response")
+	require.Equal(t, repo, served,
+		"a repository with an empty username AND an empty password hides nothing, so it must be served byte-for-byte")
+
+	// Now put back what the UI was given, unchanged. Under the defect this
+	// returned 422 and the field could never be saved.
+	body := `{"repository":"` + served + `"}`
+	putReq := httptest.NewRequest(http.MethodPut, "/api/settings/backup", bytes.NewBufferString(body))
+	putReq.Header.Set("Content-Type", "application/json")
+	putW := httptest.NewRecorder()
+	r.ServeHTTP(putW, putReq)
+
+	require.True(t, putW.Code < 300,
+		"the operator cannot save a field the API told them carries a credential it does not, got %d: %s", putW.Code, putW.Body.String())
+
+	stored, err := db.GetSetting("restic_repository")
+	require.NoError(t, err)
+	assert.Equal(t, repo, stored, "the round-tripped value must be persisted verbatim")
+}
