@@ -3,6 +3,8 @@ package handlers
 import (
 	"bufio"
 	"context"
+	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -58,13 +60,22 @@ func (h *LogsHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *LogsHandler) GetLogs(c *gin.Context) {
 	id := c.Param("id")
 
+	// agent-os-7lg1 template: a genuinely missing stack (sql.ErrNoRows) is a
+	// client-fault 404, silent below 500; any other db.GetStack error is a
+	// server fault that used to be discarded and reported as the same 404,
+	// making a database outage indistinguishable from a missing stack (the
+	// nil arm this replaces was dead — GetStack never returns (nil, nil)).
 	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrStackNotFound,
+				"Stack not found",
+			))
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
@@ -101,13 +112,27 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 	// cause. h.docker is the concrete *services.DockerService here, so the nil
 	// check means what it says (agent-os-xay).
 	if h.docker == nil {
-		writeJSONError(c, http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage)
+		// Routed through handleError, not writeJSONError: a 503 is a 5xx, and
+		// writeJSONError's plain c.JSON bypassed handleError's logServerFault
+		// entirely, so this outage was silent (same class as agent-os-7z8c/
+		// agent-os-7lg1 — a server fault that never logs). No `err` value
+		// exists here (this is a nil check, not a wrapped error), so
+		// NewAppError, not NewAppErrorWithCause. The writer is not hijacked
+		// yet (before serveWS), so c.JSON here is safe.
+		handleError(c, models.NewAppError(http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage))
 		return
 	}
 
+	// agent-os-7lg1 template (see GetLogs above): split ErrNoRows (client
+	// fault, silent 404) from any other db.GetStack error (server fault,
+	// logged 500).
 	stack, err := h.db.GetStack(id)
-	if err != nil || stack == nil {
-		writeJSONError(c, http.StatusNotFound, "STACK_NOT_FOUND", "Stack not found")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSONError(c, http.StatusNotFound, "STACK_NOT_FOUND", "Stack not found")
+			return
+		}
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 		return
 	}
 
