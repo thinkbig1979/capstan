@@ -121,13 +121,42 @@ func healthySessionDB(t *testing.T) *database.DB {
 	return db
 }
 
-func newSessionLookupGuardRouter(db *database.DB) *gin.Engine {
+// newSessionLookupGuardRouter returns the router and a pointer to a flag the
+// PROTECTED handler sets when it runs.
+//
+// That flag is what pins the Abort, and no status assertion can substitute for
+// it. gin keeps the first status written to the response: a middleware that
+// wrote its 401 (or 500) and then failed to c.Abort() would let this handler
+// run, its c.Status(http.StatusOK) would be a superfluous-WriteHeader no-op,
+// the recorder would still read 401, and every status and body assertion in
+// this file would stay green while the request had in fact reached a protected
+// route unauthenticated. requireAborted is the only assertion here that can
+// see that.
+//
+// Read without a mutex on purpose: gin serves an httptest request on the
+// calling goroutine, so the write below and the read in the test happen on the
+// same goroutine (OBSERVED: the -race gate on this package is clean).
+func newSessionLookupGuardRouter(db *database.DB) (*gin.Engine, *bool) {
 	gin.SetMode(gin.TestMode)
+	reached := false
 	r := gin.New()
 	r.Use(RequestID()) // BEFORE AuthMiddleware, as main.go chains them
 	r.Use(AuthMiddleware(db, dbFaultSecret, false, ""))
-	r.GET("/api/v1/dashboard/stats", func(c *gin.Context) { c.Status(http.StatusOK) })
-	return r
+	r.GET("/api/v1/dashboard/stats", func(c *gin.Context) {
+		reached = true
+		c.Status(http.StatusOK)
+	})
+	return r, &reached
+}
+
+// requireAborted asserts the guard stopped the chain rather than merely
+// writing a response, on BOTH arms: a server fault must not admit the request
+// any more than a missing session does.
+func requireAborted(t *testing.T, reached *bool, what string) {
+	t.Helper()
+	if *reached {
+		t.Fatalf("%s reached the protected handler: AuthMiddleware wrote its response but did not Abort, so the request ran unauthenticated. No status or body assertion in this file can see this — gin keeps the first status written.", what)
+	}
 }
 
 func guardRequest(t *testing.T, r *gin.Engine, requestID, bearer string) *httptest.ResponseRecorder {
@@ -144,7 +173,7 @@ func TestAuthMiddleware_SessionLookupDBFaultIs500WithLoggedCause(t *testing.T) {
 	buf := captureSlog(t)
 	plantStrayServerFault()
 
-	r := newSessionLookupGuardRouter(closedSessionDB(t))
+	r, reached := newSessionLookupGuardRouter(closedSessionDB(t))
 	token := signGuardToken(t, dbFaultSecret, time.Now().Add(time.Hour))
 	requestID := uuid.NewString()
 
@@ -177,13 +206,18 @@ func TestAuthMiddleware_SessionLookupDBFaultIs500WithLoggedCause(t *testing.T) {
 			t.Fatalf("the ERROR line does not match logServerFault's shape (missing %q): %q", want, lines[0])
 		}
 	}
+
+	// LAST on purpose: every assertion above stays green under a guard that
+	// writes its response and forgets to Abort, so this one has to be reached
+	// to be worth anything.
+	requireAborted(t, reached, "a session-lookup database fault")
 }
 
 func TestAuthMiddleware_MissingSessionStillIs401AndSilent(t *testing.T) {
 	buf := captureSlog(t)
 	plantStrayServerFault()
 
-	r := newSessionLookupGuardRouter(healthySessionDB(t))
+	r, reached := newSessionLookupGuardRouter(healthySessionDB(t))
 	token := signGuardToken(t, dbFaultSecret, time.Now().Add(time.Hour))
 	requestID := uuid.NewString()
 
@@ -206,4 +240,7 @@ func TestAuthMiddleware_MissingSessionStillIs401AndSilent(t *testing.T) {
 	if n := len(dbFaultErrorLines(captured, "request_id="+requestID)); n != 0 {
 		t.Fatalf("a genuinely missing session produced %d ERROR line(s) carrying this request's id, want 0. captured = %q", n, captured)
 	}
+
+	// LAST, for the same reason as the fault arm's.
+	requireAborted(t, reached, "a genuinely missing session")
 }
