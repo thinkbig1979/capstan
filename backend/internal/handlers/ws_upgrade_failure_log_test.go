@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -116,7 +118,10 @@ func TestWSAuthFailure_LogsExactlyOnceAtASilentSite(t *testing.T) {
 // dashboard.go:161's handleError(c, err) -> gin's hijacked ResponseWriter.
 // Escalated in my final report per clause 7 (STANDING RULE: a correct fix
 // must not silently route around a file outside FILES:) rather than fixed
-// here or silently avoided without comment.
+// here or silently avoided without comment. Since fixed as agent-os-lukw
+// (the four post-serveWS handleError calls are gone); the end-to-end 401
+// drive through dashboard.go now lives in
+// TestWSAuthFailure_HandleErrorSiteNeverWritesToTheHijackedConnection.
 //
 // This version verifies the exact same claim (0 lines from handleError for a
 // 401) without exercising that unrelated hazard: gin.CreateTestContext here
@@ -190,21 +195,26 @@ func TestUpgradeFailure_SilentSiteLogsExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestUpgradeFailure_HandleErrorSiteLogsTwice is the SAME raw-HandshakeError
-// control at a handleError call site (dashboard.go): unlike the 401 shape,
-// this one IS treated as a generic 500 by handleError's fallback (it is not
-// a *models.AppError), so logServerFault (>=500) DOES fire there, on top of
-// serveWS's own new line -- exactly 2, not 1. This is the accepted
-// agent-os-ua4y double-log precedent named in the bead, demonstrated rather
-// than assumed. No hijack happens on this path (upgrader.Upgrade failed
-// before any hijack), so dashboard.go's handleError call is safe here,
-// unlike the 401 shape above.
-func TestUpgradeFailure_HandleErrorSiteLogsTwice(t *testing.T) {
+// TestUpgradeFailure_HandleErrorSiteLogsOnce is the SAME raw-HandshakeError
+// control at dashboard.go, one of the four sites that used to call
+// handleError(c, err) after a failed serveWS (monitoring.go x2, dashboard.go,
+// terminal.go). A raw HandshakeError is not a *models.AppError, so
+// handleError's 500 fallback took it through logServerFault and this shape
+// logged TWICE there: serveWS's own line (agent-os-94yx) plus handleError's.
+// That double line was accepted as an interim state (the agent-os-ua4y
+// precedent) until the call sites were free of other in-flight work; an
+// earlier version of this test pinned the count at 2 on purpose. With the
+// post-serveWS handleError calls removed (agent-os-lukw) the site logs
+// exactly once, like the four sites that always returned silently.
+//
+// Seen failing first (as the count-2 -> count-1 flip): on the pre-fix tree
+// `go build ./...` exits 0 and this fails on its ASSERTION with n = 2.
+func TestUpgradeFailure_HandleErrorSiteLogsOnce(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	buf := captureHandlerLogs(t)
 
 	cm := NewConnectionManager(4)
-	srv, handled := newDashboardAuthEnabledFixture(t, cm)
+	srv, handled, _ := newDashboardAuthEnabledFixture(t, cm)
 
 	resp, err := http.Get(srv.URL + "/api/ws/dashboard/metrics")
 	require.NoError(t, err)
@@ -213,10 +223,97 @@ func TestUpgradeFailure_HandleErrorSiteLogsTwice(t *testing.T) {
 
 	got := buf.String()
 	n := strings.Count(got, "level=ERROR")
-	if n != 2 {
-		t.Fatalf("a raw upgrade failure at dashboard.go (a handleError call site) produced %d ERROR line(s), want exactly 2 "+
-			"(serveWS's new line + handleError's existing 500 fallback -- the accepted agent-os-ua4y double-log precedent). captured = %q", n, got)
+	if n != 1 {
+		t.Fatalf("a raw upgrade failure at dashboard.go (a former handleError call site) produced %d ERROR line(s), want exactly 1 "+
+			"(serveWS's line only; handleError's 500 fallback no longer runs after serveWS, agent-os-lukw). captured = %q", n, got)
 	}
+	if !strings.Contains(got, "UPGRADE_FAILED") {
+		t.Errorf(`the one line must be serveWS's, coded "UPGRADE_FAILED". captured = %q`, got)
+	}
+}
+
+// TestWSAuthFailure_HandleErrorSiteNeverWritesToTheHijackedConnection is the
+// seen-failing-first regression for agent-os-lukw: the 401 auth-frame shape,
+// driven end-to-end through dashboard.go (a former handleError call site).
+//
+// By the time upgradeConnection returns the 401 *models.AppError for a bad
+// auth frame, upgrader.Upgrade has already hijacked the connection. The
+// errWSRefused guard (agent-os-o1jp.1) kept a cap REFUSAL from reaching
+// handleError for exactly that reason, but the 401 shape had no guard:
+// handleError called c.JSON on the hijacked writer. That is deterministic,
+// not a race: net/http's response.WriteHeader/Write see the hijacked flag,
+// return ErrHijacked and report "http: response.Write on hijacked connection"
+// through the server's ErrorLog, and gin's Context.Render then does
+// `_ = c.Error(err); c.Abort()` (gin v1.12.0 context.go, OBSERVED).
+//
+// Three arms on one dial, and only the last two discriminate: the ERROR-line
+// count is already 1 on the pre-fix tree (serveWS logs the failure; a 401
+// through handleError is silent below 500, TestHandleError_4xxStaysSilent),
+// so (a) is a guard against regressing agent-os-94yx, not the failing-first
+// evidence. (b) the server's ErrorLog (httptest.Server.Config.ErrorLog wired
+// to hijackProbe) contains a "hijacked connection" line pre-fix and nothing
+// post-fix; (c) gin's c.Errors, read after the handler chain returned, is
+// non-empty pre-fix and empty post-fix.
+//
+// Seen failing first: on the pre-fix tree `go build ./...` exits 0 and this
+// test fails on its ASSERTIONS (b) and (c), not on a compile error.
+func TestWSAuthFailure_HandleErrorSiteNeverWritesToTheHijackedConnection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureHandlerLogs(t)
+
+	cm := NewConnectionManager(4)
+	srv, handled, probe := newDashboardAuthEnabledFixture(t, cm)
+
+	code, text := dialWSAndSendInvalidToken(t, srv, "/api/ws/dashboard/metrics")
+	if code != CloseCodeAuthFailure {
+		t.Fatalf("close code = %d (%q), want %d (CloseCodeAuthFailure) -- the auth failure itself didn't happen the way this test assumes", code, text, CloseCodeAuthFailure)
+	}
+	waitHandled(t, handled)
+
+	got := buf.String()
+	if n := strings.Count(got, "level=ERROR"); n != 1 {
+		t.Errorf("a WS auth failure at dashboard.go produced %d ERROR line(s), want exactly 1 (serveWS's own). captured = %q", n, got)
+	}
+	if !strings.Contains(got, "WebSocket upgrade failed") {
+		t.Errorf("the ERROR line is not serveWS's. captured = %q", got)
+	}
+	if errLog := probe.ErrorLog(); strings.Contains(errLog, "hijacked connection") {
+		t.Errorf("the handler wrote to a connection upgradeConnection had already hijacked. server ErrorLog = %q", errLog)
+	}
+	if n := probe.GinErrors(); n != 0 {
+		t.Errorf("gin recorded %d error(s) on the context after a WS auth failure, want 0 (a failed write onto the hijacked writer is what puts them there)", n)
+	}
+}
+
+// hijackProbe is the instrument for the 401-shape test above: the
+// http.Server's ErrorLog sink (where net/http reports a write on a hijacked
+// connection) and the number of gin errors the handler chain left on its
+// context. Both are written on the server's handler goroutine and read on
+// the test goroutine only after waitHandled, which gives the read its
+// happens-before edge; the mutex is belt-and-braces for any other server
+// goroutine that reports through ErrorLog.
+type hijackProbe struct {
+	mu        sync.Mutex
+	errorLog  strings.Builder
+	ginErrors int
+}
+
+func (p *hijackProbe) Write(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.errorLog.Write(b)
+}
+
+func (p *hijackProbe) ErrorLog() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.errorLog.String()
+}
+
+func (p *hijackProbe) GinErrors() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ginErrors
 }
 
 // newLogsAuthEnabledFixture is newLogsCapFixture's authDisabled=false twin,
@@ -251,9 +348,15 @@ func newLogsAuthEnabledFixture(t *testing.T, cm *ConnectionManager) (*httptest.S
 
 // newDashboardAuthEnabledFixture is newDashboardCapFixture's twin with a
 // done-signal middleware, for the same reason as newLogsAuthEnabledFixture
-// above (authDisabled value doesn't matter for the raw-HandshakeError shape
-// this fixture is used for -- the upgrade fails before either auth branch).
-func newDashboardAuthEnabledFixture(t *testing.T, cm *ConnectionManager) (*httptest.Server, <-chan struct{}) {
+// above. authDisabled is false so the 401 auth-frame shape is reachable
+// (the raw-HandshakeError shape fails before either auth branch and does
+// not care). It also returns a hijackProbe: the server is built unstarted
+// so its ErrorLog can be pointed at the probe before any connection is
+// served (net/http reads Server.ErrorLog from serving goroutines, so
+// setting it after Start would itself be a race), and a second middleware,
+// registered AFTER withHandlerDoneSignal's so it runs inside it, records
+// len(c.Errors) once the handler chain has returned.
+func newDashboardAuthEnabledFixture(t *testing.T, cm *ConnectionManager) (*httptest.Server, <-chan struct{}, *hijackProbe) {
 	t.Helper()
 
 	docker := newTestDockerServiceAgainst(t, newFakeDockerMetricsServer(t, http.StatusOK, "[]", nil))
@@ -264,12 +367,21 @@ func newDashboardAuthEnabledFixture(t *testing.T, cm *ConnectionManager) (*httpt
 
 	handler := NewDashboardHandler(nil, docker, db, cm)
 
+	probe := &hijackProbe{}
 	router, handled := withHandlerDoneSignal(gin.New())
+	router.Use(func(c *gin.Context) {
+		c.Next()
+		probe.mu.Lock()
+		probe.ginErrors = len(c.Errors)
+		probe.mu.Unlock()
+	})
 	handler.RegisterRoutes(router.Group("/api"), "test-secret-key-32-chars-long!!!", false)
 
-	srv := httptest.NewServer(router)
+	srv := httptest.NewUnstartedServer(router)
+	srv.Config.ErrorLog = log.New(probe, "", 0)
+	srv.Start()
 	t.Cleanup(srv.Close)
-	return srv, handled
+	return srv, handled, probe
 }
 
 // dialWSAndSendInvalidToken completes a WebSocket handshake with no cookie
