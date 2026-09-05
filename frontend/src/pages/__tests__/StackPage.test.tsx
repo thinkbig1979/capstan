@@ -336,8 +336,10 @@ describe('StackPage', () => {
 
       renderPage('/stacks/s1')
 
-      // The page's useQuery sets retry:1, so the error only settles after one
-      // retry attempt (~1s default backoff) — outlasts waitFor's default timeout.
+      // The wrapper's `retry: false` now actually applies: the page no longer
+      // restates `retry: 1` per-query, which used to REPLACE that default rather
+      // than compose with it (agent-os-tdts). The error settles on the first
+      // failure; the timeout is headroom for a loaded box, not a retry backoff.
       await waitFor(() => expect(screen.getByText('Failed to load stack')).toBeInTheDocument(), { timeout: 3000 })
       // The message is rendered twice: once as the page subtitle, once in the card body.
       expect(screen.getAllByText('stack lookup exploded').length).toBeGreaterThan(0)

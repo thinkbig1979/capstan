@@ -15,6 +15,5 @@ export function useVersion() {
     queryFn: () => versionApi.get(),
     staleTime: Infinity,
     refetchOnWindowFocus: false,
-    retry: 1,
   })
 }

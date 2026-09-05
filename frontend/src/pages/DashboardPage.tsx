@@ -96,7 +96,6 @@ export function DashboardPage() {
   } = useQuery({
     queryKey: queryKeys.directories(),
     queryFn: directoriesApi.list,
-    retry: 1,
   })
 
   const {
@@ -107,7 +106,6 @@ export function DashboardPage() {
   } = useQuery({
     queryKey: queryKeys.stacks(),
     queryFn: () => stacksApi.list(),
-    retry: 1,
   })
 
   const {
@@ -115,7 +113,6 @@ export function DashboardPage() {
   } = useQuery({
     queryKey: queryKeys.dashboardStats(),
     queryFn: dashboardApi.stats,
-    retry: 1,
   })
 
   const { data: config } = useQuery({

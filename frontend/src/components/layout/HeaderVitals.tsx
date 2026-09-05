@@ -37,7 +37,6 @@ export function HeaderVitals() {
   const { data: stats } = useQuery({
     queryKey: queryKeys.dashboardStats(),
     queryFn: dashboardApi.stats,
-    retry: 1,
     refetchInterval: 60000,
   })
 

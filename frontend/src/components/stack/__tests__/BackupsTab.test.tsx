@@ -222,7 +222,9 @@ describe('BackupsTab — snapshots table', () => {
     const wrapper = createWrapper()
     render(<BackupsTab stackId={STACK_ID} />, { wrapper })
 
-    // useBackupSnapshots has retry:1 so allow up to 3s for the retry + error render.
+    // useBackupSnapshots no longer restates `retry: 1` over the wrapper's
+    // `retry: false` (agent-os-tdts), so this settles on the first failure. The
+    // timeout is headroom for a loaded box, not a retry backoff.
     await waitFor(
       () => {
         expect(screen.getByText(/failed to load snapshots/i)).toBeInTheDocument()
