@@ -169,63 +169,13 @@ func newMetricsTestFixture(t *testing.T, monitor *services.MonitorService, cm *C
 	return srv
 }
 
-// wsRegistrationHangGuardCeiling bounds the two waits below. It is NOT a
-// latency budget and no passing run ever reaches it: both waits block on a
-// CONDITION their caller has arranged to be durable, and every observed
-// satisfaction is in microseconds to low milliseconds (see
-// newHeldFakeDockerMetricsServer). 60s is a hang guard — the answer to "the
-// signal never came at all", not to "the box is busy".
-//
-// NAMING, deliberate: agent-os-fzqb added a wsHangGuardCeiling /
-// hangGuardDeadline pair with the same intent in backup_ws_cap_test.go, on a
-// branch this one is not based on. Same package, so identical names would
-// make main fail to build the moment both land. These are spelled differently
-// on purpose; collapsing the two pairs into one is a post-merge cleanup, and
-// is flagged to the orchestrator rather than done blind from here.
-const wsRegistrationHangGuardCeiling = 60 * time.Second
-
-// wsRegistrationHangGuard returns an absolute deadline for a wait that must
-// NEVER fire in a correct run:
-//
-//	min(t.Deadline() - reporting margin, now + wsRegistrationHangGuardCeiling)
-//
-// Both halves are load-bearing.
-//
-// THE CEILING HALF, and why t.Deadline() alone is wrong here. VERIFIED by
-// reading .github/workflows/backend.yml on this branch: the unit job runs
-// `go test ./... -count=1` with NO -timeout (line 116) and the race job
-// likewise (line 156), so Go's default 10m package timeout applies — and the
-// unit job's own `timeout-minutes: 10` (line 72) is THE SAME NUMBER. A guard
-// derived from t.Deadline() alone would fire around 9m55s, inside the window
-// GitHub is already killing the runner, and a real hang would surface as a
-// cancelled job with no test output. That is strictly worse to diagnose than
-// the failure being removed here. The ceiling keeps a hang inside the job, as
-// a named assertion.
-//
-// THE t.Deadline() HALF. A bare constant is picked against an imagined
-// machine; deriving from the binary's own -timeout makes the guard respect
-// what the invoker actually allowed. Its bool is FALSE under `-timeout 0`, a
-// routine local invocation, which is why the ceiling has to stand alone.
-//
-// COST when a signal genuinely never arrives: up to the ceiling before it
-// reports. Seconds, not minutes.
-func wsRegistrationHangGuard(t *testing.T) time.Time {
-	t.Helper()
-
-	guard := time.Now().Add(wsRegistrationHangGuardCeiling)
-	if d, ok := t.Deadline(); ok {
-		if reportBy := d.Add(-5 * time.Second); reportBy.Before(guard) {
-			guard = reportBy // room to report before the runtime's own panic
-		}
-	}
-	// A -timeout shorter than the reporting margin would put the guard in the
-	// past and fail instantly; a floor keeps the failure a real timeout rather
-	// than an artefact of the margin.
-	if floor := time.Now().Add(time.Second); guard.Before(floor) {
-		guard = floor
-	}
-	return guard
-}
+// The hang guards in this file are hangGuardDeadline / wsHangGuardCeiling
+// (backup_ws_cap_test.go). This file used to carry an identical pair under
+// different names (a `wsRegistration` prefix, agent-os-gs7r) so that two
+// concurrently developed branches could both land without a duplicate-symbol
+// break; the pairs were collapsed once both were on main (agent-os-5t69), and
+// the justification, including this file's registration-latency figures, now
+// lives on the survivor.
 
 // firstConnection grabs whatever *Connection is currently registered in cm.
 // Direct access to the unexported map is deliberate and safe here (this file
@@ -246,7 +196,7 @@ func wsRegistrationHangGuard(t *testing.T) time.Time {
 // bound below will not save it.
 func firstConnection(t *testing.T, cm *ConnectionManager) *Connection {
 	t.Helper()
-	guard := wsRegistrationHangGuard(t)
+	guard := hangGuardDeadline(t)
 	for {
 		cm.mu.RLock()
 		for _, c := range cm.connections {
@@ -286,7 +236,7 @@ func waitForServerSideClose(t *testing.T, conn *Connection, cm *ConnectionManage
 	// ever needed a hang guard rather than the 5s budget it used to carry
 	// (agent-os-gs7r; the same class as agent-os-fzqb's tests, and the reason
 	// this one never showed up in the flake corpus).
-	guard := wsRegistrationHangGuard(t)
+	guard := hangGuardDeadline(t)
 	for {
 		if cm.Count() == 0 {
 			// Close() (this fix) runs, via defer, before Remove() — but give
