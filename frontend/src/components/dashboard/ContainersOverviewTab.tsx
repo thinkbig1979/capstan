@@ -415,7 +415,6 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
   const { data: stacks = [] } = useQuery({
     queryKey: queryKeys.stacks(),
     queryFn: () => stacksApi.list(),
-    staleTime: 30_000,
   })
 
   const stackDirMap = useMemo(() => {
