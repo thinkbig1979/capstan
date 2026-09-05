@@ -683,7 +683,13 @@ test.describe.serial('Backup flow E2E', () => {
     const thisRun = runs.find((r) => r.id === runId)
     expect(thisRun, `No history record found for restore runId ${runId}`).toBeTruthy()
     expect(thisRun?.kind).toBe('restore')
-    expect(thisRun?.status).toBe('success')
+    // The message carries both correlated values, so a failure names WHICH run
+    // it read and WHAT it read — a bare toBe reports only `"success"` vs
+    // `"running"`, which does not say which record was compared.
+    expect(
+      thisRun?.status,
+      `restore run ${runId} persisted status "${thisRun?.status}", expected "success"`,
+    ).toBe('success')
   })
 
   // ── 007: Post-restore verification ────────────────────────────────────────
