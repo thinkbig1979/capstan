@@ -184,6 +184,10 @@ var qonwRejectCorpus = []struct {
 }{
 	{"sftp opaque with password", "sftp:user:RESTICSECRET999@host:/path",
 		"sftp:***@host:/path", "sftp:", "sftp:user@host:/path"},
+	{"sftp opaque, password containing a slash", "sftp:user:PA/SS+RESTICSECRET999@host:/path",
+		"sftp:***@host:/path", "sftp:", "sftp:user@host:/path"},
+	{"sftp opaque, relative path containing an at-sign", "sftp:user:RESTICSECRET999@host:dir@2024",
+		"sftp:***@host:dir@2024", "sftp:", "sftp:user@host:/path"},
 	{"s3 opaque with key and secret", "s3:AKIAKEY:RESTICSECRET999@host/bucket",
 		"s3:***@host/bucket", "s3:", "AWS_SECRET_ACCESS_KEY"},
 	{"rclone connection string with an inline credential", "rclone::sftp,host=h,user=u,pass=RESTICSECRET999:path",
@@ -214,6 +218,9 @@ var qonwLeaveCorpus = []string{
 	"sftp:host:/a@b:c",
 	"rclone:remote:backups/nginx@sha256:abc123",
 	"rclone::sftp,host=h,user=u,ask_password=true:path",
+	// An EMPTY password is no secret; starring it locks the field.
+	"sftp:user:@host:/path",
+	"sftp:nas:@backups:sub",
 }
 
 // qonwRedactedAsTodayCorpus: saved 2xx, served STARRED, flag true, unchanged by

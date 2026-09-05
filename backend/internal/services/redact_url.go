@@ -316,13 +316,13 @@ func isParseableAuthority(s string) bool {
 // those is now a pinned negative arm, alongside "rclone:gdrive:edwin@example.com"
 // and "sftp:host:/path/with@sign".
 //
-// Known limitation, stated rather than discovered later: an sftp opaque
-// password containing "/" ("sftp:user:AB/CD@host:/path") is NOT detected,
-// because a "/" before the first "@" is what marks that "@" as path content.
-// Preferring that over the digest lockout is deliberate: the form is
-// malformed for restic anyway (it reads host "user"), while the digest path
-// is a valid one. The documented "s3:https://..." form, where a "/" in the
-// secret is common, is covered by the URL branch (agent-os-zzhs).
+// Two narrow residues, stated rather than discovered later, both in the
+// sftp opaque form and both malformed for restic anyway (it reads host
+// "user"): a password that BEGINS with "/" ("sftp:user:/pw@host:/path") is
+// not detected, because ":/" is what marks the host:path separator; and a
+// password containing "@" followed by ":" ("sftp:user:p@w:x@host:/path") is
+// spliced at the wrong "@". The documented "s3:https://..." form, where a
+// "/" in the secret is common, is covered by the URL branch (agent-os-zzhs).
 
 // opaqueSchemeRe matches "scheme:" at the start of a value. Deliberately NOT
 // url.Parse: the fallback needs to work on values url.Parse rejects too, and
@@ -349,23 +349,25 @@ func splitOpaque(raw string) (scheme, opaque string, ok bool) {
 // or ok=false when the part carries none.
 //
 //   - sftp ([user@]host:path): a credential can only sit in front of the
-//     host, so only the FIRST "@" can end one, and only if no "/" precedes
-//     it (a "/" means the "@" is inside the path) and the text before it
-//     holds the user:pw split (a ":"). Also required: a ":" somewhere after
-//     it, because a credential is followed by "host:path" — that is what
-//     separates "sftp:user:@host:/p" (empty password, starred) from
-//     "sftp:nas:@backups" (a btrfs-style relative path, left alone). Detection
-//     is decided at the first "@"; the SPLICE runs to the last "@" before the
-//     first "/", so a password containing "@" is starred whole rather than
-//     leaving its tail in clear.
+//     host, so only the FIRST "@" can end one, and only if the text before
+//     it holds the user:pw split (a ":") but NOT restic's host:path
+//     separator (":/" — "sftp:host:/a@b:c" has userinfo "host:/a", which is
+//     a host and a path, not a user and a password; a mere "/" is not the
+//     mark, a password may contain one). Also required: a ":" somewhere
+//     after it, because a credential is followed by "host:path" — that is
+//     what separates "sftp:user:pw@host:/p" from "sftp:nas:@backups" (a
+//     btrfs-style relative path). Detection is decided at the first "@"; the
+//     SPLICE runs to the last "@" before the host's end (the first ":" after
+//     the first "@"), so a password containing "@" is starred whole while a
+//     relative path containing "@" ("host:dir@2024") keeps its host.
 //   - s3: the endpoint is everything before the first "/", and a well-formed
 //     endpoint (host[:port]) never contains "@". So the last "@" inside that
 //     segment ends a userinfo, and a ":" before it means "KEY:SECRET".
 //   - rclone: deliberately ABSENT. remote:path has no credential position;
 //     see the section comment. Connection strings are handled separately.
 //
-// A userinfo with no non-empty component (":@") is not a credential, for the
-// reason spliceUserinfo gives.
+// A userinfo whose password is empty is not a credential (see the check at
+// the end).
 func opaqueCredentialBoundary(scheme, opaque string) (at int, ok bool) {
 	switch strings.ToLower(scheme) {
 	case "sftp":
@@ -374,14 +376,15 @@ func opaqueCredentialBoundary(scheme, opaque string) (at int, ok bool) {
 			return 0, false
 		}
 		userinfo := opaque[:first]
-		if strings.Contains(userinfo, "/") || !strings.Contains(userinfo, ":") || !strings.Contains(opaque[first+1:], ":") {
+		hostColon := strings.Index(opaque[first+1:], ":")
+		if strings.Contains(userinfo, ":/") || !strings.Contains(userinfo, ":") || hostColon < 0 {
 			return 0, false
 		}
-		end := strings.Index(opaque, "/")
-		if end < 0 {
-			end = len(opaque)
-		}
-		at, ok = strings.LastIndex(opaque[:end], "@"), true
+		// The splice stops at the host's end: the first ":" after the first
+		// "@". Running to a later "@" would jump past the host when the path
+		// is relative and contains one ("host:dir@2024").
+		hostEnd := first + 1 + hostColon
+		at, ok = strings.LastIndex(opaque[:hostEnd], "@"), true
 	case "s3":
 		seg := opaque
 		if slash := strings.Index(seg, "/"); slash >= 0 {
@@ -396,7 +399,11 @@ func opaqueCredentialBoundary(scheme, opaque string) (at int, ok bool) {
 	if !ok {
 		return 0, false
 	}
-	if user, password, _ := strings.Cut(opaque[:at], ":"); user == "" && password == "" {
+	// An EMPTY password is no secret. For the URL forms a username alone can
+	// be a token (https://ghp_xxx@host/), but sftp is key-auth and an s3
+	// endpoint has no userinfo at all, so here "user:@host" hides nothing —
+	// and starring it would lock the field (agent-os-zzhs arm 2).
+	if _, password, _ := strings.Cut(opaque[:at], ":"); password == "" {
 		return 0, false
 	}
 	return at, true
