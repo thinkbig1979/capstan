@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -64,8 +65,36 @@ func TestHandleError_PlainErrorFallsBackTo500(t *testing.T) {
 	}
 }
 
-// captureHandlerLogs swaps the process-wide slog default for a buffer and
-// restores it.
+// syncLogBuffer is the sink captureHandlerLogs hands to slog. A plain
+// bytes.Buffer is NOT enough here: slog serialises its own Write calls
+// (log/slog/handler.go's commonHandler holds a mutex around every write),
+// but a reader calling String() sits outside that lock, and in this package
+// the reader is often a different goroutine from the writer — the WS tests
+// read the buffer while other connections' handler goroutines are still
+// logging on their own tick loops. That was a real `WARNING: DATA RACE`
+// under -race with the package under parallel load (agent-os-2h1r), and it
+// is what TestLogCapture_ConcurrentReadIsRaceFree pins deterministically.
+// Guarding both sides in the type makes every reader safe by construction,
+// whatever goroutine it runs on.
+type syncLogBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncLogBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncLogBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// captureHandlerLogs swaps the process-wide slog default for a mutex-guarded
+// buffer (see syncLogBuffer) and restores it.
 //
 // The stdlib log package must be restored explicitly. slog.SetDefault ALSO
 // does log.SetOutput(handlerWriter{...}) and log.SetFlags(0), and restoring
@@ -84,9 +113,9 @@ func TestHandleError_PlainErrorFallsBackTo500(t *testing.T) {
 // serial test has returned, so they cannot overlap these. The reason is
 // narrower — an unrelated goroutine writing one line must not break an
 // assertion about a sentinel.
-func captureHandlerLogs(t *testing.T) *bytes.Buffer {
+func captureHandlerLogs(t *testing.T) *syncLogBuffer {
 	t.Helper()
-	var buf bytes.Buffer
+	var buf syncLogBuffer
 	prevSlog := slog.Default()
 	prevWriter, prevFlags := log.Writer(), log.Flags()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
@@ -324,5 +353,43 @@ func TestCaptureHandlerLogs_RestoresStdlibLog(t *testing.T) {
 	}
 	if log.Flags() != flagsBefore {
 		t.Errorf("stdlib log flags not restored: got %d, want %d", log.Flags(), flagsBefore)
+	}
+}
+
+// TestLogCapture_ConcurrentReadIsRaceFree is the deterministic reproduction
+// for agent-os-2h1r. captureHandlerLogs used to hand back a plain
+// *bytes.Buffer: slog serialises its own writes, but a reader calling
+// buf.String() sits outside that lock. The WS tests read the buffer while
+// OTHER connections' handler goroutines are still logging (dashboard.go's
+// empty-host branch logs on every tick since agent-os-ear5), which only
+// fired under -race with the package under parallel load — latent, and the
+// shape that turns a required check red with no finding.
+//
+// This test needs no load: there is no happens-before edge between the
+// writer goroutine and the reads below until wg.Wait, so the race detector
+// flags the pair regardless of wall-clock interleaving. Seen failing first on
+// the *bytes.Buffer helper (build green, `WARNING: DATA RACE` with the read in
+// bytes.(*Buffer).String and the write under log/slog's handler); clean on
+// syncLogBuffer. The final assertion keeps it non-vacuous after the fix.
+func TestLogCapture_ConcurrentReadIsRaceFree(t *testing.T) {
+	buf := captureHandlerLogs(t)
+
+	const iterations = 2000
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			slog.Default().Info("race-probe-2h1r", "i", i)
+		}
+	}()
+
+	for i := 0; i < iterations; i++ {
+		_ = buf.String()
+	}
+	wg.Wait()
+
+	if !strings.Contains(buf.String(), "race-probe-2h1r") {
+		t.Fatalf("writer goroutine's lines never reached the buffer; got %q", buf.String())
 	}
 }

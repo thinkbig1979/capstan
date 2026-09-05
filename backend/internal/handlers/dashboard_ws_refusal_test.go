@@ -82,10 +82,16 @@ func TestDashboardMetricsWS_CapRefusalReportsNoGinError(t *testing.T) {
 	router.Use(func(c *gin.Context) {
 		c.Next()
 		// Snapshot taken HERE, on the serving goroutine, and handed over the
-		// channel: the buffer captureHandlerLogs returns is a plain
-		// bytes.Buffer, so reading it from the test goroutine while this one
-		// may still be writing is a data race under -race. The channel send
-		// gives the read a happens-before edge.
+		// channel. The channel send orders the SNAPSHOT after this request's
+		// handler returned — that is still what makes the c.Errors count and
+		// the log contents belong to the refused request. It does NOT make
+		// the buffer read itself safe: the connection filling the cap has its
+		// own handler goroutine that keeps logging on every tick (the
+		// empty-host branch since agent-os-ear5), so a plain bytes.Buffer
+		// raced here under -race with the package under load (agent-os-2h1r).
+		// captureHandlerLogs therefore returns a mutex-guarded syncLogBuffer;
+		// the happens-before edge from the channel and the lock on the buffer
+		// solve two different problems and both are needed.
 		observed <- refusalObservation{ginErrs: len(c.Errors), logs: buf.String()}
 	})
 	handler.RegisterRoutes(router.Group("/api"), "test-secret-key-32-chars-long!!!", true)
