@@ -120,12 +120,10 @@ func renderDockerResult(c *gin.Context, err error, r truth.ActionResult) {
 // becomes an actionable HTTP response instead of a generic 500.
 func respondDockerErr(c *gin.Context, err error, status int, code, message string) {
 	if errors.Is(err, services.ErrDockerUnavailable) {
-		appErr := models.NewAppErrorWithCause(http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage, err)
-		handleError(c, appErr)
+		handleError(c, models.NewAppErrorWithCause(http.StatusServiceUnavailable, "DOCKER_UNAVAILABLE", DockerUnavailableMessage, err))
 		return
 	}
-	appErr := models.NewAppErrorWithCause(status, code, message, err)
-	handleError(c, appErr)
+	handleError(c, models.NewAppErrorWithCause(status, code, message, err))
 }
 
 // EncryptionUnavailableMessage is the operator-facing text for a missing
@@ -144,8 +142,7 @@ func respondIfEncryptionUnavailable(c *gin.Context, err error) bool {
 	if !errors.Is(err, services.ErrEncryptionUnavailable) {
 		return false
 	}
-	appErr := models.NewAppErrorWithCause(http.StatusUnprocessableEntity, models.ErrEncryptionUnavailable, EncryptionUnavailableMessage, err)
-	handleError(c, appErr)
+	handleError(c, models.NewAppErrorWithCause(http.StatusUnprocessableEntity, models.ErrEncryptionUnavailable, EncryptionUnavailableMessage, err))
 	return true
 }
 

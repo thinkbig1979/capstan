@@ -88,6 +88,13 @@ func NewAppErrorWithDetails(status int, code string, message string, details int
 // that produced it, so a 5xx still lets logServerFault emit the real failure
 // even when the AppError itself carries only a sanitised, client-facing
 // Message (agent-os-2mhb).
+//
+// Because Unwrap exposes Cause, errors.Is/errors.As on the returned AppError
+// now see straight through it to cause. Attach the cause at the HTTP
+// response boundary (handlers/respond.go), not inside a service or database
+// call that returns the error upward — an AppError minted early and passed
+// through several layers turns every later errors.Is/As check against it
+// into an implicit check against cause too, which is easy to get wrong.
 func NewAppErrorWithCause(status int, code string, message string, cause error) *AppError {
 	return &AppError{
 		Code:    code,
