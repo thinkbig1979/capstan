@@ -141,6 +141,14 @@ func TestScannerAndCreateAgreeOnProjectName(t *testing.T) {
 // returns the recorder, the double and the DB, for the agent-os-f3ah arms.
 func createStackForProjectName(t *testing.T, name string, deploy bool) (*httptest.ResponseRecorder, *recordingStackDocker, *database.DB) {
 	t.Helper()
+	return createStackForProjectNameWithContent(t, name, "services:\n  web:\n    image: nginx:1.21\n", deploy)
+}
+
+// createStackForProjectNameWithContent is createStackForProjectName with the
+// compose body under the test's control, for the agent-os-89z2 arms where the
+// top-level `name:` in the request body is the thing being exercised.
+func createStackForProjectNameWithContent(t *testing.T, name, composeContent string, deploy bool) (*httptest.ResponseRecorder, *recordingStackDocker, *database.DB) {
+	t.Helper()
 	tempDir := t.TempDir()
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
@@ -158,7 +166,7 @@ func createStackForProjectName(t *testing.T, name string, deploy bool) (*httptes
 
 	reqBytes, err := json.Marshal(map[string]interface{}{
 		"name":           name,
-		"composeContent": "services:\n  web:\n    image: nginx:1.21\n",
+		"composeContent": composeContent,
 		"deploy":         deploy,
 	})
 	require.NoError(t, err)
@@ -219,4 +227,55 @@ func TestStacksHandler_Create_AcceptsAnAlreadyNormalName(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, stacks, 1)
 	assert.Equal(t, "ok-normal", stacks[0].ProjectName)
+}
+
+// TestStacksHandler_Create_AdoptsTheTopLevelNameFromTheComposeBody is
+// agent-os-89z2 on the Capstan-created path.
+//
+// Create writes the compose file to disk (stack_crud.go:193-194) BEFORE it
+// derives the project name, so it can and must ask compose the same question
+// the scanner asks about the same file. If it derived the directory name here
+// instead, the create would deploy under "-p namedstack" while the scan that
+// immediately follows it rewrote the row to "custom": the containers the create
+// had just started would be orphaned from the row every later operation reads —
+// the agent-os-07x failure, re-entered through a different door.
+//
+// The deploy arm is the half that matters: buildComposeArgs passes
+// stack.ProjectName as -p, so this asserts what compose is actually told.
+func TestStacksHandler_Create_AdoptsTheTopLevelNameFromTheComposeBody(t *testing.T) {
+	w, docker, db := createStackForProjectNameWithContent(t, "namedstack",
+		"name: custom\nservices:\n  web:\n    image: nginx:1.21\n", true)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	require.Len(t, docker.started, 1)
+	assert.Equal(t, "custom", docker.started[0].ProjectName,
+		"the deploy must run under the project compose itself would use for this file")
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+	assert.Equal(t, "custom", stacks[0].ProjectName,
+		"the row must carry the same name the deploy used, or the scan that follows orphans it")
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	respStack := resp["details"].(map[string]interface{})["stack"].(map[string]interface{})
+	assert.Equal(t, "custom", respStack["projectName"])
+}
+
+// TestStacksHandler_Create_RefusesANameThatNormalisesToNothing_EvenWithATopLevelName
+// pins that the :64 guard is unchanged by agent-os-89z2. It validates the
+// REQUEST NAME, which becomes the directory on disk, and it runs before any
+// file is written — so there is no compose file to ask, and a `name:` in the
+// body cannot buy a directory compose can derive nothing from.
+func TestStacksHandler_Create_RefusesANameThatNormalisesToNothing_EvenWithATopLevelName(t *testing.T) {
+	w, docker, db := createStackForProjectNameWithContent(t, "---",
+		"name: custom\nservices:\n  web:\n    image: nginx:1.21\n", false)
+	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "letter or digit", "the refusal must name the rule")
+	assert.Empty(t, docker.started)
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	assert.Empty(t, stacks, "a refused create must not leave a row behind")
 }
