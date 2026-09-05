@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -898,9 +899,17 @@ func TestScannerService_PruneStaleIDStacks_NeitherRowMatchesExpected_BothSurvive
 // directory path.
 func writeComposeStack(t *testing.T, root, dirName string) string {
 	t.Helper()
+	return writeComposeStackWithContent(t, root, dirName, "services:\n  web:\n    image: nginx\n")
+}
+
+// writeComposeStackWithContent is writeComposeStack with the file's body under
+// the test's control, for the agent-os-89z2 arms where the top-level `name:`
+// is the thing being exercised.
+func writeComposeStackWithContent(t *testing.T, root, dirName, content string) string {
+	t.Helper()
 	dir := filepath.Join(root, dirName)
 	require.NoError(t, os.MkdirAll(dir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(content), 0644))
 	return dir
 }
 
@@ -1205,4 +1214,296 @@ func TestScannerService_ScanAll_SameDirectoryNamedFilesCollideToo(t *testing.T) 
 		}
 	}
 	assert.Equal(t, 1, warnLines, "one collision warning keyed on the normalised name, naming both compose files; log was:\n%s", out)
+}
+
+// ───────────────────────────────────────────
+// agent-os-89z2: the persisted project_name is the one COMPOSE resolves,
+// through compose-go's own loader, not Capstan's directory-name rule
+// ───────────────────────────────────────────
+
+// TestScannerService_ScanAll_TopLevelNameWinsOverTheDirectory is shape S2 from
+// agent-os-f3ah's notes, end to end inside the unit suite.
+//
+// `docker compose` derives a project name from exactly three sources, in this
+// order: an explicit -p, else a top-level `name:` in the compose file, else the
+// directory basename (compose-go v2.14.0 loader.go:694 / :752, cli/options.go:
+// 561-567). Capstan derived only the LAST of the three, so a directory "other"
+// holding `name: custom` was labelled "custom" by compose while Capstan
+// persisted "other": the stack shows stopped with zero containers, and a Start
+// from Capstan passes `-p other` and builds a SECOND project beside the
+// operator's.
+//
+// The Docker arm is the oracle: the same label-filtering Engine API double the
+// f3ah arms use, so the assertion is "the stored name finds the live
+// containers", not "the stored name equals a literal".
+func TestScannerService_ScanAll_TopLevelNameWinsOverTheDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	writeComposeStackWithContent(t, tempDir, "other",
+		"name: custom\nservices:\n  web:\n    image: nginx\n")
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = NewScannerService(&config.Config{StacksDir: tempDir}, db).ScanAll()
+	require.NoError(t, err)
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+
+	assert.Equal(t, "custom", stacks[0].ProjectName,
+		"the compose file names the project; compose labels its containers with that name, so the row must carry it")
+
+	docker := newLabelFilteringDockerAPI(t, map[string]string{
+		"custom-web-1": "custom",
+		"other-web-1":  "other",
+	})
+
+	// The instrument discriminates: the directory-derived name finds the
+	// WRONG container, which is what makes the divergence invisible rather
+	// than loud.
+	pre, err := docker.GetContainerList("other")
+	require.NoError(t, err)
+	require.Len(t, pre, 1, "control: the filter double must actually filter")
+	require.Equal(t, "other-web-1", pre[0].Name, "control: 'other' is a different, unrelated project")
+
+	got, err := docker.GetContainerList(stacks[0].ProjectName)
+	require.NoError(t, err)
+	names := make([]string, 0, len(got))
+	for _, c := range got {
+		names = append(names, c.Name)
+	}
+	assert.ElementsMatch(t, []string{"custom-web-1"}, names,
+		"stored project_name %q must match the compose label so the stack's containers are visible", stacks[0].ProjectName)
+}
+
+// TestScannerService_ScanAll_TopLevelNameIsNormalisedAndInterpolated: the
+// `name:` field is not taken verbatim. Compose interpolates it and then runs it
+// through NormalizeProjectName (loader.go:740-752), so `name: My.Project`
+// labels "myproject". Reading it through the loader rather than the raw YAML is
+// what keeps those two rules from drifting from compose's.
+func TestScannerService_ScanAll_TopLevelNameIsNormalisedAndInterpolated(t *testing.T) {
+	tempDir := t.TempDir()
+	writeComposeStackWithContent(t, tempDir, "dirname",
+		"name: My.Project\nservices:\n  web:\n    image: nginx\n")
+
+	// Interpolated from the directory's own .env, the way `docker compose`
+	// resolves it before loading.
+	dir := writeComposeStackWithContent(t, tempDir, "envdir",
+		"name: ${PROJECT_SUFFIX}-svc\nservices:\n  web:\n    image: nginx\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("PROJECT_SUFFIX=billing\n"), 0644))
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = NewScannerService(&config.Config{StacksDir: tempDir}, db).ScanAll()
+	require.NoError(t, err)
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	byDir := map[string]string{}
+	for _, s := range stacks {
+		byDir[filepath.Base(s.Directory)] = s.ProjectName
+	}
+	assert.Equal(t, "myproject", byDir["dirname"], "compose normalises `name:` exactly as it normalises a directory basename")
+	assert.Equal(t, "billing-svc", byDir["envdir"], "compose interpolates `name:` against the directory's .env before normalising")
+}
+
+// TestScannerService_ScanAll_UnparseableComposeFallsBackToTheDirectoryAndWarns
+// is the load-failure control. The scanner runs at boot over every directory,
+// so a file compose itself cannot parse must still be listed and startable-or-
+// loudly-failing exactly as before: the row keeps Capstan's directory-derived
+// name and ONE warning names the file and the parse error.
+//
+// The bystander in the same tree is the other side of the instrument: a
+// resolvable stack in the same scan is unaffected, so the fallback is scoped to
+// the broken file rather than to the pass.
+func TestScannerService_ScanAll_UnparseableComposeFallsBackToTheDirectoryAndWarns(t *testing.T) {
+	tempDir := t.TempDir()
+	broken := writeComposeStackWithContent(t, tempDir, "BrokenDir",
+		"services:\n  web:\n  - image: nginx\n   bad: [\n")
+	writeComposeStackWithContent(t, tempDir, "fine",
+		"name: custom\nservices:\n  web:\n    image: nginx\n")
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	logs := captureSlog(t)
+	_, err = NewScannerService(&config.Config{StacksDir: tempDir}, db).ScanAll()
+	require.NoError(t, err, "a broken compose file must not abort the scan")
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	byDir := map[string]string{}
+	for _, s := range stacks {
+		byDir[filepath.Base(s.Directory)] = s.ProjectName
+	}
+	assert.Equal(t, "brokendir", byDir["BrokenDir"],
+		"an unreadable file falls back to today's derivation: the stack stays listed and startable")
+	assert.Equal(t, "custom", byDir["fine"], "control: the fallback is scoped to the broken file, not the scan")
+
+	out := logs.String()
+	warnLines := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "level=WARN") && strings.Contains(line, "project name") && strings.Contains(line, "BrokenDir") {
+			warnLines++
+			assert.Contains(t, line, filepath.Join(broken, "compose.yaml"), "the warning must name the file")
+			assert.Contains(t, line, "yaml", "the warning must carry compose's own error")
+		}
+	}
+	assert.Equal(t, 1, warnLines,
+		"exactly one warning, naming the file and the error; log was:\n%s", out)
+}
+
+// TestScannerService_ScanAll_NamedFileKeepsCapstansNamespace pins the OWNER
+// POLICY decided by Edwin on 2026-09-05: KEEP the "<dir>-<profile>" namespace
+// for a NAMED compose file.
+//
+// Compose never derives a project name from the FILE's name, so
+// `docker compose -f compose.api.yaml up` in "mystack" labels "mystack" and, if
+// the file carries `name: custom`, labels "custom". Capstan deliberately does
+// neither: a named file gets its own project "<dir>-<profile>", which Capstan
+// then passes as -p on start (an imperative -p outranks a file's `name:`, so
+// Capstan's start and Capstan's row agree by construction). The cost is that
+// the named-file half of S6 stays uncovered — a named file started OUTSIDE
+// Capstan is not found — which is what KEEP accepts.
+//
+// The `name: custom` in the fixture is the point: under DROP this row would say
+// "custom". A change here is a POLICY change, not a refactor.
+func TestScannerService_ScanAll_NamedFileKeepsCapstansNamespace(t *testing.T) {
+	tempDir := t.TempDir()
+	dir := writeComposeStackWithContent(t, tempDir, "mystack",
+		"name: shoulddefer\nservices:\n  web:\n    image: nginx\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.api.yaml"),
+		[]byte("name: custom\nservices:\n  api:\n    image: nginx\n"), 0644))
+
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = NewScannerService(&config.Config{StacksDir: tempDir}, db).ScanAll()
+	require.NoError(t, err)
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	byFile := map[string]string{}
+	for _, s := range stacks {
+		byFile[s.ComposeFile] = s.ProjectName
+	}
+	assert.Equal(t, "mystack-api", byFile["compose.api.yaml"],
+		"OWNER POLICY KEEP: a named file stays in Capstan's own namespace, so its `name:` is not adopted")
+	assert.Equal(t, "shoulddefer", byFile["compose.yaml"],
+		"control: the DEFAULT file in the same directory DOES adopt its `name:` — the policy is about named files only")
+}
+
+// TestResolveComposeProjectName_ReportsWhichSourceProducedTheName pins the
+// producer directly, including the `source` half that the scan loop logs. The
+// scan-level tests above pin the OUTCOME; this pins the four ways of reaching
+// it, so a change that gets the right name for the wrong reason is still caught.
+func TestResolveComposeProjectName_ReportsWhichSourceProducedTheName(t *testing.T) {
+	base := t.TempDir()
+	write := func(dirName, file, content string) string {
+		dir := filepath.Join(base, dirName)
+		require.NoError(t, os.MkdirAll(dir, 0755))
+		p := filepath.Join(dir, file)
+		require.NoError(t, os.WriteFile(p, []byte(content), 0644))
+		return p
+	}
+
+	cases := []struct {
+		label, path, dirName, profile string
+		wantName, wantSource, why     string
+	}{
+		{
+			label: "top-level name:", path: write("a", "compose.yaml", "name: custom\nservices:\n  web:\n    image: nginx\n"),
+			dirName: "a", profile: "default", wantName: "custom", wantSource: ProjectNameSourceComposeName,
+			why: "compose's second source outranks the directory",
+		},
+		{
+			label: "no name:", path: write("b", "compose.yaml", "services:\n  web:\n    image: nginx\n"),
+			dirName: "b", profile: "default", wantName: "b", wantSource: ProjectNameSourceDirectory,
+			why: "CONTROL: compose's third source, unchanged by agent-os-89z2",
+		},
+		{
+			label: "name: normalises to nothing", path: write("c", "compose.yaml", "name: \"---\"\nservices:\n  web:\n    image: nginx\n"),
+			dirName: "c", profile: "default", wantName: "c", wantSource: ProjectNameSourceDirectory,
+			why: "compose assigns the file's name only when it survives normalisation, so this falls through as compose does",
+		},
+		{
+			label: "named file ignores its own name:", path: write("d", "compose.api.yaml", "name: custom\nservices:\n  api:\n    image: nginx\n"),
+			dirName: "d", profile: "api", wantName: "d-api", wantSource: ProjectNameSourceNamedFile,
+			why: "OWNER POLICY KEEP (Edwin, 2026-09-05): the named-file namespace is Capstan's, not compose's",
+		},
+		{
+			label: "unparseable YAML", path: write("e", "compose.yaml", "services:\n  web:\n  - image: nginx\n   bad: [\n"),
+			dirName: "e", profile: "default", wantName: "e", wantSource: ProjectNameSourceFallback,
+			why: "the stack must stay listed and startable, so a broken file keeps today's derivation",
+		},
+		{
+			label: "required variable in name:", path: write("f", "compose.yaml", "name: ${MISSING:?not set}\nservices:\n  web:\n    image: nginx\n"),
+			dirName: "f", profile: "default", wantName: "f", wantSource: ProjectNameSourceFallback,
+			why: "compose refuses this file too; Capstan warns and carries on rather than dropping the row",
+		},
+		{
+			label: "file does not exist", path: filepath.Join(base, "g", "compose.yaml"),
+			dirName: "g", profile: "default", wantName: "g", wantSource: ProjectNameSourceFallback,
+			why: "a file that vanished between the glob and the load must not take the row with it",
+		},
+		{
+			label: "directory needs normalising, no name:", path: write("MyStack", "compose.yaml", "services:\n  web:\n    image: nginx\n"),
+			dirName: "MyStack", profile: "default", wantName: "mystack", wantSource: ProjectNameSourceDirectory,
+			why: "CONTROL: agent-os-f3ah's normalisation still applies on the fallthrough path",
+		},
+	}
+
+	for _, tc := range cases {
+		name, source := ResolveComposeProjectName(context.Background(), tc.path, tc.dirName, tc.profile)
+		assert.Equal(t, tc.wantName, name, "%s: name — %s", tc.label, tc.why)
+		assert.Equal(t, tc.wantSource, source, "%s: source — %s", tc.label, tc.why)
+	}
+}
+
+// TestResolveComposeProjectName_DoesNotHonourComposeProjectNameFromDotEnv pins
+// shape S3 as a DECISION, not an oversight.
+//
+// Capstan loads the directory's .env (so `name: ${VAR}` resolves), which makes
+// COMPOSE_PROJECT_NAME visible to this code. compose-go's loader ignores it as a
+// source by construction — it only writes that key back into Environment
+// (loader.go:688-692) — and Capstan does not add it back, because Capstan passes
+// its own -p on every start (docker.go, logs.go). Adopting the override at scan
+// time would make the scanned name and the started name differ, which is the
+// divergence class this producer exists to close.
+//
+// The second arm is the control: the SAME .env, with the same loading path,
+// does drive an ordinary variable — so the first arm's result is "ignored", not
+// "the .env was never read".
+func TestResolveComposeProjectName_DoesNotHonourComposeProjectNameFromDotEnv(t *testing.T) {
+	base := t.TempDir()
+
+	overrideDir := filepath.Join(base, "envoverride")
+	require.NoError(t, os.MkdirAll(overrideDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(overrideDir, "compose.yaml"),
+		[]byte("services:\n  web:\n    image: nginx\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(overrideDir, ".env"),
+		[]byte("COMPOSE_PROJECT_NAME=envwins\nGREETING=hello\n"), 0644))
+
+	name, source := ResolveComposeProjectName(context.Background(),
+		filepath.Join(overrideDir, "compose.yaml"), "envoverride", "default")
+	assert.Equal(t, "envoverride", name,
+		"COMPOSE_PROJECT_NAME in .env is visible but deliberately not adopted: Capstan passes its own -p on start")
+	assert.Equal(t, ProjectNameSourceDirectory, source)
+
+	// CONTROL, same .env, same code path: an ordinary variable IS read, so the
+	// arm above proves a policy, not a failure to load the file.
+	usedDir := filepath.Join(base, "envused")
+	require.NoError(t, os.MkdirAll(usedDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(usedDir, "compose.yaml"),
+		[]byte("name: ${GREETING}-svc\nservices:\n  web:\n    image: nginx\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(usedDir, ".env"),
+		[]byte("COMPOSE_PROJECT_NAME=envwins\nGREETING=hello\n"), 0644))
+
+	name, source = ResolveComposeProjectName(context.Background(),
+		filepath.Join(usedDir, "compose.yaml"), "envused", "default")
+	assert.Equal(t, "hello-svc", name, "control: the same .env does feed interpolation, so it was read")
+	assert.Equal(t, ProjectNameSourceComposeName, source)
 }

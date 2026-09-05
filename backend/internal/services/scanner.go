@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -45,8 +48,17 @@ func StackID(root, primaryRoot string, extraRoots []string, pathID, name string)
 	return fmt.Sprintf("%s~%s:%s", StackIDRootPrefix(root, primaryRoot, extraRoots), pathID, name)
 }
 
-// ComposeProjectName is the single producer of compose project names, for the
-// same reason StackID above is the single producer of IDs.
+// ComposeProjectName is Capstan's DIRECTORY-DERIVED project name: the last of
+// compose's three sources, and now the DEFAULT and the FALLBACK rather than the
+// answer. ResolveComposeProjectName below is the producer both writers call;
+// it asks compose-go for the name compose itself would use and drops back to
+// this function when the file does not name a project, or cannot be read
+// (agent-os-89z2). Everything below still describes what this function does,
+// because it is still what gets persisted whenever `name:` is absent — which is
+// the overwhelmingly common case.
+//
+// It remains a SINGLE producer of the directory-derived form, for the same
+// reason StackID above is the single producer of IDs.
 //
 // The scanner and POST /api/v1/stacks each derived this independently and
 // disagreed for the default compose file: create-with-deploy deployed under
@@ -103,6 +115,175 @@ func ComposeProjectName(dirName, name string) string {
 		raw = fmt.Sprintf("%s-%s", dirName, strings.ReplaceAll(name, ":", "-"))
 	}
 	return loader.NormalizeProjectName(raw)
+}
+
+// Where a persisted project name came from. Reported by
+// ResolveComposeProjectName and logged with the discovered stack, so an
+// operator asking "why is this stack called that" gets the answer from the log
+// rather than by reasoning about precedence.
+const (
+	// ProjectNameSourceComposeName: a top-level `name:` in the compose file.
+	ProjectNameSourceComposeName = "compose-name"
+	// ProjectNameSourceDirectory: the directory basename, compose's last source.
+	ProjectNameSourceDirectory = "directory"
+	// ProjectNameSourceNamedFile: Capstan's own "<dir>-<profile>" namespace for
+	// a named compose file. Not one of compose's sources; see the OWNER POLICY
+	// note in ResolveComposeProjectName.
+	ProjectNameSourceNamedFile = "capstan-named-file"
+	// ProjectNameSourceFallback: the compose file could not be read, so the
+	// directory derivation stands in. Always accompanied by a WARN.
+	ProjectNameSourceFallback = "fallback"
+)
+
+// ResolveComposeProjectName is the producer of persisted project names: the
+// scanner (ScanDirectoryWithRoot) and POST /api/v1/stacks both call it, so the
+// row a create writes and the row the scan immediately after it rewrites agree
+// by construction (agent-os-07x is the bug that invariant exists to prevent).
+//
+// It answers the question "what would `docker compose` call this?" by ASKING
+// compose-go rather than by reimplementing its rules. Compose derives a project
+// name from three sources, in order: an explicit -p / COMPOSE_PROJECT_NAME,
+// else a top-level `name:` in the compose file, else the directory basename —
+// all through NormalizeProjectName, and NEVER from the compose FILE's name.
+// agent-os-f3ah made Capstan agree with compose on the THIRD source;
+// this makes it agree on the second (shape S2), which is the one with teeth: a
+// directory "other" whose file says `name: custom` is labelled "custom" by
+// compose, so Capstan filtering on "other" saw zero containers and a Start from
+// Capstan built a SECOND project beside the operator's.
+//
+// The FIRST source is deliberately not honoured. COMPOSE_PROJECT_NAME in the
+// directory's .env is VISIBLE here (we load that file), and the loader ignores
+// it by construction — it only WRITES that key back into Environment
+// (loader.go:688-692), it never reads it as a source. Adopting it would be a
+// choice, and the choice is no: Capstan passes its own -p on every start
+// (docker.go:297, logs.go:303), so honouring an env override at scan time would
+// make the scanned name and the started name differ, which is the exact class
+// of divergence this function exists to close. An explicit -p typed by an
+// operator outside Capstan (shape S4) is not visible here at all.
+//
+// OWNER POLICY (Edwin, 2026-09-05 16:05): KEEP Capstan's "<dir>-<profile>"
+// namespace for a NAMED compose file. So a named file is NOT asked what it
+// calls itself: it keeps Capstan's name, which Capstan then passes as -p on
+// start, and an imperative -p outranks a file's `name:` — start and row agree
+// by construction. What that costs is the named-file half of shape S6: a named
+// file started OUTSIDE Capstan with `-f` is labelled by the DIRECTORY alone
+// (compose has no file-name source), and Capstan does not find it. That gap is
+// accepted, not overlooked. Dropping the namespace instead is one deleted
+// branch below, and would make two named files in one directory collide onto
+// one project — which is what compose would do with them.
+//
+// source is one of the ProjectNameSource* constants above and is advisory: it
+// explains the name, it does not participate in deriving it.
+func ResolveComposeProjectName(ctx context.Context, composePath, dirName, profile string) (name string, source string) {
+	derived := ComposeProjectName(dirName, profile)
+
+	if profile != "default" {
+		return derived, ProjectNameSourceNamedFile
+	}
+
+	loaded, err := composeFileProjectName(ctx, composePath)
+	if err != nil {
+		// The scanner runs at boot over every directory. A file compose cannot
+		// parse must still produce a listed, startable-or-loudly-failing row
+		// exactly as before this function existed, so the failure is a WARN and
+		// the directory derivation stands — never a skipped stack.
+		slog.Warn("Could not read the compose file's own project name; using the directory-derived name",
+			"file", composePath, "project name", derived, "error", err)
+		return derived, ProjectNameSourceFallback
+	}
+	if loaded == "" {
+		// No `name:`, or one that normalises to nothing. Compose falls through
+		// to the directory basename in exactly this case (loader.go:753-756
+		// assigns only a non-empty normalised name), so Capstan does too.
+		return derived, ProjectNameSourceDirectory
+	}
+	return loaded, ProjectNameSourceComposeName
+}
+
+// composeFileProjectName returns the project name compose-go resolves from this
+// one file, or "" if the file names no project. The error is returned rather
+// than absorbed so the caller can warn about it exactly once.
+//
+// The option set is chosen to make the load NAME-ONLY, and it is not the one
+// LinterService uses: linter.go:63-64 skips NOTHING, because the linter's whole
+// job is to report the failures this function must survive. compose-go resolves
+// the project name at loader.go:378, BEFORE load() and therefore before schema
+// validation, the consistency check, include, extends and default values — so
+// the name is knowable for a file that fails all of them, and a full load throws
+// it away. MEASURED on compose-go v2.14.0 (throwaway probe, 2026-09-05): with
+// the skips below, `image: ${IMAGE}` with no build, a missing `include:` target
+// and a missing `extends.file` all resolve their name; the linter's set errors
+// on all three. What remains is a YAML parse error and a required-variable
+// error (`${X:?msg}`) inside `name:` itself — both cases where compose refuses
+// the file too, and both routed to the caller's WARN and fallback.
+//
+// Interpolation and normalisation stay ON: compose applies both to `name:`
+// (loader.go:740-752), so skipping either would silently change the answer.
+func composeFileProjectName(ctx context.Context, composePath string) (string, error) {
+	dir := filepath.Dir(composePath)
+
+	// `docker compose` resolves ${VAR} against the directory's .env, so a
+	// `name: ${PROJECT}` must see it too or it interpolates blank and falls
+	// through to the directory name. The error is ignored on purpose: no .env
+	// is the common case, and a malformed one must not make the project name
+	// unresolvable — it just leaves the variables unset, which is compose's own
+	// behaviour for a variable it cannot find.
+	//
+	// The process environment is deliberately NOT merged in. It keeps the
+	// scanned name a pure function of what is on disk, so two Capstan instances
+	// walking the same tree agree, and it keeps the backend's own environment
+	// out of project names. Cost: a `name:` interpolated from a host variable
+	// alone resolves blank and falls back to the directory.
+	environment := map[string]string{}
+	if fromDotEnv, err := dotenv.GetEnvFromFile(map[string]string{}, []string{filepath.Join(dir, ".env")}); err == nil {
+		environment = fromDotEnv
+	}
+
+	details := types.ConfigDetails{
+		WorkingDir:  dir,
+		ConfigFiles: []types.ConfigFile{{Filename: composePath}},
+		Environment: environment,
+	}
+
+	project, err := loader.LoadWithContext(ctx, details, func(o *loader.Options) {
+		o.SkipValidation = true
+		o.SkipConsistencyCheck = true
+		o.SkipInclude = true
+		o.SkipExtends = true
+		o.SkipResolveEnvironment = true
+		o.SkipDefaultValues = true
+		o.SkipResolveLabels = true
+		// Nothing downstream of the name needs paths resolved against
+		// WorkingDir, and ToOptions defaults this to true.
+		o.ResolvePaths = false
+
+		// Interpolation of the whole file still runs, and every unset variable
+		// in any field emits a logrus warning straight to stderr — once per
+		// variable, per file, per scan, at every boot, in a format that is not
+		// Capstan's slog. Resolving a miss to ("", true) suppresses that with no
+		// semantic change: compose already defaults a missing variable to a
+		// blank string (template.go:209). MEASURED: `name:` still resolves from
+		// .env, and a required `${X:?msg}` still errors.
+		o.Interpolate.LookupValue = func(key string) (string, bool) {
+			if v, ok := environment[key]; ok {
+				return v, true
+			}
+			return "", true
+		}
+
+		// No SetProjectName. Compose's default here is the directory basename;
+		// Capstan's is ComposeProjectName, which the CALLER applies. Leaving the
+		// default EMPTY is behaviourally identical — loader.go:753-756 consumes
+		// the default on exactly the branch where the caller substitutes — and it
+		// makes "" mean precisely "this file names no project", which is what
+		// lets the caller report an honest source. Passing the derived name here
+		// instead would make `name: other` in directory "other" indistinguishable
+		// from no `name:` at all.
+	})
+	if err != nil {
+		return "", err
+	}
+	return project.Name, nil
 }
 
 // StackIDRootPrefix returns the root component of a stack ID.
@@ -725,7 +906,12 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 			stackPathID := strings.ReplaceAll(relPath, string(filepath.Separator), "-")
 			stackID := StackID(effectiveRoot, s.config.StacksDir, s.config.ExtraStacksDirs, stackPathID, name)
 
-			projectName := ComposeProjectName(dirName, name)
+			// context.Background(): the scan has no cancellable caller today
+			// (ScanAll is driven from boot and from a POST that does not thread
+			// one through). ResolveComposeProjectName takes a ctx anyway because
+			// the create path DOES have one, and per-file compose loads are the
+			// only thing in this loop worth cancelling.
+			projectName, projectNameSource := ResolveComposeProjectName(context.Background(), match, dirName, name)
 			if projectName == "" {
 				// Compose derives NOTHING from this directory name, and refuses
 				// to run with an empty project name, so no compose project can
@@ -753,7 +939,7 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 				return err
 			}
 
-			slog.Info("Discovered stack", "id", stackID, "project", projectName, "root", effectiveRoot)
+			slog.Info("Discovered stack", "id", stackID, "project", projectName, "projectSource", projectNameSource, "root", effectiveRoot)
 		}
 	}
 

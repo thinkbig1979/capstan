@@ -213,7 +213,13 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	// this row, and the deploy below runs with whatever is in `stack`. Deriving
 	// the name here independently is what let the two disagree (agent-os-07x).
 	// "default" is the compose profile for the compose.yaml written above.
-	projectName := services.ComposeProjectName(req.Name, "default")
+	//
+	// It reads composePath, which exists: the request body was written to it
+	// above, before this point, so the create asks compose the same question
+	// about the same bytes the scan will ask minutes later. A body carrying a
+	// top-level `name:` is therefore adopted here and NOT rewritten out from
+	// under the running containers by the next scan (agent-os-89z2).
+	projectName, _ := services.ResolveComposeProjectName(c.Request.Context(), composePath, req.Name, "default")
 
 	stack := models.Stack{
 		ID:          stackID,
