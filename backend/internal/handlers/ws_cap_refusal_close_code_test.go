@@ -103,10 +103,12 @@ func TestMeteredWS_CapRefusalUsesRateLimitCloseCode(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Cap of one, already occupied by the user upgradeConnection
-			// assigns under authDisabled, so the dial below is refused by
-			// cm.Add rather than by anything upstream of it.
+			// assigns under authDisabled -- "anon:"+c.ClientIP(),
+			// "anon:127.0.0.1" for this default-dialer httptest client,
+			// since agent-os-8uuw -- so the dial below is refused by cm.Add
+			// rather than by anything upstream of it.
 			cm := NewConnectionManager(1)
-			require.NoError(t, cm.Add("already-open", &Connection{ID: "already-open", UserID: "anonymous"}))
+			require.NoError(t, cm.Add("already-open", &Connection{ID: "already-open", UserID: "anon:127.0.0.1"}))
 
 			srv := tc.newServer(t, cm)
 

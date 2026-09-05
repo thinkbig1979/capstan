@@ -110,7 +110,11 @@ func dialOperations(t *testing.T, srv *httptest.Server, stackID, action string) 
 // already use (agent-os-a0y).
 func TestOperationsRefusesBeyondPerUserCap(t *testing.T) {
 	cm := NewConnectionManager(1)
-	require.NoError(t, cm.Add("already-open", &Connection{ID: "already-open", UserID: "anonymous"}))
+	// "anon:127.0.0.1", not the literal "anonymous": since agent-os-8uuw,
+	// upgradeConnection assigns "anon:"+c.ClientIP() under AUTH_DISABLED, and
+	// the dial below is unauthenticated default-dialer traffic from
+	// 127.0.0.1, so this is the identity that actually collides with it.
+	require.NoError(t, cm.Add("already-open", &Connection{ID: "already-open", UserID: "anon:127.0.0.1"}))
 
 	srv, _ := newOperationsFixture(t, cm)
 
@@ -139,17 +143,20 @@ func TestOperationsOccupiesThenFreesItsSlot(t *testing.T) {
 	// a poll cannot catch a registration that has already been removed, and
 	// widening the bound would not save it. Here the test owns the release, so
 	// the wait is sound and the bound is only the "it never registered" answer.
+	// "anon:127.0.0.1", not the literal "anonymous": since agent-os-8uuw,
+	// upgradeConnection assigns "anon:"+c.ClientIP() under AUTH_DISABLED, and
+	// dialOperations is unauthenticated default-dialer traffic from 127.0.0.1.
 	guard := hangGuardDeadline(t)
-	for cm.CountByUser("anonymous") == 0 && time.Now().Before(guard) {
+	for cm.CountByUser("anon:127.0.0.1") == 0 && time.Now().Before(guard) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if n := cm.CountByUser("anonymous"); n != 1 {
+	if n := cm.CountByUser("anon:127.0.0.1"); n != 1 {
 		t.Errorf("while the stream is live the user holds %d slot(s), want 1 — the connection was never registered", n)
 	}
 
 	close(release)
 	<-done
-	requireSlotsReleased(t, cm, "anonymous", "after the stream ended")
+	requireSlotsReleased(t, cm, "anon:127.0.0.1", "after the stream ended")
 }
 
 // TestOperationsFreesSlotOnAbnormalTermination — the decrement has to run when
@@ -159,7 +166,7 @@ func TestOperationsFreesSlotOnAbnormalTermination(t *testing.T) {
 	srv, _ := newOperationsFixture(t, cm)
 
 	dialOperations(t, srv, "stack-a", "pull")
-	requireSlotsReleased(t, cm, "anonymous", "after an abnormally terminated operations stream")
+	requireSlotsReleased(t, cm, "anon:127.0.0.1", "after an abnormally terminated operations stream")
 
 	// With a cap of 1, a second connection proves the slot is genuinely reusable.
 	code, _ := dialOperations(t, srv, "stack-a", "pull")

@@ -231,10 +231,21 @@ func (cm *ConnectionManager) CloseForSession(sessionID string) {
 // revocation path (handlers/settings.go) uses to invalidate every OTHER
 // session for the user without logging out the request that changed it.
 //
-// A blank or "anonymous" userID closes nothing. AUTH_DISABLED assigns every
-// connection userID "anonymous" (upgradeConnection) and a real caller's
-// userID is never blank past AuthMiddleware, so either value here means "no
-// real user to scope the close to," not "close everything" (agent-os-teop).
+// A blank or "anonymous" userID closes nothing. The userID this function
+// receives always comes from the CALLER's own gin context (settings.go,
+// authHandler.Logout), which AuthMiddleware's authDisabled branch still
+// publishes as the literal "anonymous" (middleware/auth.go) — a real
+// caller's userID is never blank past AuthMiddleware — so either value here
+// means "no real user to scope the close to," not "close everything"
+// (agent-os-teop).
+//
+// NOTE this is a check on the CALLER's identity, not on conn.UserID: since
+// agent-os-8uuw, connections upgraded under AUTH_DISABLED carry
+// "anon:<client-ip>" (upgradeConnection), never the literal "anonymous", so
+// this guard's early return never actually reaches a comparison against
+// those connections' UserID field — it stops at the literal-"anonymous"
+// caller check first, which is what still makes an AUTH_DISABLED caller's
+// CloseForUser a no-op.
 func (cm *ConnectionManager) CloseForUser(userID, exceptSessionID string) {
 	if userID == "" || userID == "anonymous" {
 		return
@@ -518,7 +529,24 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 	var userID string
 
 	if authDisabled {
-		userID = "anonymous"
+		// A per-client identity, not the literal constant "anonymous": every
+		// AUTH_DISABLED connection used to share that one string, so
+		// ConnectionManager.Add's per-user cap (below) became a single
+		// server-wide bucket across all six metered routes for every client
+		// on the host (agent-os-8uuw). c.ClientIP(), not c.RemoteIP(): this
+		// is a client-identifying decision, not the security-critical
+		// trusted-network bypass decision AuthMiddleware's authDisabled
+		// branch makes with RemoteIP() (middleware/auth.go, agent-os-0s4) --
+		// ClientIP() is the same choice this codebase already makes for
+		// client-identifying, non-security purposes (health.go). Behind a
+		// reverse proxy it resolves the real client from X-Forwarded-For
+		// only when SetTrustedProxies configures that proxy as trusted,
+		// same trust boundary already used elsewhere; without a configured
+		// trusted proxy it falls back to the raw connection's address, same
+		// as RemoteIP() would have given. The "anon:" prefix guarantees this
+		// can never collide with a real JWT "sub" claim, which CloseForUser
+		// still relies on distinguishing (see its doc comment).
+		userID = "anon:" + c.ClientIP()
 	} else {
 		cookieToken, cookieErr := c.Cookie("capstan_token")
 

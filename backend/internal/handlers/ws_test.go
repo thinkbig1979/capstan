@@ -170,9 +170,16 @@ func TestConnectionManager_CloseForUser_ExcludesCaller(t *testing.T) {
 }
 
 // TestConnectionManager_CloseForUser_AnonymousIsNoop is CloseForUser's half of
-// the AUTH_DISABLED guard: upgradeConnection assigns every connection userID
-// "anonymous" in that mode, so CloseForUser("anonymous", ...) must not be
-// triggerable into closing every dev-mode connection on the host.
+// the AUTH_DISABLED guard: AuthMiddleware's authDisabled branch (middleware/
+// auth.go) still publishes the literal "anonymous" on the gin context for
+// every caller in that mode, and CloseForUser's callers (settings.go,
+// authHandler.Logout) source their userID argument from exactly that
+// context value — never from conn.UserID — so CloseForUser("anonymous", ...)
+// must not be triggerable into closing every dev-mode connection on the
+// host. This connection's own UserID is set to the same literal here purely
+// so the test also demonstrates the guard returns before ever comparing
+// against conn.UserID; since agent-os-8uuw, a real AUTH_DISABLED connection's
+// actual UserID is "anon:"+c.ClientIP(), never this literal.
 //
 // exceptSessionID is deliberately a DIFFERENT, non-empty value from the
 // connection's own SessionID (not "" as a first draft of this test used).
@@ -191,7 +198,7 @@ func TestConnectionManager_CloseForUser_AnonymousIsNoop(t *testing.T) {
 	cm.CloseForUser("anonymous", "sess-someone-else")
 
 	_, present := cm.Get(anon.ID)
-	assert.True(t, present, `userID "anonymous" (what AUTH_DISABLED assigns) must close nothing`)
+	assert.True(t, present, `userID "anonymous" (what AuthMiddleware's context still carries under AUTH_DISABLED) must close nothing`)
 }
 
 // TestConnectionManagers_CloseForSession_SkipsNilManager and its CloseForUser
@@ -240,7 +247,13 @@ func TestConnectionManagers_CloseForUser_SkipsNilManager(t *testing.T) {
 // SAME ConnectionManager and the SAME two Connection objects:
 //
 //   - AUTH_DISABLED arm: both connections carry UserID "anonymous" and
-//     SessionID "" (what upgradeConnection assigns in that mode).
+//     SessionID "" -- SessionID "" is what upgradeConnection actually
+//     assigns in that mode; UserID "anonymous" here matches the literal
+//     CloseForUser's CALLER-side argument still carries (from
+//     AuthMiddleware's context), not what a real connection's UserID field
+//     holds since agent-os-8uuw ("anon:"+c.ClientIP()) -- this test only
+//     needs the two Connection objects to exist and be distinguishable by
+//     the fields CloseForSession/CloseForUser actually match on.
 //     CloseForSession("") and CloseForUser("anonymous", "sess-other") must
 //     leave BOTH open — exceptSessionID is deliberately non-empty
 //     ("sess-other"), not "", per the hazard note on
