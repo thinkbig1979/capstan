@@ -19,9 +19,12 @@ import (
 // therefore 100% silent: no log line anywhere, in the one place an operator
 // has nothing else to go on, because the socket never opened.
 //
-// The three sibling WS handlers (monitoring.go x2, terminal.go) call
-// handleError under this same errWSRefused guard and so log via agent-os-7z8c;
-// dashboard.go was the only divergence.
+// The zaor fix routed the error through handleError, matching the three
+// sibling sites at the time. The line asserted here is now serveWS's own
+// "WebSocket upgrade failed" (agent-os-94yx): serveWS logs every
+// upgrade/auth failure at all eight call sites, and the four post-serveWS
+// handleError calls were removed (agent-os-lukw), so the handler itself
+// logs nothing and must record nothing.
 //
 // Driven through gin.CreateTestContext rather than an httptest server on
 // purpose: this failure happens BEFORE any hijack, so no real socket is
@@ -32,8 +35,8 @@ import (
 // only reach the buffer through the error chain — a future "sanitised" log
 // line that emits status and code but drops the cause still fails here.
 //
-// Seen failing first: with `_ = c.Error(err)` restored, `go build ./...`
-// exits 0 and this test fails on its ASSERTION with an empty buffer
+// Seen failing first (zaor): with `_ = c.Error(err)` restored, `go build
+// ./...` exits 0 and this test fails on its ASSERTION with an empty buffer
 // (`captured = ""`), not on a compile error.
 func TestDashboardMetricsWS_UpgradeFailureLogsTheCause(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -53,7 +56,7 @@ func TestDashboardMetricsWS_UpgradeFailureLogsTheCause(t *testing.T) {
 
 	// A plain GET with no Connection/Upgrade headers: upgrader.Upgrade
 	// rejects the handshake and returns a *websocket.HandshakeError, which is
-	// NOT a *models.AppError and so takes handleError's 500 fallback.
+	// NOT a *models.AppError and so is logged by serveWS as UPGRADE_FAILED.
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/api/ws/dashboard/metrics", nil)
@@ -67,6 +70,12 @@ func TestDashboardMetricsWS_UpgradeFailureLogsTheCause(t *testing.T) {
 	}
 	if !strings.Contains(got, "level=ERROR") {
 		t.Errorf("the upgrade failure was logged below ERROR; captured = %q", got)
+	}
+	if !strings.Contains(got, "WebSocket upgrade failed") {
+		t.Errorf("the line is not serveWS's own (agent-os-94yx); captured = %q", got)
+	}
+	if strings.Contains(got, "request failed") {
+		t.Errorf("handleError's line is back after serveWS; the site must log nothing of its own (agent-os-lukw); captured = %q", got)
 	}
 	// The sink with no reader must stay empty, or the defect is back in a
 	// second copy alongside the fix.
