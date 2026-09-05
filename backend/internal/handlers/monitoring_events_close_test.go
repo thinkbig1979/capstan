@@ -75,7 +75,15 @@ func TestMonitoringEventsWS_ClientDisconnectClosesConnection(t *testing.T) {
 	// WebSocket close handshake.
 	clientConn.Close()
 
-	require.Eventually(t, func() bool { return eb.SubscriberCount() == 1 }, 2*time.Second, 10*time.Millisecond,
+	// Hang guard, not a latency budget. Subscribe() runs five lines after the
+	// handler's own entry (monitoring.go:327) with nothing blocking in
+	// between, so a correct run satisfies this in microseconds and never
+	// consults the bound. The observable is durable for the whole window: the
+	// handler exits only on a failed write, and at this point nothing is
+	// writing — the broadcast goroutine below has not started, and
+	// safePingLoop's first tick is DefaultPingInterval (30s, ws.go:30) away.
+	require.Eventually(t, func() bool { return eb.SubscriberCount() == 1 },
+		time.Until(hangGuardDeadline(t)), 10*time.Millisecond,
 		"handler never subscribed to the event bus")
 
 	// The handler has no reader goroutine to notice the disconnect directly
@@ -122,12 +130,26 @@ func TestMonitoringEventsWS_StillStreamingStaysOpen(t *testing.T) {
 
 	serverConn := firstConnection(t, cm)
 
-	require.Eventually(t, func() bool { return eb.SubscriberCount() == 1 }, 2*time.Second, 10*time.Millisecond,
+	// Hang guard, as above — and here it is also a PRECONDITION, not just a
+	// wait. EventBus.Broadcast is LOSSY: it drops the event on a non-blocking
+	// send when the subscriber channel is full or absent (monitoring.go:264-274,
+	// the `default:` arm). Broadcasting before this returns could therefore
+	// drop the one event the read below is waiting for, and no read deadline
+	// of any size would recover it. The pairing that makes the single
+	// broadcast safe is this wait plus eventChan's 50-deep buffer
+	// (monitoring.go:325): the channel is registered and provably empty, so
+	// the send takes the `case`, never the `default`.
+	require.Eventually(t, func() bool { return eb.SubscriberCount() == 1 },
+		time.Until(hangGuardDeadline(t)), 10*time.Millisecond,
 		"handler never subscribed to the event bus")
 
 	eb.Broadcast(models.StackEvent{Type: "test", Timestamp: time.Now()})
 
-	require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	// The event is queued in a buffered channel by the line above, so this
+	// read returns as soon as the handler forwards it — the PASS depends on
+	// the event ARRIVING, never on how long it took. The deadline is only the
+	// answer to "it never arrives at all".
+	require.NoError(t, clientConn.SetReadDeadline(hangGuardDeadline(t)))
 	_, _, err := clientConn.ReadMessage()
 	require.NoError(t, err, "expected the broadcast event while still connected")
 

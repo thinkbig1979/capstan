@@ -116,7 +116,13 @@ func dialTerminal(t *testing.T, f *terminalFixture, stackID, container string) (
 		return nil
 	})
 
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	// Hang guard. Same shape as dialOperations (operations_test.go): ONE
+	// absolute deadline over the whole loop, so the 5s it replaces bounded the
+	// caller's progress rather than any single read —
+	// TestTerminalOccupiesThenFreesItsSlot runs this in a goroutine and holds
+	// the handler parked until it closes `release`. The PASS is the close
+	// CODE, never how long it took to arrive.
+	require.NoError(t, conn.SetReadDeadline(hangGuardDeadline(t)))
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			if ce, ok := err.(*websocket.CloseError); ok && closeCode == 0 {
@@ -134,8 +140,12 @@ func dialTerminal(t *testing.T, f *terminalFixture, stackID, container string) (
 // timeout still catches a Remove that never runs, which is the thing under test.
 func requireSlotsReleased(t *testing.T, cm *ConnectionManager, userID, when string) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	// Hang guard on a durable, MONOTONE observable: every caller reaches here
+	// after the client has seen the close frame, so the count only ever moves
+	// 1 -> 0 and, once zero, stays zero. Nothing can make an already-satisfied
+	// condition unsatisfied, so no passing run consults this bound.
+	guard := hangGuardDeadline(t)
+	for time.Now().Before(guard) {
 		if cm.CountByUser(userID) == 0 {
 			return
 		}
@@ -304,9 +314,16 @@ func TestTerminalOccupiesThenFreesItsSlot(t *testing.T) {
 	done := make(chan struct{})
 	go func() { defer close(done); dialTerminal(t, f, "stack-a", "proj-a-web-1") }()
 
+	// Hang guard on a durable signal: fakeContainerLister.GetContainerList
+	// CLOSES `entered` (see its definition above) rather than sending on it, so
+	// the signal latches — a close is readable forever, and this select cannot
+	// miss it by arriving late. A send on an unbuffered channel would have made
+	// this a rendezvous where the bound genuinely mattered; it is not one.
+	hangGuard := time.NewTimer(time.Until(hangGuardDeadline(t)))
+	defer hangGuard.Stop()
 	select {
 	case <-entered:
-	case <-time.After(5 * time.Second):
+	case <-hangGuard.C:
 		t.Fatal("handler never reached the membership lookup")
 	}
 
