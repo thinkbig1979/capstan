@@ -98,11 +98,15 @@ jobs:
       # make the scan reproducible anyway — the vulnerability database is
       # fetched at run time — and an old analyzer is strictly worse at finding
       # things. Freshness beats reproducibility for this specific tool.
+      #
+      # The script runs exactly that command and retries it ONLY on a
+      # recognised stall of the module proxy or vuln.go.dev, never on a
+      # finding (findings live in the JSON and are judged by the gate below,
+      # which is unchanged). Signatures and sizing are measured and documented
+      # in the script header. See agent-os-pvta.
       - name: Run govulncheck
         working-directory: backend
-        run: |
-          go run golang.org/x/vuln/cmd/govulncheck@latest -format json ./... \
-            > "${RUNNER_TEMP}/govulncheck.json"
+        run: bash "${GITHUB_WORKSPACE}/scripts/govulncheck-retry.sh" "${RUNNER_TEMP}/govulncheck.json"
 
       # WHY THIS PARSES JSON INSTEAD OF CHECKING THE EXIT CODE:
       #   `govulncheck -format json` exits 0 unconditionally, including when it
@@ -414,6 +418,27 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The scan step below is a `uses:` step and cannot be wrapped in a retry,
+      # so its one run-time network dependency, the vulnerability DB, is
+      # fetched HERE first, by a script that retries only on a recognised
+      # registry stall, and the scan then runs with TRIVY_SKIP_DB_UPDATE so it
+      # never fetches at all. setup-trivy is the same action, SHA and version
+      # that trivy-action@v0.36.0 resolves internally (its action.yaml pins
+      # aquasecurity/setup-trivy@3fb12ec1... "v0.2.6" with version v0.70.0),
+      # invoked one step earlier: no new third-party code runs in this job.
+      # Keep the two versions in lockstep when bumping either. Signatures and
+      # sizing are measured and documented in the script header. See
+      # agent-os-pvta.
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.70.0
+
+      - name: Download Trivy vulnerability DB (retried on registry stall only)
+        run: bash "${GITHUB_WORKSPACE}/scripts/trivy-db-retry.sh"
+        env:
+          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
+
       # ADVISORY, for now. This is the only check covering the Debian trixie
       # runtime base, the Docker CLI binaries lifted from docker:28-cli, and the
       # pinned restic 0.19.1 / rclone 1.74.4 static binaries — nothing else in
@@ -482,6 +507,15 @@ jobs:
           ignore-unfixed: true
           scanners: vuln
           exit-code: '0'
+          # agent-os-pvta: trivy is installed and its DB downloaded (with
+          # retry) by the two steps above. cache:'false' disables the action's
+          # own actions/cache restore of the cache dir, which would run AFTER
+          # those steps and overwrite the fresh DB with an older day's copy.
+          skip-setup-trivy: 'true'
+          cache: 'false'
+        env:
+          # The DB is already in the action's cache dir; never fetch mid-scan.
+          TRIVY_SKIP_DB_UPDATE: 'true'
 
       # An advisory scan nobody reads is theatre. Put the table on the run's
       # summary page so the findings are one click from the check, not four.
