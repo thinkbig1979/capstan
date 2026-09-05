@@ -373,6 +373,17 @@ func topLevelComposeName(content []byte) (string, error) {
 func stackDotEnv(dir string) map[string]string {
 	envPath := filepath.Join(dir, ".env")
 	if _, err := os.Stat(envPath); err != nil {
+		// The asymmetry with the parse-error branch below WAS the bug
+		// (agent-os-d5ff): that one warns and returns an empty map, this one
+		// returned the same empty map in silence. So a fault on .env was
+		// indistinguishable from a stack that genuinely has none, and the
+		// compose project name came back resolved without it and sourced from
+		// the directory. Absence stays silent — most stacks have no .env —
+		// but anything else now carries its cause, as its neighbour does.
+		if !os.IsNotExist(err) {
+			slog.Warn("Could not read the stack's .env; compose project name resolved without it",
+				"file", envPath, "error", err)
+		}
 		return map[string]string{}
 	}
 
@@ -1124,22 +1135,41 @@ func extractStackName(filename string) string {
 
 func determineEnvFile(dirPath, stackName string) string {
 	if stackName == "default" {
-		envPath := filepath.Join(dirPath, ".env")
-		if _, err := os.Stat(envPath); err == nil {
-			return ".env"
-		}
+		return envFileIfPresent(dirPath, ".env")
+	}
+
+	if name := envFileIfPresent(dirPath, fmt.Sprintf(".env.%s", stackName)); name != "" {
+		return name
+	}
+
+	return envFileIfPresent(dirPath, ".env")
+}
+
+// envFileIfPresent returns name unless <dirPath>/<name> is KNOWN to be absent.
+//
+// determineEnvFile is a fallback chain, which makes this site's harm differ in
+// kind from the other os.Stat decisions fixed alongside it (agent-os-d5ff):
+// those OMIT an env file, this one SUBSTITUTED a different one. A fault on
+// .env.<stack> fell straight through to the .env branch, so the stack was
+// recorded as using another file entirely — and wrong configuration fails far
+// less visibly than missing configuration.
+//
+// os.IsNotExist is the only stat answer that means absent, so it is the only
+// one that may demote. On any other error the configured name is kept and
+// compose refuses on it (it exits 1 on an unreadable --env-file) instead of
+// quietly loading a different environment. A genuinely missing .env.<stack>
+// still falls back to .env exactly as before.
+func envFileIfPresent(dirPath, name string) string {
+	envPath := filepath.Join(dirPath, name)
+
+	_, err := os.Stat(envPath)
+	if os.IsNotExist(err) {
 		return ""
 	}
-
-	envPath := filepath.Join(dirPath, fmt.Sprintf(".env.%s", stackName))
-	if _, err := os.Stat(envPath); err == nil {
-		return fmt.Sprintf(".env.%s", stackName)
+	if err != nil {
+		slog.Warn("Could not determine whether a stack env file exists; keeping it rather than falling back to another",
+			"file", envPath, "error", err)
 	}
 
-	envPath = filepath.Join(dirPath, ".env")
-	if _, err := os.Stat(envPath); err == nil {
-		return ".env"
-	}
-
-	return ""
+	return name
 }

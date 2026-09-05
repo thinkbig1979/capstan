@@ -290,8 +290,23 @@ func (h *LogsHandler) buildComposeArgs(stack models.Stack, subcommand string, ex
 	args := []string{"compose"}
 
 	if h.docker != nil {
+		// Second copy of the same decision as
+		// (*DockerService).buildComposeArgs, services/docker.go:312
+		// (agent-os-d5ff) — same shape, with the global.env path built from
+		// h.dataDir instead of s.config.DataDir. That file carries
+		// the full rationale; the short version is that os.IsNotExist is the
+		// only stat answer meaning "absent", so dropping --env-file on any
+		// other error asserts an absence we never established and streams logs
+		// from a stack configured differently from the one the operator sees.
+		// Passing the path through makes compose refuse and name the cause;
+		// absence stays silent, because compose exits 1 on a missing
+		// --env-file too.
 		globalEnvPath := h.dataDir + "/global.env"
-		if _, err := os.Stat(globalEnvPath); err == nil {
+		if _, statErr := os.Stat(globalEnvPath); !os.IsNotExist(statErr) {
+			if statErr != nil {
+				slog.Error("Could not determine whether the global env file exists; passing it to compose rather than running without it",
+					"file", globalEnvPath, "error", statErr)
+			}
 			args = append(args, "--env-file", globalEnvPath)
 		}
 		if stack.EnvFile != "" {
