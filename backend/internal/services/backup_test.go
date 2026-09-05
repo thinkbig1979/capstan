@@ -641,6 +641,10 @@ func TestRunBackup_RequestedStackWithPolicyStillSucceeds(t *testing.T) {
 
 	assert.Equal(t, "success", run.Status)
 	assert.Equal(t, 1, run.StacksOK)
+	// The other side of the StacksTotal pin below: with one enabled policy the
+	// count is 1, so the zero-case assertion is shown to pin zero specifically
+	// rather than everywhere (agent-os-q0rv).
+	assert.Equal(t, 1, run.StacksTotal)
 	assert.Empty(t, run.ErrorMessage)
 }
 
@@ -664,6 +668,11 @@ func TestRunBackup_NoRequestedIDsWithNoPoliciesIsUnchanged(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "success", run.Status)
+	// The settings badge (frontend BackupStatusCard, LastRunBadge) fires on
+	// kind == backup && status == success && stacksTotal == 0, and its comment
+	// cites THIS test as the reason the backend was left alone. Pin the third
+	// leg here so that citation is load-bearing (agent-os-q0rv).
+	assert.Equal(t, 0, run.StacksTotal)
 	assert.Empty(t, run.ErrorMessage)
 }
 
