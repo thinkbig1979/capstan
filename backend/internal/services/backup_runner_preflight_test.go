@@ -212,10 +212,13 @@ func TestAttach_BoundsAttachersPerRun(t *testing.T) {
 	surplus, err := reg.Attach(dr.runID, surplusGone)
 	require.NoError(t, err, "OVER-BOUND: a refusal is a result, not an error")
 	require.NotNil(t, surplus)
-	assert.True(t, surplus.Done,
-		"OVER-BOUND (agent-os-nt0m): attacher %d must be refused as Done, the run already has %d live attachers",
+	assert.True(t, surplus.Refused,
+		"OVER-BOUND (agent-os-nt0m/agent-os-mjrl): attacher %d must be refused, the run already has %d live attachers",
 		maxAttachersPerRun+1, maxAttachersPerRun)
-	assert.Equal(t, "failed", surplus.Outcome, "OVER-BOUND: a refusal reports a failed outcome")
+	assert.False(t, surplus.Done,
+		"OVER-BOUND (agent-os-mjrl): a refusal is not a completion; Done must stay false so wsAttach never sends a done frame for it")
+	assert.Empty(t, surplus.Outcome,
+		"OVER-BOUND (agent-os-mjrl): a refusal carries no run outcome -- the outcome vocabulary is the run's, not the viewer's")
 	assert.Equal(t, tooManyAttachersReason, surplus.Reason,
 		"OVER-BOUND: the reason must name the limit so the viewer knows what to do")
 	assert.Nil(t, surplus.Live, "OVER-BOUND: a refused attach must get no live stream")
@@ -285,9 +288,10 @@ func TestAttach_BoundsAttachersPerRun(t *testing.T) {
 	admitted, refused := 0, 0
 	for res := range results {
 		require.NotNil(t, res)
-		if res.Done {
+		if res.Refused {
 			refused++
 			assert.Nil(t, res.Live, "CONCURRENT: a refused attach must get no live stream")
+			assert.False(t, res.Done, "CONCURRENT (agent-os-mjrl): a refusal is not a completion")
 		} else {
 			admitted++
 			assert.NotNil(t, res.Live, "CONCURRENT: an admitted attach must get a live stream")

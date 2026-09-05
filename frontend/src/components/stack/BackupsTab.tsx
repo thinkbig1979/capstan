@@ -11,6 +11,7 @@ import {
   useStackBackupRuns,
   useBackupPolicies,
   useBackupStreaming,
+  type BackupStreamStatus,
 } from '@/hooks/useBackup'
 import { queryKeys } from '@/lib/query-keys'
 import { useQueryClient } from '@tanstack/react-query'
@@ -134,7 +135,7 @@ function RestoreProgress({
   error,
   onDismiss,
 }: {
-  status: 'idle' | 'running' | 'success' | 'partial' | 'error'
+  status: BackupStreamStatus
   lines: string[]
   error: string | null
   onDismiss: () => void
@@ -142,12 +143,18 @@ function RestoreProgress({
   if (status === 'idle') return null
 
   const isRunning = status === 'running'
-  const isDone = status === 'success' || status === 'partial' || status === 'error'
+  const isDone = status === 'success' || status === 'partial' || status === 'error' || status === 'unavailable'
+  // 'unavailable' is a refused STREAM, not a failed run (agent-os-mjrl): the
+  // restore is still going on the server, this viewer was turned away because
+  // the run already has its maximum number of live viewers. Neutral styling,
+  // and the reason (which names the limit and the action) is shown as a note.
+  const isUnavailable = status === 'unavailable'
 
   function headerLabel() {
     if (isRunning) return 'Restoring…'
     if (status === 'success') return 'Restore completed'
     if (status === 'partial') return 'Restore partially completed'
+    if (isUnavailable) return 'Live output unavailable'
     return 'Restore failed'
   }
 
@@ -157,6 +164,7 @@ function RestoreProgress({
       status === 'success' && 'border-green-500/30',
       status === 'partial' && 'border-yellow-500/30',
       status === 'error' && 'border-destructive/30',
+      isUnavailable && 'border-muted-foreground/30',
       isRunning && 'border-blue-500/30',
     )}>
       <div className={cn(
@@ -165,12 +173,14 @@ function RestoreProgress({
         status === 'success' && 'bg-green-500/10 text-green-700 dark:text-green-400',
         status === 'partial' && 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400',
         status === 'error' && 'bg-destructive/10 text-destructive',
+        isUnavailable && 'bg-muted text-muted-foreground',
       )}>
         <div className="flex items-center gap-2">
           {isRunning && <Loader2 className="h-4 w-4 animate-spin" />}
           {status === 'success' && <CheckCircle2 className="h-4 w-4" />}
           {status === 'partial' && <AlertCircle className="h-4 w-4" />}
           {status === 'error' && <XCircle className="h-4 w-4" />}
+          {isUnavailable && <AlertCircle className="h-4 w-4" />}
           <span data-testid="restore-progress-header">{headerLabel()}</span>
           {isRunning && lines.length > 0 && (
             <span className="text-xs opacity-60">({lines.length} lines)</span>
@@ -201,7 +211,15 @@ function RestoreProgress({
           </div>
         )}
       </div>
-      {error && (
+      {error && isUnavailable && (
+        <div
+          data-testid="restore-progress-unavailable"
+          className="px-4 py-2 text-xs text-muted-foreground bg-muted/40 border-t"
+        >
+          {error} The restore continues on the server; check Recent runs for its result.
+        </div>
+      )}
+      {error && !isUnavailable && (
         <div className="px-4 py-2 text-xs text-destructive bg-destructive/5 border-t border-destructive/20">
           {error}
         </div>
@@ -357,6 +375,9 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
               toast.success('Restore completed')
             } else if (finalStatus === 'partial') {
               toast.warning('Restore partially completed — check the log')
+            } else if (finalStatus === 'unavailable') {
+              // Refused stream, not a failed run (agent-os-mjrl).
+              toast.info('Restore is still running; live output is unavailable')
             } else {
               toast.error('Restore failed — check the log for details')
             }

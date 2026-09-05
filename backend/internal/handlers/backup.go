@@ -1114,9 +1114,16 @@ func (h *BackupHandler) cloudTest(c *gin.Context) {
 // wsGroup. Each endpoint upgrades to a WebSocket and attaches to an already-
 // running (or finished) durable run via BackupRunnerRegistry.Attach.
 //
-// Terminal WS frame shape:
+// Terminal WS frame shapes:
 //
-//	{"type":"done","outcome":"success"|"partial"|"failed","reason":"..."}
+//	{"type":"done","outcome":"success"|"partial"|"failed"|"interrupted","reason":"..."}
+//	{"type":"refused","reason":"..."}
+//
+// The done frame's outcome is always the RUN's status. A refused frame is
+// not a completion: it is the registry turning THIS viewer away because the
+// run already has maxAttachersPerRun live attachers (services/backup_runner.go,
+// agent-os-nt0m / agent-os-mjrl). The run itself is unaffected and keeps
+// streaming to the admitted viewers; the reason names the limit.
 //
 // A client disconnect DOES NOT cancel the underlying operation.
 func (h *BackupHandler) RegisterWSRoutes(group *gin.RouterGroup, jwtSecret string, authDisabled bool) {
@@ -1134,7 +1141,9 @@ func (h *BackupHandler) RegisterWSRoutes(group *gin.RouterGroup, jwtSecret strin
 //  2. Look up the run in the registry via Attach.
 //  3. Send a {"type":"start","action":"<action>"} frame.
 //  4. Replay all buffered log lines as {"type":"data","line":"..."} frames.
-//  5. If the run is already done, send the terminal frame and close.
+//  5. If the attach was refused (per-run attacher bound), send the refused
+//     frame and close. If the run is already done, send the done frame and
+//     close.
 //  6. Otherwise, stream live lines until the run finishes or the client
 //     disconnects. The client disconnect closes the WS write loop but does NOT
 //     cancel the underlying goroutine.
@@ -1225,6 +1234,20 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 			}
 		}
 
+		// A refused attach is not a completion (agent-os-mjrl): the run is
+		// fine, this viewer is over the per-run attacher bound. Say so in its
+		// own frame and return BEFORE the Done branch, so sendDoneFrame is
+		// never called for a refusal and a done frame keeps exactly one
+		// meaning. Attach hands a refused caller no Live channel, and the
+		// stream select below would block on that nil channel until the
+		// client left: the surplus viewer must not fall through to it.
+		if attached.Refused {
+			_ = safeWriteJSON(conn, gin.H{"type": "refused", "reason": attached.Reason})
+			h.logger.Info("Backup WS attach refused at the per-run attacher bound",
+				"run_id", runID, "action", action)
+			return
+		}
+
 		if attached.Done {
 			h.sendDoneFrame(conn, runID, attached.Outcome, attached.Reason)
 			return
@@ -1302,8 +1325,10 @@ func (h *BackupHandler) outcomeFromRegistry(runID string) (outcome, reason strin
 	return attached.Outcome, attached.Reason
 }
 
-// sendDoneFrame writes the terminal WS frame and logs completion.
-// Shape: {"type":"done","outcome":"success"|"partial"|"failed","reason":"..."}
+// sendDoneFrame writes the terminal done frame and logs completion.
+// Shape: {"type":"done","outcome":"success"|"partial"|"failed"|"interrupted","reason":"..."}
+// (the value set, and the separate refused frame, are documented on
+// RegisterWSRoutes). Never called for a refused attach.
 func (h *BackupHandler) sendDoneFrame(conn *Connection, runID, outcome, reason string) {
 	if err := safeWriteJSON(conn, gin.H{
 		"type":    "done",
