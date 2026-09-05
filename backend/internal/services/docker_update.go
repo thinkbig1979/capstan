@@ -3,6 +3,8 @@ package services
 import (
 	"bufio"
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -53,6 +55,97 @@ func selectUpdates(candidates []updateCandidate, remoteDigests map[string]string
 //
 // If a candidate's remote fetch errors or the local digest cannot be resolved
 // for the imageRef, the candidate is skipped — never emitted as a phantom update.
+// composeUpdateStrategy is how an update is applied to one container: through
+// the compose project that owns it, through the standalone recreate path, or —
+// when the stacks table cannot be read — not at all.
+type composeUpdateStrategy int
+
+const (
+	// updateViaStandalone recreates the container directly. Correct for a
+	// container carrying no compose labels, and for one whose compose project
+	// name is genuinely absent from the stacks table.
+	updateViaStandalone composeUpdateStrategy = iota
+	// updateViaCompose applies the update through the owning stack's compose file.
+	updateViaCompose
+	// updateRefused means the stacks table could not be read, so which of the two
+	// above is correct is UNKNOWN. Both apply paths write, and the standalone one
+	// recreates the container, so guessing here recreates a compose-managed
+	// container with the wrong strategy on the strength of a read that failed
+	// (agent-os-g482).
+	updateRefused
+)
+
+// lookupStackByProject resolves the stack that owns a compose project name,
+// discriminating "this project name is not in the stacks table" from "the
+// stacks table could not be read".
+//
+// database.DB.GetStackByProjectName returns the bare Scan error
+// (database/stacks.go:127-138), so an absent row arrives as sql.ErrNoRows.
+// Every caller here used to test only `err == nil`, which cannot tell that
+// apart from a closed or locked database, and so answered a DB fault with "not
+// a compose stack" (agent-os-g482 — the same softening as agent-os-l42o).
+//
+// Absence is not a fault: a missing row returns (nil, nil), so the caller's
+// pre-existing not-found behaviour is preserved byte-for-byte. A nil db or an
+// empty projectName likewise return (nil, nil), reproducing the guards this
+// replaced.
+func lookupStackByProject(db DashboardDB, projectName string) (*models.Stack, error) {
+	if db == nil || projectName == "" {
+		return nil, nil
+	}
+	stack, err := db.GetStackByProjectName(projectName)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("reading stack for compose project %q: %w", projectName, err)
+	}
+	return stack, nil
+}
+
+// resolveUpdateStrategy decides how UpdateContainer and UpdateContainerStreaming
+// apply an update to one container, given the compose labels read off it.
+//
+// A container is updated through compose only when it carries BOTH labels, a db
+// is available, and that project name resolves to a stack. Anything genuinely
+// absent is standalone. A stacks table that cannot be READ is neither: it
+// returns updateRefused with the cause, because the caller is about to write.
+func resolveUpdateStrategy(db DashboardDB, projectName, serviceName string) (composeUpdateStrategy, *models.Stack, error) {
+	if db == nil || projectName == "" || serviceName == "" {
+		return updateViaStandalone, nil, nil
+	}
+	stack, err := lookupStackByProject(db, projectName)
+	if err != nil {
+		return updateRefused, nil, err
+	}
+	if stack == nil {
+		return updateViaStandalone, nil, nil
+	}
+	return updateViaCompose, stack, nil
+}
+
+// refusedUpdateReason is the ActionResult reason both apply paths carry when
+// resolveUpdateStrategy refuses. A constant so the two paths cannot drift; it is
+// unexported and no caller matches on it, so it is a shared literal, not an API.
+const refusedUpdateReason = "cannot determine update strategy: the stacks table could not be read"
+
+// logRefusedUpdate emits the single ERROR line that accompanies an
+// updateRefused. It is shared by UpdateContainer and UpdateContainerStreaming so
+// the two write paths cannot drift, and — the reason it is a function at all —
+// so the line itself is reachable from a unit test. Neither apply path is: both
+// call s.client.ContainerInspect before reaching this branch, and
+// DockerService.client is a concrete *client.Client (the `client *client.Client`
+// field, docker.go:55), not an interface, so they cannot run without a live daemon. Their end-to-end coverage
+// is internal/integrationtest, behind the `integration` build tag, which
+// `go test ./...` does not run.
+//
+// cause is the wrapped driver error from lookupStackByProject. Nothing here is
+// decrypted, so unlike backup_config.go there is no reason to withhold it.
+func logRefusedUpdate(containerID, projectName, serviceName string, cause error) {
+	slog.Error("Refusing container update: cannot determine whether this container is compose-managed",
+		"container", containerID, "project", projectName, "service", serviceName, "cause", cause)
+}
+
 func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]models.ContainerUpdateInfo, error) {
 	if s == nil {
 		return nil, ErrDockerUnavailable
@@ -65,6 +158,9 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 
 	uniqueRefs := make(map[string]struct{})
 	var candidates []updateCandidate
+
+	// One ERROR per call, not per container — see the stackErr branch below.
+	stackLookupFailed := false
 
 	for _, c := range containers {
 		name := ""
@@ -103,11 +199,25 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 		var stackID string
 		projectName := c.Labels["com.docker.compose.project"]
 		serviceName := c.Labels["com.docker.compose.service"]
-		if db != nil && projectName != "" {
-			stack, err := db.GetStackByProjectName(projectName)
-			if err == nil && stack != nil {
-				stackID = stack.ID
+		stack, stackErr := lookupStackByProject(db, projectName)
+		switch {
+		case stackErr != nil:
+			// agent-os-g482. Not a write, but not a display either: this StackID
+			// is what `policy, hasPolicy = stackPolicies[update.StackID]`
+			// (scheduler.go:821-822) looks up to decide whether a stack-scoped
+			// auto-update policy applies. An unreadable stacks table leaves it
+			// empty, so the scheduler skips the container at its
+			// `if !hasPolicy { skipped++; continue }` (scheduler.go:826-828) —
+			// fail-closed, but silently, which is what
+			// this line exists to stop. Logged once per call, not once per
+			// container: a dead database faults every iteration of this loop.
+			if !stackLookupFailed {
+				stackLookupFailed = true
+				slog.Error("Cannot resolve compose stacks while checking for updates; affected containers are reported with no stack id and the scheduler will skip their stack-scoped auto-update policies",
+					"project", projectName, "cause", stackErr)
 			}
+		case stack != nil:
+			stackID = stack.ID
 		}
 
 		candidates = append(candidates, updateCandidate{
@@ -200,14 +310,21 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 	// Set by the standalone paths, which recreate the container and so change its
 	// id. Empty after a compose apply, where the id is re-resolved by label below.
 	recreatedID := ""
-	if projectName != "" && serviceName != "" && db != nil {
-		stack, err := db.GetStackByProjectName(projectName)
-		if err == nil && stack != nil {
-			applyErr = s.updateComposeContainer(ctx, *stack, serviceName, wasRunning)
-		} else {
-			recreatedID, applyErr = s.updateStandaloneContainer(ctx, inspect, wasRunning)
-		}
-	} else {
+	strategy, stack, stackErr := resolveUpdateStrategy(db, projectName, serviceName)
+	switch strategy {
+	case updateRefused:
+		// agent-os-g482. The stacks table is unreadable, so compose-managed and
+		// standalone are indistinguishable. The old code fell through to the
+		// standalone path, which RECREATES the container — the wrong strategy for
+		// a compose-managed one, applied silently. Refuse instead: an update not
+		// applied is recoverable, a container recreated outside its compose
+		// project is not.
+		logRefusedUpdate(containerID, projectName, serviceName, stackErr)
+		return models.UpdateResult{DurationMs: time.Since(start).Milliseconds()},
+			truth.Failed(refusedUpdateReason, stackErr)
+	case updateViaCompose:
+		applyErr = s.updateComposeContainer(ctx, *stack, serviceName, wasRunning)
+	default:
 		recreatedID, applyErr = s.updateStandaloneContainer(ctx, inspect, wasRunning)
 	}
 
@@ -467,14 +584,18 @@ func (s *DockerService) UpdateContainerStreaming(
 	// See UpdateContainer: only the standalone paths recreate the container and so
 	// know its new id (agent-os-ekmk).
 	recreatedID := ""
-	if projectName != "" && serviceName != "" && db != nil {
-		stack, sErr := db.GetStackByProjectName(projectName)
-		if sErr == nil && stack != nil {
-			applyErr = s.updateComposeContainerStreaming(ctx, *stack, serviceName, wasRunning, emit, setStatus)
-		} else {
-			recreatedID, applyErr = s.updateStandaloneContainerStreaming(ctx, inspect, wasRunning, emit, setStatus)
-		}
-	} else {
+	strategy, stack, stackErr := resolveUpdateStrategy(db, projectName, serviceName)
+	switch strategy {
+	case updateRefused:
+		// See UpdateContainer: the same refusal, for the same reason
+		// (agent-os-g482). This is the site the bead was filed on — its receiver
+		// was sErr, not err, which is why the family's usual sweep missed it.
+		logRefusedUpdate(containerID, projectName, serviceName, stackErr)
+		return models.UpdateResult{OldDigest: oldImageID, DurationMs: time.Since(start).Milliseconds()},
+			truth.Failed(refusedUpdateReason, stackErr)
+	case updateViaCompose:
+		applyErr = s.updateComposeContainerStreaming(ctx, *stack, serviceName, wasRunning, emit, setStatus)
+	default:
 		recreatedID, applyErr = s.updateStandaloneContainerStreaming(ctx, inspect, wasRunning, emit, setStatus)
 	}
 
