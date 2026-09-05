@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1168,8 +1169,26 @@ func (s *BackupService) RunRestore(
 
 	// Fetch the stop policy from the backup policy, defaulting to "stop"
 	// for restores (restore is always destructive).
+	//
+	// agent-os-r1by: the default is assigned BEFORE the read, so the read only
+	// ever OVERWRITES it. That made a DB fault indistinguishable from an absent
+	// row and silently discarded a configured "hot" policy: the stack the
+	// operator deliberately asked to keep running went down anyway, with
+	// nothing logged. sql.ErrNoRows keeps the "stop" default unchanged; any
+	// other error means the stored policy is UNREADABLE, and we refuse rather
+	// than act on a policy we could not read. Refusing costs nothing in the
+	// whole-DB-fault case — resolveOrRefuse (:1108) and GetStack (:1121) both
+	// already refuse before control reaches here — so it only denies the narrow
+	// partial fault, where re-running once the table reads is the operator's
+	// call rather than ours to pre-empt with an unconsented outage.
 	stopPolicy := "stop"
-	if policy, pErr := s.db.GetBackupPolicy(stackID); pErr == nil && policy != nil {
+	policy, pErr := s.db.GetBackupPolicy(stackID)
+	if pErr != nil && !errors.Is(pErr, sql.ErrNoRows) {
+		s.logger.Error("refusing restore: stack backup policy is unreadable",
+			"stack", stackID, "cause", pErr)
+		return fmt.Errorf("get backup policy %s: %w", stackID, pErr)
+	}
+	if policy != nil {
 		stopPolicy = policy.StopPolicy
 	}
 
