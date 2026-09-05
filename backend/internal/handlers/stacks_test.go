@@ -279,17 +279,24 @@ func TestApplyLiveStatus_GetMatchesList(t *testing.T) {
 	assert.Equal(t, "web", present.Containers[0].Name)
 	assert.Equal(t, "healthy", present.Containers[0].Health)
 
-	// No live containers, readable compose -> stopped.
+	// No live containers, readable compose -> stopped. Containers is an EMPTY
+	// slice, not nil (agent-os-kqp6): a nil slice serialises as
+	// "containers":null, and stacks.go is the last of four such wire-shape
+	// sites to standardise on "containers":[] (see
+	// TestStacksHandler_Get_ContainerlessStackEmitsEmptyArray for the
+	// raw-bytes proof this assertion can't provide by itself, since
+	// reflect.DeepEqual — which assert.Equal on a slice ultimately uses — does
+	// distinguish nil from empty, but a decoded JSON round-trip would not).
 	stopped := models.Stack{Directory: dir, ComposeFile: "compose.yaml", ProjectName: "proj-default", Status: "running"}
 	applyLiveStatus(&stopped, map[string]services.LiveStatus{})
 	assert.Equal(t, "stopped", stopped.Status)
-	assert.Nil(t, stopped.Containers)
+	assert.Equal(t, []models.Container{}, stopped.Containers)
 
 	// No live containers, unreadable compose -> error (the old Get returned "unknown").
 	broken := models.Stack{Directory: dir, ComposeFile: "missing.yaml", ProjectName: "proj-default", Status: "running"}
 	applyLiveStatus(&broken, map[string]services.LiveStatus{})
 	assert.Equal(t, "error", broken.Status)
-	assert.Nil(t, broken.Containers)
+	assert.Equal(t, []models.Container{}, broken.Containers)
 }
 
 func TestStacksHandler_Get_Success(t *testing.T) {
@@ -775,6 +782,93 @@ func TestStacksHandler_Get_DBFaultLogsCause(t *testing.T) {
 		}
 		if strings.Contains(buf.String(), "ERROR") {
 			t.Fatalf("a genuine not-found logged an ERROR line; it must stay silent. captured = %q", buf.String())
+		}
+	})
+}
+
+// statusFakeDocker is a minimal stackDocker test double whose GetStackStatuses
+// answers with a preconfigured snapshot, letting applyLiveStatus's two branches
+// (project present in / absent from the snapshot) be driven independently —
+// unlike fakeStackDocker above, whose GetStackStatuses always returns an empty
+// map.
+type statusFakeDocker struct {
+	statuses map[string]services.LiveStatus
+}
+
+func (f *statusFakeDocker) GetStackStatuses(context.Context, services.DashboardDB) (map[string]services.LiveStatus, error) {
+	return f.statuses, nil
+}
+func (f *statusFakeDocker) StartVerified(models.Stack) (truth.ActionResult, string) {
+	return truth.ActionResult{}, ""
+}
+func (f *statusFakeDocker) StopVerified(models.Stack) (truth.ActionResult, string) {
+	return truth.ActionResult{}, ""
+}
+func (f *statusFakeDocker) RestartVerified(models.Stack) (truth.ActionResult, string) {
+	return truth.ActionResult{}, ""
+}
+func (f *statusFakeDocker) PullVerified(models.Stack) (truth.ActionResult, string) {
+	return truth.ActionResult{}, ""
+}
+func (f *statusFakeDocker) DeleteVerified(models.Stack) (truth.ActionResult, string) {
+	return truth.ActionResult{}, ""
+}
+
+// TestStacksHandler_Get_ContainerlessStackEmitsEmptyArray is the
+// SEEN-FAILING-FIRST test for agent-os-kqp6: applyLiveStatus's container-less
+// branch (stacks.go) used to leave stack.Containers nil, which json.Marshal
+// renders as "containers":null. Asserted on the RAW RESPONSE BYTES —
+// unmarshalling into a Go []Container would erase the null/[] distinction (a
+// nil slice and an empty slice decode identically into the same []Container{}),
+// so this inspects w.Body directly instead. Two-sided: a stack WITH containers
+// (present in the docker status snapshot) must stay green.
+func TestStacksHandler_Get_ContainerlessStackEmitsEmptyArray(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run(`container-less stack: "containers":[] not "containers":null`, func(t *testing.T) {
+		store := &fakeStackStore{stack: &models.Stack{ID: "s1", Directory: "/tmp/test", ComposeFile: "compose.yaml", ProjectName: "s1-default"}}
+		docker := &statusFakeDocker{statuses: map[string]services.LiveStatus{}} // empty snapshot: project not present
+		cfg := &config.Config{StacksDir: "/tmp/test"}
+		handler := NewStacksHandler(docker, nil, nil, store, cfg, nil, services.NewOperationLock())
+
+		router := gin.New()
+		router.GET("/stacks/:id", handler.Get)
+
+		req := httptest.NewRequest(http.MethodGet, "/stacks/s1", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), `"containers":[]`) {
+			t.Fatalf(`response did not contain "containers":[] (raw bytes): %s`, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), `"containers":null`) {
+			t.Fatalf(`response regressed to "containers":null: %s`, w.Body.String())
+		}
+	})
+
+	t.Run("control: stack WITH containers stays green", func(t *testing.T) {
+		store := &fakeStackStore{stack: &models.Stack{ID: "s1", Directory: "/tmp/test", ComposeFile: "compose.yaml", ProjectName: "s1-default"}}
+		docker := &statusFakeDocker{statuses: map[string]services.LiveStatus{
+			"s1-default": {Status: "running", Containers: []models.Container{{Name: "web", Status: "running"}}},
+		}}
+		cfg := &config.Config{StacksDir: "/tmp/test"}
+		handler := NewStacksHandler(docker, nil, nil, store, cfg, nil, services.NewOperationLock())
+
+		router := gin.New()
+		router.GET("/stacks/:id", handler.Get)
+
+		req := httptest.NewRequest(http.MethodGet, "/stacks/s1", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), `"name":"web"`) {
+			t.Fatalf("response did not carry the fake container: %s", w.Body.String())
 		}
 	})
 }

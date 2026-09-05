@@ -188,7 +188,7 @@ func applyLiveStatus(stack *models.Stack, statuses map[string]services.LiveStatu
 		stack.Containers = ls.Containers
 		return
 	}
-	stack.Containers = nil
+	stack.Containers = []models.Container{}
 	if composeUnreadable(*stack) {
 		stack.Status = "error"
 	} else {
