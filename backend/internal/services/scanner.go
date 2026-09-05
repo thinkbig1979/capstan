@@ -126,9 +126,11 @@ const (
 	ProjectNameSourceComposeName = "compose-name"
 	// ProjectNameSourceDirectory: the directory basename, compose's last source.
 	ProjectNameSourceDirectory = "directory"
-	// ProjectNameSourceNamedFile: Capstan's own "<dir>-<profile>" namespace for
-	// a named compose file. Not one of compose's sources; see the OWNER POLICY
-	// note in ResolveComposeProjectName.
+	// ProjectNameSourceNamedFile: Capstan's own "<dir>-<profile>" namespace,
+	// used for a named compose file that declares no `name:` of its own. Not
+	// one of compose's sources — it is Capstan's FALLBACK for named files, the
+	// counterpart of ProjectNameSourceDirectory for the default file. See the
+	// OWNER POLICY note in ResolveComposeProjectName.
 	ProjectNameSourceNamedFile = "capstan-named-file"
 	// ProjectNameSourceFallback: the compose file could not be read, so the
 	// directory derivation stands in. Always accompanied by a WARN.
@@ -161,24 +163,44 @@ const (
 // of divergence this function exists to close. An explicit -p typed by an
 // operator outside Capstan (shape S4) is not visible here at all.
 //
-// OWNER POLICY (Edwin, 2026-09-05 16:05): KEEP Capstan's "<dir>-<profile>"
-// namespace for a NAMED compose file. So a named file is NOT asked what it
-// calls itself: it keeps Capstan's name, which Capstan then passes as -p on
-// start, and an imperative -p outranks a file's `name:` — start and row agree
-// by construction. What that costs is the named-file half of shape S6: a named
-// file started OUTSIDE Capstan with `-f` is labelled by the DIRECTORY alone
-// (compose has no file-name source), and Capstan does not find it. That gap is
-// accepted, not overlooked. Dropping the namespace instead is one deleted
-// branch below, and would make two named files in one directory collide onto
-// one project — which is what compose would do with them.
+// A top-level `name:` wins for EVERY compose file, named files included. What
+// the OWNER POLICY (Edwin, 2026-09-05 16:05: KEEP Capstan's "<dir>-<profile>"
+// namespace for a NAMED compose file) governs is the FALLBACK, not the
+// precedence: a named file that declares no usable `name:` gets
+// "<dir>-<profile>", and the default file gets "<dir>". That reading was
+// settled by bud7 on 2026-09-05 ~20:50, after this function first shipped with
+// the narrower one; KEEP answered "keep the namespace or drop it", not "ignore
+// `name:` in named files". Reverting is re-adding an early return here for
+// profile != "default", which is exactly what the narrower reading was.
+//
+// The reason is the bead's own premise: `docker compose -f compose.api.yaml up`
+// labels containers with the file's `name:` when it has one, so ignoring it for
+// named files would leave shape S2 open on precisely the files this bead was
+// filed to cover.
+//
+// The namespace still earns its keep on the fallback branch. Two named files in
+// one directory with no `name:` get distinct projects, which is Capstan's own
+// convention and is passed as -p on start. Two that declare the SAME `name:`
+// now collide onto one project — as compose itself would — and
+// warnProjectNameCollisions surfaces that rather than resolving it.
+//
+// What stays uncovered is the other half of shape S6: a named file with NO
+// `name:`, started OUTSIDE Capstan with `-f`, is labelled by the DIRECTORY
+// alone (compose has no file-name source) while Capstan persists
+// "<dir>-<profile>". That gap is accepted, not overlooked, and it is the price
+// of keeping the namespace.
 //
 // source is one of the ProjectNameSource* constants above and is advisory: it
 // explains the name, it does not participate in deriving it.
 func ResolveComposeProjectName(ctx context.Context, composePath, dirName, profile string) (name string, source string) {
 	derived := ComposeProjectName(dirName, profile)
 
+	// Capstan's fallback for this file, reported only when the file names no
+	// project of its own: the "<dir>-<profile>" namespace for a named file,
+	// compose's own directory basename for the default file.
+	derivedSource := ProjectNameSourceDirectory
 	if profile != "default" {
-		return derived, ProjectNameSourceNamedFile
+		derivedSource = ProjectNameSourceNamedFile
 	}
 
 	loaded, err := composeFileProjectName(ctx, composePath)
@@ -193,9 +215,10 @@ func ResolveComposeProjectName(ctx context.Context, composePath, dirName, profil
 	}
 	if loaded == "" {
 		// No `name:`, or one that normalises to nothing. Compose falls through
-		// to the directory basename in exactly this case (loader.go:753-756
-		// assigns only a non-empty normalised name), so Capstan does too.
-		return derived, ProjectNameSourceDirectory
+		// to its next source in exactly this case (loader.go:753-756 assigns
+		// only a non-empty normalised name), so Capstan falls through to its
+		// own derivation here.
+		return derived, derivedSource
 	}
 	return loaded, ProjectNameSourceComposeName
 }
@@ -224,10 +247,19 @@ func composeFileProjectName(ctx context.Context, composePath string) (string, er
 
 	// `docker compose` resolves ${VAR} against the directory's .env, so a
 	// `name: ${PROJECT}` must see it too or it interpolates blank and falls
-	// through to the directory name. The error is ignored on purpose: no .env
-	// is the common case, and a malformed one must not make the project name
-	// unresolvable — it just leaves the variables unset, which is compose's own
-	// behaviour for a variable it cannot find.
+	// through to the directory name.
+	//
+	// A MISSING .env is the common case and is silent. A PRESENT but unparseable
+	// one is warned about exactly once, naming the file: compose refuses to run
+	// on it at all, so leaving `name: ${PROJECT}` to fall quietly to the
+	// directory name would be the same silent divergence this producer exists to
+	// close. It is still only a warning — the name stays resolvable, with the
+	// variables unset, which is compose's own behaviour for a variable it cannot
+	// find.
+	//
+	// The two are told apart by an os.Stat rather than by matching dotenv's
+	// error text, so a reworded compose-go message cannot silently turn a
+	// malformed file into a missing one.
 	//
 	// The process environment is deliberately NOT merged in. It keeps the
 	// scanned name a pure function of what is on disk, so two Capstan instances
@@ -235,8 +267,15 @@ func composeFileProjectName(ctx context.Context, composePath string) (string, er
 	// out of project names. Cost: a `name:` interpolated from a host variable
 	// alone resolves blank and falls back to the directory.
 	environment := map[string]string{}
-	if fromDotEnv, err := dotenv.GetEnvFromFile(map[string]string{}, []string{filepath.Join(dir, ".env")}); err == nil {
-		environment = fromDotEnv
+	envPath := filepath.Join(dir, ".env")
+	if _, statErr := os.Stat(envPath); statErr == nil {
+		fromDotEnv, err := dotenv.GetEnvFromFile(map[string]string{}, []string{envPath})
+		if err != nil {
+			slog.Warn("Could not parse the stack's .env; compose project name resolved without it",
+				"file", envPath, "error", err)
+		} else {
+			environment = fromDotEnv
+		}
 	}
 
 	details := types.ConfigDetails{
