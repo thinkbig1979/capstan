@@ -31,6 +31,7 @@ const (
 	ErrGitDirty              = "GIT_DIRTY"
 	ErrGitConflict           = "GIT_CONFLICT"
 	ErrGitNotRepo            = "GIT_NOT_REPO"
+	ErrGitRemoteUnreachable  = "GIT_REMOTE_UNREACHABLE"
 	ErrPathTraversal         = "PATH_TRAVERSAL"
 	ErrDuplicateStack        = "DUPLICATE_STACK"
 	ErrStackNotFound         = "STACK_NOT_FOUND"

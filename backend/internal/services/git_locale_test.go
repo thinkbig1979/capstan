@@ -11,8 +11,8 @@ import (
 )
 
 // writeFakeGit installs a stand-in `git` executable in a fresh directory and
-// returns that directory (to be prepended to PATH). It answers exactly the
-// three subcommands GitService.Pull -> pullCLI issues:
+// returns that directory (to be prepended to PATH). It answers the subcommands
+// GitService.Pull -> pullCLI issues on the failure path:
 //
 //   - status --porcelain -> success, no output (clean working tree)
 //   - rev-parse HEAD     -> success, a fixed fake hash
@@ -20,6 +20,10 @@ import (
 //     message, translated or not according to a faithful model of glibc
 //     gettext's catalog selection (see the script), so the test observes
 //     exactly what pullCLI's callers observe against a translated locale.
+//   - anything else      -> success, no output. pullFailure's three probes
+//     (ls-remote, rev-parse @{upstream}, merge-base --is-ancestor) land on
+//     this catch-all, which puts every arm on the SAME classification path and
+//     leaves the message text as the only thing that differs between them.
 //
 // The oracle models the REAL selection order, which is the whole point of the
 // test: the messages locale is LC_ALL, else LC_MESSAGES, else LANG, else C;
@@ -95,34 +99,41 @@ import (
 // oracle models git-in-general rather than git-on-this-machine, because a
 // properly configured German host DOES translate via route 1.
 //
-// Second, a REAL-git behavioural arm cannot distinguish mutant A -- LC_ALL=C
-// deleted from gitCmdWithCreds' child env -- on this box, under ANY parent
-// environment. The mutant still clears LANGUAGE in the child, which shuts
-// route 2 whatever the parent sets; route 1 is unreachable here by the
-// measurement above; with both routes shut the child prints English either way,
-// so the arm becomes a check that cannot fail. The fake git is not a
-// convenience, it is the only instrument that can exercise route 1, which this
-// host cannot. Narrowing the oracle to this box's observed output would
-// silently restore that cannot-fail state, arriving disguised as a cleanup.
+// Second, and this is what the fake git is for: a REAL-git arm cannot vary
+// git's message text on this box at all, under ANY parent environment.
+// gitCmdWithCreds clears LANGUAGE in the child, which shuts route 2 whatever
+// the parent sets, and route 1 is unreachable here by the measurement above;
+// with both routes shut, real git prints English every time and an arm built
+// on it is a check that cannot fail. The fake git is the only instrument that
+// can put a TRANSLATED git message in front of pullCLI on this host, which is
+// exactly what a test guarding against prose classification has to do.
+// Narrowing the oracle to this box's observed output would silently restore
+// that cannot-fail state, arriving disguised as a cleanup.
 //
-// A stand-in binary is necessary because a real, modern git CLI does not
-// actually exercise this branch: `git pull --ff-only` on a truly up-to-date
-// repository exits 0 (OBSERVED directly against git 2.47.3: `git pull
-// --ff-only; echo $?` prints "Already up to date." then "0", in every locale
-// tried), so pullCLI's own fall-through path (previousCommit == currentCommit
-// after a successful, err-free pull) already produces the correct no-change
-// result without ever reaching the string match. The string match survives
-// from an earlier go-git-based implementation, where Pull() signals the
-// no-op case via a non-nil git.NoErrAlreadyUpToDate sentinel error instead of
-// success (see git.go's history around the CLI migration) -- so the branch
-// this bead's locale bug lives in is real production code, reachable in
-// principle (any future or non-standard git behaviour that fails non-zero
-// while still saying "already up to date" hits it), but not reachable via an
-// ordinary pull with today's git. Swapping only the external `git` process
-// (never the production code under test: pullCLI, gitCmdWithCreds) is the
-// same technique exec_env.go's execCommand indirection exists for elsewhere
-// in this package, applied via PATH since GitService calls exec.Command
-// directly rather than through an injectable var.
+// The branch this file was originally written for is GONE. pullCLI used to
+// recognise an up-to-date pull by matching git's own prose, and that match is
+// what let a translated message change the result. agent-os-fv2j deleted it:
+// `git pull --ff-only` on a truly up-to-date repository EXITS 0 (OBSERVED, git
+// 2.47.3, `git pull --ff-only; echo $?` prints "Already up to date." then "0"),
+// so pullCLI's ordinary fall-through -- previousCommit == currentCommit after a
+// successful, err-free pull -- already produced the no-change result, and the
+// match only ever guarded a path today's git does not take. It survived from
+// the earlier go-git implementation, where Pull() signalled the no-op with a
+// non-nil NoErrAlreadyUpToDate sentinel instead of with success.
+//
+// So this file no longer pins LC_ALL=C behaviourally, and does not claim to:
+// with no production code reading git's prose, removing that pin changes no
+// pullCLI result. TestGitCmdWithCreds_PinsLocale below is what holds
+// agent-os-vq3p, asserting the child env directly. What the fake git still
+// buys is a FORWARD guard -- TestPullCLI_ClassificationIsLocaleIndependent --
+// which goes red if anyone reintroduces a text match. See that test for which
+// half of it does the catching, because it is not the half it looks like.
+//
+// Swapping only the external `git` process (never the production code under
+// test: pullCLI, pullFailure, gitCmdWithCreds) is the same technique
+// exec_env.go's execCommand indirection exists for elsewhere in this package,
+// applied via PATH since GitService calls exec.Command directly rather than
+// through an injectable var.
 func writeFakeGit(t *testing.T) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -167,80 +178,90 @@ esac
 	return dir
 }
 
-// TestPullCLI_UpToDateIsLocaleIndependent pins agent-os-vq3p: gitCmdWithCreds
-// pins the git child's locale, so pullCLI's string match on git's own message
-// ("Already up to date") gives the same answer whatever locale Capstan itself
-// is running under. That, not a particular HTTP status, is what this test
-// pins: the bead's headline symptom (an up-to-date pull surfacing as a 500) is
-// NOT reproducible on git 2.47.3, where `git pull --ff-only` on an up-to-date
-// repository exits 0 and the string match is never reached -- see writeFakeGit
-// for the evidence and for why the branch is nonetheless live production code.
-// What generalises, and what the downstream beads depend on, is that the child
-// environment is locale-pinned so no text match on git's output can drift with
-// the host's language.
+// TestPullCLI_ClassificationIsLocaleIndependent is the forward guard on
+// agent-os-fv2j's rule: pullCLI and pullFailure classify a failed pull by
+// asking git questions and reading EXIT CODES, never by matching its prose.
 //
-// The arms are chosen so each half of the pin is separately observable:
+// There are two assertions here, and MEASURED it is the first that does the
+// catching -- which is worth stating, because it is not the one the test's
+// name points at.
 //
-//   - "translated messages locale" sets LC_ALL to a German locale with no
-//     LANGUAGE. Only LC_ALL=C in the child suppresses the translation, so this
-//     arm goes RED if the LC_ALL=C pin is removed. It is the arm that protects
-//     the load-bearing half of the fix.
-//   - "LANGUAGE overrides a non-C locale" reproduces the environment that
-//     actually produces German output from real git (OBSERVED: LC_ALL=en_US.utf8
-//     LANGUAGE=de -> "Schwerwiegend: Kein Git-Repository"). It goes RED only if
-//     BOTH halves are removed, i.e. against the pre-fix code.
-//   - "english locale (control)" is the must-pass side: the fix makes the
-//     behaviour locale-INDEPENDENT rather than merely moving which string is
-//     matched.
-func TestPullCLI_UpToDateIsLocaleIndependent(t *testing.T) {
+// FIRST, each arm's precondition: Pull must FAIL. The fake git exits 1, so a
+// success means pullCLI manufactured a no-change result out of a failed
+// command, which is exactly what the deleted "Already up to date" match did.
+// Reintroducing that match turns all three arms red here, on this function's
+// own precondition Fatalf. OBSERVED, that mutation applied to git.go under
+// `go test -overlay`, go build exit 0 first so the red is an assertion:
+//
+//	under translated messages locale: Pull reported success (&{...})
+//	although the fake git exited 1
+//
+// SECOND, the three arms' (HTTP status, error code) pairs must be IDENTICAL.
+// This one is belt-and-braces, and honestly so: while gitCmdWithCreds pins the
+// child to LC_ALL=C, the fake git resolves the C catalog and prints English in
+// every arm, so a text match alone cannot make the arms DIFFER -- it makes all
+// three wrong the same way, and the precondition is what fires. The comparison
+// covers the composite fault this family actually fears: prose classification
+// arriving together with some future call path whose child env is not pinned.
+//
+// It does NOT pin agent-os-vq3p's LC_ALL=C, and must not be read as doing so:
+// with no text match left in pullCLI, deleting that pin changes no result
+// here. TestGitCmdWithCreds_PinsLocale is vq3p's pin and asserts the child
+// environment directly.
+func TestPullCLI_ClassificationIsLocaleIndependent(t *testing.T) {
 	fakeGitDir := writeFakeGit(t)
 	t.Setenv("PATH", fakeGitDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	dir := t.TempDir()
 	svc := NewGitService(&config.Config{}, nil)
 
-	// assertNoChange drives Pull and asserts the up-to-date branch was taken.
-	assertNoChange := func(t *testing.T, env string) {
-		t.Helper()
-		result, err := svc.Pull(dir)
-		if err != nil {
-			t.Fatalf("Pull under %s: expected the no-change result; got error: %v. Git's message "+
-				"is only 'Already up to date.' while the child locale stays pinned.", env, err)
-		}
-		if result.PreviousCommit != result.CurrentCommit {
-			t.Errorf("Pull under %s: expected no-op pull (PreviousCommit == CurrentCommit), got %q != %q",
-				env, result.PreviousCommit, result.CurrentCommit)
-		}
+	type outcome struct {
+		status int
+		code   string
 	}
 
-	t.Run("translated messages locale (regression arm)", func(t *testing.T) {
-		// No LANGUAGE: the translation is selected by the messages locale
-		// alone, so clearing LANGUAGE cannot mask a missing LC_ALL=C.
-		t.Setenv("LC_ALL", "de_DE.UTF-8")
-		t.Setenv("LC_MESSAGES", "")
-		t.Setenv("LANG", "")
-		t.Setenv("LANGUAGE", "")
+	arms := []struct {
+		name string
+		env  [][2]string
+	}{
+		// The messages locale alone selects a German catalog: route 1, the
+		// route real git cannot take on this host (see writeFakeGit).
+		{"translated messages locale", [][2]string{
+			{"LC_ALL", "de_DE.UTF-8"}, {"LC_MESSAGES", ""}, {"LANG", ""}, {"LANGUAGE", ""}}},
+		// LANGUAGE selects it over a non-C messages locale: route 2.
+		{"LANGUAGE over a non-C locale", [][2]string{
+			{"LC_ALL", "en_US.utf8"}, {"LC_MESSAGES", ""}, {"LANG", ""}, {"LANGUAGE", "de"}}},
+		// Untranslated control.
+		{"english locale (control)", [][2]string{
+			{"LC_ALL", "en_US.utf8"}, {"LC_MESSAGES", ""}, {"LANG", ""}, {"LANGUAGE", ""}}},
+	}
 
-		assertNoChange(t, "LC_ALL=de_DE.UTF-8")
-	})
+	got := make([]outcome, 0, len(arms))
+	for _, arm := range arms {
+		t.Run(arm.name, func(t *testing.T) {
+			for _, kv := range arm.env {
+				t.Setenv(kv[0], kv[1])
+			}
+			result, err := svc.Pull(dir)
+			if err == nil {
+				t.Fatalf("under %s: Pull reported success (%+v) although the fake git exited 1; "+
+					"a failed pull must never be turned into a no-change result", arm.name, result)
+			}
+			status, code := statusFor(err)
+			got = append(got, outcome{status: status, code: code})
+		})
+	}
 
-	t.Run("LANGUAGE overrides a non-C locale", func(t *testing.T) {
-		t.Setenv("LC_ALL", "en_US.utf8")
-		t.Setenv("LC_MESSAGES", "")
-		t.Setenv("LANG", "")
-		t.Setenv("LANGUAGE", "de")
-
-		assertNoChange(t, "LC_ALL=en_US.utf8 LANGUAGE=de")
-	})
-
-	t.Run("english locale (control)", func(t *testing.T) {
-		t.Setenv("LC_ALL", "en_US.utf8")
-		t.Setenv("LC_MESSAGES", "")
-		t.Setenv("LANG", "")
-		t.Setenv("LANGUAGE", "")
-
-		assertNoChange(t, "LC_ALL=en_US.utf8")
-	})
+	if len(got) != len(arms) {
+		t.Fatalf("precondition: %d arms recorded an outcome, want %d", len(got), len(arms))
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i] != got[0] {
+			t.Errorf("classification varies with the locale: %q gave HTTP %d (%s) but %q gave HTTP %d (%s) "+
+				"-- only code that reads git's message text can do that",
+				arms[0].name, got[0].status, got[0].code, arms[i].name, got[i].status, got[i].code)
+		}
+	}
 }
 
 // TestGitCmdWithCreds_PinsLocale asserts the child env directly: LC_ALL=C is
