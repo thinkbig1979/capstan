@@ -479,10 +479,10 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 	if err != nil {
 		// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless the
 		// non-not-found case is split out here and logged with its cause.
-		// The former `|| stack == nil` guard is dropped, not kept as a
-		// defensive no-op: database/stacks.go's GetStack always returns
-		// either &stack or a non-nil err, never (nil, nil) — nil arm dropped,
-		// dead per GetStack's return shape.
+		// A separate not-a-pointer guard on the success path is dropped, not
+		// kept as a defensive no-op: database/stacks.go's GetStack always
+		// returns either &stack or a non-nil err, never both zero — nil arm
+		// dropped, dead per GetStack's return shape.
 		if errors.Is(err, sql.ErrNoRows) {
 			handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
 			return
