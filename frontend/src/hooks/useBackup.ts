@@ -223,10 +223,11 @@ export function useStackBackupRuns(stackId: string, limit = 20) {
  * - partial   : completed with partial success (render as warning)
  * - error     : failed (maps from outcome:'failed', legacy success:false,
  *               or a genuine WS connection error — NOT a bare disconnect)
- * - unavailable : the stream was refused, not the run (maps from
- *               outcome:'refused'): the run already has its maximum number
- *               of live viewers and is still going for them. Render it as a
- *               refused stream that names the limit, never as a failed run
+ * - unavailable : the stream was refused, not the run (from the backend's
+ *               own {type:'refused', reason} frame, never from a done
+ *               frame): the run already has its maximum number of live
+ *               viewers and is still going for them. Render it as a refused
+ *               stream that names the limit, never as a failed run
  *               (agent-os-mjrl).
  */
 export type BackupStreamStatus = 'idle' | 'running' | 'success' | 'partial' | 'error' | 'unavailable'
@@ -247,7 +248,7 @@ export interface BackupStreamState {
  * deal with frontend-level status names.
  */
 function doneFrameToStatus(msg: {
-  outcome?: 'success' | 'no_change' | 'partial' | 'failed' | 'interrupted' | 'refused'
+  outcome?: 'success' | 'no_change' | 'partial' | 'failed' | 'interrupted'
   success?: boolean
 }): BackupStreamStatus {
   if (msg.outcome) {
@@ -256,13 +257,6 @@ function doneFrameToStatus(msg: {
       case 'no_change':   return 'success'  // treat no_change as success for backup ops
       case 'partial':     return 'partial'
       case 'failed':      return 'error'
-      // 'refused' (agent-os-mjrl): the registry turned THIS viewer away because
-      // the run already has its maximum number of live attachers
-      // (services/backup_runner.go). The run is fine and still streaming to
-      // the others, so this must not land in the error bucket, which every
-      // consumer renders as "the run failed". The reason names the limit and
-      // the action (close another viewer).
-      case 'refused':     return 'unavailable'
       // 'interrupted' (agent-os-pid): a run swept to this status by a
       // previous-process crash or restore, reported via Attach's DB fallback
       // when a client reconnects after a restart. The live-stream widget has
@@ -275,6 +269,24 @@ function doneFrameToStatus(msg: {
   }
   // Legacy fallback: key off success boolean.
   return msg.success ? 'success' : 'error'
+}
+
+/**
+ * The sentence shown for a refused stream (agent-os-mjrl). The backend's
+ * reason is "too many viewers attached to this run (limit N); close another
+ * viewer and reconnect": the limit is read out of it, never hard-coded here,
+ * so a change to the bound needs no frontend change. A reason that names no
+ * limit is shown as it is.
+ */
+function refusedStreamMessage(reason: string | undefined): string {
+  const limit = reason?.match(/limit (\d+)/)?.[1]
+  if (limit) {
+    return `This run already has ${limit} viewers. Close another viewer and reconnect.`
+  }
+  if (!reason) {
+    return 'This run already has the maximum number of viewers. Close another viewer and reconnect.'
+  }
+  return reason.endsWith('.') ? reason : `${reason}.`
 }
 
 /**
@@ -340,7 +352,7 @@ export function useBackupStreaming(): BackupStreamState {
             line?: string
             message?: string
             // Action Truth Contract fields (B5 backend, migrated backends)
-            outcome?: 'success' | 'no_change' | 'partial' | 'failed' | 'interrupted' | 'refused'
+            outcome?: 'success' | 'no_change' | 'partial' | 'failed'
             reason?: string
             // Legacy fields (pre-migration backends)
             success?: boolean
@@ -368,14 +380,6 @@ export function useBackupStreaming(): BackupStreamState {
               setStatus('partial')
               const label = msg.reason || 'Backup partially completed.'
               setLines((prev) => [...prev, label])
-            } else if (finalStatus === 'unavailable') {
-              // Refused stream, not a failed run: keep the reason (it names
-              // the limit and what to do) but do not prefix the line with
-              // "Error:", which consumers paint as a failure.
-              const why = msg.reason || 'too many viewers attached to this run'
-              setStatus('unavailable')
-              setError(why)
-              setLines((prev) => [...prev, `Stream unavailable: ${why}`])
             } else {
               // error / failed
               const errMsg = msg.error || msg.reason || 'Backup failed'
@@ -391,6 +395,26 @@ export function useBackupStreaming(): BackupStreamState {
             client.close()
             clientRef.current = null
             onDone?.(finalStatus)
+          } else if (msg.type === 'refused') {
+            // The backend's own frame for a viewer turned away at the per-run
+            // attacher bound (agent-os-mjrl). Not a done frame: the run is
+            // still going for the admitted viewers, so this is a refused
+            // STREAM, never a failed run. The server closes the socket right
+            // after it, so mark completed first: the onClose below must not
+            // append the "connection closed" note or treat it as a lost
+            // stream. No "Error:" prefix on the line, consumers paint that as
+            // a failure.
+            const why = refusedStreamMessage(msg.reason)
+            completedRef.current = true
+            setStatus('unavailable')
+            setError(why)
+            setLines((prev) => [...prev, `Stream unavailable: ${why}`])
+            // The run record is unchanged, but the status card may as well
+            // show the latest server truth for a run it cannot watch.
+            refetchHistory()
+            client.close()
+            clientRef.current = null
+            onDone?.('unavailable')
           } else if (msg.type === 'error') {
             const errMsg = msg.error || 'Unknown error'
             setStatus('error')

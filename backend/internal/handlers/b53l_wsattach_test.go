@@ -114,7 +114,8 @@ func waitForCMCount(t *testing.T, cm *ConnectionManager, want int, what string) 
 func TestBackupWSAttach_ClientDisconnectNeverSendsPrematureDoneFrame(t *testing.T) {
 	// SAMPLE SIZE, and why it is batched (agent-os-nt0m collision, 2026-09-05).
 	// Since nt0m, Attach admits at most services.MaxAttachersPerRun (24) live
-	// attachers to one run and refuses the surplus BY RESULT (a Done frame with
+	// attachers to one run and refuses the surplus BY RESULT (since
+	// agent-os-mjrl a {"type":"refused"} frame, before that a done frame with
 	// outcome "failed"). So a single 150-wide fan-out no longer means 150
 	// racing disconnects: 24 are admitted and race, the rest are refused
 	// instantly. The refused clients are NOT useless though: the race this
@@ -198,13 +199,15 @@ func TestBackupWSAttach_ClientDisconnectNeverSendsPrematureDoneFrame(t *testing.
 	// The marker ALSO pins outcome="" (the run has no outcome yet, so the
 	// premature branch reports an empty one): since agent-os-nt0m, Attach
 	// admits at most services.MaxAttachersPerRun live attachers per run and
-	// refuses the surplus BY RESULT, a Done frame with outcome "failed" and a
-	// reason naming the limit. That refusal is a legitimate terminal frame
-	// for a surplus viewer and logs `outcome=failed`, so with 150 concurrent
-	// attaches most of them are refused and a bare run_id marker turned this
+	// refuses the surplus BY RESULT with a reason naming the limit. When that
+	// refusal was still a done frame with outcome "failed" (before
+	// agent-os-mjrl gave it its own {"type":"refused"} frame) it logged
+	// `outcome=failed` through sendDoneFrame, so with 150 concurrent
+	// attaches most of them were refused and a bare run_id marker turned this
 	// test red on main the moment #297 (b53l) and #298 (nt0m) were both
 	// merged, each green alone. The empty outcome is what distinguishes the
-	// defect this test pins from that refusal. The count stays at 150 on
+	// defect this test pins from that refusal (which now logs no completion
+	// line at all). The count stays at 150 on
 	// purpose: the race is only reachable under contention (the sequential
 	// form never reproduced it; 24 concurrent attaches did not either under
 	// a reverted guard, 5/5 green), so do not slim it.

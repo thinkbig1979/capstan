@@ -216,7 +216,7 @@ function RestoreProgress({
           data-testid="restore-progress-unavailable"
           className="px-4 py-2 text-xs text-muted-foreground bg-muted/40 border-t"
         >
-          {error}. The restore continues on the server; check Recent runs for its result.
+          {error} The restore continues on the server; check Recent runs for its result.
         </div>
       )}
       {error && !isUnavailable && (

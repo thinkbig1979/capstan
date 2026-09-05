@@ -635,23 +635,14 @@ func (reg *BackupRunnerRegistry) execPrune(dr *durableRun, dryRun bool) {
 // by memory (~26 KB per attacher) (agent-os-nt0m).
 const maxAttachersPerRun = 24
 
-// tooManyAttachersReason is the terminal Reason a surplus attacher receives.
-// It names the limit so the viewer knows what to do, and it is a done frame,
-// not an error, so the frontend does not redial into the same refusal.
+// tooManyAttachersReason is the Reason a surplus attacher receives (with
+// AttachResult.Refused). It names the limit so the viewer knows what to do;
+// the frontend reads the number out of it rather than hard-coding the bound.
+// wsAttach delivers it in a terminal {"type":"refused"} frame, not an error
+// frame, so the frontend does not redial into the same refusal.
 var tooManyAttachersReason = fmt.Sprintf(
 	"too many viewers attached to this run (limit %d); close another viewer and reconnect",
 	maxAttachersPerRun)
-
-// attachRefusedOutcome is the Outcome a surplus attacher receives alongside
-// tooManyAttachersReason. It is its own value, not "failed": the run is fine
-// and still streaming to the admitted viewers, only THIS viewer was turned
-// away, and the frontend renders the two differently (a refused stream
-// versus a failed run, agent-os-mjrl). It is never persisted: the refusal
-// touches neither the durableRun nor the DB row, so the dashboard badge and
-// run history cannot see it. A frontend built before the value existed
-// falls through its outcome switch to the error bucket, which is what it
-// showed before, so the two halves can ship in either order.
-const attachRefusedOutcome = "refused"
 
 // AttachResult is returned by Attach and carries everything the WS handler
 // needs to stream output to the client.
@@ -663,14 +654,22 @@ type AttachResult struct {
 	// Done is true when the run has already finished.
 	Done bool
 
-	// Outcome and Reason are set only when Done is true. Done is also how a
-	// refused attach is reported: a run already at maxAttachersPerRun live
-	// attachers answers with Done=true, Outcome attachRefusedOutcome
-	// ("refused") and a Reason naming the limit, so the caller sends a
-	// terminal frame instead of streaming. Every other Done carries a run
-	// status: "success", "partial", "failed" or "interrupted".
+	// Outcome is set only when Done is true and is always a RUN status:
+	// "success", "partial", "failed" or "interrupted". Reason accompanies
+	// Outcome, and also a Refused result (see below), where it names the
+	// attacher limit.
 	Outcome string
 	Reason  string
+
+	// Refused is true when THIS attach was turned away because the run
+	// already has maxAttachersPerRun live attachers (agent-os-nt0m). It is
+	// not a completion: Done stays false and Outcome stays empty, because
+	// the run is fine and still streaming to the admitted viewers, only this
+	// viewer gets nothing. Reason names the limit and what to do. wsAttach
+	// answers it with a separate {"type":"refused"} frame, never a done
+	// frame (agent-os-mjrl). ReplayLines are still filled so the refused
+	// viewer sees what the others see up to now.
+	Refused bool
 
 	// Live receives future lines and is closed when the run finishes or the
 	// client goes away. It is nil when Done is true, and also when the caller
@@ -732,20 +731,22 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 		// Bound the fan-out: every admitted client costs a goroutine and a
 		// 256-slot buffer, and nothing upstream limits how many clients may
 		// watch one run (agent-os-nt0m). The surplus caller is refused BY
-		// RESULT, as a Done result with the "refused" outcome and a reason
-		// that names the limit, and nothing is allocated for it. That shape is
-		// chosen for the one caller that streams, wsAttach: it replays the
-		// lines and sends a terminal done frame on Done, so the surplus
-		// viewer learns why with no handler change and does not redial. An
-		// error would reach the same handler's "run evicted" branch with a
-		// misleading reason, and a nil Live would leave the viewer silent
-		// until it disconnected (its stream loop selects only on Live and its
-		// own context).
+		// RESULT (err == nil), with Refused set, a reason that names the
+		// limit, and the replay lines; nothing is allocated for it, and it
+		// is NOT a completion: Done stays false and Outcome empty, because
+		// the run is fine and the outcome vocabulary is the run's. wsAttach
+		// answers Refused with its own {"type":"refused"} frame and returns,
+		// so the surplus viewer learns why and does not redial (agent-os-mjrl;
+		// nt0m first shipped this as Done + Outcome "failed" only because
+		// the handler was owned by another change at the time, and the
+		// frontend then showed the RUN as failed). An error would reach the
+		// handler's "run evicted" branch with a misleading reason, and a nil
+		// Live alone would leave the viewer silent until it disconnected
+		// (the stream loop selects only on Live and its own context).
 		if !dr.acquireAttacher() {
 			return &AttachResult{
 				ReplayLines: lines,
-				Done:        true,
-				Outcome:     attachRefusedOutcome,
+				Refused:     true,
 				Reason:      tooManyAttachersReason,
 			}, nil
 		}

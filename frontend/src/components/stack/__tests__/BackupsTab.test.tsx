@@ -476,7 +476,8 @@ describe('BackupsTab — restore progress panel', () => {
   // STREAM, not a failed run. The panel must say so, name the limit and the
   // action, and must not show the failure header.
   it('renders a non-alarming "Live output unavailable" panel when stream status is unavailable', async () => {
-    const reason = 'too many viewers attached to this run (limit 24); close another viewer and reconnect'
+    // The hook has already turned the backend reason into this sentence.
+    const reason = 'This run already has 24 viewers. Close another viewer and reconnect.'
     mockStreamState.status = 'unavailable'
     mockStreamState.error = reason
     mockStreamState.lines = [`Stream unavailable: ${reason}`]
@@ -487,7 +488,7 @@ describe('BackupsTab — restore progress panel', () => {
       expect(screen.getByTestId('restore-progress-header')).toHaveTextContent('Live output unavailable')
     })
     expect(screen.getByTestId('restore-progress-unavailable')).toHaveTextContent(
-      'too many viewers attached to this run (limit 24); close another viewer and reconnect. The restore continues on the server; check Recent runs for its result.',
+      'This run already has 24 viewers. Close another viewer and reconnect. The restore continues on the server; check Recent runs for its result.',
     )
     expect(screen.queryByText('Restore failed')).not.toBeInTheDocument()
   })

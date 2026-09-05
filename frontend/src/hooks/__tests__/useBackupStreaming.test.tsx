@@ -355,32 +355,51 @@ describe('useBackupStreaming — reset', () => {
 
 // ─── Refused attach (agent-os-mjrl) ──────────────────────────────────────────
 //
-// Attach refuses the 25th live viewer of one run BY RESULT: a done frame with
-// outcome 'refused' and a reason naming the limit (services/backup_runner.go,
-// agent-os-nt0m). The run itself is fine and still streaming to the other 24
-// viewers, so the widget must NOT report the run as failed. Two-sided on one
-// instrument: the same done-frame path still maps a genuine failure, an
-// interrupted run and a success to their own buckets.
+// Attach refuses the 25th live viewer of one run (services/backup_runner.go,
+// agent-os-nt0m) and wsAttach answers with a DISTINCT frame,
+// {type:'refused', reason}, never a done frame: a refused attach is not a run
+// completion, and the done frame's outcome vocabulary is the run's. The run
+// itself is fine and still streaming to the other 24 viewers, so the widget
+// must NOT report the run as failed. Two-sided on one instrument (the frame
+// handler): the done-frame path still maps a genuine failure, an interrupted
+// run and a success to their own buckets.
 
 const REFUSED_REASON =
   'too many viewers attached to this run (limit 24); close another viewer and reconnect'
+const REFUSED_MESSAGE = 'This run already has 24 viewers. Close another viewer and reconnect.'
 
 describe('useBackupStreaming — refused attach is a refused stream, not a failed run', () => {
-  it('maps outcome:refused to status unavailable with the limit reason', async () => {
+  it('maps a refused frame to status unavailable with the limit read from the reason', async () => {
     const wrapper = createWrapper()
     const { result } = renderHook(() => useBackupStreaming(), { wrapper })
     const onDone = vi.fn()
 
     act(() => { result.current.connect('/ws/backups/run/abc', onDone) })
     act(() => { send({ type: 'data', line: 'replayed line' }) })
-    act(() => { send({ type: 'done', outcome: 'refused', reason: REFUSED_REASON }) })
+    act(() => { send({ type: 'refused', reason: REFUSED_REASON }) })
 
     await waitFor(() => expect(result.current.status).toBe('unavailable'))
-    expect(result.current.error).toBe(REFUSED_REASON)
+    expect(result.current.error).toBe(REFUSED_MESSAGE)
     expect(onDone).toHaveBeenCalledWith('unavailable')
     // The refusal must not be painted as an error line in the log.
     expect(result.current.lines.some((l) => l.startsWith('Error:'))).toBe(false)
-    expect(result.current.lines.some((l) => l.includes(REFUSED_REASON))).toBe(true)
+    expect(result.current.lines).toContain(`Stream unavailable: ${REFUSED_MESSAGE}`)
+    // The socket is closed by the server after the refused frame; that close
+    // must not append the "connection closed" note or flip the status.
+    act(() => { simulateClose() })
+    expect(result.current.status).toBe('unavailable')
+    expect(result.current.lines.some((l) => l.toLowerCase().includes('connection closed'))).toBe(false)
+  })
+
+  it('falls back to the reason verbatim when it names no limit', async () => {
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper })
+
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    act(() => { send({ type: 'refused', reason: 'viewer refused by the registry' }) })
+
+    await waitFor(() => expect(result.current.status).toBe('unavailable'))
+    expect(result.current.error).toBe('viewer refused by the registry.')
   })
 
   it('CONTROL: outcome:failed still maps to error', async () => {
