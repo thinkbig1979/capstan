@@ -175,10 +175,11 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to hash password",
+			err,
 		))
 		return
 	}
@@ -196,10 +197,11 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 
 	created, err := h.db.CreateFirstUser(user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to create user",
+			err,
 		))
 		return
 	}
@@ -226,20 +228,22 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 	}
 
 	if err := h.db.CreateSession(session); err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to create session",
+			err,
 		))
 		return
 	}
 
 	token, err := generateJWT(userID, req.Username, sessionID, h.jwtSecret)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to generate token",
+			err,
 		))
 		return
 	}
@@ -327,20 +331,22 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	if err := h.db.CreateSession(session); err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to create session",
+			err,
 		))
 		return
 	}
 
 	token, err := generateJWT(user.ID, user.Username, sessionID, h.jwtSecret)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to generate token",
+			err,
 		))
 		return
 	}

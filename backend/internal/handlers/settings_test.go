@@ -551,3 +551,39 @@ func TestSettingsHandler_UpdateUpdateSettings_ScheduleEditDoesNotStopTheSchedule
 	}, 2*time.Second, 10*time.Millisecond,
 		"a saved schedule must reach the running apply timer without a restart")
 }
+
+// TestSettingsHandler_GetScanDepth_LogsCauseOn500 is the seen-failing-first
+// test for agent-os-ua4y: GetScanDepth wrote its 500 directly with c.JSON,
+// bypassing handleError, so a GetSetting failure left no record beyond the
+// middleware access line. faultyDB (faulty_db_test.go) forces GetSetting to
+// fail with "sql: database is closed" (never sql.ErrNoRows), which is exactly
+// the failure this handler's err != nil branch exists for.
+//
+// Two-sided per the brief: the log assertion is the one that flips from
+// failing to passing across the fix; the status/code assertions are the
+// control showing the routing change left the wire response unchanged.
+func TestSettingsHandler_GetScanDepth_LogsCauseOn500(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureHandlerLogs(t)
+
+	db := faultyDB(t)
+	handler := NewSettingsHandler(db, "", "test-secret", false, nil, nil)
+	router := gin.New()
+	router.GET("/settings/scan-depth", handler.GetScanDepth)
+
+	req := httptest.NewRequest(http.MethodGet, "/settings/scan-depth", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Control: status and error code must be unchanged by the routing fix.
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	var appErr models.AppError
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &appErr))
+	require.Equal(t, "INTERNAL_ERROR", appErr.Code)
+
+	// The assertion that must fail before the fix and pass after: an ERROR
+	// line naming the cause must be emitted.
+	if !strings.Contains(buf.String(), "database is closed") {
+		t.Fatalf("500 emitted with no log of the underlying cause. captured = %q", buf.String())
+	}
+}

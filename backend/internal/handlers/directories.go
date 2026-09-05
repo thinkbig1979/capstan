@@ -36,10 +36,11 @@ func (h *DirectoriesHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *DirectoriesHandler) List(c *gin.Context) {
 	directories, err := h.db.ListDirectories()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to list directories",
+			err,
 		))
 		return
 	}
@@ -66,10 +67,11 @@ func (h *DirectoriesHandler) List(c *gin.Context) {
 func (h *DirectoriesHandler) Scan(c *gin.Context) {
 	hasGlobalEnv, err := h.scanner.ScanAll()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to scan directories",
+			err,
 		))
 		return
 	}
@@ -130,20 +132,22 @@ func (h *DirectoriesHandler) UpdateCredentials(c *gin.Context) {
 			return
 		}
 		slog.Error("Failed to update directory credentials", "path", directory.Path, "error", err)
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to update credentials",
+			err,
 		))
 		return
 	}
 
 	updated, err := h.db.GetDirectory(directory.Path)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.NewAppError(
+		handleError(c, models.NewAppErrorWithCause(
 			http.StatusInternalServerError,
 			"INTERNAL_ERROR",
 			"Failed to retrieve updated directory",
+			err,
 		))
 		return
 	}
