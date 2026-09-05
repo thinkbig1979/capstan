@@ -256,17 +256,17 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
 	globalEnvPath := h.cfg.DataDir + "/global.env"
 
+	// parseEnvFile owns the absence contract (no global.env yet is an empty
+	// env, not an error), so any error it returns is a real read fault.
 	envVars, err := parseEnvFile(globalEnvPath)
 	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to read global environment file",
-				err,
-			))
-			return
-		}
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to read global environment file",
+			err,
+		))
+		return
 	}
 
 	// Same second factor as the per-stack .env surface: without a live unlock
@@ -360,11 +360,18 @@ func (h *SettingsHandler) UpdateGlobalEnv(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// parseEnvFile reads the global env file. A file that does not exist is an
+// empty env with a nil error: a fresh install has none yet. Every other read
+// failure (a directory in its place, a permission or I/O fault) is returned,
+// never dressed as an empty result (agent-os-2ucq).
 func parseEnvFile(path string) ([]map[string]string, error) {
 	//nolint:gosec // path's only caller passes h.cfg.DataDir + "/global.env", config-derived, never request input
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return []map[string]string{}, nil
+		if errors.Is(err, fs.ErrNotExist) {
+			return []map[string]string{}, nil
+		}
+		return nil, err
 	}
 
 	lines := strings.Split(string(data), "\n")

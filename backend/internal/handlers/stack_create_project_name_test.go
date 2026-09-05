@@ -136,3 +136,87 @@ func TestScannerAndCreateAgreeOnProjectName(t *testing.T) {
 			"ComposeProjectName(%q, %q)", tt.dirName, tt.name)
 	}
 }
+
+// createStackRequest drives POST /stacks with the recording docker double and
+// returns the recorder, the double and the DB, for the agent-os-f3ah arms.
+func createStackForProjectName(t *testing.T, name string, deploy bool) (*httptest.ResponseRecorder, *recordingStackDocker, *database.DB) {
+	t.Helper()
+	tempDir := t.TempDir()
+	db, err := database.NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	cfg := &config.Config{StacksDir: tempDir}
+	docker := &recordingStackDocker{}
+	scanner := services.NewScannerService(cfg, db)
+	handler := NewStacksHandler(docker, scanner, services.NewLinterService(), db, cfg,
+		services.NewActionLogger(db), services.NewOperationLock())
+	router := gin.New()
+	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
+	require.NoError(t, db.CreateUser(models.User{ID: "test-user-id", Username: "testuser", CreatedAt: testTime, UpdatedAt: testTime}))
+	createTestDirectory(t, db, filepath.Join(tempDir, name))
+
+	reqBytes, err := json.Marshal(map[string]interface{}{
+		"name":           name,
+		"composeContent": "services:\n  web:\n    image: nginx:1.21\n",
+		"deploy":         deploy,
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/stacks", bytes.NewReader(reqBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w, docker, db
+}
+
+// TestStacksHandler_Create_PersistsTheNameComposeDerives is agent-os-f3ah on
+// the Capstan-created path. Before it, "MyStack" was persisted verbatim and
+// the deploy ran `-p MyStack`, which compose rejects — a loud failure, which
+// this must not turn into a silent one: the deploy and the row must both
+// carry the normalised name compose will actually use.
+func TestStacksHandler_Create_PersistsTheNameComposeDerives(t *testing.T) {
+	w, docker, db := createStackForProjectName(t, "MyStack", true)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	require.Len(t, docker.started, 1)
+	assert.Equal(t, "mystack", docker.started[0].ProjectName, "the deploy must target the name compose derives, or compose rejects -p")
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+	assert.Equal(t, "mystack", stacks[0].ProjectName)
+
+	// The 201 carries the stack struct, so the wire value follows the row.
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	respStack := resp["details"].(map[string]interface{})["stack"].(map[string]interface{})
+	assert.Equal(t, "mystack", respStack["projectName"])
+}
+
+// TestStacksHandler_Create_RefusesANameThatNormalisesToNothing: "---" passes
+// the charset check but compose derives an EMPTY project name from it, which
+// compose refuses on every -p. Refuse it here, naming the rule, rather than
+// persisting a row that can never start.
+func TestStacksHandler_Create_RefusesANameThatNormalisesToNothing(t *testing.T) {
+	w, docker, db := createStackForProjectName(t, "---", false)
+	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "letter or digit", "the refusal must name the rule")
+	assert.Empty(t, docker.started)
+
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	assert.Empty(t, stacks, "a refused create must not leave a row behind")
+}
+
+// TestStacksHandler_Create_AcceptsAnAlreadyNormalName is the control for the
+// two arms above: a name compose would not change is stored byte-for-byte.
+func TestStacksHandler_Create_AcceptsAnAlreadyNormalName(t *testing.T) {
+	w, docker, db := createStackForProjectName(t, "ok-normal", true)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	require.Len(t, docker.started, 1)
+	assert.Equal(t, "ok-normal", docker.started[0].ProjectName)
+	stacks, err := db.ListStacks()
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+	assert.Equal(t, "ok-normal", stacks[0].ProjectName)
+}

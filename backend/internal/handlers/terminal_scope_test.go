@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"strings"
@@ -163,6 +164,27 @@ func deniedRows(t *testing.T, db *database.DB) []models.ActionLog {
 	return rows
 }
 
+// requireDenyReason reads the single terminal_denied audit row and checks the
+// reason assertContainerInStack recorded in it. Every deny path writes the same
+// 4401 close frame, so the close code alone cannot say WHICH guard fired; the
+// reason in the audit row is the one observable that discriminates them
+// (agent-os-hd91). The row is written synchronously before the close frame
+// (services/actionlog.go LogWithRequest -> db.LogAction, called at terminal.go's
+// deny closure ahead of writeCloseMessage), so reading it right after
+// dialTerminal returns does not race the handler.
+func requireDenyReason(t *testing.T, db *database.DB, want string) {
+	t.Helper()
+	rows := deniedRows(t, db)
+	if len(rows) != 1 {
+		t.Fatalf("action log has %d terminal_denied rows, want 1", len(rows))
+	}
+	var detail map[string]string
+	require.NoError(t, json.Unmarshal([]byte(rows[0].Detail), &detail), "detail %q is not the JSON object deny writes", rows[0].Detail)
+	if detail["reason"] != want {
+		t.Fatalf("terminal_denied reason = %q, want %q (detail %s)", detail["reason"], want, rows[0].Detail)
+	}
+}
+
 // ── agent-os-7u5: container/stack scoping ───────────────────────────────────
 
 // TestTerminalRejectsContainerFromAnotherStack is the core of the issue: stack
@@ -216,6 +238,10 @@ func TestTerminalRejectsContainerNotManagedByCapstan(t *testing.T) {
 	if n := f.terminal.SessionCount(); n != 0 {
 		t.Errorf("%d session(s) created, want 0", n)
 	}
+	// The other side of TestTerminalDeniesWhenContainerLookupFails' reason
+	// check: a lookup that succeeded and simply missed must be recorded as
+	// such, so the two guards stay distinguishable on the same instrument.
+	requireDenyReason(t, f.db, "container_not_in_stack")
 }
 
 // TestTerminalAllowsContainerInStack is the other half: a container that really
@@ -261,6 +287,12 @@ func TestTerminalDeniesWhenDockerUnavailable(t *testing.T) {
 
 // TestTerminalDeniesWhenContainerLookupFails — a failed lookup is not proof of
 // membership either.
+//
+// The close code alone did not pin the lookup-failed branch: with that branch
+// deleted from assertContainerInStack (go test -overlay, agent-os-hd91), the
+// membership loop ran over the nil list, missed, and emitted the identical 4401
+// with reason=container_not_in_stack, and this test still passed. The reason
+// recorded in the audit row is what tells the two guards apart.
 func TestTerminalDeniesWhenContainerLookupFails(t *testing.T) {
 	lister := &fakeContainerLister{err: errDockerLookup}
 	f := newTerminalFixture(t, NewConnectionManager(5), lister)
@@ -270,6 +302,7 @@ func TestTerminalDeniesWhenContainerLookupFails(t *testing.T) {
 	if code != CloseCodeAuthFailure {
 		t.Fatalf("close code = %d, want %d", code, CloseCodeAuthFailure)
 	}
+	requireDenyReason(t, f.db, "container_lookup_failed")
 }
 
 // ── agent-os-a0y: connection cap ────────────────────────────────────────────
