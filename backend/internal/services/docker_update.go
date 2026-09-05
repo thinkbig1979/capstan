@@ -134,8 +134,8 @@ const refusedUpdateReason = "cannot determine update strategy: the stacks table 
 // the two write paths cannot drift, and — the reason it is a function at all —
 // so the line itself is reachable from a unit test. Neither apply path is: both
 // call s.client.ContainerInspect before reaching this branch, and
-// DockerService.client is a concrete *client.Client (docker.go:54), not an
-// interface, so they cannot run without a live daemon. Their end-to-end coverage
+// DockerService.client is a concrete *client.Client (the `client *client.Client`
+// field, docker.go:55), not an interface, so they cannot run without a live daemon. Their end-to-end coverage
 // is internal/integrationtest, behind the `integration` build tag, which
 // `go test ./...` does not run.
 //
@@ -203,10 +203,12 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 		switch {
 		case stackErr != nil:
 			// agent-os-g482. Not a write, but not a display either: this StackID
-			// is what scheduler.go:821-822 looks up in stackPolicies to decide
-			// whether a stack-scoped auto-update policy applies. An unreadable
-			// stacks table leaves it empty, so the scheduler skips the container
-			// (scheduler.go:824-828) — fail-closed, but silently, which is what
+			// is what `policy, hasPolicy = stackPolicies[update.StackID]`
+			// (scheduler.go:821-822) looks up to decide whether a stack-scoped
+			// auto-update policy applies. An unreadable stacks table leaves it
+			// empty, so the scheduler skips the container at its
+			// `if !hasPolicy { skipped++; continue }` (scheduler.go:826-828) —
+			// fail-closed, but silently, which is what
 			// this line exists to stop. Logged once per call, not once per
 			// container: a dead database faults every iteration of this loop.
 			if !stackLookupFailed {

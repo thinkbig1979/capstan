@@ -24,7 +24,8 @@ import (
 //
 // The instrument is resolveUpdateStrategy, the unexported decision the two apply
 // paths now switch on. It is the tightest available unit: DockerService.client
-// is a concrete *client.Client (docker.go:54), not an interface, so
+// is a concrete *client.Client (the `client *client.Client` field,
+// docker.go:55), not an interface, so
 // UpdateContainer and UpdateContainerStreaming cannot be driven without a live
 // daemon — their end-to-end coverage is in internal/integrationtest, behind the
 // `integration` build tag. Every test here therefore also pins the PREMISE
