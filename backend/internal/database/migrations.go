@@ -763,6 +763,9 @@ func (d *DB) MigrateStackIDsToRootPrefixed(stacksDir string) error {
 		newID := rootPrefix + "~" + id
 		mappings = append(mappings, idMapping{oldID: id, newID: newID, dir: dir})
 	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reading stacks to migrate: %w", err)
+	}
 	rows.Close()
 
 	for _, m := range mappings {

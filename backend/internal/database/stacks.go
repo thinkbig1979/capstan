@@ -1,6 +1,8 @@
 package database
 
 import (
+	"fmt"
+
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -35,6 +37,9 @@ func (d *DB) ListStacks() ([]models.Stack, error) {
 			return nil, err
 		}
 		stacks = append(stacks, stack)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading stacks: %w", err)
 	}
 	return stacks, nil
 }
@@ -73,6 +78,9 @@ func (d *DB) ListStacksByDirectory(path string) ([]models.Stack, error) {
 			return nil, err
 		}
 		stacks = append(stacks, stack)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading stacks for directory: %w", err)
 	}
 	return stacks, nil
 }

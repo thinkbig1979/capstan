@@ -38,6 +38,9 @@ func (d *DB) GetCachedUpdates() ([]models.CachedUpdate, error) {
 		}
 		updates = append(updates, u)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading cached updates: %w", err)
+	}
 	return updates, nil
 }
 

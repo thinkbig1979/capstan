@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -46,6 +47,9 @@ func (d *DB) GetActionsByStack(stackID string, limit int) ([]models.ActionLog, e
 		action.RequestID = requestID.String
 		actions = append(actions, action)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading actions for stack: %w", err)
+	}
 	return actions, nil
 }
 
@@ -69,6 +73,9 @@ func (d *DB) GetRecentActions(limit int) ([]models.ActionLog, error) {
 		action.StackID = stackID.String
 		action.RequestID = requestID.String
 		actions = append(actions, action)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading recent actions: %w", err)
 	}
 	return actions, nil
 }
@@ -146,6 +153,9 @@ func (d *DB) ListActionLogsFiltered(limit, offset int, f ActionLogFilter) ([]mod
 		action.RequestID = requestID.String
 		actions = append(actions, action)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("reading action log page: %w", err)
+	}
 	return actions, total, nil
 }
 
@@ -165,6 +175,9 @@ func (d *DB) DistinctActionLogActions() ([]string, error) {
 			return nil, err
 		}
 		actions = append(actions, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading distinct action log actions: %w", err)
 	}
 	return actions, nil
 }

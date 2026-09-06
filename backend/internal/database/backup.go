@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -25,6 +26,9 @@ func (d *DB) GetBackupPolicies() ([]models.BackupPolicy, error) {
 			return nil, err
 		}
 		policies = append(policies, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading backup policies: %w", err)
 	}
 	return policies, nil
 }
@@ -57,6 +61,9 @@ func (d *DB) GetEnabledBackupPolicies() ([]models.BackupPolicy, error) {
 			return nil, err
 		}
 		policies = append(policies, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading enabled backup policies: %w", err)
 	}
 	return policies, nil
 }
@@ -113,6 +120,9 @@ func (d *DB) GetBackupRuns(limit int) ([]models.BackupRun, error) {
 			return nil, err
 		}
 		runs = append(runs, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading backup runs: %w", err)
 	}
 	return runs, nil
 }
@@ -198,6 +208,9 @@ func (d *DB) GetBackupRunItems(runID string) ([]models.BackupRunItem, error) {
 			return nil, err
 		}
 		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading backup run items: %w", err)
 	}
 	return items, nil
 }

@@ -9,6 +9,22 @@ version: "2"
 #   - contextcheck: catches context.Background()/TODO() used where a request
 #     or caller context should propagate — the failure mode is a cancelled
 #     request that keeps working anyway.
+#   - rowserrcheck: a `for rows.Next()` loop that never calls rows.Err()
+#     ends on a driver fault exactly the way it ends on exhaustion, so the
+#     function returns a SHORT result set with a NIL error — "I could not
+#     find out" rendered as "this is everything" (agent-os-chmv). The worst
+#     case found was MigrateStackIDsToRootPrefixed, which truncated its
+#     mapping list, migrated only part of the stacks table, and committed
+#     the stack_id_version='2' stamp anyway, so the migration never ran
+#     again.
+#     COVERAGE, measured on 8104a65 with `default: none` + this linter alone:
+#     it flagged all 16 unguarded non-test sites in internal/database plus 4
+#     in migrations_test.go — 20 of 20, not a partial guard.
+#     Do not repeat the measurement without the `issues:` block below.
+#     golangci-lint's DEFAULT max-same-issues is 3, and every one of these
+#     sites emits the identical text `rows.Err must be checked`, so a capped
+#     run reports exactly 3 and silently drops 17. That artifact was briefly
+#     mistaken for the linter covering only 3 of 16 sites.
 #   - gosec: security-focused static analysis. G104/G301/G306/G101 are
 #     excluded below (reasons on each rule) for being noisy on this codebase
 #     specifically, not gosec as a whole. Every other finding — G204's
@@ -36,6 +52,7 @@ linters:
     - bodyclose
     - contextcheck
     - gosec
+    - rowserrcheck
   exclusions:
     generated: lax
     # Deliberately NOT using the common-false-positives/legacy presets.

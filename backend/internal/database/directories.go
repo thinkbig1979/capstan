@@ -89,6 +89,9 @@ func (d *DB) ListDirectories() ([]models.Directory, error) {
 		dir.GitHTTPSToken = ""
 		directories = append(directories, dir)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading directories: %w", err)
+	}
 	return directories, nil
 }
 
