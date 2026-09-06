@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # scripts/check-ws-read-deadline.sh
 #
-# ONE invariant, the ratchet for agent-os-euyg:
+# ONE invariant, the ratchet for agent-os-euyg (shape A) and agent-os-jar5
+# (shapes B, C and D):
 #
-#   No *_test.go file under backend/internal/handlers/ sets a WebSocket
-#   deadline as `Set{Read,Write}Deadline(time.Now().Add(...))`. Test waits use
-#   hangGuardDeadline(t) (backup_ws_cap_test.go), an ABSOLUTE deadline a
-#   passing run never consults.
+#   No *_test.go file under backend/internal/handlers/ bounds a wait with a
+#   FIXED WALL-CLOCK DURATION. Test waits use hangGuardDeadline(t)
+#   (backup_ws_cap_test.go), an ABSOLUTE deadline a passing run never consults,
+#   reached either directly or via time.Until(...).
 #
 # WHY. A fixed wall-clock bound makes the test's PASS depend on the clock
 # rather than on the condition it is waiting for, so a loaded runner turns
@@ -22,48 +23,75 @@
 # day (PR #297), and nothing noticed until an audit ran the grep again. A
 # remainder nobody can regrow past is a check, not a note.
 #
-# WHY IT MATCHES ANY ARGUMENT, NOT ONLY A LITERAL. The class's own acceptance
-# sweep is textual -- `SetReadDeadline(time.Now().Add` -- and one of the eight
-# original sites passed a VARIABLE (`time.Now().Add(within)`, a helper taking a
-# time.Duration). A literal-only rule would disagree with the sweep it exists
-# to ratchet, and a duration parameter is precisely what forces the offending
-# expression into the callee. The absolute-deadline form has no such trap.
+# THE FOUR SHAPES, and why the count grew from one to four. agent-os-euyg
+# ratcheted shape A alone and said so in this header: it named the other
+# routes, MEASURED that it did not report them, and listed the seven live
+# sites it was deliberately not reddening. agent-os-jar5 converted those seven
+# (plus an eighth this file's own author had not found, and two out-of-shape
+# extras), so the pattern widens here rather than in a second script.
 #
-# WHAT THIS DOES **NOT** COVER, AND WHY A PASSING RUN IS NOT A CLOSED CLASS.
-# The defect class is "a test whose PASS depends on a fixed wall-clock bound
-# rather than on the condition it waits for". That class has THREE syntactic
-# routes in this package and this check ratchets exactly ONE of them. MEASURED,
-# by pointing this script at a fixture carrying all three (reproducible in four
-# lines; agent-os-euyg, independently re-run by the orchestrator):
+#   A. Set{Read,Write}Deadline(time.Now().Add(...))          -- agent-os-euyg
+#   B. time.After / time.NewTimer / time.Tick / time.AfterFunc
+#      given anything other than time.Until(...)             -- agent-os-jar5
+#   C. time.Now().Add(...) used as a test deadline, with or
+#      without a Set*Deadline call on the same line          -- agent-os-jar5
+#   D. testify Eventually/Never given a literal (waitFor, tick) pair
+#                                                            -- agent-os-jar5
 #
-#   require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))  REPORTED
-#   deadline := time.Now().Add(10 * time.Second)                             NOT reported
-#   case <-time.After(5 * time.Second):                                      NOT reported
+# WHY B IS NOT ANCHORED ON A DIGIT. The orchestrator's own sweep for this bead
+# was `time\.After\([0-9]+\s*\*\s*time\.` and it returned 3 of 5 sites,
+# silently: ws_test.go:350 and :465 were `time.After(time.Second)`, a bare
+# duration constant with NO DIGITS IN IT AT ALL. Rule B therefore keys on what
+# a CORRECT bound looks like (the argument is time.Until(...)) and rejects
+# everything else, rather than on what an incorrect one looks like. A rule
+# written the other way round cannot enumerate the ways to spell a duration.
 #
-# So a green run here means "no site of the SetReadDeadline shape", never "no
-# fixed wall-clock bound". The two uncovered routes are:
+# WHY B ALSO REJECTS A DERIVED BOUND CARRYING A LITERAL. `time.Until(guard) +
+# 500*time.Millisecond` (ws_auth_disabled_identity_test.go before jar5) is
+# guard-derived and still carries fixed slop. Rule B's second clause reports a
+# time.Until(...) argument on a line that also names a time.<Unit> constant.
 #
-#   1. time.After(<literal>) / time.NewTimer(<literal>) as a select arm whose
-#      expiry is a t.Fatal.
-#   2. `deadline := time.Now().Add(<literal>)` assigned to a variable and then
-#      used as the bound. THIS IS HOW THE EIGHTH SITE HID: the bead that
-#      created this ratchet counted seven sites from a
-#      `SetReadDeadline(time.Now().Add` sweep, and
-#      ear5_metrics_empty_recheck_test.go:164 was an eighth in the same class,
-#      in one of the same files, added by the same PR as a converted sibling 71
-#      lines above it -- invisible to that sweep because the call and the
-#      arithmetic sit on different lines. This check would NOT catch it
-#      regrowing.
+# WHY C MATCHES time.Now().Add( WITHOUT REQUIRING Set*Deadline. This file's
+# previous revision predicted the gap and asked for exactly this: rule A never
+# saw `deadline := time.Now().Add(10 * time.Second)`, which is how
+# ear5_metrics_empty_recheck_test.go:164 hid from the sweep that created rule
+# A -- the call and the arithmetic sat on different lines. Rule C is the
+# no-prefix version, which is why it needs the three exemptions below.
 #
-# They are deliberately not matched here rather than accidentally: adding them
-# today would redden a REQUIRED gate against seven live sites nobody is fixing
-# in this change (ws_test.go:350 and :465, mjrl_refused_frame_test.go:156,
-# dashboard_ws_refusal_test.go:117, health_test.go:220, backup_test.go:1804,
-# updates_stack_test.go:202). Those are tracked by agent-os-jar5, which is the
-# watcher for them the way this file is the watcher for the shape above. When
-# jar5 converts them, widen this pattern rather than adding a second script --
-# and note that a sweep for route 2 must match `time.Now().Add(` without
-# requiring the SetReadDeadline prefix, or it repeats the original blindness.
+# WHY D KEYS ON TWO ADJACENT DURATION LITERALS RATHER THAN ON `Eventually(`.
+# testify's Eventually(t, cond, waitFor, tick) is routinely written across
+# four lines, with `Eventually(` on one and the bounds on another, so a
+# per-line rule anchored on the call name cannot see the bound (the exact
+# multi-line blindness that hid ear5's site from rule A). The (waitFor, tick)
+# pair is itself unmistakable: a time.<Unit> constant immediately followed by
+# another duration literal argument. MEASURED over
+# backend/internal/handlers/*_test.go at agent-os-jar5: 0 lines match that
+# outside an Eventually/Never bound.
+#
+# THE THREE EXEMPTIONS TO RULE C, each self-tested BOTH WAYS below.
+#
+#   1. TOKEN LIFETIMES. A JWT "exp"/"iat"/"nbf" claim or a session ExpiresAt
+#      is a domain value, not a test deadline; 14 such lines are live in this
+#      directory and a 24-hour token expiry must never be "converted".
+#   2. THE FILE THAT DEFINES hangGuardDeadline. Detected BY CONTENT (it
+#      contains `func hangGuardDeadline(`), never by filename: the fix's own
+#      machinery is `guard := time.Now().Add(wsHangGuardCeiling)` plus a floor
+#      of `time.Now().Add(time.Second)`, which is rule C's own shape. A
+#      filename-keyed selector is the defect agent-os-1hig is about, so it is
+#      not reintroduced here; if that helper moves file, the exemption moves
+#      with it.
+#   3. AN EXPLICIT `// wall-clock ok: <reason>` MARKER on the code line. One
+#      live use: backup_test.go's bounded NEGATIVE probe, which asserts a run
+#      has NOT finished -- there the bound IS the assertion, a slow box can
+#      only push it toward the expected answer, and hangGuardDeadline(t) would
+#      cost the full 60s ceiling to discriminate nothing extra.
+#
+#      THE REASON IS MANDATORY. A bare `// wall-clock ok:` does NOT exempt,
+#      and the self-test pins that: an unaudited escape hatch is how this
+#      class regrows, and a marker nobody has to justify is unaudited by
+#      construction. Exempted lines are PRINTED in the clean output, with a
+#      count, so the hatch cannot be widened silently -- growth in that number
+#      is visible in the same place the verdict is.
 #
 # WHY BASH, AND WHY IT READS THE WORKING TREE. This runs inside the REQUIRED
 # "Docs structure and coverage gates" job, advertised as dependency-free bash
@@ -106,9 +134,17 @@ Usage: $(basename "$0") [DIR|--self-test]
 With no arguments, every *_test.go under backend/internal/handlers is scanned.
 With a directory argument, exactly that tree is scanned.
 
-Fails when a test sets a WebSocket deadline to now+duration
-(Set{Read,Write}Deadline(time.Now().Add(...))) instead of the absolute
-hangGuardDeadline(t), which makes the test's pass depend on the clock.
+Fails when a test bounds a wait with a fixed wall-clock duration instead of the
+absolute hangGuardDeadline(t), which makes the test's pass depend on the clock.
+Four shapes: [A] Set{Read,Write}Deadline(time.Now().Add(...)), [B] time.After /
+NewTimer / Tick / AfterFunc given anything but time.Until(...), [C] a
+time.Now().Add(...) test deadline, [D] a testify Eventually/Never bounded by a
+literal (waitFor, tick) pair.
+
+Exempt: JWT/session lifetime lines, the file that DEFINES hangGuardDeadline
+(matched by content, not by name), and a line carrying an explicit
+`// wall-clock ok: <reason>` marker. A bare marker with no reason does not
+exempt. Exempt lines are printed and counted on a clean run.
 
 --self-test runs the check against fixtures in a temp directory and asserts it
 still reports the shapes it must and stays silent on the shapes it must not.
@@ -119,15 +155,19 @@ USAGE
 # the check
 # ---------------------------------------------------------------------------
 
-# The rule is a PURE PER-LINE MATCH: one line in, one verdict out, no proximity
-# window and no multi-line aggregation. There is no "within N lines" rule that
-# could borrow the next call site's guard and read a defective line as clean.
+# EVERY RULE IS A PURE PER-LINE MATCH: one line in, one verdict out, no
+# proximity window and no multi-line aggregation. There is no "within N lines"
+# rule that could borrow the next call site's guard and read a defective line
+# as clean -- the failure that made handlers/directories.go:219 read GUARDED in
+# three separate documents (agent-os-7lg1, agent-os-3h9x). The one thing that
+# is NOT per-line is exemption 2, which is a property of the FILE and is
+# computed from the file's CONTENT before awk runs.
 #
-# The one exemption is a WHOLE-LINE comment (first non-blank characters are
-# `//`), because Go has no way to put code on such a line, and this file's own
-# prose has to be able to name the pattern it forbids. A code line with a
-# TRAILING comment is still code and still matches; the self-test pins both
-# halves of that boundary.
+# The one exemption to the line rules is a WHOLE-LINE comment (first non-blank
+# characters are `//`), because Go has no way to put code on such a line, and
+# this file's own prose has to be able to name the patterns it forbids. A code
+# line with a TRAILING comment is still code and still matches; the self-test
+# pins both halves of that boundary.
 scan() {
   local root=$1
 
@@ -147,22 +187,88 @@ scan() {
     return 1
   fi
 
-  command awk '
+  # Exemption 2, computed BY CONTENT, never by filename: the file that DEFINES
+  # hangGuardDeadline is the fix's own machinery, and its `time.Now().Add(
+  # wsHangGuardCeiling)` is rule C's shape by construction. Space-delimited on
+  # both sides so membership cannot match on a path prefix.
+  local hgfiles=" "
+  for f in "${files[@]}"; do
+    if command grep -q 'func hangGuardDeadline(' "$f"; then
+      hgfiles+="$f "
+    fi
+  done
+
+  command awk -v hgfiles="$hgfiles" '
+    function report(rule, why,   _) {
+      printf "%s:%d: [%s] %s\n      %s\n", FILENAME, FNR, rule, why, line
+      bad++
+    }
     {
       line = $0
       sub(/\r$/, "", line)
       if (line ~ /^[ \t]*\/\//) next
+
+      # Exemption 3: an explicit marker WITH A NON-EMPTY REASON after the
+      # colon. A bare "// wall-clock ok:" is not a reason and does not exempt.
+      if (line ~ /\/\/[ \t]*wall-clock ok:[ \t]*[^ \t]/) {
+        exempt++
+        exempts[exempt] = sprintf("%s:%d: %s", FILENAME, FNR, line)
+        next
+      }
+
+      # --- A: the agent-os-euyg shape, reported with its own message because
+      # --- it names the one call the reader has to change.
       if (line ~ /Set(Read|Write)Deadline\(time\.Now\(\)\.Add\(/) {
-        printf "%s:%d: %s\n", FILENAME, FNR, line
-        bad++
+        report("A", "WebSocket deadline set to now+duration")
+        next
+      }
+
+      # --- B: a timer/ticker whose bound is not derived from an absolute
+      # --- deadline. Keyed on what a CORRECT bound looks like, because the
+      # --- ways to spell a duration cannot be enumerated (time.Second has no
+      # --- digits in it).
+      if (line ~ /time\.(After|NewTimer|Tick|AfterFunc)\(/) {
+        if (line !~ /time\.(After|NewTimer|Tick|AfterFunc)\(time\.Until\(/) {
+          report("B", "timer bound is a fixed duration, not time.Until(<absolute deadline>)")
+          next
+        }
+        if (line ~ /time\.(Nanosecond|Microsecond|Millisecond|Second|Minute|Hour)/) {
+          report("B", "fixed slop added to a time.Until(...) bound")
+          next
+        }
+      }
+
+      # --- C: the no-prefix version of A. This is the rule that needs the
+      # --- exemptions; see the header for why each exists.
+      if (line ~ /time\.Now\(\)\.Add\(/) {
+        if (line ~ /"exp"|"iat"|"nbf"|ExpiresAt|IssuedAt|NotBefore/) {
+          exempt++
+          exempts[exempt] = sprintf("%s:%d: %s", FILENAME, FNR, line)
+        } else if (index(hgfiles, " " FILENAME " ") > 0) {
+          exempt++
+          exempts[exempt] = sprintf("%s:%d: %s", FILENAME, FNR, line)
+        } else {
+          report("C", "test deadline built as now+duration")
+          next
+        }
+      }
+
+      # --- D: testify Eventually/Never given a literal (waitFor, tick) pair.
+      # --- Keyed on the BOUNDS line, not on the call name, because the call
+      # --- is routinely four lines above its own bounds.
+      if (line ~ /time\.(Nanosecond|Microsecond|Millisecond|Second|Minute|Hour),[ \t]*[0-9]+[ \t]*\*[ \t]*time\./) {
+        report("D", "Eventually/Never bounded by a literal duration")
+        next
       }
     }
     END {
       if (bad > 0) {
-        printf "FAIL: ws-read-deadline - %d site(s) set a WebSocket deadline to now+duration. Use hangGuardDeadline(t) (backend/internal/handlers/backup_ws_cap_test.go): an absolute deadline a passing run never consults, so a loaded runner cannot turn correct code red.\n", bad
+        printf "FAIL: ws-read-deadline - %d site(s) bound a test wait with a fixed wall-clock duration. Use hangGuardDeadline(t) (backend/internal/handlers/backup_ws_cap_test.go), directly or via time.Until(...): an absolute deadline a passing run never consults, so a loaded runner cannot turn correct code red. A site where the bound IS the assertion carries a `// wall-clock ok: <reason>` marker instead.\n", bad
         exit 1
       }
-      printf "ws-read-deadline: %d file(s) scanned, no Set{Read,Write}Deadline(time.Now().Add( outside a comment\n", ARGC - 1
+      printf "ws-read-deadline: %d file(s) scanned, no fixed wall-clock test bound (shapes A-D)\n", ARGC - 1
+      printf "ws-read-deadline: %d exempt line(s) (token lifetimes, the hangGuardDeadline definition, and marked sites)\n", exempt
+      for (i = 1; i <= exempt; i++) printf "  exempt %s\n", exempts[i]
     }
   ' "${files[@]}"
 }
@@ -211,6 +317,14 @@ FIXTURE
   echo "$dir"
 }
 
+# write_raw_fixture DIR FILENAME CONTENT -> whole-file content, no func wrapper
+write_raw_fixture() {
+  local dir="$ST_DIR/$1"
+  command mkdir -p "$dir"
+  command printf '%s\n' "$3" > "$dir/$2"
+  echo "$dir"
+}
+
 selftest() {
   ST_DIR="$(command mktemp -d)" || {
     echo "FAIL: ws-read-deadline self-test - could not create a temp directory"
@@ -221,8 +335,9 @@ selftest() {
   ST_FAILS=0
 
   local literal guarded vardur absvar barenow writedl commentonly trailing nested prodonly noTests
+  local bLit bNoDigit bClean bSlop bTicker cVar cClean cJwt cHgDef cHgName cMark cBare dLit dNoDigit dClean cmtBCD
 
-  # --- the offending shape, and its converted twin
+  # --- shape A: the offending shape, and its converted twin
   literal=$(write_fixture literal a_test.go '	require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(5*time.Second)))')
   guarded=$(write_fixture guarded a_test.go '	require.NoError(t, clientConn.SetReadDeadline(hangGuardDeadline(t)))')
 
@@ -265,7 +380,56 @@ PROD
 package handlers
 PROD
 
-  selftest_case literal-5s          1 "$literal"     'a_test\.go:[0-9]+:.*SetReadDeadline'
+  # --- shape B (agent-os-jar5). bNoDigit is THE control for this bead: the
+  # --- orchestrator's digit-anchored sweep returned 3 of 5 because
+  # --- time.After(time.Second) has no digits in it. If only one B control
+  # --- ever runs, it is this one.
+  bLit=$(write_fixture bLit a_test.go '	case <-time.After(5 * time.Second):')
+  bNoDigit=$(write_fixture bNoDigit a_test.go '	case <-time.After(time.Second):')
+  bClean=$(write_fixture bClean a_test.go '	case <-time.After(time.Until(hangGuardDeadline(t))):')
+  bSlop=$(write_fixture bSlop a_test.go '	case <-time.After(time.Until(guard) + 500*time.Millisecond):')
+  # a NewTicker is a poll INTERVAL, not a bound whose expiry fails the test --
+  # deliberately out of class, and the near-miss spelling of time.Tick(
+  bTicker=$(write_fixture bTicker a_test.go '		ticker := time.NewTicker(100 * time.Millisecond)')
+
+  # --- shape C and its three exemptions
+  cVar=$(write_fixture cVar a_test.go '	deadline := time.Now().Add(5 * time.Second)')
+  cClean=$(write_fixture cClean a_test.go '	deadline := hangGuardDeadline(t)')
+  cJwt=$(write_fixture cJwt a_test.go '		"exp":      time.Now().Add(24 * time.Hour).Unix(),')
+  # exemption 2 is keyed on CONTENT. cHgDef defines hangGuardDeadline and is
+  # exempt; cHgName carries the identical line under the real machinery's
+  # FILENAME but without the definition, and must still be reported -- that
+  # pair is what proves the selector is not filename-keyed (agent-os-1hig).
+  cHgDef=$(write_raw_fixture cHgDef backup_ws_cap_test.go 'package handlers
+
+func hangGuardDeadline(t *testing.T) time.Time {
+	guard := time.Now().Add(wsHangGuardCeiling)
+	return guard
+}')
+  cHgName=$(write_raw_fixture cHgName backup_ws_cap_test.go 'package handlers
+
+func somethingElse(t *testing.T) time.Time {
+	guard := time.Now().Add(wsHangGuardCeiling)
+	return guard
+}')
+  # exemption 3, and the arm that matters: a marker with NO REASON must NOT
+  # exempt. An escape hatch nobody has to justify is unaudited by construction.
+  cMark=$(write_fixture cMark a_test.go '	_, ok := awaitDurableRun(t, reg, id, time.Now().Add(500*time.Millisecond)) // wall-clock ok: bounded negative probe')
+  cBare=$(write_fixture cBare a_test.go '	_, ok := awaitDurableRun(t, reg, id, time.Now().Add(500*time.Millisecond)) // wall-clock ok:')
+
+  # --- shape D: the testify (waitFor, tick) pair, on its own line as testify
+  # --- calls are normally written. dNoDigit is D's version of the no-digit
+  # --- trap: a bare time.Second waitFor.
+  dLit=$(write_fixture dLit a_test.go '	}, 2*time.Second, 10*time.Millisecond,')
+  dNoDigit=$(write_fixture dNoDigit a_test.go '	}, time.Second, 10*time.Millisecond,')
+  dClean=$(write_fixture dClean a_test.go '	}, time.Until(hangGuardDeadline(t)), 10*time.Millisecond,')
+
+  # --- a whole-line comment naming B, C and D at once is still not a site
+  cmtBCD=$(write_fixture cmtBCD a_test.go '	// never write time.After(5 * time.Second), deadline := time.Now().Add(5 * time.Second)
+	// or }, 2*time.Second, 10*time.Millisecond, in this package
+	deadline := hangGuardDeadline(t)')
+
+  selftest_case literal-5s          1 "$literal"     'a_test\.go:[0-9]+: \[A\]'
   selftest_case literal-names-fix   1 "$literal"     'hangGuardDeadline\(t\)'
   selftest_case hang-guard-clean    0 "$guarded"     '1 file\(s\) scanned'
   selftest_case variable-duration   1 "$vardur"      '1 site\(s\)'
@@ -278,6 +442,26 @@ PROD
   selftest_case production-ignored  0 "$prodonly"    '1 file\(s\) scanned'
   selftest_case no-tests-is-a-fail  1 "$noTests"     'read nothing is not a clean tree'
   selftest_case missing-root        1 "$ST_DIR/does-not-exist" 'does not exist, so the ratchet did not run'
+
+  selftest_case b-literal           1 "$bLit"        '\[B\] timer bound is a fixed duration'
+  selftest_case b-no-digit          1 "$bNoDigit"    '\[B\] timer bound is a fixed duration'
+  selftest_case b-until-clean       0 "$bClean"      '1 file\(s\) scanned'
+  selftest_case b-additive-slop     1 "$bSlop"       '\[B\] fixed slop added'
+  selftest_case b-ticker-out-of-class 0 "$bTicker"   '1 file\(s\) scanned'
+
+  selftest_case c-assigned-deadline 1 "$cVar"        '\[C\] test deadline built as now\+duration'
+  selftest_case c-absolute-clean    0 "$cClean"      '1 file\(s\) scanned'
+  selftest_case c-jwt-exempt        0 "$cJwt"        '1 exempt line\(s\)'
+  selftest_case c-hangguard-def     0 "$cHgDef"      '1 exempt line\(s\)'
+  selftest_case c-hangguard-name    1 "$cHgName"     '\[C\] test deadline built as now\+duration'
+  selftest_case c-marker-exempt     0 "$cMark"       '1 exempt line\(s\)'
+  selftest_case c-marker-no-reason  1 "$cBare"       '\[C\] test deadline built as now\+duration'
+
+  selftest_case d-literal-bound     1 "$dLit"        '\[D\] Eventually/Never bounded by a literal'
+  selftest_case d-no-digit-bound    1 "$dNoDigit"    '\[D\] Eventually/Never bounded by a literal'
+  selftest_case d-until-clean       0 "$dClean"      '1 file\(s\) scanned'
+
+  selftest_case comment-names-bcd   0 "$cmtBCD"      '1 file\(s\) scanned'
 
   if [ "$ST_FAILS" -gt 0 ]; then
     echo "FAIL: ws-read-deadline self-test - $ST_FAILS of $ST_RUN control(s) failed; the check does not behave as documented"
