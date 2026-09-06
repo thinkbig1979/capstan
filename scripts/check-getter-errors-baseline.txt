@@ -17,7 +17,7 @@ internal/middleware/auth.go DISCARD=0 SOFT=1 MERGE=0
 internal/middleware/csrf.go DISCARD=0 SOFT=0 MERGE=2
 internal/middleware/ratelimit.go DISCARD=0 SOFT=0 MERGE=1
 internal/middleware/requestid.go DISCARD=0 SOFT=1 MERGE=0
-internal/services/backup.go DISCARD=4 SOFT=5 MERGE=1
+internal/services/backup.go DISCARD=4 SOFT=3 MERGE=1
 internal/services/backup_config.go DISCARD=1 SOFT=2 MERGE=0
 internal/services/backup_restic.go DISCARD=0 SOFT=0 MERGE=1
 internal/services/crypto.go DISCARD=0 SOFT=1 MERGE=0
@@ -31,4 +31,4 @@ internal/services/redact_url.go DISCARD=5 SOFT=3 MERGE=0
 internal/services/scanner.go DISCARD=0 SOFT=4 MERGE=0
 internal/services/schedule.go DISCARD=2 SOFT=0 MERGE=0
 internal/services/watcher.go DISCARD=0 SOFT=1 MERGE=0
-TOTAL FILES=33 DISCARD=39 SOFT=48 MERGE=14
+TOTAL FILES=33 DISCARD=39 SOFT=46 MERGE=14

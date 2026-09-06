@@ -116,6 +116,11 @@ type BackupService struct {
 	// so status endpoints can report the scheduler state accurately.
 	schedulerActive atomic.Bool
 
+	// nextRunAtFault holds the fault kind NextRunAt saw on its most recent call,
+	// so a fault that persists across every status poll is logged once per
+	// episode rather than once per poll. See noteNextRunAtFault.
+	nextRunAtFault atomic.Int32
+
 	// resticBin / rcloneBin cache the resolved binary paths at construction
 	// time for fast availability checks. Empty = binary absent.
 	resticBin string
@@ -402,13 +407,33 @@ func (s *BackupService) NextRunAt() *time.Time {
 	interval := time.Duration(bc.ScheduleInterval) * time.Minute
 
 	// Use the most recent run's finish time as the base, falling back to now.
+	//
+	// Three outcomes share that fallback and must not be confused (agent-os-38ct):
+	// the read FAILED, the stored timestamp is UNPARSEABLE, or there simply is no
+	// finished run yet. Only the third is normal, and it is the one that made the
+	// other two invisible. All three still fall back to time.Now(): NextRunAt is a
+	// read-only estimator for one JSON field, so a fault is reported, not acted on.
 	var base time.Time
 	runs, err := s.db.GetBackupRuns(1)
-	if err == nil && len(runs) > 0 && runs[0].FinishedAt != nil {
+	switch {
+	case err != nil:
+		s.noteNextRunAtFault(nextRunAtFaultRead,
+			"Could not read the last backup run; the next-backup estimate falls back to now",
+			"error", err)
+	case len(runs) > 0 && runs[0].FinishedAt != nil:
 		parsed, parseErr := time.Parse(time.RFC3339, *runs[0].FinishedAt)
-		if parseErr == nil {
-			base = parsed
+		if parseErr != nil {
+			s.noteNextRunAtFault(nextRunAtFaultParse,
+				"The last backup run's finish time is unparseable; the next-backup estimate falls back to now",
+				"run_id", runs[0].ID, "finished_at", *runs[0].FinishedAt, "error", parseErr)
+			break
 		}
+		s.nextRunAtFault.Store(nextRunAtFaultNone)
+		base = parsed
+	default:
+		// No run yet, or the newest has not finished. Normal, and silent: this
+		// is the ordinary state of a freshly started scheduler.
+		s.nextRunAtFault.Store(nextRunAtFaultNone)
 	}
 	if base.IsZero() {
 		base = time.Now().UTC()
@@ -416,6 +441,35 @@ func (s *BackupService) NextRunAt() *time.Time {
 
 	next := base.Add(interval)
 	return &next
+}
+
+// Fault kinds recorded in BackupService.nextRunAtFault.
+const (
+	nextRunAtFaultNone int32 = iota
+	nextRunAtFaultRead
+	nextRunAtFaultParse
+)
+
+// noteNextRunAtFault logs kind ONCE per episode: the line is emitted only when
+// the observed fault kind CHANGES, and every healthy call resets the state, so
+// the next episode is reported again.
+//
+// The gate is the point. NextRunAt is called once per dashboard status poll
+// (handlers/backup.go:727), and the two comments above at :375 and :387 decline
+// to log there for exactly that reason. An unconditional line here would emit
+// one entry per poll for as long as the fault lasted; this emits one entry per
+// fault, which is the information an operator actually needs. A genuinely
+// FLAPPING fault still logs per flap, which is a real state change and worth
+// seeing.
+//
+// Not tested against a live flapping database -- inferred from the Swap
+// semantics; TestNextRunAt_ReadFaultIsVisibleAndLoggedOnce pins the persistent
+// case at exactly one line across four polls.
+func (s *BackupService) noteNextRunAtFault(kind int32, msg string, args ...any) {
+	if s.nextRunAtFault.Swap(kind) == kind {
+		return
+	}
+	s.logger.Warn(msg, args...)
 }
 
 // RepoSizeBytes returns the raw-data size of the restic repository in bytes,
