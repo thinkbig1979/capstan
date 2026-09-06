@@ -1,0 +1,9 @@
+mode: set
+example.com/fixture/reach_branch.go:20.49,21.14 1 1
+example.com/fixture/reach_branch.go:21.14,23.3 1 1
+example.com/fixture/reach_branch.go:24.2,24.23 1 1
+example.com/fixture/reach_branch.go:29.43,31.16 2 1
+example.com/fixture/reach_branch.go:31.16,32.32 1 1
+example.com/fixture/reach_branch.go:32.32,34.4 1 1
+example.com/fixture/reach_branch.go:35.3,35.17 1 1
+example.com/fixture/reach_branch.go:37.2,37.22 1 0

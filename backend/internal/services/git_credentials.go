@@ -173,9 +173,11 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 		// would have hit that read first. Verified by reading the switch at
 		// :128-157, and OBSERVED: a `go test -overlay` mutant that swallows this
 		// default branch entirely leaves ./internal/services GREEN, 0 `--- FAIL`,
-		// with `go build ./...` exit 0. (scripts/check-getter-fault-reach.sh
-		// cannot answer this one: its site shape is an `if err != nil` guard, so
-		// a switch-based conversion is not in its site set at all.)
+		// with `go build ./...` exit 0. (`getter-errors reach` cannot answer this
+		// one either -- its site shape is an `if err != nil` guard, so a
+		// switch-based conversion is not in its site set at all. Its shell
+		// driver check-getter-fault-reach.sh was deleted in agent-os-1hig; the
+		// limitation named here is a property of the analyser, which survives.)
 		// That unreachability is an accident of statement ORDER,
 		// not a property of this site — move this read above the token read, or
 		// weaken either `return "", ""`, and the old fall-through becomes live. So

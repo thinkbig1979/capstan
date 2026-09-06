@@ -24,12 +24,14 @@ import (
 // of these nine returns to swallow its error left the suite green.
 //
 // HOW THE SITE SET WAS DERIVED, and why it is not the twelve the bead names.
-// scripts/check-getter-fault-reach.sh reports MISS=12 for services/git.go, but
-// its test selection is the filename pattern *_dbfault_test.go and git.go's
-// errors are exec errors, not DB errors — so it cannot see the ordinary tests
-// in this package that already drive faults into five of the twelve. Measured
-// with the same instrument's Go mode over a FULL-package coverage profile, on
-// 19082bb:
+// The former shell driver scripts/check-getter-fault-reach.sh reported MISS=12
+// for services/git.go, because its test selection was the filename pattern
+// *_dbfault_test.go while git.go's errors are exec errors, not DB errors — so
+// it could not see the ordinary tests in this package that already drive faults
+// into five of the twelve. That selector IS agent-os-1hig, which deleted the
+// script; this file's own name is a sixth victim of that glob. The surviving
+// instrument is the analyser's Go mode, measured over a FULL-package coverage
+// profile, on 19082bb:
 //
 //	go test ./internal/services -count=1 -coverprofile=all.cov
 //	go run ../scripts/getter-errors/main.go reach all.cov $PWD/internal/services/git.go
