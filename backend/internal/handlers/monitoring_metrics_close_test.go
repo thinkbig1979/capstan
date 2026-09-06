@@ -316,7 +316,7 @@ func TestMonitoringMetricsWS_ClientDisconnectClosesConnection(t *testing.T) {
 	// Drain one real metrics frame first, proving the handler reached its
 	// main streaming loop (past GetContainersForStack/StreamStats setup)
 	// before simulating the client vanishing.
-	require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	require.NoError(t, clientConn.SetReadDeadline(hangGuardDeadline(t)))
 	_, _, err := clientConn.ReadMessage()
 	require.NoError(t, err, "expected at least one metrics frame before disconnecting")
 
@@ -346,7 +346,7 @@ func TestMonitoringMetricsWS_StillStreamingStaysOpen(t *testing.T) {
 
 	serverConn := firstConnection(t, cm)
 
-	require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	require.NoError(t, clientConn.SetReadDeadline(hangGuardDeadline(t)))
 	_, _, err := clientConn.ReadMessage()
 	require.NoError(t, err, "expected at least one metrics frame while still connected")
 

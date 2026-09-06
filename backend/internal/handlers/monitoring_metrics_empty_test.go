@@ -23,9 +23,20 @@ import (
 // distinction the empty-list test most needs: json.Unmarshal turns both
 // `null` and `[]` into a zero-length Go slice, so no assertion on
 // frame.Containers can tell them apart. Only the bytes can (agent-os-74rl).
-func readMetricsFrame(t *testing.T, conn *websocket.Conn, within time.Duration, why string) (MetricsFrame, []byte) {
+//
+// deadline is ABSOLUTE, not a duration, and that is load-bearing rather than
+// stylistic (agent-os-euyg). A time.Duration parameter forces the body to
+// write time.Now().Add(within), which is the fixed wall-clock bound the class
+// is about; every caller then has to supply a number, and every number so
+// supplied here was 5*time.Second. A time.Time makes that expression
+// unrepresentable in this helper and lets each caller pass
+// hangGuardDeadline(t) instead -- a bound no passing run ever consults,
+// because the read blocks on the frame arriving, not on the clock. See the
+// comment on hangGuardDeadline (backup_ws_cap_test.go) for why a bigger
+// constant would not have been the fix.
+func readMetricsFrame(t *testing.T, conn *websocket.Conn, deadline time.Time, why string) (MetricsFrame, []byte) {
 	t.Helper()
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(within)))
+	require.NoError(t, conn.SetReadDeadline(deadline))
 	_, payload, err := conn.ReadMessage()
 	require.NoError(t, err, why)
 
@@ -68,7 +79,7 @@ func TestMonitoringMetricsWS_EmptyContainerListStaysOpen(t *testing.T) {
 
 	serverConn := firstConnection(t, cm)
 
-	frame, payload := readMetricsFrame(t, clientConn, 5*time.Second,
+	frame, payload := readMetricsFrame(t, clientConn, hangGuardDeadline(t),
 		"expected an empty metrics frame instead of an immediate close on an empty container list")
 	require.Empty(t, frame.Containers, "empty container list must yield a frame with no containers")
 
@@ -110,7 +121,7 @@ func TestMonitoringMetricsWS_PopulatedListStillStreams(t *testing.T) {
 
 	serverConn := firstConnection(t, cm)
 
-	frame, _ := readMetricsFrame(t, clientConn, 5*time.Second,
+	frame, _ := readMetricsFrame(t, clientConn, hangGuardDeadline(t),
 		"expected a real metrics frame for a stack with two running containers")
 	require.Len(t, frame.Containers, 2, "populated container list must still stream every container")
 
@@ -151,7 +162,7 @@ func TestMonitoringMetricsWS_EmptyListClientDisconnectClosesConnection(t *testin
 
 	// Drain one empty frame first, so the handler is provably parked in the
 	// ticker loop — not still in setup — before the client vanishes.
-	frame, _ := readMetricsFrame(t, clientConn, 5*time.Second,
+	frame, _ := readMetricsFrame(t, clientConn, hangGuardDeadline(t),
 		"expected an empty metrics frame before disconnecting")
 	require.Empty(t, frame.Containers, "expected the empty-list frame, not a populated one")
 
