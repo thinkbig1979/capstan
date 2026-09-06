@@ -1,4 +1,7 @@
-// Package reach is the fixture for check-getter-fault-reach.sh's self-test.
+// Package reach is the fixture for `getter-errors reach --self-test`, arms 1
+// and 2. (Until agent-os-1hig its driver was check-getter-fault-reach.sh; that
+// script was deleted and its self-test arms moved into the tool, because
+// nothing else on this tree exercises `reach` at all.)
 // It holds two CONVERTED sites -- the shape this family's fixes produce -- and
 // is paired with two hand-written coverage profiles: cov_all.txt, where both
 // error branches ran, and cov_partial.txt, where the second one never did.

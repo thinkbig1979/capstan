@@ -201,8 +201,30 @@
 #   scanner: never redirect its stderr, and never pipe before reading its exit
 #   code.
 #
-#   `reach` takes a coverage profile and files, not a directory:
+#   `reach` (layer C) takes a coverage profile and files, not a directory, and
+#   answers a DIFFERENT question from layers A and B: not "is this site
+#   converted" but "does any test drive a fault INTO it".
 #     $ go run scripts/getter-errors/main.go reach coverage.out backend/internal/services/backup.go
+#     REACHED backup.go:118 GetSetting (loadConfig)
+#     PARTIAL backup.go:204 GetStack (runBackup) dead=209
+#     MISS    backup.go:377 GetSetting (pruneOld)
+#     TOTAL CONVERTED=3 REACHED=1 PARTIAL=1 MISS=1
+#
+#   PARTIAL is the verdict that matters and the reason it is three-valued. A
+#   binary REACHED/MISS reports per SITE while coverage is per BLOCK, so an
+#   error body holding a nested dispatch reads REACHED as soon as ONE of its
+#   blocks runs -- services/git.go:101 and :726 both did, while their own
+#   fall-through `return nil, fmt.Errorf(...)` never executed, so a mutant on
+#   either line survived a REACHED verdict (agent-os-hsj7). PARTIAL names the
+#   dead lines.
+#
+#   Its verdict is exercised by --self-test above, four arms. There is no
+#   standing driver that generates the coverage profile for you: there was one,
+#   scripts/check-getter-fault-reach.sh, and it was deleted for selecting its
+#   tests by filename (agent-os-1hig). To run it by hand, produce a profile with
+#   the fault tests you care about and pass the files:
+#     $ cd backend && go test ./internal/services -run '\''^TestX$'\'' -coverprofile=/tmp/c.out
+#     $ go run scripts/getter-errors/main.go reach /tmp/c.out backend/internal/services/backup.go
 #
 # Exit: 0 clean, 1 violation or an unusable input, 2 usage error.
 
@@ -393,10 +415,32 @@ TOTAL SITES=16 DISCARD=3 SOFT=5 MERGE=8'
   fi
   rm -rf "$tmp"
 
+  # ARM 5, THE REACH VERDICT. Layer C lives in the same binary as layers A and
+  # B, and until agent-os-1hig its only exercise on this tree was
+  # scripts/check-getter-fault-reach.sh's own --self-test. That script was
+  # deleted (it selected its tests by the filename convention
+  # `*_dbfault_test.go` while its site set included non-DB getters, so a real
+  # filesystem-fault test drove a fault into a site it still reported MISS),
+  # and scripts/getter-errors holds no _test.go file while the repo root has no
+  # go.mod, so NOTHING would have exercised `reach` afterwards. Its four arms
+  # moved into the tool itself and are called from here, which is the only
+  # gated caller either layer has.
+  #
+  # Never redirect its stderr and never pipe before reading its exit code: a
+  # `go run` refusal writes to stderr and leaves stdout EMPTY, which is the
+  # false zero this whole file exists to prevent.
+  out=$(go run "$TOOL" reach --self-test)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "self-test: FAIL - the reach (layer C) verdict no longer fires:"
+    echo "$out" | sed 's/^/  /'
+    failed=1
+  fi
+
   if [ "$failed" -ne 0 ]; then
     return 1
   fi
-  echo "self-test: 16 sites found in the must-fire fixture (3 DISCARD, 5 SOFT, 8 MERGE), 0 in the must-not-fire fixture, ratchet rejects DISCARD growth, MERGE growth and a new file, and accepts no change"
+  echo "self-test: 16 sites found in the must-fire fixture (3 DISCARD, 5 SOFT, 8 MERGE), 0 in the must-not-fire fixture, ratchet rejects DISCARD growth, MERGE growth and a new file, and accepts no change; ${out#reach self-test: }"
   return 0
 }
 

@@ -15,8 +15,11 @@
 //
 //	scan <dir>              list every DISCARD / SOFT / MERGE site under <dir>
 //	counts <dir>            the same, aggregated per file (the ratchet baseline)
-//	reach <dir> <profile>   list converted sites and whether a test drives a
-//	                        fault into each (layer C; needs a coverage profile)
+//	reach <profile> <file.go...>
+//	                        list converted sites and whether a test drives a
+//	                        fault into each -- REACHED / PARTIAL / MISS (layer
+//	                        C; needs a coverage profile)
+//	reach --self-test       prove that verdict still fires, all four ways
 //
 // SHAPES.
 //
@@ -114,16 +117,46 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	_ "embed"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 )
+
+// THE REACH SELF-TEST'S FIXTURES ARE EMBEDDED, NOT READ FROM DISK. The self-
+// test is the only exercise `reach` has: scripts/getter-errors holds no
+// _test.go file and the repo root has no go.mod, so no `go test` can reach
+// this program at all. A fixture loaded by relative path would resolve against
+// the CALLER's working directory, and the shape that produces is a self-test
+// that passes because it found nothing to disagree with. Embedding makes the
+// fixtures part of the binary, so "the fixture was missing" is a compile
+// error rather than a green run.
+//
+//go:embed testdata/reach/reach.go
+var fxReachSrc []byte
+
+//go:embed testdata/reach/cov_all.txt
+var fxCovAll []byte
+
+//go:embed testdata/reach/cov_partial.txt
+var fxCovPartial []byte
+
+//go:embed testdata/reach/reach_branch.go
+var fxBranchSrc []byte
+
+//go:embed testdata/reach/cov_branch_all.txt
+var fxCovBranchAll []byte
+
+//go:embed testdata/reach/cov_branch_partial.txt
+var fxCovBranchPartial []byte
 
 type site struct {
 	kind   string // DISCARD | SOFT | MERGE
@@ -877,8 +910,14 @@ func readProfile(path string) (map[string][]covBlock, error) {
 		return nil, err
 	}
 	defer func() { _ = fh.Close() }()
+	return parseProfile(fh)
+}
+
+// parseProfile is readProfile's body over any reader, so the self-test can
+// feed it an embedded fixture instead of a path.
+func parseProfile(r io.Reader) (map[string][]covBlock, error) {
 	out := map[string][]covBlock{}
-	sc := bufio.NewScanner(fh)
+	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "mode:") {
@@ -919,28 +958,57 @@ func blocksFor(prof map[string][]covBlock, rel string) []covBlock {
 	return nil
 }
 
-// cmdReach reports, for every converted site in the named source files,
-// whether the coverage profile shows its error branch executed at least once.
-func cmdReach(profile string, files []string) error {
-	prof, err := readProfile(profile)
-	if err != nil {
-		return err
-	}
+// reachInput is one source file to analyse. src nil means "read the file at
+// name"; src non-nil means "this is the content, and name is only a label" --
+// which is what lets the self-test run against embedded fixtures.
+type reachInput struct {
+	name string
+	src  []byte
+}
+
+// THE VERDICT IS THREE-VALUED, and that is the whole point of it.
+//
+// A binary REACHED/MISS reports per SITE while the coverage underneath is per
+// BLOCK, so an error body holding several blocks reads REACHED as soon as ONE
+// of them runs. That is a truthful answer to "did a fault ARRIVE here" and a
+// misleading answer to the question this tool actually exists for, which is
+// "would a mutation at this site survive". Measured on the tree
+// (agent-os-hsj7): services/git.go:101 and :726 both read REACHED while their
+// own fall-through `return nil, fmt.Errorf(...)` never executed --
+//
+//	git.go:101.3,101.60 1 0
+//	git.go:726.3,726.55 1 0
+//
+// -- because each body also holds a nested dispatch (the 404 branch at :97,
+// the gitFailure branch at :722) that DID run. A mutant on either dead line
+// survives, and the instrument said REACHED.
+//
+//	REACHED  every block wholly inside the body ran
+//	PARTIAL  some did and some did not; the dead blocks' first lines are named
+//	MISS     none did, so no fault reaches this site at all
+//
+// MISS keeps exactly its old meaning, so anything keyed on MISS is unaffected;
+// PARTIAL is carved out of what used to be reported as REACHED.
+func reachReport(w io.Writer, prof map[string][]covBlock, profName string, files []reachInput) error {
 	fset := token.NewFileSet()
-	total, reached := 0, 0
+	total, reached, partial := 0, 0, 0
 	var misses []string
-	for _, p := range files {
-		f, perr := parser.ParseFile(fset, p, nil, 0)
+	for _, in := range files {
+		var srcArg any
+		if in.src != nil {
+			srcArg = in.src
+		}
+		f, perr := parser.ParseFile(fset, in.name, srcArg, 0)
 		if perr != nil {
-			return fmt.Errorf("parse %s: %w", p, perr)
+			return fmt.Errorf("parse %s: %w", in.name, perr)
 		}
-		rel := displayPath(p)
-		blocks := blocksFor(prof, filepath.ToSlash(filepath.Base(p)))
+		rel := displayPath(in.name)
+		blocks := blocksFor(prof, filepath.ToSlash(filepath.Base(in.name)))
 		if blocks == nil {
-			blocks = blocksFor(prof, filepath.ToSlash(p))
+			blocks = blocksFor(prof, filepath.ToSlash(in.name))
 		}
 		if blocks == nil {
-			return fmt.Errorf("no coverage blocks for %s in %s -- the profile does not cover this file, which is a blind instrument, not a clean result", rel, profile)
+			return fmt.Errorf("no coverage blocks for %s in %s -- the profile does not cover this file, which is a blind instrument, not a clean result", rel, profName)
 		}
 		for _, c := range convertedSites(fset, f, rel) {
 			total++
@@ -954,33 +1022,154 @@ func cmdReach(profile string, files []string) error {
 			// following it ran. testdata/reach/cov_partial.txt pins that: the
 			// second site's branch is 0 while the block immediately after it
 			// is 1, and the self-test requires the answer to be MISS.
-			hit := false
+			inBody, ran := 0, 0
+			var dead []int
 			for _, b := range blocks {
-				if b.lo >= c.bodyLo && b.hi <= c.bodyHi && b.count > 0 {
-					hit = true
-					break
+				if b.lo < c.bodyLo || b.hi > c.bodyHi {
+					continue
+				}
+				inBody++
+				if b.count > 0 {
+					ran++
+				} else {
+					dead = append(dead, b.lo)
 				}
 			}
-			label := "MISS   "
-			if hit {
-				label = "REACHED"
+			row := fmt.Sprintf("%s:%d %s (%s)", c.file, c.line, c.callee, c.fn)
+			switch {
+			case ran == 0:
+				// inBody == 0 lands here too: a body the profile says nothing
+				// about is no evidence, not good evidence.
+				misses = append(misses, row)
+				fmt.Fprintf(w, "MISS    %s\n", row)
+			case ran == inBody:
 				reached++
-			} else {
-				misses = append(misses, fmt.Sprintf("%s:%d %s (%s)", c.file, c.line, c.callee, c.fn))
+				fmt.Fprintf(w, "REACHED %s\n", row)
+			default:
+				partial++
+				parts := make([]string, len(dead))
+				for i, d := range dead {
+					parts[i] = strconv.Itoa(d)
+				}
+				fmt.Fprintf(w, "PARTIAL %s dead=%s\n", row, strings.Join(parts, ","))
 			}
-			fmt.Printf("%s %s:%d %s (%s)\n", label, c.file, c.line, c.callee, c.fn)
 		}
 	}
-	fmt.Printf("TOTAL CONVERTED=%d REACHED=%d MISS=%d\n", total, reached, total-reached)
+	fmt.Fprintf(w, "TOTAL CONVERTED=%d REACHED=%d PARTIAL=%d MISS=%d\n", total, reached, partial, total-reached-partial)
 	for _, m := range misses {
-		fmt.Printf("MISSLINE %s\n", m)
+		fmt.Fprintf(w, "MISSLINE %s\n", m)
 	}
+	return nil
+}
+
+// cmdReach reports, for every converted site in the named source files,
+// whether the coverage profile shows its error branch executed.
+func cmdReach(profile string, files []string) error {
+	prof, err := readProfile(profile)
+	if err != nil {
+		return err
+	}
+	inputs := make([]reachInput, len(files))
+	for i, f := range files {
+		inputs[i] = reachInput{name: f}
+	}
+	return reachReport(os.Stdout, prof, profile, inputs)
+}
+
+// selfTestReach proves the reach verdict still fires, in every direction it
+// can be wrong in. Arms 1 and 2 were carried over verbatim from
+// scripts/check-getter-fault-reach.sh when that script was deleted
+// (agent-os-1hig); arms 3 and 4 are new, because a self-test in which PARTIAL
+// never appears cannot show that PARTIAL fires -- and one in which it always
+// appears cannot show that it stops.
+func selfTestReach() error {
+	arms := []struct {
+		name string
+		cov  []byte
+		file string
+		src  []byte
+		want string
+	}{
+		{
+			// MUST REPORT CLEAN: every error branch covered.
+			name: "fully covered",
+			cov:  fxCovAll, file: "reach.go", src: fxReachSrc,
+			want: `REACHED reach.go:19 GetThing (firstRead)
+REACHED reach.go:27 GetThing (secondRead)
+TOTAL CONVERTED=2 REACHED=2 PARTIAL=0 MISS=0
+`,
+		},
+		{
+			// MUST REPORT THE MISS: the second site's own branch is 0 while
+			// the block immediately after it is 1. A window that does not stop
+			// at the closing brace reports this as REACHED, which is the
+			// borrowed-guard failure that made handlers/directories.go:219
+			// read GUARDED in three separate documents (agent-os-3h9x).
+			name: "unreached branch is not rescued by the block after it",
+			cov:  fxCovPartial, file: "reach.go", src: fxReachSrc,
+			want: `REACHED reach.go:19 GetThing (firstRead)
+MISS    reach.go:27 GetThing (secondRead)
+TOTAL CONVERTED=2 REACHED=1 PARTIAL=0 MISS=1
+MISSLINE reach.go:27 GetThing (secondRead)
+`,
+		},
+		{
+			// MUST REPORT PARTIAL AND NAME THE DEAD LINE. Two of the three
+			// blocks inside this body ran; `return "", err` at :35 did not.
+			// The binary verdict called this REACHED.
+			name: "multi-block body with one dead exit",
+			cov:  fxCovBranchPartial, file: "reach_branch.go", src: fxBranchSrc,
+			want: `PARTIAL reach_branch.go:30 GetThing (branchRead) dead=35
+TOTAL CONVERTED=1 REACHED=0 PARTIAL=1 MISS=0
+`,
+		},
+		{
+			// MUST NOT REPORT PARTIAL: same source, same body, every in-body
+			// block now 1. Without this arm an instrument that always said
+			// PARTIAL would pass arm 3. Note this profile still carries
+			// `37.2,37.22 1 0` -- the success return, OUTSIDE the body -- so
+			// it also re-proves the bound excludes the following block even
+			// when that block is dead.
+			name: "multi-block body with every exit exercised",
+			cov:  fxCovBranchAll, file: "reach_branch.go", src: fxBranchSrc,
+			want: `REACHED reach_branch.go:30 GetThing (branchRead)
+TOTAL CONVERTED=1 REACHED=1 PARTIAL=0 MISS=0
+`,
+		},
+	}
+
+	failed := 0
+	for _, a := range arms {
+		prof, err := parseProfile(bytes.NewReader(a.cov))
+		if err != nil {
+			return fmt.Errorf("self-test %q: %w", a.name, err)
+		}
+		var buf bytes.Buffer
+		if err := reachReport(&buf, prof, "<embedded "+a.name+">", []reachInput{{name: a.file, src: a.src}}); err != nil {
+			return fmt.Errorf("self-test %q: %w", a.name, err)
+		}
+		if buf.String() != a.want {
+			failed++
+			fmt.Printf("reach self-test: FAIL - %s\n  want:\n", a.name)
+			for _, l := range strings.Split(strings.TrimRight(a.want, "\n"), "\n") {
+				fmt.Printf("    %s\n", l)
+			}
+			fmt.Printf("  got:\n")
+			for _, l := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+				fmt.Printf("    %s\n", l)
+			}
+		}
+	}
+	if failed != 0 {
+		return fmt.Errorf("%d of %d reach self-test arms failed", failed, len(arms))
+	}
+	fmt.Printf("reach self-test: %d arms pass - a fully covered body reports REACHED, an unreached branch reports MISS and is not rescued by the block after it, a body with one dead exit reports PARTIAL naming line 35, and the same body with every exit exercised reports REACHED\n", len(arms))
 	return nil
 }
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: getter-errors scan|counts <dir> | reach <profile> <file.go...>")
+		fmt.Fprintln(os.Stderr, "usage: getter-errors scan|counts <dir> | reach <profile> <file.go...> | reach --self-test")
 		os.Exit(2)
 	}
 	var err error
@@ -998,8 +1187,12 @@ func main() {
 		}
 		err = cmdCounts(os.Args[2])
 	case "reach":
+		if len(os.Args) == 3 && os.Args[2] == "--self-test" {
+			err = selfTestReach()
+			break
+		}
 		if len(os.Args) < 4 {
-			fmt.Fprintln(os.Stderr, "usage: getter-errors reach <profile> <file.go...>")
+			fmt.Fprintln(os.Stderr, "usage: getter-errors reach <profile> <file.go...> | reach --self-test")
 			os.Exit(2)
 		}
 		err = cmdReach(os.Args[2], os.Args[3:])
