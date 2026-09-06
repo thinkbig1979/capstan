@@ -66,6 +66,16 @@ holding a login cookie is signed out. The server does not need restarting.
 // runAdminCommand executes an "admin" subcommand and returns a process exit
 // code. All I/O is injected so the behaviour can be tested without a terminal
 // or a live server.
+//
+// The `_, _ = io.WriteString(...)` discards here and in runResetPassword are
+// deliberate and stay, and the getter-errors baseline records them rather than
+// excluding them, so the ratchet still sees this file. They print usage text to
+// a terminal the operator is already looking at. There is no recovery: the only
+// channel for reporting a failed write to stderr is stderr, and returning a
+// different exit code because a help message did not render would report the
+// command as failed when nothing it was asked to do had failed. Contrast the
+// CountSessionsForUser and f.Stat sites below, where the discarded error
+// changed what the operator was TOLD about state they cannot otherwise see.
 func runAdminCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = io.WriteString(stderr, adminUsage)
@@ -166,8 +176,22 @@ func runResetPassword(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		return 1
 	}
 
+	// `err == nil &&` here softened a failed COUNT into "0 sessions remain",
+	// and the success line below then told the operator "All sessions revoked"
+	// on the strength of a number that was never read. The revocation itself
+	// did succeed (the DeleteSessionsByUserExcluding check above returned nil),
+	// so this reports an unverified success rather than a failure — but the
+	// operator resetting a password because access may be compromised is
+	// exactly the one who must not be told "revoked" when the answer is
+	// "unknown". Non-zero for the same reason the remaining > 0 branch is:
+	// the reset happened, something else about it did not.
 	remaining, err := db.CountSessionsForUser(user.ID)
-	if err == nil && remaining > 0 {
+	if err != nil {
+		fmt.Fprintf(stderr, "WARNING: password was reset and session revocation was accepted, but whether any "+
+			"session survived could not be checked: %v\nRestart the container if you need certainty.\n", err)
+		return 1
+	}
+	if remaining > 0 {
 		fmt.Fprintf(stderr, "WARNING: password was reset but %d session(s) remain.\n", remaining)
 		return 1
 	}
@@ -216,7 +240,18 @@ func resolveAccount(db *database.DB, username string) (*models.User, error) {
 // keeps it off both the screen and the shell history.
 func readPassword(stdin io.Reader) (string, error) {
 	if f, ok := stdin.(*os.File); ok {
-		if info, err := f.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+		info, err := f.Stat()
+		if err != nil {
+			// `err == nil &&` softened "could not find out whether this is a
+			// terminal" into "it is not one", which disables the guard in the
+			// only case where it cannot be checked — and the cost of guessing
+			// wrong is a password typed with echo on. Refusing loses nothing:
+			// Stat on a usable descriptor does not fail, so a descriptor that
+			// fails here would fail the io.ReadAll below in any case.
+			return "", fmt.Errorf("cannot determine whether stdin is a terminal, so refusing to read a password "+
+				"that might be echoed to the screen; pipe it on stdin instead: %w", err)
+		}
+		if info.Mode()&os.ModeCharDevice != 0 {
 			return "", errors.New("refusing to read a password from a terminal; pipe it on stdin instead")
 		}
 	}
