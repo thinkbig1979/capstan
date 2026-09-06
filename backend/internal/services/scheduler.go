@@ -789,7 +789,26 @@ func (s *SchedulerService) pruneVanishedTargets(ctx context.Context, updates []m
 // deleted so the frontend list converges without waiting for the next scan.
 func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.CachedUpdate) {
 	autoEnabledStr, err := s.db.GetSetting("auto_update_enabled")
-	if err != nil || autoEnabledStr != "true" {
+	if err != nil {
+		// agent-os-koy9. The read error used to be merged into the value test
+		// with a single `||`, so a settings read that FAILED and an operator
+		// who turned auto-updates OFF took the same bare return, with no log
+		// line at any level. A database fault therefore disabled automatic updates
+		// silently, and the operator found out when a container they believed
+		// was being patched had not been patched for weeks.
+		//
+		// Migration 3 seeds the key (migrations.go:248, 'false'), so after
+		// migrations an absent row cannot happen; it only means a
+		// pre-migration-3 database, where 'off' is what the seed would have
+		// said anyway. That case stays quiet, exactly as loadApplySchedule
+		// treats a missing update_apply_mode.
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.Error("Failed to read auto_update_enabled; skipping this auto-update run, so no container will be patched until this read succeeds",
+				"error", err)
+		}
+		return
+	}
+	if autoEnabledStr != "true" {
 		return
 	}
 
