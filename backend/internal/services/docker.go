@@ -284,8 +284,36 @@ func (s *DockerService) ListenEvents(ctx context.Context) (<-chan models.DockerE
 func (s *DockerService) buildComposeArgs(stack models.Stack, subcommand string, extraArgs []string) []string {
 	args := []string{"compose"}
 
+	// os.IsNotExist is the ONLY stat answer that means "absent". Every other
+	// error means "could not find out", and dropping --env-file on one of those
+	// ASSERTS an absence we never established: the stack came up without the
+	// operator's global environment, silently, with nothing logged
+	// (agent-os-d5ff). It is the discriminator ScanAll already uses on this
+	// very file (scanner.go:498-499, `hasGlobalEnv = !os.IsNotExist(err)`).
+	//
+	// On a fault we hand compose the configured path anyway and let the
+	// component that can actually read the file decide. That is a refusal
+	// rather than a shrug: `docker compose --env-file <unstattable path>` exits
+	// 1 naming the cause — "stat …/global.env: not a directory" — so the
+	// command stops without buildComposeArgs needing an error return it does
+	// not have. It is also right in the one case a Capstan-side refusal would
+	// get wrong: a stat fault that has cleared by the time compose runs.
+	//
+	// Measured on the compose that `docker compose version` reports as
+	// "Docker Compose version v5.5.1", on both `config` and `ps`. Quoting the
+	// command because the first version recorded here was wrong: it was the
+	// ENGINE version from `docker version --format '{{.Server.Version}}'`
+	// (26.1.5+dfsg1) mislabelled as compose's.
+	//
+	// Absence stays silent. `--env-file` on a merely missing path ALSO exits 1
+	// ("couldn't find env file: …"), so passing it unconditionally would break
+	// every healthy install that has no global.env.
 	globalEnvPath := s.config.DataDir + "/global.env"
-	if _, err := os.Stat(globalEnvPath); err == nil {
+	if _, statErr := os.Stat(globalEnvPath); !os.IsNotExist(statErr) {
+		if statErr != nil {
+			slog.Error("Could not determine whether the global env file exists; passing it to compose rather than starting the stack without it",
+				"file", globalEnvPath, "error", statErr)
+		}
 		args = append(args, "--env-file", globalEnvPath)
 	}
 

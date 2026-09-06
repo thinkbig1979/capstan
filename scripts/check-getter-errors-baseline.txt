@@ -6,7 +6,7 @@ handlers/backup.go DISCARD=13 SOFT=1
 handlers/directories.go DISCARD=3 SOFT=0
 handlers/env.go DISCARD=0 SOFT=1
 handlers/git.go DISCARD=0 SOFT=3
-handlers/logs.go DISCARD=0 SOFT=3
+handlers/logs.go DISCARD=0 SOFT=2
 handlers/settings.go DISCARD=10 SOFT=4
 handlers/stack_crud.go DISCARD=2 SOFT=1
 handlers/updates.go DISCARD=4 SOFT=7
@@ -17,13 +17,13 @@ middleware/requestid.go DISCARD=0 SOFT=1
 services/backup.go DISCARD=4 SOFT=7
 services/backup_config.go DISCARD=1 SOFT=2
 services/crypto.go DISCARD=0 SOFT=1
-services/docker.go DISCARD=1 SOFT=3
+services/docker.go DISCARD=1 SOFT=2
 services/docker_update.go DISCARD=3 SOFT=3
 services/exec_env.go DISCARD=1 SOFT=0
 services/git.go DISCARD=12 SOFT=5
 services/linter.go DISCARD=0 SOFT=1
 services/redact_url.go DISCARD=5 SOFT=3
-services/scanner.go DISCARD=0 SOFT=9
+services/scanner.go DISCARD=0 SOFT=6
 services/schedule.go DISCARD=2 SOFT=0
 services/watcher.go DISCARD=0 SOFT=1
-TOTAL FILES=28 DISCARD=68 SOFT=58
+TOTAL FILES=28 DISCARD=68 SOFT=53
