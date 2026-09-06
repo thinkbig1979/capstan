@@ -636,13 +636,25 @@ func TestGetStatusCLI_ResolvedTokenReachesEveryInvocation(t *testing.T) {
 		t.Fatalf("write git wrapper: %v", err)
 	}
 
-	// The expected invocation count below depends on this fixture having no
-	// upstream, so state it as a precondition instead of trusting the builder.
+	// The expected invocation count below depends on this fixture resolving NO
+	// tracking branch at all, so state it as a precondition instead of trusting
+	// the builder. agent-os-ct4e: this needs BOTH probes to fail, not just the
+	// first. getStatusCLI resolves trackingBranch from @{upstream}, falling back
+	// to refs/remotes/origin/<branch>, and only counts ahead/behind when that
+	// resolution SUCCEEDED. A fixture with a conventional tracking ref but no
+	// upstream would take the fallback, run the rev-list, and make the count
+	// below wrong for a reason the old single-probe precondition could not see.
 	//nolint:gosec // realGit is exec.LookPath("git")'s result, resolved a few lines above from this process's own PATH, with a fixed argv — not user input
 	upstreamProbe := exec.Command(realGit, "rev-parse", "--abbrev-ref", "@{upstream}")
 	upstreamProbe.Dir = dirPath
 	if err := upstreamProbe.Run(); err == nil {
 		t.Fatal("precondition: fixture HAS an upstream, so the fallback probe never runs and the count below is wrong")
+	}
+	//nolint:gosec // same fixed argv as above, realGit resolved from this process's own PATH
+	fallbackProbe := exec.Command(realGit, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main")
+	fallbackProbe.Dir = dirPath
+	if err := fallbackProbe.Run(); err == nil {
+		t.Fatal("precondition: fixture HAS refs/remotes/origin/main, so trackingBranch resolves via the fallback and the ahead/behind rev-list DOES run — the count below is wrong")
 	}
 
 	t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -657,8 +669,16 @@ func TestGetStatusCLI_ResolvedTokenReachesEveryInvocation(t *testing.T) {
 		t.Fatalf("read wrapper log (wrapper never ran — the real git was invoked directly instead of via PATH): %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
-	if len(lines) != 11 {
-		t.Fatalf("wrapper observed %d git invocations, want 11 (one per getStatusCLI internal call): %v", len(lines), lines)
+	// 11 -> 10 under agent-os-ct4e. The ahead/behind rev-list used to run
+	// unconditionally against @{upstream}, which in this fixture is a
+	// guaranteed-to-fail subprocess: there is no upstream and no conventional
+	// tracking ref, so it could only ever exit non-zero and leave both counts
+	// at 0. It is now gated on trackingBranch resolving, so that doomed
+	// invocation is gone — one fewer process per request for every untracked
+	// repository. The count is still the guard it always was: it fails if a new
+	// call site is added without routing through gitCommandWithCreds.
+	if len(lines) != 10 {
+		t.Fatalf("wrapper observed %d git invocations, want 10 (one per getStatusCLI internal call): %v", len(lines), lines)
 	}
 	want := fmt.Sprintf("user=%s token=%s", testGitUser, testGitToken)
 	for i, line := range lines {

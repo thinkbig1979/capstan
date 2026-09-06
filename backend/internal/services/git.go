@@ -126,16 +126,6 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		}
 	}
 
-	ahead := 0
-	behind := 0
-	if output, err := s.gitCommandWithCreds(dirPath, user, token, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"); err == nil {
-		parts := strings.Fields(output)
-		if len(parts) == 2 {
-			behind, _ = strconv.Atoi(parts[0])
-			ahead, _ = strconv.Atoi(parts[1])
-		}
-	}
-
 	// TrackingBranch was served only by the deleted go-git path until
 	// agent-os-yo9e, so this is a port — but not a transcription. go-git
 	// hardcoded origin/<same-branch-name>, which is simply wrong for a branch
@@ -165,13 +155,37 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 			// here, and dropping it would be an unannounced regression for
 			// those repositories, so the field is preserved.
 			//
-			// Ahead/Behind deliberately stay 0 in this state. git itself
-			// reports no divergence for a branch with no upstream, and counting
-			// against a ref the operator never configured as one would be a
-			// guess of exactly the kind this change removes elsewhere. That is
-			// a real, narrow behaviour change from the go-git path, which did
-			// count here (agent-os-yo9e).
+			// agent-os-yo9e originally left Ahead/Behind at 0 here, on the
+			// reasoning that counting against a ref the operator never
+			// configured is a guess. agent-os-ct4e reverses that: the function
+			// is already willing to NAME this ref as the tracking branch, so
+			// refusing to count against it made getStatusCLI report "tracking
+			// origin/main" and "0 behind" in one breath, where the 0 was
+			// measured against nothing. go-git counted here, and dropping it
+			// was an undeclared regression — GitStatus.tsx gates its chip on
+			// `behind > 0`, so a stack that was genuinely behind rendered NO
+			// chip rather than a zero, losing the dashboard's only "you need to
+			// pull" signal.
 			trackingBranch = "origin/" + branch
+		}
+	}
+
+	// Counted against trackingBranch rather than @{upstream} so the three
+	// fields agree BY CONSTRUCTION rather than by coincidence. Where an
+	// upstream is configured, trackingBranch IS its abbrev-ref and this is the
+	// same question; where only the conventional remote-tracking ref exists,
+	// this is the ref the field above already names. Where neither exists
+	// trackingBranch is "" and both counts stay 0, which is the honest answer.
+	ahead := 0
+	behind := 0
+	if trackingBranch != "" {
+		if output, err := s.gitCommandWithCreds(dirPath, user, token,
+			"rev-list", "--left-right", "--count", trackingBranch+"...HEAD"); err == nil {
+			parts := strings.Fields(output)
+			if len(parts) == 2 {
+				behind, _ = strconv.Atoi(parts[0])
+				ahead, _ = strconv.Atoi(parts[1])
+			}
 		}
 	}
 

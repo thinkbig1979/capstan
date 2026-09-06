@@ -514,11 +514,14 @@ func TestYo9eGitStatusContract(t *testing.T) {
 			name: "16 tracking ref exists, NO upstream config (fallback arm)",
 			want: yo9eWant{
 				branch: "main", trackingBranch: "origin/main", remoteURLSet: true,
-				// Deliberately 0/0 even though HEAD could be compared to the
-				// ref: git reports no divergence for a branch with no upstream,
-				// and counting against a ref the operator never configured
-				// would be the same guess this change removed elsewhere.
-				ahead: 0, behind: 0,
+				// agent-os-ct4e: divergence IS counted here, against the same
+				// ref the function is already willing to NAME as TrackingBranch.
+				// The previous 0/0 made getStatusCLI report "tracking
+				// origin/main" and "0 behind" in one breath, where the 0 was
+				// computed against nothing — and because GitStatus.tsx gates its
+				// chip on `behind > 0`, a stack that was genuinely behind
+				// rendered no chip at all rather than a zero.
+				ahead: 0, behind: 2,
 			},
 			build: func(t *testing.T) string {
 				_, r, _ := yo9eSeeded(t)
@@ -528,7 +531,18 @@ func TestYo9eGitStatusContract(t *testing.T) {
 				yo9eRun(t, d, "add", ".")
 				yo9eRun(t, d, "commit", "-m", "fallback")
 				yo9eRun(t, d, "remote", "add", "origin", r)
+				// agent-os-ct4e: the ref must ADVANCE past HEAD. Pointing it AT
+				// HEAD makes true divergence 0/0 by construction, so the
+				// ahead/behind assertion is satisfied whichever behaviour the
+				// code implements — the fixture disarms its own test. Proved by
+				// mutation: with the ref at HEAD, code counting divergence and
+				// code refusing to both pass.
+				yo9eWrite(t, filepath.Join(d, "compose.yaml"), "# fallback 2\n")
+				yo9eRun(t, d, "commit", "-am", "remote 1")
+				yo9eWrite(t, filepath.Join(d, "compose.yaml"), "# fallback 3\n")
+				yo9eRun(t, d, "commit", "-am", "remote 2")
 				yo9eRun(t, d, "update-ref", "refs/remotes/origin/main", "HEAD")
+				yo9eRun(t, d, "reset", "--hard", "HEAD~2")
 				return d
 			},
 			assert: func(t *testing.T, dir string) {
@@ -537,6 +551,14 @@ func TestYo9eGitStatusContract(t *testing.T) {
 				}
 				if _, code := yo9eTry(t, dir, "rev-parse", "--verify", "refs/remotes/origin/main"); code != 0 {
 					t.Fatal("fixture has no refs/remotes/origin/main — the fallback has nothing to find")
+				}
+				// agent-os-ct4e: assert the DIVERGENCE the assertion depends on,
+				// via git rather than via the code under test. Without this a
+				// fixture that silently failed to advance the ref would restore
+				// the 0/0-by-construction state and the test would pass for the
+				// wrong reason again.
+				if out, code := yo9eTry(t, dir, "rev-list", "--count", "HEAD..refs/remotes/origin/main"); code != 0 || strings.TrimSpace(out) != "2" {
+					t.Fatalf("fixture precondition: want refs/remotes/origin/main exactly 2 ahead of HEAD, got %q (exit %d)", strings.TrimSpace(out), code)
 				}
 			},
 		},
