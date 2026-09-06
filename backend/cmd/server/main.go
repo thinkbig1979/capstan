@@ -185,6 +185,83 @@ func registerIndexRoute(r *gin.Engine, indexHTML string) {
 	})
 }
 
+// schedulerSettings is the slice of *database.DB that startUpdateScheduler
+// reads. It is declared here, structurally, so the boot decision can be driven
+// with a fault-injecting fake: update_scan_interval and update_apply_mode come
+// from the SAME source, so a fault reaches both at once and the only way to
+// observe that is to inject one.
+type schedulerSettings interface {
+	GetSetting(key string) (string, error)
+}
+
+// updateScheduler is the *services.SchedulerService surface used at boot. The
+// nil check stays at the call site: a nil *SchedulerService stored in this
+// interface would be a non-nil interface value.
+type updateScheduler interface {
+	Start(interval time.Duration)
+}
+
+// startUpdateScheduler arms the update scan scheduler from persisted settings
+// and reports whether it started.
+func startUpdateScheduler(sched updateScheduler, db schedulerSettings, log *slog.Logger) bool {
+	intervalStr, err := db.GetSetting("update_scan_interval")
+	if err != nil {
+		// This branch and the update_apply_mode branch below fail TOGETHER,
+		// which is why the failure was invisible: both settings come from one
+		// store, so a fault that stops the scheduler also empties the answer
+		// the else-branch checks, and the warning that exists to report the
+		// first is silenced by the same fault that caused it. Reporting here
+		// covers both, and the early return keeps the code from consulting a
+		// source it already knows cannot answer.
+		log.Error("The update scan interval could not be read, so the update scheduler was not started; "+
+			"automatic update scans and any scheduled apply stay inactive until this is fixed",
+			"error", err)
+		return false
+	}
+	scanIntervalMinutes := 0
+	if intervalStr != "" {
+		minutes, convErr := strconv.Atoi(intervalStr)
+		if convErr != nil {
+			// Indistinguishable from "not configured" when discarded: both
+			// leave the interval at 0 and the scheduler off.
+			log.Error("The update scan interval is not a number, so the update scheduler was not started",
+				"value", intervalStr, "error", convErr)
+		} else {
+			scanIntervalMinutes = minutes
+		}
+	}
+
+	if scanIntervalMinutes > 0 {
+		// Start also arms the scheduled-apply timer, reading update_apply_*
+		// itself, so a configured apply schedule is live from boot.
+		sched.Start(time.Duration(scanIntervalMinutes) * time.Minute)
+		log.Info("Update scheduler started", "interval_minutes", scanIntervalMinutes)
+		return true
+	}
+
+	applyMode, err := db.GetSetting("update_apply_mode")
+	if err != nil {
+		log.Error("The update apply mode could not be read, so it is unknown whether a scheduled apply is "+
+			"configured; the update scan interval is 0, so nothing will be applied either way",
+			"error", err)
+		return false
+	}
+	if applyMode == "scheduled" {
+		// The apply timer lives inside the scan scheduler, because applying
+		// from a cache no scan ever refreshes is worse than not applying.
+		// Say so rather than letting a configured schedule sit silently dead.
+		applyTime, timeErr := db.GetSetting("update_apply_time")
+		if timeErr != nil {
+			// Log text only: the warning below is worth emitting without it.
+			log.Warn("The update apply time could not be read", "error", timeErr)
+			applyTime = "unknown"
+		}
+		log.Warn("Auto-update apply is scheduled but the update scan interval is 0, so nothing will be applied",
+			"apply_time", applyTime)
+	}
+	return false
+}
+
 func main() {
 	// Offline admin commands are dispatched before anything else, deliberately
 	// ahead of config.Load: config treats JWT_SECRET as a hard startup
@@ -308,7 +385,19 @@ func main() {
 
 	opLock := services.NewOperationLock()
 
-	hasGlobalEnv, _ := scannerService.ScanAll()
+	hasGlobalEnv, scanErr := scannerService.ScanAll()
+	if scanErr != nil {
+		// ScanAll refuses rather than scanning shallow when the scan depth
+		// setting is unreadable (services/scanner.go:501-512, agent-os-obgr),
+		// and logs the cause itself. Discarding it here left the call site
+		// silent about the CONSEQUENCE: this boot pass found nothing, so the
+		// stack list stays as the database last recorded it until the watcher
+		// or an operator-triggered rescan succeeds. The scan path upserts and
+		// never deletes, so nothing is lost, but "no stacks appeared" and
+		// "the scan refused to run" look identical without this line.
+		slog.Error("The initial directory scan did not complete, so the stack list is whatever was last persisted "+
+			"until a later scan succeeds", "error", scanErr)
+	}
 	if hasGlobalEnv {
 		slog.Info("Global .env file detected")
 	}
@@ -511,27 +600,7 @@ func main() {
 	resourcesHandler.RegisterRoutes(protected)
 
 	if schedulerService != nil {
-		intervalStr, _ := db.GetSetting("update_scan_interval")
-		scanIntervalMinutes := 0
-		if intervalStr != "" {
-			if minutes, err := strconv.Atoi(intervalStr); err == nil {
-				scanIntervalMinutes = minutes
-			}
-		}
-
-		if scanIntervalMinutes > 0 {
-			// Start also arms the scheduled-apply timer, reading update_apply_*
-			// itself, so a configured apply schedule is live from boot.
-			schedulerService.Start(time.Duration(scanIntervalMinutes) * time.Minute)
-			slog.Info("Update scheduler started", "interval_minutes", scanIntervalMinutes)
-		} else if applyMode, _ := db.GetSetting("update_apply_mode"); applyMode == "scheduled" {
-			// The apply timer lives inside the scan scheduler, because applying
-			// from a cache no scan ever refreshes is worse than not applying.
-			// Say so rather than letting a configured schedule sit silently dead.
-			applyTime, _ := db.GetSetting("update_apply_time")
-			slog.Warn("Auto-update apply is scheduled but the update scan interval is 0, so nothing will be applied",
-				"apply_time", applyTime)
-		}
+		startUpdateScheduler(schedulerService, db, slog.Default())
 	}
 
 	if monitorService != nil {
