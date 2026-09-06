@@ -96,6 +96,51 @@ func (d *DB) RetentionDays(key string) (int, error) {
 	return RetentionDays(value), nil
 }
 
+// errBelowRetentionFloor refuses a retention below MinRetentionDays at the
+// statements that actually issue the DELETE, rather than only on the routes to
+// them (RetentionDays, retention.go:43; handlers/settings.go:488).
+//
+// It REFUSES rather than clamping. Clamping to the floor would still delete, and
+// a value arriving here below the floor is not an operator preference — the
+// preference is clamped at the parser, where a deliberately low setting is
+// honoured as far as the floor allows. Below the floor at THIS boundary means a
+// caller computed the value some other way and got it wrong, and answering a
+// caller's bug with a smaller irreversible deletion buries it. Refusing costs
+// only unbounded growth, which is recoverable; the deletion is not. This is the
+// same asymmetry the (*DB).RetentionDays comment argues (retention.go:65-70),
+// and the same choice as agent-os-r1kc and agent-os-6wbu.
+//
+// retentionDays = 0 is the destructive input: `datetime('now', '-' || 0 ||
+// ' days')` is NOW, so the predicate becomes "older than this instant" and every
+// eligible row goes, including one written seconds ago. OBSERVED, not inferred —
+// TestRetentionFloor_UnguardedSQLWipesTable runs the unguarded statements and
+// shows the tables emptied.
+//
+// Negative values are refused too, though they are not destructive: `'-' || -1`
+// concatenates to "--1 days", which is not a valid SQLite modifier, so datetime()
+// returns NULL, `col < NULL` is NULL, and nothing matches. OBSERVED on the same
+// fixture. That makes a negative a prune that silently does nothing, which is
+// still out of contract and still worth surfacing.
+func errBelowRetentionFloor(retentionDays int) error {
+	if retentionDays >= MinRetentionDays {
+		return nil
+	}
+	return fmt.Errorf("refusing to prune at a retention of %d days: below the %d-day floor",
+		retentionDays, MinRetentionDays)
+}
+
+// These two prune statements are named constants so the guard's negative control
+// executes the SAME SQL these functions run; the third lives beside its function
+// as deleteOldActionLogsStmt (audit.go). Inlined literals would let a production
+// statement change while the control kept proving something about the old one.
+const (
+	deleteOldUpdateHistoryStmt = `DELETE FROM update_history
+	          WHERE completed_at IS NOT NULL
+	            AND completed_at < datetime('now', '-' || ? || ' days')`
+
+	deleteOldBackupRunsStmt = `DELETE FROM backup_runs WHERE started_at < datetime('now', '-' || ? || ' days')`
+)
+
 // DeleteOldUpdateHistory removes update_history rows completed longer ago than
 // retentionDays, returning how many went.
 //
@@ -103,10 +148,10 @@ func (d *DB) RetentionDays(key string) (int, error) {
 // history older than" endpoint uses, so a run still in flight (completed_at
 // unset) is never pruned out from under itself.
 func (d *DB) DeleteOldUpdateHistory(retentionDays int) (int, error) {
-	query := `DELETE FROM update_history
-	          WHERE completed_at IS NOT NULL
-	            AND completed_at < datetime('now', '-' || ? || ' days')`
-	result, err := d.db.Exec(query, retentionDays)
+	if err := errBelowRetentionFloor(retentionDays); err != nil {
+		return 0, err
+	}
+	result, err := d.db.Exec(deleteOldUpdateHistoryStmt, retentionDays)
 	if err != nil {
 		return 0, err
 	}
@@ -120,8 +165,10 @@ func (d *DB) DeleteOldUpdateHistory(retentionDays int) (int, error) {
 // is set pool-wide on the DSN (agent-os-94t); the cascade is covered by a test
 // rather than assumed.
 func (d *DB) DeleteOldBackupRuns(retentionDays int) (int, error) {
-	query := `DELETE FROM backup_runs WHERE started_at < datetime('now', '-' || ? || ' days')`
-	result, err := d.db.Exec(query, retentionDays)
+	if err := errBelowRetentionFloor(retentionDays); err != nil {
+		return 0, err
+	}
+	result, err := d.db.Exec(deleteOldBackupRunsStmt, retentionDays)
 	if err != nil {
 		return 0, err
 	}

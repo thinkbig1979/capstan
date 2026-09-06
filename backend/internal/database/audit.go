@@ -80,9 +80,21 @@ func (d *DB) GetRecentActions(limit int) ([]models.ActionLog, error) {
 	return actions, nil
 }
 
+// deleteOldActionLogsStmt is a named constant for the same reason as its two
+// siblings in retention.go: the floor guard's negative control runs this exact
+// statement unguarded, and must not drift away from what production issues.
+const deleteOldActionLogsStmt = `DELETE FROM action_log WHERE created_at < datetime('now', '-' || ? || ' days')`
+
+// DeleteOldActionLogs removes action_log rows older than retentionDays.
+//
+// A retention below MinRetentionDays is refused rather than clamped; see
+// errBelowRetentionFloor (retention.go) for why, and for what retentionDays = 0
+// does to this statement.
 func (d *DB) DeleteOldActionLogs(retentionDays int) error {
-	query := `DELETE FROM action_log WHERE created_at < datetime('now', '-' || ? || ' days')`
-	_, err := d.db.Exec(query, retentionDays)
+	if err := errBelowRetentionFloor(retentionDays); err != nil {
+		return err
+	}
+	_, err := d.db.Exec(deleteOldActionLogsStmt, retentionDays)
 	return err
 }
 
