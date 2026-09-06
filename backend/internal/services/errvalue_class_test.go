@@ -27,14 +27,22 @@ import (
 //     compose project that simply has no stack row shared one DEBUG line and one
 //     dropped event.
 //
-// The third site the class sweep found, scheduler.go loadApplySchedule:497
-// (agent-os-7549), is NOT a defect and is deliberately untested here: reaching
-// it requires update_apply_mode == "scheduled", which requires migration 14 to
-// have committed, and migration 14 seeds update_apply_time and update_apply_days
-// in the same transaction (migrations.go:542-544, run under tx.Begin/tx.Commit
-// at migrations.go:665-694). The absent-row state it was filed for is
-// unreachable. TestMigration14SeedsAllThreeKeysTogether below pins that premise
-// so the verdict is anchored to the code rather than to this comment.
+// The third site the class sweep found, scheduler.go loadApplySchedule
+// (agent-os-7549), is not an instance of THIS class and is deliberately
+// untested here: reaching it requires update_apply_mode == "scheduled", which
+// requires migration 14 to have committed, and migration 14 seeds
+// update_apply_time and update_apply_days in the same transaction
+// (migrations.go:542-544, run under tx.Begin/tx.Commit at
+// migrations.go:665-694). The absent-row state it was filed for is unreachable,
+// so the `||` there merges two ERRORS and never an error with a value.
+// TestMigration14SeedsAllThreeKeysTogether below pins that premise so the
+// verdict is anchored to the code rather than to this comment.
+//
+// What was left standing there — that a genuine read fault resolved to
+// immediate and APPLIED updates outside the operator's maintenance window — is
+// a different class (fail open on a read fault, agent-os-r1kc's shape) and was
+// fixed separately under agent-os-rltu. Its tests live in
+// scheduler_readfault_test.go, not here.
 
 // ---------------------------------------------------------------------------
 // agent-os-koy9 — RunAutoUpdates
@@ -216,10 +224,12 @@ func TestRunAutoUpdatesGateStillOpensAndCloses(t *testing.T) {
 }
 
 // TestMigration14SeedsAllThreeKeysTogether pins the premise behind closing
-// agent-os-7549 as not-a-defect: loadApplySchedule:497 can only be reached when
-// update_apply_mode reads back as "scheduled", and the migration that puts any
-// value in that row puts values in the other two as well. So the absent-row
-// state that bead was filed for cannot exist while :497 is reachable.
+// agent-os-7549 as not-an-instance-of-this-class: the time/days branch of
+// loadApplySchedule can only be reached when update_apply_mode reads back as
+// "scheduled", and the migration that puts any value in that row puts values in
+// the other two as well. So the absent-row state that bead was filed for cannot
+// exist while that branch is reachable, and the errors it merges are both
+// genuine faults. (Both of them now refuse rather than apply — agent-os-rltu.)
 func TestMigration14SeedsAllThreeKeysTogether(t *testing.T) {
 	db, _ := koy9HealthyDB(t)
 	for _, key := range []string{"update_apply_mode", "update_apply_time", "update_apply_days"} {
