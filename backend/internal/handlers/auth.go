@@ -124,7 +124,25 @@ func (h *AuthHandler) RegisterProtectedRoutes(group *gin.RouterGroup) {
 }
 
 func (h *AuthHandler) Status(c *gin.Context) {
-	userCount, _ := h.db.UserCount()
+	// agent-os-1gqn. GET /status is registered by RegisterPublicRoutes and the
+	// frontend polls it on every navigation, so a discarded error here told an
+	// UNAUTHENTICATED caller needsSetup:true on a fully provisioned instance —
+	// routing the operator to the setup form on a database hiccup.
+	//
+	// Refusing is safe for that consumer, which was checked rather than assumed:
+	// frontend/src/stores/authStore.ts:237-283 already retries this probe twice
+	// and, on final failure, deliberately leaves needsSetup untouched and forces
+	// authDisabled back to false. A 500 therefore degrades to "the login prompt
+	// stands", which is strictly better than a confident lie.
+	//
+	// No sql.ErrNoRows arm: UserCount is a COUNT(*) (database/users.go:11-15),
+	// which always yields a row, so every error it can return is a fault.
+	userCount, err := h.db.UserCount()
+	if err != nil {
+		slog.Error("Failed to count users for the status probe", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read the setup state", err))
+		return
+	}
 	needsSetup := userCount == 0
 
 	if h.authDisabled {
@@ -141,7 +159,18 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 	// Fast path only: reject an obviously-already-setup instance before hashing.
 	// This is NOT the race guard — two concurrent callers can both read count==0
 	// here. The authoritative check is the atomic CreateFirstUser below.
-	userCount, _ := h.db.UserCount()
+	//
+	// The discarded error made a fault here read as count==0, skipping the 409
+	// and spending a bcrypt on a request CreateFirstUser was always going to
+	// reject. Not an auth bypass — that insert is atomic — but the operator was
+	// told the wrong thing about why it failed (agent-os-1gqn). Same COUNT(*)
+	// shape as Status above, so again no not-found arm.
+	userCount, err := h.db.UserCount()
+	if err != nil {
+		slog.Error("Failed to count users for the setup guard", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read the setup state", err))
+		return
+	}
 	if userCount > 0 {
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,

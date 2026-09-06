@@ -68,7 +68,17 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 			if updates == nil {
 				updates = []models.ContainerUpdateInfo{}
 			}
-			lastScanAt, _ := h.db.GetSetting("update_scan_last_run")
+			// Logged and defaulted, NOT refused, unlike the two sibling reads
+			// further down this function: a background scan has already been
+			// started at :41 and the action already logged, so a 500 here would
+			// deny a request whose side effect has happened. This is the same
+			// trade-off GetCachedUpdates makes twenty lines above, for the same
+			// reason. The fault is made diagnosable instead (agent-os-1gqn).
+			lastScanAt, err := settingOrFault(h.db, "update_scan_last_run")
+			if err != nil {
+				slog.Error("Failed to read the last scan time for the refresh response", "error", err)
+				lastScanAt = ""
+			}
 			c.JSON(http.StatusAccepted, gin.H{
 				"updates":   updates,
 				"fromCache": len(cachedUpdates) > 0,
@@ -107,7 +117,17 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 	}
 
 	if len(cachedUpdates) == 0 {
-		lastScanAt, _ := h.db.GetSetting("update_scan_last_run")
+		// Refused rather than defaulted: GetCachedUpdates above already answers
+		// this same broken database with 500, so a silent scannedAt:"" here
+		// would be an oversight rather than a choice (agent-os-1gqn). Contrast
+		// the refresh branch at the top of this function, which deliberately
+		// keeps going because a scan has already been started there.
+		lastScanAt, err := settingOrFault(h.db, "update_scan_last_run")
+		if err != nil {
+			slog.Error("Failed to read the last scan time", "error", err)
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read the last scan time", err))
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"updates":   []models.ContainerUpdateInfo{},
 			"fromCache": false,
@@ -132,7 +152,13 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 		})
 	}
 
-	lastScanAt, _ := h.db.GetSetting("update_scan_last_run")
+	// Same reasoning as the empty-cache branch above.
+	lastScanAt, err := settingOrFault(h.db, "update_scan_last_run")
+	if err != nil {
+		slog.Error("Failed to read the last scan time", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read the last scan time", err))
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"updates":   updates,
 		"fromCache": true,
@@ -176,10 +202,23 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 		projectName = inspect.Config.Labels["com.docker.compose.project"]
 	}
 	if projectName != "" {
+		// Logged and defaulted rather than refused (agent-os-1gqn): this lookup
+		// only decorates the history row written below, and the update it
+		// records has ALREADY run by this point — refusing would drop the
+		// record of an action that happened, which is worse than recording it
+		// with empty stack fields. An absent row is the ordinary case for a
+		// container whose compose project this instance does not manage, so
+		// only a non-not-found error is worth a line.
 		stack, err := h.db.GetStackByProjectName(projectName)
-		if err == nil && stack != nil {
+		switch {
+		case err == nil:
 			stackID = stack.ID
 			stackName = stack.ProjectName
+		case errors.Is(err, sql.ErrNoRows):
+			// Not managed here; the history row carries empty stack fields.
+		default:
+			slog.Error("Failed to look up the stack for the update history row",
+				"projectName", projectName, "error", err)
 		}
 	}
 
@@ -322,10 +361,23 @@ func (h *ResourcesHandler) updateContainerSync(c *gin.Context, id string) {
 		projectName = inspect.Config.Labels["com.docker.compose.project"]
 	}
 	if projectName != "" {
+		// Logged and defaulted rather than refused (agent-os-1gqn): this lookup
+		// only decorates the history row written below, and the update it
+		// records has ALREADY run by this point — refusing would drop the
+		// record of an action that happened, which is worse than recording it
+		// with empty stack fields. An absent row is the ordinary case for a
+		// container whose compose project this instance does not manage, so
+		// only a non-not-found error is worth a line.
 		stack, err := h.db.GetStackByProjectName(projectName)
-		if err == nil && stack != nil {
+		switch {
+		case err == nil:
 			stackID = stack.ID
 			stackName = stack.ProjectName
+		case errors.Is(err, sql.ErrNoRows):
+			// Not managed here; the history row carries empty stack fields.
+		default:
+			slog.Error("Failed to look up the stack for the update history row",
+				"projectName", projectName, "error", err)
 		}
 	}
 
@@ -778,7 +830,19 @@ func (h *ResourcesHandler) listAutoUpdatePolicies(c *gin.Context) {
 		return
 	}
 
-	autoEnabledStr, _ := h.db.GetSetting("auto_update_enabled")
+	// Refused, not defaulted: the read one line above already answers a broken
+	// database with 500, so serving 200 with a fabricated globalEnabled=false
+	// beside a policies list that was good enough to require would be
+	// incoherent. The frontend renders !globalEnabled as a locked auto-update
+	// chip (components/dashboard/AutoUpdateToggle.tsx:56), i.e. it would show
+	// every container's auto-update as switched off at the global level
+	// (agent-os-1gqn).
+	autoEnabledStr, err := settingOrFault(h.db, "auto_update_enabled")
+	if err != nil {
+		slog.Error("Failed to read the global auto-update setting", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read the global auto-update setting", err))
+		return
+	}
 
 	if policies == nil {
 		policies = []models.AutoUpdatePolicy{}
@@ -809,7 +873,26 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 
 	now := time.Now().Format(time.RFC3339)
 
+	// agent-os-1gqn. This read decided whether the policy below is an UPDATE of
+	// the stored row or a brand-new one, and its error was folded into "no
+	// existing policy" by a guard further down that required a nil error AND a
+	// non-nil row. UpsertAutoUpdatePolicy is INSERT OR REPLACE
+	// (database/auto_update_policies.go:41-48) against UNIQUE(target_type,
+	// target_id), so on a read fault the stored row was DELETED and replaced
+	// with a fresh one: new ID, CreatedAt reset to now, ConsecutiveFailures
+	// zeroed, Paused cleared — and the caller got 200 OK.
+	//
+	// Not hypothetical, and not only reachable on a dead database, which would
+	// have failed the write too and so hidden the damage: a row whose
+	// consecutive_failures cannot be scanned as an int (SQLite columns are not
+	// STRICT) fails this read while the replace below succeeds. That is the
+	// fixture the regression uses.
 	existing, err := h.db.GetAutoUpdatePolicy(targetType, targetId)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		slog.Error("Failed to read the existing auto-update policy", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read the existing auto-update policy", err))
+		return
+	}
 
 	policy := &models.AutoUpdatePolicy{
 		ID:         uuid.New().String(),
@@ -820,7 +903,13 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 		UpdatedAt:  now,
 	}
 
-	if err == nil && existing != nil {
+	// err is nil or sql.ErrNoRows past the guard above, so a non-nil existing is
+	// exactly "the row was found". Spelled as the nil check alone rather than
+	// left as a conjunction of the nil-error and non-nil-row tests: a guarded
+	// site that still matches the class sweep would be a permanent false
+	// positive in it (agent-os-r1by). That rule applies to prose too, which is
+	// why neither this comment nor the one above spells the old shape out.
+	if existing != nil {
 		policy.ID = existing.ID
 		policy.ConsecutiveFailures = existing.ConsecutiveFailures
 		policy.Paused = existing.Paused

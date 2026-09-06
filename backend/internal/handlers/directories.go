@@ -52,7 +52,23 @@ func (h *DirectoriesHandler) List(c *gin.Context) {
 
 	result := make([]DirWithCount, 0, len(directories))
 	for _, dir := range directories {
-		stacks, _ := h.db.ListStacksByDirectory(dir.Path)
+		// Refused rather than defaulted (agent-os-1gqn): ListDirectories at the
+		// top of this handler already answers a broken database with 500, so
+		// reporting StackCount:0 for every directory from the same database
+		// would be an oversight rather than a choice. No sql.ErrNoRows arm is
+		// possible — ListStacksByDirectory is a multi-row query
+		// (database/stacks.go:56-62) returning an empty slice and a nil error
+		// for a directory with no stacks, so every error is a fault.
+		stacks, err := h.db.ListStacksByDirectory(dir.Path)
+		if err != nil {
+			handleError(c, models.NewAppErrorWithCause(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to count the stacks in a directory",
+				err,
+			))
+			return
+		}
 		result = append(result, DirWithCount{
 			Directory:  dir,
 			StackCount: len(stacks),
@@ -76,9 +92,31 @@ func (h *DirectoriesHandler) Scan(c *gin.Context) {
 		return
 	}
 
-	redactedDirs, _ := h.db.ListDirectories()
+	// redactedDirs is not a count: it is the response body at the bottom of this
+	// handler. Discarding this error answered a scan that SUCCEEDED with 200 OK
+	// and "directories": null, telling the operator the scan found nothing
+	// (agent-os-1gqn). Multi-row query, so there is no not-found arm to keep:
+	// an empty table is (empty slice, nil error) (database/directories.go:71-77).
+	redactedDirs, err := h.db.ListDirectories()
+	if err != nil {
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to list directories after the scan",
+			err,
+		))
+		return
+	}
 	directoriesCount := len(redactedDirs)
-	stacks, _ := h.db.ListStacks()
+
+	// The one site in this bead's class that really is display-only: stacksCount
+	// feeds the slog.Info line below and nothing else, so it is logged and
+	// defaulted rather than refused — a scan that completed should not be
+	// reported as failed because its summary line is short a number.
+	stacks, err := h.db.ListStacks()
+	if err != nil {
+		slog.Error("Failed to count stacks for the scan summary", "error", err)
+	}
 	stacksCount := len(stacks)
 
 	slog.Info("Directory scan completed", "directories", directoriesCount, "stacks", stacksCount)
