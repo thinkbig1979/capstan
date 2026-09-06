@@ -5,18 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"path/filepath"
-	"runtime/debug"
 	"strconv"
 	"strings"
-	"time"
 
-	"github.com/go-git/go-billy/v5/osfs"
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/cache"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/storage/filesystem"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -54,133 +45,20 @@ func NewGitService(cfg *config.Config, db *database.DB) *GitService {
 	}
 }
 
+// GetStatus was a go-git call with a git-CLI fallback until agent-os-yo9e. The
+// two implementations were MEASURED against a fifteen-state fixture corpus and
+// were not equivalent in either direction, so "one is redundant" was false: each
+// answered something the other got wrong. The CLI path won on the substance —
+// it resolves the real @{upstream} instead of assuming origin/<same-name>, it
+// still reports RemoteURL when no remote-tracking ref exists, and it can read a
+// linked worktree, whose .git is a file that go-git cannot open at all. The one
+// field only go-git served, TrackingBranch, moved into getStatusCLI first; the
+// deletion followed. See git_parity_yo9e_test.go for the corpus.
+//
+// There is no fallback left to mask a failure, which is the point: an error
+// from here is now the answer, not a reason to ask a second implementation.
 func (s *GitService) GetStatus(dirPath string) (*models.GitStatusResult, error) {
-	result, err := s.getStatusGoGit(dirPath)
-	if err != nil {
-		// A typed AppError (e.g. the not-a-git-repo 404 from openRepo) is
-		// definitive — returning it as-is keeps GET /git a clean 404 instead of
-		// masking it behind the CLI fallback, whose generic error becomes a 500.
-		if appErr, ok := definitiveStatusError(err); ok {
-			return nil, appErr
-		}
-		slog.Debug("go-git failed, falling back to CLI", "path", dirPath, "error", err)
-		return s.getStatusCLI(dirPath)
-	}
-	return result, nil
-}
-
-// definitiveStatusError reports whether err IS, or WRAPS, a typed
-// *models.AppError (agent-os-5s9j).
-//
-// This was a bare `err.(*models.AppError)` type assertion, which does not
-// traverse a `%w` wrap. handlers/respond.go:34 uses errors.As for exactly this
-// reason, and handlers/respond_test.go pins it with a comment recording that it
-// was seen failing first against the assertion form; the fix landed there and
-// the same form stayed live here.
-//
-// The cost of a miss here is worse than a wrong status code. The caller does
-// not fall through to handleError with the typed error still in hand —
-// GetStatus DISCARDS it and returns getStatusCLI's answer instead, so
-// respond.go's errors.As never sees it. For a directory that is not a
-// repository the two answers coincide (both 404 GIT_NOT_REPO, via gitFailure);
-// for anything else the operator gets the fallback's generic error and the
-// definitive one is gone without a trace.
-//
-// LATENT, not live: MEASURED against this file, the errors that can reach the
-// branch today are openRepo's bare *models.AppError, openRepo's
-// `failed to open repository: %w` over a go-git error, wrapped go-git errors
-// from repo.Head/getDivergence, and the recover() defer's
-// `go-git panic: %v` — none of them a wrapped AppError. The next `%w` added
-// anywhere upstream of getStatusGoGit converts that into a wrong answer
-// silently, which is why this is fixed before it bites rather than after.
-//
-// It is a named function rather than three inline lines because that same
-// measurement makes the wrapped case unreachable from GetStatus's only input, a
-// path string. This is the seam the wrapped arm is testable through; see
-// TestDefinitiveStatusError_TraversesWrap.
-func definitiveStatusError(err error) (*models.AppError, bool) {
-	var appErr *models.AppError
-	if errors.As(err, &appErr) {
-		return appErr, true
-	}
-	return nil, false
-}
-
-func (s *GitService) getStatusGoGit(dirPath string) (result *models.GitStatusResult, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			// Warn, not Debug. A panic in go-git is a bug in this code or in
-			// the library, not a routine fallback condition — logging it at
-			// Debug is how agent-os-r1a stayed invisible in production for as
-			// long as it did. The CLI fallback still keeps the endpoint
-			// answering; it just no longer does so silently.
-			slog.Warn("go-git panicked, falling back to the git CLI",
-				"path", dirPath, "panic", r, "stack", string(debug.Stack()))
-			err = fmt.Errorf("go-git panic: %v", r)
-		}
-	}()
-
-	repo, err := s.openRepo(dirPath)
-	if err != nil {
-		return nil, err
-	}
-
-	head, err := repo.Head()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get HEAD: %w", err)
-	}
-
-	branchName := head.Name().Short()
-	commitHash := head.Hash()
-
-	commit, err := repo.CommitObject(commitHash)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get commit: %w", err)
-	}
-
-	gitCommit := s.mapCommit(commit)
-
-	worktree, err := repo.Worktree()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get worktree: %w", err)
-	}
-
-	status, err := worktree.Status()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get status: %w", err)
-	}
-
-	dirty := !status.IsClean()
-	dirtyCount := 0
-	for _, s := range status {
-		if s.Staging != git.Unmodified || s.Worktree != git.Unmodified {
-			dirtyCount++
-		}
-	}
-
-	ahead, behind, trackingBranch, remoteURL, err := s.getDivergence(repo, head)
-	if err != nil {
-		slog.Warn("Failed to get ahead/behind status", "error", err)
-		ahead = 0
-		behind = 0
-		trackingBranch = ""
-		remoteURL = ""
-	}
-
-	return &models.GitStatusResult{
-		Branch:     branchName,
-		Commit:     gitCommit,
-		Dirty:      dirty,
-		DirtyCount: dirtyCount,
-		Ahead:      ahead,
-		Behind:     behind,
-		// Redacted here rather than at the handler: RemoteURL carries a json
-		// tag, so any future marshal of GitStatusResult would reopen the leak
-		// (agent-os-57xj). Redacting at the source makes "the struct never
-		// holds a credential" an invariant instead of a per-caller duty.
-		RemoteURL:      RedactURLUserinfo(remoteURL),
-		TrackingBranch: trackingBranch,
-	}, nil
+	return s.getStatusCLI(dirPath)
 }
 
 func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, error) {
@@ -258,10 +136,51 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		}
 	}
 
+	// TrackingBranch was served only by the deleted go-git path until
+	// agent-os-yo9e, so this is a port — but not a transcription. go-git
+	// hardcoded origin/<same-branch-name>, which is simply wrong for a branch
+	// whose upstream has a different name; MEASURED, a branch `deploy` tracking
+	// origin/main got ahead=0 from go-git and the true ahead=1 from this
+	// function, because ahead/behind above already ask git for @{upstream}.
+	// Asking the same question here makes TrackingBranch, Ahead and Behind
+	// agree by construction instead of by coincidence.
+	//
+	// Exit codes only, never message text: git translates its errors.
+	trackingBranch := ""
+	// A detached HEAD has no upstream and no conventional tracking ref either.
+	// The guard is not redundant with the @{upstream} probe below: MEASURED, a
+	// clone carries refs/remotes/origin/HEAD as a symbolic ref that
+	// `rev-parse --verify` resolves happily, so without this the fallback would
+	// report the nonsense "origin/HEAD" for every detached checkout — a state
+	// where go-git reported "".
+	if branch != "HEAD" {
+		if output, err := s.gitCommandWithCreds(dirPath, user, token,
+			"rev-parse", "--abbrev-ref", "@{upstream}"); err == nil {
+			trackingBranch = strings.TrimSpace(output)
+		} else if _, refErr := s.gitCommandWithCreds(dirPath, user, token,
+			"rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch); refErr == nil {
+			// No upstream configured, but a remote-tracking ref of the
+			// conventional name exists — the state left by a bare `git fetch`
+			// with no branch.<name>.merge. go-git answered origin/<branch>
+			// here, and dropping it would be an unannounced regression for
+			// those repositories, so the field is preserved.
+			//
+			// Ahead/Behind deliberately stay 0 in this state. git itself
+			// reports no divergence for a branch with no upstream, and counting
+			// against a ref the operator never configured as one would be a
+			// guess of exactly the kind this change removes elsewhere. That is
+			// a real, narrow behaviour change from the go-git path, which did
+			// count here (agent-os-yo9e).
+			trackingBranch = "origin/" + branch
+		}
+	}
+
 	remoteURL, _ := s.gitCommandWithCreds(dirPath, user, token, "remote", "get-url", "origin")
-	// See the go-git path above. redactToken has already run on this value, but
-	// it only removes the token Capstan itself resolved, so a credential the
-	// operator embedded independently survives it (agent-os-57xj).
+	// redactToken has already run on this value, but it only removes the token
+	// Capstan itself resolved, so a credential the operator embedded
+	// independently survives it (agent-os-57xj). RemoteURL carries a json tag,
+	// so redacting at the source keeps "the struct never holds a credential" an
+	// invariant instead of a per-caller duty.
 	remoteURL = RedactURLUserinfo(remoteURL)
 
 	return &models.GitStatusResult{
@@ -274,11 +193,12 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 			Message: subject,
 			Date:    dateStr,
 		},
-		Dirty:      dirty,
-		DirtyCount: dirtyCount,
-		Ahead:      ahead,
-		Behind:     behind,
-		RemoteURL:  remoteURL,
+		Dirty:          dirty,
+		DirtyCount:     dirtyCount,
+		Ahead:          ahead,
+		Behind:         behind,
+		RemoteURL:      remoteURL,
+		TrackingBranch: trackingBranch,
 	}, nil
 }
 
@@ -818,202 +738,4 @@ func (s *GitService) GetLogForFile(dirPath, filePath string, limit int) (*models
 		Total:   len(commits),
 		HasMore: false,
 	}, nil
-}
-
-func (s *GitService) openRepo(dirPath string) (*git.Repository, error) {
-	dotGit := osfs.New(filepath.Join(dirPath, ".git"))
-	// The cache is NOT optional. filesystem.ObjectStorage dereferences it the
-	// moment an object has to be read out of a packfile, so passing nil here
-	// panicked on every repository produced by `git clone` — which is every
-	// real stack. Repositories built commit-by-commit store loose objects and
-	// never reach the packfile reader, which is why it went unnoticed.
-	stor := filesystem.NewStorage(dotGit, cache.NewObjectLRUDefault())
-	worktree := osfs.New(dirPath)
-	repo, err := git.Open(stor, worktree)
-	if err != nil {
-		if err == git.ErrRepositoryNotExists {
-			return nil, models.NewAppError(404, models.ErrGitNotRepo, "Not a git repository")
-		}
-		return nil, fmt.Errorf("failed to open repository: %w", err)
-	}
-	return repo, nil
-}
-
-func (s *GitService) getDivergence(repo *git.Repository, head *plumbing.Reference) (ahead, behind int, trackingBranch, remoteURL string, err error) {
-	remoteName := "origin"
-	branchName := head.Name().Short()
-	trackingBranch = fmt.Sprintf("%s/%s", remoteName, branchName)
-
-	remoteRef, err := repo.Storer.Reference(plumbing.ReferenceName(fmt.Sprintf("refs/remotes/%s/%s", remoteName, branchName)))
-	if err != nil {
-		if err == plumbing.ErrReferenceNotFound {
-			return 0, 0, "", "", nil
-		}
-		return 0, 0, "", "", fmt.Errorf("failed to get remote ref: %w", err)
-	}
-
-	cfg, err := repo.Config()
-	if err != nil {
-		return 0, 0, "", "", fmt.Errorf("failed to get config: %w", err)
-	}
-
-	remoteURL = ""
-	for name, remote := range cfg.Remotes {
-		if name == remoteName && len(remote.URLs) > 0 {
-			remoteURL = remote.URLs[0]
-			break
-		}
-	}
-
-	localCommit, err := repo.CommitObject(head.Hash())
-	if err != nil {
-		return 0, 0, "", "", fmt.Errorf("failed to get local commit: %w", err)
-	}
-
-	remoteCommit, err := repo.CommitObject(remoteRef.Hash())
-	if err != nil {
-		return 0, 0, "", "", fmt.Errorf("failed to get remote commit: %w", err)
-	}
-
-	mergeBase, err := s.findMergeBase(repo, localCommit, remoteCommit)
-	if err != nil {
-		return 0, 0, "", "", fmt.Errorf("failed to find merge base: %w", err)
-	}
-
-	ahead = s.countCommits(repo, mergeBase.Hash, localCommit.Hash)
-	behind = s.countCommits(repo, mergeBase.Hash, remoteCommit.Hash)
-
-	return ahead, behind, trackingBranch, remoteURL, nil
-}
-
-func (s *GitService) findMergeBase(repo *git.Repository, commit1, commit2 *object.Commit) (*object.Commit, error) {
-	ancestors1 := s.collectAncestors(repo, commit1)
-
-	queue := []*object.Commit{commit2}
-	visited := map[plumbing.Hash]bool{commit2.Hash: true}
-
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-
-		if ancestors1[current.Hash] {
-			return current, nil
-		}
-
-		parents := current.Parents()
-		// The callback never returns an error, so a non-nil return here is
-		// an iteration/storage fault. It silently truncates this commit's
-		// parent set for the BFS rather than aborting the walk, which can
-		// turn a real merge base into a false "no merge base found" below —
-		// worth knowing about even though there's nothing to retry inline.
-		if err := parents.ForEach(func(parent *object.Commit) error {
-			if !visited[parent.Hash] {
-				visited[parent.Hash] = true
-				queue = append(queue, parent)
-			}
-			return nil
-		}); err != nil {
-			slog.Warn("Merge-base parent traversal truncated by a storage error", "commit", current.Hash, "error", err)
-		}
-	}
-
-	return nil, fmt.Errorf("no merge base found")
-}
-
-func (s *GitService) collectAncestors(repo *git.Repository, commit *object.Commit) map[plumbing.Hash]bool {
-	ancestors := map[plumbing.Hash]bool{}
-	ancestors[commit.Hash] = true
-
-	queue := []*object.Commit{commit}
-
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-
-		parents := current.Parents()
-		// See findMergeBase above: a non-nil return here is a storage
-		// fault that silently truncates the ancestor set this function
-		// builds, which callers use to compute ahead/behind — worth
-		// logging even though there's nothing to retry inline.
-		if err := parents.ForEach(func(parent *object.Commit) error {
-			if !ancestors[parent.Hash] {
-				ancestors[parent.Hash] = true
-				queue = append(queue, parent)
-			}
-			return nil
-		}); err != nil {
-			slog.Warn("Ancestor traversal truncated by a storage error", "commit", current.Hash, "error", err)
-		}
-	}
-
-	return ancestors
-}
-
-// countCommits returns the number of commits reachable from target but not from
-// base — the same quantity as `git rev-list --count base..target`, which is what
-// git's own ahead/behind reports.
-//
-// It walks ALL parents. The previous implementation followed first parents only
-// and stopped when it hit base, which undercounts any history containing merge
-// commits: a merge that brought in two commits counted as 1 instead of 3. That
-// was invisible while agent-os-r1a kept this whole path unreachable, and it
-// would have become a live regression the moment the path was switched back on,
-// because getStatusCLI (`git rev-list --left-right --count`) counts correctly.
-//
-// The old loop also had a termination hazard: base is found by BFS over all
-// parents, so it need not lie on target's first-parent chain. When it did not,
-// the walk ran to the root commit and returned the entire history length.
-func (s *GitService) countCommits(repo *git.Repository, base, target plumbing.Hash) int {
-	baseCommit, err := repo.CommitObject(base)
-	if err != nil {
-		return 0
-	}
-	reachableFromBase := s.collectAncestors(repo, baseCommit)
-
-	targetCommit, err := repo.CommitObject(target)
-	if err != nil {
-		return 0
-	}
-
-	count := 0
-	visited := map[plumbing.Hash]bool{targetCommit.Hash: true}
-	queue := []*object.Commit{targetCommit}
-
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-
-		if reachableFromBase[current.Hash] {
-			// Everything above this commit is shared history; do not descend.
-			continue
-		}
-		count++
-
-		// See findMergeBase above: a non-nil return here is a storage
-		// fault that silently truncates the walk, which would undercount
-		// commits ahead/behind — worth logging even though there's
-		// nothing to retry inline.
-		if err := current.Parents().ForEach(func(parent *object.Commit) error {
-			if !visited[parent.Hash] {
-				visited[parent.Hash] = true
-				queue = append(queue, parent)
-			}
-			return nil
-		}); err != nil {
-			slog.Warn("Commit count traversal truncated by a storage error", "commit", current.Hash, "error", err)
-		}
-	}
-
-	return count
-}
-
-func (s *GitService) mapCommit(commit *object.Commit) *models.GitCommit {
-	return &models.GitCommit{
-		Hash:    commit.Hash.String(),
-		Short:   commit.Hash.String()[:7],
-		Author:  commit.Author.Name,
-		Email:   commit.Author.Email,
-		Message: strings.Split(commit.Message, "\n")[0],
-		Date:    commit.Author.When.Format(time.RFC3339),
-	}
 }

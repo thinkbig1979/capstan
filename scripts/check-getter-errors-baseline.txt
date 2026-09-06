@@ -19,10 +19,10 @@ internal/services/crypto.go DISCARD=0 SOFT=1
 internal/services/docker.go DISCARD=1 SOFT=2
 internal/services/docker_update.go DISCARD=3 SOFT=3
 internal/services/exec_env.go DISCARD=1 SOFT=0
-internal/services/git.go DISCARD=12 SOFT=5
+internal/services/git.go DISCARD=12 SOFT=7
 internal/services/linter.go DISCARD=0 SOFT=1
 internal/services/redact_url.go DISCARD=5 SOFT=3
 internal/services/scanner.go DISCARD=0 SOFT=6
 internal/services/schedule.go DISCARD=2 SOFT=0
 internal/services/watcher.go DISCARD=0 SOFT=1
-TOTAL FILES=27 DISCARD=39 SOFT=50
+TOTAL FILES=27 DISCARD=39 SOFT=52

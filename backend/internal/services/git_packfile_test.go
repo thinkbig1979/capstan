@@ -9,14 +9,16 @@ import (
 	"testing"
 )
 
-// The go-git status path is only reachable for repositories whose objects live
-// in PACKFILES. Repositories built commit-by-commit — which is what every other
-// fixture in this package does — store loose objects, and the packfile reader is
-// the only thing that touches the object cache. That is why agent-os-r1a
-// survived 657 tests: nothing here had ever opened a packed repository.
-//
 // gitPackedRepo builds a bare "remote", clones it, and runs `git gc --aggressive`
 // on the clone so every object is packed. No network.
+//
+// The packing was originally load-bearing: the deleted go-git path only reached
+// its packfile reader for packed objects, which is how agent-os-r1a survived 657
+// tests — nothing here had ever opened a packed repository. Since agent-os-yo9e
+// deleted that path, `git` itself reads packed and loose objects identically and
+// the packing proves nothing on its own. The fixture is kept because the SHAPE
+// is still the one that matters: a real stack is a clone with an upstream, and
+// these tests are the only ones in the package that assert against one.
 func gitPackedRepo(t *testing.T) (local, remote string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -75,21 +77,22 @@ func gitPackedRepo(t *testing.T) (local, remote string) {
 	return local, remote
 }
 
-// TestGetStatusGoGit_PackedRepo is the regression test for agent-os-r1a.
-// openRepo passed a nil cache to filesystem.NewStorage, so ObjectStorage
-// dereferenced it as soon as an object had to be read out of a packfile and
-// getStatusGoGit panicked. GetStatus recovered and silently fell back to the
-// CLI, so nothing surfaced.
+// TestGetStatus_PackedRepo pins every field of the status contract against a
+// clone with an upstream.
 //
-// This asserts on getStatusGoGit directly, NOT GetStatus — the fallback would
-// mask the failure and the test would pass against the broken code.
-func TestGetStatusGoGit_PackedRepo(t *testing.T) {
+// It was the regression test for agent-os-r1a (a nil object cache panicked
+// go-git on any packed repository) and asserted on getStatusGoGit directly,
+// because the CLI fallback would otherwise have masked the failure. agent-os-yo9e
+// deleted that path and with it the fallback, so there is nothing left to mask
+// anything: the public entry point IS the implementation, and asserting through
+// it is now both the honest and the stronger choice.
+func TestGetStatus_PackedRepo(t *testing.T) {
 	local, _ := gitPackedRepo(t)
 	s := &GitService{}
 
-	st, err := s.getStatusGoGit(local)
+	st, err := s.GetStatus(local)
 	if err != nil {
-		t.Fatalf("getStatusGoGit failed on a packed repository: %v", err)
+		t.Fatalf("GetStatus failed on a packed repository: %v", err)
 	}
 
 	if st.Branch != "main" {
@@ -113,10 +116,15 @@ func TestGetStatusGoGit_PackedRepo(t *testing.T) {
 }
 
 // TestGetStatus_PackedRepoPopulatesTrackingBranch covers the second, distinct
-// symptom. getStatusCLI never sets TrackingBranch, so while the go-git path was
-// dead this API field came back empty for every stack, always. Asserting it
-// through the public GetStatus is deliberate: it is the contract the handler
-// serves, and it fails if the fallback is silently reinstated.
+// symptom of agent-os-r1a: getStatusCLI did not set TrackingBranch, so while the
+// go-git path was dead this API field came back empty for every stack, always.
+//
+// It is unchanged by agent-os-yo9e, deliberately: it was the test that PROVED
+// the two implementations were not interchangeable, and it is now the test that
+// proves the port carried the field across. getStatusCLI resolves @{upstream}
+// itself, so this passes on the surviving implementation for a better reason
+// than it used to — the tracking branch is read from git rather than assumed to
+// be origin/<same-name>.
 func TestGetStatus_PackedRepoPopulatesTrackingBranch(t *testing.T) {
 	local, remote := gitPackedRepo(t)
 	s := &GitService{}
@@ -133,10 +141,14 @@ func TestGetStatus_PackedRepoPopulatesTrackingBranch(t *testing.T) {
 	}
 }
 
-// TestGetStatusGoGit_PackedRepoAheadBehind exercises getDivergence, findMergeBase
-// and countCommits against packed objects. Every one of those was unreachable
-// while the nil cache stood, so none of them had ever run on a packed repository.
-func TestGetStatusGoGit_PackedRepoAheadBehind(t *testing.T) {
+// TestGetStatus_PackedRepoAheadBehind pins ahead/behind, and TrackingBranch
+// alongside them, after rewinding one commit off the upstream tip.
+//
+// It exercised go-git's getDivergence/findMergeBase/countCommits until
+// agent-os-yo9e; it now exercises getStatusCLI's `rev-list --left-right --count`
+// and its @{upstream} lookup. The assertion is unchanged because the CONTRACT is
+// unchanged — which is the only reason the implementation could be swapped.
+func TestGetStatus_PackedRepoAheadBehind(t *testing.T) {
 	local, _ := gitPackedRepo(t)
 	s := &GitService{}
 
@@ -146,9 +158,9 @@ func TestGetStatusGoGit_PackedRepoAheadBehind(t *testing.T) {
 		t.Fatalf("reset: %v\n%s", err, out)
 	}
 
-	st, err := s.getStatusGoGit(local)
+	st, err := s.GetStatus(local)
 	if err != nil {
-		t.Fatalf("getStatusGoGit after rewind failed: %v", err)
+		t.Fatalf("GetStatus after rewind failed: %v", err)
 	}
 	if st.Behind != 1 || st.Ahead != 0 {
 		t.Errorf("after rewinding one commit: ahead=%d behind=%d, want 0/1", st.Ahead, st.Behind)
@@ -158,11 +170,15 @@ func TestGetStatusGoGit_PackedRepoAheadBehind(t *testing.T) {
 	}
 }
 
-// TestGetStatusGoGit_PackedRepoDirtyWorktree exercises repo.Worktree() and
-// worktree.Status() against packed objects. repo.Worktree() is the call site
-// that go-git v5.19.2 changed most — it now wraps the filesystem in a
-// symlink-rejecting boundary — and it had never executed in this codebase.
-func TestGetStatusGoGit_PackedRepoDirtyWorktree(t *testing.T) {
+// TestGetStatus_PackedRepoDirtyWorktree pins Dirty and DirtyCount for a single
+// modified tracked file. It exercised go-git's repo.Worktree()/worktree.Status()
+// until agent-os-yo9e and now exercises `git status --porcelain`.
+//
+// One modified tracked file is the case where the two agree. They do NOT agree
+// on an untracked DIRECTORY: porcelain emits one entry for the directory where
+// go-git listed every file under it, so DirtyCount is now an entry count. That
+// difference is asserted, with its fixture, in git_parity_yo9e_test.go.
+func TestGetStatus_PackedRepoDirtyWorktree(t *testing.T) {
 	local, _ := gitPackedRepo(t)
 	s := &GitService{}
 
@@ -170,27 +186,25 @@ func TestGetStatusGoGit_PackedRepoDirtyWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st, err := s.getStatusGoGit(local)
+	st, err := s.GetStatus(local)
 	if err != nil {
-		t.Fatalf("getStatusGoGit on a dirty packed repo failed: %v", err)
+		t.Fatalf("GetStatus on a dirty packed repo failed: %v", err)
 	}
 	if !st.Dirty || st.DirtyCount != 1 {
 		t.Errorf("dirty tree: dirty=%v count=%d, want true/1", st.Dirty, st.DirtyCount)
 	}
 }
 
-// TestGetStatusGoGit_PackedRepoWithSymlinkedSubdir locks in behaviour that was
-// specifically at risk. go-git v5.19.2 wraps the worktree filesystem in a
-// boundary that rejects paths whose leading directories exist on disk as
-// symlinks (v5.19.2/worktree_fs.go), and repo.Worktree() had never executed in
-// this codebase before the nil-cache fix — so a stacks directory containing
-// symlinked subdirectories was the most plausible way for that change to
-// surface as a regression.
+// TestGetStatus_PackedRepoWithSymlinkedSubdir pins how a symlinked subdirectory
+// inside a stack is counted: as ONE untracked entry, not traversed into.
 //
-// It does not: Status reports a top-level symlink as an untracked entry rather
-// than traversing into it. Keeping the test so that a future go-git bump which
-// does break it fails here instead of in production.
-func TestGetStatusGoGit_PackedRepoWithSymlinkedSubdir(t *testing.T) {
+// The original risk was go-git-specific — v5.19.2 wrapped the worktree
+// filesystem in a boundary rejecting paths whose leading directories are
+// symlinks — and that risk left with the library in agent-os-yo9e. The
+// ASSERTION outlives it: operators do symlink directories into a stacks tree,
+// and "one entry, not traversed" is the answer `git status --porcelain` gives
+// and the one the UI's dirty count depends on.
+func TestGetStatus_PackedRepoWithSymlinkedSubdir(t *testing.T) {
 	local, _ := gitPackedRepo(t)
 
 	target := filepath.Join(t.TempDir(), "elsewhere")
@@ -205,9 +219,9 @@ func TestGetStatusGoGit_PackedRepoWithSymlinkedSubdir(t *testing.T) {
 	}
 
 	s := &GitService{}
-	st, err := s.getStatusGoGit(local)
+	st, err := s.GetStatus(local)
 	if err != nil {
-		t.Fatalf("getStatusGoGit failed on a repo containing a symlinked subdir: %v", err)
+		t.Fatalf("GetStatus failed on a repo containing a symlinked subdir: %v", err)
 	}
 	if !st.Dirty || st.DirtyCount != 1 {
 		t.Errorf("symlinked subdir should read as one untracked entry, got dirty=%v count=%d", st.Dirty, st.DirtyCount)
@@ -217,18 +231,18 @@ func TestGetStatusGoGit_PackedRepoWithSymlinkedSubdir(t *testing.T) {
 	}
 }
 
-// TestGetStatusGoGit_PackedRepoBehindAcrossMerge pins the go-git divergence
-// count to git's own answer across a MERGE commit.
+// TestGetStatus_PackedRepoBehindAcrossMerge pins the divergence count to git's
+// own answer across a MERGE commit, on a repo whose history is merge-per-feature
+// exactly like this one.
 //
-// countCommits used to follow first parents only, so a merge that brought in two
-// commits counted as 1 instead of 3. It was invisible while agent-os-r1a kept
-// this path unreachable, and switching the path back on would have silently
-// downgraded the API's behind count — getStatusCLI uses
-// `git rev-list --left-right --count`, which counts correctly.
-//
-// This repo's own history is merge-per-feature, so the wrong answer would have
-// shipped on the first real stack.
-func TestGetStatusGoGit_PackedRepoBehindAcrossMerge(t *testing.T) {
+// It was written against go-git's countCommits, which followed first parents only
+// and reported 1 where git says 3. agent-os-yo9e deleted that walk, so the test
+// now guards a different and still-live mistake: `rev-list --left-right --count`
+// prints BEHIND then AHEAD, and getStatusCLI assigns parts[0] to Behind and
+// parts[1] to Ahead. Swap those two and this fixture — behind 3, ahead 0 — is
+// what catches it, because it is the only one in the package where the two
+// counts differ.
+func TestGetStatus_PackedRepoBehindAcrossMerge(t *testing.T) {
 	local, _ := gitPackedRepo(t)
 
 	run := func(dir string, args ...string) string {
@@ -271,9 +285,9 @@ func TestGetStatusGoGit_PackedRepoBehindAcrossMerge(t *testing.T) {
 	}
 
 	s := &GitService{}
-	st, err := s.getStatusGoGit(local)
+	st, err := s.GetStatus(local)
 	if err != nil {
-		t.Fatalf("getStatusGoGit failed: %v", err)
+		t.Fatalf("GetStatus failed: %v", err)
 	}
 	if got := strconv.Itoa(st.Behind); got != wantBehind {
 		t.Errorf("behind = %s, git rev-list --count HEAD..origin/main says %s", got, wantBehind)

@@ -603,8 +603,19 @@ func TestGetStatusCLI_DirectoryHTTPSEmptyToken_LogsWarnOnce(t *testing.T) {
 // environment on every invocation once a token is configured (regardless of
 // whether that particular git subcommand needs to contact a remote — see
 // gitCmd's doc comment), so this observes the resolved credential landing on
-// each of getStatusCLI's nine internal git processes directly, rather than
-// inferring it from a log line.
+// each of getStatusCLI's internal git processes directly, rather than inferring
+// it from a log line.
+//
+// The count is eleven for THIS fixture, and the fixture property it depends on
+// is asserted below rather than assumed. realLocalRepo is a bare `git init`
+// with one commit: no remote, no upstream. So both arms of the TrackingBranch
+// resolution added by agent-os-yo9e run — the `@{upstream}` lookup, which
+// fails, and then the `refs/remotes/origin/<branch>` fallback probe, which also
+// fails. A fixture WITH an upstream would take the first arm and stop, for ten.
+// The eleven are, in order: rev-parse --abbrev-ref HEAD; rev-parse HEAD; four
+// `log -1 --format=...`; status --porcelain; rev-list --left-right --count;
+// rev-parse --abbrev-ref @{upstream}; rev-parse --verify refs/remotes/origin/main;
+// remote get-url origin.
 func TestGetStatusCLI_ResolvedTokenReachesEveryInvocation(t *testing.T) {
 	realGit, err := exec.LookPath("git")
 	if err != nil {
@@ -625,6 +636,15 @@ func TestGetStatusCLI_ResolvedTokenReachesEveryInvocation(t *testing.T) {
 		t.Fatalf("write git wrapper: %v", err)
 	}
 
+	// The expected invocation count below depends on this fixture having no
+	// upstream, so state it as a precondition instead of trusting the builder.
+	//nolint:gosec // realGit is exec.LookPath("git")'s result, resolved a few lines above from this process's own PATH, with a fixed argv — not user input
+	upstreamProbe := exec.Command(realGit, "rev-parse", "--abbrev-ref", "@{upstream}")
+	upstreamProbe.Dir = dirPath
+	if err := upstreamProbe.Run(); err == nil {
+		t.Fatal("precondition: fixture HAS an upstream, so the fallback probe never runs and the count below is wrong")
+	}
+
 	t.Setenv("PATH", wrapperDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	if _, err := svc.getStatusCLI(dirPath); err != nil {
@@ -637,8 +657,8 @@ func TestGetStatusCLI_ResolvedTokenReachesEveryInvocation(t *testing.T) {
 		t.Fatalf("read wrapper log (wrapper never ran — the real git was invoked directly instead of via PATH): %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
-	if len(lines) != 9 {
-		t.Fatalf("wrapper observed %d git invocations, want 9 (one per getStatusCLI internal call): %v", len(lines), lines)
+	if len(lines) != 11 {
+		t.Fatalf("wrapper observed %d git invocations, want 11 (one per getStatusCLI internal call): %v", len(lines), lines)
 	}
 	want := fmt.Sprintf("user=%s token=%s", testGitUser, testGitToken)
 	for i, line := range lines {
