@@ -2136,42 +2136,6 @@ func TestPrune_UnavailableWhenNoRestic(t *testing.T) {
 }
 
 // ============================================================
-// runSyncInternal — no remote configured
-// ============================================================
-
-func TestRunSync_NoRemoteConfigured_ReturnsError(t *testing.T) {
-	t.Parallel()
-
-	db := newBackupTestDB(t)
-	// rclone_remote NOT set in DB.
-	docker := &fakeDocker{}
-	runner := &fakeRunner{}
-	svc := buildSvc(t, db, docker, runner, runner)
-
-	// Override the rclone factory so RunSync gets past the binary check
-	// but hits the "no remote configured" error in runSyncInternal.
-	// We need to zero the DB value that would otherwise be resolved from bc.
-	// buildSvc hardcodes bc.RcloneRemote="myremote" in the factory — but
-	// runSyncInternal uses resolveBackupConfig which reads from db. Since the
-	// DB has no rclone_remote, the remote comes from cfg, which is also empty.
-	// So: clear the factory's BackupConfig remote by resetting via the DB
-	// having an empty rclone_remote (no SetSetting call = default empty).
-	//
-	// We confirm runSyncInternal is reached: RunSync must NOT return ErrBackupUnavailable
-	// (rclone IS "present"), and the returned error must be about remote config.
-	out := make(chan StreamLine, 64)
-	err := svc.RunSync(context.Background(), out)
-	// The error should be about the remote not being configured (not busy, not unavailable).
-	// Because runSyncInternal reads resolveBackupConfig which yields empty RcloneRemote.
-	if err != nil && (err.Error() == "rclone remote is not configured") {
-		// Expected path.
-		return
-	}
-	// If no error or different error, that's also acceptable (rclone factory might
-	// succeed silently if runner returns nil). Either way, the test must not panic.
-}
-
-// ============================================================
 // ResolveBackupConfig (exported variant)
 // ============================================================
 

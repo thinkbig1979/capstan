@@ -309,7 +309,6 @@ type UpdateHistoryFilters struct {
 }
 
 type UpdateResult struct {
-	HistoryID  string `json:"historyId"`
 	OldDigest  string `json:"oldDigest"`
 	NewDigest  string `json:"newDigest"`
 	DurationMs int64  `json:"durationMs"`
