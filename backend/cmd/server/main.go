@@ -185,6 +185,51 @@ func registerIndexRoute(r *gin.Engine, indexHTML string) {
 	})
 }
 
+// schedulerSettings is the slice of *database.DB that startUpdateScheduler
+// reads. It is declared here, structurally, so the boot decision can be driven
+// with a fault-injecting fake: update_scan_interval and update_apply_mode come
+// from the SAME source, so a fault reaches both at once and the only way to
+// observe that is to inject one.
+type schedulerSettings interface {
+	GetSetting(key string) (string, error)
+}
+
+// updateScheduler is the *services.SchedulerService surface used at boot. The
+// nil check stays at the call site: a nil *SchedulerService stored in this
+// interface would be a non-nil interface value.
+type updateScheduler interface {
+	Start(interval time.Duration)
+}
+
+// startUpdateScheduler arms the update scan scheduler from persisted settings
+// and reports whether it started.
+func startUpdateScheduler(sched updateScheduler, db schedulerSettings, log *slog.Logger) bool {
+	intervalStr, _ := db.GetSetting("update_scan_interval")
+	scanIntervalMinutes := 0
+	if intervalStr != "" {
+		if minutes, err := strconv.Atoi(intervalStr); err == nil {
+			scanIntervalMinutes = minutes
+		}
+	}
+
+	if scanIntervalMinutes > 0 {
+		// Start also arms the scheduled-apply timer, reading update_apply_*
+		// itself, so a configured apply schedule is live from boot.
+		sched.Start(time.Duration(scanIntervalMinutes) * time.Minute)
+		log.Info("Update scheduler started", "interval_minutes", scanIntervalMinutes)
+		return true
+	}
+	if applyMode, _ := db.GetSetting("update_apply_mode"); applyMode == "scheduled" {
+		// The apply timer lives inside the scan scheduler, because applying
+		// from a cache no scan ever refreshes is worse than not applying.
+		// Say so rather than letting a configured schedule sit silently dead.
+		applyTime, _ := db.GetSetting("update_apply_time")
+		log.Warn("Auto-update apply is scheduled but the update scan interval is 0, so nothing will be applied",
+			"apply_time", applyTime)
+	}
+	return false
+}
+
 func main() {
 	// Offline admin commands are dispatched before anything else, deliberately
 	// ahead of config.Load: config treats JWT_SECRET as a hard startup
@@ -511,27 +556,7 @@ func main() {
 	resourcesHandler.RegisterRoutes(protected)
 
 	if schedulerService != nil {
-		intervalStr, _ := db.GetSetting("update_scan_interval")
-		scanIntervalMinutes := 0
-		if intervalStr != "" {
-			if minutes, err := strconv.Atoi(intervalStr); err == nil {
-				scanIntervalMinutes = minutes
-			}
-		}
-
-		if scanIntervalMinutes > 0 {
-			// Start also arms the scheduled-apply timer, reading update_apply_*
-			// itself, so a configured apply schedule is live from boot.
-			schedulerService.Start(time.Duration(scanIntervalMinutes) * time.Minute)
-			slog.Info("Update scheduler started", "interval_minutes", scanIntervalMinutes)
-		} else if applyMode, _ := db.GetSetting("update_apply_mode"); applyMode == "scheduled" {
-			// The apply timer lives inside the scan scheduler, because applying
-			// from a cache no scan ever refreshes is worse than not applying.
-			// Say so rather than letting a configured schedule sit silently dead.
-			applyTime, _ := db.GetSetting("update_apply_time")
-			slog.Warn("Auto-update apply is scheduled but the update scan interval is 0, so nothing will be applied",
-				"apply_time", applyTime)
-		}
+		startUpdateScheduler(schedulerService, db, slog.Default())
 	}
 
 	if monitorService != nil {
