@@ -78,10 +78,19 @@ const applyRetryDelay = 30 * time.Second
 
 // applySchedule is the scheduler's resolved view of the update_apply_* settings.
 // A zero value means immediate mode, which is both the seeded default and the
-// fallback for anything unreadable or unparseable (see loadApplySchedule).
+// fallback for an absent key or an unparseable stored value (see
+// loadApplySchedule).
+//
+// unreadable is the THIRD state, and it is not a flavour of immediate: it means
+// the settings could not be read at all, so the scheduler knows neither that the
+// operator wants immediate mode nor when their maintenance window is. Every
+// consumer must treat it as "apply nothing this pass" rather than falling
+// through to the zero value, which would apply updates NOW on the strength of a
+// database fault (agent-os-rltu).
 type applySchedule struct {
-	scheduled bool
-	schedule  DailySchedule
+	scheduled  bool
+	schedule   DailySchedule
+	unreadable bool
 }
 
 type SchedulerService struct {
@@ -457,10 +466,22 @@ func (s *SchedulerService) runCycle(ctx context.Context) {
 	}
 
 	// Scheduled mode keeps scanning on the interval but moves APPLYING to the
-	// clock, so the scan tick stops here and the apply loop does the rest. Every
-	// other case — immediate mode, an unreadable setting, an unparseable stored
-	// schedule — resolves to immediate and applies exactly as before.
-	if s.loadApplySchedule().scheduled {
+	// clock, so the scan tick stops here and the apply loop does the rest.
+	// Immediate mode — the seeded default, an absent key, or a stored schedule
+	// this code cannot parse — applies exactly as before.
+	cfg := s.loadApplySchedule()
+	if cfg.unreadable {
+		// A settings READ fault, not a value the scheduler disagrees with. It is
+		// checked BEFORE .scheduled rather than after, because the zero value of
+		// applySchedule has scheduled=false: reading this state as "not
+		// scheduled" is precisely how the fault used to fall through to
+		// RunAutoUpdates and apply on the strength of a failed query
+		// (agent-os-rltu). loadApplySchedule has already logged the cause and
+		// the consequence at ERROR, so this branch stays quiet rather than
+		// emitting a second line for one event.
+		return
+	}
+	if cfg.scheduled {
 		s.logger.Info("Scheduled apply mode: updates cached, not applied on this scan tick",
 			"updates_found", len(updates))
 		return
@@ -471,22 +492,44 @@ func (s *SchedulerService) runCycle(ctx context.Context) {
 
 // loadApplySchedule resolves the update_apply_* settings into an applySchedule.
 //
-// Requirement C of the task brief: it NEVER falls back to "no schedule". Every
-// failure path — an unreadable setting, an unparseable time or weekday list —
-// returns immediate mode and says so in the log. Falling back to a dead
-// schedule would mean the apply timer never fires and nothing tells the
-// operator their updates stopped landing.
+// It distinguishes THREE outcomes, and the line between them is "could the
+// setting be read at all", not "did it give me a schedule":
+//
+//   - scheduled — the operator configured a window and it parsed.
+//   - immediate — a legitimately known "no window": an absent key (the
+//     pre-migration-14 state, where immediate is exactly what migration 14
+//     seeds) or a stored value this code cannot parse. A corrupt value is one
+//     the operator themselves set and can see in the settings UI, so acting on
+//     the documented default is honest.
+//   - unreadable — a genuine database fault. NOTHING is applied on this pass.
+//
+// The third case used to resolve to immediate, on the reasoning (Requirement C
+// of the original task brief) that falling back to a dead schedule would stop
+// updates landing with nobody told. That reasoning covered the wrong risk: it
+// traded a loud stop for a silent override of an explicit maintenance window,
+// so an operator who asked for 03:00 got production containers restarted mid-
+// afternoon because a query failed. agent-os-r1kc settled the identical shape
+// for retention the other way — refuse rather than act at a default when the
+// setting cannot be read — and this now matches it (agent-os-rltu). The stop is
+// not silent: every unreadable branch below logs at ERROR naming both the cause
+// and the consequence.
 func (s *SchedulerService) loadApplySchedule() applySchedule {
 	immediate := applySchedule{}
+	unreadable := applySchedule{unreadable: true}
 
 	mode, err := s.db.GetSetting("update_apply_mode")
 	if err != nil {
 		// A missing key is the pre-migration-14 state, and immediate is exactly
-		// what migration 14 seeds, so that case is not worth shouting about.
-		if !errors.Is(err, sql.ErrNoRows) {
-			s.logger.Error("Failed to read update_apply_mode; applying updates immediately", "error", err)
+		// what migration 14 seeds, so that case is not worth shouting about AND
+		// is not a fault: it stays on the immediate path deliberately. Only a
+		// genuine read fault refuses.
+		if errors.Is(err, sql.ErrNoRows) {
+			return immediate
 		}
-		return immediate
+		s.logger.Error("Failed to read update_apply_mode; no update will be applied on this pass, "+
+			"because applying now could override a maintenance window this fault is hiding",
+			"error", err)
+		return unreadable
 	}
 	if mode != "scheduled" {
 		return immediate
@@ -495,9 +538,10 @@ func (s *SchedulerService) loadApplySchedule() applySchedule {
 	hhmm, timeErr := s.db.GetSetting("update_apply_time")
 	days, daysErr := s.db.GetSetting("update_apply_days")
 	if timeErr != nil || daysErr != nil {
-		s.logger.Error("Apply mode is scheduled but its schedule could not be read; applying updates immediately",
+		s.logger.Error("Apply mode is scheduled but its schedule could not be read; no update will be applied "+
+			"until it can be read, rather than applying now outside the operator's maintenance window",
 			"time_error", timeErr, "days_error", daysErr)
-		return immediate
+		return unreadable
 	}
 
 	schedule, err := ParseDailySchedule(hhmm, days)
@@ -630,7 +674,9 @@ func (s *SchedulerService) applySeams() (func() time.Time, time.Duration) {
 }
 
 // NextApplyAt reports the instant the apply loop is waiting for. The zero time
-// means nothing is scheduled: immediate mode, or no running scheduler.
+// means nothing is scheduled: immediate mode, an unreadable settings store
+// (agent-os-rltu — in which case nothing is applied on the scan tick either),
+// or no running scheduler.
 func (s *SchedulerService) NextApplyAt() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -648,6 +694,15 @@ func (s *SchedulerService) publishNextApplyAt(nextAt time.Time, armed bool) {
 }
 
 func (s *SchedulerService) logApplyArming(cfg applySchedule, nextAt time.Time, armed bool) {
+	// Ordered before the !scheduled test for the same reason runCycle checks it
+	// first: unreadable also carries scheduled=false, so reporting it as
+	// "immediate (applying on the scan tick)" would tell the operator the exact
+	// opposite of what the scheduler is now doing (agent-os-rltu).
+	if cfg.unreadable {
+		s.logger.Error("Auto-update apply mode is unknown: the update_apply_* settings could not be read, " +
+			"so nothing will be applied on the scan tick and no apply is scheduled")
+		return
+	}
 	if !cfg.scheduled {
 		s.logger.Info("Auto-update apply mode: immediate (applying on the scan tick)")
 		return
