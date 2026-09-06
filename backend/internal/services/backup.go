@@ -865,6 +865,63 @@ func (s *BackupService) RunBackupWithRunID(
 	return run, nil
 }
 
+// runState is the three-valued answer to "was this stack running before we
+// touched it?": known-running, known-stopped, and could-not-find-out.
+//
+// A bool cannot hold the third answer, and folding it into false is what
+// agent-os-uacg was filed for: `docker compose ps` failing made the service
+// treat a stack it could not read as not-running. The stop policy never
+// consulted that flag, so the stack was stopped for the backup and then not
+// restarted — a read fault became an availability incident, announced nowhere.
+type runState int
+
+const (
+	// runStateStopped: Status answered, and the stack was not running.
+	runStateStopped runState = iota
+	// runStateRunning: Status answered, and the stack was running or partial.
+	runStateRunning
+	// runStateUnknown: Status returned an error. We do not know what the stack
+	// was doing, and must not pretend either answer.
+	runStateUnknown
+)
+
+// observeRunState reports whether stack was running, keeping a failed read
+// distinct from a negative answer.
+func (s *BackupService) observeRunState(stack models.Stack, stackID string) runState {
+	status, _, statusErr := s.dockerSvc().Status(stack)
+	if statusErr != nil {
+		s.logger.Warn("could not read stack run state; the restart decision will be made without it",
+			"stack", stackID, "cause", statusErr)
+		return runStateUnknown
+	}
+	if status == "running" || status == "partial" {
+		return runStateRunning
+	}
+	return runStateStopped
+}
+
+// announceUnprovenRestart tells the operator, at the moment it happens, that a
+// stack is being restarted without knowing what state it was in beforehand.
+//
+// The tradeoff is deliberate, decided on agent-os-uacg: of the two ways to be
+// wrong about an unreadable stack, leaving a running stack down is worse than
+// starting a stopped one, so an unknown prior state restarts. The residual risk
+// — starting a stack an operator had deliberately stopped — is not eliminated
+// by that choice, so it is surfaced here rather than hidden. Both directions
+// are pinned by TestRunBackup_RunStateDecidesRestart and
+// TestRunRestore_RunStateDecidesRestart, which assert this notice is present on
+// the unknown arm and ABSENT on the known-running arm; a restart count alone
+// cannot tell those two apart.
+func (s *BackupService) announceUnprovenRestart(stackID, phase string, out chan<- StreamLine) {
+	s.logger.Warn("restarting stack on an unproven premise: its prior run state could not be read",
+		"stack", stackID, "phase", phase)
+	stream(out, "info", fmt.Sprintf(
+		"[%s] WARNING: restarting after %s on an unproven premise — docker status could not be read "+
+			"beforehand, so whether this stack was running is unknown. Restarting to restore service; "+
+			"if it was stopped deliberately, stop it again.",
+		stackID, phase))
+}
+
 // backupStack performs the full backup cycle for a single stack (stop, backup,
 // verify, retention, restart). It writes a BackupRunItem to the DB and returns
 // any error encountered.
@@ -896,18 +953,19 @@ func (s *BackupService) backupStack(
 	stack := *stackRecord
 
 	// Determine whether the stack is currently running so we know whether to
-	// restart it after backup.
-	wasRunning := false
-	if status, _, statusErr := s.dockerSvc().Status(stack); statusErr == nil {
-		wasRunning = status == "running" || status == "partial"
-	}
+	// restart it after backup. A failed read is its own answer here, not a "no".
+	priorState := s.observeRunState(stack, stackID)
 
 	stopApplied := false
 
 	// Defensive restart: even if we return early due to a backup failure, we
-	// attempt to restart the stack if we stopped it.
+	// attempt to restart the stack if we stopped it. Only a stack we KNEW to be
+	// stopped is left down; an unreadable one is restarted, and says so.
 	defer func() {
-		if stopApplied && wasRunning {
+		if stopApplied && priorState != runStateStopped {
+			if priorState == runStateUnknown {
+				s.announceUnprovenRestart(stackID, "backup", out)
+			}
 			stream(out, "info", fmt.Sprintf("[%s] restarting stack (defensive)", stackID))
 			ar, _ := s.dockerSvc().StartVerified(stack)
 			switch ar.Outcome {
@@ -975,7 +1033,8 @@ func (s *BackupService) backupStack(
 	s.recordItem(runID, stackID, "success", snapshotID, stopApplied, time.Since(startedAt))
 	stream(out, "info", fmt.Sprintf("[%s] completed successfully", stackID))
 
-	// The deferred restart will fire here for the stop-policy path if wasRunning.
+	// The deferred restart will fire here for the stop-policy path unless the
+	// stack was known to be stopped beforehand.
 	return bytesAdded, nil
 }
 
@@ -1161,11 +1220,9 @@ func (s *BackupService) RunRestore(
 	}
 	defer s.opLock.Release(lockToken)
 
-	// Determine if the stack was running.
-	wasRunning := false
-	if status, _, statusErr := s.dockerSvc().Status(stack); statusErr == nil {
-		wasRunning = status == "running" || status == "partial"
-	}
+	// Determine if the stack was running. As in backupStack, a failed read is a
+	// third answer — "could not find out" — and not a "no".
+	priorState := s.observeRunState(stack, stackID)
 
 	// Fetch the stop policy from the backup policy, defaulting to "stop"
 	// for restores (restore is always destructive).
@@ -1195,7 +1252,7 @@ func (s *BackupService) RunRestore(
 	stopApplied := false
 
 	defer func() {
-		if !stopApplied || !wasRunning {
+		if !stopApplied || priorState == runStateStopped {
 			return
 		}
 		// N13 (agent-os-4pa.7): only restart when the restore SUCCEEDED. A failed
@@ -1208,6 +1265,9 @@ func (s *BackupService) RunRestore(
 				"[%s] restore failed; stack left stopped deliberately so you can inspect %s and retry (not auto-restarting over a possibly partial restore)",
 				stackID, restoreTarget))
 			return
+		}
+		if priorState == runStateUnknown {
+			s.announceUnprovenRestart(stackID, "restore", out)
 		}
 		stream(out, "info", fmt.Sprintf("[%s] restarting stack after restore", stackID))
 		ar, _ := s.dockerSvc().StartVerified(stack)

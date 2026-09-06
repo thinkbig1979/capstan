@@ -434,34 +434,94 @@ func TestRunBackup_StopPolicy_StopsAndRestartsRunningStack(t *testing.T) {
 	assert.Equal(t, 1, docker.started(), "Start must be called once (restart after backup)")
 }
 
-// TestRunBackup_StatusError_DefaultsToNoRestart pins the behavior of unifying
-// Status (docker_lifecycle.go) to always propagate a real docker compose ps
-// error instead of the old ("unknown", nil, nil) sentinel. backupStack already
-// gates wasRunning on `statusErr == nil`, defaulting to false — so a ps failure
-// now takes that same default-false branch instead of the previously swallowed
-// "unknown" status (which also evaluated to not-running). The stop policy still
-// applies (it does not depend on wasRunning), but the defensive restart after
-// backup must be skipped because the service could not prove the stack had
-// been running in the first place.
-func TestRunBackup_StatusError_DefaultsToNoRestart(t *testing.T) {
+// TestRunBackup_RunStateDecidesRestart replaces the former
+// TestRunBackup_StatusError_DefaultsToNoRestart, which pinned the OPPOSITE
+// decision (agent-os-uacg). That test recorded this reasoning: because
+// backupStack gated wasRunning on `statusErr == nil`, a `docker compose ps`
+// failure took the default-false branch, and the defensive restart was skipped
+// "because the service could not prove the stack had been running".
+//
+// The flaw in that reasoning is that the STOP policy never depended on
+// wasRunning. So a status read fault stopped the stack, backed it up, and left
+// it DOWN — a read fault turned into an availability incident, announced
+// nowhere. wasRunning was a boolean holding three answers: running, stopped,
+// and "could not find out", with the third silently rendered as the second.
+//
+// The decision recorded on agent-os-uacg is to restore the prior state rather
+// than leave a stack down, so "could not find out" now restarts. The residual
+// risk is real and accepted: if the stack was genuinely stopped AND Status
+// faulted, we start something that was down. It is therefore not hidden — the
+// restart announces on the stream that it acts on an unproven premise, and
+// that announcement is what makes this arm distinguishable from a restart that
+// was actually proven. started() == 1 alone cannot tell those apart, which is
+// why all three arms run on one instrument here:
+//
+//	known-running -> restart, WITHOUT the uncertainty notice
+//	known-stopped -> no restart (also pinned independently, and left untouched,
+//	                 by TestRunBackup_StopPolicy_DoesNotRestartIfWasStopped)
+//	unknown/fault -> restart, WITH the uncertainty notice
+func TestRunBackup_RunStateDecidesRestart(t *testing.T) {
 	t.Parallel()
 
-	db := newBackupTestDB(t)
-	docker := &fakeDocker{statusErr: errors.New("docker compose ps failed")}
+	// The substring the operator-facing notice must (and must not) contain.
+	const unprovenMarker = "unproven premise"
 
-	runner := &fakeRunner{
-		outputData: snapshotJSON("abc123", "abc", "myapp"),
+	tests := []struct {
+		name          string
+		docker        *fakeDocker
+		wantStarted   int
+		wantUncertain bool
+	}{
+		{
+			name:          "known running restarts, and not on an unproven premise",
+			docker:        &fakeDocker{statusStr: "running"},
+			wantStarted:   1,
+			wantUncertain: false,
+		},
+		{
+			name:          "known stopped is left stopped",
+			docker:        &fakeDocker{statusStr: "stopped"},
+			wantStarted:   0,
+			wantUncertain: false,
+		},
+		{
+			name:          "status fault restarts and says the premise is unproven",
+			docker:        &fakeDocker{statusErr: errors.New("docker compose ps failed")},
+			wantStarted:   1,
+			wantUncertain: true,
+		},
 	}
-	svc := buildSvc(t, db, docker, runner, runner)
-	seedStack(t, db, "myapp", "stop")
 
-	out := make(chan StreamLine, 256)
-	run, err := svc.RunBackup(context.Background(), nil, false, "manual", out)
-	require.NoError(t, err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newBackupTestDB(t)
+			runner := &fakeRunner{
+				outputData: snapshotJSON("abc123", "abc", "myapp"),
+			}
+			svc := buildSvc(t, db, tc.docker, runner, runner)
+			seedStack(t, db, "myapp", "stop")
 
-	assert.Equal(t, "success", run.Status)
-	assert.Equal(t, 1, docker.stopped(), "stop policy still applies regardless of wasRunning")
-	assert.Equal(t, 0, docker.started(), "restart must be skipped: Status error means wasRunning could not be proven true")
+			out := make(chan StreamLine, 256)
+			run, err := svc.RunBackup(context.Background(), nil, false, "manual", out)
+			require.NoError(t, err)
+
+			assert.Equal(t, "success", run.Status)
+			assert.Equal(t, 1, tc.docker.stopped(),
+				"the stop policy applies regardless of the observed run state")
+			assert.Equal(t, tc.wantStarted, tc.docker.started())
+
+			gotUncertain := false
+			lines := drainChannel(out)
+			for _, l := range lines {
+				if strings.Contains(l.Line, unprovenMarker) {
+					gotUncertain = true
+					break
+				}
+			}
+			assert.Equal(t, tc.wantUncertain, gotUncertain,
+				"the stream must announce an unproven premise only when the run state was genuinely unknown; got %v", lines)
+		})
+	}
 }
 
 func TestRunBackup_StopPolicy_DoesNotRestartIfWasStopped(t *testing.T) {
@@ -1297,6 +1357,100 @@ func TestRunRestore_FailedRestoreLeavesStackStopped(t *testing.T) {
 	}
 	assert.True(t, found,
 		"stream must tell the operator the stack was left stopped for inspection; got %v", lines)
+}
+
+// TestRunRestore_RunStateDecidesRestart covers the second site of agent-os-uacg:
+// RunRestore held the same boolean-over-three-states as backupStack, and its
+// fault branch had no test at all. (The site itself was reachable — mutating
+// the guard to a constant false breaks TestRunRestore_StopsAndRestartsRunningStack
+// and two others — but nothing exercised statusErr != nil here.)
+//
+// Restore's semantics are NOT simply backup's: a restore is destructive, so
+// N13 (agent-os-4pa.7) already forbids restarting over a possibly half-written
+// directory when the restore itself failed. That gate is unchanged and takes
+// precedence, which is why the last arm exists: an unknown run state must not
+// become a way around it. Where the restore SUCCEEDS, the agent-os-uacg
+// decision applies exactly as it does for backup — an unknown prior state is
+// restarted rather than left down, and the restart says it is acting on an
+// unproven premise.
+func TestRunRestore_RunStateDecidesRestart(t *testing.T) {
+	t.Parallel()
+
+	const unprovenMarker = "unproven premise"
+
+	tests := []struct {
+		name          string
+		docker        *fakeDocker
+		failRestore   bool
+		wantStarted   int
+		wantUncertain bool
+	}{
+		{
+			name:          "known running restarts, and not on an unproven premise",
+			docker:        &fakeDocker{statusStr: "running"},
+			wantStarted:   1,
+			wantUncertain: false,
+		},
+		{
+			name:          "known stopped is left stopped",
+			docker:        &fakeDocker{statusStr: "stopped"},
+			wantStarted:   0,
+			wantUncertain: false,
+		},
+		{
+			name:          "status fault restarts and says the premise is unproven",
+			docker:        &fakeDocker{statusErr: errors.New("docker compose ps failed")},
+			wantStarted:   1,
+			wantUncertain: true,
+		},
+		{
+			name:          "status fault does not override N13 when the restore failed",
+			docker:        &fakeDocker{statusErr: errors.New("docker compose ps failed")},
+			failRestore:   true,
+			wantStarted:   0,
+			wantUncertain: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newBackupTestDB(t)
+			base := fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")}
+
+			var runner commandRunner
+			if tc.failRestore {
+				runner = &restoreFailingRunner{fakeRunner: base}
+			} else {
+				r := base
+				runner = &r
+			}
+			svc := buildSvc(t, db, tc.docker, runner, runner)
+			seedStack(t, db, "myapp", "stop")
+
+			out := make(chan StreamLine, 256)
+			err := svc.RunRestore(context.Background(), "myapp", "abc123", "/opt/stacks/myapp", out)
+			if tc.failRestore {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, 1, tc.docker.stopped(),
+				"restore always stops the stack first, regardless of the observed run state")
+			assert.Equal(t, tc.wantStarted, tc.docker.started())
+
+			gotUncertain := false
+			lines := drainChannel(out)
+			for _, l := range lines {
+				if strings.Contains(l.Line, unprovenMarker) {
+					gotUncertain = true
+					break
+				}
+			}
+			assert.Equal(t, tc.wantUncertain, gotUncertain,
+				"the stream must announce an unproven premise only when the run state was genuinely unknown AND a restart actually happened; got %v", lines)
+		})
+	}
 }
 
 func TestRunRestore_BusyReturns409Sentinel(t *testing.T) {
