@@ -283,6 +283,46 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// Re-read what the scan just persisted, and respond with THAT.
+	//
+	// The scan above is synchronous and upserts over the row written at
+	// UpsertStack, filling in the fields only the scanner produces —
+	// IsGitRepo and GitBranch (services/scanner.go is their sole writer;
+	// no handler ever sets them). The struct literal above therefore still
+	// holds their zero values, and rendering it reported a stack in a
+	// perfectly healthy git-backed directory as not a git repo at all, for
+	// one response, while the database said otherwise. The database was
+	// never wrong here and no later scan had to repair it: only the response
+	// disagreed with the row the same handler had just written
+	// (agent-os-hgtb).
+	//
+	// Fixed by re-reading rather than by populating the literal above,
+	// which would duplicate the git resolution the scanner already does 59
+	// lines later and re-create the two-producers-disagreeing defect
+	// agent-os-07x fixed — the same reason ResolveComposeProjectName is
+	// called there instead of deriving the name independently.
+	//
+	// Done here, BEFORE the deploy branch, so all three response paths
+	// (created, created+deployed, created-but-not-deployed) report the
+	// persisted row rather than only the first of them. StartVerified below
+	// then deploys from the row too: the comment above exists precisely so
+	// the local and the persisted row agree, and where they ever did not,
+	// the row is what every other part of the system reads.
+	if persisted, err := h.db.GetStack(stackID); err != nil {
+		// Deliberately NOT fatal, and not the fail-open this codebase has
+		// been closing elsewhere: the outcome is unaffected. The stack WAS
+		// created and persisted — directory, database row and scan all
+		// succeeded — and only the freshness of this response's decoration
+		// is in question. Answering a successful create with a 500 would
+		// report a false outcome, which is the defect class, not an
+		// instance of it. So: log the cause AND the consequence, and serve
+		// the pre-scan values.
+		slog.Warn("could not re-read the newly created stack after its scan; the git fields in this response may be stale, though the stored row is correct",
+			"id", stackID, "error", err)
+	} else {
+		stack = *persisted
+	}
+
 	h.logAction(c, stackID, "create", fmt.Sprintf("Created new stack: %s", req.Name))
 
 	// req.Deploy is false: stack created successfully, no deploy requested.
