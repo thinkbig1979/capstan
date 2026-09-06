@@ -13,7 +13,7 @@
 //
 // THREE COMMANDS:
 //
-//	scan <dir>              list every DISCARD / SOFT site under <dir>
+//	scan <dir>              list every DISCARD / SOFT / MERGE site under <dir>
 //	counts <dir>            the same, aggregated per file (the ratchet baseline)
 //	reach <dir> <profile>   list converted sites and whether a test drives a
 //	                        fault into each (layer C; needs a coverage profile)
@@ -23,6 +23,57 @@
 //	DISCARD  x, _ := f()          the error is thrown away outright
 //	SOFT     x, e := f()          e is only ever compared `e == nil`; the error
 //	         if e == nil { ... }  is softened into an "absent" signal
+//	MERGE    if e != nil || v {   the error IS checked, but it is fused by `||`
+//	                              to a VALUE test, so "I could not read it" and
+//	                              "I read it and the answer is no" take one
+//	                              branch and the caller cannot tell them apart
+//
+// THE MERGE SHAPE, and why it needed its own kind (agent-os-8f2g). DISCARD and
+// SOFT both describe an error that is thrown away or weakened at the
+// ASSIGNMENT. MERGE describes one that is checked correctly and then merged
+// into a legitimate value state at the BRANCH, so neither of the other two
+// kinds could ever see it: at 33666e3 none of services/backup_runner.go,
+// services/docker_update.go's fetch loop or handlers/auth.go appeared in a
+// DISCARD or SOFT row, while all three carried the defect. agent-os-koy9 /
+// 91u2 / 89ut / rb6f are four beads of that one class, and it regrew unwatched
+// between them because the only ratchet in the repo could not classify it.
+//
+// FOUR WAYS A GREP FOR THIS SHAPE RETURNS A FALSE ZERO, all four OBSERVED on
+// this tree, and all four are why it is detected on the AST and not with a
+// pattern:
+//
+//   - OPERAND ORDER. `if !userExists || cmpErr != nil` (handlers/auth.go:346)
+//     is invisible to every arm anchored on the error to the LEFT of the `||`,
+//     and both arms in agent-os-koy9's brief were left-anchored.
+//   - ERROR NAME. sErr, listErr, timeErr, rerr and cmpErr all evade an
+//     `err`-anchored pattern; a SelectorExpr (`resp.Err != nil`) evades an
+//     ident-anchored one.
+//   - IF-INIT. `if x, rerr := f(); rerr != nil || ...` puts the call and the
+//     test on ONE line, so no arm anchored on a line beginning `if <err> !=`
+//     can match it. This form hid handlers/compose.go:452 and
+//     services/backup_restic.go:351 from every sweep run on this class, and
+//     neither site had ever been dispositioned when this kind was added.
+//   - COMMENTS. handlers/terminal.go:99 is prose describing the shape, and a
+//     text sweep counts it. So did a draft fix that quoted the pre-fix code in
+//     a comment, which made the arm report an unchanged count after a real
+//     conversion. An AST walk cannot see either.
+//
+// And a fifth that only an AST detector can have, found by probing this one
+// wider than its own verdict rather than by re-running it: a TAGLESS SWITCH.
+// `switch { case err != nil || v: }` is the same branch as `if err != nil || v`
+// and an IfStmt-only walk cannot see it -- which mattered immediately, because
+// that is the shape agent-os-89ut's own fix is written in. See mergeSwitch.
+//
+// MEMBERSHIP RULE, stated so a later reader can check it rather than infer it:
+// an `if` whose condition is a top-level `||` chain with AT LEAST ONE
+// error-nil operand AND AT LEAST ONE operand that is not. The second half is
+// what the class means -- a fault merged with a VALUE. `if timeErr != nil ||
+// daysErr != nil` (services/scheduler.go:497) is two faults sharing a branch,
+// which is a different question, owned by agent-os-rltu, and it is deliberately
+// NOT a MERGE site. The one identifier this program is forced to anchor on is
+// the error's NAME (`err`, or any name ending `err`, on an ident or a selector),
+// because without go/types there is nothing else that says an operand is an
+// error; that anchor is stated here rather than left to be discovered.
 //
 // SCOPE RULE, and it is the whole substance of this program. bud5's prototype
 // classified a candidate by walking the ENTIRE enclosing function body after
@@ -75,7 +126,7 @@ import (
 )
 
 type site struct {
-	kind   string // DISCARD | SOFT
+	kind   string // DISCARD | SOFT | MERGE
 	file   string // slash path relative to the scanned root
 	line   int
 	callee string // reporting only -- never a filter in the committed verdict
@@ -409,6 +460,134 @@ func (s *scanner) classify(a *ast.AssignStmt, region func(*useScan)) {
 	}
 }
 
+// ------------------------------------------------------------ merge shape --
+
+// errNameLike reports whether e NAMES something that is conventionally an
+// error. This is the ONE identifier anchor in this program and it is
+// unavoidable: without go/types nothing else distinguishes `err != nil` from
+// `conn != nil`. It is deliberately receiver-agnostic (an ident or the
+// selected field of a selector, never the receiver expression) and
+// name-variation tolerant, because sErr / listErr / dbErr / cmpErr / rerr are
+// exactly the spellings that produced false zeros in this family before.
+func errNameLike(e ast.Expr) bool {
+	var n string
+	switch x := e.(type) {
+	case *ast.Ident:
+		n = x.Name
+	case *ast.SelectorExpr:
+		n = x.Sel.Name
+	default:
+		return false
+	}
+	return strings.HasSuffix(strings.ToLower(n), "err")
+}
+
+// isErrNotNil reports whether e is `<error-ish> != nil`, in either operand
+// order. Both orders are checked because `nil != err` is legal Go and because
+// checking only one is the same category of blindness as anchoring the whole
+// sweep on the left of the `||`.
+func isErrNotNil(e ast.Expr) bool {
+	b, ok := e.(*ast.BinaryExpr)
+	if !ok || b.Op != token.NEQ {
+		return false
+	}
+	if isIdent(b.Y, "nil") && errNameLike(b.X) {
+		return true
+	}
+	return isIdent(b.X, "nil") && errNameLike(b.Y)
+}
+
+// orOperands flattens a top-level `||` chain. `a || b || c` parses as
+// `(a || b) || c`, so a check that looked only at Cond.X and Cond.Y would miss
+// the first operand of any three-way condition -- and three-way conditions are
+// real here (handlers/settings.go, middleware/ratelimit.go).
+func orOperands(e ast.Expr, out *[]ast.Expr) {
+	if b, ok := e.(*ast.BinaryExpr); ok && b.Op == token.LOR {
+		orOperands(b.X, out)
+		orOperands(b.Y, out)
+		return
+	}
+	*out = append(*out, e)
+}
+
+// mergesErrorWithValue applies the membership rule stated in the header: at
+// least one error-nil operand AND at least one operand that is not. Returns
+// the callee-slot label used in the scan row.
+func mergesErrorWithValue(cond ast.Expr) (string, bool) {
+	var ops []ast.Expr
+	orOperands(cond, &ops)
+	if len(ops) < 2 {
+		return "", false
+	}
+	errs, values := 0, 0
+	for _, o := range ops {
+		if isErrNotNil(o) {
+			errs++
+		} else {
+			values++
+		}
+	}
+	if errs == 0 || values == 0 {
+		return "", false
+	}
+	return fmt.Sprintf("||(err=%d,value=%d)", errs, values), true
+}
+
+// recordAt records a site that is a STATEMENT rather than an assignment, which
+// is what MERGE is: the defect lives at the branch, not at the read.
+func (s *scanner) recordAt(kind string, pos token.Pos, callee string) {
+	*s.sites = append(*s.sites, site{
+		kind:   kind,
+		file:   s.rel,
+		line:   s.fset.Position(pos).Line,
+		callee: callee,
+		fn:     s.fn,
+	})
+}
+
+// mergeIf records the MERGE site, if any, carried by one if statement.
+func (s *scanner) mergeIf(x *ast.IfStmt) {
+	if label, ok := mergesErrorWithValue(x.Cond); ok {
+		s.recordAt("MERGE", x.Pos(), label)
+	}
+}
+
+// mergeSwitch records MERGE sites carried by a TAGLESS switch's case
+// expressions. `switch { case err != nil || v: }` is the same branch as
+// `if err != nil || v`, written the other way, and an IfStmt-only detector is
+// blind to it.
+//
+// THIS IS NOT HYPOTHETICAL AND IT IS WHY THE ARM EXISTS. The first version of
+// this detector handled IfStmt alone. Its verdict was then probed the way
+// CLAUDE.md requires -- by reintroducing a known in-class site into a file the
+// baseline recorded at MERGE=0 -- and the ratchet stayed GREEN, because the
+// reintroduced site was written as `case dbRun.FinishedAt == nil || err != nil`
+// inside the very switch that agent-os-89ut's fix had just introduced. So the
+// instrument was blind precisely to the shape its own remedy produces, which is
+// the worst possible place for a ratchet to be blind: the fix would have been
+// free to be undone under a green gate. A control that fires on the sites you
+// already know about would never have shown this.
+//
+// A TAGGED switch is excluded on purpose: in `switch x { case a || b: }` the
+// case expression is compared against x, so it is a value, not a branch
+// condition, and treating it as one would be a false positive no arm catches.
+func (s *scanner) mergeSwitch(x *ast.SwitchStmt) {
+	if x.Tag != nil || x.Body == nil {
+		return
+	}
+	for _, st := range x.Body.List {
+		cc, ok := st.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		for _, e := range cc.List {
+			if label, ok := mergesErrorWithValue(e); ok {
+				s.recordAt("MERGE", e.Pos(), label)
+			}
+		}
+	}
+}
+
 // list handles every candidate that sits directly in a statement list.
 func (s *scanner) list(stmts []ast.Stmt) {
 	for i, st := range stmts {
@@ -443,6 +622,7 @@ func (s *scanner) file(f *ast.File) {
 		case *ast.CommClause:
 			s.list(x.Body)
 		case *ast.IfStmt:
+			s.mergeIf(x)
 			s.initOf(x.Init, func(u *useScan) {
 				u.expr(x.Cond)
 				u.stmts(x.Body.List, false)
@@ -458,6 +638,7 @@ func (s *scanner) file(f *ast.File) {
 				u.stmts(x.Body.List, false)
 			})
 		case *ast.SwitchStmt:
+			s.mergeSwitch(x)
 			s.initOf(x.Init, func(u *useScan) {
 				if x.Tag != nil {
 					u.expr(x.Tag)
@@ -530,16 +711,19 @@ func cmdScan(root string) error {
 	if err != nil {
 		return err
 	}
-	d, s := 0, 0
+	d, so, m := 0, 0, 0
 	for _, h := range sites {
-		if h.kind == "DISCARD" {
+		switch h.kind {
+		case "DISCARD":
 			d++
-		} else {
-			s++
+		case "MERGE":
+			m++
+		default:
+			so++
 		}
 		fmt.Printf("%-7s %s:%d %s (%s)\n", h.kind, h.file, h.line, h.callee, h.fn)
 	}
-	fmt.Printf("TOTAL SITES=%d DISCARD=%d SOFT=%d\n", len(sites), d, s)
+	fmt.Printf("TOTAL SITES=%d DISCARD=%d SOFT=%d MERGE=%d\n", len(sites), d, so, m)
 	return nil
 }
 
@@ -551,31 +735,35 @@ func cmdCounts(root string) error {
 	if err != nil {
 		return err
 	}
-	type pair struct{ d, s int }
-	per := map[string]*pair{}
+	type triple struct{ d, s, m int }
+	per := map[string]*triple{}
 	var order []string
 	for _, h := range sites {
 		p, ok := per[h.file]
 		if !ok {
-			p = &pair{}
+			p = &triple{}
 			per[h.file] = p
 			order = append(order, h.file)
 		}
-		if h.kind == "DISCARD" {
+		switch h.kind {
+		case "DISCARD":
 			p.d++
-		} else {
+		case "MERGE":
+			p.m++
+		default:
 			p.s++
 		}
 	}
 	sort.Strings(order)
-	td, ts := 0, 0
+	td, ts, tm := 0, 0, 0
 	for _, f := range order {
 		p := per[f]
 		td += p.d
 		ts += p.s
-		fmt.Printf("%s DISCARD=%d SOFT=%d\n", f, p.d, p.s)
+		tm += p.m
+		fmt.Printf("%s DISCARD=%d SOFT=%d MERGE=%d\n", f, p.d, p.s, p.m)
 	}
-	fmt.Printf("TOTAL FILES=%d DISCARD=%d SOFT=%d\n", len(order), td, ts)
+	fmt.Printf("TOTAL FILES=%d DISCARD=%d SOFT=%d MERGE=%d\n", len(order), td, ts, tm)
 	return nil
 }
 

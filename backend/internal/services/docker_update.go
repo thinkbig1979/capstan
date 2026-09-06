@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -241,10 +242,43 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 	// truth.RemoteRegistryDigest, which is version-independent (hashes --raw
 	// bytes; falls back to parsing the Digest: line). A failed fetch leaves
 	// the ref out of the map so selectUpdates skips it gracefully.
+	remoteDigests := fetchRemoteDigests(ctx, uniqueRefs)
+
+	return selectUpdates(candidates, remoteDigests), nil
+}
+
+// fetchRemoteDigests resolves each unique image ref's remote index digest,
+// five at a time, and returns only the refs that resolved. A ref missing from
+// the result is one selectUpdates must skip.
+//
+// It is a free function rather than inline in CheckForUpdates because it is the
+// TIGHTEST TESTABLE UNIT for agent-os-rb6f: DockerService.client is a concrete
+// *client.Client (docker.go:55), so CheckForUpdates itself cannot be driven
+// without a live daemon, while truth.RemoteRegistryDigest is already a package
+// var and can be swapped. Same reasoning as resolveUpdateStrategy under
+// agent-os-g482.
+//
+// THE DISCRIMINATION IT EXISTS FOR (agent-os-rb6f). A fetch that FAILED and a
+// registry that ANSWERED with no digest used to share one `err != nil || digest
+// == ""` branch, logged at DEBUG, which is off in production. A persistent
+// registry fault — an expired credential, a network policy change, a rate limit
+// — was therefore indistinguishable from "you are up to date", which is the most
+// reassuring possible message to show an operator whose containers are in fact
+// drifting. The transient case self-heals on the next scan; the persistent one
+// never announces itself.
+//
+// WHY THE FAULT REPORT IS AGGREGATED, and why this departs from the bead's
+// literal "at least INFO per image": this runs once per ref per scan, and a
+// locally built image has no registry to answer for it, so a per-image warning
+// fires forever for every such image. An operator who learns to ignore a
+// recurring warning has no signal left when a real registry fault appears. One
+// line per scan, only when something actually failed, keeps the signal.
+func fetchRemoteDigests(ctx context.Context, uniqueRefs map[string]struct{}) map[string]string {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 5)
 	remoteDigests := make(map[string]string)
+	var unreadable []string
 
 	for ref := range uniqueRefs {
 		wg.Add(1)
@@ -257,8 +291,17 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 			defer cancel()
 
 			digest, err := truth.RemoteRegistryDigest(fetchCtx, ref)
-			if err != nil || digest == "" {
+			if err != nil {
 				slog.Debug("Failed to fetch remote image digest", "image", ref, "error", err)
+				mu.Lock()
+				unreadable = append(unreadable, ref)
+				mu.Unlock()
+				return
+			}
+			if digest == "" {
+				// The registry answered and reported no digest. Not a fault,
+				// so it must not be counted as one.
+				slog.Debug("Registry reported no remote digest for image", "image", ref)
 				return
 			}
 
@@ -269,7 +312,13 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 	}
 	wg.Wait()
 
-	return selectUpdates(candidates, remoteDigests), nil
+	if len(unreadable) > 0 {
+		sort.Strings(unreadable)
+		slog.Warn("Could not determine whether an update exists for some images; their registry digest could not be fetched, so they are reported as having no update available",
+			"unreadable", len(unreadable), "checked", len(uniqueRefs), "images", strings.Join(unreadable, ", "))
+	}
+
+	return remoteDigests
 }
 
 // UpdateContainer performs a non-streaming update of a single container and
@@ -397,7 +446,18 @@ func (s *DockerService) findComposeContainer(ctx context.Context, projectName, s
 	fa.Add("label", "com.docker.compose.project="+projectName)
 	fa.Add("label", "com.docker.compose.service="+serviceName)
 	containers, err := s.client.ContainerList(ctx, container.ListOptions{All: true, Filters: fa})
-	if err != nil || len(containers) == 0 {
+	if err != nil {
+		// A list fault is NOT "no such container": both used to return
+		// fallbackID silently, and fallbackID is the PRE-update id, which
+		// compose has just removed. ContainerImageAdvanced then fails on a
+		// container that no longer exists and a successful update is reported
+		// as "post-update container inspect failed" — a wrong cause, with the
+		// real one nowhere in the logs (agent-os-rb6f).
+		slog.Warn("Could not list compose containers to resolve the post-update container; falling back to the pre-update id, so this update's outcome may be reported wrongly",
+			"project", projectName, "service", serviceName, "error", err)
+		return fallbackID
+	}
+	if len(containers) == 0 {
 		return fallbackID
 	}
 	return containers[0].ID

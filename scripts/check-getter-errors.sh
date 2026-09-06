@@ -1,11 +1,24 @@
 #!/usr/bin/env bash
 # scripts/check-getter-errors.sh
 #
-# ONE invariant, the ratchet for agent-os-zhe9:
+# ONE invariant, the ratchet for agent-os-zhe9 and (third kind) agent-os-8f2g:
 #
-#   backend/internal/ grows NO new site where the error returned by a call is
-#   discarded (`x, _ := f()`) or softened (`x, e := f()` whose `e` is only ever
-#   compared `e == nil`).
+#   backend/ grows NO new site where the error returned by a call is
+#   discarded (`x, _ := f()`), softened (`x, e := f()` whose `e` is only ever
+#   compared `e == nil`), or MERGED into a value test (`if e != nil || <value>`,
+#   in either operand order).
+#
+# WHY THE THIRD KIND WAS ADDED (agent-os-8f2g). DISCARD and SOFT both describe
+# an error weakened at the ASSIGNMENT. MERGE describes one checked correctly and
+# then fused by `||` to a value test at the BRANCH, so "I could not read it" and
+# "I read it and the answer is no" produce the same branch and the caller cannot
+# tell them apart. Neither existing kind could ever see it: agent-os-koy9, 91u2,
+# 89ut and rb6f are four beads of that ONE class, and at c8c5c6b none of
+# services/scheduler.go, services/monitor.go, services/docker_lifecycle.go or
+# services/backup_runner.go appeared in a DISCARD or SOFT row while all four
+# carried the defect. The class therefore regrew between beads with this
+# required gate green over it, which is the complaint agent-os-jar5 makes one
+# level up. Every count printed here now names all three kinds for that reason.
 #
 # WHY. Nine beads filed across 2026-09-04/05 are one defect family, and every
 # sweep their close reasons cited was anchored on an identifier, so every one
@@ -133,7 +146,7 @@
 # missing.
 #
 #   $ bash scripts/check-getter-errors.sh
-#   getter-errors: no file exceeds its baseline (scope backend/ (cmd, internal), TOTAL FILES=... DISCARD=... SOFT=...)
+#   getter-errors: no file exceeds its baseline (scope backend/ (cmd, internal), TOTAL FILES=... DISCARD=... SOFT=... MERGE=...)
 #
 #     The ratchet, and what the required "Docs structure" CI job runs via
 #     scripts/check-docs.sh. Exit 0 clean, 1 on growth.
@@ -142,7 +155,15 @@
 #   getter-errors: scope backend/ (cmd, internal)
 #   DISCARD cmd/server/admin.go:71 WriteString (runAdminCommand)
 #   ... one row per site ...
-#   TOTAL SITES=... DISCARD=... SOFT=...
+#   MERGE   internal/handlers/auth.go:346 ||(err=1,value=1) (Login)
+#   TOTAL SITES=... DISCARD=... SOFT=... MERGE=...
+#
+#   A MERGE row's third column is not a callee: it is the operand census of the
+#   `||` chain, `||(err=N,value=M)`. Both N and M are >= 1 by the membership
+#   rule -- a chain of errors alone (`if timeErr != nil || daysErr != nil`) is a
+#   different question and is deliberately NOT a MERGE site. See main.go's
+#   header for the rule and for the four false-zero mechanisms that made an AST
+#   detector necessary rather than a grep.
 #
 #   $ bash scripts/check-getter-errors.sh --self-test
 #   $ bash scripts/check-getter-errors.sh --cross-check   # needs golangci-lint
@@ -162,7 +183,7 @@
 #     $ go run scripts/getter-errors/main.go scan backend/cmd
 #     DISCARD server/admin.go:71 WriteString (runAdminCommand)
 #     ...
-#     TOTAL SITES=3 DISCARD=3 SOFT=0
+#     TOTAL SITES=3 DISCARD=3 SOFT=0 MERGE=0
 #     (paths are relative to the directory you point it at, not to the repo)
 #
 #   FAILS, and this is the trap -- OBSERVED at 8104a65 from the repo root:
@@ -240,10 +261,13 @@ usage() {
   cat <<USAGE >&2
 Usage: $(basename "$0") [--scan | --self-test | --cross-check | --update-baseline]
 
-Fails when $TARGET_REL contains MORE discarded (\`x, _ := f()\`) or softened
-(\`x, e := f()\` used only as \`e == nil\`) call sites in any one file than
-$(basename "$BASELINE") records. Detection is by AST shape only: not the
-receiver expression, not the error-variable name, not the callee prefix.
+Fails when $TARGET_REL contains MORE discarded (\`x, _ := f()\`), softened
+(\`x, e := f()\` used only as \`e == nil\`) or MERGED
+(\`if e != nil || <value>\`, either operand order) call sites in any one file
+than $(basename "$BASELINE") records. Detection is by AST shape only: not the
+receiver expression, not the callee prefix, and -- except for the error's own
+name, which without go/types is the only thing that can say an operand IS an
+error -- not an identifier.
 USAGE
 }
 
@@ -264,7 +288,20 @@ run_tool() {
 self_test() {
   local out status failed=0
 
-  # ARM 1, MUST FIRE: eight sites, one per anchor the family's sweeps evaded.
+  # ARM 1, MUST FIRE: sixteen sites. Eight are one per anchor the DISCARD/SOFT
+  # family's sweeps evaded; eight are the MERGE shape (agent-os-8f2g), one per
+  # false-zero mechanism a text sweep for THAT class has actually hit on this
+  # tree -- operand order, error name, selector, IF-INIT, three-operand chain,
+  # `nil != err`, and a TAGLESS SWITCH CASE. The if-init row is the one most
+  # likely to be deleted as
+  # redundant. It is not: it is the mechanism that hid handlers/compose.go:452
+  # and services/backup_restic.go:351 from every sweep ever run on this class,
+  # and neither site had been dispositioned when this fixture was written. The
+  # switch-case row is the one that was MISSING: the first detector passed every
+  # other arm here and then stayed green when a known in-class site was
+  # reintroduced into the real tree as a switch case -- the shape agent-os-89ut's
+  # own fix is written in. Neither arm below could have caught that; only
+  # probing the verdict wider than itself did.
   out=$(run_tool scan "$FIXTURES/fire" 2>&1)
   status=$?
   if [ "$status" -ne 0 ]; then
@@ -280,7 +317,15 @@ SOFT    fire.go:58 ListThings (softListCallee)
 SOFT    fire.go:68 GetThing (softBareEqNil)
 SOFT    fire.go:83 GetThing (softThenShadowed)
 SOFT    fire.go:97 GetThing (softInNestedBlock)
-TOTAL SITES=8 DISCARD=3 SOFT=5'
+MERGE   merge.go:17 ||(err=1,value=1) (mergeLeftAnchored)
+MERGE   merge.go:29 ||(err=1,value=1) (mergeRightAnchored)
+MERGE   merge.go:39 ||(err=1,value=1) (mergeUnusualErrorName)
+MERGE   merge.go:54 ||(err=1,value=1) (mergeSelectorError)
+MERGE   merge.go:66 ||(err=1,value=1) (mergeIfInit)
+MERGE   merge.go:78 ||(err=1,value=2) (mergeThreeOperands)
+MERGE   merge.go:89 ||(err=1,value=1) (mergeNilOnTheLeft)
+MERGE   merge.go:105 ||(err=1,value=1) (mergeTaglessSwitchCase)
+TOTAL SITES=16 DISCARD=3 SOFT=5 MERGE=8'
   if [ "$out" != "$want_fire" ]; then
     echo "self-test: FAIL - the MUST-FIRE fixture no longer reports its eight sites."
     echo "  Every missing row is an anchor this scanner has silently regrown."
@@ -290,6 +335,13 @@ TOTAL SITES=8 DISCARD=3 SOFT=5'
 
   # ARM 2, MUST NOT FIRE: same callees, same names, same `== nil` text, all
   # handled. Without this arm, a scanner that matched everything would pass.
+  # For MERGE it also pins the three things that must NOT count: a two-error
+  # `||` with no value operand (agent-os-rltu's shape, which a ratchet must not
+  # bless as accepted), an `&&`, a TAGGED switch (whose case expression is a
+  # value compared against the tag, not a branch condition), and the class
+  # written out in a COMMENT --
+  # which every text-based arm counts and an AST walk cannot see. If clean/
+  # ever reports MERGE=1, the detector has been reimplemented on text.
   out=$(run_tool scan "$FIXTURES/clean" 2>&1)
   status=$?
   if [ "$status" -ne 0 ]; then
@@ -297,7 +349,7 @@ TOTAL SITES=8 DISCARD=3 SOFT=5'
     echo "$out"
     return 1
   fi
-  if [ "$out" != 'TOTAL SITES=0 DISCARD=0 SOFT=0' ]; then
+  if [ "$out" != 'TOTAL SITES=0 DISCARD=0 SOFT=0 MERGE=0' ]; then
     echo "self-test: FAIL - the MUST-NOT-FIRE fixture reported a site, so the"
     echo "  scanner is now matching handled errors too:"
     echo "$out" | sed 's/^/  /'
@@ -308,10 +360,15 @@ TOTAL SITES=8 DISCARD=3 SOFT=5'
   # a comparison that never fails is still a clean-looking tree.
   local tmp
   tmp=$(mktemp -d) || return 1
-  printf 'a.go DISCARD=1 SOFT=1\nTOTAL FILES=1 DISCARD=1 SOFT=1\n' >"$tmp/base"
-  printf 'a.go DISCARD=1 SOFT=1\nTOTAL FILES=1 DISCARD=1 SOFT=1\n' >"$tmp/same"
-  printf 'a.go DISCARD=2 SOFT=1\nTOTAL FILES=1 DISCARD=2 SOFT=1\n' >"$tmp/grown"
-  printf 'b.go DISCARD=1 SOFT=0\nTOTAL FILES=1 DISCARD=1 SOFT=0\n' >"$tmp/newfile"
+  printf 'a.go DISCARD=1 SOFT=1 MERGE=1\nTOTAL FILES=1 DISCARD=1 SOFT=1 MERGE=1\n' >"$tmp/base"
+  printf 'a.go DISCARD=1 SOFT=1 MERGE=1\nTOTAL FILES=1 DISCARD=1 SOFT=1 MERGE=1\n' >"$tmp/same"
+  printf 'a.go DISCARD=2 SOFT=1 MERGE=1\nTOTAL FILES=1 DISCARD=2 SOFT=1 MERGE=1\n' >"$tmp/grown"
+  printf 'b.go DISCARD=1 SOFT=0 MERGE=0\nTOTAL FILES=1 DISCARD=1 SOFT=0 MERGE=0\n' >"$tmp/newfile"
+  # MERGE gets its OWN growth arm. Without it the comparison could ignore the
+  # new column entirely and every arm above would still pass: a ratchet wired
+  # to a kind it detects but never compares is exactly the clean-looking tree
+  # this file exists to prevent, one column over.
+  printf 'a.go DISCARD=1 SOFT=1 MERGE=2\nTOTAL FILES=1 DISCARD=1 SOFT=1 MERGE=2\n' >"$tmp/mergegrown"
   compare_counts "$tmp/base" "$tmp/same" >/dev/null 2>&1
   if [ $? -ne 0 ]; then
     echo "self-test: FAIL - the ratchet comparison rejected an UNCHANGED tree."
@@ -328,12 +385,18 @@ TOTAL SITES=8 DISCARD=3 SOFT=5'
     echo "  baseline does not mention at all."
     failed=1
   fi
+  compare_counts "$tmp/base" "$tmp/mergegrown" >/dev/null 2>&1
+  if [ $? -eq 0 ]; then
+    echo "self-test: FAIL - the ratchet comparison accepted a GROWN MERGE count,"
+    echo "  so the MERGE column is detected but never gated."
+    failed=1
+  fi
   rm -rf "$tmp"
 
   if [ "$failed" -ne 0 ]; then
     return 1
   fi
-  echo "self-test: 8 sites found in the must-fire fixture, 0 in the must-not-fire fixture, ratchet rejects growth and a new file and accepts no change"
+  echo "self-test: 16 sites found in the must-fire fixture (3 DISCARD, 5 SOFT, 8 MERGE), 0 in the must-not-fire fixture, ratchet rejects DISCARD growth, MERGE growth and a new file, and accepts no change"
   return 0
 }
 
@@ -345,9 +408,9 @@ compare_counts() {
       while ((getline line < basefile) > 0) {
         if (line ~ /^TOTAL /) continue
         n = split(line, f, " ")
-        if (n != 3) continue
-        sub(/^DISCARD=/, "", f[2]); sub(/^SOFT=/, "", f[3])
-        bd[f[1]] = f[2] + 0; bs[f[1]] = f[3] + 0
+        if (n != 4) continue
+        sub(/^DISCARD=/, "", f[2]); sub(/^SOFT=/, "", f[3]); sub(/^MERGE=/, "", f[4])
+        bd[f[1]] = f[2] + 0; bs[f[1]] = f[3] + 0; bm[f[1]] = f[4] + 0
       }
       close(basefile)
       bad = 0
@@ -355,11 +418,12 @@ compare_counts() {
     /^TOTAL / { next }
     {
       n = split($0, f, " ")
-      if (n != 3) next
-      sub(/^DISCARD=/, "", f[2]); sub(/^SOFT=/, "", f[3])
-      d = f[2] + 0; s = f[3] + 0
+      if (n != 4) next
+      sub(/^DISCARD=/, "", f[2]); sub(/^SOFT=/, "", f[3]); sub(/^MERGE=/, "", f[4])
+      d = f[2] + 0; s = f[3] + 0; m = f[4] + 0
       if (d > bd[f[1]]) { printf "  %s DISCARD %d -> %d\n", f[1], bd[f[1]], d; bad = 1 }
       if (s > bs[f[1]]) { printf "  %s SOFT %d -> %d\n", f[1], bs[f[1]], s; bad = 1 }
+      if (m > bm[f[1]]) { printf "  %s MERGE %d -> %d\n", f[1], bm[f[1]], m; bad = 1 }
     }
     END { exit bad }
   ' "$cur"
@@ -396,11 +460,14 @@ ratchet() {
   scope=$(scope_line "$cur" 1)
   rm -f "$cur"
   if [ "$status" -ne 0 ]; then
-    echo "getter-errors: FAIL - a new discarded or softened call site was added ($scope)."
+    echo "getter-errors: FAIL - a new discarded, softened or merged call site was added ($scope)."
     echo "  A discarded error turns a database or daemon fault into a silent"
-    echo "  default; a softened one turns it into 'not found'. Handle the error,"
-    echo "  or if the site is genuinely fine, say so at the site and refresh the"
-    echo "  baseline with scripts/check-getter-errors.sh --update-baseline."
+    echo "  default; a softened one turns it into 'not found'; a MERGED one"
+    echo "  (\`if err != nil || <value>\`) makes 'I could not read it' and 'I read"
+    echo "  it and the answer is no' the same branch, so the caller cannot tell"
+    echo "  them apart and nothing is logged. Handle the error separately from"
+    echo "  the value, or if the site is genuinely fine, say so at the site and"
+    echo "  refresh the baseline with scripts/check-getter-errors.sh --update-baseline."
     echo "$grown"
     return 1
   fi
