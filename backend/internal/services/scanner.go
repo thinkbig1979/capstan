@@ -971,26 +971,191 @@ func rootContainsPath(root, path string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// gitStateUnknown is what GitBranch carries when the scan found a repository
+// but could not read which branch it is on: an unreadable HEAD, a .git entry
+// that stat could not resolve, a broken worktree pointer, or a HEAD whose
+// contents parse as neither a symbolic ref nor an object name.
+//
+// It exists because those states used to be indistinguishable from a detached
+// HEAD and from a healthy repo with no branch: all four produced "" and both
+// screens render "" as an em dash (agent-os-jieh). An operator cannot act on an
+// em dash, because a detached checkout is deliberate and a read fault is not.
+//
+// The string contains an ASCII SPACE, which git-check-ref-format forbids in a
+// ref name, so it can never collide with a real branch. The detached form below
+// has no space and IS a legal branch name; that collision is accepted
+// deliberately (the format was chosen by the product owner) and is called out
+// here so a later reader does not read it as an oversight.
+const gitStateUnknown = "unknown (read failed)"
+
+// gitShortSHALen is git's own default abbreviation length for an object name.
+const gitShortSHALen = 7
+
+// resolveGitState reports whether path holds a git repository and which branch
+// it is on, WITHOUT shelling out to git: it is called for every directory of
+// every scan, including the watcher's debounced rescan on each file change, so
+// it stays a couple of filesystem reads.
+//
+// It answers five states where the code it replaced answered one. Only
+// os.IsNotExist means "not a repository"; every other stat error means "could
+// not find out", which the old code reported as the definite answer "not a git
+// repo" (the agent-os-d5ff shape, at a site that sweep never dispositioned).
+//
+// A fault returns isGitRepo=true with gitStateUnknown. true is the honest half
+// of "there is a .git entry here that I could not read": both screens gate the
+// branch badge on isGitRepo, so returning false would hide the failure entirely
+// rather than merely blanking the branch. It does not claim the repository is
+// healthy, and the branch string says so.
+func resolveGitState(path string) (isGitRepo bool, branch string) {
+	gitPath := filepath.Join(path, ".git")
+
+	info, err := os.Stat(gitPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, ""
+		}
+		slog.Warn("Could not determine whether directory is a git repository",
+			"directory", path, "error", err)
+		return true, gitStateUnknown
+	}
+
+	headPath := filepath.Join(gitPath, "HEAD")
+	if !info.IsDir() {
+		// .git is a FILE: a linked worktree or a submodule checkout, whose
+		// real git directory lives elsewhere. gitrepository-layout(5) defines
+		// the file as holding "gitdir: <path>", so HEAD is under that path and
+		// not under .git — which is why the old code's read failed ENOTDIR and
+		// a perfectly healthy worktree rendered as unknown.
+		gitDir, err := readGitdirPointer(gitPath, path)
+		if err != nil {
+			slog.Warn("Could not follow the gitdir pointer in a .git file",
+				"directory", path, "error", err)
+			return true, gitStateUnknown
+		}
+		headPath = filepath.Join(gitDir, "HEAD")
+	}
+
+	//nolint:gosec // path is reached only by recursing from the configured stacks directories (ScanAll -> scanDirectoryRecursive), never external input
+	content, err := os.ReadFile(headPath)
+	if err != nil {
+		slog.Warn("Could not read the git HEAD of a repository",
+			"directory", path, "head", headPath, "error", err)
+		return true, gitStateUnknown
+	}
+
+	branch, ok := parseGitHead(string(content))
+	if !ok {
+		slog.Warn("Could not parse the git HEAD of a repository",
+			"directory", path, "head", headPath)
+		return true, gitStateUnknown
+	}
+	return true, branch
+}
+
+// readGitdirPointer resolves the "gitdir: <path>" line a .git FILE holds into
+// the directory it names. Per gitrepository-layout(5) the path may be relative,
+// in which case it is relative to the directory CONTAINING the .git file --
+// which is the spelling `git worktree add` actually writes -- so dir is needed
+// as well as the file itself.
+//
+// The target is stat'd rather than trusted: a pointer at a path that no longer
+// exists is a fault worth naming, and without this check the caller would go on
+// to report the ENOENT from reading HEAD, which names the wrong file.
+func readGitdirPointer(gitFile string, dir string) (string, error) {
+	//nolint:gosec // same provenance as the HEAD read above: a path recursed into from the configured stacks directories
+	content, err := os.ReadFile(gitFile)
+	if err != nil {
+		return "", err
+	}
+
+	target, ok := strings.CutPrefix(strings.TrimSpace(string(content)), "gitdir:")
+	if !ok {
+		return "", fmt.Errorf("%s is not a gitdir pointer", gitFile)
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", fmt.Errorf("%s names an empty gitdir", gitFile)
+	}
+
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(dir, target)
+	}
+	// gosec flags target as tainted, correctly: it comes out of a file rather
+	// than out of config. The containment is that anyone who can write a .git
+	// file inside a configured stacks directory can already write the compose
+	// files Capstan executes, so this reaches no data they do not already
+	// control; and the only thing that escapes back to the UI is whatever
+	// parseGitHead accepts, which is a ref name under refs/heads or a hex
+	// object name -- never arbitrary file contents. Not a proof of safety in
+	// general, just the reason it adds no reach here.
+	//nolint:gosec // G703: see above; target is operator-controlled data inside an already-trusted directory
+	if _, err := os.Stat(target); err != nil {
+		return "", fmt.Errorf("gitdir %s named by %s: %w", target, gitFile, err)
+	}
+	return target, nil
+}
+
+// parseGitHead turns the contents of a HEAD file into the branch string the UI
+// shows. ok is false when HEAD is neither of the two things git writes there,
+// which is a fault for the caller to report rather than a state to render.
+//
+// The two shapes:
+//
+//	ref: refs/heads/<name>   attached; <name> may contain '/', so the whole
+//	                         remainder is the name
+//	<40 or 64 hex chars>     detached; SHA-1 and SHA-256 object formats
+//
+// A detached HEAD renders as "detached@<short>" rather than the em dash the
+// empty string used to produce, so an operator can tell a deliberate detached
+// checkout from a scan that failed. Those need opposite responses and the old
+// UI gave them the same glyph.
+func parseGitHead(content string) (string, bool) {
+	head := strings.TrimSpace(content)
+
+	if rest, ok := strings.CutPrefix(head, "ref: refs/heads/"); ok {
+		name := strings.TrimSpace(rest)
+		if name == "" {
+			return "", false
+		}
+		return name, true
+	}
+
+	if isHexObjectName(head) {
+		short := head
+		if len(short) > gitShortSHALen {
+			short = short[:gitShortSHALen]
+		}
+		return "detached@" + short, true
+	}
+
+	return "", false
+}
+
+// isHexObjectName reports whether s is a full git object name: 40 lowercase hex
+// characters for the SHA-1 object format, or 64 for SHA-256.
+//
+// The length is checked exactly rather than as a minimum, so an abbreviated ref
+// or a stray hex-looking word in a corrupted HEAD is treated as unparseable
+// instead of being reported as a commit the scan never actually read.
+func isHexObjectName(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *ScannerService) buildDirectoryRecord(path string, rootDir string) directoryRecord {
 	dirName := filepath.Base(path)
 	isGitRepo := false
 	gitRemote := ""
 	gitBranch := ""
 
-	gitPath := filepath.Join(path, ".git")
-	if _, err := os.Stat(gitPath); err == nil {
-		isGitRepo = true
-
-		headPath := filepath.Join(gitPath, "HEAD")
-		//nolint:gosec // path is reached only by recursing from the configured stacks directories (ScanAll -> scanDirectoryRecursive), never external input
-		if content, err := os.ReadFile(headPath); err == nil {
-			headContent := string(content)
-			if strings.HasPrefix(headContent, "ref: refs/heads/") {
-				gitBranch = strings.TrimPrefix(headContent, "ref: refs/heads/")
-				gitBranch = strings.TrimSpace(gitBranch)
-			}
-		}
-	}
+	isGitRepo, gitBranch = resolveGitState(path)
 
 	effectiveRoot := rootDir
 	if effectiveRoot == "" {

@@ -17,7 +17,7 @@
  * redesign — its coverage lives in StackPage.test.tsx now.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
 import type { Stack } from '@/types'
@@ -119,6 +119,21 @@ function renderDetail(
   return { ...result, onTabChange }
 }
 
+/**
+ * The Overview grid renders several KvRows and more than one of them can show
+ * an em dash at the same time (Env file does it for the default fixture), so a
+ * bare screen.getByText('—') is ambiguous and a bare queryByText('—') asserts
+ * about whichever row happens to match. This returns the Branch row itself —
+ * KvRow puts the label and the value in two spans under one div — so the git
+ * assertions are scoped to the row they are actually about.
+ */
+async function branchRow(): Promise<HTMLElement> {
+  const label = await screen.findByText('Branch')
+  const row = label.parentElement
+  if (!row) throw new Error('the Branch KvRow label has no parent element')
+  return row as HTMLElement
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mockGetPolicies.mockResolvedValue({ policies: [], globalEnabled: true })
@@ -217,6 +232,49 @@ describe('StackDetail — Overview detail grid', () => {
 
     expect(await screen.findByText('Branch')).toBeInTheDocument()
     expect(screen.getByText('main')).toBeInTheDocument()
+  })
+
+  /**
+   * The Branch row is the other end of agent-os-jieh. The scanner used to send
+   * an empty gitBranch for a detached HEAD, an unreadable HEAD, an unstat-able
+   * .git and a worktree checkout alike, so all four rendered as the same em
+   * dash and an operator could not tell a deliberate detached checkout from a
+   * scan that failed. resolveGitState (backend/internal/services/scanner.go)
+   * now sends a different string for each, and this row has to carry them
+   * through unaltered.
+   *
+   * Whole-string assertions, for the same reason as the DirectoriesTab arm:
+   * 'detached@abc1234' must not be satisfied by a branch named 'detached-x'.
+   */
+  it('renders the scanner’s detached and read-fault strings distinctly', async () => {
+    for (const branch of ['detached@abc1234', 'unknown (read failed)', 'feature/login']) {
+      const { unmount } = renderDetail({ stack: stack({ isGitRepo: true, gitBranch: branch }) })
+
+      const row = await branchRow()
+      expect(within(row).getByText(branch)).toBeInTheDocument()
+      // Scoped to the Branch row on purpose: the Env file row above it renders
+      // its own em dash for this fixture, so an unscoped queryByText('—') here
+      // reports the WRONG row's content and passes for the wrong reason.
+      expect(within(row).queryByText('—')).not.toBeInTheDocument()
+
+      unmount()
+    }
+  })
+
+  /**
+   * The em dash is still reachable, and still correct, for a row an older
+   * Capstan wrote and no rescan has replaced yet — and for a payload that omits
+   * gitBranch entirely, which the `gitBranch?: string` declaration at
+   * types/index.ts:104 permits. Both arms, because they take different routes
+   * to the same `||`.
+   */
+  it('still falls back to the em dash for a stale or absent branch', async () => {
+    const { unmount } = renderDetail({ stack: stack({ isGitRepo: true, gitBranch: '' }) })
+    expect(within(await branchRow()).getByText('—')).toBeInTheDocument()
+    unmount()
+
+    renderDetail({ stack: stack({ isGitRepo: true }) })
+    expect(within(await branchRow()).getByText('—')).toBeInTheDocument()
   })
 
   it('deep-links a service row to the Logs tab with the container preselected', async () => {

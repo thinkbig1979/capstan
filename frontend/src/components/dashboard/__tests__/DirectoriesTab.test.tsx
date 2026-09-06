@@ -166,11 +166,32 @@ describe('DirectoriesTab — git badges', () => {
   })
 
   /**
-   * The scanner leaves gitBranch empty for a detached HEAD, an unreadable HEAD,
-   * and a git worktree or submodule checkout (where .git is a file, so
-   * .git/HEAD does not exist). Rendering a literal 'main' there states a branch
-   * name the UI never learned. StackDetail.tsx:90 already renders the em dash
-   * for the same unknown; this badge now says the same thing.
+   * This comment used to record that the scanner leaves gitBranch EMPTY for a
+   * detached HEAD, an unreadable HEAD, and a worktree or submodule checkout,
+   * and that the em dash was the right answer for all of them. That was true of
+   * the scanner and it is no longer true of it (agent-os-jieh): collapsing four
+   * different situations into one glyph is exactly the bug that bead fixed,
+   * because a detached checkout is deliberate and a read fault is not, and an
+   * operator cannot tell them apart from an em dash.
+   *
+   * What the scanner sends now (backend/internal/services/scanner.go,
+   * resolveGitState):
+   *
+   *   'release'                a branch, attached — unchanged
+   *   'detached@abc1234'       HEAD holds an object name
+   *   'unknown (read failed)'  HEAD unreadable, .git unstat-able, or a broken
+   *                            worktree pointer. Contains a space, which git
+   *                            forbids in a ref name, so it cannot be a branch
+   *   'feature/login'          a linked worktree or submodule: the gitdir:
+   *                            pointer is followed, so this is no longer a
+   *                            failure state at all
+   *
+   * So the em dash below is NOT dead. It is what remains when gitBranch arrives
+   * empty or absent, which is two cases and neither of them a scan fault:
+   * directories/stacks rows written by a Capstan older than this change and not
+   * yet rescanned, and any payload that omits the field at all — ConfiguredDir
+   * and Stack both declare `gitBranch?: string` (types/index.ts:20, :104), so
+   * absent reaches the same `||`.
    */
   it('renders the unknown marker, not a fabricated "main", when the branch is empty', () => {
     const { unmount } = renderTab({
@@ -191,6 +212,40 @@ describe('DirectoriesTab — git badges', () => {
 
     expect(screen.queryByText('main')).not.toBeInTheDocument()
     expect(screen.getByText('\u2014')).toBeInTheDocument()
+  })
+
+  /**
+   * The three strings the scanner can now send have to stay VISIBLY different
+   * from each other in the badge, which is the whole point of agent-os-jieh.
+   * Asserted as whole strings via getByText's exact match, never a substring:
+   * a `toContain('detached')` assertion is satisfied by a branch legitimately
+   * named 'detached-hotfix', which would put the collapse straight back.
+   */
+  it('distinguishes a detached HEAD, a read fault and a real branch', () => {
+    const cases: [string, string][] = [
+      ['detached@abc1234', 'a detached checkout'],
+      ['unknown (read failed)', 'a scan that could not read the repo'],
+      ['feature/login', 'a branch resolved through a worktree pointer'],
+    ]
+
+    const seen = new Set<string>()
+    for (const [branch, what] of cases) {
+      const { unmount } = renderTab({
+        directories: [dir('/srv/stacks/web', { isGitRepo: true, gitBranch: branch })],
+        configuredDirs: ['/srv/stacks'],
+      })
+
+      expect(screen.getByText(branch), what).toBeInTheDocument()
+      // None of them may fall through to the em dash, which is what every one
+      // of them rendered as before the scanner learned to tell them apart.
+      expect(screen.queryByText('—')).not.toBeInTheDocument()
+
+      seen.add(branch)
+      unmount()
+      localStorage.clear()
+    }
+
+    expect(seen.size).toBe(cases.length)
   })
 
   it('shows the behind-count only when there is something to pull', () => {
