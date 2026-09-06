@@ -111,7 +111,7 @@ updates:
 
   # ---------------------------------------------------------------------------
   # Covers the Dockerfile's pinned bases: node:22-trixie-slim,
-  # golang:1.26.5-trixie, debian:trixie-slim, and the digest-pinned docker:28-cli
+  # golang:1.26.5-trixie, debian:trixie-slim, and the digest-pinned docker:29-cli
   # stage the runtime lifts the Docker CLI binaries out of.
   #
   # NOTE for reviewers of these PRs: the Go base image is pinned in lockstep with
