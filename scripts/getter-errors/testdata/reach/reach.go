@@ -1,7 +1,4 @@
-// Package reach is the fixture for `getter-errors reach --self-test`, arms 1
-// and 2. (Until agent-os-1hig its driver was check-getter-fault-reach.sh; that
-// script was deleted and its self-test arms moved into the tool, because
-// nothing else on this tree exercises `reach` at all.)
+// Package reach is the fixture for `getter-errors reach --self-test` arms 1+2.
 // It holds two CONVERTED sites -- the shape this family's fixes produce -- and
 // is paired with two hand-written coverage profiles: cov_all.txt, where both
 // error branches ran, and cov_partial.txt, where the second one never did.
@@ -33,3 +30,17 @@ func secondRead() (string, error) {
 	}
 	return thing.ID, nil
 }
+
+// DO NOT ADD OR REMOVE LINES ABOVE THIS POINT. cov_all.txt and cov_partial.txt
+// are hand-written and name the line numbers of the two sites (19 and 27) and
+// of their error branches. A single line added to the header comment shifts
+// both sites and every arm fails at once -- OBSERVED while writing
+// agent-os-1hig, which is why this warning is here and why it is down here,
+// where prose can grow without moving anything.
+//
+// HISTORY. Until agent-os-1hig the driver was scripts/check-getter-fault-reach.sh.
+// That script was deleted (it selected its tests by the filename convention
+// `*_dbfault_test.go` while its site set included non-DB getters), and its
+// self-test arms moved into the tool, because scripts/getter-errors holds no
+// _test.go file and the repo root has no go.mod -- so without them nothing on
+// this tree would exercise `reach` at all.

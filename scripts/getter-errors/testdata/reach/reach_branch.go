@@ -36,3 +36,14 @@ func branchRead(k string) (string, error) {
 	}
 	return thing.ID, nil
 }
+
+// DO NOT ADD OR REMOVE LINES ABOVE THIS POINT. cov_branch_all.txt and
+// cov_branch_partial.txt name the line numbers of the site (30) and of every
+// block inside its error body (31, 32, 35). A single line added to the header
+// comment shifts all of them and both arms fail at once. Same coupling as
+// reach.go; same reason this note is below the code rather than above it.
+//
+// Both profiles were GENERATED from a real `go test -coverprofile` run over
+// this exact source, not hand-written, so they pin Go's actual block layout
+// rather than a belief about it.
+

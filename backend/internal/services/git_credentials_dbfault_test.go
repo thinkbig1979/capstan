@@ -29,9 +29,11 @@ import (
 // entirely (no log, no return) leaves ./internal/services GREEN -- 0 `--- FAIL`
 // lines -- with `go build ./...` exit 0 in the same run, so it is a real green
 // and not a non-compiling mutant read as a kill.
-// scripts/check-getter-fault-reach.sh cannot answer this question here: its
-// site shape is an `if err != nil` guard, so a switch-based conversion is not
-// in its site set at all.
+// `go run scripts/getter-errors/main.go reach` cannot answer this question
+// here: its site shape is an `if err != nil` guard, so a switch-based
+// conversion is not in its site set at all. (That limitation belongs to the
+// analyser, not to its former shell driver check-getter-fault-reach.sh, which
+// was deleted in agent-os-1hig.)
 //
 // So what it DOES pin is the property that actually protects the site today:
 // the ORDERING. The token read runs first and refuses first. That is an
