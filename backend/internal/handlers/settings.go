@@ -420,12 +420,36 @@ func parseEnvFile(path string) ([]map[string]string, error) {
 func (h *SettingsHandler) GetLogRetention(c *gin.Context) {
 	// All three histories are read through the same clamped accessor, so the
 	// UI shows the value that will actually be applied rather than the raw row.
-	c.JSON(http.StatusOK, gin.H{
-		"retentionDays":              h.db.RetentionDays(database.SettingLogRetentionDays),
-		"updateHistoryRetentionDays": h.db.RetentionDays(database.SettingUpdateHistoryRetentionDays),
-		"backupHistoryRetentionDays": h.db.RetentionDays(database.SettingBackupHistoryRetentionDays),
-		"minRetentionDays":           database.MinRetentionDays,
-	})
+	//
+	// Refused rather than defaulted on a fault, for the reason GetUpdateSettings
+	// gives at :517 and one worse: this endpoint and PruneHistory read the SAME
+	// accessor, so before agent-os-r1kc a persistent read fault made the settings
+	// page display 90 as the configured retention — agreeing with the deletion
+	// that had just truncated everything to 90, and leaving the operator with no
+	// signal anywhere that the setting could not be read. An ABSENT row stays a
+	// default, as it always was; that is the fresh-install case.
+	// A slice, not a map: range order over a map is randomised, and which key
+	// the wrapped error names would then vary run to run.
+	fields := []struct {
+		field string
+		key   string
+	}{
+		{"retentionDays", database.SettingLogRetentionDays},
+		{"updateHistoryRetentionDays", database.SettingUpdateHistoryRetentionDays},
+		{"backupHistoryRetentionDays", database.SettingBackupHistoryRetentionDays},
+	}
+	settings := gin.H{"minRetentionDays": database.MinRetentionDays}
+	for _, f := range fields {
+		days, err := h.db.RetentionDays(f.key)
+		if err != nil {
+			slog.Error("Failed to read history retention settings", "error", err)
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read history retention settings", err))
+			return
+		}
+		settings[f.field] = days
+	}
+
+	c.JSON(http.StatusOK, settings)
 }
 
 func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {

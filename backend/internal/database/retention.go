@@ -1,6 +1,9 @@
 package database
 
 import (
+	"database/sql"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -25,11 +28,18 @@ const (
 	SettingBackupHistoryRetentionDays = "max_backup_history_retention_days"
 )
 
-// RetentionDays reads a retention setting, applying the default when it is
-// unset or unparseable and clamping to the floor.
+// RetentionDays parses an already-read retention VALUE, applying the default
+// when it is empty or unparseable and clamping to the floor.
 //
-// It never returns an error: a retention lookup failing must not stop the
-// cleanup pass from pruning the other tables.
+// Note the name collision: this package-level function and the (*DB) method
+// below are different functions sharing one name, and only the method touches
+// the database. Read the receiver before citing either.
+//
+// This half never returns an error, and that is still correct: it is handed a
+// string, so "unparseable" is a value judgement about a row that WAS read, not
+// a failure to read it. The method below is where the two were previously
+// conflated — it answered an unreadable database with this same default
+// (agent-os-r1kc).
 func RetentionDays(value string) int {
 	days := DefaultRetentionDays
 	trimmed := strings.TrimSpace(value)
@@ -48,15 +58,42 @@ func RetentionDays(value string) int {
 	return days
 }
 
-// RetentionDays resolves the retention for a settings key.
-func (d *DB) RetentionDays(key string) int {
+// RetentionDays resolves the retention for a settings key, separating "no such
+// row" from "this database could not answer".
+//
+// An ABSENT row keeps DefaultRetentionDays: that is the fresh-install case, and
+// it is the only case the pre-agent-os-r1kc form was right about. ANY other
+// error is returned, because the value goes straight into three irreversible
+// DELETEs (PruneHistory) and onto the settings page (handlers.GetLogRetention),
+// and a fault answered with a confident 90 silently truncates every retention an
+// operator deliberately raised — the fallback can only ever be less conservative
+// than the configured value, never more.
+//
+// The comment this replaces defended the swallow on the grounds that absence is
+// ordinary. It is not, after startup: migrations.go:182, :394 and :395 seed all
+// three keys with INSERT OR IGNORE, so on a started instance the row exists and
+// err != nil means an I/O error, corruption, or a closed or locked database.
+//
+// This is the discrimination handlers/settings_read.go:26 settingOrFault already
+// makes for the handler layer, expressed here because these callers are in this
+// package. The error is safe to log verbatim: GetSetting only decrypts keys in
+// sensitiveSettingKeys (settings.go:9-12, :21), which holds git_https_token and
+// restic_password and none of the three retention keys, so no crypto output can
+// reach this error.
+//
+// The int returned beside a non-nil error is the Go zero, deliberately not
+// DefaultRetentionDays. Both in-tree callers refuse before issuing a DELETE, so
+// nothing reaches a deleter with it; and unlike the old shape there is now an
+// error for check-getter-errors.sh to see if a future caller discards one.
+func (d *DB) RetentionDays(key string) (int, error) {
 	value, err := d.GetSetting(key)
-	if err != nil {
-		// A missing row is the normal case on a fresh install before the
-		// migration's seed, not a fault worth failing the pass over.
-		return DefaultRetentionDays
+	if errors.Is(err, sql.ErrNoRows) {
+		return DefaultRetentionDays, nil
 	}
-	return RetentionDays(value)
+	if err != nil {
+		return 0, fmt.Errorf("read retention setting %q: %w", key, err)
+	}
+	return RetentionDays(value), nil
 }
 
 // DeleteOldUpdateHistory removes update_history rows completed longer ago than
@@ -101,35 +138,60 @@ type RetentionResult struct {
 // PruneHistory runs every retention policy once. Each table is pruned
 // independently: one failing must not skip the others, since the whole point is
 // bounding growth on a long-lived instance.
+//
+// A table whose retention could not be RESOLVED is refused rather than pruned at
+// the default, and the refusal happens before the DELETE is issued rather than
+// merely before the loop (agent-os-obgr's rule, agent-os-r1kc's site). Absence
+// still resolves to the default, so the fresh-install pass is unchanged.
 func (d *DB) PruneHistory() RetentionResult {
 	var result RetentionResult
 
-	logDays := d.RetentionDays(SettingLogRetentionDays)
-	if err := d.DeleteOldActionLogs(logDays); err != nil {
+	logDays, logErr := d.RetentionDays(SettingLogRetentionDays)
+	if logErr != nil {
+		slog.Error("Refusing to prune action logs: the retention setting could not be read",
+			"setting", SettingLogRetentionDays, "error", logErr)
+	} else if err := d.DeleteOldActionLogs(logDays); err != nil {
 		slog.Error("Failed to delete old action logs", "error", err, "retention_days", logDays)
 	}
 
-	updateDays := d.RetentionDays(SettingUpdateHistoryRetentionDays)
-	if n, err := d.DeleteOldUpdateHistory(updateDays); err != nil {
+	updateDays, updateErr := d.RetentionDays(SettingUpdateHistoryRetentionDays)
+	if updateErr != nil {
+		slog.Error("Refusing to prune update history: the retention setting could not be read",
+			"setting", SettingUpdateHistoryRetentionDays, "error", updateErr)
+	} else if n, err := d.DeleteOldUpdateHistory(updateDays); err != nil {
 		slog.Error("Failed to delete old update history", "error", err, "retention_days", updateDays)
 	} else {
 		result.UpdateHistory = n
 	}
 
-	backupDays := d.RetentionDays(SettingBackupHistoryRetentionDays)
-	if n, err := d.DeleteOldBackupRuns(backupDays); err != nil {
+	backupDays, backupErr := d.RetentionDays(SettingBackupHistoryRetentionDays)
+	if backupErr != nil {
+		slog.Error("Refusing to prune backup history: the retention setting could not be read",
+			"setting", SettingBackupHistoryRetentionDays, "error", backupErr)
+	} else if n, err := d.DeleteOldBackupRuns(backupDays); err != nil {
 		slog.Error("Failed to delete old backup runs", "error", err, "retention_days", backupDays)
 	} else {
 		result.BackupRuns = n
 	}
 
 	slog.Info("History retention pass complete",
-		"log_retention_days", logDays,
-		"update_history_retention_days", updateDays,
-		"backup_history_retention_days", backupDays,
+		"log_retention_days", retentionForLog(logDays, logErr),
+		"update_history_retention_days", retentionForLog(updateDays, updateErr),
+		"backup_history_retention_days", retentionForLog(backupDays, backupErr),
 		"update_history_deleted", result.UpdateHistory,
 		"backup_runs_deleted", result.BackupRuns,
 	)
 
 	return result
+}
+
+// retentionForLog keeps the summary line from reporting a retention that was
+// never resolved. On a refusal the value is the Go zero, and "0" there would read
+// as "pruned at zero days" — a worse lie than the 90 this bead removed, since it
+// describes a deletion that did not happen at all.
+func retentionForLog(days int, err error) any {
+	if err != nil {
+		return "unreadable"
+	}
+	return days
 }
