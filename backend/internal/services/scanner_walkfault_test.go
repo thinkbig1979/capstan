@@ -325,3 +325,43 @@ func TestPruneStaleStacks_ChildReadDirFault_PropagatesAndKeepsRows(t *testing.T)
 
 	require.Error(t, pruneErr)
 }
+
+// The refusal must name WHICH configured root failed, and this arm is written
+// against a CHILD fault specifically because that is the only case that
+// discriminates. walkErr wraps the path that actually faulted; on a ROOT fault
+// that path IS the configured root, so the cause names it incidentally and an
+// assertion there would pass with or without the dedicated attribute. On a
+// child fault the cause carries a 4000-byte descendant path and the root is
+// never named at all.
+//
+// THE OBVIOUS ASSERTION IS THE WRONG ONE, and it is wrong in the direction that
+// reports a defect as fixed: the child path has the root as a PREFIX, so a bare
+// strings.Contains(out, root) is satisfied by the cause alone and passes on code
+// that logs no stacksDir at all. The assertion is therefore anchored on the
+// attribute token "stacksDir="+root, which nothing else in the line can supply.
+func TestPruneStaleStacks_ChildReadDirFault_LogsWhichConfiguredRoot(t *testing.T) {
+	root := wbuOverlongChildTree(t)
+
+	db := wbuNewDB(t)
+	require.NoError(t, db.SetSetting("scan_depth", "2"))
+	wbuSeedStack(t, db, root, filepath.Join(root, "mystack"), "root~mystack:default")
+
+	service := NewScannerService(&config.Config{StacksDir: root, DataDir: t.TempDir()}, db)
+	buf := captureSlog(t)
+
+	require.Error(t, service.pruneStaleStacks())
+
+	out := buf.String()
+	assert.Contains(t, out, "level=ERROR",
+		"a suspended prune is not a warning: the DB drifts from disk for as long as it lasts")
+	assert.Contains(t, out, "stacksDir="+root,
+		"the refusal must name the CONFIGURED ROOT as its own attribute; the cause carries only the faulting child, which an operator cannot map back to a stacks_dir setting")
+	assert.Contains(t, out, "cause=",
+		"and it must still carry the underlying cause")
+
+	// Guards the assertion above against being weakened back to a bare
+	// Contains(out, root): this shows the trap is real, i.e. that the root
+	// string is present in the line for a reason other than the attribute.
+	require.Contains(t, out, "file name too long",
+		"the cause names the faulting child, whose path begins with the root")
+}

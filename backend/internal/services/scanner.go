@@ -676,7 +676,15 @@ func (s *ScannerService) pruneStaleStacks() error {
 			// deleted git credentials are not. ScanAll is unaffected -- it logs
 			// this as a WARN naming no cause (:518), which is why the ERROR
 			// carrying the cause is emitted here, where the cause is known.
-			slog.Error("Refusing to prune stale stacks: a configured stacks directory could not be walked, and pruning against an incomplete directory listing would delete the directory row of every stack under it, taking its stacks by cascade and its git credentials permanently", "cause", walkErr)
+			// stacksDir is logged SEPARATELY from the cause, and it is not
+			// redundant with it. walkErr wraps the path that actually faulted,
+			// which for a fault below the root is a CHILD -- so on exactly the
+			// case an operator most needs to act on, the cause alone never
+			// names which configured root owns the failure. There can be
+			// several roots (GetAllStacksDirs = StacksDir + ExtraStacksDirs),
+			// and a deep child path is not something an operator should have
+			// to prefix-match by eye to find the stacks_dir setting to fix.
+			slog.Error("Refusing to prune stale stacks: a configured stacks directory could not be walked, and pruning against an incomplete directory listing would delete the directory row of every stack under it, taking its stacks by cascade and its git credentials permanently", "stacksDir", stacksDir, "cause", walkErr)
 			return walkErr
 		}
 	}
