@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -204,6 +206,94 @@ func (s *MonitorService) StreamStats(ctx context.Context, containerIDs []string)
 	return statsChan, nil
 }
 
+// unassociatedStackEvent is the event emitted for a container that belongs to no
+// stack we can name. It is the shape the label-less (non-compose) path has always
+// used: a plain container_event with an empty StackID, and only for the four
+// lifecycle actions that carry signal on their own. The other six (restart,
+// pause, unpause, kill, create, rename) are only meaningful as a stack status
+// transition, so without a stack they are still dropped — unchanged behaviour.
+func unassociatedStackEvent(action, containerID string, ts time.Time) (models.StackEvent, bool) {
+	switch action {
+	case "start", "stop", "die", "destroy":
+		return models.StackEvent{
+			Type:        "container_event",
+			StackID:     "",
+			ContainerID: containerID,
+			Event:       action,
+			Timestamp:   ts,
+		}, true
+	default:
+		return models.StackEvent{}, false
+	}
+}
+
+// stackEventFor maps one Docker container event to the StackEvent to broadcast,
+// reporting ok=false when the event carries nothing worth broadcasting.
+//
+// agent-os-91u2. The stack lookup used to be `if err != nil { slog.Debug(...);
+// continue }`, which merged two unrelated outcomes: "this compose project has no
+// stacks row" — routine, for a project started outside Capstan or not yet
+// scanned — and "the stacks table cannot be read". Both dropped the event
+// entirely, and the only trace was DEBUG, which is off in production. So a
+// container going down was invisible, and a broken database looked exactly like
+// a container Capstan does not manage.
+//
+// The two are now separated, and NEITHER drops the event:
+//
+//   - sql.ErrNoRows: not an error. Emit unassociated, log at DEBUG.
+//   - any other error: a real read fault. Emit unassociated as well, and log at
+//     ERROR. The container really did start or die; that fact does not depend on
+//     the database, and a database fault is the worst moment for the fleet to go
+//     dark. The log level is what distinguishes the two, which is the whole
+//     point — dropping telemetry because a container has no stack and dropping it
+//     because the database is broken must not look the same.
+func (s *MonitorService) stackEventFor(action, containerID, projectName string, ts time.Time) (models.StackEvent, bool) {
+	if projectName == "" {
+		return unassociatedStackEvent(action, containerID, ts)
+	}
+
+	// Without a database this service reports the compose project name as the
+	// stack id, unchanged.
+	stackID := projectName
+	if s.db != nil {
+		stack, err := s.db.GetStackByProjectName(projectName)
+		switch {
+		case err == nil:
+			stackID = stack.ID
+		case errors.Is(err, sql.ErrNoRows):
+			slog.Debug("No stack row for compose project; emitting the container event without a stack association",
+				"project", projectName)
+			return unassociatedStackEvent(action, containerID, ts)
+		default:
+			slog.Error("Failed to read the stack for a compose project; emitting the container event without a stack association, so this container's events are no longer attributed to its stack",
+				"project", projectName, "error", err)
+			return unassociatedStackEvent(action, containerID, ts)
+		}
+	}
+
+	stackEvent := models.StackEvent{
+		Type:        "container_event",
+		StackID:     stackID,
+		ContainerID: containerID,
+		Event:       action,
+		Timestamp:   ts,
+	}
+
+	switch action {
+	case "start", "restart", "unpause":
+		stackEvent.Type = "stack_status"
+		stackEvent.Status = "running"
+	case "stop", "die", "kill":
+		stackEvent.Type = "stack_status"
+		stackEvent.Status = "stopped"
+	case "pause":
+		stackEvent.Type = "stack_status"
+		stackEvent.Status = "paused"
+	}
+
+	return stackEvent, true
+}
+
 func (s *MonitorService) ListenEvents(ctx context.Context) (<-chan models.StackEvent, error) {
 	if s == nil || s.client == nil {
 		return nil, ErrDockerUnavailable
@@ -244,54 +334,9 @@ func (s *MonitorService) ListenEvents(ctx context.Context) (<-chan models.StackE
 				containerLabels := event.Actor.Attributes
 				projectName := containerLabels["com.docker.compose.project"]
 
-				if projectName == "" {
-					stackEvent := models.StackEvent{
-						Type:        "container_event",
-						StackID:     "",
-						ContainerID: containerID,
-						Event:       action,
-						Timestamp:   time.Unix(event.Time, 0),
-					}
-					if action == "start" || action == "stop" || action == "die" || action == "destroy" {
-						select {
-						case eventChan <- stackEvent:
-						case <-ctx.Done():
-							return
-						}
-					}
+				stackEvent, ok := s.stackEventFor(action, containerID, projectName, time.Unix(event.Time, 0))
+				if !ok {
 					continue
-				}
-
-				var stackID string
-				if s.db != nil {
-					stack, err := s.db.GetStackByProjectName(projectName)
-					if err != nil {
-						slog.Debug("Stack not found for project", "project", projectName, "error", err)
-						continue
-					}
-					stackID = stack.ID
-				} else {
-					stackID = projectName
-				}
-
-				stackEvent := models.StackEvent{
-					Type:        "container_event",
-					StackID:     stackID,
-					ContainerID: containerID,
-					Event:       action,
-					Timestamp:   time.Unix(event.Time, 0),
-				}
-
-				switch action {
-				case "start", "restart", "unpause":
-					stackEvent.Type = "stack_status"
-					stackEvent.Status = "running"
-				case "stop", "die", "kill":
-					stackEvent.Type = "stack_status"
-					stackEvent.Status = "stopped"
-				case "pause":
-					stackEvent.Type = "stack_status"
-					stackEvent.Status = "paused"
 				}
 
 				select {
