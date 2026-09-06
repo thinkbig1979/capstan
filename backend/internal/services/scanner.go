@@ -662,7 +662,31 @@ func (s *ScannerService) pruneStaleStacks() error {
 
 	activeDirs := make(map[string]bool)
 	for _, stacksDir := range allDirs {
-		collectActiveDirs(stacksDir, scanDepth, 1, activeDirs)
+		if walkErr := collectActiveDirs(stacksDir, scanDepth, 1, activeDirs); walkErr != nil {
+			// Refuse WHOLLY, not per-root. allDirs feeds ONE shared map, so
+			// skipping the faulted root and continuing would still prune the
+			// healthy roots' rows against a map that is missing the faulted
+			// root's subtree -- the same defect with an extra step. Same
+			// argument as the depth guard above: refusing after building a
+			// wrong activeDirs is not refusing.
+			//
+			// The cost, accepted deliberately: a configured root that does not
+			// exist suspends pruning for every root until it is fixed or
+			// removed from the config. Stale rows accumulating is recoverable;
+			// deleted git credentials are not. ScanAll is unaffected -- it logs
+			// this as a WARN naming no cause (:518), which is why the ERROR
+			// carrying the cause is emitted here, where the cause is known.
+			// stacksDir is logged SEPARATELY from the cause, and it is not
+			// redundant with it. walkErr wraps the path that actually faulted,
+			// which for a fault below the root is a CHILD -- so on exactly the
+			// case an operator most needs to act on, the cause alone never
+			// names which configured root owns the failure. There can be
+			// several roots (GetAllStacksDirs = StacksDir + ExtraStacksDirs),
+			// and a deep child path is not something an operator should have
+			// to prefix-match by eye to find the stacks_dir setting to fix.
+			slog.Error("Refusing to prune stale stacks: a configured stacks directory could not be walked, and pruning against an incomplete directory listing would delete the directory row of every stack under it, taking its stacks by cascade and its git credentials permanently", "stacksDir", stacksDir, "cause", walkErr)
+			return walkErr
+		}
 	}
 
 	directories, err := s.db.ListDirectories()
@@ -823,11 +847,46 @@ func (s *ScannerService) expectedStackID(dirPath, effectiveRoot, composeFile str
 	return StackID(effectiveRoot, s.config.StacksDir, s.config.ExtraStacksDirs, stackPathID, name)
 }
 
-func collectActiveDirs(path string, maxDepth int, currentDepth int, active map[string]bool) {
+// collectActiveDirs marks path, and every directory below it down to maxDepth,
+// as present on disk. Its map is the sole input to the delete loops in
+// pruneStaleStacks, so a directory missing from it is a directory whose row is
+// deleted, cascading to its stacks and to the git credentials stored on them
+// (migrations.go:151, ON DELETE CASCADE). An incomplete walk is therefore a
+// destructive walk, which is why this returns an error instead of the nothing
+// it used to return: the caller has to be able to refuse.
+//
+// THE POLARITY IS NOT UNIFORM ACROSS DEPTH, and that is the whole content of
+// the discrimination below.
+//
+//   - ENOENT at currentDepth == 1 REFUSES. Depth 1 is a configured root out of
+//     config.GetAllStacksDirs(); nothing enumerated it, and neither ScanAll nor
+//     pruneStaleStacks checks that it exists. An unmounted volume, a mistyped
+//     stacks_dir and a genuinely emptied root are indistinguishable here, and
+//     the first two would delete every row beneath that root in one pass. This
+//     is the gap add3405 (agent-os-d5ff) recorded as NOT closed for the
+//     DataDir case -- "a MISSING DataDir also returns ENOENT, so an unmounted
+//     volume stays indistinguishable" -- and depth is what closes it here.
+//   - ENOENT below that PRUNES, as before. Such a path was listed by its
+//     parent's ReadDir moments earlier, so it existed and has since gone: a
+//     genuine removal, which is exactly what the sweep exists to act on.
+//     Reaching this branch at all requires the directory to vanish inside the
+//     window between the parent's ReadDir and this call -- a child that was
+//     already gone is never listed, so collectActiveDirs is never called on it.
+//     INFERRED from the loop below, not observed in production.
+//   - Any non-ENOENT error at any depth REFUSES. EIO, ENOTDIR, ENAMETOOLONG,
+//     ELOOP and EACCES all mean "could not find out", never "absent".
+//
+// The sibling walk scanDirectoryRecursive (:569) may keep its Warn-and-continue
+// on the same read: it only upserts, so an incomplete scan under-reports and
+// the next pass recovers. Only this walk deletes.
+func collectActiveDirs(path string, maxDepth int, currentDepth int, active map[string]bool) error {
 	active[path] = true
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return
+		if os.IsNotExist(err) && currentDepth > 1 {
+			return nil
+		}
+		return fmt.Errorf("read directory %s: %w", path, err)
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
@@ -836,9 +895,12 @@ func collectActiveDirs(path string, maxDepth int, currentDepth int, active map[s
 		dirPath := filepath.Join(path, entry.Name())
 		active[dirPath] = true
 		if currentDepth < maxDepth {
-			collectActiveDirs(dirPath, maxDepth, currentDepth+1, active)
+			if walkErr := collectActiveDirs(dirPath, maxDepth, currentDepth+1, active); walkErr != nil {
+				return walkErr
+			}
 		}
 	}
+	return nil
 }
 
 func (s *ScannerService) ScanDirectory(path string) error {
