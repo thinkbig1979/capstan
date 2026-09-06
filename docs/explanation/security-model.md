@@ -150,7 +150,8 @@ audit; the measures below are in place and covered by tests.
   weekly schedule, so advisories published against unchanged code are still
   caught. Two checks block a merge: Go vulnerabilities that `govulncheck` traces
   to a call in Capstan's own code, and production npm advisories of high severity
-  or above. Container image findings (`trivy`, covering the Alpine base and the
+  or above. Container image findings (`trivy`, covering the `debian:trixie-slim`
+  runtime base, the Capstan server binary, the Docker CLI binaries and the
   vendored `restic`/`rclone` binaries) and dev-dependency npm advisories are
   reported but do not block, since neither reaches the running application.
 - A small number of advisories are accepted rather than fixed, each recorded in
