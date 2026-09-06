@@ -45,6 +45,10 @@ func assertRebuildForeignKeyIntact(t *testing.T, db *DB, childTable, parentTable
 	for fkRows.Next() {
 		fkViolations++
 	}
+	// agent-os-chmv: a driver fault mid-iteration would end this loop the
+	// same way exhaustion does, so a truncated read would be counted as zero
+	// violations and this assertion would pass on evidence it never saw.
+	require.NoError(t, fkRows.Err())
 	require.NoError(t, fkRows.Close())
 	assert.Equal(t, 0, fkViolations, "the rebuild must leave zero foreign_key_check violations")
 }
@@ -175,6 +179,7 @@ func TestMigration_ActionLogDenormalized_IndexesRecreated(t *testing.T) {
 		require.NoError(t, rows.Scan(&name))
 		names = append(names, name)
 	}
+	require.NoError(t, rows.Err())
 	assert.Contains(t, names, "idx_action_log_user_id")
 	assert.Contains(t, names, "idx_action_log_stack_id")
 	assert.Contains(t, names, "idx_action_log_created_at")
@@ -376,6 +381,7 @@ CREATE TABLE backup_run_items (
 		require.NoError(t, rows.Scan(&name))
 		names = append(names, name)
 	}
+	require.NoError(t, rows.Err())
 	assert.Contains(t, names, "idx_backup_runs_started_at")
 	assert.Contains(t, names, "idx_backup_runs_kind")
 
@@ -391,6 +397,7 @@ CREATE TABLE backup_run_items (
 		require.NoError(t, itemRows.Scan(&name))
 		itemNames = append(itemNames, name)
 	}
+	require.NoError(t, itemRows.Err())
 	assert.Contains(t, itemNames, "idx_backup_run_items_run_id")
 	assert.Contains(t, itemNames, "idx_backup_run_items_stack_id")
 }

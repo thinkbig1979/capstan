@@ -1,6 +1,8 @@
 package database
 
 import (
+	"fmt"
+
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -22,6 +24,9 @@ func (d *DB) GetAutoUpdatePolicies() ([]models.AutoUpdatePolicy, error) {
 			return nil, err
 		}
 		policies = append(policies, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading auto-update policies: %w", err)
 	}
 	return policies, nil
 }
@@ -70,6 +75,9 @@ func (d *DB) GetEnabledAutoUpdatePolicies() ([]models.AutoUpdatePolicy, error) {
 			return nil, err
 		}
 		policies = append(policies, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading enabled auto-update policies: %w", err)
 	}
 	return policies, nil
 }

@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -115,6 +116,9 @@ func (d *DB) GetUpdateHistory(filters models.UpdateHistoryFilters) ([]models.Upd
 		}
 
 		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("reading update history: %w", err)
 	}
 	return entries, total, nil
 }
