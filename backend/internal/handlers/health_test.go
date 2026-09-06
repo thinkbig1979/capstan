@@ -23,10 +23,22 @@ type fakePinger struct {
 	// block, when non-nil, holds Ping until ctx is done or block is closed —
 	// the stand-in for a hung daemon.
 	block chan struct{}
+	// sawDeadline / probeBudget record the budget Ready put on the probe's
+	// context, sampled at entry. TestReadinessTimesOutOnAHungDaemon asserts on
+	// this instead of on how long the request took (agent-os-jar5): elapsed
+	// time is a wall-clock bound a loaded runner can turn red, whereas the
+	// budget the handler SET is a property of the code under test. See the
+	// comment on that test for what it discriminates.
+	sawDeadline atomic.Bool
+	probeBudget atomic.Int64 // nanoseconds remaining when Ping was entered
 }
 
 func (f *fakePinger) Ping(ctx context.Context) error {
 	f.calls.Add(1)
+	if d, ok := ctx.Deadline(); ok {
+		f.probeBudget.Store(int64(time.Until(d)))
+		f.sawDeadline.Store(true)
+	}
 	if f.block != nil {
 		select {
 		case <-f.block:
@@ -202,7 +214,8 @@ func TestReadinessTimesOutOnAHungDaemon(t *testing.T) {
 	blocked := make(chan struct{})
 	t.Cleanup(func() { close(blocked) })
 
-	h := NewHealthHandler(&fakePinger{block: blocked}, "")
+	docker := &fakePinger{block: blocked}
+	h := NewHealthHandler(docker, "")
 	h.probeTimeout = 50 * time.Millisecond
 
 	done := make(chan *httptest.ResponseRecorder, 1)
@@ -217,8 +230,29 @@ func TestReadinessTimesOutOnAHungDaemon(t *testing.T) {
 		if body["status"] != "degraded" {
 			t.Errorf("status = %v, want %q", body["status"], "degraded")
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(time.Until(hangGuardDeadline(t))):
 		t.Fatal("readiness never returned against a hung daemon: the probe has no timeout")
+	}
+
+	// The guard above only proves the request RETURNED. It deliberately does
+	// NOT carry the size assertion any more: at wsHangGuardCeiling it would
+	// also be satisfied by a handler that ignored h.probeTimeout and used a
+	// large constant, which is exactly the defect this test's own failure
+	// message names. That assertion moves here (agent-os-jar5).
+	//
+	// This reads the budget Ready put on the probe's context, sampled inside
+	// Ping at entry — a property of the code under test, not of the box. The
+	// comparison is ONE-SIDED on purpose: scheduling delay between
+	// context.WithTimeout (health.go:114) and Ping's first line can only make
+	// the observed budget SMALLER, so a loaded runner cannot push it past the
+	// bound. A handler using a larger constant reports a larger budget and
+	// fails, however slow the machine is.
+	if !docker.sawDeadline.Load() {
+		t.Fatal("Ready gave the probe no deadline at all: h.probeTimeout is not reaching the context")
+	}
+	if budget := time.Duration(docker.probeBudget.Load()); budget > h.probeTimeout {
+		t.Errorf("probe budget = %v, want <= %v (h.probeTimeout): Ready is not honouring its configured probe timeout",
+			budget, h.probeTimeout)
 	}
 }
 
