@@ -262,7 +262,7 @@ func TestRcloneManager_RestoreRepo_DoesNotCreateBackupDirWhenProbeFails(t *testi
 // reachable bucket makes `rclone lsf` exit 0 with EMPTY output rather than an
 // error -- a prefix with no keys is a successful empty listing there, not a
 // "directory not found" (OBSERVED 2026-09-03, `rclone serve s3` on the
-// pinned rclone v1.74.4 binary, checksum-verified against the Dockerfile's
+// then-pinned rclone v1.74.4 binary, checksum-verified against the Dockerfile's
 // RCLONE_SHA256_AMD64; see probeRestoreSource's doc comment). Checking only
 // `err == nil` would have let this through -- the same mistake as the
 // original bug.

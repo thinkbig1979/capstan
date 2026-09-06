@@ -177,7 +177,7 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 // wrong prefix, and a nonexistent path entirely.
 //
 // OBSERVED 2026-09-03 (object-store emulation: `rclone serve s3` on the
-// pinned rclone v1.74.4 binary, checksum-verified against the Dockerfile's
+// then-pinned rclone v1.74.4 binary, checksum-verified against the Dockerfile's
 // RCLONE_SHA256_AMD64, driven with the exact syncOptions() flag set): on an
 // object store, a wrong prefix inside a valid, reachable bucket instead
 // exits 0 with EMPTY output -- a prefix with no keys is a successful empty
