@@ -29,6 +29,42 @@
 # to ratchet, and a duration parameter is precisely what forces the offending
 # expression into the callee. The absolute-deadline form has no such trap.
 #
+# WHAT THIS DOES **NOT** COVER, AND WHY A PASSING RUN IS NOT A CLOSED CLASS.
+# The defect class is "a test whose PASS depends on a fixed wall-clock bound
+# rather than on the condition it waits for". That class has THREE syntactic
+# routes in this package and this check ratchets exactly ONE of them. MEASURED,
+# by pointing this script at a fixture carrying all three (reproducible in four
+# lines; agent-os-euyg, independently re-run by the orchestrator):
+#
+#   require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))  REPORTED
+#   deadline := time.Now().Add(10 * time.Second)                             NOT reported
+#   case <-time.After(5 * time.Second):                                      NOT reported
+#
+# So a green run here means "no site of the SetReadDeadline shape", never "no
+# fixed wall-clock bound". The two uncovered routes are:
+#
+#   1. time.After(<literal>) / time.NewTimer(<literal>) as a select arm whose
+#      expiry is a t.Fatal.
+#   2. `deadline := time.Now().Add(<literal>)` assigned to a variable and then
+#      used as the bound. THIS IS HOW THE EIGHTH SITE HID: the bead that
+#      created this ratchet counted seven sites from a
+#      `SetReadDeadline(time.Now().Add` sweep, and
+#      ear5_metrics_empty_recheck_test.go:164 was an eighth in the same class,
+#      in one of the same files, added by the same PR as a converted sibling 71
+#      lines above it -- invisible to that sweep because the call and the
+#      arithmetic sit on different lines. This check would NOT catch it
+#      regrowing.
+#
+# They are deliberately not matched here rather than accidentally: adding them
+# today would redden a REQUIRED gate against seven live sites nobody is fixing
+# in this change (ws_test.go:350 and :465, mjrl_refused_frame_test.go:156,
+# dashboard_ws_refusal_test.go:117, health_test.go:220, backup_test.go:1804,
+# updates_stack_test.go:202). Those are tracked by agent-os-jar5, which is the
+# watcher for them the way this file is the watcher for the shape above. When
+# jar5 converts them, widen this pattern rather than adding a second script --
+# and note that a sweep for route 2 must match `time.Now().Add(` without
+# requiring the SetReadDeadline prefix, or it repeats the original blindness.
+#
 # WHY BASH, AND WHY IT READS THE WORKING TREE. This runs inside the REQUIRED
 # "Docs structure and coverage gates" job, advertised as dependency-free bash
 # (.github/workflows/docs.yml:8-10); an earlier proposal to add actions/setup-go
