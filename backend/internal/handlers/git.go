@@ -255,6 +255,10 @@ func (h *GitHandler) GetDiff(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"commit": result.Commit,
 		"diff":   result.Diff,
+		// agent-os-2613: services/git.go runs `git diff-tree --name-only` on
+		// every request to fill DiffResult.Files, and this literal used to drop
+		// it, so the changed-file list was computed and discarded each time.
+		"files": result.Files,
 	})
 }
 
