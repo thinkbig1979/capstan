@@ -160,9 +160,17 @@ func TestUpdateStack_EnqueuesAJobForOutdatedServices(t *testing.T) {
 
 // ── enqueueJobWithBroadcasts ────────────────────────────────────────────────
 
+// settleSentinelType marks the barrier event settle pushes onto the collector's
+// own channel. It is never broadcast, so no other subscriber can observe it,
+// and the collector drops it rather than recording it as an event.
+const settleSentinelType = "__test_settle_barrier__"
+
 // captureBroadcasts collects the events the handler emits during a job.
 // EventBus.Broadcast drops on a full channel, so the buffer is generous.
-func captureBroadcasts(t *testing.T) (func() []models.StackEvent, func()) {
+// The returned settle blocks until the collector has appended everything the
+// bus had already queued for this subscriber; see its own comment for why that
+// is a barrier and not a poll on the asserted quantity.
+func captureBroadcasts(t *testing.T) (func() []models.StackEvent, func(*testing.T), func()) {
 	t.Helper()
 
 	ch := make(chan models.StackEvent, 256)
@@ -170,10 +178,15 @@ func captureBroadcasts(t *testing.T) (func() []models.StackEvent, func()) {
 
 	var mu sync.Mutex
 	var got []models.StackEvent
+	barrier := make(chan struct{}, 1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for e := range ch {
+			if e.Type == settleSentinelType {
+				barrier <- struct{}{}
+				continue
+			}
 			mu.Lock()
 			got = append(got, e)
 			mu.Unlock()
@@ -185,17 +198,53 @@ func captureBroadcasts(t *testing.T) (func() []models.StackEvent, func()) {
 		<-done
 	}
 
-	return func() []models.StackEvent {
+	events := func() []models.StackEvent {
 		mu.Lock()
 		defer mu.Unlock()
 		out := make([]models.StackEvent, len(got))
 		copy(out, got)
 		return out
-	}, stop
-}
+	}
 
-// settle lets the collector goroutine drain what Broadcast already queued.
-func settle() { time.Sleep(50 * time.Millisecond) }
+	// settle is a QUEUE BARRIER, not a poll on the condition being asserted.
+	// It pushes a sentinel straight into the collector's channel, where per-
+	// channel FIFO puts it behind everything Broadcast has already queued, and
+	// waits for the collector to reach it. Everything queued before the call is
+	// therefore in got when settle returns.
+	//
+	// Why a barrier rather than "poll until the expected event appears": the
+	// callers assert EXACT counts (a second update_job_complete is a defect).
+	// A poll on the asserted quantity returns on the first event and can never
+	// see a duplicate; the barrier sees every event already queued, duplicates
+	// included, so it strictly preserves those assertions.
+	//
+	// Why everything the job emits IS already queued once waitForJob returns:
+	// enqueueJobWithBroadcasts broadcasts update_job_complete inside its wrapped
+	// run func (updates.go), and UpdateJobManager.runJob sets the terminal
+	// status the caller polls for only AFTER that func returns
+	// (services/update_job_manager.go). EventBus.Broadcast is a synchronous send
+	// (monitoring.go), so the send happens-before the status the caller saw.
+	//
+	// The cap is hangGuardDeadline(t): absolute, never consulted by a passing
+	// run, and its expiry is a real hang rather than a slow-runner artefact.
+	settle := func(t *testing.T) {
+		t.Helper()
+		ctx, cancel := context.WithDeadline(context.Background(), hangGuardDeadline(t))
+		defer cancel()
+		select {
+		case ch <- models.StackEvent{Type: settleSentinelType}:
+		case <-ctx.Done():
+			t.Fatal("collector channel stayed full: could not queue the settle barrier")
+		}
+		select {
+		case <-barrier:
+		case <-ctx.Done():
+			t.Fatal("collector goroutine never drained the events already queued")
+		}
+	}
+
+	return events, settle, stop
+}
 
 func waitForJob(t *testing.T, h *ResourcesHandler, jobID string, want services.Status) *services.Job {
 	t.Helper()
@@ -212,7 +261,7 @@ func waitForJob(t *testing.T, h *ResourcesHandler, jobID string, want services.S
 
 func TestEnqueueJobWithBroadcasts_SuccessPath(t *testing.T) {
 	h := newTestResourcesHandlerWithJobManager(t)
-	events, stop := captureBroadcasts(t)
+	events, settle, stop := captureBroadcasts(t)
 	defer stop()
 
 	spec := services.JobSpec{TargetType: "stack", TargetID: "s1", Name: "web", StackID: "s1"}
@@ -228,7 +277,7 @@ func TestEnqueueJobWithBroadcasts_SuccessPath(t *testing.T) {
 	waitForJob(t, h, job.ID, services.StatusSuccess)
 	assert.Equal(t, job.ID, sawJobID, "the manager injects the job id into the run signature")
 
-	settle()
+	settle(t)
 	var progress, complete int
 	for _, e := range events() {
 		switch e.Type {
@@ -248,7 +297,7 @@ func TestEnqueueJobWithBroadcasts_SuccessPath(t *testing.T) {
 
 func TestEnqueueJobWithBroadcasts_FailurePathCarriesTheError(t *testing.T) {
 	h := newTestResourcesHandlerWithJobManager(t)
-	events, stop := captureBroadcasts(t)
+	events, settle, stop := captureBroadcasts(t)
 	defer stop()
 
 	spec := services.JobSpec{TargetType: "stack", TargetID: "s1", Name: "web", StackID: "s1"}
@@ -260,7 +309,7 @@ func TestEnqueueJobWithBroadcasts_FailurePathCarriesTheError(t *testing.T) {
 
 	waitForJob(t, h, job.ID, services.StatusError)
 
-	settle()
+	settle(t)
 	var complete int
 	for _, e := range events() {
 		if e.Type == "update_job_complete" {
@@ -275,7 +324,7 @@ func TestEnqueueJobWithBroadcasts_FailurePathCarriesTheError(t *testing.T) {
 
 func TestEnqueueJobWithBroadcasts_TerminalBroadcastCarriesTheOutcome(t *testing.T) {
 	h := newTestResourcesHandlerWithJobManager(t)
-	events, stop := captureBroadcasts(t)
+	events, settle, stop := captureBroadcasts(t)
 	defer stop()
 
 	spec := services.JobSpec{TargetType: "container", TargetID: "c1", Name: "web-1"}
@@ -289,7 +338,7 @@ func TestEnqueueJobWithBroadcasts_TerminalBroadcastCarriesTheOutcome(t *testing.
 
 	waitForJob(t, h, job.ID, services.StatusSuccess)
 
-	settle()
+	settle(t)
 	var seen bool
 	for _, e := range events() {
 		if e.Type == "update_job_complete" {
@@ -303,7 +352,7 @@ func TestEnqueueJobWithBroadcasts_TerminalBroadcastCarriesTheOutcome(t *testing.
 
 func TestEnqueueJobWithBroadcasts_ProgressCarriesEveryStatusTransition(t *testing.T) {
 	h := newTestResourcesHandlerWithJobManager(t)
-	events, stop := captureBroadcasts(t)
+	events, settle, stop := captureBroadcasts(t)
 	defer stop()
 
 	spec := services.JobSpec{TargetType: "stack", TargetID: "s1", Name: "web", StackID: "s1"}
@@ -316,7 +365,7 @@ func TestEnqueueJobWithBroadcasts_ProgressCarriesEveryStatusTransition(t *testin
 
 	waitForJob(t, h, job.ID, services.StatusSuccess)
 
-	settle()
+	settle(t)
 	var progress int
 	for _, e := range events() {
 		if e.Type == "update_job_progress" {
