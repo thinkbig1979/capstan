@@ -17,10 +17,56 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	dockernet "github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
+
+// containerUpdateAPI is the subset of *client.Client that UpdateContainer and
+// UpdateContainerStreaming reach, directly or through the apply and verify
+// helpers they call. It exists so both apply paths can be driven from a unit
+// test with a fake (agent-os-bx43): DockerService.client is a concrete
+// *client.Client (docker.go:54), so before this the only executable coverage of
+// either path was internal/integrationtest, behind the `integration` build tag,
+// which `go test ./...` does not run — and a mutation that rewired only the
+// call sites, leaving resolveUpdateStrategy correct, survived every test in
+// this package.
+//
+// It is deliberately the eight methods those two paths touch, not the whole
+// client surface: docker.go and docker_resources.go keep calling the concrete
+// client, so this stays small enough to read in one screen.
+//
+// ImageInspect keeps client.ImageInspectOption's variadic parameter for two
+// reasons: *client.Client satisfies this interface with its real signature and
+// needs no adapter, and a containerUpdateAPI is then assignable to
+// truth.ImageInspector (truth/image_inspect.go:22). That assignability is load
+// bearing, not incidental — truth.ResolveContainerImage is handed the client at
+// docker_update.go's first Docker touch on each apply path, BEFORE any
+// ContainerInspect call of its own, so a seam that covered only the
+// s.client.<method> sites would still hand the real client to truth and never
+// reach the strategy switch.
+type containerUpdateAPI interface {
+	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
+	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (image.InspectResponse, error)
+	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
+	ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error
+	ImagePull(ctx context.Context, refStr string, options image.PullOptions) (io.ReadCloser, error)
+	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
+	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *dockernet.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
+	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
+}
+
+// updateAPI returns the Docker API the container-update paths call: the fake a
+// test injected, or the real client. Production leaves updateClient nil, so the
+// shipped behaviour is the concrete client exactly as before.
+func (s *DockerService) updateAPI() containerUpdateAPI {
+	if s.updateClient != nil {
+		return s.updateClient
+	}
+	return s.client
+}
 
 // updateCandidate pairs a container's pre-built update metadata with the
 // imageRef and local repo digest that were resolved from the SAME repository
@@ -133,12 +179,14 @@ const refusedUpdateReason = "cannot determine update strategy: the stacks table 
 // logRefusedUpdate emits the single ERROR line that accompanies an
 // updateRefused. It is shared by UpdateContainer and UpdateContainerStreaming so
 // the two write paths cannot drift, and — the reason it is a function at all —
-// so the line itself is reachable from a unit test. Neither apply path is: both
-// call s.client.ContainerInspect before reaching this branch, and
-// DockerService.client is a concrete *client.Client (the `client *client.Client`
-// field, docker.go:55), not an interface, so they cannot run without a live daemon. Their end-to-end coverage
-// is internal/integrationtest, behind the `integration` build tag, which
-// `go test ./...` does not run.
+// so the line itself is reachable from a unit test.
+//
+// Both apply paths are now reachable too: they call Docker through
+// containerUpdateAPI, so a fake drives them to this branch without a daemon
+// (agent-os-bx43, docker_update_apply_fake_test.go). Before that they could
+// only run against internal/integrationtest, behind the `integration` build
+// tag, which `go test ./...` does not run — which is why this function was
+// carved out in the first place.
 //
 // cause is the wrapped driver error from lookupStackByProject. Nothing here is
 // decrypted, so unlike backup_config.go there is no reason to withhold it.
@@ -152,7 +200,7 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 		return nil, ErrDockerUnavailable
 	}
 
-	containers, err := s.client.ContainerList(ctx, container.ListOptions{All: true})
+	containers, err := s.updateAPI().ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("listing containers: %w", err)
 	}
@@ -169,7 +217,7 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
 
-		imgInspect, err := s.client.ImageInspect(ctx, c.ImageID)
+		imgInspect, err := s.updateAPI().ImageInspect(ctx, c.ImageID)
 		if err != nil {
 			continue
 		}
@@ -253,7 +301,7 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 //
 // It is a free function rather than inline in CheckForUpdates because it is the
 // TIGHTEST TESTABLE UNIT for agent-os-rb6f: DockerService.client is a concrete
-// *client.Client (docker.go:55), so CheckForUpdates itself cannot be driven
+// *client.Client (docker.go:54), so CheckForUpdates itself cannot be driven
 // without a live daemon, while truth.RemoteRegistryDigest is already a package
 // var and can be swapped. Same reasoning as resolveUpdateStrategy under
 // agent-os-g482.
@@ -335,14 +383,14 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 	}
 
 	// Capture the pre-update image ID so we can verify advancement afterward.
-	imageRef, _, oldImageID, err := truth.ResolveContainerImage(ctx, s.client, containerID)
+	imageRef, _, oldImageID, err := truth.ResolveContainerImage(ctx, s.updateAPI(), containerID)
 	if err != nil {
 		return models.UpdateResult{}, truth.Failed("could not inspect container before update", err)
 	}
 
 	start := time.Now()
 
-	inspect, err := s.client.ContainerInspect(ctx, containerID)
+	inspect, err := s.updateAPI().ContainerInspect(ctx, containerID)
 	if err != nil {
 		return models.UpdateResult{}, truth.Failed("could not inspect container", err)
 	}
@@ -403,7 +451,7 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 		newContainerID = recreatedID
 	}
 
-	advanced, newImageID, err := truth.ContainerImageAdvanced(ctx, s.client, newContainerID, oldImageID)
+	advanced, newImageID, err := truth.ContainerImageAdvanced(ctx, s.updateAPI(), newContainerID, oldImageID)
 	if err != nil {
 		// Post-verify failed — we can't confirm the outcome. Report failed.
 		return models.UpdateResult{OldDigest: oldImageID, DurationMs: durationMs},
@@ -418,7 +466,7 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 
 	if advanced {
 		// Resolve new digest for details (best-effort).
-		newImg, imgErr := s.client.ImageInspect(ctx, newImageID)
+		newImg, imgErr := s.updateAPI().ImageInspect(ctx, newImageID)
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)
@@ -445,7 +493,7 @@ func (s *DockerService) findComposeContainer(ctx context.Context, projectName, s
 	fa := filters.NewArgs()
 	fa.Add("label", "com.docker.compose.project="+projectName)
 	fa.Add("label", "com.docker.compose.service="+serviceName)
-	containers, err := s.client.ContainerList(ctx, container.ListOptions{All: true, Filters: fa})
+	containers, err := s.updateAPI().ContainerList(ctx, container.ListOptions{All: true, Filters: fa})
 	if err != nil {
 		// A list fault is NOT "no such container": both used to return
 		// fallbackID silently, and fallbackID is the PRE-update id, which
@@ -489,12 +537,12 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 		filterArgs.Add("label", "com.docker.compose.service="+serviceName)
 		filterArgs.Add("status", "running")
 
-		containers, err := s.client.ContainerList(ctx, container.ListOptions{Filters: filterArgs})
+		containers, err := s.updateAPI().ContainerList(ctx, container.ListOptions{Filters: filterArgs})
 		if err != nil {
 			return fmt.Errorf("finding new container to stop: %w", err)
 		}
 		for _, c := range containers {
-			if err := s.client.ContainerStop(ctx, c.ID, container.StopOptions{}); err != nil {
+			if err := s.updateAPI().ContainerStop(ctx, c.ID, container.StopOptions{}); err != nil {
 				slog.Error("Failed to stop recreated container", "id", c.ID, "error", err)
 			}
 		}
@@ -513,7 +561,7 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect container.InspectResponse, wasRunning bool) (string, error) {
 	imageRef := inspect.Config.Image
 
-	reader, err := s.client.ImagePull(ctx, imageRef, image.PullOptions{})
+	reader, err := s.updateAPI().ImagePull(ctx, imageRef, image.PullOptions{})
 	if err != nil {
 		return "", fmt.Errorf("pulling image: %w", err)
 	}
@@ -525,12 +573,12 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect c
 	}
 
 	if wasRunning {
-		if err := s.client.ContainerStop(ctx, inspect.ID, container.StopOptions{}); err != nil {
+		if err := s.updateAPI().ContainerStop(ctx, inspect.ID, container.StopOptions{}); err != nil {
 			return "", fmt.Errorf("stopping container: %w", err)
 		}
 	}
 
-	if err := s.client.ContainerRemove(ctx, inspect.ID, container.RemoveOptions{}); err != nil {
+	if err := s.updateAPI().ContainerRemove(ctx, inspect.ID, container.RemoveOptions{}); err != nil {
 		return "", fmt.Errorf("removing container: %w", err)
 	}
 
@@ -543,13 +591,13 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect c
 		}
 	}
 
-	newContainer, err := s.client.ContainerCreate(ctx, inspect.Config, inspect.HostConfig, netConfig, nil, name)
+	newContainer, err := s.updateAPI().ContainerCreate(ctx, inspect.Config, inspect.HostConfig, netConfig, nil, name)
 	if err != nil {
 		return "", fmt.Errorf("creating container: %w", err)
 	}
 
 	if wasRunning {
-		if err := s.client.ContainerStart(ctx, newContainer.ID, container.StartOptions{}); err != nil {
+		if err := s.updateAPI().ContainerStart(ctx, newContainer.ID, container.StartOptions{}); err != nil {
 			return newContainer.ID, fmt.Errorf("starting container: %w", err)
 		}
 	}
@@ -620,14 +668,14 @@ func (s *DockerService) UpdateContainerStreaming(
 	}
 
 	// Capture the pre-update image ID.
-	imageRef, _, oldImageID, err := truth.ResolveContainerImage(ctx, s.client, containerID)
+	imageRef, _, oldImageID, err := truth.ResolveContainerImage(ctx, s.updateAPI(), containerID)
 	if err != nil {
 		return models.UpdateResult{}, truth.Failed("could not inspect container before update", err)
 	}
 
 	start := time.Now()
 
-	inspect, err := s.client.ContainerInspect(ctx, containerID)
+	inspect, err := s.updateAPI().ContainerInspect(ctx, containerID)
 	if err != nil {
 		return models.UpdateResult{}, truth.Failed("could not inspect container", err)
 	}
@@ -676,7 +724,7 @@ func (s *DockerService) UpdateContainerStreaming(
 		newContainerID = recreatedID
 	}
 
-	advanced, newImageID, err := truth.ContainerImageAdvanced(ctx, s.client, newContainerID, oldImageID)
+	advanced, newImageID, err := truth.ContainerImageAdvanced(ctx, s.updateAPI(), newContainerID, oldImageID)
 	if err != nil {
 		return models.UpdateResult{OldDigest: oldImageID, DurationMs: durationMs},
 			truth.Failed("post-update container inspect failed", err)
@@ -689,7 +737,7 @@ func (s *DockerService) UpdateContainerStreaming(
 	}
 
 	if advanced {
-		newImg, imgErr := s.client.ImageInspect(ctx, newImageID)
+		newImg, imgErr := s.updateAPI().ImageInspect(ctx, newImageID)
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)
@@ -742,12 +790,12 @@ func (s *DockerService) updateComposeContainerStreaming(
 		filterArgs.Add("label", "com.docker.compose.service="+serviceName)
 		filterArgs.Add("status", "running")
 
-		containers, err := s.client.ContainerList(ctx, container.ListOptions{Filters: filterArgs})
+		containers, err := s.updateAPI().ContainerList(ctx, container.ListOptions{Filters: filterArgs})
 		if err != nil {
 			return fmt.Errorf("finding new container to stop: %w", err)
 		}
 		for _, c := range containers {
-			if err := s.client.ContainerStop(ctx, c.ID, container.StopOptions{}); err != nil {
+			if err := s.updateAPI().ContainerStop(ctx, c.ID, container.StopOptions{}); err != nil {
 				slog.Error("Failed to stop recreated container", "id", c.ID, "error", err)
 			}
 		}
@@ -774,7 +822,7 @@ func (s *DockerService) updateStandaloneContainerStreaming(
 	setStatus(StatusPulling)
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Pulling " + imageRef, Stream: StreamStatus})
 
-	reader, err := s.client.ImagePull(ctx, imageRef, image.PullOptions{})
+	reader, err := s.updateAPI().ImagePull(ctx, imageRef, image.PullOptions{})
 	if err != nil {
 		return "", fmt.Errorf("pulling image: %w", err)
 	}
@@ -794,13 +842,13 @@ func (s *DockerService) updateStandaloneContainerStreaming(
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + strings.TrimPrefix(inspect.Name, "/"), Stream: StreamStatus})
 
 	if wasRunning {
-		if err := s.client.ContainerStop(ctx, inspect.ID, container.StopOptions{}); err != nil {
+		if err := s.updateAPI().ContainerStop(ctx, inspect.ID, container.StopOptions{}); err != nil {
 			return "", fmt.Errorf("stopping container: %w", err)
 		}
 		emit(LogLine{Ts: time.Now().UTC(), Text: "Container stopped", Stream: StreamStdout})
 	}
 
-	if err := s.client.ContainerRemove(ctx, inspect.ID, container.RemoveOptions{}); err != nil {
+	if err := s.updateAPI().ContainerRemove(ctx, inspect.ID, container.RemoveOptions{}); err != nil {
 		return "", fmt.Errorf("removing container: %w", err)
 	}
 	emit(LogLine{Ts: time.Now().UTC(), Text: "Old container removed", Stream: StreamStdout})
@@ -814,14 +862,14 @@ func (s *DockerService) updateStandaloneContainerStreaming(
 		}
 	}
 
-	newContainer, err := s.client.ContainerCreate(ctx, inspect.Config, inspect.HostConfig, netConfig, nil, name)
+	newContainer, err := s.updateAPI().ContainerCreate(ctx, inspect.Config, inspect.HostConfig, netConfig, nil, name)
 	if err != nil {
 		return "", fmt.Errorf("creating container: %w", err)
 	}
 	emit(LogLine{Ts: time.Now().UTC(), Text: "New container created", Stream: StreamStdout})
 
 	if wasRunning {
-		if err := s.client.ContainerStart(ctx, newContainer.ID, container.StartOptions{}); err != nil {
+		if err := s.updateAPI().ContainerStart(ctx, newContainer.ID, container.StartOptions{}); err != nil {
 			return newContainer.ID, fmt.Errorf("starting container: %w", err)
 		}
 		emit(LogLine{Ts: time.Now().UTC(), Text: "Container started", Stream: StreamStdout})
@@ -852,7 +900,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("label", "com.docker.compose.project="+stack.ProjectName)
 	filterArgs.Add("label", "com.docker.compose.service="+serviceName)
-	containers, listErr := s.client.ContainerList(ctx, container.ListOptions{All: true, Filters: filterArgs})
+	containers, listErr := s.updateAPI().ContainerList(ctx, container.ListOptions{All: true, Filters: filterArgs})
 	if listErr != nil || len(containers) == 0 {
 		durationMs = time.Since(start).Milliseconds()
 		ar = truth.Failed("could not find container for service "+serviceName, listErr)
@@ -861,7 +909,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 
 	preContainerID := containers[0].ID
 	// Resolve image ref and old image ID for post-apply comparison.
-	imageRef, _, oldImgID, resolveErr := truth.ResolveContainerImage(ctx, s.client, preContainerID)
+	imageRef, _, oldImgID, resolveErr := truth.ResolveContainerImage(ctx, s.updateAPI(), preContainerID)
 	if resolveErr != nil {
 		durationMs = time.Since(start).Milliseconds()
 		ar = truth.Failed("could not inspect container for "+serviceName, resolveErr)
@@ -891,7 +939,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 
 	// Verify image advancement.
 	postContainerID := s.findComposeContainer(ctx, stack.ProjectName, serviceName, preContainerID)
-	advanced, newImgID, verifyErr := truth.ContainerImageAdvanced(ctx, s.client, postContainerID, oldImgID)
+	advanced, newImgID, verifyErr := truth.ContainerImageAdvanced(ctx, s.updateAPI(), postContainerID, oldImgID)
 	newImageID = newImgID
 	durationMs = time.Since(start).Milliseconds()
 
@@ -901,7 +949,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	}
 
 	if advanced {
-		newImg, imgErr := s.client.ImageInspect(ctx, newImgID)
+		newImg, imgErr := s.updateAPI().ImageInspect(ctx, newImgID)
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)

@@ -52,6 +52,12 @@ const dockerUnavailableReason = "Docker daemon unreachable: the server started w
 type DockerService struct {
 	config *config.Config
 	client *client.Client
+	// updateClient, when non-nil, overrides the Docker API the container-update
+	// apply paths call (see containerUpdateAPI and updateAPI in
+	// docker_update.go). Production leaves it nil and gets client; unit tests
+	// inject a fake so UpdateContainer and UpdateContainerStreaming can be
+	// driven without a live daemon (agent-os-bx43).
+	updateClient containerUpdateAPI
 	// statusFn, when non-nil, overrides Status during lifecycle settling.
 	// Production leaves it nil; unit tests inject a scripted snapshot
 	// sequence so pollUntilSettled runs against real code.
