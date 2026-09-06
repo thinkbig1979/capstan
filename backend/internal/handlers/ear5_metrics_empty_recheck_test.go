@@ -113,15 +113,17 @@ func TestMonitoringMetricsWS_StaysEmptyIfHostStaysEmpty(t *testing.T) {
 	defer clientConn.Close()
 	defer resp.Body.Close()
 
-	// Read a FIXED number of frames, each with its OWN fresh per-read
-	// deadline, rather than racing a single shared wall-clock deadline across
-	// reads (a shared deadline that reads have already spent most of leaves
-	// the last read with too little of it remaining and fails on a timeout
-	// that has nothing to do with the fix). 3 frames spans more than one 2s
-	// ticker interval, so at least one re-check genuinely ran.
+	// Read a FIXED number of frames, each with its OWN fresh deadline,
+	// rather than racing a single shared budget across reads (a shared
+	// budget that earlier reads have spent most of leaves the last read with
+	// too little of it remaining and fails on a timeout that has nothing to
+	// do with the fix). hangGuardDeadline(t) is re-derived per iteration for
+	// that reason; it is a hang guard a passing run never consults, not a
+	// budget (agent-os-euyg). 3 frames spans more than one 2s ticker
+	// interval, so at least one re-check genuinely ran.
 	const framesToRead = 3
 	for i := 0; i < framesToRead; i++ {
-		require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+		require.NoError(t, clientConn.SetReadDeadline(hangGuardDeadline(t)))
 		_, raw, err := clientConn.ReadMessage()
 		require.NoError(t, err, "reading empty-host frame %d", i)
 		if bytes.Contains(raw, []byte(`"containerId"`)) {
@@ -161,7 +163,7 @@ func TestDashboardMetricsWS_EmptyHostThenPopulated_LaterFrameCarriesContainer(t 
 	defer clientConn.Close()
 	defer resp.Body.Close()
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := hangGuardDeadline(t)
 	raw := readFramesUntil(t, clientConn, deadline, "dashboard empty-then-populated", func(raw []byte) bool {
 		return bytes.Contains(raw, []byte(`"containerId":"c1"`))
 	})
@@ -193,10 +195,10 @@ func TestDashboardMetricsWS_StaysEmptyIfHostStaysEmpty(t *testing.T) {
 	defer resp.Body.Close()
 
 	// See the monitoring.go control test's comment: a fixed frame count with a
-	// fresh per-read deadline, not a shared wall-clock deadline across reads.
+	// fresh per-read hang guard, not a shared wall-clock budget across reads.
 	const framesToRead = 3
 	for i := 0; i < framesToRead; i++ {
-		require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+		require.NoError(t, clientConn.SetReadDeadline(hangGuardDeadline(t)))
 		_, raw, err := clientConn.ReadMessage()
 		require.NoError(t, err, "reading empty-host frame %d", i)
 		if bytes.Contains(raw, []byte(`"containerId"`)) {

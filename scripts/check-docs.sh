@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -789,6 +789,51 @@ check_ws_registration() {
   return 1
 }
 
+# check_ws_read_deadline delegates to scripts/check-ws-read-deadline.sh: no
+# *_test.go under backend/internal/handlers/ sets a WebSocket deadline as
+# Set{Read,Write}Deadline(time.Now().Add(...)); test waits use the absolute
+# hangGuardDeadline(t) instead (agent-os-euyg, the ratchet for the class
+# agent-os-o1jp.8 half-converted).
+#
+# THIS CHECK EXISTS BECAUSE THE PREVIOUS FIX HAD NO RATCHET. o1jp.8 converted
+# three of eight sites and named the other five open in its own close reason;
+# nothing watched that declared remainder, so the five survived and two more
+# grew beside them within a day (PR #297). A remainder in prose regrows; a
+# remainder in a required check cannot.
+#
+# Same self-test-first shape as ws-registration and networkidle-probes, and for
+# the same reason: a scanner that has silently stopped firing looks exactly like
+# a clean tree. Unlike getter-errors this has NO skip path -- it needs only
+# bash, find, grep and awk, so it runs wherever this script runs, and a scan
+# root it cannot read is a FAILURE rather than a pass (see the script header).
+check_ws_read_deadline() {
+  local script="$SCRIPT_DIR/check-ws-read-deadline.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: ws-read-deadline - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: ws-read-deadline - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: ws-read-deadline - ${self#ws-read-deadline }; ${out#ws-read-deadline: }"
+    return 0
+  fi
+  echo "FAIL: ws-read-deadline - a handlers test sets a WebSocket deadline to now+duration, so its pass depends on the clock rather than on the condition it waits for:"
+  echo "$out"
+  return 1
+}
+
 # check_getter_errors delegates to scripts/check-getter-errors.sh: no file in
 # backend/internal/ may hold more discarded (`x, _ := f()`) or softened
 # (`x, e := f()` used only as `e == nil`) call sites than the committed
@@ -892,6 +937,7 @@ Valid check names:
   ws-registration one WS upgrade path and no ConnectionManager registration outside serveWS
   close-reason   the bug-bead close-reason checker's self-test (the checker itself needs the tracker)
   getter-errors  no new discarded (`x, _ := f()`) or softened (`err == nil` only) call site
+  ws-read-deadline no handlers test sets a WS deadline to now+duration instead of hangGuardDeadline(t)
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -912,6 +958,7 @@ run_check() {
     ws-registration) check_ws_registration ;;
     close-reason) check_close_reason ;;
     getter-errors) check_getter_errors ;;
+    ws-read-deadline) check_ws_read_deadline ;;
     *) return 2 ;;
   esac
 }

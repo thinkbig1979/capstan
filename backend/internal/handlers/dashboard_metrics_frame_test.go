@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -48,7 +47,7 @@ func TestDashboardMetricsWS_EmptyHostFrame_ContainersNotNull(t *testing.T) {
 	defer clientConn.Close()
 	defer resp.Body.Close()
 
-	require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	require.NoError(t, clientConn.SetReadDeadline(hangGuardDeadline(t)))
 	_, raw, err := clientConn.ReadMessage()
 	require.NoError(t, err, "expected a metrics frame on the empty-host ticker branch")
 
@@ -91,7 +90,7 @@ func TestDashboardMetricsWS_PopulatedHostFrame_ContainersPopulated(t *testing.T)
 	defer clientConn.Close()
 	defer resp.Body.Close()
 
-	require.NoError(t, clientConn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	require.NoError(t, clientConn.SetReadDeadline(hangGuardDeadline(t)))
 	_, raw, err := clientConn.ReadMessage()
 	require.NoError(t, err, "expected a metrics frame on the populated-host streaming branch")
 
