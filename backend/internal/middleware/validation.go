@@ -16,7 +16,6 @@ var (
 	// lookup key — the on-disk path comes from the stack record, not the ID.
 	stackIDRegex  = regexp.MustCompile(`^[a-zA-Z0-9 ._:~-]+$`)
 	usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-	pathTraversal = regexp.MustCompile(`\.\.`)
 
 	commonPasswords = map[string]bool{
 		"password":    true,
@@ -101,10 +100,6 @@ func ValidatePassword(password string) (bool, string) {
 	return true, ""
 }
 
-func ValidateNoPathTraversal(input string) bool {
-	return !pathTraversal.MatchString(input)
-}
-
 const maxRequestBodySize = 10 << 20
 
 func BodySizeLimit() gin.HandlerFunc {
@@ -138,15 +133,4 @@ func ValidateInput() gin.HandlerFunc {
 
 		c.Next()
 	}
-}
-
-func SanitizeFilePath(input string) string {
-	cleaned := strings.TrimSpace(input)
-	cleaned = strings.ReplaceAll(cleaned, "\\", "/")
-	cleaned = strings.ReplaceAll(cleaned, "../", "")
-	return cleaned
-}
-
-func ValidatePathParam(param string) bool {
-	return ValidateNoPathTraversal(param) && param != "" && len(param) < 500
 }
