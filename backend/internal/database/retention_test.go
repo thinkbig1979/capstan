@@ -149,7 +149,11 @@ func TestRetentionDays_FloorIsClamped(t *testing.T) {
 			if err := db.SetSetting("test_retention_key", tc.setting); err != nil {
 				t.Fatalf("SetSetting: %v", err)
 			}
-			if got := db.RetentionDays("test_retention_key"); got != tc.want {
+			got, err := db.RetentionDays("test_retention_key")
+			if err != nil {
+				t.Fatalf("RetentionDays(%q): %v", tc.setting, err)
+			}
+			if got != tc.want {
 				t.Errorf("RetentionDays(%q) = %d, want %d", tc.setting, got, tc.want)
 			}
 		})
@@ -160,7 +164,11 @@ func TestRetentionDays_FloorIsClamped(t *testing.T) {
 // migration's INSERT OR IGNORE has not seeded the key.
 func TestRetentionDays_UnsetKeyUsesDefault(t *testing.T) {
 	db := newRetentionTestDB(t)
-	if got := db.RetentionDays("key_that_does_not_exist"); got != DefaultRetentionDays {
+	got, err := db.RetentionDays("key_that_does_not_exist")
+	if err != nil {
+		t.Fatalf("an absent key must not be an error, it is the fresh-install case: %v", err)
+	}
+	if got != DefaultRetentionDays {
 		t.Errorf("RetentionDays for a missing key = %d, want %d", got, DefaultRetentionDays)
 	}
 }
