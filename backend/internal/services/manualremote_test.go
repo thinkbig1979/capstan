@@ -10,14 +10,12 @@
 // drives GitService against github.com/thinkbig1979/capstan over BOTH an
 // HTTPS and an SSH remote.
 //
-// Since agent-os-r1a was fixed this DOES exercise go-git meaningfully: the
-// nil-cache panic no longer fires, so repo.Worktree, worktree.Status,
-// getDivergence, findMergeBase, countCommits and mapCommit all run. Before
-// that fix everything below step 2a was served by the git CLI and this file
-// was near-worthless as evidence about a go-git upgrade.
-//
-// Pull remains CLI by construction (git.go: Pull -> pullCLI); that is the
-// product design, not a fallback.
+// agent-os-yo9e deleted the go-git status path after measuring that it and the
+// CLI path were not equivalent in either direction, so this file no longer has
+// a library upgrade to verify — every step below is the git CLI, which is now
+// the whole of GitService. What it still does, and nothing in the unit suite
+// does, is drive that CLI against a REAL remote over the network, on both
+// transports.
 //
 // The packfile regression tests in git_packfile_test.go cover the same ground
 // hermetically and run in the normal suite. Keep this one for what it alone
@@ -70,34 +68,9 @@ func TestManualRemote(t *testing.T) {
 
 			s := &GitService{}
 
-			// 2a. go-git directly: openRepo is osfs.New +
-			// filesystem.NewStorage + git.Open, repo.Head() is the reference
-			// lookup. Both must work against a real clone.
-			repo, err := s.openRepo(local)
-			if err != nil {
-				t.Fatalf("openRepo (go-git) failed on a real clone: %v", err)
-			}
-			headRef, err := repo.Head()
-			if err != nil {
-				t.Fatalf("repo.Head (go-git) failed on a real clone: %v", err)
-			}
-			if want := runGit(t, local, "rev-parse", "HEAD"); headRef.Hash().String() != want {
-				t.Errorf("go-git Head = %s, git CLI says %s", headRef.Hash(), want)
-			}
-			if headRef.Name().Short() != "main" {
-				t.Errorf("go-git Head ref = %q, want main", headRef.Name().Short())
-			}
-			t.Logf("go-git reached: openRepo + Head OK at %s", headRef.Hash())
-
-			// The full go-git status path must succeed against a real clone.
-			// Asserted, not logged: GetStatus below would silently fall back to
-			// the CLI and hide a regression here, which is exactly how
-			// agent-os-r1a survived in production.
-			if _, err := s.getStatusGoGit(local); err != nil {
-				t.Fatalf("getStatusGoGit failed on a real clone: %v", err)
-			}
-
-			// 2b. STATUS through the public API — what capstan actually serves.
+			// 2. STATUS through the public API — what capstan actually serves.
+			// There is no second implementation left to fall back to, so an
+			// error here is the answer rather than a reason to retry.
 			st, err := s.GetStatus(local)
 			if err != nil {
 				t.Fatalf("GetStatus failed: %v", err)
@@ -114,8 +87,9 @@ func TestManualRemote(t *testing.T) {
 			if st.RemoteURL != tc.url {
 				t.Errorf("remoteURL = %q, want %q", st.RemoteURL, tc.url)
 			}
-			// Populated by the go-git path only; getStatusCLI never sets it.
-			// This assertion therefore also proves GetStatus did not fall back.
+			// Served by go-git only until agent-os-yo9e; getStatusCLI now
+			// resolves @{upstream} itself. Against a real clone that is
+			// origin/main, read from git rather than assumed.
 			if st.TrackingBranch != "origin/main" {
 				t.Errorf("trackingBranch = %q, want origin/main", st.TrackingBranch)
 			}
@@ -125,8 +99,9 @@ func TestManualRemote(t *testing.T) {
 			t.Logf("status: branch=%s commit=%s author=%q remote=%s",
 				st.Branch, st.Commit.Short, st.Commit.Author, st.RemoteURL)
 
-			// 3. STATUS reports a dirty worktree, via go-git's repo.Worktree()
-			// and worktree.Status().
+			// 3. STATUS reports a dirty worktree. One untracked FILE, which is
+			// one porcelain entry — the entry-vs-file distinction that
+			// git_parity_yo9e_test.go pins does not bite here.
 			if err := os.WriteFile(filepath.Join(local, "vkr-scratch.txt"), []byte("dirty\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -157,8 +132,10 @@ func TestManualRemote(t *testing.T) {
 			}
 			// Derive the expected count rather than hardcoding it: this clones
 			// a live moving remote, so the repo shape is not under the test's
-			// control. This assertion is what caught countCommits following
-			// first parents only — it reported behind=1 where git said 3.
+			// control. This assertion is what caught go-git's countCommits
+			// following first parents only — it reported behind=1 where git
+			// said 3 — and it now guards the behind/ahead field order in
+			// getStatusCLI's parse of `rev-list --left-right --count`.
 			wantBehind := runGit(t, local, "rev-list", "--count", "HEAD..origin/main")
 			if got := strconv.Itoa(behindSt.Behind); got != wantBehind {
 				t.Errorf("after rewind: behind=%s, git rev-list says %s", got, wantBehind)

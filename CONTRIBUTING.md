@@ -49,7 +49,7 @@ environment files: [`.env.example`](.env.example) (production) and
 - Database: SQLite
 - Framework: Gin
 - Docker SDK: docker/docker (Moby) client
-- Git library: go-git
+- Git: the `git` CLI, invoked directly (no Go git library)
 
 ### Frontend
 - Language: TypeScript

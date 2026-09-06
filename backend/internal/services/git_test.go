@@ -7,11 +7,16 @@ import (
 )
 
 // TestGetStatus_NonGitRepoReturns404 reproduces the bug where a stack directory
-// that is not a git repository made GET /api/v1/git return 500: getStatusGoGit
-// produced the correct typed 404, but GetStatus fell back to the CLI path, which
-// returned a generic error that HandleError mapped to 500. GetStatus must surface
-// a typed *models.AppError (404, GIT_NOT_REPO) so the frontend can treat it as
-// "no git repo" instead of a server error.
+// that is not a git repository made GET /api/v1/git return 500: go-git produced
+// the correct typed 404, but GetStatus fell back to the CLI path, which returned
+// a generic error that HandleError mapped to 500. GetStatus must surface a typed
+// *models.AppError (404, GIT_NOT_REPO) so the frontend can treat it as "no git
+// repo" instead of a server error.
+//
+// agent-os-yo9e removed the fallback that caused this: there is no second
+// implementation whose generic error can overwrite a typed one, so the 404 now
+// comes from getStatusCLI's own gitFailure probe. The assertion is unchanged and
+// is the reason that restructuring is safe to make.
 func TestGetStatus_NonGitRepoReturns404(t *testing.T) {
 	s := &GitService{}
 

@@ -27,14 +27,12 @@ const notRepoMessage = "Not a git repository"
 // message for everything passes the empty-repo arm and fails the control, and
 // is worse than the bug it replaces because it hides the real non-repo case.
 //
-// The arms call getStatusCLI DIRECTLY rather than through GetStatus, and that
-// is deliberate. MEASURED on this tree: GetStatus (git.go:60) returns a typed
-// *models.AppError from getStatusGoGit as-is without falling back to the CLI,
-// and openRepo already mints a 404 GIT_NOT_REPO for a non-repo and for a
-// missing directory. So through GetStatus the control never executes this
-// guard at all — it would be satisfied by openRepo and could only come out one
-// way. Only the empty-repo case reaches getStatusCLI in production, via
-// go-git's non-typed "failed to get HEAD: reference not found".
+// The arms call getStatusCLI directly. Until agent-os-yo9e that was load-bearing:
+// GetStatus tried go-git first, whose openRepo minted its own 404 GIT_NOT_REPO,
+// so the control arm never reached this guard and could only come out one way.
+// go-git is gone and GetStatus is now a direct call to getStatusCLI, so the two
+// spellings are the same code path and both arms genuinely execute this guard.
+// The direct call is kept because it names the function under test.
 func TestGetStatusCLI_DiscriminatesEmptyRepoFromNonRepo(t *testing.T) {
 	svc := NewGitService(&config.Config{}, nil)
 

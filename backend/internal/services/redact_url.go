@@ -39,10 +39,12 @@ var authorityPrefixRe = regexp.MustCompile(`^(?:[a-zA-Z][a-zA-Z0-9+.\-]*:)?//`)
 // every authenticated client (agent-os-57xj).
 //
 // This redacts by PATTERN, never by value. The existing redactToken replaces a
-// specific known token, so it can only remove secrets Capstan itself issued —
-// which is why it never caught this: the go-git path that serves most requests
-// reads .git/config directly and never calls it at all, and even on the CLI path
-// a credential Capstan did not issue passes straight through.
+// specific known token, so it can only remove secrets Capstan itself issued, and
+// a credential the operator embedded in the remote URL is not one of them: it
+// passes straight through. When this was written there was a second reason too
+// — the go-git path served most requests, read .git/config directly and never
+// called redactToken at all — and agent-os-yo9e deleted that path. The
+// remaining reason is sufficient on its own and is what this function fixes.
 //
 // The placeholder is kept rather than the userinfo dropped, deliberately: it
 // tells the operator a credential is embedded, which is a misconfiguration they
