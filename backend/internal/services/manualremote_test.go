@@ -24,10 +24,8 @@ package services
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -36,17 +34,15 @@ const (
 	sshRemote   = "git@github.com:thinkbig1979/capstan.git"
 )
 
-func runGit(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
-	}
-	return strings.TrimSpace(string(out))
-}
+// runGit is NOT declared here. It is declared once for the whole package in
+// git_credentials_test.go, which carries no build tag and so is present in
+// every build this file can appear in. Declaring a second copy under the
+// `manualremote` tag made `go vet -tags=manualremote ./...` fail to compile,
+// and because nothing in CI ever built the tag the breakage sat unnoticed
+// (agent-os-e11e). The surviving helper is a strict superset of the copy that
+// stood here: it additionally pins GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM and an
+// author/committer identity, which only makes a clone-based harness more
+// hermetic.
 
 func TestManualRemote(t *testing.T) {
 	for _, tc := range []struct {

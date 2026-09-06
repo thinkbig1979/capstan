@@ -109,6 +109,18 @@ jobs:
         working-directory: backend
         run: go vet ./...
 
+      # Build-tagged files are invisible to the step above, so a tag nothing
+      # compiles rots silently: `manualremote` accumulated a duplicate runGit
+      # declaration and `go vet -tags=manualremote` had never once compiled
+      # (agent-os-e11e). This is a TYPE-CHECK, not a test run -- vet does not
+      # execute anything, and TestManualRemote must never run here because it
+      # clones github.com/thinkbig1979/capstan over the real network on both
+      # HTTPS and SSH. Do not "simplify" this away; it is the only thing
+      # standing between that tag and the next silent rot.
+      - name: Vet (build-tagged files)
+        working-directory: backend
+        run: go vet -tags=manualremote ./...
+
       # -count=1 disables the test cache, so a green run always reflects this
       # commit rather than a cached result from an earlier one.
       - name: Unit tests
