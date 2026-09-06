@@ -144,6 +144,12 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 		"ahead":         status.Ahead,
 		"behind":        status.Behind,
 		"remote":        status.RemoteURL,
+		// agent-os-w0ai: GitStatusResult is never marshalled — this literal IS
+		// the API — so a field the service assigns reaches no caller until it is
+		// listed here. TrackingBranch was write-only from its introduction until
+		// this line, which is why agent-os-r1a's second symptom described an
+		// empty trackingBranch that had in fact never been emitted at all.
+		"trackingBranch": status.TrackingBranch,
 	})
 }
 
