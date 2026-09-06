@@ -835,9 +835,11 @@ check_ws_read_deadline() {
 }
 
 # check_getter_errors delegates to scripts/check-getter-errors.sh: no file in
-# backend/internal/ may hold more discarded (`x, _ := f()`) or softened
-# (`x, e := f()` used only as `e == nil`) call sites than the committed
-# baseline records (agent-os-zhe9, the ratchet for the family behind
+# backend/ -- which is backend/internal AND backend/cmd, widened from
+# backend/internal alone under agent-os-pcnh because cmd is a SIBLING of
+# internal and had therefore never been swept -- may hold more discarded
+# (`x, _ := f()`) or softened (`x, e := f()` used only as `e == nil`) call sites
+# than the committed baseline records (agent-os-zhe9, the ratchet for the family behind
 # agent-os-7lg1/3h9x/8tqd/1gqn/l42o/obgr/g482/r1by/xzoe). Detection is by AST
 # shape only -- not the receiver expression, not the error-variable name, not
 # the callee prefix -- because every one of those anchors has already returned

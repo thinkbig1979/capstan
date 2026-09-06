@@ -126,12 +126,62 @@
 # whose zero you intend to believe, and use `git ls-tree` or `ls` on an
 # absolute path for existence questions.
 #
-# Usage:
-#   check-getter-errors.sh              ratchet: no file may exceed its baseline
-#   check-getter-errors.sh --scan       list every site (file:line, kind, callee)
-#   check-getter-errors.sh --self-test  prove the check still fires, both ways
-#   check-getter-errors.sh --cross-check   layer A: AST vs errcheck check-blank
-#   check-getter-errors.sh --update-baseline   rewrite the committed baseline
+# ---------------------------------------------------------------------------
+# HOW TO RUN IT (agent-os-egjr). Every command below is copy-pasteable from the
+# REPO ROOT and was run there. The five hazards above say how this instrument
+# lies; this section says how to invoke it, which is the other half and was
+# missing.
+#
+#   $ bash scripts/check-getter-errors.sh
+#   getter-errors: no file exceeds its baseline (scope backend/ (cmd, internal), TOTAL FILES=... DISCARD=... SOFT=...)
+#
+#     The ratchet, and what the required "Docs structure" CI job runs via
+#     scripts/check-docs.sh. Exit 0 clean, 1 on growth.
+#
+#   $ bash scripts/check-getter-errors.sh --scan
+#   getter-errors: scope backend/ (cmd, internal)
+#   DISCARD cmd/server/admin.go:71 WriteString (runAdminCommand)
+#   ... one row per site ...
+#   TOTAL SITES=... DISCARD=... SOFT=...
+#
+#   $ bash scripts/check-getter-errors.sh --self-test
+#   $ bash scripts/check-getter-errors.sh --cross-check   # needs golangci-lint
+#   $ bash scripts/check-getter-errors.sh --update-baseline
+#
+# THE SCOPE IS backend/, WHICH IS backend/internal AND backend/cmd. It was
+# backend/internal alone until agent-os-pcnh, and every mode prints the scope it
+# swept precisely so that a number lifted out of this output cannot be quoted as
+# a statement about a wider tree than it measured. If you cite a count from here,
+# cite the scope line with it.
+#
+# RUNNING THE SCANNER DIRECTLY, and the ONE form that reads as a clean zero.
+# The scanner is a standalone go/ast program and the repo root has no go.mod, so
+# it must be invoked as a FILE, never as a package directory:
+#
+#   WORKS:
+#     $ go run scripts/getter-errors/main.go scan backend/cmd
+#     DISCARD server/admin.go:71 WriteString (runAdminCommand)
+#     ...
+#     TOTAL SITES=3 DISCARD=3 SOFT=0
+#     (paths are relative to the directory you point it at, not to the repo)
+#
+#   FAILS, and this is the trap -- OBSERVED at 8104a65 from the repo root:
+#     $ go run ./scripts/getter-errors scan backend/cmd
+#     go: go.mod file not found in current directory or any parent directory; see 'go help modules'
+#     $ echo $?
+#     1
+#
+#   The refusal goes to STDERR and stdout is EMPTY. So the directory-shaped form
+#   inside `count=$(go run ./scripts/getter-errors scan "$dir" 2>/dev/null | wc -l)`
+#   yields 0 with rc 0 -- `wc`'s rc, not `go run`'s -- and a caller that does not
+#   read ${PIPESTATUS[0]} scores a refusal as a clean tree. That is the same
+#   false-zero shape this whole file exists to prevent, and cross_check below
+#   shipped with it (`2>/dev/null |`) until agent-os-pcnh. If you wrap this
+#   scanner: never redirect its stderr, and never pipe before reading its exit
+#   code.
+#
+#   `reach` takes a coverage profile and files, not a directory:
+#     $ go run scripts/getter-errors/main.go reach coverage.out backend/internal/services/backup.go
 #
 # Exit: 0 clean, 1 violation or an unusable input, 2 usage error.
 
@@ -143,7 +193,48 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TOOL="$SCRIPT_DIR/getter-errors/main.go"
 FIXTURES="$SCRIPT_DIR/getter-errors/testdata"
 BASELINE="$SCRIPT_DIR/check-getter-errors-baseline.txt"
-TARGET_REL='backend/internal'
+# TARGET_REL is the ONE scope constant. It was 'backend/internal' until
+# agent-os-pcnh: backend/cmd is a SIBLING of backend/internal, not a child, so
+# the boot path and the admin CLI had never been swept at all, and the number
+# this check printed was quoted in close reasons as a statement about "the
+# backend". It was 86; the tree-wide number was 96. That is the repo's own
+# "scope too narrow, result generalized" failure mode, committed.
+#
+# 'backend' is the whole of the Go source and nothing else. OBSERVED at 8104a65,
+# in a clean checkout:
+#
+#   $ command find backend -name '*.go' -type f | command grep -v '^backend/internal/' | command grep -v '^backend/cmd/'
+#   (no output)
+#
+# and goFiles() skips vendor/, testdata/ and node_modules/ by directory name
+# (getter-errors/main.go:480-484), so backend/testdata's compose fixtures and
+# backend/frontend's built assets cannot enter the count. Widen this constant
+# and every mode below follows it, INCLUDING cross_check's second arm -- see
+# the note there, which is a scope constant this one does not reach.
+TARGET_REL='backend'
+
+# scope_line names the tree that was actually swept, and it is computed from
+# the scan's OWN output rather than restated by hand, so it cannot drift from
+# what ran. Every mode prints it. That is the substance of agent-os-pcnh: this
+# check printed "TOTAL SITES=86" with no scope attached, and the number was then
+# quoted in close reasons as a fact about the backend while it only ever covered
+# backend/internal. A count that does not carry its scope WILL be generalized.
+# The field number is a parameter because the two output shapes put the path in
+# different columns: `counts` prints "internal/services/x.go DISCARD=1 SOFT=2"
+# (field 1) and `scan` prints "DISCARD internal/services/x.go:44 Foo (bar)"
+# (field 2). Hardcoding field 1 would have produced an EMPTY scope for --scan,
+# which is the failure this function exists to prevent, one level down.
+scope_line() {
+  local rows="$1" field="$2" dirs
+  dirs=$(awk -v f="$field" '$1 != "TOTAL" { n = index($f, "/"); if (n > 1) print substr($f, 1, n - 1) }' "$rows" |
+    sort -u | tr '\n' ' ')
+  dirs="${dirs% }"
+  if [ -z "$dirs" ]; then
+    printf 'scope %s/' "$TARGET_REL"
+    return
+  fi
+  printf 'scope %s/ (%s)' "$TARGET_REL" "$(echo "$dirs" | sed 's/ /, /g')"
+}
 
 usage() {
   cat <<USAGE >&2
@@ -297,11 +388,15 @@ ratchet() {
   local grown
   grown=$(compare_counts "$BASELINE" "$cur")
   status=$?
-  local totals
-  totals=$(grep '^TOTAL ' "$cur")
+  local totals scope
+  totals=$(command grep '^TOTAL ' "$cur")
+  # Computed BEFORE the temp file goes away, and printed on the FAIL path too:
+  # a verdict that names its scope only when it passes is exactly as quotable
+  # out of context as one that never names it.
+  scope=$(scope_line "$cur" 1)
   rm -f "$cur"
   if [ "$status" -ne 0 ]; then
-    echo "getter-errors: FAIL - a new discarded or softened call site was added."
+    echo "getter-errors: FAIL - a new discarded or softened call site was added ($scope)."
     echo "  A discarded error turns a database or daemon fault into a silent"
     echo "  default; a softened one turns it into 'not found'. Handle the error,"
     echo "  or if the site is genuinely fine, say so at the site and refresh the"
@@ -309,7 +404,7 @@ ratchet() {
     echo "$grown"
     return 1
   fi
-  echo "getter-errors: no file exceeds its baseline ($totals)"
+  echo "getter-errors: no file exceeds its baseline ($scope, $totals)"
   return 0
 }
 
@@ -377,20 +472,46 @@ cross_check() {
   tmp=$(mktemp -d) || return 1
   ast="$tmp/ast"
   lint="$tmp/lint"
-  run_tool scan "$REPO_ROOT/$TARGET_REL" 2>/dev/null |
-    awk '$1 == "DISCARD" { print $2 }' | sort -u >"$ast"
+  # THE OLD FORM HERE WAS `run_tool scan ... 2>/dev/null | awk ... >"$ast"`:
+  # stderr discarded, and piped before the exit code could be read, inside the
+  # gate whose entire purpose is preventing exactly that. If the scanner refused
+  # to run, its complaint went to /dev/null, $ast came out empty and the
+  # comparison below reported a clean AST side. Fixed under agent-os-pcnh; see
+  # the invocation section in the header for the `go run` refusal that makes it
+  # concrete.
+  local astraw="$tmp/ast.raw"
+  run_tool scan "$REPO_ROOT/$TARGET_REL" >"$astraw" 2>&1
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "cross-check: FAIL - the AST scanner errored, so its side of this comparison would be" >&2
+    echo "  EMPTY rather than clean. Its output, which this line used to discard:" >&2
+    sed 's/^/  /' "$astraw" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  awk '$1 == "DISCARD" { print $2 }' "$astraw" | sort -u >"$ast"
   # An ISOLATED cache: a shared one is not merely slow here, it is unsound
   # across worktrees of the same module (see the header).
-  (cd "$backend" && GOLANGCI_LINT_CACHE="$tmp/cache" golangci-lint run -c "$(basename "$derived")" ./internal/... >"$tmp/out" 2>&1)
+  # ./... , NOT ./internal/... . This is a SECOND scope constant that TARGET_REL
+  # does not reach, and widening TARGET_REL alone would have desynchronised the
+  # two arms: the AST side would report cmd/server/main.go while errcheck never
+  # looked there, so every backend/cmd site would surface in the "AST only"
+  # column below as an instrument disagreement that does not exist. The brief
+  # for agent-os-pcnh listed four TARGET_REL inheritors and missed this one.
+  (cd "$backend" && GOLANGCI_LINT_CACHE="$tmp/cache" golangci-lint run -c "$(basename "$derived")" ./... >"$tmp/out" 2>&1)
   status=$?
   if [ "$status" -eq 3 ]; then
     echo "cross-check: FAIL - golangci-lint refused to run (another instance holds its lock)." >&2
     rm -rf "$tmp"
     return 1
   fi
-  grep -oE '^internal/[A-Za-z0-9_./-]+\.go:[0-9]+' "$tmp/out" |
-    grep -v '_test\.go' | sed 's#^internal/##' | sort -u >"$lint"
-  echo "cross-check: instrument = committed backend/.golangci.yml + errcheck check-blank, scope ./internal/... non-test"
+  # Both arms are now relative to backend/, so the `sed 's#^internal/##'` that
+  # used to strip the prefix off the errcheck side is GONE: with TARGET_REL
+  # widened the AST side carries that prefix too, and stripping one side only
+  # would make every pair mismatch.
+  command grep -oE '^(internal|cmd)/[A-Za-z0-9_./-]+\.go:[0-9]+' "$tmp/out" |
+    command grep -v '_test\.go' | sort -u >"$lint"
+  echo "cross-check: instrument = committed backend/.golangci.yml + errcheck check-blank, $(scope_line "$astraw" 2), non-test"
   echo "  AST DISCARD sites: $(wc -l <"$ast"); errcheck blank sites: $(wc -l <"$lint") (golangci-lint rc=$status)"
   echo "-- AST only: no type information, so a discarded non-error last value looks the same."
   echo "   OBSERVED: StartVerified, gitCmdWithCreds and ResolveComposeProjectName all return"
@@ -406,12 +527,27 @@ cross_check() {
 }
 
 main() {
+  local scan_out scan_status
   case "${1:-}" in
     '')
       ratchet
       ;;
     --scan)
-      run_tool scan "$REPO_ROOT/$TARGET_REL"
+      # Buffered rather than streamed so the scope header can be computed from
+      # the rows themselves, and so a scanner error is a FAILURE here instead of
+      # an empty listing that reads as a clean tree.
+      scan_out=$(mktemp) || return 1
+      run_tool scan "$REPO_ROOT/$TARGET_REL" >"$scan_out" 2>&1
+      scan_status=$?
+      if [ "$scan_status" -ne 0 ]; then
+        echo "getter-errors: FAIL - the scanner errored:" >&2
+        sed 's/^/  /' "$scan_out" >&2
+        rm -f "$scan_out"
+        return 1
+      fi
+      echo "getter-errors: $(scope_line "$scan_out" 2)"
+      cat "$scan_out"
+      rm -f "$scan_out"
       ;;
     --self-test)
       self_test
@@ -421,7 +557,13 @@ main() {
       ;;
     --update-baseline)
       run_tool counts "$REPO_ROOT/$TARGET_REL" >"$BASELINE" || return 1
-      echo "getter-errors: baseline rewritten -> ${BASELINE#$REPO_ROOT/}"
+      # The scope is stated here and not written INTO the baseline: a comment
+      # line in that file would split into three fields and compare_counts would
+      # read it as a file named "#" with a count of 0. The paths themselves carry
+      # the scope instead -- they are relative to TARGET_REL, so a baseline
+      # written against backend/ has an internal/ or cmd/ prefix on every row and
+      # one written against backend/internal/ does not.
+      echo "getter-errors: baseline rewritten -> ${BASELINE#$REPO_ROOT/} ($(scope_line "$BASELINE" 1), $(command grep '^TOTAL ' "$BASELINE"))"
       ;;
     -h | --help)
       usage
