@@ -297,11 +297,41 @@ func (reg *BackupRunnerRegistry) evictFinished() {
 		select {
 		case <-dr.done:
 			dbRun, err := reg.db.GetBackupRunByID(id)
-			if err != nil || dbRun.FinishedAt == nil {
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+				// The row is gone, so no future tick can ever read a
+				// FinishedAt for this entry and the ONLY way it leaves the
+				// registry is here. Keeping it would leak it forever AND
+				// re-log every five minutes; evicting is the sole terminal
+				// state left (agent-os-89ut).
+				slog.Warn("Backup run row no longer exists; evicting its in-memory registry entry, which can never be evicted by its finish time",
+					"run_id", id, "kind", dr.kind)
+				delete(reg.runs, id)
+				continue
+			case err != nil:
+				// A real read fault, NOT "not finished yet". The entry is
+				// deliberately kept — a transient fault must not evict a run
+				// whose finish time is simply unreadable right now — so the
+				// consequence is that it stays in the registry and is retried
+				// on the next tick. Silent before agent-os-89ut, which made a
+				// persistent DB fault an unbounded, unobservable leak.
+				slog.Warn("Could not read a backup run while evicting finished runs; its registry entry stays in memory and will be retried on the next GC tick",
+					"run_id", id, "kind", dr.kind, "error", err)
+				continue
+			case dbRun.FinishedAt == nil:
+				// The normal case for a run that has closed done but whose
+				// terminal status has not been persisted yet. Stays silent.
 				continue
 			}
 			t, err := time.Parse(time.RFC3339, *dbRun.FinishedAt)
 			if err != nil {
+				// A malformed finished_at is permanent, so this entry is in
+				// the same never-evictable position as the missing-row case
+				// above — and it was equally silent. Log the consequence and
+				// evict, rather than retrying an unparseable value forever.
+				slog.Warn("Backup run has an unparseable finished_at; evicting its in-memory registry entry, which can never be evicted by its finish time",
+					"run_id", id, "kind", dr.kind, "finished_at", *dbRun.FinishedAt, "error", err)
+				delete(reg.runs, id)
 				continue
 			}
 			if time.Since(t) > retentionTTL {
