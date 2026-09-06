@@ -347,8 +347,8 @@ func TestSafeWriteMessage_SurvivesConcurrentRevocationClose(t *testing.T) {
 	var serverConn *websocket.Conn
 	select {
 	case serverConn = <-serverConnCh:
-	case <-time.After(time.Second):
-		t.Fatal("server-side upgrade did not complete in time")
+	case <-time.After(time.Until(hangGuardDeadline(t))):
+		t.Fatal("server-side upgrade did not complete before the hang guard")
 	}
 
 	conn := &Connection{
@@ -462,8 +462,8 @@ func TestSafeWriteCloseMessage_SurvivesConcurrentPingLoop(t *testing.T) {
 	var serverConn *websocket.Conn
 	select {
 	case serverConn = <-serverConnCh:
-	case <-time.After(time.Second):
-		t.Fatal("server-side upgrade did not complete in time")
+	case <-time.After(time.Until(hangGuardDeadline(t))):
+		t.Fatal("server-side upgrade did not complete before the hang guard")
 	}
 
 	conn := &Connection{

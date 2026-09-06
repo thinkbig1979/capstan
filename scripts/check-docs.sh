@@ -790,10 +790,12 @@ check_ws_registration() {
 }
 
 # check_ws_read_deadline delegates to scripts/check-ws-read-deadline.sh: no
-# *_test.go under backend/internal/handlers/ sets a WebSocket deadline as
-# Set{Read,Write}Deadline(time.Now().Add(...)); test waits use the absolute
-# hangGuardDeadline(t) instead (agent-os-euyg, the ratchet for the class
-# agent-os-o1jp.8 half-converted).
+# *_test.go under backend/internal/handlers/ bounds a wait with a fixed
+# wall-clock duration; test waits use the absolute hangGuardDeadline(t)
+# instead, directly or via time.Until(...) (agent-os-euyg, the ratchet for the
+# class agent-os-o1jp.8 half-converted; widened to four syntactic shapes by
+# agent-os-jar5, whose seven sites euyg had measured and deliberately left
+# unreddened).
 #
 # THIS CHECK EXISTS BECAUSE THE PREVIOUS FIX HAD NO RATCHET. o1jp.8 converted
 # three of eight sites and named the other five open in its own close reason;
@@ -939,7 +941,7 @@ Valid check names:
   ws-registration one WS upgrade path and no ConnectionManager registration outside serveWS
   close-reason   the bug-bead close-reason checker's self-test (the checker itself needs the tracker)
   getter-errors  no new discarded (`x, _ := f()`) or softened (`err == nil` only) call site
-  ws-read-deadline no handlers test sets a WS deadline to now+duration instead of hangGuardDeadline(t)
+  ws-read-deadline no handlers test bounds a wait with a fixed wall-clock duration instead of hangGuardDeadline(t)
 
 With no arguments, all checks run and a summary is printed.
 USAGE

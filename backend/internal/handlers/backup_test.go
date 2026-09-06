@@ -1699,7 +1699,14 @@ func TestRegistry_AttachUnfinishedRun_IsNotReportedDone(t *testing.T) {
 		t.Fatal("the injected restic runner was never reached: this control is not blocking where it claims to")
 	}
 
-	_, ok := awaitDurableRun(t, reg, runID, time.Now().Add(500*time.Millisecond))
+	// wall-clock ok: the bound IS the assertion. This is a bounded NEGATIVE
+	// probe -- it asserts the run has NOT finished -- so a slow box can only
+	// push it further toward the expected answer, never turn correct code red,
+	// which is the opposite direction from the flake class agent-os-jar5 and
+	// agent-os-euyg close. hangGuardDeadline(t) here would cost the full
+	// wsHangGuardCeiling (60s) on every run and discriminate nothing extra:
+	// a registry that wrongly reported Done would do so immediately.
+	_, ok := awaitDurableRun(t, reg, runID, time.Now().Add(500*time.Millisecond)) // wall-clock ok: bounded negative probe, see above
 	require.False(t, ok,
 		"a durable run that never completes must NOT be reported as Done — "+
 			"if this passes, the wait no longer asserts anything")
@@ -1801,18 +1808,13 @@ func TestRegistry_PanicInExec_RunTerminatesAsFailed(t *testing.T) {
 	//   (a) catch the panic without crashing the binary,
 	//   (b) write outcome="failed" to the durableRun, and
 	//   (c) update the DB record to status="failed".
-	deadline := time.Now().Add(5 * time.Second)
-	var finalAR *services.AttachResult
-	for time.Now().Before(deadline) {
-		ar, aErr := reg.Attach(runID, nil)
-		require.NoError(t, aErr)
-		if ar.Done {
-			finalAR = ar
-			break
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	require.NotNil(t, finalAR, "run must reach Done=true within 5 s after panic")
+	// awaitDurableRun waits on the run's own completion channel (dr.done)
+	// rather than polling Attach under a fixed budget, so the PASS depends on
+	// the goroutine finishing, never on how fast the box is (agent-os-jar5;
+	// the poll this replaces is the shape agent-os-25ye turned red in CI).
+	finalAR, finished := awaitDurableRun(t, reg, runID, hangGuardDeadline(t))
+	require.True(t, finished,
+		"run must reach Done=true after the panic, before the hang guard")
 
 	assert.Equal(t, "failed", finalAR.Outcome,
 		"outcome must be 'failed' when the exec goroutine panics")

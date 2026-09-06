@@ -548,7 +548,7 @@ func TestSettingsHandler_UpdateUpdateSettings_ScheduleEditDoesNotStopTheSchedule
 	assert.Eventually(t, func() bool {
 		next := sched.NextApplyAt()
 		return !next.IsZero() && next.Weekday() == time.Tuesday && next.Hour() == 5 && next.Minute() == 15
-	}, 2*time.Second, 10*time.Millisecond,
+	}, time.Until(hangGuardDeadline(t)), 10*time.Millisecond,
 		"a saved schedule must reach the running apply timer without a restart")
 }
 

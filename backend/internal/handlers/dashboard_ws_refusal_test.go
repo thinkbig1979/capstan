@@ -114,7 +114,7 @@ func TestDashboardMetricsWS_CapRefusalReportsNoGinError(t *testing.T) {
 		if strings.Contains(obs.logs, "hijacked connection") {
 			t.Errorf("a cap refusal drove output onto the hijacked connection: %q", obs.logs)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("handler never returned within 5s")
+	case <-time.After(time.Until(hangGuardDeadline(t))):
+		t.Fatal("handler never returned before the hang guard")
 	}
 }

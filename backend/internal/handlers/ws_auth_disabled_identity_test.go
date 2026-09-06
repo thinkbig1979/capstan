@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,9 +44,25 @@ func waitForDistinctIdentityOrRefusal(t *testing.T, cm *ConnectionManager, first
 	resultCh := make(chan wsIdentityRaceResult, 2)
 	guard := hangGuardDeadline(t)
 
+	// Both watchers below self-terminate at guard, so closing resultCh once
+	// both have returned turns "neither watcher resolved" into a CHANNEL
+	// CLOSE rather than a timer expiry. There is therefore no wall-clock
+	// bound in this function at all: the read below resolves on the actual
+	// event, and its failure arm resolves on the watchers actually giving up
+	// (agent-os-jar5). It replaces `time.After(time.Until(guard) + 500ms)`,
+	// where the additive slop existed only to order the outer timer after the
+	// watchers -- an ordering a WaitGroup states instead of estimating.
+	var watchers sync.WaitGroup
+	watchers.Add(2)
+	go func() {
+		watchers.Wait()
+		close(resultCh)
+	}()
+
 	// Watcher A: poll cm for a connection registered under a UserID
 	// different from firstUserID -- the fixed-code outcome.
 	go func() {
+		defer watchers.Done()
 		for {
 			cm.mu.RLock()
 			for _, c := range cm.connections {
@@ -66,6 +83,7 @@ func waitForDistinctIdentityOrRefusal(t *testing.T, cm *ConnectionManager, first
 	// Watcher B: read conn2's close frame -- the pre-fix outcome (both
 	// connections shared firstUserID, so cm.Add refused the second at cap 1).
 	go func() {
+		defer watchers.Done()
 		_ = conn2.SetReadDeadline(guard)
 		for {
 			if _, _, err := conn2.ReadMessage(); err != nil {
@@ -77,14 +95,12 @@ func waitForDistinctIdentityOrRefusal(t *testing.T, cm *ConnectionManager, first
 		}
 	}()
 
-	select {
-	case r := <-resultCh:
-		return r
-	case <-time.After(time.Until(guard) + 500*time.Millisecond):
+	r, resolved := <-resultCh
+	if !resolved {
 		t.Fatal("neither watcher resolved: conn2 was neither registered under a distinct " +
 			"identity nor refused with a close frame before the hang-guard deadline")
-		return wsIdentityRaceResult{}
 	}
+	return r
 }
 
 // TestAuthDisabledWS_DistinctClientIdentitiesGetIndependentCapBuckets is the

@@ -199,7 +199,7 @@ func settle() { time.Sleep(50 * time.Millisecond) }
 
 func waitForJob(t *testing.T, h *ResourcesHandler, jobID string, want services.Status) *services.Job {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := hangGuardDeadline(t)
 	for time.Now().Before(deadline) {
 		if j := h.jobManager.Get(jobID); j != nil && j.Status == want {
 			return j

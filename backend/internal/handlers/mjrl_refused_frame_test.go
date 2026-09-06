@@ -153,13 +153,13 @@ func TestBackupWSAttach_SurplusViewerGetsRefusedFrameNotDone(t *testing.T) {
 	// --- CONTROL: free one slot, a fresh viewer is admitted and gets the real
 	// done frame on genuine completion.
 	close(gone[0])
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(time.Until(hangGuardDeadline(t)))
 	for open := true; open; {
 		select {
 		case _, ok := <-lives[0]:
 			open = ok
 		case <-deadline:
-			t.Fatal("CONTROL: forwardLive did not exit within 5s of its client going away")
+			t.Fatal("CONTROL: forwardLive did not exit before the hang guard after its client went away")
 		}
 	}
 
