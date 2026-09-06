@@ -13,7 +13,6 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
@@ -235,50 +234,6 @@ func (s *DockerService) GetContainerStats(ctx context.Context, containerID strin
 	}()
 
 	return statsChan, nil
-}
-
-func (s *DockerService) ListenEvents(ctx context.Context) (<-chan models.DockerEvent, error) {
-	if s == nil {
-		return nil, ErrDockerUnavailable
-	}
-
-	eventChan := make(chan models.DockerEvent, 100)
-
-	dockerEvents, errChan := s.client.Events(ctx, events.ListOptions{})
-
-	go func() {
-		defer close(eventChan)
-
-		for {
-			select {
-			case event := <-dockerEvents:
-				if event.Type == "container" {
-					containerID := event.Actor.ID
-					action := string(event.Action)
-
-					dockerEvent := models.DockerEvent{
-						ContainerID: containerID,
-						Action:      action,
-						Type:        "container",
-						Timestamp:   time.Unix(event.Time, 0),
-					}
-
-					select {
-					case eventChan <- dockerEvent:
-					case <-ctx.Done():
-						return
-					}
-				}
-			case err := <-errChan:
-				slog.Error("Docker event error", "error", err)
-				return
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	return eventChan, nil
 }
 
 func (s *DockerService) buildComposeArgs(stack models.Stack, subcommand string, extraArgs []string) []string {

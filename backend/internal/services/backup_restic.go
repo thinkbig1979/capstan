@@ -492,6 +492,20 @@ type resticSnapshot struct {
 	Host    string   `json:"hostname"`
 	Tags    []string `json:"tags"`
 	Paths   []string `json:"paths"`
+	// agent-os-kezb: restic >= 0.17 attaches a summary to every snapshot it
+	// writes, and `restic snapshots --json` already returns it in the bytes
+	// parsed below — so the snapshot size costs no extra restic invocation.
+	// Snapshots written by older restic carry no summary at all; the zero value
+	// then leaves BackupSnapshot.SizeBytes at 0, which `omitempty` drops.
+	Summary *resticSnapshotSummary `json:"summary"`
+}
+
+// resticSnapshotSummary is the subset of restic's per-snapshot summary we read.
+// TotalBytesProcessed is the logical size of what the snapshot holds, which is
+// what a column headed "Size" means. DataAdded — the deduplicated delta this run
+// added to the repository — answers a different question and is not read here.
+type resticSnapshotSummary struct {
+	TotalBytesProcessed int64 `json:"total_bytes_processed"`
 }
 
 // ListSnapshots returns snapshots filtered by tag (empty = all), capped at
@@ -539,6 +553,9 @@ func (m *ResticManager) ListSnapshots(ctx context.Context, tag string, limit int
 			Hostname: s.Host,
 			Tags:     s.Tags,
 			Paths:    s.Paths,
+		}
+		if s.Summary != nil {
+			result[i].SizeBytes = s.Summary.TotalBytesProcessed
 		}
 	}
 	return result, nil

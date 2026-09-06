@@ -17,12 +17,6 @@ type Session struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-type ConfiguredDir struct {
-	Path      string `json:"path"`
-	Name      string `json:"name"`
-	IsDefault bool   `json:"isDefault"`
-}
-
 type Directory struct {
 	Path          string    `json:"path"`
 	Name          string    `json:"name"`
@@ -111,19 +105,6 @@ type ActionLog struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-type CommandResult struct {
-	ExitCode int    `json:"exitCode"`
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-}
-
-type DockerEvent struct {
-	ContainerID string    `json:"containerId"`
-	Action      string    `json:"action"`
-	Type        string    `json:"type"`
-	Timestamp   time.Time `json:"timestamp"`
-}
-
 type GitStatusResult struct {
 	Branch         string     `json:"branch"`
 	Commit         *GitCommit `json:"commit"`
@@ -168,16 +149,6 @@ type DashboardContainerInfo struct {
 	StartedAt    time.Time     `json:"startedAt"`
 	DiskSize     int64         `json:"diskSize"`
 	ImageSize    int64         `json:"imageSize"`
-}
-
-type DashboardStats struct {
-	TotalStacks       int                      `json:"totalStacks"`
-	RunningStacks     int                      `json:"runningStacks"`
-	StoppedStacks     int                      `json:"stoppedStacks"`
-	TotalContainers   int                      `json:"totalContainers"`
-	RunningContainers int                      `json:"runningContainers"`
-	ImageDiskUsage    int64                    `json:"imageDiskUsage"`
-	Containers        []DashboardContainerInfo `json:"containers"`
 }
 
 type DockerImage struct {

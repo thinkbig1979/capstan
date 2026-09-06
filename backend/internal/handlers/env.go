@@ -52,11 +52,6 @@ type EnvRequest struct {
 	Raw     string     `json:"raw"`
 }
 
-type EnvSaveResponse struct {
-	Saved    bool   `json:"saved"`
-	Filename string `json:"filename"`
-}
-
 func NewEnvHandler(db *database.DB, config *config.Config) *EnvHandler {
 	return &EnvHandler{
 		db:        db,
