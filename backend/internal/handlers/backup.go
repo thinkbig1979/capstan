@@ -237,17 +237,48 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	//   here would build the second detector this comparison exists to avoid.
 	hasEmbeddedCredential := repository != bc.ResticRepository
 
-	keepDaily, _ := db.GetSetting("backup_keep_daily")
-	keepWeekly, _ := db.GetSetting("backup_keep_weekly")
-	keepMonthly, _ := db.GetSetting("backup_keep_monthly")
-	keepYearly, _ := db.GetSetting("backup_keep_yearly")
-	autoPrune, _ := db.GetSetting("backup_auto_prune")
-	scheduleInterval, _ := db.GetSetting("backup_schedule_interval")
-	syncAfterBackup, _ := db.GetSetting("backup_sync_after")
-	rcloneRemote, _ := db.GetSetting("rclone_remote")
-	rclonePath, _ := db.GetSetting("rclone_path")
-	rcloneTransfers, _ := db.GetSetting("rclone_transfers")
-	hostname, _ := db.GetSetting("backup_hostname")
+	// Read together and refused as one (agent-os-1gqn), for the same reason the
+	// two ResolveBackupConfig* calls above already refuse: this response IS the
+	// backup settings form, and the settingIntOrDefault/settingBoolOrDefault
+	// fallbacks below are applied to whatever comes back. Discarding the errors
+	// rendered a complete, plausible page — retention 7/4/6/0, auto-prune on,
+	// no rclone remote — out of a database that answered nothing, and the
+	// operator's next Save wrote that page over their real configuration.
+	//
+	// One call rather than eleven guards is deliberate: eleven fault-capable
+	// reads cannot be pinned individually by a fixture that faults all of them
+	// (agent-os-a6bc), and one can.
+	bs, err := readSettings(db,
+		"backup_keep_daily",
+		"backup_keep_weekly",
+		"backup_keep_monthly",
+		"backup_keep_yearly",
+		"backup_auto_prune",
+		"backup_schedule_interval",
+		"backup_sync_after",
+		"rclone_remote",
+		"rclone_path",
+		"rclone_transfers",
+		"backup_hostname",
+	)
+	if err != nil {
+		// A message distinct from the two above, deliberately: all three refuse
+		// the same request, and an operator reading the log needs to know WHICH
+		// read failed.
+		h.internalError(c, "Failed to read the backup retention and schedule settings", err)
+		return
+	}
+	keepDaily := bs["backup_keep_daily"]
+	keepWeekly := bs["backup_keep_weekly"]
+	keepMonthly := bs["backup_keep_monthly"]
+	keepYearly := bs["backup_keep_yearly"]
+	autoPrune := bs["backup_auto_prune"]
+	scheduleInterval := bs["backup_schedule_interval"]
+	syncAfterBackup := bs["backup_sync_after"]
+	rcloneRemote := bs["rclone_remote"]
+	rclonePath := bs["rclone_path"]
+	rcloneTransfers := bs["rclone_transfers"]
+	hostname := bs["backup_hostname"]
 
 	// scheduleDays is always an array, never null: the UI iterates it directly
 	// and a JSON null would break that. An unparseable stored value degrades to
@@ -606,7 +637,16 @@ func (h *BackupHandler) upsertPolicy(c *gin.Context) {
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	existing, _ := h.db.GetBackupPolicy(stackID)
+	// agent-os-1gqn, the same defect as updates.go's auto-update policy upsert:
+	// a discarded error read as "no policy yet", so UpsertBackupPolicy below
+	// replaced the operator's stored row with a fresh generateID() and a
+	// CreatedAt of now. An absent row is the ordinary first-save case and still
+	// takes that path.
+	existing, err := h.db.GetBackupPolicy(stackID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		h.internalError(c, "Failed to read the existing backup policy", err)
+		return
+	}
 
 	policy := &models.BackupPolicy{
 		ID:         generateID(),
@@ -656,7 +696,18 @@ func (h *BackupHandler) getStatus(c *gin.Context) {
 		return
 	}
 
-	runs, _ := h.db.GetBackupRuns(1)
+	// Refused rather than defaulted: GetEnabledBackupPolicies above already
+	// answers this same database with 500, so reporting lastRun:null from a
+	// database that could not be read would be an oversight rather than a
+	// choice (agent-os-1gqn). No sql.ErrNoRows arm, and none is possible:
+	// GetBackupRuns is a multi-row query (database/backup.go:98-104) that
+	// returns an empty slice with a nil error when there are no runs, so every
+	// error it can return is a fault.
+	runs, err := h.db.GetBackupRuns(1)
+	if err != nil {
+		h.internalError(c, "Failed to read the most recent backup run", err)
+		return
+	}
 	var lastRun *models.BackupRun
 	if len(runs) > 0 {
 		lastRun = &runs[0]

@@ -1,15 +1,13 @@
 database/backup.go DISCARD=1 SOFT=0
 database/retention.go DISCARD=2 SOFT=0
 database/update_history.go DISCARD=1 SOFT=0
-handlers/auth.go DISCARD=2 SOFT=0
-handlers/backup.go DISCARD=13 SOFT=1
-handlers/directories.go DISCARD=3 SOFT=0
+handlers/backup.go DISCARD=0 SOFT=1
 handlers/env.go DISCARD=0 SOFT=1
 handlers/git.go DISCARD=0 SOFT=3
 handlers/logs.go DISCARD=0 SOFT=2
-handlers/settings.go DISCARD=10 SOFT=4
+handlers/settings.go DISCARD=0 SOFT=4
 handlers/stack_crud.go DISCARD=2 SOFT=1
-handlers/updates.go DISCARD=4 SOFT=7
+handlers/updates.go DISCARD=0 SOFT=4
 handlers/ws.go DISCARD=0 SOFT=1
 integrationtest/harness.go DISCARD=1 SOFT=0
 middleware/auth.go DISCARD=0 SOFT=1
@@ -26,4 +24,4 @@ services/redact_url.go DISCARD=5 SOFT=3
 services/scanner.go DISCARD=0 SOFT=6
 services/schedule.go DISCARD=2 SOFT=0
 services/watcher.go DISCARD=0 SOFT=1
-TOTAL FILES=28 DISCARD=68 SOFT=53
+TOTAL FILES=26 DISCARD=36 SOFT=50

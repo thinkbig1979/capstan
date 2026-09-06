@@ -515,13 +515,33 @@ const (
 )
 
 func (h *SettingsHandler) GetUpdateSettings(c *gin.Context) {
-	scanIntervalStr, _ := h.db.GetSetting("update_scan_interval")
-	lastScanAt, _ := h.db.GetSetting("update_scan_last_run")
-	lastScanError, _ := h.db.GetSetting("update_scan_last_error")
-	autoUpdateEnabledStr, _ := h.db.GetSetting("auto_update_enabled")
-	applyMode, _ := h.db.GetSetting("update_apply_mode")
-	applyTime, _ := h.db.GetSetting("update_apply_time")
-	applyDaysStr, _ := h.db.GetSetting("update_apply_days")
+	// Refused rather than defaulted on a fault: this response seeds the update
+	// settings FORM, and the operator's next Save writes back whatever it was
+	// shown. Serving the defaults below as if they were the stored configuration
+	// turns an unreadable database into a silent overwrite of real settings the
+	// next time anyone touches the page (agent-os-1gqn). An ABSENT row stays a
+	// default, as it always was — that is the fresh-install case.
+	s, err := readSettings(h.db,
+		"update_scan_interval",
+		"update_scan_last_run",
+		"update_scan_last_error",
+		"auto_update_enabled",
+		"update_apply_mode",
+		"update_apply_time",
+		"update_apply_days",
+	)
+	if err != nil {
+		slog.Error("Failed to read update settings", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read update settings", err))
+		return
+	}
+	scanIntervalStr := s["update_scan_interval"]
+	lastScanAt := s["update_scan_last_run"]
+	lastScanError := s["update_scan_last_error"]
+	autoUpdateEnabledStr := s["auto_update_enabled"]
+	applyMode := s["update_apply_mode"]
+	applyTime := s["update_apply_time"]
+	applyDaysStr := s["update_apply_days"]
 
 	if applyMode != applyModeScheduled {
 		applyMode = applyModeImmediate
@@ -673,7 +693,15 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	applied := gin.H{"setting": "update_schedule"}
 
 	if req.ScanIntervalMinutes != nil {
-		oldIntervalStr, _ := h.db.GetSetting("update_scan_interval")
+		// The old interval decides whether the scheduler is restarted or stopped
+		// below, inside the write path. Defaulting it to "" on a fault would make
+		// that decision on invented state (agent-os-1gqn).
+		oldIntervalStr, err := settingOrFault(h.db, "update_scan_interval")
+		if err != nil {
+			slog.Error("Failed to read the current scan interval", "error", err)
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read the current scan interval", err))
+			return
+		}
 		oldInterval := 0
 		if oldIntervalStr != "" {
 			if v, err := strconv.Atoi(oldIntervalStr); err == nil {
@@ -793,11 +821,29 @@ func looksLikePrivateKey(s string) bool {
 }
 
 func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
-	sshKey, _ := h.db.GetSetting("git_ssh_key")
+	// Both keys select the identity a later git operation runs as: an empty
+	// value silently hands the operation over to the env-supplied cfg fallback.
+	// A fault must not be able to make that substitution (agent-os-1gqn), so it
+	// refuses here. Two arms suffice where the token below needs three: neither
+	// key is in sensitiveSettingKeys (database/settings.go:9-12), so there is no
+	// decrypt path and therefore no "row present but unreadable" state to
+	// report — and unlike hasHttpsToken, these values are USED rather than
+	// reported as a presence flag.
+	sshKey, err := settingOrFault(h.db, "git_ssh_key")
+	if err != nil {
+		slog.Error("Failed to read the git SSH key setting", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read git settings", err))
+		return
+	}
 	if sshKey == "" {
 		sshKey = h.cfg.GitSSHKey
 	}
-	httpsUser, _ := h.db.GetSetting("git_https_user")
+	httpsUser, err := settingOrFault(h.db, "git_https_user")
+	if err != nil {
+		slog.Error("Failed to read the git HTTPS user setting", "error", err)
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read git settings", err))
+		return
+	}
 	if httpsUser == "" {
 		httpsUser = h.cfg.GitHTTPSUser
 	}
