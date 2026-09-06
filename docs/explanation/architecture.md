@@ -33,7 +33,7 @@ unique on every request and cannot be cached.
    `rclone` static binaries for the target architecture directly from their
    upstream releases, rather than installing them via a package manager.
 4. **`docker-cli`** — lifts the `docker`, `docker-buildx`, and
-   `docker-compose` CLI binaries out of the official `docker:28-cli` image
+   `docker-compose` CLI binaries out of the official `docker:29-cli` image
    (pinned by digest), since Capstan talks to the *host's* Docker daemon and
    must never bundle a daemon of its own.
 

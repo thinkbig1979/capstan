@@ -80,7 +80,7 @@ FROM --platform=$BUILDPLATFORM debian:trixie-slim AS backup-tools
 # Note: use RESTIC_VER / RCLONE_VER (not RESTIC_VERSION / RCLONE_VERSION) to
 # avoid accidental collision with restic/rclone's own env-var flags.
 ARG RESTIC_VER=0.19.1
-ARG RCLONE_VER=1.74.4
+ARG RCLONE_VER=1.75.1
 
 # SHA256 checksums of the per-arch release archives, from the projects' official
 # SHA256SUMS (restic GitHub release; rclone downloads.rclone.org). Pin these in
@@ -88,8 +88,8 @@ ARG RCLONE_VER=1.74.4
 # build. Restic ships .bz2, rclone ships .zip — the sums are of those archives.
 ARG RESTIC_SHA256_AMD64=f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c
 ARG RESTIC_SHA256_ARM64=a5f64aaab53d51e311fa3829124c5b703f2d14cf187d8640b6be3b2b49376465
-ARG RCLONE_SHA256_AMD64=fe435e0c36228e7c2f116a8701f01127bb1f694005fc11d1f27186c8bca4115d
-ARG RCLONE_SHA256_ARM64=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c358de419
+ARG RCLONE_SHA256_AMD64=982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab
+ARG RCLONE_SHA256_ARM64=03f2504174034b6d004152ed7369251c9a9ec1f7e0836eda420f5c7a5ec0dff9
 
 ARG TARGETARCH
 
@@ -145,7 +145,7 @@ RUN set -eu; \
 # Pinned by index digest, not just by tag: the tag moves and a silently swapped
 # CLI is the kind of change that only shows up in production. Dependabot tracks
 # this FROM line like any other.
-FROM docker:29-cli@sha256:3f4743208d2338c934d7b8bcfbe1bb54c0b2355c510ad5e0f31c0c4a54bd704e AS docker-cli
+FROM docker:29-cli@sha256:eccaacfeed644c7de222ff047483568cb988dde95476fbaaf10ea2d04921bb66 AS docker-cli
 
 # Runtime stage
 FROM debian:trixie-slim

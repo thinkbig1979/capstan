@@ -439,19 +439,23 @@ jobs:
         env:
           TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
 
-      # ADVISORY, for now. This is the only check covering the Debian trixie
-      # runtime base, the Docker CLI binaries lifted from docker:28-cli, and the
-      # pinned restic 0.19.1 / rclone 1.74.4 static binaries — nothing else in
-      # CI looks at any of them at all. Starting advisory is
-      # a deliberate choice about sequencing, not about importance: this scan
-      # has no observed baseline yet, and turning on an unknown number of
-      # findings as a merge blocker on day one blocks work that has nothing to
-      # do with them.
+      # ADVISORY, and staying that way. This is the only check covering the
+      # Debian trixie runtime base, the Docker CLI binaries lifted from
+      # docker:29-cli, and the pinned restic 0.19.1 / rclone 1.75.1 static
+      # binaries — nothing else in CI looks at any of them at all.
       #
-      # TO GRADUATE THE GATE once the baseline is known and triaged: set
-      # `exit-code: '1'` below, and narrow `severity` to the level being
-      # enforced. Prefer graduating to CRITICAL-only first rather than going
-      # straight to HIGH,CRITICAL.
+      # THE VULNERABILITY GATE IS NOT GRADUATING. `exit-code: '0'` stays, and
+      # so do `severity: HIGH,CRITICAL`, `ignore-unfixed: true` and
+      # `scanners: vuln`. Edwin's decision, 2026-09-06 (agent-os-h1hr), taken
+      # WITH the baseline in hand rather than for want of one: every remaining
+      # finding lives in a third-party binary this repo vendors, so a red gate
+      # would block unrelated PRs on an upstream release cadence nobody here
+      # controls. The lever is the pin bump, not the exit code.
+      #
+      # What DOES gate, in a separate step below, is COVERAGE: the scan must
+      # still be looking at app/server and at the runtime base's OS packages.
+      # See scripts/check-trivy-coverage.sh — a target that silently stops
+      # being scanned removes findings and reads as an improvement.
       #
       # `ignore-unfixed: true` on purpose — a finding with no fixed version is
       # not something a PR can act on. It stays out of the report so the report
@@ -463,33 +467,43 @@ jobs:
       # no longer exists. It went stale twice (alpine 3.24, agent-os-4pa.2) and
       # then obsolete entirely when the runtime moved off Alpine.
       #
-      # OBSERVED BASELINE, PR #148 run on 2026-08-07, against the current
-      # debian:trixie-slim image. HIGH,CRITICAL, ignore-unfixed:
+      # OBSERVED BASELINE, measured 2026-09-06 on branch fix/agent-os-h1hr with
+      # trivy 0.70.0 — the version this job installs, so the numbers are
+      # comparable to a CI run. Same scoping: HIGH,CRITICAL, ignore-unfixed,
+      # scanners vuln. A count is a claim about a SHA and an instrument
+      # version; re-measure both before treating a delta as a regression.
       #
-      #   capstan:scan (debian 13.6)   debian      0     <-- base is clean
-      #   app/server                   gobinary    1
-      #   usr/local/bin/restic         gobinary    3
-      #   usr/local/bin/rclone         gobinary    4
-      #   usr/local/bin/docker         gobinary   15
-      #   .../cli-plugins/docker-buildx   gobinary  44
-      #   .../cli-plugins/docker-compose  gobinary  45
+      #                                          before   after
+      #                                        (bbfeaa2)  (this commit)
+      #   capstan:* (debian 13.6)    os-pkgs         0        0   <-- base clean
+      #   app/server                 gobinary        0        0   <-- ours clean
+      #   usr/local/bin/docker       gobinary        8        0
+      #   usr/local/bin/rclone       gobinary       16        0
+      #   usr/local/bin/restic       gobinary       14       14
+      #   .../cli-plugins/docker-buildx  gobinary   13        1
+      #   .../cli-plugins/docker-compose gobinary    4        0
+      #                                            ---      ---
+      #                                             55       15
+      #   of which CRITICAL                          4        1
       #
-      # Two things changed shape, and both matter for graduating the gate:
+      # The `before` column is main @ bbfeaa2 (rclone 1.74.4, docker:29-cli
+      # @sha256:3f474320). The `after` column is this commit, which bumps
+      # rclone to 1.75.1 and the docker:29-cli digest to sha256:eccaacfe.
       #
-      # 1. restic and rclone collapsed from 35/39 to 3/4 — the agent-os-9e1
-      #    version bumps landed. The original reason this job started advisory
-      #    is largely gone.
-      # 2. The Docker CLI is now three static Go binaries copied from
-      #    docker:28-cli instead of Alpine packages, so Trivy resolves their
-      #    module graphs and reports 104 findings that the apk packaging never
-      #    surfaced. These are upstream's own published binaries: nothing in
-      #    this repo can "fix" them short of waiting for a docker:28-cli rebuild
-      #    and bumping the pinned digest.
+      # THE ONE REMAINING CRITICAL IS restic, and it cannot be cleared here.
+      # CVE-2026-56854 (golang.org/x/crypto/ssh, vendored v0.52.0, fixed in
+      # 0.55.0) needs a restic release built against x/crypto >= 0.55.0.
+      # restic v0.19.1 IS the newest release (checked 2026-09-06 against the
+      # GitHub releases API) and its go.mod:37 pins x/crypto v0.52.0, so there
+      # is nothing to bump to. It clears when restic ships v0.19.2 or v0.20.0;
+      # bump RESTIC_VER in docker/Dockerfile then. Our own binary is
+      # unaffected — backend/go.mod is already on x/crypto v0.55.0.
       #
-      # So the blocker is no longer the backup tools, it is the Docker CLI. Do
-      # not graduate to `exit-code: '1'` until those 104 are triaged — most
-      # likely by scoping the gate to the base image and app/server, and
-      # tracking the CLI binaries by digest-bump cadence instead.
+      # The Docker CLI is three static Go binaries copied from docker:29-cli
+      # rather than distro packages, so Trivy resolves their module graphs and
+      # reports findings the packaging never surfaced. Nothing in this repo can
+      # "fix" one short of an upstream rebuild and a digest bump — which is
+      # exactly what took the CLI's three targets from 25 findings to 1.
       #
       # READING THE `Fixed Version` COLUMN: it is the *product* version, which
       # is not always a Go module version. Trivy reports CVE-2026-34040 in
@@ -517,6 +531,35 @@ jobs:
           # The DB is already in the action's cache dir; never fetch mid-scan.
           TRIVY_SKIP_DB_UPDATE: 'true'
 
+      # The SAME scan again, in JSON, purely so the coverage assertion below has
+      # an instrument that lists TARGETS rather than findings.
+      #
+      # WHY A SECOND SCAN and not a `trivy convert` of one report: convert
+      # rebuilds the table from a report whose scanner set it cannot recover,
+      # and drops the summary header ("No enabled scanners found. Summary table
+      # will not be displayed." — OBSERVED locally with trivy 0.70.0 on
+      # 2026-09-06). The table above is what humans read, so it stays produced
+      # first-hand and byte-for-byte as before. The image is already local and
+      # TRIVY_SKIP_DB_UPDATE keeps this off the network, so the second pass is
+      # analysis time only.
+      #
+      # Scoping is deliberately IDENTICAL to the table scan. If they diverge,
+      # the assertion stops describing the report on the summary page.
+      - name: Scan image (JSON, for the coverage assertion)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: capstan:scan
+          format: json
+          output: trivy.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          scanners: vuln
+          exit-code: '0'
+          skip-setup-trivy: 'true'
+          cache: 'false'
+        env:
+          TRIVY_SKIP_DB_UPDATE: 'true'
+
       # An advisory scan nobody reads is theatre. Put the table on the run's
       # summary page so the findings are one click from the check, not four.
       #
@@ -540,10 +583,31 @@ jobs:
           {
             echo '## Trivy — image scan (advisory, not gated)'
             echo
-            echo 'Covers the Alpine runtime base and the vendored restic/rclone binaries.'
+            echo 'Covers the debian:trixie-slim runtime base, the Capstan server binary,'
+            echo 'the Docker CLI binaries from docker:29-cli, and the vendored restic/rclone binaries.'
             echo 'Unfixed advisories are excluded.'
             echo
             echo '```'
             echo "${REPORT}"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      # THE ONE GATING STEP IN THIS JOB. The scan above is advisory about what
+      # it FOUND; this is not advisory about what it LOOKED AT.
+      #
+      # Trivy's table omits a target that produced no rows, so "app/server is
+      # not in the report" is ambiguous between "scanned, clean" and "never
+      # scanned". Both readings were live in this repo until 2026-09-06
+      # (agent-os-h1hr), and the second one turns a green advisory scan into
+      # theatre: a Dockerfile change that stops Trivy resolving the Go binary,
+      # or a base image whose package DB it cannot read, REMOVES findings and
+      # looks like an improvement.
+      #
+      # --self-test runs first and on every run, deliberately. A gate only ever
+      # observed green has not been shown to be a gate; the self-test drives the
+      # assertion red against doctored reports on the same commit the green is
+      # claimed on. It needs no network and no image.
+      - name: Assert the scan still covers app/server and the OS base
+        run: |
+          bash "${GITHUB_WORKSPACE}/scripts/check-trivy-coverage.sh" --self-test
+          bash "${GITHUB_WORKSPACE}/scripts/check-trivy-coverage.sh" trivy.json
