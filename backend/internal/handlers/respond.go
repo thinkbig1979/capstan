@@ -53,6 +53,34 @@ func renderResultWithStatus(c *gin.Context, status int, r truth.ActionResult) {
 	c.JSON(status, r)
 }
 
+// routineErrorCodes lists the AppError codes whose 4xx responses are ROUTINE
+// NEGATIVE ANSWERS — a true, expected fact about a resource — rather than
+// client errors. handleError marks these so middleware.LoggingMiddleware logs
+// them at Info instead of Warn (agent-os-prfj).
+//
+// EVERY MEMBER IS LISTED EXPLICITLY, one code at a time. This is the class
+// boundary, and it is never inferred from the status or the request path:
+// GET /api/v1/git answers 404 for BOTH "this directory is not a git
+// repository" (routine — the frontend asks it of every stack, and most hosts
+// have no git-backed stack at all) and "stack not found" for an unknown
+// stackId (git.go's resolvePathFromStack, models.ErrNotFound — a real client
+// error). Same endpoint, same status, opposite answers; only the code
+// separates them.
+//
+// The list lives here rather than in middleware so middleware carries no
+// opinion about which codes are routine. That is a design preference, not an
+// import constraint — middleware already imports models (middleware/auth.go,
+// middleware/recovery.go), so either placement compiles.
+//
+// Adding a code here silences a WARN for every response carrying it. Before
+// adding one, confirm the code is not ALSO minted for a genuine client error
+// somewhere: models.ErrNotFound would fail that test, which is why the two
+// in-class env.go sites (agent-os-hjmf) cannot join this list and must call
+// middleware.MarkRoutineOutcome directly instead.
+var routineErrorCodes = map[string]bool{
+	models.ErrGitNotRepo: true,
+}
+
 // handleError writes err as a JSON error response, using the AppError's
 // status and code when available and falling back to a generic 500.
 //
@@ -66,6 +94,9 @@ func renderResultWithStatus(c *gin.Context, status int, r truth.ActionResult) {
 func handleError(c *gin.Context, err error) {
 	var appErr *models.AppError
 	if errors.As(err, &appErr) {
+		if routineErrorCodes[appErr.Code] {
+			middleware.MarkRoutineOutcome(c)
+		}
 		logServerFault(c, appErr.Status, appErr.Code, err)
 		c.JSON(appErr.Status, appErr)
 		return
