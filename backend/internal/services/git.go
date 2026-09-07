@@ -278,12 +278,58 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		return nil, s.pullFailure(dirPath, user, token, err)
 	}
 
-	currentCommit, _ := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
+	// Checked, not discarded, and for the same reason as the identical call
+	// above (agent-os-x2st). On failure currentCommit is "", which is not a
+	// degraded answer but a meaningless one: previousCommit != "" then makes
+	// headAdvanced TRUE, so PullVerified used to report SUCCESS naming an empty
+	// currentCommit, and every field downstream — the diff, ChangedFiles, the
+	// redeploy decision — is derived from a commit that was never read.
+	// OBSERVED against the pre-fix file, with a post-merge hook repointing
+	// .git/HEAD at a branch that does not exist:
+	// `outcome = "success" ... pullResult &{PreviousCommit:fa1229d ... CurrentCommit: ...}`.
+	//
+	// This returns an error rather than a partial because the two adjacent
+	// reads of HEAD should not disagree about what an unreadable HEAD means.
+	// The cost is that PullVerified wraps it as "git pull failed" when the pull
+	// itself did land; the wrapped cause below names the real fault, and a
+	// re-run of an --ff-only pull is a no-op, so erring toward "failed" is the
+	// safe direction.
+	currentCommit, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get HEAD after pull: %w", err)
+	}
 
 	changedFiles := []string{}
+	diffError := ""
 	if previousCommit != currentCommit {
 		diffOutput, err := s.gitCommandWithCreds(dirPath, user, token, "diff", "--name-only", previousCommit, currentCommit)
-		if err == nil && diffOutput != "" {
+		switch {
+		case err != nil:
+			// This branch runs only because the ref MOVED, so "no files
+			// changed" is the one answer it cannot legitimately produce — yet
+			// that is exactly what a failed diff used to leave behind, silently
+			// and at no log level (agent-os-x2st). Both consumers branch on the
+			// empty list and read it as "no stack is affected": PullVerified
+			// early-returns Success at the redeploy check below, and
+			// stackFilesChanged returns false for every stack. The stack then
+			// keeps running the OLD compose content while the worktree sits on
+			// the new commit, and the operator is told the pull succeeded.
+			// Recording the cause is what lets PullVerified tell the two apart.
+			// OBSERVED against the pre-fix file, with a post-merge hook deleting
+			// the loose object for ORIG_HEAD: `outcome = "success" (reason
+			// "pulled new commits", changedFiles [])` on a ref that had moved.
+			//
+			// err is safe to surface: gitCommandWithCreds redacts the token out
+			// of the git output it wraps.
+			diffError = err.Error()
+			slog.Error("Git diff failed after pull; changed files unknown, redeploy will be skipped",
+				"path", dirPath,
+				"previousCommit", previousCommit,
+				"currentCommit", currentCommit,
+				"error", err)
+		case diffOutput != "":
+			// gitCommandWithCreds TrimSpaces its output, so a successful but
+			// empty diff cannot reach Split and produce a spurious [""].
 			changedFiles = strings.Split(diffOutput, "\n")
 		}
 	}
@@ -292,6 +338,7 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 		PreviousCommit: previousCommit,
 		CurrentCommit:  currentCommit,
 		ChangedFiles:   changedFiles,
+		DiffError:      diffError,
 	}, nil
 }
 
@@ -417,6 +464,7 @@ func gitExitCode(err error) int {
 //   - no new commits (HEAD unchanged) → no_change
 //   - HEAD advanced, all redeploys verified-success → success
 //   - HEAD advanced, ≥1 redeploy failed → partial (details.failedRedeploys)
+//   - HEAD advanced, the diff naming the changed files failed → partial (details.diffError)
 //   - pull itself failed → failed
 //
 // docker may be nil; in that case redeploy is skipped even when requested.
@@ -431,6 +479,22 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 	if !headAdvanced {
 		return truth.NoChange("already up to date",
 			truth.KV("commit", pullResult.CurrentCommit),
+		), pullResult
+	}
+
+	// A failed diff must be caught BEFORE the redeploy early return, and is
+	// deliberately NOT gated on redeploy or docker (agent-os-x2st). The diff in
+	// pullCLI runs unconditionally, so its failure is unconditional too: what
+	// the early return below would otherwise emit is
+	// truth.KV("changedFiles", []), a positive claim that nothing changed, on a
+	// ref that demonstrably moved. That claim is false whether or not a
+	// redeploy was requested. Same idiom as the stack-list fault further down —
+	// the pull landed, a follow-up read did not, so the outcome is partial.
+	if pullResult.DiffError != "" {
+		return truth.Partial("pulled new commits but could not diff them to find changed files",
+			truth.KV("previousCommit", pullResult.PreviousCommit),
+			truth.KV("currentCommit", pullResult.CurrentCommit),
+			truth.KV("diffError", pullResult.DiffError),
 		), pullResult
 	}
 

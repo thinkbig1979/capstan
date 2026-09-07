@@ -120,6 +120,21 @@ type PullResult struct {
 	PreviousCommit string   `json:"previousCommit"`
 	CurrentCommit  string   `json:"currentCommit"`
 	ChangedFiles   []string `json:"changedFiles"`
+
+	// DiffError records that the `git diff` naming the changed files FAILED,
+	// which an empty ChangedFiles cannot express on its own: the diff only runs
+	// when HEAD actually moved, so "nothing changed" is the one answer that
+	// cannot be correct there (agent-os-x2st). Consumers branch on the file
+	// list — PullVerified's redeploy early return and stackFilesChanged both
+	// treat empty as "no stack is affected" — so without this field a failed
+	// diff silently skips the redeploy and reports success.
+	//
+	// json:"-" is documentation, not a fix: PullResult never crosses the HTTP
+	// boundary. handlers/git.go:155-170 uses it only for formatPullDetail's
+	// audit string and renders the ActionResult instead, so the frontend's
+	// changedFiles comes from truth.KV inside PullVerified. The tag pins that
+	// this struct is internal rather than leaving it to be rediscovered.
+	DiffError string `json:"-"`
 }
 
 type LogResult struct {
