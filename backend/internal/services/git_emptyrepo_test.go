@@ -67,11 +67,17 @@ func TestGetStatusCLI_DiscriminatesEmptyRepoFromNonRepo(t *testing.T) {
 	}
 
 	// ARM 3 — a missing directory cannot be a repository either.
+	//
+	// The STATUS is unchanged; the expected CODE moved from ErrGitNotRepo to
+	// ErrStackDirMissing in agent-os-n2df, which gave that condition a code of
+	// its own so an unmounted stacks volume stops presenting as a git problem.
+	// This arm's job here is unchanged: it is still the control proving the
+	// empty-repo diagnosis discriminates rather than renaming every failure.
 	missing := filepath.Join(t.TempDir(), "gone")
 	if _, err := svc.getStatusCLI(missing); err != nil {
-		if status, code := statusFor(err); status != http.StatusNotFound || code != models.ErrGitNotRepo {
+		if status, code := statusFor(err); status != http.StatusNotFound || code != models.ErrStackDirMissing {
 			t.Errorf("CONTROL, directory is gone: got HTTP %d (%s), want 404 (%s)",
-				status, code, models.ErrGitNotRepo)
+				status, code, models.ErrStackDirMissing)
 		}
 	} else {
 		t.Error("precondition: getStatusCLI unexpectedly succeeded on a missing directory")

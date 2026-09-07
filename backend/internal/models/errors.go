@@ -21,16 +21,34 @@ package models
 // Reaching for ErrSessionExpired on a credential path recreates agent-os-318,
 // where mistyping your own password bounced you to /login mid-session.
 const (
-	ErrUnauthorized          = "UNAUTHORIZED"
-	ErrForbidden             = "FORBIDDEN"
-	ErrNotFound              = "NOT_FOUND"
-	ErrValidation            = "VALIDATION_ERROR"
-	ErrComposeValidation     = "COMPOSE_VALIDATION_ERROR"
-	ErrDockerUnavailable     = "DOCKER_UNAVAILABLE"
-	ErrDockerOperation       = "DOCKER_OPERATION"
-	ErrGitDirty              = "GIT_DIRTY"
-	ErrGitConflict           = "GIT_CONFLICT"
-	ErrGitNotRepo            = "GIT_NOT_REPO"
+	ErrUnauthorized      = "UNAUTHORIZED"
+	ErrForbidden         = "FORBIDDEN"
+	ErrNotFound          = "NOT_FOUND"
+	ErrValidation        = "VALIDATION_ERROR"
+	ErrComposeValidation = "COMPOSE_VALIDATION_ERROR"
+	ErrDockerUnavailable = "DOCKER_UNAVAILABLE"
+	ErrDockerOperation   = "DOCKER_OPERATION"
+	ErrGitDirty          = "GIT_DIRTY"
+	ErrGitConflict       = "GIT_CONFLICT"
+	ErrGitNotRepo        = "GIT_NOT_REPO"
+	// ErrGitNoCommits is a repository that exists but has no commits yet — the
+	// state `git init` leaves behind until the first commit. It is a ROUTINE
+	// negative answer, not a client error, and it needs a code of its own
+	// rather than ErrNotFound precisely because handlers/respond.go's
+	// routineErrorCodes keys on the code: ErrNotFound is also the genuine
+	// "Stack not found" error at 20 sites, so the two must not share (agent-os-n2df).
+	ErrGitNoCommits = "GIT_NO_COMMITS"
+	// ErrStackDirMissing is a stack whose configured directory does not exist
+	// on disk. It is NOT routine and is deliberately absent from
+	// handlers/respond.go's routineErrorCodes: an unmounted stacks volume
+	// produces it for every stack at once, and that must stay a warning.
+	//
+	// It exists so that condition stops being answered as ErrGitNotRepo, which
+	// sent an operator looking for a git problem when the volume was the fault.
+	// The 404 is deliberate and unchanged from agent-os-pawv, whose contract
+	// was that this answer be a 404 that SAYS WHY; only the code moves, and it
+	// now says why more precisely than ErrGitNotRepo did (agent-os-n2df).
+	ErrStackDirMissing       = "STACK_DIR_MISSING"
 	ErrGitRemoteUnreachable  = "GIT_REMOTE_UNREACHABLE"
 	ErrPathTraversal         = "PATH_TRAVERSAL"
 	ErrDuplicateStack        = "DUPLICATE_STACK"

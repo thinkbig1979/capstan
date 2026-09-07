@@ -83,6 +83,24 @@ func TestHandleError_RoutineOutcomeLogLevel(t *testing.T) {
 			want: "WARN",
 		},
 		{
+			// The must-still-log arm for agent-os-n2df. STACK_DIR_MISSING is a
+			// 404 on this same endpoint, minted by the same gitFailure that
+			// mints the routine GIT_NOT_REPO — and it must stay a warning. An
+			// unmounted stacks volume produces it for every stack at once, so
+			// silencing it would trade the noise this bead removed for a real
+			// incident going quiet.
+			name: "STACK_DIR_MISSING 404 is a server-side incident: still Warn",
+			err:  models.NewAppError(http.StatusNotFound, models.ErrStackDirMissing, "Stack directory does not exist on disk"),
+			want: "WARN",
+		},
+		{
+			// GIT_NO_COMMITS is routine like GIT_NOT_REPO: a repo that exists
+			// but has no commits is a normal state, asked about on every visit.
+			name: "GIT_NO_COMMITS 404 is routine: Info",
+			err:  models.NewAppError(http.StatusNotFound, models.ErrGitNoCommits, "Repository has no commits yet"),
+			want: "INFO",
+		},
+		{
 			name: "UNAUTHORIZED 401 still Warn",
 			err:  models.NewAppError(http.StatusUnauthorized, models.ErrUnauthorized, "Unauthorized"),
 			want: "WARN",
@@ -181,7 +199,16 @@ func TestHandleError_MarksOnlyListedCodes(t *testing.T) {
 		want bool
 	}{
 		{models.ErrGitNotRepo, true},
+		// GIT_NO_COMMITS earned its own code in agent-os-n2df precisely so it
+		// could be listed here without dragging ErrNotFound's 20 genuine
+		// "Stack not found" sites along with it. The row below is the other
+		// half of that argument and must stay false.
+		{models.ErrGitNoCommits, true},
 		{models.ErrNotFound, false},
+		// STACK_DIR_MISSING is minted by the same function as GIT_NOT_REPO and
+		// is deliberately NOT routine: an unmounted stacks volume must stay a
+		// warning (agent-os-n2df).
+		{models.ErrStackDirMissing, false},
 		{models.ErrStackNotFound, false},
 		{models.ErrUnauthorized, false},
 		{models.ErrForbidden, false},

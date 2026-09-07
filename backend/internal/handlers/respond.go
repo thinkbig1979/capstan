@@ -77,8 +77,22 @@ func renderResultWithStatus(c *gin.Context, status int, r truth.ActionResult) {
 // somewhere: models.ErrNotFound would fail that test, which is why the two
 // in-class env.go sites (agent-os-hjmf) cannot join this list and must call
 // middleware.MarkRoutineOutcome directly instead.
+//
+// The second thing to confirm is that the code means ONE thing at its mint.
+// GIT_NOT_REPO only just earned its place: services/git.go's gitFailure used
+// to answer it for every way its probe could fail, so an unmounted stacks
+// volume and an image with no git binary both arrived here as "Not a git
+// repository". Listing it while that was true would have taken two real
+// operator incidents off the log, because a code is only as routine as its
+// narrowest mint. gitFailure now splits "the probe ran and found no
+// repository" from "the probe could not run" on the error TYPE, and only the
+// former keeps this code; the latter is a plain wrapped error that becomes a
+// 500 and logs its chain. See services/git.go gitFailure, which carries the
+// measurements and one accepted limit (an unreadable .git is still
+// indistinguishable from an absent one, because git reports them identically).
 var routineErrorCodes = map[string]bool{
-	models.ErrGitNotRepo: true,
+	models.ErrGitNotRepo:   true,
+	models.ErrGitNoCommits: true,
 }
 
 // handleError writes err as a JSON error response, using the AppError's

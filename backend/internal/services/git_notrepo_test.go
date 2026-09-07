@@ -96,19 +96,28 @@ func TestGitEntryPoints_NotARepoIsA404(t *testing.T) {
 		{"GetLogForFile", func(d string) error { _, e := svc.GetLogForFile(d, ".", 50); return e }},
 	}
 
+	// wantCode was implicit (always models.ErrGitNotRepo) until agent-os-n2df
+	// split gitFailure. The STATUS contract below is untouched — every row
+	// still wants exactly what pawv decided it should want. Only "directory is
+	// gone" changed code, because that condition now has one of its own:
+	// answering it GIT_NOT_REPO sent an operator looking for a git problem when
+	// an unmounted stacks volume was the fault. That is a supersession of pawv's
+	// CODE expectation in service of pawv's own stated reason, which is the
+	// `why` string kept verbatim below.
 	dirs := []struct {
-		name string
-		path string
-		want int
-		why  string
+		name     string
+		path     string
+		want     int
+		wantCode string
+		why      string
 	}{
-		{"not a repo", t.TempDir(), http.StatusNotFound,
+		{"not a repo", t.TempDir(), http.StatusNotFound, models.ErrGitNotRepo,
 			"the whole point of the bead"},
-		{"directory is gone", missing, http.StatusNotFound,
+		{"directory is gone", missing, http.StatusNotFound, models.ErrStackDirMissing,
 			"no directory cannot be a repository"},
-		{"subdirectory of a repo", sub, http.StatusOK,
+		{"subdirectory of a repo", sub, http.StatusOK, "",
 			"REGRESSION GUARD: the git CLI walks up to the parent .git and serves logs today"},
-		{"bare repo with commits", bare, http.StatusOK,
+		{"bare repo with commits", bare, http.StatusOK, "",
 			"REGRESSION GUARD: a bare repo has commits and serves logs today"},
 	}
 
@@ -119,9 +128,9 @@ func TestGitEntryPoints_NotARepoIsA404(t *testing.T) {
 				t.Errorf("%s / %s: got HTTP %d (%s), want %d — %s",
 					d.name, ep.name, got, code, d.want, d.why)
 			}
-			if d.want == http.StatusNotFound && code != models.ErrGitNotRepo {
+			if d.wantCode != "" && code != d.wantCode {
 				t.Errorf("%s / %s: got code %q, want %q — a 404 that does not say why is no better than the 500 it replaced",
-					d.name, ep.name, code, models.ErrGitNotRepo)
+					d.name, ep.name, code, d.wantCode)
 			}
 		}
 	}
