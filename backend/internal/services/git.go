@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os/exec"
 	"strconv"
@@ -89,12 +90,32 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 			return nil, repoErr
 		}
 		if s.hasUnbornHead(dirPath) {
-			// ErrNotFound rather than a dedicated GIT_NO_COMMITS: adding a code
-			// means editing internal/models/errors.go, and nothing branches on
-			// git codes on the client side (the frontend renders the message),
-			// so the honest message is the whole of the user-visible fix. The
-			// 404 is unchanged from before, so only the diagnosis moves.
-			return nil, models.NewAppError(404, models.ErrNotFound, "Repository has no commits yet")
+			// A dedicated code, NOT the generic ErrNotFound. agent-os-xmtf
+			// deliberately chose ErrNotFound here, reasoning that adding a code
+			// costs an edit to internal/models/errors.go while "nothing
+			// branches on git codes on the client side (the frontend renders
+			// the message), so the honest message is the whole of the
+			// user-visible fix". That premise expired with agent-os-prfj:
+			// handlers/respond.go's routineErrorCodes now branches on the code
+			// SERVER-side to pick a log level, so a shared code is no longer
+			// free.
+			//
+			// A repository with no commits is a routine negative answer — the
+			// state `git init` leaves behind, asked about on every page visit
+			// like the non-repo case — but ErrNotFound is ALSO the genuine
+			// "Stack not found" client error at 20 sites, so listing ErrNotFound
+			// as routine would silence those too. The codes have to separate
+			// before the levels can.
+			//
+			// The other way to mark a routine outcome, calling
+			// middleware.MarkRoutineOutcome at the response site the way
+			// agent-os-hjmf will for handlers/env.go, is not available here:
+			// this is the service layer and has no gin.Context — internal/services
+			// imports gin nowhere. So the code is the only route (agent-os-n2df).
+			//
+			// The Message is unchanged, which is the half agent-os-xmtf actually
+			// fixed and the half git_parity_yo9e_test.go asserts on.
+			return nil, models.NewAppError(404, models.ErrGitNoCommits, "Repository has no commits yet")
 		}
 		// A repository, with a HEAD that resolves, whose branch name still could
 		// not be read: unusual enough that naming it would be another guess.
@@ -592,11 +613,48 @@ func (s *GitService) GetLog(dirPath string, limit, offset int) (*models.LogResul
 	return s.getLogCLI(dirPath, limit, offset)
 }
 
-// gitFailure classifies a failed git invocation in dirPath.
+// gitFailure classifies a failed git invocation in dirPath, into one of three
+// answers:
 //
-// It returns the error the caller should surface, or nil when the failure is not
-// attributable to the directory's repository state and the caller should wrap
-// generically as before (agent-os-pawv).
+//   - a typed 404 GIT_NOT_REPO, when the probe RAN and reported no repository;
+//   - a plain wrapped error, when the probe COULD NOT RUN at all, which is a
+//     server fault and becomes a 500 at the HTTP boundary;
+//   - nil, when the failure is not attributable to the directory's repository
+//     state and the caller should wrap generically as before (agent-os-pawv).
+//
+// The first two used to be one answer, and separating them is agent-os-prfj.
+// The probe branched on `probeErr != nil` and nothing finer, so a missing
+// stacks directory and a missing git binary both became "Not a git
+// repository" — a 404 telling an operator to point the stack somewhere else
+// when the real fault was that the volume was not mounted or the image had no
+// git in it. That was already a misdiagnosis at WARN; it became invisible once
+// GIT_NOT_REPO was marked a routine outcome and dropped to INFO
+// (handlers/respond.go routineErrorCodes), so the split is a precondition for
+// that downgrade rather than a tidy-up alongside it.
+//
+// The discriminator is the ERROR TYPE, never the message text: gitExitCode
+// returns the process's exit status when an *exec.ExitError is in the chain
+// and -1 when no process ever exited. Text matching is not an option here for
+// the reason documented at length below — git translates its output, so a
+// string match silently stops firing on a non-English host (agent-os-vq3p).
+// MEASURED on this host through gitCommandWithCreds' exact %w wrapping:
+//
+//	genuine non-git directory   -> gitExitCode 128  ("fatal: not a git repository")
+//	missing directory (chdir)   -> gitExitCode  -1  ("chdir ...: no such file or directory")
+//	missing git binary (lookup) -> gitExitCode  -1  ("exec: \"git\": executable file not found in $PATH")
+//
+// Any exit status at all means git ran and answered; 128 is what it uses
+// today, but the branch does not depend on that number. A negative result
+// covers both "never started" and "killed by a signal", neither of which is
+// git answering the question.
+//
+// KNOWN LIMIT, tested and accepted: a .git the server's uid cannot read is
+// NOT separated by this. MEASURED as uid 1000, `chmod 000 .git` then
+// `git rev-parse --git-dir` exits 128 with a message byte-identical to a
+// genuine non-repository's, so git itself does not distinguish the two at the
+// probe. Separating that case needs a different mechanism (stat'ing the .git
+// path on its own), not a finer reading of this one, and no amount of message
+// parsing would help even if parsing were allowed.
 //
 // Before this, a stack directory that was not a git repository produced a typed
 // 404 from GET /git and a generic 500 from /git/log, /git/diff and the file-log
@@ -647,10 +705,36 @@ func (s *GitService) gitFailure(dirPath string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if _, probeErr := s.gitCommandWithCreds(dirPath, "", "", "rev-parse", "--git-dir"); probeErr != nil {
-		return models.NewAppError(404, models.ErrGitNotRepo, "Not a git repository")
+	_, probeErr := s.gitCommandWithCreds(dirPath, "", "", "rev-parse", "--git-dir")
+	if probeErr == nil {
+		return nil
 	}
-	return nil
+	if gitExitCode(probeErr) < 0 {
+		// The probe never ran. Two sub-cases, and they deserve different
+		// answers because only one of them is a fact about the resource.
+		//
+		// The directory not existing IS a fact about the resource, so it keeps
+		// agent-os-pawv's 404 — pawv's contract was that this answer be "a 404
+		// that does not say why is no better than the 500 it replaced", and a
+		// dedicated code says why more precisely than ErrGitNotRepo did. It is
+		// deliberately NOT in routineErrorCodes, so it still logs at WARN: an
+		// unmounted stacks volume produces it for every stack at once and must
+		// stay visible (agent-os-n2df).
+		if errors.Is(probeErr, fs.ErrNotExist) {
+			return models.NewAppError(404, models.ErrStackDirMissing, "Stack directory does not exist on disk")
+		}
+		// Anything else that stopped git from running — no git binary in the
+		// image, a directory that exists but cannot be entered — says nothing
+		// about the repository and is a server fault. Not an *models.AppError
+		// on purpose: handleError's fallback turns this into a 500
+		// INTERNAL_ERROR and logServerFault logs the chain, which is what those
+		// need. A typed AppError would also have to carry a Cause, and
+		// models/errors.go asks that causes be attached at the HTTP boundary
+		// rather than inside a service. Same shape as pullFailure's
+		// "the divergence probe could not run" branch above.
+		return fmt.Errorf("the git repository probe could not run in %s: %w", dirPath, probeErr)
+	}
+	return models.NewAppError(404, models.ErrGitNotRepo, "Not a git repository")
 }
 
 // hasUnbornHead reports whether dirPath's repository has a HEAD pointing at a
