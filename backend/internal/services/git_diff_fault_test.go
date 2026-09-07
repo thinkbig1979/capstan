@@ -39,10 +39,13 @@ import (
 //  1. The object must be LOOSE. A packed object makes the hook's rm a silent
 //     no-op. OBSERVED (git 2.47.3): a local-path `git clone` of a bare origin
 //     leaves objects loose and .git/objects/pack empty, because git's local
-//     clone path hardlinks objects rather than negotiating a pack — so the
-//     plain clone this fixture shares with git_faultreach_test.go:299 is
-//     sufficient. assertLooseObject pins that, since the day it stops being
-//     true is the day this test starts passing vacuously.
+//     clone path hardlinks objects rather than negotiating a pack —
+//     `git count-objects -v` in such a clone reports `count: 3, in-pack: 0,
+//     packs: 0`. So the plain clone this fixture shares with
+//     git_faultreach_test.go:299 is sufficient. assertLooseObject pins that,
+//     since the day it stops being true is the day this test starts passing
+//     vacuously; see its own comment for why the assertion must be made
+//     against the CLONE's path and not the origin's.
 //  2. post-merge's exit status must be ignored by git. It is documented as
 //     ignored, and the hook here ends `exit 1` to exercise that; VERIFIED, not
 //     cited — `git pull --ff-only` exits 0 with the hook installed. If a
@@ -126,6 +129,23 @@ func pullDiffFixture(t *testing.T, hookScript string) (workDir, previousCommit s
 // assertLooseObject fails unless commit's object file is loose in dir, so a
 // packed object is reported as a broken fixture rather than passing as a clean
 // tree. See precondition 1 above.
+//
+// dir MUST be the CLONE, never the bare origin, and the hook deletes the
+// CLONE's entry for the same reason. A local-path `git clone` HARDLINKS objects
+// out of the origin rather than copying them, so the two paths are one file
+// with two names: OBSERVED, `stat -c 'inode=%i nlink=%h'` on both gives
+// `inode=5375248 nlink=2` for the same object. `rm` in the clone therefore
+// unlinks only the clone's name — after it, `git cat-file -t <commit>` in the
+// clone gives `fatal: git cat-file: could not get object info` while the same
+// command in the origin still answers `commit`, which is exactly the asymmetry
+// this fixture needs.
+//
+// Two plausible "tidies" would silently disarm it, and both leave the test
+// green while it tests nothing: asserting against the ORIGIN's path (which
+// stays populated no matter what the hook does), or cloning with
+// --no-hardlinks (which is fine on its own, but invites the first mistake by
+// making the two trees look independent). The pull must also never re-fetch the
+// deleted object, or it would simply come back.
 func assertLooseObject(t *testing.T, dir, commit string) {
 	t.Helper()
 	path := filepath.Join(dir, ".git", "objects", commit[:2], commit[2:])
