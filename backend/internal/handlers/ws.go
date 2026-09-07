@@ -795,11 +795,32 @@ func serveWS(c *gin.Context, db *database.DB, jwtSecret string, authDisabled boo
 		return nil, nil, errors.Join(errWSRefused, err)
 	}
 
-	// Close-then-Remove, not the other way round: waitForServerSideClose
-	// (monitoring_metrics_close_test.go) polls cm.Count()==0 as
-	// synchronisation and then asserts the underlying socket is actually
-	// closed. Remove-then-Close would let Count() reach 0 before the socket
-	// closes, narrowing that test's margin (agent-os-o1jp.1, H8).
+	// Close-then-Remove, and NOTHING PINS THIS ORDER (agent-os-py5j). It is
+	// kept exactly as it is, but a flip would go undetected:
+	//
+	//   - No production code reads the manager's Count() or Get(): every
+	//     caller of either is a _test.go. Swept by TYPE rather than by
+	//     receiver name — every non-test mention of ConnectionManager outside
+	//     this file is a struct field, a constructor parameter, wiring in
+	//     cmd/server/main.go, or a comment.
+	//   - waitForServerSideClose (monitoring_metrics_close_test.go) cannot
+	//     see a flip either: Close and Remove are adjacent statements and it
+	//     samples every 2ms. ORCHESTRATOR-OBSERVED on agent-os-c744 with the
+	//     old fixed beat deleted — a realistic adjacent swap passes 20/20,
+	//     while an artificial Remove/10ms/Close fails 5/5. This comment used
+	//     to claim that helper guarded the order; it never did.
+	//   - "cm empty implies socket closed" is not a codebase invariant, so it
+	//     is not a surviving reason either: closeMatching takes the OPPOSITE
+	//     order deliberately — delete under the lock, unlock, write the close
+	//     frames, sleep grace (100ms from CloseAll), and only then
+	//     Conn.Close().
+	//
+	// Why this order and not the other, then: MINIMUM DELTA, not safety. The
+	// agent-os-o1jp.1 refactor converged all 8 sites onto the majority that
+	// pre-refactor LIFO already produced. (That bead's H8 pointer, which this
+	// comment used to carry, was retracted in the tracker on 2026-09-04 — do
+	// not go looking for it.) So the order is safe to reason about, not
+	// sacred.
 	//
 	// This order is unchanged (pre-refactor already registered Remove before
 	// Close, so LIFO already gave Close-then-Remove) at dashboard.go,

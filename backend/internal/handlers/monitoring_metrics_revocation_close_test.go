@@ -13,7 +13,7 @@ import (
 //
 // There are two routes, with OPPOSITE orderings:
 //
-//   - Route 1, serveWS's release (ws.go:811-814): one sync.OnceFunc doing
+//   - Route 1, serveWS's release (the sync.OnceFunc it returns in ws.go):
 //     Close() and then Remove(). Count() reaching 0 already implies a closed
 //     socket, so any probe shape works here.
 //   - Route 2, closeMatching (ws.go:278-315), reached from CloseAll (:205),
