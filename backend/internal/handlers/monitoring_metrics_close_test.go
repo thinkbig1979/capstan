@@ -226,9 +226,37 @@ func isServerSideClosed(conn *Connection) bool {
 	return errors.Is(err, net.ErrClosed)
 }
 
-// waitForServerSideClose waits for the handler goroutine to return (cm empties
-// via its deferred Remove) and then reports whether the connection was
-// actually closed by that point.
+// waitForServerSideClose waits for cm to empty and then polls until the
+// connection's underlying socket is actually closed, reporting false at its
+// deadline rather than t.Fatal-ing, so each caller's own message is what fires.
+//
+// It polls rather than probing once because cm.Count() reaching 0 does NOT
+// imply a closed socket on every route, and there are two routes with opposite
+// orderings:
+//
+//   - serveWS's release (ws.go:811-814) is one sync.OnceFunc doing Close()
+//     and then Remove(). Here an emptied manager does imply a closed socket.
+//   - closeMatching (ws.go:278-315), reached from CloseAll / CloseForSession /
+//     CloseForUser, is reversed by design: it deletes from cm.connections at
+//     :296, unlocks, writes the close frames, sleeps grace at :307, and only
+//     calls Conn.Close() at :312. CloseAll passes 100ms (ws.go:205).
+//
+// So on the revocation route the socket closes up to a production
+// time.Sleep(grace) AFTER Count() hits 0, and no fixed beat covers both routes:
+// on route 1 there is nothing to wait for, and on route 2 the old 20ms simply
+// expired inside CloseAll's 100ms grace and reported a live socket as never
+// closed. TestMonitoringMetricsWS_RevocationRouteClosesConnection pins that
+// (base 20/20 RED, polled 20/20 green). What exceeds the beat is a sleep in
+// shipped code, not network latency, so polling is the shape that is correct
+// on both routes rather than a wider guess at the right constant.
+//
+// What this does NOT buy: it does not detect a Close/Remove ordering swap on
+// route 1. Adjacent statements are sub-microsecond apart and this loop samples
+// every 2ms, so such a flip is invisible to a poll, to a fixed beat, and to a
+// one-shot alike — OBSERVED by the orchestrator on agent-os-c744, sleep
+// deleted, five callers: an artificial Remove/10ms/Close mutant fails 5/5
+// while a realistic adjacent swap passes 20/20. Do not cite this helper as a
+// guard on that ordering (agent-os-c744).
 func waitForServerSideClose(t *testing.T, conn *Connection, cm *ConnectionManager) bool {
 	t.Helper()
 	// Unlike firstConnection's, this condition is MONOTONE — once the handler
@@ -237,16 +265,28 @@ func waitForServerSideClose(t *testing.T, conn *Connection, cm *ConnectionManage
 	// (agent-os-gs7r; the same class as agent-os-fzqb's tests, and the reason
 	// this one never showed up in the flake corpus).
 	guard := hangGuardDeadline(t)
-	for {
-		if cm.Count() == 0 {
-			// Close() (this fix) runs, via defer, before Remove() — but give
-			// a short beat for the network-level close to complete.
-			time.Sleep(20 * time.Millisecond)
-			return isServerSideClosed(conn)
-		}
-
+	for cm.Count() != 0 {
 		if !time.Now().Before(guard) {
 			t.Fatal("handler never returned: cm never emptied")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// A SEPARATE deadline, recomputed here, and probed BEFORE it is consulted.
+	// Both halves of that are load-bearing. Reusing the loop above's `guard`
+	// would give this poll zero iterations whenever cm happened to empty near
+	// the cap, silently restoring the one-shot probe under exactly the load
+	// this poll exists to survive; and checking any deadline before the first
+	// probe would do the same on a guard that is already spent. Probe first,
+	// then decide whether there is budget to probe again.
+	closeGuard := hangGuardDeadline(t)
+	for {
+		if isServerSideClosed(conn) {
+			return true
+		}
+
+		if !time.Now().Before(closeGuard) {
+			return false
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
