@@ -286,3 +286,55 @@ describe('BackupToggle — last run status indicator', () => {
     expect(screen.queryByLabelText('Last backup was interrupted')).not.toBeInTheDocument()
   })
 })
+
+// ─── Tests: showLastRunStatus suppression ─────────────────────────────────────
+
+describe('BackupToggle — showLastRunStatus=false suppresses the icon', () => {
+  // agent-os-lak4.5: statusData.lastRun is install-wide, not per-stack, so a
+  // multi-row table would render the same icon on every row and assert an
+  // outcome for stacks that were never backed up. The table opts out.
+
+  it('renders no success icon when showLastRunStatus is false', () => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatusWithLastRun('success'))
+    render(<BackupToggle stackId={STACK_ID} showLastRunStatus={false} />)
+
+    expect(screen.queryByLabelText('Last backup succeeded')).not.toBeInTheDocument()
+  })
+
+  it('renders no failure icon when showLastRunStatus is false', () => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatusWithLastRun('failed'))
+    render(<BackupToggle stackId={STACK_ID} showLastRunStatus={false} />)
+
+    expect(screen.queryByLabelText('Last backup failed')).not.toBeInTheDocument()
+  })
+
+  it('renders no interrupted icon when showLastRunStatus is false', () => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeStatusWithLastRun('interrupted'),
+    )
+    render(<BackupToggle stackId={STACK_ID} showLastRunStatus={false} />)
+
+    expect(screen.queryByLabelText('Last backup was interrupted')).not.toBeInTheDocument()
+  })
+
+  it('still renders the switch and the stop-policy select when the icon is suppressed', () => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true, 'stop'))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatusWithLastRun('success'))
+    render(<BackupToggle stackId={STACK_ID} showLastRunStatus={false} />)
+
+    expect(screen.getByRole('switch', { name: `Backup stack ${STACK_ID}` })).toBeChecked()
+    expect(screen.getByRole('combobox', { name: /stop policy/i })).toBeInTheDocument()
+  })
+
+  it('renders the success icon when showLastRunStatus is explicitly true', () => {
+    // The must-pass side of the guard: the prop suppresses only when false.
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatusWithLastRun('success'))
+    render(<BackupToggle stackId={STACK_ID} showLastRunStatus />)
+
+    expect(screen.getByLabelText('Last backup succeeded')).toBeInTheDocument()
+  })
+})
