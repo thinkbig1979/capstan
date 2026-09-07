@@ -2540,49 +2540,110 @@ func TestBackupHistory_ClampsLimitToMax(t *testing.T) {
 	assert.Equal(t, float64(101), body["total"], "total still counts every matching run")
 }
 
-// TestBackupHistory_FiltersReachTheQuery proves the query-string parsing is
-// actually wired to the DB filter, both ways on one instrument: the same run is
-// returned when the filter matches and absent when it does not.
+// seedDecorrelatedRuns inserts four runs whose kind, trigger and status cut
+// ACROSS each other rather than partitioning the table the same way, so every
+// filter value selects a different set of ids:
+//
+//	id      kind    trigger    status   started_at
+//	run-a   backup  manual     success  2026-01-01
+//	run-b   backup  scheduled  failed   2026-03-15
+//	run-c   prune   scheduled  failed   2026-06-01
+//	run-d   prune   manual     failed   2026-09-01
+//
+// With only two anti-correlated rows every filter returns "one row or the
+// other", so a clause bound to the wrong column still selects the expected row
+// and the test cannot say which column it filtered on. Here it changes the
+// answer. Mirrors seedFilterRuns in database/backup_test.go.
+func seedDecorrelatedRuns(t *testing.T, db *database.DB) {
+	t.Helper()
+	rows := []models.BackupRun{
+		{ID: "run-a", Kind: "backup", Trigger: "manual", Status: "success", StartedAt: "2026-01-01T00:00:00Z"},
+		{ID: "run-b", Kind: "backup", Trigger: "scheduled", Status: "failed", StartedAt: "2026-03-15T00:00:00Z"},
+		{ID: "run-c", Kind: "prune", Trigger: "scheduled", Status: "failed", StartedAt: "2026-06-01T00:00:00Z"},
+		{ID: "run-d", Kind: "prune", Trigger: "manual", Status: "failed", StartedAt: "2026-09-01T00:00:00Z"},
+	}
+	for i := range rows {
+		require.NoError(t, db.CreateBackupRun(&rows[i]))
+	}
+}
+
+// runIDsFromBody pulls the ordered id list out of a history response.
+func runIDsFromBody(t *testing.T, body map[string]interface{}) []string {
+	t.Helper()
+	runs, ok := body["runs"].([]interface{})
+	require.True(t, ok, "runs must be an array")
+	ids := make([]string, 0, len(runs))
+	for _, r := range runs {
+		m, ok := r.(map[string]interface{})
+		require.True(t, ok)
+		id, ok := m["id"].(string)
+		require.True(t, ok)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// TestBackupHistory_FiltersReachTheQuery proves each query parameter is wired to
+// its own column, both ways on one instrument: the whole seed with the filter
+// absent, and EXACTLY that column's set with the filter present.
+//
+// Asserting the exact set rather than "one row came back" is what pins the
+// column — over a decorrelated seed no two filters share an answer, so a clause
+// bound to a neighbouring column changes the result.
 func TestBackupHistory_FiltersReachTheQuery(t *testing.T) {
 	t.Parallel()
 
 	r, db := newBackupHistoryRouter(t)
-	require.NoError(t, db.CreateBackupRun(&models.BackupRun{
-		ID: "run-manual-backup", Kind: "backup", Trigger: "manual", Status: "success",
-		StartedAt: "2026-01-01T00:00:00Z",
-	}))
-	require.NoError(t, db.CreateBackupRun(&models.BackupRun{
-		ID: "run-scheduled-prune", Kind: "prune", Trigger: "scheduled", Status: "failed",
-		StartedAt: "2026-06-01T00:00:00Z",
-	}))
+	seedDecorrelatedRuns(t, db)
+
+	allIDs := []string{"run-d", "run-c", "run-b", "run-a"}
 
 	cases := []struct {
 		name  string
 		query string
-		want  string
+		want  []string
 	}{
-		{"status", "?status=success", "run-manual-backup"},
-		{"kind", "?kind=prune", "run-scheduled-prune"},
-		{"trigger", "?trigger=scheduled", "run-scheduled-prune"},
-		{"from", "?from=2026-03-01T00:00:00Z", "run-scheduled-prune"},
-		{"to", "?to=2026-03-01T00:00:00Z", "run-manual-backup"},
+		{"status", "?status=failed", []string{"run-d", "run-c", "run-b"}},
+		{"kind", "?kind=backup", []string{"run-b", "run-a"}},
+		{"trigger", "?trigger=scheduled", []string{"run-c", "run-b"}},
+		{"from", "?from=2026-08-01T00:00:00Z", []string{"run-d"}},
+		{"to", "?to=2026-07-01T00:00:00Z", []string{"run-c", "run-b", "run-a"}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Control arm: with no filter both runs come back, so a single-row
+			// Control arm: unfiltered, the whole seed is visible, so a short
 			// result below is the filter and not an empty table.
 			all := getBackupHistory(t, r, "")
-			assert.Equal(t, float64(2), all["total"], "both runs visible unfiltered")
+			require.Equal(t, float64(len(allIDs)), all["total"], "every run visible unfiltered")
+			require.Equal(t, allIDs, runIDsFromBody(t, all))
+			require.Less(t, len(tc.want), len(allIDs),
+				"a filter that excludes nothing cannot demonstrate filtering")
 
 			body := getBackupHistory(t, r, tc.query)
-			runs, ok := body["runs"].([]interface{})
-			require.True(t, ok)
-			require.Len(t, runs, 1, "exactly the matching run")
-			got, ok := runs[0].(map[string]interface{})
-			require.True(t, ok)
-			assert.Equal(t, tc.want, got["id"])
-			assert.Equal(t, float64(1), body["total"], "total reflects the filter")
+			assert.Equal(t, tc.want, runIDsFromBody(t, body), "exact matching set, newest first")
+			assert.Equal(t, float64(len(tc.want)), body["total"], "total reflects the filter")
 		})
 	}
+}
+
+// TestBackupHistory_HugePageDoesNotWrapToPageOne is the HTTP-level arm of the
+// OFFSET overflow guard. page = MaxInt64 is accepted by strconv.Atoi, and
+// (page-1)*limit wraps to a negative offset that SQLite reads as no offset —
+// serving page ONE while echoing back the enormous page number. A wrong answer
+// dressed as a correct one.
+func TestBackupHistory_HugePageDoesNotWrapToPageOne(t *testing.T) {
+	t.Parallel()
+
+	r, db := newBackupHistoryRouter(t)
+	seedDecorrelatedRuns(t, db)
+
+	// Control arm: page one over the same seed is populated, so the empty
+	// result below cannot be an empty table.
+	first := getBackupHistory(t, r, "?page=1&limit=50")
+	require.NotEmpty(t, runIDsFromBody(t, first), "page one is non-empty")
+
+	body := getBackupHistory(t, r, "?page=9223372036854775807&limit=50")
+	assert.Empty(t, runIDsFromBody(t, body), "a page past the end must never return page one's rows")
+	assert.Equal(t, float64(4), body["total"], "total still describes the whole match set")
 }

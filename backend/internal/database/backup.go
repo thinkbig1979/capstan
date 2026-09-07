@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -182,6 +183,21 @@ func (d *DB) GetBackupRunsFiltered(filters models.BackupHistoryFilters) ([]model
 	page := filters.Page
 	if page <= 0 {
 		page = 1
+	}
+
+	// (page-1)*limit is arithmetic on a client-supplied page, and int wraps.
+	// OBSERVED before this guard: page = MaxInt with limit = 50 produces
+	// offset -100, SQLite reads a negative OFFSET as no offset at all, and the
+	// call returns page ONE's rows while the caller believes it asked for a
+	// page far past the end — a wrong answer served as a correct one.
+	//
+	// Detecting the overflow beats capping page: a page legitimately past the
+	// end (?page=999999999 over a small table) already returns empty, and
+	// returning empty here keeps that answer consistent instead of inventing a
+	// maximum page number. total is left untouched, so the caller still learns
+	// the real size of the match set.
+	if page-1 > math.MaxInt/limit {
+		return nil, total, nil
 	}
 	offset := (page - 1) * limit
 
