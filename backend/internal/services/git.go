@@ -288,12 +288,29 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 	// .git/HEAD at a branch that does not exist:
 	// `outcome = "success" ... pullResult &{PreviousCommit:fa1229d ... CurrentCommit: ...}`.
 	//
-	// This returns an error rather than a partial because the two adjacent
-	// reads of HEAD should not disagree about what an unreadable HEAD means.
-	// The cost is that PullVerified wraps it as "git pull failed" when the pull
-	// itself did land; the wrapped cause below names the real fault, and a
-	// re-run of an --ff-only pull is a no-op, so erring toward "failed" is the
-	// safe direction.
+	// This returns an error rather than recording a sentinel and reporting a
+	// partial, for two reasons.
+	//
+	// First, the two adjacent reads of HEAD should not disagree about what an
+	// unreadable HEAD means. :258 reads HEAD with the identical command and
+	// returns an error; this one discarding its own was the whole defect.
+	//
+	// Second — and this is the reason that is easy to get backwards — the broad
+	// reason string is NOT a cost this site introduces. pullCLI has exactly
+	// five error returns (:250 status read, :253 dirty-worktree 400, :258
+	// pre-pull HEAD, :278 pullFailure, :316 here), and every one of them
+	// funnels into the single truth.Failed("git pull failed", err) at :491.
+	// So four siblings already carried that reason before this site joined
+	// them, and THREE of the four never ran a pull at all: the pull itself is
+	// at :261, below :250, :253 and :258. Returning an error here follows the
+	// established idiom; a HeadReadError field plus a partial would have made
+	// this the exception among five. The breadth of that reason string is a
+	// real issue, but a pre-existing one spanning four other sites, and it is
+	// not this change's to fix or to be blamed for.
+	//
+	// The wrapped cause below names the real fault, and a re-run of an
+	// --ff-only pull is a no-op, so erring toward "failed" is the safe
+	// direction.
 	currentCommit, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD after pull: %w", err)
