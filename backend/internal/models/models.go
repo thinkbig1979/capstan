@@ -294,6 +294,20 @@ type UpdateHistoryFilters struct {
 	To          *time.Time
 }
 
+// BackupHistoryFilters is the query shape for GET /backups/history, mirroring
+// UpdateHistoryFilters above. Kind replaces the update log's container/stack
+// dimensions: backup_runs has no stack column (see the CREATE TABLE in
+// database/migrations.go), so there is no per-stack filter to offer.
+type BackupHistoryFilters struct {
+	Page    int
+	Limit   int
+	Status  string
+	Kind    string
+	Trigger string
+	From    *time.Time
+	To      *time.Time
+}
+
 type UpdateResult struct {
 	OldDigest  string `json:"oldDigest"`
 	NewDigest  string `json:"newDigest"`

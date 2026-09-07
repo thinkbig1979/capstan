@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -2429,6 +2430,159 @@ func TestUpdateSettings_SavingDoesNotKillRunningScheduledScheduler(t *testing.T)
 			require.Equal(t, http.StatusOK, statusW.Code)
 			assert.Equal(t, true, decodeBody(t, statusW)["schedulerRunning"],
 				"the status endpoint must still report the scheduler as running")
+		})
+	}
+}
+
+// ─────────────────────────────────────────────
+// Backup history pagination + filters (agent-os-lak4.1)
+// ─────────────────────────────────────────────
+
+// newBackupHistoryRouter is the shared fixture for the tests below: a wired
+// BackupHandler over a migrated DB, plus the DB itself so a test can seed rows.
+func newBackupHistoryRouter(t *testing.T) (*gin.Engine, *database.DB) {
+	t.Helper()
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine has finished its DB
+	// write, so it must run BEFORE db.Close(); t.Cleanup is LIFO and this is
+	// registered last. See agent-os-80n.
+	t.Cleanup(h.Stop)
+	return newBackupRouter(h), db
+}
+
+// seedBackupRuns inserts n runs with DISTINCT started_at values, newest last.
+// Distinct timestamps are load-bearing: getHistory orders by started_at DESC
+// with no tiebreaker, so equal timestamps would make any page-window assertion
+// non-deterministic rather than merely arbitrary.
+func seedBackupRuns(t *testing.T, db *database.DB, n int) {
+	t.Helper()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		require.NoError(t, db.CreateBackupRun(&models.BackupRun{
+			ID:        fmt.Sprintf("run-%03d", i),
+			Kind:      "backup",
+			Trigger:   "manual",
+			Status:    "success",
+			StartedAt: base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339),
+		}))
+	}
+}
+
+func getBackupHistory(t *testing.T, r *gin.Engine, query string) map[string]interface{} {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/backups/history"+query, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	return decodeBody(t, w)
+}
+
+// TestBackupHistory_PaginatesWithTotal is AC1.
+func TestBackupHistory_PaginatesWithTotal(t *testing.T) {
+	t.Parallel()
+
+	r, db := newBackupHistoryRouter(t)
+	seedBackupRuns(t, db, 25)
+
+	body := getBackupHistory(t, r, "?page=2&limit=10")
+
+	runs, ok := body["runs"].([]interface{})
+	require.True(t, ok, "runs must stay an array")
+	assert.Len(t, runs, 10, "page 2 of 25 at limit 10 holds 10 runs")
+	assert.Equal(t, float64(2), body["page"])
+	assert.Equal(t, float64(10), body["limit"])
+	assert.Equal(t, float64(25), body["total"])
+	assert.Equal(t, float64(3), body["totalPages"])
+
+	// The window must be the SECOND ten, not the first: a handler that ignored
+	// page would return the right COUNT with the wrong rows.
+	first, ok := runs[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "run-014", first["id"], "page 2 starts at the 11th newest run")
+}
+
+// TestBackupHistory_NoParamsReturnsRecentRuns is AC4, the backward-compatibility
+// guard. Per the brief's fact D this has no fail-first arm: the no-params
+// behaviour is already correct today, so this pins it rather than adding it.
+func TestBackupHistory_NoParamsReturnsRecentRuns(t *testing.T) {
+	t.Parallel()
+
+	r, db := newBackupHistoryRouter(t)
+	seedBackupRuns(t, db, 3)
+
+	body := getBackupHistory(t, r, "")
+
+	runs, ok := body["runs"].([]interface{})
+	require.True(t, ok, "runs must remain an array under the same key")
+	require.Len(t, runs, 3)
+	newest, ok := runs[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "run-002", newest["id"], "most recent run first")
+}
+
+// TestBackupHistory_ClampsLimitToMax is AC5. The seed is deliberately 101 rows:
+// at 100 an unclamped handler and a clamped one return the same length, so the
+// assertion could not discriminate.
+func TestBackupHistory_ClampsLimitToMax(t *testing.T) {
+	t.Parallel()
+
+	r, db := newBackupHistoryRouter(t)
+	seedBackupRuns(t, db, 101)
+
+	body := getBackupHistory(t, r, "?limit=100000")
+
+	runs, ok := body["runs"].([]interface{})
+	require.True(t, ok)
+	assert.Len(t, runs, 100, "limit is capped at 100 regardless of the request")
+	assert.Equal(t, float64(100), body["limit"], "the clamped limit is what is reported back")
+	assert.Equal(t, float64(101), body["total"], "total still counts every matching run")
+}
+
+// TestBackupHistory_FiltersReachTheQuery proves the query-string parsing is
+// actually wired to the DB filter, both ways on one instrument: the same run is
+// returned when the filter matches and absent when it does not.
+func TestBackupHistory_FiltersReachTheQuery(t *testing.T) {
+	t.Parallel()
+
+	r, db := newBackupHistoryRouter(t)
+	require.NoError(t, db.CreateBackupRun(&models.BackupRun{
+		ID: "run-manual-backup", Kind: "backup", Trigger: "manual", Status: "success",
+		StartedAt: "2026-01-01T00:00:00Z",
+	}))
+	require.NoError(t, db.CreateBackupRun(&models.BackupRun{
+		ID: "run-scheduled-prune", Kind: "prune", Trigger: "scheduled", Status: "failed",
+		StartedAt: "2026-06-01T00:00:00Z",
+	}))
+
+	cases := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{"status", "?status=success", "run-manual-backup"},
+		{"kind", "?kind=prune", "run-scheduled-prune"},
+		{"trigger", "?trigger=scheduled", "run-scheduled-prune"},
+		{"from", "?from=2026-03-01T00:00:00Z", "run-scheduled-prune"},
+		{"to", "?to=2026-03-01T00:00:00Z", "run-manual-backup"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Control arm: with no filter both runs come back, so a single-row
+			// result below is the filter and not an empty table.
+			all := getBackupHistory(t, r, "")
+			assert.Equal(t, float64(2), all["total"], "both runs visible unfiltered")
+
+			body := getBackupHistory(t, r, tc.query)
+			runs, ok := body["runs"].([]interface{})
+			require.True(t, ok)
+			require.Len(t, runs, 1, "exactly the matching run")
+			got, ok := runs[0].(map[string]interface{})
+			require.True(t, ok)
+			assert.Equal(t, tc.want, got["id"])
+			assert.Equal(t, float64(1), body["total"], "total reflects the filter")
 		})
 	}
 }

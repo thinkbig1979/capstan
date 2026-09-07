@@ -730,14 +730,64 @@ func (h *BackupHandler) getStatus(c *gin.Context) {
 	})
 }
 
+const (
+	// defaultBackupHistoryLimit preserves the page size this endpoint served
+	// before it was paginated, so an existing caller that sends no limit sees
+	// the same number of runs it always did.
+	defaultBackupHistoryLimit = 50
+
+	// maxBackupHistoryLimit caps how many runs one request can pull, so a
+	// client asking for limit=100000 cannot make the server materialise the
+	// whole table. Note this has no counterpart in getUpdateHistory, which
+	// guards only that limit is positive — the cap is added here rather than
+	// mirrored from there.
+	maxBackupHistoryLimit = 100
+)
+
+// getHistory serves GET /backups/history: one page of backup runs, newest
+// first, plus the total matching the filters.
+//
+// Query parameters mirror getUpdateHistory in updates.go — page, limit, status,
+// trigger, from, to — with kind in place of the update log's container/stack
+// dimensions, and an unparseable page/limit/date falling back to the default
+// rather than erroring, exactly as the update log does.
+//
+// The "runs" key keeps its name and meaning; the pagination fields are added
+// alongside it, so a client that only reads "runs" is unaffected.
 func (h *BackupHandler) getHistory(c *gin.Context) {
-	limitStr := c.DefaultQuery("limit", "50")
-	limit, err := strconv.Atoi(limitStr)
-	if err != nil || limit <= 0 {
-		limit = 50
+	filters := models.BackupHistoryFilters{
+		Page:    1,
+		Limit:   defaultBackupHistoryLimit,
+		Status:  c.Query("status"),
+		Kind:    c.Query("kind"),
+		Trigger: c.Query("trigger"),
 	}
 
-	runs, err := h.db.GetBackupRuns(limit)
+	if p := c.Query("page"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+			filters.Page = v
+		}
+	}
+	if l := c.Query("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			filters.Limit = v
+		}
+	}
+	if filters.Limit > maxBackupHistoryLimit {
+		filters.Limit = maxBackupHistoryLimit
+	}
+	if from := c.Query("from"); from != "" {
+		if t, err := time.Parse(time.RFC3339, from); err == nil {
+			filters.From = &t
+		}
+	}
+	if to := c.Query("to"); to != "" {
+		if t, err := time.Parse(time.RFC3339, to); err == nil {
+			filters.To = &t
+		}
+	}
+
+	runs, total, err := h.db.GetBackupRunsFiltered(filters)
 	if err != nil {
 		h.internalError(c, "Failed to get backup history", err)
 		return
@@ -745,7 +795,19 @@ func (h *BackupHandler) getHistory(c *gin.Context) {
 	if runs == nil {
 		runs = []models.BackupRun{}
 	}
-	c.JSON(http.StatusOK, gin.H{"runs": runs})
+
+	totalPages := total / filters.Limit
+	if total%filters.Limit > 0 {
+		totalPages++
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"runs":       runs,
+		"total":      total,
+		"page":       filters.Page,
+		"limit":      filters.Limit,
+		"totalPages": totalPages,
+	})
 }
 
 // getRunDetail returns the durable record for a specific run ID, including
