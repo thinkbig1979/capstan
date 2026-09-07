@@ -234,7 +234,7 @@ func isServerSideClosed(conn *Connection) bool {
 // imply a closed socket on every route, and there are two routes with opposite
 // orderings:
 //
-//   - serveWS's release (ws.go:811-814) is one sync.OnceFunc doing Close()
+//   - serveWS's release (the sync.OnceFunc it returns in ws.go) does Close()
 //     and then Remove(). Here an emptied manager does imply a closed socket.
 //   - closeMatching (ws.go:278-315), reached from CloseAll / CloseForSession /
 //     CloseForUser, is reversed by design: it deletes from cm.connections at
