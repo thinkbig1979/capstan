@@ -10,9 +10,16 @@ import type { BackupPolicy } from '@/types'
 
 interface BackupToggleProps {
   stackId: string
+  /**
+   * Render the last-run status icon. Defaults to true. A multi-row table sets
+   * this to false: the underlying value is install-wide, not per-stack (see the
+   * comment on lastRunStatus below), so every row would show the same icon and
+   * assert an outcome for stacks that have no backup policy at all.
+   */
+  showLastRunStatus?: boolean
 }
 
-export function BackupToggle({ stackId }: BackupToggleProps) {
+export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggleProps) {
   const { data: statusData } = useBackupStatus()
   const { data: policiesData } = useBackupPolicies()
   const toggleMutation = useToggleBackup()
@@ -75,7 +82,7 @@ export function BackupToggle({ stackId }: BackupToggleProps) {
   // which selects ORDER BY started_at DESC LIMIT ? with no kind and no stack
   // predicate, and getStatus (backend/internal/handlers/backup.go), which takes
   // runs[0]. A per-stack affordance is unimplemented; see agent-os-26pi.
-  const lastRunStatus = statusData?.lastRun?.status ?? null
+  const lastRunStatus = showLastRunStatus ? (statusData?.lastRun?.status ?? null) : null
 
   if (engineUnavailable) {
     return (
