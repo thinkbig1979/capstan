@@ -622,7 +622,11 @@ func (s *GitService) GetLog(dirPath string, limit, offset int) (*models.LogResul
 //   - nil, when the failure is not attributable to the directory's repository
 //     state and the caller should wrap generically as before (agent-os-pawv).
 //
-// The first two used to be one answer, and separating them is agent-os-prfj.
+// The first two used to be one answer, and separating them is agent-os-n2df
+// (merged as 2f1f735). The split was scoped to agent-os-prfj while this comment
+// was written and moved to a bead of its own before it landed; prfj kept the
+// routine-404 log marker, which is the sense the citation at line 98 above uses
+// and is correct there.
 // The probe branched on `probeErr != nil` and nothing finer, so a missing
 // stacks directory and a missing git binary both became "Not a git
 // repository" — a 404 telling an operator to point the stack somewhere else

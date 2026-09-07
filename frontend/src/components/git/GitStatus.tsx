@@ -29,7 +29,16 @@ export function GitStatus({ stack }: GitStatusProps) {
 
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  if (isLoading || error || !gitStatus) {
+  // `!gitStatus.isRepo` is the whole of the non-git handling. The endpoint now
+  // answers a genuine non-repo with 200 `{isRepo: false}` rather than a 404
+  // (agent-os-x40a), so that case arrives as DATA and never as `error` — which
+  // is the point: a 404 put a red failed request in the console of every
+  // non-git stack for something nobody did wrong.
+  //
+  // Narrowing on it also gives the ~130 lines below `GitRepoStatus` for free,
+  // so a future field read on the non-repo branch is a compile error rather
+  // than an `undefined` rendered into the chip.
+  if (isLoading || error || !gitStatus || !gitStatus.isRepo) {
     return null
   }
 

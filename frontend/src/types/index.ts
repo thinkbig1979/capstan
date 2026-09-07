@@ -109,7 +109,22 @@ export interface Stack {
   containers?: Container[]
 }
 
-export interface GitStatus {
+/**
+ * GET /api/v1/git, repo branch.
+ *
+ * `isRepo` is NOT named `isGitRepo`, and the difference is load-bearing rather
+ * than stylistic. `Stack.isGitRepo` above is a DIFFERENT and weaker predicate:
+ * it comes from the scanner stat'ing the stack's own directory for a `.git`,
+ * while this endpoint asks git, which walks UP to a parent repository. A stack
+ * nested inside a monorepo has `isGitRepo: false` and a real branch here, so
+ * gating the git panel on `Stack.isGitRepo` hides a working panel — that
+ * approach was implemented and reverted (agent-os-a786). Keeping the two names
+ * distinct means a `grep isGitRepo` still finds exactly the sites carrying the
+ * wrong predicate and none carrying the right one. Do not rename for
+ * consistency.
+ */
+export interface GitRepoStatus {
+  isRepo: true
   branch: string
   commit: string
   commitShort: string
@@ -122,6 +137,23 @@ export interface GitStatus {
   behind: number
   remote: string
 }
+
+/**
+ * GET /api/v1/git, non-repo branch: a 200, because "this directory is not a git
+ * repository" is a normal answer and not a client error (agent-os-x40a).
+ *
+ * The repo fields are ABSENT rather than null or zero-valued. A `branch: ''`
+ * would be indistinguishable from a failed read and would invite callers to
+ * render it; absence plus the union below makes reading one a compile error.
+ *
+ * A directory that does not EXIST is a different condition and still an error
+ * (404 STACK_DIR_MISSING) — it never arrives here.
+ */
+export interface GitNotRepoStatus {
+  isRepo: false
+}
+
+export type GitStatus = GitRepoStatus | GitNotRepoStatus
 
 export interface GitCommit {
   hash: string

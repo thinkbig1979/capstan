@@ -36,8 +36,13 @@ const mockStack = {
   gitBehind: 0,
 }
 
+// isRepo:true is not decoration — the component narrows on it and renders
+// nothing without it, so every row below would go empty if the backend ever
+// stopped emitting it. The backend side is pinned by
+// handlers/x40a_nonrepo_200_test.go arm 2.
 function gitData(overrides: Record<string, unknown> = {}) {
   return {
+    isRepo: true,
     branch: 'main',
     commit: 'abc123',
     commitShort: 'abc1234',
@@ -64,8 +69,22 @@ describe('GitStatus', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('renders nothing when the directory is not a git repository', () => {
+  // Renamed in agent-os-x40a. It never tested a non-git directory — it drives an
+  // ERROR, and a non-git directory now arrives as DATA (200 `{isRepo: false}`,
+  // see below). What it does test is still worth keeping: a genuinely failed
+  // request renders nothing rather than a broken chip. The old name would have
+  // sent the next reader looking for non-repo coverage and finding this.
+  it('renders nothing when the status request fails', () => {
     mockUseGitStatus.mockReturnValue({ isLoading: false, error: new Error('fail'), data: null })
+    const { container } = renderWithProviders(<GitStatus stack={mockStack} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  // The frontend half of agent-os-x40a. Seen failing first: before the
+  // `!gitStatus.isRepo` guard the component read `gitStatus.branch` on this
+  // payload and rendered a chip whose branch was `undefined`.
+  it('renders nothing for a directory that is not a git repository', () => {
+    mockUseGitStatus.mockReturnValue({ isLoading: false, error: null, data: { isRepo: false } })
     const { container } = renderWithProviders(<GitStatus stack={mockStack} />)
     expect(container).toBeEmptyDOMElement()
   })
