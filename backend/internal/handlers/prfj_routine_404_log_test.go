@@ -53,9 +53,18 @@ func httpRequestLineLevel(t *testing.T, out string) string {
 // The first two rows are the whole test. They are the SAME PATH and the SAME
 // STATUS and differ only in the AppError's CODE:
 //
-//   - GIT_NOT_REPO is the routine answer. GET /api/v1/git is asked of every
-//     stack the frontend renders, and on a host with no git-backed stack every
-//     one of those answers 404. It must not be a warning.
+//   - GIT_NOT_REPO is the routine answer. It is minted for a directory that is
+//     not a repository, which is normal configuration rather than anyone's
+//     mistake, so it must not be a warning.
+//
+//     GET /api/v1/git no longer emits it: agent-os-x40a made that endpoint
+//     answer a genuine non-repo with 200 `{isRepo: false}`, because a normal
+//     answer modelled as an error also put a red failed request in the browser
+//     console of every non-git stack. The code is still minted, and still
+//     routine, on /git/log, /git/diff and the file-log path (services/git.go
+//     gitFailure, pinned by services/git_notrepo_test.go), so this row is
+//     unchanged and still live — only the example endpoint moved.
+//
 //   - NOT_FOUND is git.go resolvePathFromStack's answer for an unknown
 //     stackId. Same endpoint, same 404, and a real client error that must
 //     still warn.

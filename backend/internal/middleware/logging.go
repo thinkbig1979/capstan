@@ -18,11 +18,20 @@ const RoutineOutcomeKey = "routineOutcome"
 // negative answer, so LoggingMiddleware does not log it at Warn.
 //
 // The motivating case (agent-os-prfj): on a host where no stack is git-backed,
-// GET /api/v1/git answers 404 GIT_NOT_REPO for every stack the frontend
-// renders. "This directory is not a git repository" is the correct, expected
-// answer to that question, not a client mistake — but LoggingMiddleware keyed
-// level on status alone, so every stack on every page visit wrote a WARN line.
-// Warning level stops being a signal when the normal case fills it.
+// /git/log and /git/diff answer 404 GIT_NOT_REPO for every stack whose Activity
+// tab is opened. "This directory is not a git repository" is the correct,
+// expected answer to that question, not a client mistake — but
+// LoggingMiddleware keyed level on status alone, so every one of those wrote a
+// WARN line. Warning level stops being a signal when the normal case fills it.
+//
+// That example named GET /api/v1/git until agent-os-x40a, which went further on
+// that ONE endpoint: rather than logging its routine 404 more quietly, it
+// stopped calling the condition an error at all and answers 200
+// `{"isRepo": false}`, because a 404 also put a red failed request in the
+// browser console of every non-git stack. The endpoint is asked of every stack
+// the frontend renders, so it was the loudest instance and is now not an
+// instance at all. GIT_NOT_REPO is still minted, still routine, and still
+// reaches this marker from the two paths above.
 //
 // EXPORTED, and deliberately not folded into handlers.handleError, because
 // handleError is not the only way a 4xx leaves this server. handleError covers

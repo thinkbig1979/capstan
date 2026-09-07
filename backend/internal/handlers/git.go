@@ -128,11 +128,48 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 
 	status, err := h.git.GetStatus(absPath)
 	if err != nil {
+		// agent-os-x40a: "this directory is not a git repository" is a normal,
+		// expected answer about a resource, and this endpoint modelled it as an
+		// ERROR. Every symptom followed from that one decision — the browser
+		// console showed a red failed request on every non-git stack, because
+		// the frontend asks this of EVERY stack it renders.
+		//
+		// The discrimination happens HERE and not in the service on purpose.
+		// handlers/git.go is the ONLY caller of GitService.GetStatus, while
+		// gitFailure's ErrGitNotRepo is still the right answer for /git/log,
+		// /git/diff and GetLogForFile — a different surface (GitHistory on the
+		// Activity tab), pinned by services/git_notrepo_test.go. Moving the
+		// decision down into the service would flip the contract for three
+		// entry points that want it unchanged.
+		//
+		// Keyed on the CODE, never the status and never the route. Two other
+		// 404s reach this same line and must stay 404s:
+		//
+		//   - ErrStackDirMissing — a stack whose directory is GONE. That is the
+		//     OPPOSITE condition: a broken deployment, not normal configuration,
+		//     and an unmounted /stacks volume produces it for every stack at
+		//     once. It is deliberately absent from respond.go's
+		//     routineErrorCodes so it still logs at WARN, and answering it 200
+		//     would hide the exact incident agent-os-n2df added it to surface —
+		//     silently, since a 200 produces no console error either.
+		//   - ErrNotFound — resolvePathFromStack's answer for an unknown
+		//     stackId, a real client error (ua4y_7lg1_cause_test.go).
+		//
+		// A status-keyed or route-keyed guard would swallow both.
+		var appErr *models.AppError
+		if errors.As(err, &appErr) && appErr.Code == models.ErrGitNotRepo {
+			c.JSON(http.StatusOK, gin.H{"isRepo": false})
+			return
+		}
 		handleError(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
+		// The discriminator is emitted on BOTH branches. The frontend's
+		// GitStatus type is a union narrowed on it, so a repo answer that
+		// omitted it would render no chip at all.
+		"isRepo":        true,
 		"branch":        status.Branch,
 		"commit":        status.Commit.Hash,
 		"commitShort":   status.Commit.Short,

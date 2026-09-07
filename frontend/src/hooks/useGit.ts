@@ -10,8 +10,13 @@ export function useGitStatus(stackId: string) {
     queryKey: queryKeys.git.all(stackId),
     queryFn: () => gitApi.status(stackId),
     staleTime: 60000,
-    // A non-git stack returns a definitive 404 — retrying just repeats the error
-    // in the console/network tab. The panel hides on first failure either way.
+    // A non-git stack is no longer an error at all: it returns 200
+    // `{isRepo: false}` (agent-os-x40a), so it never reaches this option.
+    //
+    // What still does is definitive too — STACK_DIR_MISSING (the directory is
+    // gone), GIT_NO_COMMITS and NOT_FOUND (unknown stackId). None is a
+    // transient fault, so retrying just repeats the error in the
+    // console/network tab, and the panel hides on first failure either way.
     retry: false,
   })
 }
