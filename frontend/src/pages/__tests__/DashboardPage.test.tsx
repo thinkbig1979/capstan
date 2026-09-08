@@ -13,6 +13,7 @@ const listStacks = vi.fn()
 const scanDirectories = vi.fn()
 const dashboardStats = vi.fn()
 const getConfig = vi.fn()
+const getAutoUpdatePolicies = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   directoriesApi: {
@@ -31,6 +32,13 @@ vi.mock('@/lib/api', () => ({
   },
   settingsApi: {
     getConfig: (...args: unknown[]) => getConfig(...args),
+  },
+  // DashboardPage now calls useAutoUpdatePolicies (for the stacks table's
+  // Auto update column), and useResources imports autoUpdateApi from this
+  // module. A factory mock must declare it or vitest raises "No 'autoUpdateApi'
+  // export is defined on the mock" the moment the query runs.
+  autoUpdateApi: {
+    getPolicies: (...args: unknown[]) => getAutoUpdatePolicies(...args),
   },
 }))
 
@@ -170,6 +178,7 @@ describe('DashboardPage', () => {
     listStacks.mockResolvedValue([])
     dashboardStats.mockResolvedValue({ runningContainers: 0 })
     getConfig.mockResolvedValue({ stacksDirectories: [] })
+    getAutoUpdatePolicies.mockResolvedValue({ globalEnabled: false, policies: [] })
   })
 
   describe('tab routing', () => {

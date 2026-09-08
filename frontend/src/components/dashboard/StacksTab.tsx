@@ -8,18 +8,41 @@ import { GitBranch, Plus } from 'lucide-react'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { StackRowActions } from '@/components/dashboard/StackRowActions'
+import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
+import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import {
   buildDirectoryTree,
   countTreeNodeStacks,
   type TreeNode,
 } from '@/lib/stack-tree'
-import type { Stack } from '@/types'
+import type { AutoUpdatePolicy, Stack } from '@/types'
 import { useTextFilter } from '@/hooks/useTextFilter'
 
 const STACK_SEARCH_FIELDS = [
   (s: Stack) => s.projectName,
   (s: Stack) => s.status,
 ]
+
+/**
+ * The single source of truth for the table's width. Both the header cells and
+ * the directory group-header row's colSpan derive from this, so adding a column
+ * cannot leave the group header under-spanning the body.
+ */
+const STACK_TABLE_COLUMNS = [
+  'Name',
+  'Status',
+  'Containers',
+  'Auto update',
+  'Auto backup',
+  'Actions',
+] as const
+
+// The rows are role="link" and navigate on click, on Enter and on Space. A
+// Switch inside one inherits all three, so a toggle would fire AND navigate
+// away. Each toggle cell's content is wrapped in a div using this to keep the
+// interaction local to the toggle. Propagation only, no preventDefault: the
+// Switch is a button and needs its own default Space/Enter activation.
+const stopRowNavigation = (e: React.SyntheticEvent) => e.stopPropagation()
 
 type SortOption = 'name' | 'status'
 type StatusFilter = 'all' | 'running' | 'stopped' | 'error'
@@ -32,7 +55,6 @@ interface StacksTabProps {
   statusFilter: StatusFilter
   onSortChange: (key: SortOption) => void
   onFilterChange: (key: StatusFilter) => void
-  onNavigateToDirectories: () => void
   onCreateStack: () => void
   onStart: (stackId: string, e: React.MouseEvent) => void
   onStop: (stackId: string, e: React.MouseEvent) => void
@@ -44,6 +66,11 @@ interface StacksTabProps {
   restartPending: boolean
   deletePending: boolean
   isAnimating: (id: string) => boolean
+  /** Auto-update policies for every target; fetched by DashboardPage so this
+   *  component stays prop-driven. BackupToggle self-fetches instead — its
+   *  queries are react-query keyed, so the rows dedupe. */
+  autoUpdatePolicies: AutoUpdatePolicy[]
+  globalAutoUpdateEnabled: boolean
 }
 
 export function StacksTab({
@@ -54,7 +81,6 @@ export function StacksTab({
   statusFilter,
   onSortChange,
   onFilterChange,
-  onNavigateToDirectories,
   onCreateStack,
   onStart,
   onStop,
@@ -66,6 +92,8 @@ export function StacksTab({
   restartPending,
   deletePending,
   isAnimating,
+  autoUpdatePolicies,
+  globalAutoUpdateEnabled,
 }: StacksTabProps) {
   const navigate = useNavigate()
 
@@ -75,6 +103,96 @@ export function StacksTab({
     () => buildDirectoryTree(textFilteredStacks, configuredDirs),
     [textFilteredStacks, configuredDirs],
   )
+
+  const renderNameCell = (stack: Stack, style?: React.CSSProperties) => (
+    <TableCell className="font-medium font-mono text-[13px]" style={style}>
+      <span className="inline-flex items-center gap-1.5">
+        {stack.projectName}
+        {stack.isGitRepo && (
+          <GitBranch
+            className="h-3 w-3 text-muted-foreground"
+            data-testid={`git-repo-${stack.id}`}
+          />
+        )}
+      </span>
+    </TableCell>
+  )
+
+  const renderToggleCells = (stack: Stack) => {
+    const policy = autoUpdatePolicies.find(
+      (p) => p.targetType === 'stack' && p.targetId === stack.id,
+    )
+    return (
+      <>
+        <TableCell>
+          <div onClick={stopRowNavigation} onKeyDown={stopRowNavigation}>
+            <AutoUpdateToggle
+              targetType="stack"
+              targetId={stack.id}
+              enabled={policy?.enabled ?? false}
+              paused={policy?.paused ?? false}
+              consecutiveFailures={policy?.consecutiveFailures ?? 0}
+              globalDisabled={!globalAutoUpdateEnabled}
+            />
+          </div>
+        </TableCell>
+        <TableCell>
+          <div onClick={stopRowNavigation} onKeyDown={stopRowNavigation}>
+            {/* Install-wide, not per-stack, so a multi-row table must not
+                render the last-run icon on every row — see BackupToggle. */}
+            <BackupToggle stackId={stack.id} showLastRunStatus={false} />
+          </div>
+        </TableCell>
+      </>
+    )
+  }
+
+  const renderActionsCell = (stack: Stack) => (
+    <TableCell>
+      <StackRowActions
+        stackId={stack.id}
+        stackName={stack.projectName}
+        status={stack.status}
+        isDeleting={deletingStackId === stack.id}
+        startPending={startPending}
+        stopPending={stopPending}
+        restartPending={restartPending}
+        deletePending={deletePending}
+        onStart={onStart}
+        onStop={onStop}
+        onRestart={onRestart}
+        onDelete={onDelete}
+      />
+    </TableCell>
+  )
+
+  const renderStatusAndCountCells = (stack: Stack) => (
+    <>
+      <TableCell>
+        <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'error' | 'unknown'} pulse={isAnimating(stack.id)} />
+      </TableCell>
+      <TableCell>
+        {stack.containers?.length ? (
+          <Badge variant="outline">{stack.containers.length}</Badge>
+        ) : (
+          <span className="text-sm text-muted-foreground">-</span>
+        )}
+      </TableCell>
+    </>
+  )
+
+  const rowNavigationProps = (stackId: string) => ({
+    className: 'cursor-pointer',
+    role: 'link',
+    tabIndex: 0,
+    onClick: () => navigate(`/stacks/${stackId}`),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        navigate(`/stacks/${stackId}`)
+      }
+    },
+  })
 
   const renderTreeNodes = (nodes: TreeNode[], depth: number): React.ReactNode[] => {
     return nodes.flatMap((node) => {
@@ -87,7 +205,11 @@ export function StacksTab({
           key={`group-${node.fullPath}`}
           className="bg-muted/50 hover:bg-muted/50"
         >
-          <TableCell colSpan={5} className="py-1.5" style={{ paddingLeft: `${headerPadding}px` }}>
+          <TableCell
+            colSpan={STACK_TABLE_COLUMNS.length}
+            className="py-1.5"
+            style={{ paddingLeft: `${headerPadding}px` }}
+          >
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               {node.name}
             </span>
@@ -100,53 +222,11 @@ export function StacksTab({
           </TableCell>
         </TableRow>,
         ...node.stacks.map((stack) => (
-          <TableRow
-            key={stack.id}
-            className="cursor-pointer"
-            role="link"
-            tabIndex={0}
-            onClick={() => navigate(`/stacks/${stack.id}`)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                navigate(`/stacks/${stack.id}`)
-              }
-            }}
-          >
-            <TableCell className="font-medium font-mono text-[13px]" style={{ paddingLeft: `${stackPadding}px` }}>
-              {stack.projectName}
-            </TableCell>
-            <TableCell className="text-sm text-muted-foreground">
-              <span className="inline-flex items-center gap-1.5">
-                {stack.composeFile}
-              </span>
-            </TableCell>
-            <TableCell>
-              <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'error' | 'unknown'} pulse={isAnimating(stack.id)} />
-            </TableCell>
-            <TableCell>
-              {stack.containers?.length ? (
-                <Badge variant="outline">{stack.containers.length}</Badge>
-              ) : (
-                <span className="text-sm text-muted-foreground">-</span>
-              )}
-            </TableCell>
-            <TableCell>
-              <StackRowActions
-                stackId={stack.id}
-                stackName={stack.projectName}
-                status={stack.status}
-                isDeleting={deletingStackId === stack.id}
-                startPending={startPending}
-                stopPending={stopPending}
-                restartPending={restartPending}
-                deletePending={deletePending}
-                onStart={onStart}
-                onStop={onStop}
-                onRestart={onRestart}
-                onDelete={onDelete}
-              />
-            </TableCell>
+          <TableRow key={stack.id} {...rowNavigationProps(stack.id)}>
+            {renderNameCell(stack, { paddingLeft: `${stackPadding}px` })}
+            {renderStatusAndCountCells(stack)}
+            {renderToggleCells(stack)}
+            {renderActionsCell(stack)}
           </TableRow>
         )),
         ...renderTreeNodes(node.children, depth + 1),
@@ -191,11 +271,9 @@ export function StacksTab({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Compose file</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Containers</TableHead>
-                <TableHead>Actions</TableHead>
+                {STACK_TABLE_COLUMNS.map((column) => (
+                  <TableHead key={column}>{column}</TableHead>
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -203,66 +281,11 @@ export function StacksTab({
                 renderTreeNodes(tree, 0)
               ) : (
                 textFilteredStacks.map((stack) => (
-                  <TableRow
-                    key={stack.id}
-                    className="cursor-pointer"
-                    role="link"
-                    tabIndex={0}
-                    onClick={() => navigate(`/stacks/${stack.id}`)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        navigate(`/stacks/${stack.id}`)
-                      }
-                    }}
-                  >
-                    <TableCell className="font-medium font-mono text-[13px]">{stack.projectName}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1.5 cursor-pointer hover:text-foreground hover:underline"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          onNavigateToDirectories()
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.stopPropagation()
-                          }
-                        }}
-                      >
-                        {stack.composeFile}
-                        {stack.isGitRepo && (
-                          <GitBranch className="h-3 w-3 text-muted-foreground" />
-                        )}
-                      </button>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'error' | 'unknown'} pulse={isAnimating(stack.id)} />
-                    </TableCell>
-                    <TableCell>
-                      {stack.containers?.length ? (
-                        <Badge variant="outline">{stack.containers.length}</Badge>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <StackRowActions
-                        stackId={stack.id}
-                        stackName={stack.projectName}
-                        status={stack.status}
-                        isDeleting={deletingStackId === stack.id}
-                        startPending={startPending}
-                        stopPending={stopPending}
-                        restartPending={restartPending}
-                        deletePending={deletePending}
-                        onStart={onStart}
-                        onStop={onStop}
-                        onRestart={onRestart}
-                        onDelete={onDelete}
-                      />
-                    </TableCell>
+                  <TableRow key={stack.id} {...rowNavigationProps(stack.id)}>
+                    {renderNameCell(stack)}
+                    {renderStatusAndCountCells(stack)}
+                    {renderToggleCells(stack)}
+                    {renderActionsCell(stack)}
                   </TableRow>
                 ))
               )}
