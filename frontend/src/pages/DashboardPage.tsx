@@ -31,6 +31,7 @@ import { useConfirm } from '@/hooks/useConfirm'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import type { ConfiguredDir } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
+import { useAutoUpdatePolicies } from '@/hooks/useResources'
 
 // Lazy: CreateStackDialog pulls in codemirror (its inline compose editor) but was
 // previously mounted unconditionally on every Dashboard visit, keeping codemirror
@@ -126,6 +127,9 @@ export function DashboardPage() {
     () => config?.stacksDirectories || [],
     [config],
   )
+
+  // Fetched here rather than inside StacksTab so the tab stays prop-driven.
+  const { data: autoUpdatePoliciesData } = useAutoUpdatePolicies()
 
   const { start: startMutation, stop: stopMutation, restart: restartMutation, delete: deleteMutation } = useStackActions({
     onSuccess: (action) => {
@@ -343,7 +347,6 @@ export function DashboardPage() {
               statusFilter={statusFilter}
               onSortChange={setSortBy}
               onFilterChange={setStatusFilter}
-              onNavigateToDirectories={() => setActiveTab('directories')}
               onCreateStack={() => setCreateDialogOpen(true)}
               onStart={handleStart}
               onStop={handleStop}
@@ -355,6 +358,8 @@ export function DashboardPage() {
               restartPending={restartMutation.isPending}
               deletePending={deleteMutation.isPending}
               isAnimating={isAnimating}
+              autoUpdatePolicies={autoUpdatePoliciesData?.policies ?? []}
+              globalAutoUpdateEnabled={autoUpdatePoliciesData?.globalEnabled ?? false}
             />
             <HostStrip
               stats={dashboardStats}
