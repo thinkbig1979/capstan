@@ -57,7 +57,7 @@ export function TerminalToolbar({
       <div className="flex items-center space-x-4">
         <Terminal className="h-5 w-5 text-muted-foreground" />
         <Select value={selectedContainer} onValueChange={onContainerChange}>
-          <SelectTrigger className="w-[300px]">
+          <SelectTrigger className="w-[300px]" aria-label="Container">
             <SelectValue placeholder="Select container">
               {selectedContainer
                 ? runningContainers.find(c => c.id === selectedContainer)?.name || 'Unknown'

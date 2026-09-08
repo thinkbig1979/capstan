@@ -169,7 +169,7 @@ function AuditLogTable() {
             value={action || ALL_ACTIONS}
             onValueChange={(v) => setAction(v === ALL_ACTIONS ? '' : v)}
           >
-            <SelectTrigger id="audit-action" className="h-9 w-[180px]">
+            <SelectTrigger id="audit-action" className="h-9 w-[180px]" aria-label="Action">
               <SelectValue placeholder="All actions" />
             </SelectTrigger>
             <SelectContent>

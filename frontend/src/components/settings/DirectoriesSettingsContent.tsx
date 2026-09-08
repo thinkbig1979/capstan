@@ -129,7 +129,7 @@ export function DirectoriesSettingsContent() {
         <div className="space-y-2">
           <Label htmlFor="scan-depth">Directory Recursion Depth</Label>
           <Select value={effectiveDepth} onValueChange={setScanDepth}>
-            <SelectTrigger id="scan-depth" className="w-full max-w-xs">
+            <SelectTrigger id="scan-depth" className="w-full max-w-xs" aria-label="Directory Recursion Depth">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -160,7 +160,7 @@ export function DirectoriesSettingsContent() {
           <div className="space-y-2">
             <Label htmlFor="default-dir">Default Directory for New Stacks</Label>
             <Select value={effectiveDefault} onValueChange={setDefaultDir}>
-              <SelectTrigger id="default-dir" className="w-full max-w-md">
+              <SelectTrigger id="default-dir" className="w-full max-w-md" aria-label="Default Directory for New Stacks">
                 <SelectValue placeholder="Select default directory" />
               </SelectTrigger>
               <SelectContent>

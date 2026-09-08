@@ -303,7 +303,7 @@ export function SettingsPage() {
                 </div>
               </div>
               <Select value={theme} onValueChange={(value) => setTheme(value as 'light' | 'dark' | 'system')}>
-                <SelectTrigger id="theme-select" className="w-full max-w-xs">
+                <SelectTrigger id="theme-select" className="w-full max-w-xs" aria-label="Theme">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

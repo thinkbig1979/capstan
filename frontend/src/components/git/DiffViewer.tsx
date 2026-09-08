@@ -69,7 +69,7 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
       <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/50">
         <span className="text-sm font-medium">Diff View</span>
         <Select value={viewMode} onValueChange={(value) => setViewMode(value as DiffView)}>
-          <SelectTrigger className="w-[140px] h-8">
+          <SelectTrigger className="w-[140px] h-8" aria-label="Diff view mode">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
