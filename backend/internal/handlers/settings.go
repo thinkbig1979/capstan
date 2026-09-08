@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1108,7 +1109,29 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 		pageSize = 50
 	}
 
-	offset := (page - 1) * pageSize
+	// (page-1)*pageSize is arithmetic on a client-supplied page, and int wraps.
+	// OBSERVED one layer below this handler: ListActionLogsFiltered(50, -100)
+	// returns the same rows as ListActionLogsFiltered(50, 0), because SQLite
+	// reads a negative OFFSET as no offset at all. Unguarded, ?page=<MaxInt>
+	// therefore comes back holding page ONE's entries while echoing the huge
+	// page number the client asked for — a wrong answer served as a correct one.
+	//
+	// The operands are tested BEFORE the multiplication, never the product: at
+	// page = 1<<62 + 1 with pageSize = 4 the product wraps to exactly 0, so a
+	// fix that multiplied first and then checked the sign would let that case
+	// through and serve page one again.
+	//
+	// The query still runs on the overflow path, because total must stay the
+	// TRUE match-set size: an out-of-range page is empty, not a report that
+	// nothing matched. Only the entries are dropped, which is what a page past
+	// the end returns anyway — so this needs no maximum page number invented
+	// for it, and reports the same shape ([], not null) that ordinary
+	// past-the-end paging already returns.
+	pageOverflows := page-1 > math.MaxInt/pageSize
+	offset := 0
+	if !pageOverflows {
+		offset = (page - 1) * pageSize
+	}
 
 	filter := database.ActionLogFilter{
 		Action:   c.Query("action"),
@@ -1126,6 +1149,10 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 			err,
 		))
 		return
+	}
+
+	if pageOverflows {
+		actions = []models.ActionLog{}
 	}
 
 	availableActions, err := h.db.DistinctActionLogActions()
