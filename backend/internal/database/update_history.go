@@ -30,9 +30,10 @@ func (d *DB) GetUpdateHistory(filters models.UpdateHistoryFilters) ([]models.Upd
 		args = append(args, filters.StackID)
 	}
 	// started_at is compared as TEXT, so the bound has to be one canonical
-	// spelling or it selects by spelling rather than by instant: a caller
-	// sending its own offset is sending a different string for the same
-	// moment. The other half -- the stored values -- is canonical too as of
+	// spelling AND one width, or it selects by spelling rather than by
+	// instant: a caller sending its own offset is sending a different string
+	// for the same moment. The other half -- the stored values -- is canonical
+	// too as of
 	// agent-os-lmbn: canonicalTimestamp below normalises every write, and
 	// migration 15 rewrote the rows that predate it. Both sides now speak one
 	// spelling, so this comparison is by instant.
@@ -160,37 +161,48 @@ func (d *DB) GetUpdateHistory(filters models.UpdateHistoryFilters) ([]models.Upd
 // destroy a value it cannot interpret -- a normaliser that zeroes an
 // unparseable value turns a display bug into data loss.
 //
-// RFC3339Nano, not RFC3339, is the output layout: .Format(time.RFC3339)
-// truncates sub-second precision, so "2026-02-28T23:30:00.123Z" would be
-// silently rewritten to "2026-02-28T23:30:00Z" (OBSERVED). No current writer
-// emits sub-second values, so this is a trap for the next caller rather than a
-// live bug.
+// THE GUARANTEE: the value is stored in one FIXED-WIDTH canonical form, so
+// that text ordering equals instant ordering. Sub-second precision is
+// deliberately DISCARDED, because this column is sorted and compared as text.
 //
-// THE GUARANTEE THIS MAKES IS "the instant is preserved exactly and the
-// spelling is canonicalised". It is NOT "the bytes never change" -- do not
-// build on byte-stability. RFC3339Nano drops TRAILING ZEROS, which is itself a
-// byte change on a fractional value that was already canonical (OBSERVED, and
-// every one of these is the same instant in and out):
+// That trade looks backwards until you write the values down, so here is the
+// reason in full -- it is exactly the kind of choice a later reader "fixes"
+// back to a precision-preserving layout without the evidence to hand.
+// time.RFC3339Nano is VARIABLE WIDTH, and '.' is 0x2E while 'Z' is 0x5A, so a
+// fractional value text-sorts BELOW a whole one in the SAME second while being
+// the LATER instant (OBSERVED, both symptoms, from values this function itself
+// produced):
 //
-//	"2026-02-28T23:30:00Z"      -> "2026-02-28T23:30:00Z"     unchanged
-//	"2026-02-28T23:30:00.123Z"  -> "2026-02-28T23:30:00.123Z" unchanged
-//	"2026-02-28T23:30:00.120Z"  -> "2026-02-28T23:30:00.12Z"  CHANGED
-//	"2026-02-28T23:30:00.100Z"  -> "2026-02-28T23:30:00.1Z"   CHANGED
-//	"2026-02-28T23:30:00.000Z"  -> "2026-02-28T23:30:00Z"     CHANGED
+//	stored "2026-02-28T23:30:00.5Z" and "2026-02-28T23:30:00Z"
+//	  ORDER BY started_at DESC -> [whole, frac]   the later instant comes SECOND
+//	  From = "2026-02-28T23:30:00Z" over the .5Z row -> total=0, row excluded
 //
-// That is an accepted canonicalisation, not a defect, and it is deliberately
-// NOT worked around: a short-circuit to preserve trailing zeros would trade
-// the real guarantee above for a cosmetic one. Note that migration 15 does the
-// OPPOSITE with a stored ".120Z" -- its GLOB guard skips it, so that row keeps
-// its trailing zero. The two sides genuinely differ on this one input, and
-// that is intended for the reason given above: they act at different times on
-// different populations, and neither is permitted to lose an instant.
+// The second of those is agent-os-hxra's symptom regenerated, from a row this
+// server wrote itself -- no non-UTC server needed. So a variable-width layout
+// buys back precision that nothing reads at the cost of the ordering the whole
+// table depends on. Truncate(time.Second) is what makes the two halves of this
+// fix agree: migration 15's strftime('%Y-%m-%dT%H:%M:%SZ', ...) is fixed width
+// for the same reason, and all 16 existing writers already emit whole seconds
+// via time.Now().Format(time.RFC3339), so this output is byte-identical to
+// what they produce today.
+//
+// Truncation, never rounding: it only ever moves a value earlier, and never
+// out of the second it names.
+//
+// The .Truncate(time.Second) is NOT load-bearing today and is not pretending
+// to be: time.RFC3339's layout carries no fractional field, so Format alone
+// already drops it. MEASURED -- removing the Truncate under -overlay leaves
+// the whole database package green, whereas swapping the layout back to
+// RFC3339Nano fails four assertions. It is kept because it states the
+// invariant on the VALUE rather than relying on a property of the layout
+// constant, so the guarantee survives someone changing the layout later. Read
+// it as documentation with teeth, not as the mechanism.
 func canonicalTimestamp(value string) string {
 	parsed, err := time.Parse(time.RFC3339, value)
 	if err != nil {
 		return value
 	}
-	return parsed.UTC().Format(time.RFC3339Nano)
+	return parsed.UTC().Truncate(time.Second).Format(time.RFC3339)
 }
 
 func (d *DB) InsertUpdateHistory(entry *models.UpdateHistoryEntry) error {

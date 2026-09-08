@@ -23,9 +23,21 @@ const (
 	// DESC it comes SECOND behind offsetSpelling ("2026-03-01" > "2026-02-28")
 	// even though it is the later instant: that inversion is the bug.
 	laterUTCSpelling = "2026-02-28T23:30:00Z"
-	// Already canonical AND sub-second: RFC3339Nano keeps this byte-identical,
-	// time.RFC3339 would truncate it. Sorts between the two above.
-	subSecondSpelling = "2026-02-28T23:00:00.123Z"
+	// Three values one SECOND apart, for the control arm. Second-level
+	// separation, not minute-level: a fixture separated at the minute field is
+	// satisfied by minute ordering and cannot notice a sort that is wrong
+	// inside a minute, which is precisely the resolution this column's text
+	// sort operates at.
+	secondA = "2026-02-28T23:30:00Z"
+	secondB = "2026-02-28T23:30:01Z"
+	secondC = "2026-02-28T23:30:02Z"
+	// The same whole second as secondA, half a second LATER. This is the pair
+	// that a variable-width layout gets wrong: '.' (0x2E) sorts BELOW 'Z'
+	// (0x5A), so "...00.5Z" text-sorts before "...00Z" while being the later
+	// instant.
+	subSecondSpelling = "2026-02-28T23:30:00.5Z"
+	// Width of a whole-second RFC3339 UTC value, "2026-02-28T23:30:00Z".
+	fixedWidth = 20
 )
 
 // seedRawUpdateHistory writes a row with the DB layer bypassed, so the stored
@@ -125,20 +137,23 @@ func TestGetUpdateHistory_OrdersByInstantAcrossSpellings(t *testing.T) {
 // Criterion 4, the control arm: it MUST pass on both sides of the fix, or a
 // normaliser that mangles every value would satisfy criteria 1-3.
 //
-// Both shapes the criterion is really asserting are covered: a whole-second Z
-// value AND a sub-second one. The sub-second half is the one that fails if the
-// chokepoint ever goes back to time.RFC3339, which truncates.
+// The fixture is separated by ONE SECOND, deliberately. An earlier version of
+// this test separated its rows at the MINUTE field, which meant the ordering
+// assertion was satisfied by minute separation rather than by the behaviour it
+// names -- a row sorted wrongly inside a minute would still have passed. The
+// column's text sort is only as good as its finest field, so the fixture has
+// to discriminate at that resolution.
 func TestGetUpdateHistory_AlreadyCanonicalIsUnchangedAndOrdersCorrectly(t *testing.T) {
 	db := newTestDB(t)
-	require.NoError(t, db.InsertUpdateHistory(newEntry("early", utcSpelling, nil)))
-	require.NoError(t, db.InsertUpdateHistory(newEntry("mid", subSecondSpelling, nil)))
-	require.NoError(t, db.InsertUpdateHistory(newEntry("late", laterUTCSpelling, nil)))
+	require.NoError(t, db.InsertUpdateHistory(newEntry("early", secondA, nil)))
+	require.NoError(t, db.InsertUpdateHistory(newEntry("mid", secondB, nil)))
+	require.NoError(t, db.InsertUpdateHistory(newEntry("late", secondC, nil)))
 
 	// Byte-identical storage, not merely equivalent.
 	for _, tc := range []struct{ id, want string }{
-		{"early", utcSpelling},
-		{"mid", subSecondSpelling},
-		{"late", laterUTCSpelling},
+		{"early", secondA},
+		{"mid", secondB},
+		{"late", secondC},
 	} {
 		got, _ := rawTimestamps(t, db, tc.id)
 		require.Equal(t, tc.want, got, "%s must be stored byte-identically", tc.id)
@@ -150,45 +165,115 @@ func TestGetUpdateHistory_AlreadyCanonicalIsUnchangedAndOrdersCorrectly(t *testi
 		[]string{entries[0].ID, entries[1].ID, entries[2].ID})
 }
 
-// The chokepoint's guarantee is "the instant is preserved exactly and the
-// spelling is canonicalised", NOT "the bytes never change". This pins the one
-// input where those two differ, so it is documented executably rather than
-// discovered later by someone who assumed byte-stability: RFC3339Nano drops
-// trailing zeros. Every case here is the SAME INSTANT in and out, which is the
-// property that actually matters and is asserted alongside.
+// THE PROPERTY THE WHOLE BEAD RESTS ON: these columns are ORDERed and compared
+// as TEXT, so text order must equal instant order. That requires every stored
+// value to be the SAME WIDTH -- not merely correct, and not merely precise.
 //
-// Deliberately NOT worked around. A short-circuit preserving trailing zeros
-// would trade a real guarantee for a cosmetic one. Latent either way: every
-// current writer emits whole seconds, so no such value exists today.
-func TestInsertUpdateHistory_TrailingZeroesAreCanonicalisedNotLost(t *testing.T) {
+// A variable-width layout breaks it inside a single second. '.' is 0x2E and
+// 'Z' is 0x5A, so "...:00.5Z" text-sorts BELOW "...:00Z" while being half a
+// second LATER. Both arms below are the bead's own two symptoms regenerated
+// from values the chokepoint itself produces, which is what makes this
+// different from the offset case: no non-UTC server is needed.
+//
+// The ordering arm is written as an INVARIANT rather than an expected
+// permutation, because that is the form which is meaningful on both sides:
+// under a fixed-width layout the two values collapse to one string and their
+// order is a legitimate tie, so asserting a specific permutation would be
+// asserting something false. "The later instant never sorts strictly below the
+// earlier one" is true under the fix and violated without it.
+func TestGetUpdateHistory_SubSecondValuesStaySortableAndInBounds(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, db.InsertUpdateHistory(newEntry("whole", secondA, nil)))
+	require.NoError(t, db.InsertUpdateHistory(newEntry("frac", subSecondSpelling, nil)))
+
+	storedWhole, _ := rawTimestamps(t, db, "whole")
+	storedFrac, _ := rawTimestamps(t, db, "frac")
+
+	// Subtests, not a straight sequence: the three arms are the mechanism and
+	// its two independent symptoms, and a plain require would stop at the
+	// first and hide whether the other two actually discriminate.
+	t.Run("text order does not contradict instant order", func(t *testing.T) {
+		require.False(t, storedFrac < storedWhole,
+			"%q (the LATER instant) text-sorts below %q", storedFrac, storedWhole)
+	})
+
+	t.Run("a bound at the whole second includes a row inside it", func(t *testing.T) {
+		// The agent-os-hxra symptom, regenerated from values this chokepoint
+		// produces itself -- no non-UTC server required.
+		bound := time.Date(2026, 2, 28, 23, 30, 0, 0, time.UTC)
+		entries, total, err := db.GetUpdateHistory(models.UpdateHistoryFilters{From: &bound})
+		require.NoError(t, err)
+		require.Equal(t, 2, total, "a row written half a second after the bound was excluded")
+		require.Len(t, entries, 2)
+	})
+
+	t.Run("every stored value is fixed width", func(t *testing.T) {
+		require.Len(t, storedWhole, fixedWidth)
+		require.Len(t, storedFrac, fixedWidth,
+			"a sub-second input must still be stored fixed width, or it cannot text-sort against its own second")
+	})
+}
+
+// Sub-second precision is DISCARDED, on purpose, and this pins that so a
+// later reader does not "fix" it back to a precision-preserving layout without
+// the evidence in front of them.
+//
+// The trade is deliberate and one-directional: this column is SORTED and
+// COMPARED as text, so fixed width is load-bearing and retained precision is
+// not used by anything. A variable-width layout buys precision nobody reads at
+// the cost of the ordering the whole table depends on -- see
+// TestGetUpdateHistory_SubSecondValuesStaySortableAndInBounds for the two
+// symptoms that produces. Every one of the five inputs below collapses to the
+// same fixed-width whole second, which is the property being asserted; the
+// discarded fraction is at most 999ms on a row whose purpose is to say which
+// day an update ran.
+//
+// Latent in practice: all 16 existing writers emit whole seconds via
+// time.Now().Format(time.RFC3339), so this truncation changes nothing about
+// what they store. It governs the next caller.
+func TestInsertUpdateHistory_SubSecondPrecisionIsDiscardedForFixedWidth(t *testing.T) {
 	db := newTestDB(t)
 	for _, tc := range []struct{ id, in, wantStored string }{
-		{"z", "2026-02-28T23:30:00Z", "2026-02-28T23:30:00Z"},          // unchanged
-		{"n3", "2026-02-28T23:30:00.123Z", "2026-02-28T23:30:00.123Z"}, // unchanged
-		{"n2", "2026-02-28T23:30:00.120Z", "2026-02-28T23:30:00.12Z"},  // canonicalised
-		{"n1", "2026-02-28T23:30:00.100Z", "2026-02-28T23:30:00.1Z"},   // canonicalised
-		{"n0", "2026-02-28T23:30:00.000Z", "2026-02-28T23:30:00Z"},     // canonicalised
+		{"z", "2026-02-28T23:30:00Z", "2026-02-28T23:30:00Z"},      // already whole
+		{"n3", "2026-02-28T23:30:00.123Z", "2026-02-28T23:30:00Z"}, // truncated
+		{"n2", "2026-02-28T23:30:00.120Z", "2026-02-28T23:30:00Z"}, // truncated
+		{"n1", "2026-02-28T23:30:00.100Z", "2026-02-28T23:30:00Z"}, // truncated
+		{"n0", "2026-02-28T23:30:00.000Z", "2026-02-28T23:30:00Z"}, // truncated
+		{"n9", "2026-02-28T23:30:00.999Z", "2026-02-28T23:30:00Z"}, // truncated, never rounded up
 	} {
 		require.NoError(t, db.InsertUpdateHistory(newEntry(tc.id, tc.in, nil)))
 		stored, _ := rawTimestamps(t, db, tc.id)
 		require.Equal(t, tc.wantStored, stored, "%s: stored spelling", tc.id)
 
+		require.Len(t, stored, fixedWidth, "%s: stored value must be fixed width", tc.id)
+
+		// Truncation only ever moves a value EARLIER, never later, and never
+		// past the second it names. Rounding would break both.
 		in, err := time.Parse(time.RFC3339, tc.in)
 		require.NoError(t, err)
 		out, err := time.Parse(time.RFC3339, stored)
 		require.NoError(t, err)
-		require.True(t, in.Equal(out), "%s: the instant must survive exactly", tc.id)
+		require.False(t, out.After(in), "%s: truncation must never move a value later", tc.id)
+		require.True(t, in.Sub(out) < time.Second, "%s: must stay within its own second", tc.id)
 	}
 }
 
-// Migration 15 does the OPPOSITE with a stored sub-second value: its GLOB
-// guard skips it, so the trailing zero survives untouched. The two sides
-// genuinely differ on this one input and that is intended -- they act at
-// different times on different populations. Two-sided on ONE migration run, so
-// this cannot pass by the statement simply doing nothing: the offset row in
-// the same table must be rewritten by the same statement that leaves the
-// fractional row alone.
-func TestMigration15_LeavesStoredTrailingZeroesAloneWhileStillRewritingOffsets(t *testing.T) {
+// Guard 2's scope, pinned: the migration leaves a row that already ends in Z
+// alone, sub-second fraction included.
+//
+// This is a KNOWN AND ACCEPTED GAP rather than a property to be proud of. Such
+// a row keeps a variable-width spelling and so still does not text-sort
+// correctly against whole-second rows in its own second -- the same defect
+// canonicalTimestamp's truncation exists to prevent on the write side. It is
+// left alone deliberately: rewriting it is a data-touching edit whose only
+// beneficiary is a row shape this application has never written, since every
+// writer goes through the chokepoint and emits whole seconds. Pinned here so
+// the gap is visible in the test record instead of being rediscovered.
+//
+// Two-sided on ONE migration run, so it cannot pass by the statement simply
+// doing nothing: the offset row in the same table must be rewritten by the
+// same statement that leaves the fractional row alone.
+func TestMigration15_LeavesStoredSubSecondRowsAloneWhileStillRewritingOffsets(t *testing.T) {
 	db := newTestDB(t)
 	seedRawUpdateHistory(t, db, "frac", "2026-02-28T23:30:00.120Z", "2026-02-28T23:30:00.120Z")
 	seedRawUpdateHistory(t, db, "off", offsetSpelling, nil)
@@ -207,16 +292,18 @@ func TestMigration15_LeavesStoredTrailingZeroesAloneWhileStillRewritingOffsets(t
 }
 
 // Criterion 1's pass-through requirement, and the other half of the control:
-// a normaliser must not zero, reject, or reshape what it cannot parse, and it
-// must not truncate a value that is already canonical but carries sub-second
-// precision. Both must hold on BOTH sides of the fix.
-func TestInsertUpdateHistory_UninterpretableAndSubSecondValuesSurviveUnchanged(t *testing.T) {
+// a normaliser must not zero, reject, or reshape a value it cannot parse. Must
+// hold on BOTH sides of the fix.
+//
+// A sub-second value is NOT in this set -- Go's RFC3339 parses it, so it is
+// normalised rather than passed through. That case is
+// TestInsertUpdateHistory_SubSecondPrecisionIsDiscardedForFixedWidth.
+func TestInsertUpdateHistory_UninterpretableValuesSurviveUnchanged(t *testing.T) {
 	db := newTestDB(t)
 	for _, tc := range []struct{ id, startedAt string }{
 		{"garbage", "not-a-date"},
 		{"zoneless", "2026-02-28T23:30:00"},
 		{"spaced", "2026-02-28 23:30:00"},
-		{"subsecond", "2026-02-28T23:30:00.123Z"},
 	} {
 		completed := tc.startedAt
 		require.NoError(t, db.InsertUpdateHistory(newEntry(tc.id, tc.startedAt, &completed)))
@@ -271,8 +358,10 @@ func TestMigration15_NormalisesStoredTimestampsWithoutDestroyingAnything(t *test
 			require.True(t, c.Valid, "%s: %s completed_at must not be NULLed", when, tc.id)
 			require.Equal(t, tc.completedAt, c.String, "%s: %s completed_at", when, tc.id)
 		}
-		// Already-canonical rows are byte-identical -- including the
-		// sub-second one, which SQLite's strftime would truncate.
+		// Rows already ending in Z are byte-identical, including the
+		// sub-second one that SQLite's strftime would otherwise truncate.
+		// See TestMigration15_LeavesStoredSubSecondRowsAloneWhileStillRewritingOffsets
+		// for why leaving that one alone is an accepted gap, not a win.
 		for _, tc := range []struct{ id, startedAt, completedAt string }{
 			{"zulu", utcSpelling, laterUTCSpelling},
 			{"subsecond", "2026-02-28T22:30:00.123Z", "2026-02-28T23:30:00.456Z"},

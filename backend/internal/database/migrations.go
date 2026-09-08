@@ -587,13 +587,26 @@ INSERT OR IGNORE INTO settings (key, value) VALUES ('update_apply_days', '0,1,2,
 		// (OBSERVED). The explicit `IS NOT NULL` in front of it is therefore
 		// belt-and-braces, and is kept for readability.
 		//
-		// DELIBERATE DIVERGENCE FROM THE CHOKEPOINT, not an oversight: a
-		// stored '2026-02-28T23:30:00.120Z' is skipped here and keeps its
-		// trailing zero, whereas canonicalTimestamp would rewrite the same
-		// value to '...00.12Z' (OBSERVED, both). Same instant either way.
-		// This is the two-populations rule doing its job -- the migration's
-		// duty is to leave an already-canonical stored row alone, and the
-		// chokepoint's is to emit one canonical spelling.
+		// The '%S' in the format string is FIXED WIDTH, and that is the
+		// point of it rather than a limitation to apologise for: these
+		// columns are ORDERed and compared as text, so a variable-width
+		// spelling breaks sorting inside a single second. canonicalTimestamp
+		// truncates to the second for exactly the same reason, so both halves
+		// of this fix emit the same shape. ('%f' would stamp a '.000' on
+		// every row and reintroduce the width problem it looks like it
+		// solves.)
+		//
+		// KNOWN AND ACCEPTED GAP, recorded so it is not mistaken for
+		// coverage: guard 2 skips a row ALREADY ending in Z, including a
+		// sub-second one such as '2026-02-28T23:30:00.120Z'. Such a row keeps
+		// its trailing fraction and therefore still does not text-sort
+		// correctly against whole-second rows in its own second. It is left
+		// alone deliberately -- rewriting it is a data-touching edit whose
+		// only beneficiary is a row shape this application has never written,
+		// since every writer goes through canonicalTimestamp and emits whole
+		// seconds. A row like that can only come from an external writer or a
+		// hand-edited database, the same population as the unparseable rows
+		// guard 1 protects.
 		//
 		// Idempotent by construction: every row this touches ends in an
 		// uppercase Z, so guard 2 excludes it from any later run. Migrations
