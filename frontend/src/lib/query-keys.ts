@@ -18,7 +18,7 @@
  *    cannot drift between the useQuery and the invalidate.
  */
 
-import type { UpdateHistoryFilters } from '@/types'
+import type { BackupHistoryFilters, UpdateHistoryFilters } from '@/types'
 
 /** Filters accepted by the paginated audit-log query. */
 export interface AuditLogFilters {
@@ -122,6 +122,14 @@ export const queryKeys = {
      * fails against a query registered under `{ limit: 20 }` and reaches nothing.
      */
     historyAll: () => ['backup', 'history'] as const,
+    /**
+     * The paginated, filtered dashboard history list. Its first two segments
+     * are exactly `historyAll()`, so every existing `historyAll()` invalidation
+     * partial-matches it. The filters ride in a single trailing object, the
+     * same shape as `updateHistory.list` -- do NOT hoist any of them into the
+     * prefix, or `historyAll()` stops reaching this key.
+     */
+    history: (filters: BackupHistoryFilters) => ['backup', 'history', filters] as const,
     snapshots: (stackId: string) => ['backup', 'snapshots', stackId] as const,
     run: (runId: string) => ['backup', 'runs', runId] as const,
     snapshotPreview: (snapshotId: string) => ['backup', 'snapshot-preview', snapshotId] as const,

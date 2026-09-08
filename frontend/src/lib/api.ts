@@ -27,6 +27,8 @@ import type {
   GitCommit,
   BackupPolicy,
   BackupRun,
+  BackupHistoryFilters,
+  BackupHistoryResponse,
   BackupRunItem,
   BackupSnapshot,
   BackupSettings,
@@ -774,8 +776,15 @@ export const backupApi = {
     return response.data
   },
 
-  getHistory: async (limit = 50) => {
-    const response = await apiClient.get<{ runs: BackupRun[] }>('/backups/history', { params: { limit } })
+  /**
+   * One page of backup runs. Accepts either a bare limit -- the original
+   * signature, still used by useStackBackupRuns -- or a full filters object.
+   * A number is deliberately mapped to `{ limit }` alone so the legacy caller
+   * keeps sending exactly what it always sent, with no `page` param.
+   */
+  getHistory: async (options: number | BackupHistoryFilters = 50) => {
+    const params = typeof options === 'number' ? { limit: options } : options
+    const response = await apiClient.get<BackupHistoryResponse>('/backups/history', { params })
     return response.data
   },
 

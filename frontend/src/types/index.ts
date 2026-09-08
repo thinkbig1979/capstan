@@ -391,6 +391,37 @@ export interface BackupRun {
   errorMessage?: string
 }
 
+/**
+ * Query shape for GET /backups/history, mirroring the handler's own parser
+ * (backend/internal/handlers/backup.go, getHistory). `page` and `limit` are
+ * required here because every caller paginates; the server clamps `limit` to
+ * 100 and falls back to its own defaults on an unparseable value rather than
+ * erroring. `from`/`to` are RFC3339.
+ */
+export interface BackupHistoryFilters {
+  page: number
+  limit: number
+  status?: string
+  kind?: string
+  trigger?: string
+  from?: string
+  to?: string
+}
+
+/**
+ * GET /backups/history. `runs` keeps its original name and meaning -- the
+ * pagination fields were added alongside it -- and the handler guarantees an
+ * array, never null, so no `?? []` defence is needed at the call sites.
+ * `totalPages` is 0 when `total` is 0.
+ */
+export interface BackupHistoryResponse {
+  runs: BackupRun[]
+  total: number
+  page: number
+  limit: number
+  totalPages: number
+}
+
 export interface BackupRunItem {
   id: string
   runId: string

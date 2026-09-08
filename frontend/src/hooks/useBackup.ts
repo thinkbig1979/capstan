@@ -4,7 +4,7 @@ import { backupApi } from '@/lib/api'
 import { WSClient } from '@/lib/ws'
 import { reconcileOnClose } from '@/lib/ws-reconcile'
 import { queryKeys } from '@/lib/query-keys'
-import type { BackupPolicy, BackupOperationResult } from '@/types'
+import type { BackupPolicy, BackupOperationResult, BackupHistoryFilters } from '@/types'
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -187,6 +187,22 @@ export function usePreviewSnapshot(snapshotId: string) {
     queryKey: queryKeys.backup.snapshotPreview(snapshotId),
     queryFn: () => backupApi.previewSnapshot(snapshotId),
     enabled: !!snapshotId,
+  })
+}
+
+// ─── Paginated global run history ───────────────────────────
+
+/**
+ * One filtered page of backup runs, for the dashboard's Backups tab.
+ *
+ * The key comes from queryKeys.backup.history(filters), which sits under the
+ * ['backup','history'] prefix, so the mutations that already invalidate
+ * historyAll() refresh this list too without any new invalidation call.
+ */
+export function useBackupHistory(filters: BackupHistoryFilters) {
+  return useQuery({
+    queryKey: queryKeys.backup.history(filters),
+    queryFn: () => backupApi.getHistory(filters),
   })
 }
 

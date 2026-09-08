@@ -62,6 +62,12 @@ describe('queryKeys literal shapes', () => {
     expect(queryKeys.backup.stackHistory(5, 's1')).toEqual([
       'backup', 'history', { limit: 5 }, 'stack', 's1',
     ])
+    // agent-os-lak4.2: the paginated dashboard history key. Elements 0-1 are
+    // exactly what historyAll() returns, so the five existing historyAll()
+    // invalidations partial-match it.
+    expect(queryKeys.backup.history({ page: 1, limit: 25 })).toEqual([
+      'backup', 'history', { page: 1, limit: 25 },
+    ])
   })
 
   it('pins the update-history and audit-log families', () => {
@@ -153,6 +159,17 @@ describe('queryKeys prefix relationships', () => {
     ).toBe(true)
   })
 
+  it('backup.historyAll() is a prefix of the paginated dashboard history key', () => {
+    // AC1 (agent-os-lak4.2). The filtered key must START with the exact array
+    // historyAll() returns, or a completed backup does not refresh the tab.
+    expect(
+      isPrefixOf(
+        queryKeys.backup.historyAll(),
+        queryKeys.backup.history({ page: 1, limit: 25 }),
+      ),
+    ).toBe(true)
+  })
+
 })
 
 /**
@@ -211,6 +228,36 @@ describe('queryKeys invalidation reaches its queries', () => {
     expect(
       await registerAndInvalidate(queryKeys.backup.status(), queryKeys.backup.historyAll()),
     ).toBe(false)
+  })
+
+  it('backup.historyAll() invalidates the paginated dashboard history query', async () => {
+    // AC2, positive arm (agent-os-lak4.2). BackupHistoryTab registers under
+    // history(filters); the five mutation call sites invalidate historyAll().
+    expect(
+      await registerAndInvalidate(
+        queryKeys.backup.history({ page: 2, limit: 25, status: 'failed' }),
+        queryKeys.backup.historyAll(),
+      ),
+    ).toBe(true)
+  })
+
+  it('a wrong prefix does NOT invalidate the paginated dashboard history query', async () => {
+    // AC2, negative arm. On its own, "invalidateQueries marked it stale" is
+    // equally consistent with a correct key and with a key so broad it matches
+    // everything; this arm is the half that discriminates. The three probes are
+    // a near-miss typo, a sibling family, and a typo in the root segment.
+    for (const wrongPrefix of [
+      ['backup', 'history-list'],
+      ['backup', 'status'],
+      ['backups', 'history'],
+    ]) {
+      expect(
+        await registerAndInvalidate(
+          queryKeys.backup.history({ page: 2, limit: 25, status: 'failed' }),
+          wrongPrefix,
+        ),
+      ).toBe(false)
+    }
   })
 
   it('updateHistory.all() invalidates a filtered update-history list', async () => {
