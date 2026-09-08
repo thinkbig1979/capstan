@@ -237,8 +237,17 @@ describe('StacksTab — the git indicator', () => {
     // A group header is present: this is the grouped branch.
     expect(screen.getByText('2 stacks')).toBeInTheDocument()
     expect(screen.getByTestId('git-repo-s1')).toBeInTheDocument()
-    // The directory's first stack is a repo and the second is not. A row
-    // indicator keyed on the directory (node.stacks[0]) would mark both.
+    // This fixture makes a directory's stacks disagree on isGitRepo
+    // SYNTHETICALLY, to exercise the predicate. Production cannot reach that
+    // state: buildDirectoryRecord calls resolveGitState(path) once per
+    // directory (backend/internal/services/scanner.go:1158),
+    // ScanDirectoryWithRoot reads that single value into a local (:1224), and
+    // the per-compose-file loop stamps the same loop-invariant into every
+    // stack it creates (:1328), so all stacks in a node share it. The
+    // assertion therefore pins the predicate's shape -- the row indicator
+    // reads the row's own stack, not the directory's first (node.stacks[0]),
+    // which would mark both -- rather than a reachable bug. Not tested against
+    // a live scanner; read from those three sites.
     expect(screen.queryByTestId('git-repo-s2')).not.toBeInTheDocument()
   })
 })
