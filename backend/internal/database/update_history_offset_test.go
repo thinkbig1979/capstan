@@ -2,6 +2,7 @@ package database
 
 import (
 	"math"
+	"math/bits"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +15,14 @@ import (
 // {Page: 3, Limit: 2} a SHORT last page of exactly one row, which an
 // over-rejecting guard turns empty and a correct guard leaves alone.
 var seededUpdateIDs = []string{"upd-e", "upd-d", "upd-c", "upd-b", "upd-a"}
+
+// wrapToZeroPage is the page at which (page-1)*4 wraps to EXACTLY zero on THIS
+// platform: 2^62+1 where int is 64-bit, 2^30+1 where it is 32-bit. Derived from
+// bits.UintSize rather than written as a literal, because a 64-bit literal does
+// not compile under GOARCH=386 — which would leave the one arm that exists to
+// prove the guard is 32-bit-correct as the only thing that cannot be built for
+// 32-bit. (OBSERVED under GOARCH=386: `1<<62 + 1` is rejected with "overflows".)
+const wrapToZeroPage = 1<<(bits.UintSize-2) + 1
 
 func seedUpdateHistoryPage(t *testing.T, db *DB) {
 	t.Helper()
@@ -88,7 +97,7 @@ func TestGetUpdateHistory_OffsetOverflowDoesNotWrapToPageOne(t *testing.T) {
 	// which is not negative, so a guard that multiplied first and then tested
 	// the sign of the product would miss this and serve page one again. Only a
 	// guard on the OPERANDS catches it.
-	zero, zeroTotal, err := db.GetUpdateHistory(models.UpdateHistoryFilters{Page: 1<<62 + 1, Limit: 4})
+	zero, zeroTotal, err := db.GetUpdateHistory(models.UpdateHistoryFilters{Page: wrapToZeroPage, Limit: 4})
 	require.NoError(t, err)
 	assert.Empty(t, updateEntryIDs(zero), "a page whose offset wraps to exactly zero must be empty, never page one")
 	assert.Equal(t, len(seededUpdateIDs), zeroTotal, "total still describes the whole match set")
@@ -109,4 +118,40 @@ func TestGetUpdateHistory_OffsetOverflowDoesNotWrapToPageOne(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, updateEntryIDs(big), "an in-range page past the end is empty too")
 	assert.Equal(t, len(seededUpdateIDs), bigTotal)
+}
+
+// The overflow guard divides by limit, which the code did not do before the
+// guard existed — back then limit was only ever MULTIPLIED, so limit = 0 gave
+// offset = 0 and was merely useless. It is now a DIVISOR, which makes the
+// `if limit <= 0 { limit = 25 }` clamp load-bearing for panic-safety rather
+// than only for defaults. Nothing pinned that coupling, so a later cleanup
+// could weaken the clamp with no idea it was holding back a divide-by-zero.
+//
+// The control arm matters as much as the defect arm: an explicit in-range
+// limit must still work, or "no panic" above could just as well mean the
+// function stopped doing anything.
+func TestGetUpdateHistory_ZeroLimitDoesNotDivideByZero(t *testing.T) {
+	db := newTestDB(t)
+	seedUpdateHistoryPage(t, db)
+
+	// Limit 0 reaches the clamp, which substitutes the default page size. The
+	// assertion is that this RETURNS at all — an unclamped 0 panics with
+	// "integer divide by zero" inside the guard, never reaching this line.
+	got, total, err := db.GetUpdateHistory(models.UpdateHistoryFilters{Limit: 0})
+	require.NoError(t, err)
+	assert.Equal(t, seededUpdateIDs, updateEntryIDs(got), "limit 0 falls back to the default page size")
+	assert.Equal(t, len(seededUpdateIDs), total)
+
+	// Page 2 as well: page-1 is non-zero here, so the division is reached by a
+	// different route through the comparison than the page-1 case above.
+	second, secondTotal, err := db.GetUpdateHistory(models.UpdateHistoryFilters{Page: 2, Limit: 0})
+	require.NoError(t, err)
+	assert.Empty(t, updateEntryIDs(second), "page two at the default page size is past the end of a five-row seed")
+	assert.Equal(t, len(seededUpdateIDs), secondTotal)
+
+	// Control arm: an explicit in-range limit still pages normally.
+	explicit, explicitTotal, err := db.GetUpdateHistory(models.UpdateHistoryFilters{Page: 1, Limit: 2})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"upd-e", "upd-d"}, updateEntryIDs(explicit), "an explicit limit still applies")
+	assert.Equal(t, len(seededUpdateIDs), explicitTotal)
 }

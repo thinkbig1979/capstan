@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/bits"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -29,6 +30,14 @@ type auditLogResponse struct {
 // `ORDER BY created_at DESC`. Five (not four) makes ?page=3&pageSize=2 a SHORT
 // last page of exactly one row, which an over-rejecting guard empties.
 var seededAuditIDs = []string{"log-e", "log-d", "log-c", "log-b", "log-a"}
+
+// wrapToZeroPage is the page at which (page-1)*4 wraps to EXACTLY zero on THIS
+// platform: 2^62+1 where int is 64-bit, 2^30+1 where it is 32-bit. Derived from
+// bits.UintSize rather than hardcoded into the query string, because a 64-bit
+// literal Atoi-clamps to page=1 on a 32-bit build — the arm would still compile
+// there and would then assert the wrong thing entirely. The URL is built from
+// this same constant with Sprintf so the value and the request cannot drift.
+const wrapToZeroPage = 1<<(bits.UintSize-2) + 1
 
 func seedAuditLogPage(t *testing.T, db *database.DB) {
 	t.Helper()
@@ -110,7 +119,7 @@ func TestGetAuditLog_OffsetOverflowDoesNotWrapToPageOne(t *testing.T) {
 	// which is not negative, so a guard that multiplied first and then tested
 	// the sign of the product would miss this and serve page one again. Only a
 	// guard on the OPERANDS catches it.
-	zero, _ := getAuditLogPage(t, router, "?page=4611686018427387905&pageSize=4")
+	zero, _ := getAuditLogPage(t, router, fmt.Sprintf("?page=%d&pageSize=4", wrapToZeroPage))
 	assert.Empty(t, auditLogIDs(zero.Entries), "a page whose offset wraps to exactly zero must be empty, never page one")
 	assert.Equal(t, len(seededAuditIDs), zero.Total, "total must stay the true match-set size, never 0")
 
@@ -128,4 +137,49 @@ func TestGetAuditLog_OffsetOverflowDoesNotWrapToPageOne(t *testing.T) {
 	big, _ := getAuditLogPage(t, router, "?page=999999999&pageSize=50")
 	assert.Empty(t, auditLogIDs(big.Entries), "an in-range page past the end is empty too")
 	assert.Equal(t, len(seededAuditIDs), big.Total)
+}
+
+// The overflow guard divides by pageSize, which the handler did not do before
+// the guard existed — back then pageSize was only ever MULTIPLIED, so
+// pageSize = 0 gave offset = 0 and was merely useless. It is now a DIVISOR,
+// which makes the clamp rejecting a pageSize below 1 load-bearing for
+// panic-safety rather than only for defaults. Nothing pinned that coupling, so
+// a later cleanup could weaken the clamp with no idea it was holding back a
+// divide-by-zero. This test drives the real route, because the clamp reads a
+// client-supplied query parameter and that is the whole exposure.
+//
+// The router is gin.New() with no recovery middleware, deliberately: an
+// unclamped 0 panics inside the guard and the panic surfaces as a test
+// failure here rather than being converted into a quiet 500.
+func TestGetAuditLog_ZeroPageSizeDoesNotDivideByZero(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler, _ := newTestSettingsHandler(t)
+	seedAuditLogPage(t, handler.db)
+
+	router := gin.New()
+	router.GET("/settings/audit-log", authContextMiddleware("test-user-id"), handler.GetAuditLog)
+
+	// pageSize 0 reaches the clamp, which substitutes the default page size.
+	// The assertion is that this RESPONDS at all — an unclamped 0 panics with
+	// "integer divide by zero" inside the guard and never reaches the 200.
+	zeroSize, _ := getAuditLogPage(t, router, "?pageSize=0")
+	assert.Equal(t, seededAuditIDs, auditLogIDs(zeroSize.Entries), "pageSize 0 falls back to the default page size")
+	assert.Equal(t, 50, zeroSize.PageSize, "the clamp substitutes the default, it does not pass 0 through")
+	assert.Equal(t, len(seededAuditIDs), zeroSize.Total)
+
+	// Page 2 as well: page-1 is non-zero here, so the division is reached by a
+	// different route through the comparison than the page-1 case above.
+	secondPage, _ := getAuditLogPage(t, router, "?page=2&pageSize=0")
+	assert.Empty(t, auditLogIDs(secondPage.Entries), "page two at the default page size is past the end of a five-row seed")
+	assert.Equal(t, len(seededAuditIDs), secondPage.Total)
+
+	// A negative pageSize takes the same clamp branch and must behave the same.
+	negative, _ := getAuditLogPage(t, router, "?pageSize=-1")
+	assert.Equal(t, seededAuditIDs, auditLogIDs(negative.Entries), "a negative pageSize falls back to the default too")
+	assert.Equal(t, 50, negative.PageSize)
+
+	// Control arm: an explicit in-range pageSize still pages normally.
+	explicit, _ := getAuditLogPage(t, router, "?page=1&pageSize=2")
+	assert.Equal(t, []string{"log-e", "log-d"}, auditLogIDs(explicit.Entries), "an explicit pageSize still applies")
+	assert.Equal(t, 2, explicit.PageSize)
 }

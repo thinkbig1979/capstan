@@ -1127,6 +1127,12 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 	// the end returns anyway — so this needs no maximum page number invented
 	// for it, and reports the same shape ([], not null) that ordinary
 	// past-the-end paging already returns.
+	//
+	// pageSize is a DIVISOR here, which it was not before this guard existed:
+	// the clamp above that rejects a pageSize below 1 is now load-bearing for
+	// panic-safety, not just for defaults. Weakening it to admit 0 turns the
+	// next line into an integer divide by zero. Pinned by
+	// TestGetAuditLog_ZeroPageSizeDoesNotDivideByZero.
 	pageOverflows := page-1 > math.MaxInt/pageSize
 	offset := 0
 	if !pageOverflows {
@@ -1157,9 +1163,12 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 	// guard exists to prevent, while leaving the guard above still sitting
 	// there looking correct — the one weakness of splitting a guard across a DB
 	// call. OBSERVED: with only this block removed (nothing else changed),
-	// TestGetAuditLog_OffsetOverflowDoesNotWrapToPageOne fails on all three of
-	// its overflow arms, reporting entries [log-e log-d log-c log-b log-a] for
-	// ?page=<MaxInt>. Do not remove it without removing the detection too.
+	// TestGetAuditLog_OffsetOverflowDoesNotWrapToPageOne fails on BOTH of its
+	// overflow arms — the huge-page route and the wrap-to-zero route, three
+	// failing assertions between them, since the huge-page arm checks the
+	// decoded entries and the raw body shape separately — reporting entries
+	// [log-e log-d log-c log-b log-a] for ?page=<MaxInt>. Do not remove it
+	// without removing the detection too.
 	if pageOverflows {
 		actions = []models.ActionLog{}
 	}

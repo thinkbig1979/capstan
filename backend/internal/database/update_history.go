@@ -85,6 +85,12 @@ func (d *DB) GetUpdateHistory(filters models.UpdateHistoryFilters) ([]models.Upd
 	// end already returns empty, and returning empty here keeps that answer
 	// consistent instead of inventing a maximum page number. total is left
 	// untouched, so the caller still learns the real size of the match set.
+	//
+	// limit is a DIVISOR here, which it was not before this guard existed: the
+	// `if limit <= 0 { limit = 25 }` clamp above is now load-bearing for
+	// panic-safety, not just for defaults. Weakening it to admit 0 turns the
+	// next line into an integer divide by zero. Pinned by
+	// TestGetUpdateHistory_ZeroLimitDoesNotDivideByZero.
 	if page-1 > math.MaxInt/limit {
 		return nil, total, nil
 	}
