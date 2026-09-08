@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1108,7 +1109,35 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 		pageSize = 50
 	}
 
-	offset := (page - 1) * pageSize
+	// (page-1)*pageSize is arithmetic on a client-supplied page, and int wraps.
+	// OBSERVED one layer below this handler: ListActionLogsFiltered(50, -100)
+	// returns the same rows as ListActionLogsFiltered(50, 0), because SQLite
+	// reads a negative OFFSET as no offset at all. Unguarded, ?page=<MaxInt>
+	// therefore comes back holding page ONE's entries while echoing the huge
+	// page number the client asked for — a wrong answer served as a correct one.
+	//
+	// The operands are tested BEFORE the multiplication, never the product: at
+	// page = 1<<62 + 1 with pageSize = 4 the product wraps to exactly 0, so a
+	// fix that multiplied first and then checked the sign would let that case
+	// through and serve page one again.
+	//
+	// The query still runs on the overflow path, because total must stay the
+	// TRUE match-set size: an out-of-range page is empty, not a report that
+	// nothing matched. Only the entries are dropped, which is what a page past
+	// the end returns anyway — so this needs no maximum page number invented
+	// for it, and reports the same shape ([], not null) that ordinary
+	// past-the-end paging already returns.
+	//
+	// pageSize is a DIVISOR here, which it was not before this guard existed:
+	// the clamp above that rejects a pageSize below 1 is now load-bearing for
+	// panic-safety, not just for defaults. Weakening it to admit 0 turns the
+	// next line into an integer divide by zero. Pinned by
+	// TestGetAuditLog_ZeroPageSizeDoesNotDivideByZero.
+	pageOverflows := page-1 > math.MaxInt/pageSize
+	offset := 0
+	if !pageOverflows {
+		offset = (page - 1) * pageSize
+	}
 
 	filter := database.ActionLogFilter{
 		Action:   c.Query("action"),
@@ -1126,6 +1155,22 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 			err,
 		))
 		return
+	}
+
+	// This line is the guard's EFFECT, and the detection above is inert without
+	// it: on the overflow path offset was held at 0, so the call just above has
+	// returned PAGE ONE's rows. Deleting this block restores the exact bug the
+	// guard exists to prevent, while leaving the guard above still sitting
+	// there looking correct — the one weakness of splitting a guard across a DB
+	// call. OBSERVED: with only this block removed (nothing else changed),
+	// TestGetAuditLog_OffsetOverflowDoesNotWrapToPageOne fails on BOTH of its
+	// overflow arms — the huge-page route and the wrap-to-zero route, three
+	// failing assertions between them, since the huge-page arm checks the
+	// decoded entries and the raw body shape separately — reporting entries
+	// [log-e log-d log-c log-b log-a] for ?page=<MaxInt>. Do not remove it
+	// without removing the detection too.
+	if pageOverflows {
+		actions = []models.ActionLog{}
 	}
 
 	availableActions, err := h.db.DistinctActionLogActions()

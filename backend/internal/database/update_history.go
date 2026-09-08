@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -64,6 +65,34 @@ func (d *DB) GetUpdateHistory(filters models.UpdateHistoryFilters) ([]models.Upd
 	page := filters.Page
 	if page <= 0 {
 		page = 1
+	}
+
+	// (page-1)*limit is arithmetic on a client-supplied page AND a
+	// client-supplied limit, and int wraps. OBSERVED before this guard, on a
+	// three-row seed: page = MaxInt with limit = 50, and page = 3 with
+	// limit = MaxInt, both returned page ONE's rows — SQLite reads a negative
+	// OFFSET as no offset at all, so the caller gets a wrong answer served as a
+	// correct one. The second route is unique to this site: getUpdateHistory in
+	// handlers/updates.go clamps limit with v > 0 and imposes no maximum, so a
+	// SMALL page overflows here whenever limit is large enough.
+	//
+	// The operands are tested BEFORE the multiplication, never the product: at
+	// page = 1<<62 + 1 with limit = 4 the product wraps to exactly 0, so a fix
+	// that multiplied first and then checked the sign would let that case
+	// through and serve page one again.
+	//
+	// Detecting the overflow beats capping page: a page legitimately past the
+	// end already returns empty, and returning empty here keeps that answer
+	// consistent instead of inventing a maximum page number. total is left
+	// untouched, so the caller still learns the real size of the match set.
+	//
+	// limit is a DIVISOR here, which it was not before this guard existed: the
+	// `if limit <= 0 { limit = 25 }` clamp above is now load-bearing for
+	// panic-safety, not just for defaults. Weakening it to admit 0 turns the
+	// next line into an integer divide by zero. Pinned by
+	// TestGetUpdateHistory_ZeroLimitDoesNotDivideByZero.
+	if page-1 > math.MaxInt/limit {
+		return nil, total, nil
 	}
 	offset := (page - 1) * limit
 
