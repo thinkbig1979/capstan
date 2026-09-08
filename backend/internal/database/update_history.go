@@ -29,13 +29,21 @@ func (d *DB) GetUpdateHistory(filters models.UpdateHistoryFilters) ([]models.Upd
 		whereClauses = append(whereClauses, "stack_id = ?")
 		args = append(args, filters.StackID)
 	}
+	// started_at is compared as TEXT, so the bound has to be one canonical
+	// spelling or it selects by spelling rather than by instant: a caller
+	// sending its own offset is sending a different string for the same
+	// moment. Normalising the bound is only half of it -- the WRITE side of
+	// this table still stores the server's local offset (agent-os-lmbn), so
+	// the stored values are not canonical yet either. This makes the bound
+	// correct and does not regress that: when the caller sends Z, which the
+	// frontend always does, .UTC() is a no-op.
 	if filters.From != nil {
 		whereClauses = append(whereClauses, "started_at >= ?")
-		args = append(args, filters.From.Format(time.RFC3339))
+		args = append(args, filters.From.UTC().Format(time.RFC3339))
 	}
 	if filters.To != nil {
 		whereClauses = append(whereClauses, "started_at <= ?")
-		args = append(args, filters.To.Format(time.RFC3339))
+		args = append(args, filters.To.UTC().Format(time.RFC3339))
 	}
 
 	whereClause := ""
@@ -182,7 +190,11 @@ func (d *DB) UpdateUpdateHistory(id string, updates map[string]interface{}) erro
 }
 
 func (d *DB) DeleteUpdateHistoryOlderThan(before time.Time) (int, error) {
-	result, err := d.db.Exec("DELETE FROM update_history WHERE completed_at < ?", before.Format(time.RFC3339))
+	// .UTC() is load-bearing here, not cosmetic: completed_at is compared as
+	// text, so an unnormalised bound deletes by spelling rather than by
+	// instant. A positive offset destroys rows the caller asked to keep and a
+	// negative one leaves rows it asked to remove (agent-os-hxra).
+	result, err := d.db.Exec("DELETE FROM update_history WHERE completed_at < ?", before.UTC().Format(time.RFC3339))
 	if err != nil {
 		return 0, err
 	}

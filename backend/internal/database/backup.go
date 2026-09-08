@@ -156,13 +156,15 @@ func (d *DB) GetBackupRunsFiltered(filters models.BackupHistoryFilters) ([]model
 		whereClauses = append(whereClauses, "trigger = ?")
 		args = append(args, filters.Trigger)
 	}
+	// Same text-comparison hazard as GetUpdateHistory: normalise the
+	// caller's bound to UTC before formatting, or it selects by spelling.
 	if filters.From != nil {
 		whereClauses = append(whereClauses, "started_at >= ?")
-		args = append(args, filters.From.Format(time.RFC3339))
+		args = append(args, filters.From.UTC().Format(time.RFC3339))
 	}
 	if filters.To != nil {
 		whereClauses = append(whereClauses, "started_at <= ?")
-		args = append(args, filters.To.Format(time.RFC3339))
+		args = append(args, filters.To.UTC().Format(time.RFC3339))
 	}
 
 	whereClause := ""
