@@ -48,19 +48,36 @@ function runDuration(run: BackupRun): string {
 }
 
 /**
+ * Whether a run has stopped writing items. Spelled as an exhaustive Record
+ * rather than `status !== 'running'` so that adding a status to the union is a
+ * compile error here until someone decides which side it falls on — the unsafe
+ * default (silently caching a run that is still changing) is the one a
+ * negation would pick.
+ */
+const RUN_IS_TERMINAL: Record<BackupRun['status'], boolean> = {
+  running: false,
+  success: true,
+  partial: true,
+  failed: true,
+  interrupted: true,
+}
+
+/**
  * One run's per-stack records, fetched only once the row is expanded.
  *
- * The staleTime is the reason collapsing and re-expanding does not re-issue
- * the request: this component unmounts on collapse, and without it react-query
- * would treat the cached answer as stale on every remount. A finished run's
- * item list is immutable, so serving it from cache is correct, not merely
- * cheap.
+ * The staleTime is what makes a collapse-and-re-expand cheap: this component
+ * unmounts on collapse, and react-query refetches a stale answer on every
+ * remount. It is applied only to a terminal run, whose item list can no longer
+ * change, so caching it is correct rather than merely cheap. A `running` run
+ * is still writing items, so it gets no cache and re-expanding does refetch —
+ * otherwise the panel would keep showing a snapshot of a backup that has moved
+ * on since.
  */
-function useBackupRunDetail(runId: string) {
+function useBackupRunDetail(runId: string, status: BackupRun['status']) {
   return useQuery({
     queryKey: queryKeys.backup.run(runId),
     queryFn: () => backupApi.getRun(runId),
-    staleTime: 5 * 60 * 1000,
+    staleTime: RUN_IS_TERMINAL[status] ? 5 * 60 * 1000 : 0,
   })
 }
 
@@ -70,8 +87,8 @@ const ITEM_STATUS_CLASS: Record<'skipped' | 'success' | 'failed', string> = {
   skipped: 'text-muted-foreground',
 }
 
-function RunDetail({ runId }: { runId: string }) {
-  const { data, isLoading, isError } = useBackupRunDetail(runId)
+function RunDetail({ runId, status }: { runId: string; status: BackupRun['status'] }) {
+  const { data, isLoading, isError } = useBackupRunDetail(runId, status)
 
   if (isLoading) {
     return (
@@ -179,7 +196,7 @@ function RunRow({ run }: { run: BackupRun }) {
       {expanded && (
         <TableRow>
           <TableCell colSpan={COLUMN_COUNT} className="bg-muted/30 p-0">
-            <RunDetail runId={run.id} />
+            <RunDetail runId={run.id} status={run.status} />
           </TableCell>
         </TableRow>
       )}

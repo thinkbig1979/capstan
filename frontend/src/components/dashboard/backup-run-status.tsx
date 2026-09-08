@@ -3,10 +3,11 @@ import { cn } from '@/lib/utils'
 import type { BackupRun } from '@/types'
 
 /**
- * The tone mapping for a backup run's terminal status, shared by the per-stack
- * Backups tab and the dashboard's install-wide backup history. It lives here
- * rather than in either consumer so the two surfaces cannot drift apart on
- * what a status means.
+ * The tone mapping for a backup run's status, shared by the per-stack Backups
+ * tab and the dashboard's install-wide backup history. It lives here rather
+ * than in either consumer so the two surfaces cannot drift apart on what a
+ * status means. It covers the in-progress `running` state as well as the four
+ * terminal ones — `running` is the entry that renders the spinner below.
  *
  * Deliberately not exported: RunStatusBadge is its only consumer, and
  * `react-refresh/only-export-components` (an error, not a warning, outside

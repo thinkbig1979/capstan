@@ -347,7 +347,8 @@ describe('BackupHistoryTab — the pager', () => {
 })
 
 describe('BackupHistoryTab — expandable run rows', () => {
-  it('fetches the run detail once, and re-expanding does not fetch again', async () => {
+  it('caches a terminal run: fetches once, and re-expanding does not fetch again', async () => {
+    // The default run() fixture is status 'success' — a terminal run.
     const user = userEvent.setup()
     renderTab()
 
@@ -365,6 +366,32 @@ describe('BackupHistoryTab — expandable run rows', () => {
     await user.click(screen.getByRole('button', { name: /Show details for run run-1/ }))
     expect(await screen.findByText('stack-alpha')).toBeInTheDocument()
     expect(mockGetRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT cache a still-running run: re-expanding refetches', async () => {
+    // The other arm of the guard above. A terminal run is cached because its
+    // items can no longer change; a running run is still writing them, so the
+    // same interaction must produce a second request. Without this test the
+    // suite could not tell a correct staleTime from one that is simply too
+    // broad.
+    const user = userEvent.setup()
+    const live = run({ status: 'running', finishedAt: null })
+    mockGetHistory.mockResolvedValue(historyPage({ runs: [live] }))
+    mockGetRun.mockResolvedValue({ run: live, items: [item()] })
+    renderTab()
+
+    await screen.findByText('run-1')
+    expect(mockGetRun).toHaveBeenCalledTimes(0)
+
+    await user.click(screen.getByRole('button', { name: /Show details for run run-1/ }))
+    expect(await screen.findByText('stack-alpha')).toBeInTheDocument()
+    expect(mockGetRun).toHaveBeenCalledTimes(1)
+
+    await user.click(screen.getByRole('button', { name: /Hide details for run run-1/ }))
+    await waitFor(() => expect(screen.queryByText('stack-alpha')).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: /Show details for run run-1/ }))
+    await waitFor(() => expect(mockGetRun).toHaveBeenCalledTimes(2))
   })
 
   it('lists every run item with its per-stack status', async () => {
