@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -22,6 +23,9 @@ const (
 	// DESC it comes SECOND behind offsetSpelling ("2026-03-01" > "2026-02-28")
 	// even though it is the later instant: that inversion is the bug.
 	laterUTCSpelling = "2026-02-28T23:30:00Z"
+	// Already canonical AND sub-second: RFC3339Nano keeps this byte-identical,
+	// time.RFC3339 would truncate it. Sorts between the two above.
+	subSecondSpelling = "2026-02-28T23:00:00.123Z"
 )
 
 // seedRawUpdateHistory writes a row with the DB layer bypassed, so the stored
@@ -120,20 +124,86 @@ func TestGetUpdateHistory_OrdersByInstantAcrossSpellings(t *testing.T) {
 
 // Criterion 4, the control arm: it MUST pass on both sides of the fix, or a
 // normaliser that mangles every value would satisfy criteria 1-3.
+//
+// Both shapes the criterion is really asserting are covered: a whole-second Z
+// value AND a sub-second one. The sub-second half is the one that fails if the
+// chokepoint ever goes back to time.RFC3339, which truncates.
 func TestGetUpdateHistory_AlreadyCanonicalIsUnchangedAndOrdersCorrectly(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, db.InsertUpdateHistory(newEntry("early", utcSpelling, nil)))
+	require.NoError(t, db.InsertUpdateHistory(newEntry("mid", subSecondSpelling, nil)))
 	require.NoError(t, db.InsertUpdateHistory(newEntry("late", laterUTCSpelling, nil)))
 
 	// Byte-identical storage, not merely equivalent.
-	early, _ := rawTimestamps(t, db, "early")
-	late, _ := rawTimestamps(t, db, "late")
-	require.Equal(t, utcSpelling, early)
-	require.Equal(t, laterUTCSpelling, late)
+	for _, tc := range []struct{ id, want string }{
+		{"early", utcSpelling},
+		{"mid", subSecondSpelling},
+		{"late", laterUTCSpelling},
+	} {
+		got, _ := rawTimestamps(t, db, tc.id)
+		require.Equal(t, tc.want, got, "%s must be stored byte-identically", tc.id)
+	}
 
 	entries, _, err := db.GetUpdateHistory(models.UpdateHistoryFilters{})
 	require.NoError(t, err)
-	require.Equal(t, []string{"late", "early"}, []string{entries[0].ID, entries[1].ID})
+	require.Equal(t, []string{"late", "mid", "early"},
+		[]string{entries[0].ID, entries[1].ID, entries[2].ID})
+}
+
+// The chokepoint's guarantee is "the instant is preserved exactly and the
+// spelling is canonicalised", NOT "the bytes never change". This pins the one
+// input where those two differ, so it is documented executably rather than
+// discovered later by someone who assumed byte-stability: RFC3339Nano drops
+// trailing zeros. Every case here is the SAME INSTANT in and out, which is the
+// property that actually matters and is asserted alongside.
+//
+// Deliberately NOT worked around. A short-circuit preserving trailing zeros
+// would trade a real guarantee for a cosmetic one. Latent either way: every
+// current writer emits whole seconds, so no such value exists today.
+func TestInsertUpdateHistory_TrailingZeroesAreCanonicalisedNotLost(t *testing.T) {
+	db := newTestDB(t)
+	for _, tc := range []struct{ id, in, wantStored string }{
+		{"z", "2026-02-28T23:30:00Z", "2026-02-28T23:30:00Z"},          // unchanged
+		{"n3", "2026-02-28T23:30:00.123Z", "2026-02-28T23:30:00.123Z"}, // unchanged
+		{"n2", "2026-02-28T23:30:00.120Z", "2026-02-28T23:30:00.12Z"},  // canonicalised
+		{"n1", "2026-02-28T23:30:00.100Z", "2026-02-28T23:30:00.1Z"},   // canonicalised
+		{"n0", "2026-02-28T23:30:00.000Z", "2026-02-28T23:30:00Z"},     // canonicalised
+	} {
+		require.NoError(t, db.InsertUpdateHistory(newEntry(tc.id, tc.in, nil)))
+		stored, _ := rawTimestamps(t, db, tc.id)
+		require.Equal(t, tc.wantStored, stored, "%s: stored spelling", tc.id)
+
+		in, err := time.Parse(time.RFC3339, tc.in)
+		require.NoError(t, err)
+		out, err := time.Parse(time.RFC3339, stored)
+		require.NoError(t, err)
+		require.True(t, in.Equal(out), "%s: the instant must survive exactly", tc.id)
+	}
+}
+
+// Migration 15 does the OPPOSITE with a stored sub-second value: its GLOB
+// guard skips it, so the trailing zero survives untouched. The two sides
+// genuinely differ on this one input and that is intended -- they act at
+// different times on different populations. Two-sided on ONE migration run, so
+// this cannot pass by the statement simply doing nothing: the offset row in
+// the same table must be rewritten by the same statement that leaves the
+// fractional row alone.
+func TestMigration15_LeavesStoredTrailingZeroesAloneWhileStillRewritingOffsets(t *testing.T) {
+	db := newTestDB(t)
+	seedRawUpdateHistory(t, db, "frac", "2026-02-28T23:30:00.120Z", "2026-02-28T23:30:00.120Z")
+	seedRawUpdateHistory(t, db, "off", offsetSpelling, nil)
+
+	_, err := db.db.Exec("DELETE FROM schema_migrations WHERE version = 15")
+	require.NoError(t, err)
+	require.NoError(t, RunMigrations(db))
+
+	frac, fracCompleted := rawTimestamps(t, db, "frac")
+	require.Equal(t, "2026-02-28T23:30:00.120Z", frac, "the migration must not touch an already-Z row")
+	require.True(t, fracCompleted.Valid)
+	require.Equal(t, "2026-02-28T23:30:00.120Z", fracCompleted.String)
+
+	off, _ := rawTimestamps(t, db, "off")
+	require.Equal(t, utcSpelling, off, "the same statement must still rewrite an offset row")
 }
 
 // Criterion 1's pass-through requirement, and the other half of the control:

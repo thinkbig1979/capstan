@@ -581,6 +581,20 @@ INSERT OR IGNORE INTO settings (key, value) VALUES ('update_apply_days', '0,1,2,
 		// GLOB is case-sensitive, so such a row falls through to the rewrite
 		// and is corrected.
 		//
+		// Guard 2 also decides the NULL case, rather than leaving it to
+		// luck: `NULL NOT GLOB '*Z'` evaluates to NULL, which is falsy as a
+		// WHERE predicate, so a row with no completed_at is skipped
+		// (OBSERVED). The explicit `IS NOT NULL` in front of it is therefore
+		// belt-and-braces, and is kept for readability.
+		//
+		// DELIBERATE DIVERGENCE FROM THE CHOKEPOINT, not an oversight: a
+		// stored '2026-02-28T23:30:00.120Z' is skipped here and keeps its
+		// trailing zero, whereas canonicalTimestamp would rewrite the same
+		// value to '...00.12Z' (OBSERVED, both). Same instant either way.
+		// This is the two-populations rule doing its job -- the migration's
+		// duty is to leave an already-canonical stored row alone, and the
+		// chokepoint's is to emit one canonical spelling.
+		//
 		// Idempotent by construction: every row this touches ends in an
 		// uppercase Z, so guard 2 excludes it from any later run. Migrations
 		// are also recorded by version and never re-run.

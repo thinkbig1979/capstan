@@ -164,8 +164,27 @@ func (d *DB) GetUpdateHistory(filters models.UpdateHistoryFilters) ([]models.Upd
 // truncates sub-second precision, so "2026-02-28T23:30:00.123Z" would be
 // silently rewritten to "2026-02-28T23:30:00Z" (OBSERVED). No current writer
 // emits sub-second values, so this is a trap for the next caller rather than a
-// live bug. RFC3339Nano drops trailing zeros, so a whole-second UTC value is
-// returned byte-identical.
+// live bug.
+//
+// THE GUARANTEE THIS MAKES IS "the instant is preserved exactly and the
+// spelling is canonicalised". It is NOT "the bytes never change" -- do not
+// build on byte-stability. RFC3339Nano drops TRAILING ZEROS, which is itself a
+// byte change on a fractional value that was already canonical (OBSERVED, and
+// every one of these is the same instant in and out):
+//
+//	"2026-02-28T23:30:00Z"      -> "2026-02-28T23:30:00Z"     unchanged
+//	"2026-02-28T23:30:00.123Z"  -> "2026-02-28T23:30:00.123Z" unchanged
+//	"2026-02-28T23:30:00.120Z"  -> "2026-02-28T23:30:00.12Z"  CHANGED
+//	"2026-02-28T23:30:00.100Z"  -> "2026-02-28T23:30:00.1Z"   CHANGED
+//	"2026-02-28T23:30:00.000Z"  -> "2026-02-28T23:30:00Z"     CHANGED
+//
+// That is an accepted canonicalisation, not a defect, and it is deliberately
+// NOT worked around: a short-circuit to preserve trailing zeros would trade
+// the real guarantee above for a cosmetic one. Note that migration 15 does the
+// OPPOSITE with a stored ".120Z" -- its GLOB guard skips it, so that row keeps
+// its trailing zero. The two sides genuinely differ on this one input, and
+// that is intended for the reason given above: they act at different times on
+// different populations, and neither is permitted to lose an instant.
 func canonicalTimestamp(value string) string {
 	parsed, err := time.Parse(time.RFC3339, value)
 	if err != nil {
