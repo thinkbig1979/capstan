@@ -1151,6 +1151,15 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 		return
 	}
 
+	// This line is the guard's EFFECT, and the detection above is inert without
+	// it: on the overflow path offset was held at 0, so the call just above has
+	// returned PAGE ONE's rows. Deleting this block restores the exact bug the
+	// guard exists to prevent, while leaving the guard above still sitting
+	// there looking correct — the one weakness of splitting a guard across a DB
+	// call. OBSERVED: with only this block removed (nothing else changed),
+	// TestGetAuditLog_OffsetOverflowDoesNotWrapToPageOne fails on all three of
+	// its overflow arms, reporting entries [log-e log-d log-c log-b log-a] for
+	// ?page=<MaxInt>. Do not remove it without removing the detection too.
 	if pageOverflows {
 		actions = []models.ActionLog{}
 	}
