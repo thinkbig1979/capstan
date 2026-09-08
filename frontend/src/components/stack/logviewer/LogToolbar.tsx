@@ -134,7 +134,7 @@ export function LogToolbar({
         </DropdownMenu>
 
         <Select value={timeRange} onValueChange={onTimeRangeChange}>
-          <SelectTrigger className="w-40">
+          <SelectTrigger className="w-40" aria-label="Time range">
             <Clock className="mr-2 h-4 w-4" />
             <SelectValue placeholder="All time" />
           </SelectTrigger>

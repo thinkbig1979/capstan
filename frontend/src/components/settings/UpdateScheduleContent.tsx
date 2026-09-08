@@ -168,7 +168,7 @@ export function UpdateScheduleContent() {
         <div className="space-y-2">
           <Label htmlFor="scan-interval">Scan Interval</Label>
           <Select value={effectivePreset} onValueChange={handlePresetChange}>
-            <SelectTrigger id="scan-interval" className="w-full max-w-xs">
+            <SelectTrigger id="scan-interval" className="w-full max-w-xs" aria-label="Scan Interval">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

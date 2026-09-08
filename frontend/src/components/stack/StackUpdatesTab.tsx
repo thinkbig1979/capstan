@@ -142,7 +142,7 @@ export function StackUpdatesTab({ stackId }: { stackId: string }) {
         />
 
         <Select value={statusFilter} onValueChange={handleSelectChange(setStatusFilter)}>
-          <SelectTrigger className="h-8 w-[130px] text-xs">
+          <SelectTrigger className="h-8 w-[130px] text-xs" aria-label="Filter by status">
             <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
@@ -155,7 +155,7 @@ export function StackUpdatesTab({ stackId }: { stackId: string }) {
         </Select>
 
         <Select value={triggerFilter} onValueChange={handleSelectChange(setTriggerFilter)}>
-          <SelectTrigger className="h-8 w-[130px] text-xs">
+          <SelectTrigger className="h-8 w-[130px] text-xs" aria-label="Filter by trigger">
             <SelectValue placeholder="Trigger" />
           </SelectTrigger>
           <SelectContent>

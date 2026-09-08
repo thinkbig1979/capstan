@@ -103,7 +103,7 @@ export function GitSettingsSection({
             <Label className="text-sm text-right">Method</Label>
             <div>
               <Select value={authType} onValueChange={setAuthType}>
-                <SelectTrigger className="h-8 text-sm">
+                <SelectTrigger className="h-8 text-sm" aria-label="Authentication method">
                   <SelectValue placeholder="Select method" />
                 </SelectTrigger>
                 <SelectContent>

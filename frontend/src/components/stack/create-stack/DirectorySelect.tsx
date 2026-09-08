@@ -25,7 +25,7 @@ export function DirectorySelect({
     <div className="space-y-2">
       <Label htmlFor="directory">Target Directory</Label>
       <Select value={selectedDir || stacksDir || ''} onValueChange={onSelectedDirChange}>
-        <SelectTrigger id="directory">
+        <SelectTrigger id="directory" aria-label="Target Directory">
           <SelectValue placeholder="Select directory" />
         </SelectTrigger>
         <SelectContent>

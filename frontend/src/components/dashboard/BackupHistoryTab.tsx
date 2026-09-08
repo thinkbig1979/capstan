@@ -309,7 +309,7 @@ export function BackupHistoryTab() {
         />
 
         <Select value={statusFilter} onValueChange={handleFilterChange(setStatusFilter)}>
-          <SelectTrigger className="w-[130px] h-8 text-xs">
+          <SelectTrigger className="w-[130px] h-8 text-xs" aria-label="Filter by status">
             <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
@@ -323,7 +323,7 @@ export function BackupHistoryTab() {
         </Select>
 
         <Select value={kindFilter} onValueChange={handleFilterChange(setKindFilter)}>
-          <SelectTrigger className="w-[130px] h-8 text-xs">
+          <SelectTrigger className="w-[130px] h-8 text-xs" aria-label="Filter by run kind">
             <SelectValue placeholder="Kind" />
           </SelectTrigger>
           <SelectContent>
@@ -337,7 +337,7 @@ export function BackupHistoryTab() {
         </Select>
 
         <Select value={triggerFilter} onValueChange={handleFilterChange(setTriggerFilter)}>
-          <SelectTrigger className="w-[130px] h-8 text-xs">
+          <SelectTrigger className="w-[130px] h-8 text-xs" aria-label="Filter by trigger">
             <SelectValue placeholder="Trigger" />
           </SelectTrigger>
           <SelectContent>
@@ -348,7 +348,7 @@ export function BackupHistoryTab() {
         </Select>
 
         <Select value={dateRange} onValueChange={handleFilterChange(setDateRange)}>
-          <SelectTrigger className="w-[130px] h-8 text-xs">
+          <SelectTrigger className="w-[130px] h-8 text-xs" aria-label="Filter by date range">
             <SelectValue placeholder="Date Range" />
           </SelectTrigger>
           <SelectContent>

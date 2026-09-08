@@ -104,7 +104,7 @@ export function CreateNetworkDialog({ open, onOpenChange }: CreateNetworkDialogP
           <div className="space-y-2">
             <Label htmlFor="network-driver">Driver</Label>
             <Select value={driver} onValueChange={setDriver}>
-              <SelectTrigger id="network-driver">
+              <SelectTrigger id="network-driver" aria-label="Driver">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

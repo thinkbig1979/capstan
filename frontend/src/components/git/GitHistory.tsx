@@ -98,7 +98,7 @@ export function GitHistory({ stackId }: GitHistoryProps) {
             setSelectedCommit(null)
           }}
         >
-          <SelectTrigger className="w-[140px]">
+          <SelectTrigger className="w-[140px]" aria-label="Search scope">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
