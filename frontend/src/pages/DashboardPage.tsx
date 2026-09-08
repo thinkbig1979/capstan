@@ -18,6 +18,7 @@ import { VolumesTab } from '@/components/dashboard/VolumesTab'
 import { NetworksTab } from '@/components/dashboard/NetworksTab'
 import { BuildCacheTab } from '@/components/dashboard/BuildCacheTab'
 import { UpdatesTab } from '@/components/dashboard/UpdatesTab'
+import { BackupHistoryTab } from '@/components/dashboard/BackupHistoryTab'
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader'
 import { AttentionStrip } from '@/components/dashboard/AttentionStrip'
 import { HostStrip, type HostView } from '@/components/dashboard/HostStrip'
@@ -305,6 +306,7 @@ export function DashboardPage() {
                 'Updates'
               ),
             },
+            { value: 'backups', label: 'Backups' },
           ]}
         />
 
@@ -385,6 +387,15 @@ export function DashboardPage() {
         <TabsContent value="updates" className="mt-4">
           <ErrorBoundary>
             <UpdatesTab />
+          </ErrorBoundary>
+        </TabsContent>
+
+        {/* Top-level peer of Updates, not a sub-tab under it: docker-manager-648.10
+            removed the nested Backup sub-tab, and this restores backup history as
+            its own destination. */}
+        <TabsContent value="backups" className="mt-4">
+          <ErrorBoundary>
+            <BackupHistoryTab />
           </ErrorBoundary>
         </TabsContent>
 

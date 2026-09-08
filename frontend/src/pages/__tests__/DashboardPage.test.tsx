@@ -86,6 +86,13 @@ vi.mock('@/components/dashboard/DirectoriesTab', () => ({
 vi.mock('@/components/dashboard/UpdatesTab', () => ({
   UpdatesTab: () => <div data-testid="tab-updates" />,
 }))
+// Stubbed for the same reason as every sibling tab, plus a hard one: the real
+// BackupHistoryTab imports backupApi from '@/lib/api', which the module mock
+// above does not expose. Mounting it would fail on the missing export rather
+// than on anything this file is testing.
+vi.mock('@/components/dashboard/BackupHistoryTab', () => ({
+  BackupHistoryTab: () => <div data-testid="tab-backups" />,
+}))
 vi.mock('@/components/dashboard/ImagesTab', () => ({
   ImagesTab: () => <div data-testid="tab-images" />,
 }))
@@ -196,6 +203,56 @@ describe('DashboardPage', () => {
       await waitFor(() => expect(screen.getByTestId('tab-overview')).toBeInTheDocument())
       expect(screen.queryByTestId('tab-stacks')).not.toBeInTheDocument()
       expect(window.location.search).toBe('?tab=overview')
+    })
+  })
+
+  // BackupHistoryTab shipped in agent-os-lak4.3 with no mount point — no route
+  // and no strip entry referenced it, so it was unreachable. These pin the
+  // registration itself: the trigger exists, the URL value round-trips, and the
+  // sibling it was inserted next to is untouched.
+  describe('the Backups tab registration', () => {
+    it('shows a Backups trigger in the tab strip', async () => {
+      renderPage('/')
+      await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument())
+
+      expect(screen.getByRole('tab', { name: 'Backups' })).toBeInTheDocument()
+    })
+
+    it('selects Backups and mounts its content at ?tab=backups', async () => {
+      renderPage('/?tab=backups')
+
+      await waitFor(() => expect(screen.getByTestId('tab-backups')).toBeInTheDocument())
+      expect(screen.getByRole('tab', { name: 'Backups' })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.queryByTestId('tab-stacks')).not.toBeInTheDocument()
+    })
+
+    it('writes ?tab=backups to the URL when the trigger is clicked', async () => {
+      const user = userEvent.setup()
+      renderPage('/')
+      await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument())
+
+      await user.click(screen.getByRole('tab', { name: 'Backups' }))
+
+      await waitFor(() => expect(screen.getByTestId('tab-backups')).toBeInTheDocument())
+      expect(window.location.search).toBe('?tab=backups')
+    })
+
+    // Two-sided control for the three above. Inserting into the strip array is
+    // the kind of edit that silently displaces or renames the entry next to it,
+    // and nothing else in this file would notice.
+    it('leaves the neighbouring Updates tab present and still selectable', async () => {
+      const user = userEvent.setup()
+      renderPage('/')
+      await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument())
+
+      expect(screen.getByRole('tab', { name: 'Updates' })).toBeInTheDocument()
+
+      await user.click(screen.getByRole('tab', { name: 'Updates' }))
+
+      await waitFor(() => expect(screen.getByTestId('tab-updates')).toBeInTheDocument())
+      expect(screen.getByRole('tab', { name: 'Updates' })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.queryByTestId('tab-backups')).not.toBeInTheDocument()
+      expect(window.location.search).toBe('?tab=updates')
     })
   })
 
