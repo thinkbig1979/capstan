@@ -544,6 +544,87 @@ INSERT OR IGNORE INTO settings (key, value) VALUES ('update_apply_time', '03:00'
 INSERT OR IGNORE INTO settings (key, value) VALUES ('update_apply_days', '0,1,2,3,4,5,6');
 `,
 	},
+	{
+		Version: 15,
+		Name:    "update_history_timestamps_utc",
+		// Rewrite update_history timestamps that were stored with the
+		// server's local offset (agent-os-lmbn). Every write now goes through
+		// database.canonicalTimestamp, but rows written before that fix still
+		// hold e.g. '2026-03-01T00:30:00+02:00'. Both columns are ORDERed and
+		// compared as TEXT, so a mixed table keeps mis-sorting until retention
+		// prunes the old rows -- which can take months.
+		//
+		// Pure SQL, no Go loop: strftime handles +02:00, -05:00 and Z. It does
+		// NOT have to agree with the Go-side chokepoint's RFC3339 parser, and
+		// deliberately does not -- see canonicalTimestamp's comment in
+		// update_history.go. The two act at different times on different
+		// populations. What they share is the rule that neither may destroy a
+		// value it cannot interpret, which is what the two guards below
+		// enforce.
+		//
+		// GUARD 1, `strftime(...) IS NOT NULL` -- MANDATORY, not defensive.
+		// Without it, strftime on an uninterpretable value returns NULL and
+		// the UPDATE writes that NULL with err=nil and rowsAffected=1: silent
+		// data loss (OBSERVED). Worse, it is not merely lost. retention.go's
+		// deleteOldUpdateHistoryStmt selects `WHERE completed_at IS NOT NULL
+		// AND completed_at < datetime(...)`, so a row whose completed_at was
+		// NULLed is never pruned again -- the unguarded migration would make
+		// the row immortal as well as empty.
+		//
+		// GUARD 2, `NOT GLOB '*Z'` -- skips rows already canonical, which
+		// makes this a no-op on the common case and, more importantly, keeps
+		// a sub-second value byte-identical: strftime's '%S' truncates, so
+		// '2026-02-28T23:30:00.123Z' would come back as
+		// '2026-02-28T23:30:00Z' (OBSERVED). GLOB, never LIKE: SQLite's LIKE
+		// is case-insensitive, so '...00z' LIKE '%Z' is TRUE and a LIKE guard
+		// would skip a lowercase-z row that Go's RFC3339 rejects (OBSERVED).
+		// GLOB is case-sensitive, so such a row falls through to the rewrite
+		// and is corrected.
+		//
+		// Guard 2 also decides the NULL case, rather than leaving it to
+		// luck: `NULL NOT GLOB '*Z'` evaluates to NULL, which is falsy as a
+		// WHERE predicate, so a row with no completed_at is skipped
+		// (OBSERVED). The explicit `IS NOT NULL` in front of it is therefore
+		// belt-and-braces, and is kept for readability.
+		//
+		// The '%S' in the format string is FIXED WIDTH, and that is the
+		// point of it rather than a limitation to apologise for: these
+		// columns are ORDERed and compared as text, so a variable-width
+		// spelling breaks sorting inside a single second. canonicalTimestamp
+		// truncates to the second for exactly the same reason, so both halves
+		// of this fix emit the same shape. ('%f' would stamp a '.000' on
+		// every row and reintroduce the width problem it looks like it
+		// solves.)
+		//
+		// KNOWN AND ACCEPTED GAP, recorded so it is not mistaken for
+		// coverage: guard 2 skips a row ALREADY ending in Z, including a
+		// sub-second one such as '2026-02-28T23:30:00.120Z'. Such a row keeps
+		// its trailing fraction and therefore still does not text-sort
+		// correctly against whole-second rows in its own second. It is left
+		// alone deliberately -- rewriting it is a data-touching edit whose
+		// only beneficiary is a row shape this application has never written,
+		// since every writer goes through canonicalTimestamp and emits whole
+		// seconds. A row like that can only come from an external writer or a
+		// hand-edited database, the same population as the unparseable rows
+		// guard 1 protects.
+		//
+		// Idempotent by construction: every row this touches ends in an
+		// uppercase Z, so guard 2 excludes it from any later run. Migrations
+		// are also recorded by version and never re-run.
+		SQL: `
+UPDATE update_history
+SET started_at = strftime('%Y-%m-%dT%H:%M:%SZ', started_at)
+WHERE started_at IS NOT NULL
+  AND started_at NOT GLOB '*Z'
+  AND strftime('%Y-%m-%dT%H:%M:%SZ', started_at) IS NOT NULL;
+
+UPDATE update_history
+SET completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', completed_at)
+WHERE completed_at IS NOT NULL
+  AND completed_at NOT GLOB '*Z'
+  AND strftime('%Y-%m-%dT%H:%M:%SZ', completed_at) IS NOT NULL;
+`,
+	},
 }
 
 // checkNoCaseCollidingUsernames is migration 13's PreCheck. It detects

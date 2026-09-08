@@ -43,9 +43,12 @@ import (
 //
 // Deliberately a literal rather than a reference to the database package's own
 // count: a test that derives the expected value from the thing it is checking
-// cannot fail. Adding migration 15 is meant to fail this test and make someone
-// look at the template — that friction is the feature.
-const wantSchemaMigrations = 14
+// cannot fail. Adding migration 16 is meant to fail this test and make someone
+// look at the template — that friction is the feature. It did exactly that for
+// migration 15 (agent-os-lmbn): the template is rebuilt from the database
+// package's own migration list, so it picked 15 up automatically and only this
+// literal needed moving.
+const wantSchemaMigrations = 15
 
 // backupSchemaTemplate returns the bytes of a fully migrated, empty Capstan
 // database, built exactly once per test binary.
@@ -53,7 +56,7 @@ const wantSchemaMigrations = 14
 // WHY THIS EXISTS (agent-os-1kio): under -race every SQLite call in the
 // process serialises on one process-global allocator mutex —
 // modernc.org/libc's allocMu (libc.go:52, taken in Xmalloc/Xfree/Xrealloc).
-// This file has 54 t.Parallel tests, and each one running all 14 migrations
+// This file has 54 t.Parallel tests, and each one running all 15 migrations
 // turned the parallel phase into a lock stampede: bursts of tests entering
 // migrations separated by multi-second stretches in which nothing completed.
 // Running the migrations once and handing every test a byte-for-byte copy
