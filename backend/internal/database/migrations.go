@@ -544,6 +544,60 @@ INSERT OR IGNORE INTO settings (key, value) VALUES ('update_apply_time', '03:00'
 INSERT OR IGNORE INTO settings (key, value) VALUES ('update_apply_days', '0,1,2,3,4,5,6');
 `,
 	},
+	{
+		Version: 15,
+		Name:    "update_history_timestamps_utc",
+		// Rewrite update_history timestamps that were stored with the
+		// server's local offset (agent-os-lmbn). Every write now goes through
+		// database.canonicalTimestamp, but rows written before that fix still
+		// hold e.g. '2026-03-01T00:30:00+02:00'. Both columns are ORDERed and
+		// compared as TEXT, so a mixed table keeps mis-sorting until retention
+		// prunes the old rows -- which can take months.
+		//
+		// Pure SQL, no Go loop: strftime handles +02:00, -05:00 and Z. It does
+		// NOT have to agree with the Go-side chokepoint's RFC3339 parser, and
+		// deliberately does not -- see canonicalTimestamp's comment in
+		// update_history.go. The two act at different times on different
+		// populations. What they share is the rule that neither may destroy a
+		// value it cannot interpret, which is what the two guards below
+		// enforce.
+		//
+		// GUARD 1, `strftime(...) IS NOT NULL` -- MANDATORY, not defensive.
+		// Without it, strftime on an uninterpretable value returns NULL and
+		// the UPDATE writes that NULL with err=nil and rowsAffected=1: silent
+		// data loss (OBSERVED). Worse, it is not merely lost. retention.go's
+		// deleteOldUpdateHistoryStmt selects `WHERE completed_at IS NOT NULL
+		// AND completed_at < datetime(...)`, so a row whose completed_at was
+		// NULLed is never pruned again -- the unguarded migration would make
+		// the row immortal as well as empty.
+		//
+		// GUARD 2, `NOT GLOB '*Z'` -- skips rows already canonical, which
+		// makes this a no-op on the common case and, more importantly, keeps
+		// a sub-second value byte-identical: strftime's '%S' truncates, so
+		// '2026-02-28T23:30:00.123Z' would come back as
+		// '2026-02-28T23:30:00Z' (OBSERVED). GLOB, never LIKE: SQLite's LIKE
+		// is case-insensitive, so '...00z' LIKE '%Z' is TRUE and a LIKE guard
+		// would skip a lowercase-z row that Go's RFC3339 rejects (OBSERVED).
+		// GLOB is case-sensitive, so such a row falls through to the rewrite
+		// and is corrected.
+		//
+		// Idempotent by construction: every row this touches ends in an
+		// uppercase Z, so guard 2 excludes it from any later run. Migrations
+		// are also recorded by version and never re-run.
+		SQL: `
+UPDATE update_history
+SET started_at = strftime('%Y-%m-%dT%H:%M:%SZ', started_at)
+WHERE started_at IS NOT NULL
+  AND started_at NOT GLOB '*Z'
+  AND strftime('%Y-%m-%dT%H:%M:%SZ', started_at) IS NOT NULL;
+
+UPDATE update_history
+SET completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', completed_at)
+WHERE completed_at IS NOT NULL
+  AND completed_at NOT GLOB '*Z'
+  AND strftime('%Y-%m-%dT%H:%M:%SZ', completed_at) IS NOT NULL;
+`,
+	},
 }
 
 // checkNoCaseCollidingUsernames is migration 13's PreCheck. It detects
