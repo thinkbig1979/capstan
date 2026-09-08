@@ -168,23 +168,37 @@ func (d *DB) GetUpdateHistory(filters models.UpdateHistoryFilters) ([]models.Upd
 // That trade looks backwards until you write the values down, so here is the
 // reason in full -- it is exactly the kind of choice a later reader "fixes"
 // back to a precision-preserving layout without the evidence to hand.
-// time.RFC3339Nano is VARIABLE WIDTH, and '.' is 0x2E while 'Z' is 0x5A, so a
-// fractional value text-sorts BELOW a whole one in the SAME second while being
-// the LATER instant (OBSERVED, both symptoms, from values this function itself
-// produced):
 //
-//	stored "2026-02-28T23:30:00.5Z" and "2026-02-28T23:30:00Z"
-//	  ORDER BY started_at DESC -> [whole, frac]   the later instant comes SECOND
-//	  From = "2026-02-28T23:30:00Z" over the .5Z row -> total=0, row excluded
+// time.RFC3339Nano is VARIABLE WIDTH. Two inputs ONE DIGIT APART land in
+// different sort classes (OBSERVED):
 //
-// The second of those is agent-os-hxra's symptom regenerated, from a row this
-// server wrote itself -- no non-UTC server needed. So a variable-width layout
-// buys back precision that nothing reads at the cost of the ordering the whole
-// table depends on. Truncate(time.Second) is what makes the two halves of this
-// fix agree: migration 15's strftime('%Y-%m-%dT%H:%M:%SZ', ...) is fixed width
-// for the same reason, and all 16 existing writers already emit whole seconds
-// via time.Now().Format(time.RFC3339), so this output is byte-identical to
-// what they produce today.
+//	".000Z"  ->  "2026-02-28T23:30:00Z"      20 chars, fixed-width form, sorts CORRECTLY
+//	".120Z"  ->  "2026-02-28T23:30:00.12Z"   23 chars, variable form,    sorts WRONG
+//
+// '.' is 0x2E and 'Z' is 0x5A, so the fractional spelling text-sorts BELOW the
+// whole one in the SAME second while being the LATER instant. Both symptoms,
+// OBSERVED through the real GetUpdateHistory on exactly that pair:
+//
+//	ORDER BY started_at DESC          -> [.000Z row, .120Z row]  later instant SECOND
+//	From = "2026-02-28T23:30:00Z"     -> total=1, the .12Z row EXCLUDED
+//
+// The second is agent-os-hxra's symptom regenerated from rows this server
+// wrote itself -- no non-UTC server needed. And it is not a two-class problem:
+// the five inputs in
+// TestInsertUpdateHistory_SubSecondPrecisionIsDiscardedForFixedWidth produce
+// FOUR distinct widths under Nano (20, 22, 23, 24).
+//
+// This is also why the guarantee cannot be stated as "the instant is preserved
+// and the spelling is canonicalised", which is what this comment used to say.
+// Under a variable-width layout there IS no single canonical spelling -- only
+// a preserved instant, and instants sharing a second land on either side of
+// the boundary depending on their last digit.
+//
+// Truncate to the second and the five collapse onto the ONE 20-character
+// spelling that all three producers already emit: the 16 existing writers via
+// time.Now().Format(time.RFC3339), migration 15 via
+// strftime('%Y-%m-%dT%H:%M:%SZ', ...), and this function. Three producers, one
+// form -- which is the property the text sort actually needs.
 //
 // Truncation, never rounding: it only ever moves a value earlier, and never
 // out of the second it names.
