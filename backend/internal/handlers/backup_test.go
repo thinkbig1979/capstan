@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -2431,4 +2432,218 @@ func TestUpdateSettings_SavingDoesNotKillRunningScheduledScheduler(t *testing.T)
 				"the status endpoint must still report the scheduler as running")
 		})
 	}
+}
+
+// ─────────────────────────────────────────────
+// Backup history pagination + filters (agent-os-lak4.1)
+// ─────────────────────────────────────────────
+
+// newBackupHistoryRouter is the shared fixture for the tests below: a wired
+// BackupHandler over a migrated DB, plus the DB itself so a test can seed rows.
+func newBackupHistoryRouter(t *testing.T) (*gin.Engine, *database.DB) {
+	t.Helper()
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, true, false)
+	h := NewBackupHandler(svc, db, slog.Default())
+	// h.Stop() blocks until every durable-run goroutine has finished its DB
+	// write, so it must run BEFORE db.Close(); t.Cleanup is LIFO and this is
+	// registered last. See agent-os-80n.
+	t.Cleanup(h.Stop)
+	return newBackupRouter(h), db
+}
+
+// seedBackupRuns inserts n runs with DISTINCT started_at values, newest last.
+// Distinct timestamps are load-bearing: getHistory orders by started_at DESC
+// with no tiebreaker, so equal timestamps would make any page-window assertion
+// non-deterministic rather than merely arbitrary.
+func seedBackupRuns(t *testing.T, db *database.DB, n int) {
+	t.Helper()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		require.NoError(t, db.CreateBackupRun(&models.BackupRun{
+			ID:        fmt.Sprintf("run-%03d", i),
+			Kind:      "backup",
+			Trigger:   "manual",
+			Status:    "success",
+			StartedAt: base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339),
+		}))
+	}
+}
+
+func getBackupHistory(t *testing.T, r *gin.Engine, query string) map[string]interface{} {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/backups/history"+query, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	return decodeBody(t, w)
+}
+
+// TestBackupHistory_PaginatesWithTotal is AC1.
+func TestBackupHistory_PaginatesWithTotal(t *testing.T) {
+	t.Parallel()
+
+	r, db := newBackupHistoryRouter(t)
+	seedBackupRuns(t, db, 25)
+
+	body := getBackupHistory(t, r, "?page=2&limit=10")
+
+	runs, ok := body["runs"].([]interface{})
+	require.True(t, ok, "runs must stay an array")
+	assert.Len(t, runs, 10, "page 2 of 25 at limit 10 holds 10 runs")
+	assert.Equal(t, float64(2), body["page"])
+	assert.Equal(t, float64(10), body["limit"])
+	assert.Equal(t, float64(25), body["total"])
+	assert.Equal(t, float64(3), body["totalPages"])
+
+	// The window must be the SECOND ten, not the first: a handler that ignored
+	// page would return the right COUNT with the wrong rows.
+	first, ok := runs[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "run-014", first["id"], "page 2 starts at the 11th newest run")
+}
+
+// TestBackupHistory_NoParamsReturnsRecentRuns is AC4, the backward-compatibility
+// guard. Per the brief's fact D this has no fail-first arm: the no-params
+// behaviour is already correct today, so this pins it rather than adding it.
+func TestBackupHistory_NoParamsReturnsRecentRuns(t *testing.T) {
+	t.Parallel()
+
+	r, db := newBackupHistoryRouter(t)
+	seedBackupRuns(t, db, 3)
+
+	body := getBackupHistory(t, r, "")
+
+	runs, ok := body["runs"].([]interface{})
+	require.True(t, ok, "runs must remain an array under the same key")
+	require.Len(t, runs, 3)
+	newest, ok := runs[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "run-002", newest["id"], "most recent run first")
+}
+
+// TestBackupHistory_ClampsLimitToMax is AC5. The seed is deliberately 101 rows:
+// at 100 an unclamped handler and a clamped one return the same length, so the
+// assertion could not discriminate.
+func TestBackupHistory_ClampsLimitToMax(t *testing.T) {
+	t.Parallel()
+
+	r, db := newBackupHistoryRouter(t)
+	seedBackupRuns(t, db, 101)
+
+	body := getBackupHistory(t, r, "?limit=100000")
+
+	runs, ok := body["runs"].([]interface{})
+	require.True(t, ok)
+	assert.Len(t, runs, 100, "limit is capped at 100 regardless of the request")
+	assert.Equal(t, float64(100), body["limit"], "the clamped limit is what is reported back")
+	assert.Equal(t, float64(101), body["total"], "total still counts every matching run")
+}
+
+// seedDecorrelatedRuns inserts four runs whose kind, trigger and status cut
+// ACROSS each other rather than partitioning the table the same way, so every
+// filter value selects a different set of ids:
+//
+//	id      kind    trigger    status   started_at
+//	run-a   backup  manual     success  2026-01-01
+//	run-b   backup  scheduled  failed   2026-03-15
+//	run-c   prune   scheduled  failed   2026-06-01
+//	run-d   prune   manual     failed   2026-09-01
+//
+// With only two anti-correlated rows every filter returns "one row or the
+// other", so a clause bound to the wrong column still selects the expected row
+// and the test cannot say which column it filtered on. Here it changes the
+// answer. Mirrors seedFilterRuns in database/backup_test.go.
+func seedDecorrelatedRuns(t *testing.T, db *database.DB) {
+	t.Helper()
+	rows := []models.BackupRun{
+		{ID: "run-a", Kind: "backup", Trigger: "manual", Status: "success", StartedAt: "2026-01-01T00:00:00Z"},
+		{ID: "run-b", Kind: "backup", Trigger: "scheduled", Status: "failed", StartedAt: "2026-03-15T00:00:00Z"},
+		{ID: "run-c", Kind: "prune", Trigger: "scheduled", Status: "failed", StartedAt: "2026-06-01T00:00:00Z"},
+		{ID: "run-d", Kind: "prune", Trigger: "manual", Status: "failed", StartedAt: "2026-09-01T00:00:00Z"},
+	}
+	for i := range rows {
+		require.NoError(t, db.CreateBackupRun(&rows[i]))
+	}
+}
+
+// runIDsFromBody pulls the ordered id list out of a history response.
+func runIDsFromBody(t *testing.T, body map[string]interface{}) []string {
+	t.Helper()
+	runs, ok := body["runs"].([]interface{})
+	require.True(t, ok, "runs must be an array")
+	ids := make([]string, 0, len(runs))
+	for _, r := range runs {
+		m, ok := r.(map[string]interface{})
+		require.True(t, ok)
+		id, ok := m["id"].(string)
+		require.True(t, ok)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// TestBackupHistory_FiltersReachTheQuery proves each query parameter is wired to
+// its own column, both ways on one instrument: the whole seed with the filter
+// absent, and EXACTLY that column's set with the filter present.
+//
+// Asserting the exact set rather than "one row came back" is what pins the
+// column — over a decorrelated seed no two filters share an answer, so a clause
+// bound to a neighbouring column changes the result.
+func TestBackupHistory_FiltersReachTheQuery(t *testing.T) {
+	t.Parallel()
+
+	r, db := newBackupHistoryRouter(t)
+	seedDecorrelatedRuns(t, db)
+
+	allIDs := []string{"run-d", "run-c", "run-b", "run-a"}
+
+	cases := []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{"status", "?status=failed", []string{"run-d", "run-c", "run-b"}},
+		{"kind", "?kind=backup", []string{"run-b", "run-a"}},
+		{"trigger", "?trigger=scheduled", []string{"run-c", "run-b"}},
+		{"from", "?from=2026-08-01T00:00:00Z", []string{"run-d"}},
+		{"to", "?to=2026-07-01T00:00:00Z", []string{"run-c", "run-b", "run-a"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Control arm: unfiltered, the whole seed is visible, so a short
+			// result below is the filter and not an empty table.
+			all := getBackupHistory(t, r, "")
+			require.Equal(t, float64(len(allIDs)), all["total"], "every run visible unfiltered")
+			require.Equal(t, allIDs, runIDsFromBody(t, all))
+			require.Less(t, len(tc.want), len(allIDs),
+				"a filter that excludes nothing cannot demonstrate filtering")
+
+			body := getBackupHistory(t, r, tc.query)
+			assert.Equal(t, tc.want, runIDsFromBody(t, body), "exact matching set, newest first")
+			assert.Equal(t, float64(len(tc.want)), body["total"], "total reflects the filter")
+		})
+	}
+}
+
+// TestBackupHistory_HugePageDoesNotWrapToPageOne is the HTTP-level arm of the
+// OFFSET overflow guard. page = MaxInt64 is accepted by strconv.Atoi, and
+// (page-1)*limit wraps to a negative offset that SQLite reads as no offset —
+// serving page ONE while echoing back the enormous page number. A wrong answer
+// dressed as a correct one.
+func TestBackupHistory_HugePageDoesNotWrapToPageOne(t *testing.T) {
+	t.Parallel()
+
+	r, db := newBackupHistoryRouter(t)
+	seedDecorrelatedRuns(t, db)
+
+	// Control arm: page one over the same seed is populated, so the empty
+	// result below cannot be an empty table.
+	first := getBackupHistory(t, r, "?page=1&limit=50")
+	require.NotEmpty(t, runIDsFromBody(t, first), "page one is non-empty")
+
+	body := getBackupHistory(t, r, "?page=9223372036854775807&limit=50")
+	assert.Empty(t, runIDsFromBody(t, body), "a page past the end must never return page one's rows")
+	assert.Equal(t, float64(4), body["total"], "total still describes the whole match set")
 }

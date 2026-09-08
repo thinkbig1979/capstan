@@ -2,6 +2,8 @@ package database
 
 import (
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -125,6 +127,107 @@ func (d *DB) GetBackupRuns(limit int) ([]models.BackupRun, error) {
 		return nil, fmt.Errorf("reading backup runs: %w", err)
 	}
 	return runs, nil
+}
+
+// GetBackupRunsFiltered returns one page of backup runs plus the total number
+// of runs matching the filters (ignoring the page window), for GET
+// /backups/history.
+//
+// It mirrors GetUpdateHistory in update_history.go: clauses accumulate into
+// whereClauses with every value bound as a `?` parameter, the COUNT(*) uses the
+// same clause as the page query, and the page is taken newest-first. No caller
+// value is ever concatenated into SQL.
+//
+// GetBackupRuns(limit) is deliberately left alone rather than made to delegate
+// here: it returns no total and has its own callers.
+func (d *DB) GetBackupRunsFiltered(filters models.BackupHistoryFilters) ([]models.BackupRun, int, error) {
+	var whereClauses []string
+	var args []interface{}
+
+	if filters.Status != "" {
+		whereClauses = append(whereClauses, "status = ?")
+		args = append(args, filters.Status)
+	}
+	if filters.Kind != "" {
+		whereClauses = append(whereClauses, "kind = ?")
+		args = append(args, filters.Kind)
+	}
+	if filters.Trigger != "" {
+		whereClauses = append(whereClauses, "trigger = ?")
+		args = append(args, filters.Trigger)
+	}
+	if filters.From != nil {
+		whereClauses = append(whereClauses, "started_at >= ?")
+		args = append(args, filters.From.Format(time.RFC3339))
+	}
+	if filters.To != nil {
+		whereClauses = append(whereClauses, "started_at <= ?")
+		args = append(args, filters.To.Format(time.RFC3339))
+	}
+
+	whereClause := ""
+	if len(whereClauses) > 0 {
+		whereClause = "WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	var total int
+	countQuery := "SELECT COUNT(*) FROM backup_runs " + whereClause
+	if err := d.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	limit := filters.Limit
+	if limit <= 0 {
+		limit = 25
+	}
+	page := filters.Page
+	if page <= 0 {
+		page = 1
+	}
+
+	// (page-1)*limit is arithmetic on a client-supplied page, and int wraps.
+	// OBSERVED before this guard: page = MaxInt with limit = 50 produces
+	// offset -100, SQLite reads a negative OFFSET as no offset at all, and the
+	// call returns page ONE's rows while the caller believes it asked for a
+	// page far past the end — a wrong answer served as a correct one.
+	//
+	// Detecting the overflow beats capping page: a page legitimately past the
+	// end (?page=999999999 over a small table) already returns empty, and
+	// returning empty here keeps that answer consistent instead of inventing a
+	// maximum page number. total is left untouched, so the caller still learns
+	// the real size of the match set.
+	if page-1 > math.MaxInt/limit {
+		return nil, total, nil
+	}
+	offset := (page - 1) * limit
+
+	// Column order must stay identical to the Scan targets below, and to
+	// GetBackupRuns' list, which this deliberately repeats rather than shares:
+	// that function keeps its existing callers and is left untouched here.
+	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message
+	          FROM backup_runs ` + whereClause + ` ORDER BY started_at DESC LIMIT ? OFFSET ?`
+	queryArgs := append(args, limit, offset)
+
+	rows, err := d.db.Query(query, queryArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var runs []models.BackupRun
+	for rows.Next() {
+		var r models.BackupRun
+		err := rows.Scan(&r.ID, &r.Kind, &r.Trigger, &r.Status, &r.StartedAt, &r.FinishedAt,
+			&r.StacksTotal, &r.StacksOK, &r.StacksFailed, &r.BytesAdded, &r.ErrorMessage)
+		if err != nil {
+			return nil, 0, err
+		}
+		runs = append(runs, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("reading backup runs: %w", err)
+	}
+	return runs, total, nil
 }
 
 // GetBackupRunByID fetches a single BackupRun by its primary key.
