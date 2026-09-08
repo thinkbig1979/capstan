@@ -248,3 +248,30 @@ arm**, in three parts:
 A sweep that has not been shown to fire, that has not been probed wider than its
 own verdict, or whose membership rule has never been shown to stop where it
 claims, is not a sweep. It is an assumption with a command line attached.
+
+<!-- BEGIN AGENT OS — managed by install-agent-os.sh, do not hand-edit -->
+## Agent OS (7.8.8) — the six commands, and which one to use
+
+**There is no auto-discovery. This table is the routing.**
+
+| The work is… | Invoke |
+|---|---|
+| an existing codebase with no Agent OS product docs | `/analyze-product` |
+| a new product to plan | `/plan-product` |
+| a feature carrying **product decisions** (new user-facing behaviour) | `/create-spec` |
+| beads or tasks to execute — **or a freeform goal**: migration, refactor, cleanup, "make X work" | **`/run`** |
+| end-to-end tests to run or repair | `/e2e` |
+| dead code, unused deps, type errors, stale references | `/sweep` |
+
+**`/run` picks its own weight.** Invoking it does not commit you to worktrees or subagents: it
+triages first and recommends **Direct** for one small task. A one-file bug fix is a `/run` job;
+you will just be told to do it directly.
+
+If you are about to dispatch subagents, review a deliverable, or merge and clean up a branch by
+hand, that is `/run`'s job — it carries the worktree isolation, the dispatch contract, the freeze
+and the re-execution gate. Full procedure: `.agent-os/instructions/core/run.md`.
+
+These six are the whole set. Any other Agent OS command you have seen named — `create-tasks`,
+`execute-tasks`, `upgrade-spec`, `enhance-existing`, `validate-browser`, `validate-quality`,
+`validate-system`, `orchestrate` — was removed in v7.0.0 and is deleted on every rollout.
+<!-- END AGENT OS -->
