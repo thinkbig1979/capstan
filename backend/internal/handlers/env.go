@@ -85,7 +85,16 @@ func (h *EnvHandler) Get(c *gin.Context) {
 		return
 	}
 
+	// A stack with no env file is ordinary configuration, not a client mistake,
+	// and the frontend asks this of every stack whose Env tab is opened — so
+	// without the marker this 404 fills the log with warnings nobody can act on
+	// (agent-os-hjmf). Marked per-site rather than by adding models.ErrNotFound
+	// to respond.go's routineErrorCodes, because the SAME code answers the
+	// genuine "Stack not found" above and "Env file not found on disk" below,
+	// both of which must keep warning. prfj_routine_404_log_test.go's
+	// TestHandleError_MarksOnlyListedCodes pins ErrNotFound out of that list.
 	if stack.EnvFile == "" {
+		middleware.MarkRoutineOutcome(c)
 		c.JSON(http.StatusNotFound, models.NewAppError(
 			http.StatusNotFound,
 			models.ErrNotFound,
@@ -196,7 +205,10 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		return
 	}
 
+	// Routine for the same reason as the read path above (agent-os-hjmf); the
+	// write path mints the identical answer and so needs the identical marker.
 	if stack.EnvFile == "" {
+		middleware.MarkRoutineOutcome(c)
 		c.JSON(http.StatusNotFound, models.NewAppError(
 			http.StatusNotFound,
 			models.ErrNotFound,
