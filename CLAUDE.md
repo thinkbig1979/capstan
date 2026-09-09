@@ -24,6 +24,8 @@ web UI on one port.
 - **Backend**: Go, in `backend/`. Embedded SQLite via `modernc.org/sqlite`.
 - **Frontend**: React with TypeScript, in `frontend/`. TailwindCSS for styling,
   Radix-based UI primitives, Lucide icons.
+- **Package manager: pnpm.** There is a `pnpm-workspace.yaml` at the root. Do NOT run
+  `npm install` here — it corrupts `node_modules` and the lockfile in a pnpm workspace.
 - **Hosting**: self-hosted Docker Compose (`docker-compose.yaml`,
   `docker-compose.prod.yaml`).
 
