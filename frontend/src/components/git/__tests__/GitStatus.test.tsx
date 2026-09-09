@@ -88,9 +88,8 @@ describe('GitStatus', () => {
   // agent-os-omvy. This REPLACES an assertion that the same payload renders
   // nothing (agent-os-x40a's frontend half, which stopped the component reading
   // `gitStatus.branch` off a non-repo payload). The guard is still there; what
-  // changed is what it renders. Nothing was a dead end — a blank stack header,
-  // no statement of why, and no hint that Rescan is what picks up a directory
-  // `git init`'d after it was registered.
+  // changed is what it renders. Nothing was a dead end: a blank stack header
+  // with no statement of why.
   it('names a non-repository directory and offers Rescan', () => {
     mockUseGitStatus.mockReturnValue({ isLoading: false, error: null, data: { isRepo: false } })
     renderWithProviders(<GitStatus stack={mockStack} />)
@@ -99,7 +98,10 @@ describe('GitStatus', () => {
   })
 
   // The offer has to be the action, not a word. A label reading "Rescan" that
-  // scans nothing is the same dead end with better wording.
+  // scans nothing is the same dead end with better wording. What it buys is
+  // narrow and real: this chip renders when the live probe says no repository
+  // while the cached `Stack.isGitRepo` behind the badges may still say yes, and
+  // the scan is what rewrites that field.
   it('runs a directory rescan when Rescan is clicked', async () => {
     const user = userEvent.setup()
     mockUseGitStatus.mockReturnValue({ isLoading: false, error: null, data: { isRepo: false } })

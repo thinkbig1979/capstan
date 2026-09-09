@@ -41,10 +41,12 @@ export function GitStatus({ stack }: GitStatusProps) {
   // Backs the Rescan offered on the non-repo chip below. Directory scanning has
   // no per-stack form: `directoriesApi.scan` takes no arguments and rescans
   // every monitored directory (lib/api.ts, the same call behind the dashboard's
-  // Refresh at pages/DashboardPage.tsx). It is also the only thing that can
-  // change the answer — `command grep -rn "IsGitRepo" backend --include=*.go`
-  // shows the field constructed only in services/scanner.go (:1170, :1328);
-  // every other hit reads or persists it.
+  // Refresh at pages/DashboardPage.tsx). It is the only thing that rewrites the
+  // cached `Stack.isGitRepo` the badges elsewhere read: `command grep -rn
+  // "IsGitRepo" backend --include=*.go` shows the field constructed only in
+  // services/scanner.go (:1170, :1328), every other hit reading or persisting
+  // it. That cached field is why the two stack keys are invalidated below
+  // alongside this stack's git key.
   const handleRescan = async () => {
     setIsRescanning(true)
     try {
@@ -77,13 +79,22 @@ export function GitStatus({ stack }: GitStatusProps) {
   // and never as `error` — which is the point: a 404 put a red failed request
   // in the console of every non-git stack for something nobody did wrong.
   //
-  // Rendering nothing for it was a dead end (agent-os-omvy): the header went
-  // blank, with no statement of the fact and no hint that Rescan is what picks
-  // a repository up. `Stack.isGitRepo` is written only by the scanner, so a
-  // directory `git init`'d after it was registered stays non-git in the UI
-  // until someone rescans, and the person who would rescan is the one looking
-  // at a blank header. Quiet, though: for most stacks this is a normal state
-  // and not a fault, so it gets the muted chip rather than a warning.
+  // Rendering nothing for it was a dead end (agent-os-omvy): the stack header
+  // went blank with no statement of the fact. Quiet, though. For most stacks
+  // this is an ordinary state and not a fault, so it gets the muted chip rather
+  // than a warning.
+  //
+  // The Rescan on the chip clears a stale TRUE, and it is worth being exact
+  // about the direction, because the opposite reading is intuitive and wrong.
+  // This endpoint is a LIVE probe: handlers/git.go never consults the cached
+  // `Stack.isGitRepo` (`command grep -n "IsGitRepo" backend/internal/handlers/
+  // git.go` returns nothing) and derives `isRepo` from the real path at request
+  // time. So a directory that BECOMES a repository answers `isRepo: true` on
+  // the very next fetch, with no rescan, and this chip is never on screen for
+  // it. The reverse persists: a directory whose `.git` has gone since the last
+  // scan answers `isRepo: false` here while the dashboard and sidebar badges
+  // still read the cached field and show a branch that no longer exists.
+  // Rescan reconciles those two, which is why it invalidates the stack keys.
   //
   // Narrowing here also gives the ~130 lines below `GitRepoStatus` for free, so
   // a future field read on the non-repo branch is a compile error rather than
@@ -101,7 +112,7 @@ export function GitStatus({ stack }: GitStatusProps) {
           onClick={handleRescan}
           disabled={isRescanning}
           className="underline underline-offset-2 hover:text-foreground disabled:opacity-60"
-          title="Rescan the monitored directories. Use this if the directory has become a git repository since it was registered."
+          title="Rescans the monitored directories. Use it if this stack still shows a git branch elsewhere in the UI."
         >
           {isRescanning ? 'Rescanning…' : 'Rescan'}
         </button>
