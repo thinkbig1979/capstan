@@ -1028,6 +1028,14 @@ const (
 // so scanning a directory inside a bare repository agrees with git rather than
 // contradicting it.
 //
+// A consequence of that, named here rather than left implicit because it is a
+// dependency on a guard enforced elsewhere in this file: a .git DIRECTORY
+// itself satisfies the bare triple, so the bare test would match one if the
+// walk ever started inside a .git. It cannot today only because
+// scanDirectoryRecursive skips dot-prefixed entries (scanner.go:581), so no
+// directory under a .git is ever registered or scanned. A refactor that relaxed
+// that skip would break this silently.
+//
 // Only os.IsNotExist means "not a repository"; every other stat error means
 // "could not find out" (the agent-os-d5ff shape). A fault at path's OWN .git
 // returns isGitRepo=true with gitStateUnknown: true is the honest half of
@@ -1040,15 +1048,18 @@ const (
 // this replaced, and one that surfaces only in a deployment nobody tests on.
 //
 // FILESYSTEM BOUNDARIES: git stops discovery at a mount point unless
-// GIT_DISCOVERY_ACROSS_FILESYSTEM=1; this walk does not, because st_dev needs a
-// platform-specific syscall.Stat_t assertion rather than anything os.FileInfo
-// exposes. The divergence is accepted rather than papered over, and it runs in
-// the OPPOSITE direction from the bug being fixed: a repository above a mount
-// boundary would make isGitRepo true while GET /api/v1/git, which is real git,
-// answers isRepo false. Not tested -- inferred from docker-compose.yaml:24,
-// which bind-mounts STACKS_DIR (default /opt/stacks) at the same path inside
-// the container, so the levels above the mount are image directories that carry
-// no .git and this deployment shape does not produce the case. If it ever does,
+// GIT_DISCOVERY_ACROSS_FILESYSTEM=1; this walk does not compare st_dev. The
+// divergence is accepted rather than papered over, and it runs in the OPPOSITE
+// direction from the bug being fixed: a repository above a mount boundary makes
+// isGitRepo true while GET /api/v1/git, which is real git, answers isRepo
+// false.
+//
+// It is accepted because the case is not reachable in the deployment shape this
+// ships in -- NOT TESTED, inferred from docker-compose.yaml:24, which
+// bind-mounts STACKS_DIR (default /opt/stacks) at the same path inside the
+// container, so every level above the mount is an image directory and carries
+// no .git. That is the whole reason; nothing here is claimed to be impossible
+// to implement. If a deployment ever does put a repository above the boundary,
 // the fix is a per-level st_dev comparison, not a ceiling directory.
 //
 // NO BOUND AND NO CACHE ARE NEEDED, and adding either buys an invalidation bug
@@ -1144,6 +1155,14 @@ func gitStateAtLevel(dir string) (gitLevelState, string) {
 // The triple alone is the weaker instrument: any directory that happens to hold
 // those three names would light a git badge on a non-repository. parseGitHead
 // already supplies the stronger half, so requiring both costs one file read.
+//
+// An unparseable HEAD therefore gets the OPPOSITE disposition here from the one
+// it gets under a located .git, deliberately. A .git entry is near-proof of a
+// repository, so gitStateAtLevel answers "there is a repository here and I
+// cannot name its branch" and stops the walk. The bare triple is three ordinary
+// directory names and is weak evidence on its own -- parseGitHead is what makes
+// it strong -- so failing it means "not shown to be a repository here", and the
+// walk continues rather than claiming one.
 //
 // Unlike readGitBranch this reports no warnings: every ordinary non-git
 // directory of every scan reaches it, so a warning here would be noise rather
