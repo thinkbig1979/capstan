@@ -72,20 +72,33 @@ describe('GitStatus, repository with no commits (agent-os-4a4a)', () => {
     renderWithProviders(<GitStatus stack={mockStack} />)
 
     expect(screen.getByText('no commits')).toBeInTheDocument()
+    // An empty repository IS a repository, so agent-os-omvy's non-repo chip
+    // must not reach this case.
+    expect(screen.queryByText('not a git repository')).not.toBeInTheDocument()
     // Inert by design: nothing to pull, no remote to configure, no commit to
-    // show. A button here would open a popover with three empty rows.
+    // show. A button here would open a popover with three empty rows. It also
+    // forbids omvy's Rescan button on this branch.
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
-  it('CONTROL renders nothing for a directory that is not a repository', () => {
+  // Updated by agent-os-omvy, which replaced the blank render for this payload
+  // with a chip naming the state and offering Rescan. The control's job is
+  // unchanged and is the reason it is asserted from both sides here: the two
+  // negative answers must stay distinguishable. An empty repository says "no
+  // commits"; a directory with no repository in it says so and offers the one
+  // action that changes the answer.
+  it('CONTROL says not-a-repository, not no-commits, for a directory that is not a repository', () => {
     mockUseGitStatus.mockReturnValue({
       isLoading: false,
       error: null,
       data: { isRepo: false },
     })
 
-    const { container } = renderWithProviders(<GitStatus stack={mockStack} />)
-    expect(container).toBeEmptyDOMElement()
+    renderWithProviders(<GitStatus stack={mockStack} />)
+
+    expect(screen.getByText('not a git repository')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /rescan/i })).toBeInTheDocument()
+    expect(screen.queryByText('no commits')).not.toBeInTheDocument()
   })
 
   it('CONTROL still renders the branch chip for a repository with commits', () => {
@@ -112,5 +125,6 @@ describe('GitStatus, repository with no commits (agent-os-4a4a)', () => {
 
     expect(screen.getByText('main')).toBeInTheDocument()
     expect(screen.queryByText('no commits')).not.toBeInTheDocument()
+    expect(screen.queryByText('not a git repository')).not.toBeInTheDocument()
   })
 })
