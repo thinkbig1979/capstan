@@ -36,13 +36,16 @@ const mockStack = {
   gitBehind: 0,
 }
 
-// isRepo:true is not decoration — the component narrows on it and renders
-// nothing without it, so every row below would go empty if the backend ever
-// stopped emitting it. The backend side is pinned by
-// handlers/x40a_nonrepo_200_test.go arm 2.
+// Neither discriminator is decoration — the component narrows on both and
+// renders nothing (isRepo) or the inert "no commits" chip (hasCommits) without
+// them, so every row below would go empty or wrong if the backend ever stopped
+// emitting one. The backend side is pinned by
+// handlers/x40a_nonrepo_200_test.go arm 2 and
+// handlers/4a4a_emptyrepo_200_test.go arm 4.
 function gitData(overrides: Record<string, unknown> = {}) {
   return {
     isRepo: true,
+    hasCommits: true,
     branch: 'main',
     commit: 'abc123',
     commitShort: 'abc1234',

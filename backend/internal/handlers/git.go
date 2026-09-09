@@ -156,20 +156,41 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 		//     stackId, a real client error (ua4y_7lg1_cause_test.go).
 		//
 		// A status-keyed or route-keyed guard would swallow both.
+		//
+		// agent-os-4a4a added the second arm, for the same reason and with a
+		// different answer. A `git init`'d directory with no commits is also
+		// normal configuration, also asked about on every page load, and also
+		// painted a red console entry — but a repository with no commits IS a
+		// repository, so x40a's `{isRepo: false}` would be factually wrong
+		// here. It says there is no git where there is some.
+		//
+		// The repo-only fields are ABSENT on that answer, never null and never
+		// zero-valued, which is x40a's absent-over-null precedent on this same
+		// endpoint: `ahead: 0` would mean both "up to date" and "no commits
+		// exist", and a caller cannot tell those apart.
 		var appErr *models.AppError
-		if errors.As(err, &appErr) && appErr.Code == models.ErrGitNotRepo {
-			c.JSON(http.StatusOK, gin.H{"isRepo": false})
-			return
+		if errors.As(err, &appErr) {
+			switch appErr.Code {
+			case models.ErrGitNotRepo:
+				c.JSON(http.StatusOK, gin.H{"isRepo": false})
+				return
+			case models.ErrGitNoCommits:
+				c.JSON(http.StatusOK, gin.H{"isRepo": true, "hasCommits": false})
+				return
+			}
 		}
 		handleError(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		// The discriminator is emitted on BOTH branches. The frontend's
-		// GitStatus type is a union narrowed on it, so a repo answer that
-		// omitted it would render no chip at all.
+		// Both discriminators are emitted on every branch that can carry them.
+		// The frontend's GitStatus type is a union narrowed on them, so a repo
+		// answer that omitted either would render no chip at all — hasCommits
+		// for the same reason as isRepo, since agent-os-4a4a split the repo
+		// answer in two.
 		"isRepo":        true,
+		"hasCommits":    true,
 		"branch":        status.Branch,
 		"commit":        status.Commit.Hash,
 		"commitShort":   status.Commit.Short,

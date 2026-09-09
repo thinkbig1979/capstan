@@ -105,6 +105,14 @@ func TestHandleError_RoutineOutcomeLogLevel(t *testing.T) {
 		{
 			// GIT_NO_COMMITS is routine like GIT_NOT_REPO: a repo that exists
 			// but has no commits is a normal state, asked about on every visit.
+			//
+			// GET /api/v1/git no longer sends this condition here at all — it
+			// answers 200 `{isRepo: true, hasCommits: false}` (agent-os-4a4a),
+			// which is the stronger fix, since a routine LOG level still leaves
+			// the red console entry standing. This row now pins the behaviour
+			// for any OTHER caller that routes the code to handleError, and it
+			// is exercised directly rather than through the endpoint, so it is
+			// deliberately unaffected by that change.
 			name: "GIT_NO_COMMITS 404 is routine: Info",
 			err:  models.NewAppError(http.StatusNotFound, models.ErrGitNoCommits, "Repository has no commits yet"),
 			want: "INFO",
@@ -212,6 +220,12 @@ func TestHandleError_MarksOnlyListedCodes(t *testing.T) {
 		// could be listed here without dragging ErrNotFound's 20 genuine
 		// "Stack not found" sites along with it. The row below is the other
 		// half of that argument and must stay false.
+		//
+		// The listing is now defence in depth rather than the live path:
+		// agent-os-4a4a made the one endpoint that minted this code answer 200
+		// instead, so nothing routes it to handleError today. services/git.go
+		// still mints it, and this row is what keeps a future caller from
+		// reintroducing a WARN for a routine state.
 		{models.ErrGitNoCommits, true},
 		{models.ErrNotFound, false},
 		// STACK_DIR_MISSING is minted by the same function as GIT_NOT_REPO and

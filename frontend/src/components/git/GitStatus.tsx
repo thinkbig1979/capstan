@@ -14,8 +14,9 @@ interface GitStatusProps {
 
 /**
  * Compact git chip for the stack header. Renders nothing while loading and
- * nothing at all for non-git directories; details and pull actions live in a
- * popover behind the chip.
+ * nothing at all for non-git directories; a repository with no commits yet gets
+ * an inert chip that says so. Details and pull actions live in a popover behind
+ * the full chip.
  */
 export function GitStatus({ stack }: GitStatusProps) {
   const { data: gitStatus, isLoading, error } = useGitStatus(stack.id)
@@ -40,6 +41,28 @@ export function GitStatus({ stack }: GitStatusProps) {
   // than an `undefined` rendered into the chip.
   if (isLoading || error || !gitStatus || !gitStatus.isRepo) {
     return null
+  }
+
+  // A `git init`'d directory with no commits yet (agent-os-4a4a). It used to
+  // arrive as an ERROR — a 404 that put a red entry in the console — and this
+  // component rendered nothing for it. Rendering nothing is still the wrong
+  // answer now that it arrives as data: an empty repository IS a repository,
+  // and an operator who has just run `git init` would otherwise see the same
+  // blank header as a stack with no git at all, with no way to tell which.
+  //
+  // Inert on purpose. There is no branch to name, no commit to show, no remote
+  // to configure and nothing to pull, so the popover behind the chip below
+  // would open on three empty rows.
+  if (!gitStatus.hasCommits) {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-0.5 text-xs font-mono text-muted-foreground"
+        aria-label="Git status: repository initialised, no commits yet"
+      >
+        <GitBranch className="h-3 w-3" aria-hidden="true" />
+        no commits
+      </span>
+    )
   }
 
   const handlePull = (redeploy = false) => {

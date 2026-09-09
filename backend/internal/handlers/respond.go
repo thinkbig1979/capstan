@@ -90,6 +90,15 @@ func renderResultWithStatus(c *gin.Context, status int, r truth.ActionResult) {
 // 500 and logs its chain. See services/git.go gitFailure, which carries the
 // measurements and one accepted limit (an unreadable .git is still
 // indistinguishable from an absent one, because git reports them identically).
+//
+// GIT_NO_COMMITS is KEPT here although agent-os-4a4a made GET /api/v1/git
+// answer that condition 200, which is the only route by which it used to reach
+// this map. It is defence in depth and not an oversight: services/git.go still
+// MINTS the code, and any future caller of GitService.GetStatus that routes it
+// to handleError would otherwise reintroduce a WARN for the same routine state.
+// Removing the entry would also delete the two rows in
+// prfj_routine_404_log_test.go that carry agent-os-n2df's argument for why this
+// condition needed a code of its own rather than sharing ErrNotFound.
 var routineErrorCodes = map[string]bool{
 	models.ErrGitNotRepo:   true,
 	models.ErrGitNoCommits: true,

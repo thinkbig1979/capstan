@@ -125,6 +125,7 @@ export interface Stack {
  */
 export interface GitRepoStatus {
   isRepo: true
+  hasCommits: true
   branch: string
   commit: string
   commitShort: string
@@ -153,7 +154,28 @@ export interface GitNotRepoStatus {
   isRepo: false
 }
 
-export type GitStatus = GitRepoStatus | GitNotRepoStatus
+/**
+ * GET /api/v1/git, empty-repo branch: a `git init`'d directory with no commits
+ * yet. Also a 200, for the same reason (agent-os-4a4a).
+ *
+ * `isRepo` is TRUE here, and that is the whole point of the second field. An
+ * empty repository IS a repository, so answering `isRepo: false` would tell the
+ * UI there is no git where there is some. What is not true is the promise
+ * `isRepo: true` used to carry on its own — that a branch, a commit and an
+ * ahead/behind count are readable — which is why the split is a separate field
+ * rather than an overload of the first.
+ *
+ * Every repo-only field is ABSENT, not zero-valued: `ahead: 0` would mean both
+ * "up to date" and "no commits exist", the conflation agent-os-x40a rejected
+ * when it chose absent-over-null on this endpoint. The union below turns a read
+ * of one into a compile error instead of an `undefined` in the DOM.
+ */
+export interface GitEmptyRepoStatus {
+  isRepo: true
+  hasCommits: false
+}
+
+export type GitStatus = GitRepoStatus | GitEmptyRepoStatus | GitNotRepoStatus
 
 export interface GitCommit {
   hash: string

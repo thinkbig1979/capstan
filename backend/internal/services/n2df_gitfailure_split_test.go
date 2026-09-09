@@ -162,6 +162,15 @@ func TestGitExitCode_DiscriminatesRanFromNeverRan(t *testing.T) {
 // The message is deliberately unchanged, so git_parity_yo9e_test.go's
 // "06 unborn HEAD" arm (which asserts on err.Error(), the Message) stays green.
 // Only the code moves.
+//
+// This is a SERVICE-layer assertion and agent-os-4a4a did not move it. The HTTP
+// answer for this condition is now 200 `{isRepo: true, hasCommits: false}`, but
+// the discrimination happens at the boundary in handlers/git.go, exactly where
+// agent-os-x40a put the sibling one and for the same reason: the service's
+// error is still the right answer for every other caller, and moving the
+// decision down would flip a contract three entry points want unchanged. The
+// code, status and message asserted below are what that boundary keys ON, so
+// this test guards the fix rather than contradicting it.
 func TestGetStatus_UnbornHeadHasItsOwnCode(t *testing.T) {
 	svc := NewGitService(&config.Config{}, nil)
 
