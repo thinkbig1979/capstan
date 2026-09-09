@@ -2,8 +2,10 @@ package services
 
 import (
 	"errors"
+	"io/fs"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -189,4 +191,139 @@ func TestGetStatus_UnbornHeadHasItsOwnCode(t *testing.T) {
 	if appErr.Message != "Repository has no commits yet" {
 		t.Fatalf("message must be unchanged, got %q", appErr.Message)
 	}
+}
+
+// TestPullFailure_ProbeThatCouldNotRunIsNotARemoteFault pins agent-os-4kom on
+// ONE instrument, both directions, which is the only way the result
+// discriminates anything.
+//
+// pullFailure's first probe branched on `probeErr != nil` and nothing finer, so
+// "the remote answered badly" and "the probe never ran" were one answer: 502
+// GIT_REMOTE_UNREACHABLE, "Could not read from the git remote". The second is a
+// LOCAL fault — no git binary, a directory that cannot be entered, a probe
+// child killed or never forked — and an operator handed that message goes to
+// DNS, the firewall and the credential store for something none of them can
+// fix. Exactly the defect gitFailure was split for one function further down
+// (agent-os-prfj), reached by a different probe.
+//
+// The arm that matters is NOT arm (a) on its own. A "fix" that stopped
+// classifying altogether would pass it and would be worse than the bug, because
+// it also loses the genuine remote diagnosis. Arm (b) — the same call still
+// answering GIT_REMOTE_UNREACHABLE for a remote that really cannot be read —
+// is what forbids that, and arm (a3) is what forbids the OTHER cheap wrong fix:
+// merely deleting the branch, which drops a local fault into the next probe and
+// answers "the branch tracks no upstream", a confident misdiagnosis one line
+// further down.
+//
+// MEASURED through gitCommandWithCreds' %w wrap, git 2.47.3 on this host:
+//
+//	ls-remote at a bare repo path that does not exist -> gitExitCode 128
+//	ls-remote with dirPath deleted                    -> gitExitCode  -1 (chdir ENOENT)
+//	ls-remote with PATH emptied                       -> gitExitCode  -1 (exec lookup)
+//
+// HOW THE -1 SHAPE IS PRODUCED HERE IS NOT HOW PRODUCTION REACHES IT, and
+// saying so is the point. pullCLI runs `status --porcelain` and `rev-parse
+// HEAD` in dirPath BEFORE the pull (git.go), so a directory that was already
+// gone, or a git that was never on PATH, fails there and never reaches
+// pullFailure at all. The reachable routes are narrower — the binary or the
+// mount going away BETWEEN the pull and the probe, a fork that fails under
+// memory pressure, a probe child killed by a signal (gitExitCode is -1 for that
+// too). What the class IS, is "probeErr carries no exit status". These two
+// fixtures are the cheapest hermetic way to produce that class; they are not a
+// claim that this is how an operator gets there.
+func TestPullFailure_ProbeThatCouldNotRunIsNotARemoteFault(t *testing.T) {
+	svc := NewGitService(&config.Config{}, nil)
+
+	// appCode reports the AppError code when the error is one, so an
+	// arm can say "not this code" without caring whether the answer is typed.
+	appCode := func(err error) string {
+		var appErr *models.AppError
+		if errors.As(err, &appErr) {
+			return appErr.Code
+		}
+		return ""
+	}
+
+	// ARM (a) — THE DEFECT. The probe could not run because dirPath is not
+	// there. Nothing was learned about the remote, so the remote must not be
+	// named.
+	t.Run("missing directory is not a remote fault", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "not-mounted")
+
+		got := svc.pullFailure(missing, "", "", errProbeTrigger)
+		if got == nil {
+			t.Fatal("want an error when the remote probe cannot run, got nil")
+		}
+		if code := appCode(got); code == models.ErrGitRemoteUnreachable {
+			t.Errorf("missing directory: got code %q — the probe never ran, so nothing was "+
+				"learned about the remote; this sends the operator to DNS and credentials for a "+
+				"local fault. Full error: %v", code, got)
+		}
+		// ARM (a3) — the fall-through trap. Deleting the branch instead of
+		// guarding it lands this case in the NEXT probe, which cannot run
+		// either, and answers with a different confident misdiagnosis.
+		if strings.Contains(got.Error(), "tracks no upstream") {
+			t.Errorf("missing directory: answered %q — the upstream probe could not run either, "+
+				"so this is the same defect one branch further down", got.Error())
+		}
+		// The answer must NAME the local cause, not merely decline to name the
+		// remote one.
+		if !errors.Is(got, fs.ErrNotExist) {
+			t.Errorf("the local cause must survive the wrap so handleError logs it: %v", got)
+		}
+		if !errors.Is(got, errProbeTrigger) {
+			t.Errorf("the failed pull that triggered the classification must survive the wrap too: %v", got)
+		}
+	})
+
+	// ARM (a2) — the same class by the other route: git itself cannot be
+	// executed. exec.Command resolves the binary against the PARENT process's
+	// PATH (not cmd.Env), so emptying it here is what makes the lookup fail.
+	t.Run("missing git binary is not a remote fault", func(t *testing.T) {
+		t.Setenv("PATH", "")
+
+		got := svc.pullFailure(t.TempDir(), "", "", errProbeTrigger)
+		if got == nil {
+			t.Fatal("want an error when git cannot be executed, got nil")
+		}
+		if code := appCode(got); code == models.ErrGitRemoteUnreachable {
+			t.Errorf("missing git binary: got code %q — an image with no git tells the operator "+
+				"their remote is unreachable. Full error: %v", code, got)
+		}
+		if strings.Contains(got.Error(), "tracks no upstream") {
+			t.Errorf("missing git binary: answered %q, the same defect one branch further down",
+				got.Error())
+		}
+		var execErr *exec.Error
+		if !errors.As(got, &execErr) {
+			t.Errorf("the exec lookup failure must survive the wrap: %q", got.Error())
+		}
+	})
+
+	// ARM (b) — THE CONTROL, and the load-bearing half. A remote that genuinely
+	// cannot be read must STILL answer 502 GIT_REMOTE_UNREACHABLE on this same
+	// call. Offline: the "remote" is a bare repo path that does not exist, so
+	// no DNS and no network are involved, and ls-remote exits 128 the same way
+	// it does for auth and DNS failures (see pullFailure's measured table).
+	t.Run("CONTROL: an unreadable remote is still GIT_REMOTE_UNREACHABLE", func(t *testing.T) {
+		work, _, root := pullFixture(t)
+		mustGit(t, work, "remote", "set-url", "origin", filepath.Join(root, "gone.git"))
+
+		got := svc.pullFailure(work, "", "", errProbeTrigger)
+		if got == nil {
+			t.Fatal("want an error for a remote that cannot be read, got nil")
+		}
+		var appErr *models.AppError
+		if !errors.As(got, &appErr) {
+			t.Fatalf("CONTROL: want *models.AppError, got %T: %v — a fix that stops classifying "+
+				"the genuine case has discriminated nothing", got, got)
+		}
+		if appErr.Code != models.ErrGitRemoteUnreachable {
+			t.Errorf("CONTROL: got code %q, want %q — this remote really cannot be read",
+				appErr.Code, models.ErrGitRemoteUnreachable)
+		}
+		if appErr.Status != 502 {
+			t.Errorf("CONTROL: got HTTP %d, want 502", appErr.Status)
+		}
+	})
 }

@@ -440,6 +440,12 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 // exits 128 for want of a revision to resolve, and without that probe the
 // failure would be reported as a divergence.
 //
+// Every row of that table is a probe that RAN and answered. A probe that could
+// not run at all — no git binary, a directory that cannot be entered, a child
+// never forked or killed by a signal — has no row, no exit code and nothing to
+// say about the remote, so it is classified by NEITHER the remote branch nor
+// the upstream one (agent-os-4kom); see the first probe below.
+//
 // Auth and network are deliberately not separated. Git does not distinguish
 // them by exit code, only in the message text, and splitting them would mean
 // exactly the prose matching this change removes. They share one answer:
@@ -457,6 +463,41 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 // GIT_TERMINAL_PROMPT=0 in the child env keeps it from blocking on a prompt.
 func (s *GitService) pullFailure(dirPath, user, token string, err error) error {
 	if _, probeErr := s.gitCommandWithCreds(dirPath, user, token, "ls-remote", "--quiet"); probeErr != nil {
+		// EXIT STATUS, not "non-nil" -- the same discipline as the is-ancestor
+		// branch below and as gitFailure, and for the same reason
+		// (agent-os-4kom). A non-nil probeErr also covers the probe NEVER
+		// RUNNING: no git binary in the image, a stacks directory that has been
+		// unmounted, a fork that failed under memory pressure, a probe child
+		// killed by a signal. None of those is a fact about the remote, and
+		// answering them with "Could not read from the git remote" sends an
+		// operator to DNS, the firewall and the credential store for a local
+		// fault. MEASURED through gitCommandWithCreds' %w wrap, git 2.47.3:
+		//
+		//	remote path missing / DNS / auth -> gitExitCode 128
+		//	dirPath cannot be entered        -> gitExitCode  -1  (chdir ENOENT)
+		//	git not on PATH                  -> gitExitCode  -1  (exec lookup)
+		//
+		// The branch keys on "git ran and answered", not on 128 specifically.
+		// Every measured remote failure exits 128 today, but 128 is not what
+		// this probe is asking about: the question is whether the answer came
+		// from git at all. Pinning the number would silently unclassify a
+		// future git that reported an unreadable remote with some other status,
+		// turning a good 502 into a 500.
+		//
+		// It returns EARLY rather than falling through to the upstream probe.
+		// Whatever stopped ls-remote from running stops that one too, and the
+		// fall-through would answer "the branch tracks no upstream" -- the same
+		// misdiagnosis of the same local fault, one branch further down.
+		//
+		// Both causes are wrapped: probeErr names the local fault, err is the
+		// pull failure that triggered the classification. Not an
+		// *models.AppError on purpose, matching the divergence-probe branch
+		// below -- handleError's fallback turns this into a 500 INTERNAL_ERROR
+		// and logServerFault logs the chain (agent-os-7z8c), which is what a
+		// server fault needs.
+		if gitExitCode(probeErr) < 0 {
+			return fmt.Errorf("git pull failed (%w) and the remote probe could not run: %w", err, probeErr)
+		}
 		return models.NewAppErrorWithDetails(502, models.ErrGitRemoteUnreachable,
 			"Could not read from the git remote", err.Error())
 	}
