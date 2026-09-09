@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
 
@@ -19,9 +19,11 @@ vi.mock('@/lib/api', () => ({
   directoriesApi: {
     list: vi.fn().mockResolvedValue([]),
     updateCredentials: vi.fn(),
+    scan: vi.fn().mockResolvedValue({ directories: [], hasGlobalEnv: false, scannedAt: '' }),
   },
 }))
 
+import { directoriesApi } from '@/lib/api'
 import { GitStatus } from '../GitStatus'
 
 const mockStack = {
@@ -83,19 +85,53 @@ describe('GitStatus', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  // The frontend half of agent-os-x40a. Seen failing first: before the
-  // `!gitStatus.isRepo` guard the component read `gitStatus.branch` on this
-  // payload and rendered a chip whose branch was `undefined`.
-  it('renders nothing for a directory that is not a git repository', () => {
+  // agent-os-omvy. This REPLACES an assertion that the same payload renders
+  // nothing (agent-os-x40a's frontend half, which stopped the component reading
+  // `gitStatus.branch` off a non-repo payload). The guard is still there; what
+  // changed is what it renders. Nothing was a dead end: a blank stack header
+  // with no statement of why.
+  it('names a non-repository directory and offers Rescan', () => {
     mockUseGitStatus.mockReturnValue({ isLoading: false, error: null, data: { isRepo: false } })
-    const { container } = renderWithProviders(<GitStatus stack={mockStack} />)
-    expect(container).toBeEmptyDOMElement()
+    renderWithProviders(<GitStatus stack={mockStack} />)
+    expect(screen.getByText('not a git repository')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /rescan/i })).toBeInTheDocument()
   })
 
+  // The offer has to be the action, not a word. A label reading "Rescan" that
+  // scans nothing is the same dead end with better wording. What it buys is
+  // narrow and real: this chip renders when the live probe says no repository
+  // while the cached `Stack.isGitRepo` behind the badges may still say yes, and
+  // the scan is what rewrites that field.
+  it('runs a directory rescan and refreshes every cache the scan rewrites', async () => {
+    const user = userEvent.setup()
+    mockUseGitStatus.mockReturnValue({ isLoading: false, error: null, data: { isRepo: false } })
+    const { queryClient } = renderWithProviders(<GitStatus stack={mockStack} />)
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+
+    await user.click(screen.getByRole('button', { name: /rescan/i }))
+
+    await waitFor(() => expect(vi.mocked(directoriesApi.scan)).toHaveBeenCalledTimes(1))
+
+    // The key SET, not merely that the request went out. A scan rewrites
+    // `is_git_repo` on the stack rows AND the directory rows, and the
+    // dashboard's git badge reads the directories query
+    // (DashboardPage.tsx:99 -> DirectoriesTab.tsx:347), so a missing key here
+    // leaves a branch on screen that the scan has just disproved. Asserting
+    // only `scan` was called cannot see that.
+    await waitFor(() =>
+      expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+        expect.arrayContaining([['git', mockStack.id], ['stacks'], ['stack'], ['directories']])
+      )
+    )
+  })
+
+  // Also the control on agent-os-omvy's affordance: a real repository must keep
+  // the branch chip and must not pick up the non-repo one.
   it('renders branch name in the chip', () => {
     mockUseGitStatus.mockReturnValue({ isLoading: false, error: null, data: gitData() })
     renderWithProviders(<GitStatus stack={mockStack} />)
     expect(screen.getByText('main')).toBeInTheDocument()
+    expect(screen.queryByText('not a git repository')).not.toBeInTheDocument()
   })
 
   it('shows a clean marker when the working tree is clean', () => {

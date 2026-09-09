@@ -2,9 +2,14 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Download, GitBranch, ArrowUp, ArrowDown, FileWarning } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { useGitStatus, useGitPull } from '@/hooks/useGit'
 import { useState } from 'react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { directoriesApi } from '@/lib/api'
+import { classifyError } from '@/lib/error-handler'
+import { queryKeys } from '@/lib/query-keys'
 import type { Stack } from '@/types'
 import { GitSettingsSection } from '@/components/git/GitSettingsSection'
 
@@ -13,10 +18,11 @@ interface GitStatusProps {
 }
 
 /**
- * Compact git chip for the stack header. Renders nothing while loading and
- * nothing at all for non-git directories; a repository with no commits yet gets
- * an inert chip that says so. Details and pull actions live in a popover behind
- * the full chip.
+ * Compact git chip for the stack header. Renders nothing while the status is
+ * loading, when the request failed and when no data arrived. A directory that
+ * is not a repository gets a quiet chip that says so and offers Rescan
+ * (agent-os-omvy); a repository with no commits yet gets an inert chip that
+ * says so. Details and pull actions live in a popover behind the full chip.
  */
 export function GitStatus({ stack }: GitStatusProps) {
   const { data: gitStatus, isLoading, error } = useGitStatus(stack.id)
@@ -29,18 +35,110 @@ export function GitStatus({ stack }: GitStatusProps) {
   } | null>(null)
 
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [isRescanning, setIsRescanning] = useState(false)
+  const queryClient = useQueryClient()
 
-  // `!gitStatus.isRepo` is the whole of the non-git handling. The endpoint now
-  // answers a genuine non-repo with 200 `{isRepo: false}` rather than a 404
-  // (agent-os-x40a), so that case arrives as DATA and never as `error` — which
-  // is the point: a 404 put a red failed request in the console of every
-  // non-git stack for something nobody did wrong.
+  // Backs the Rescan offered on the non-repo chip below. Directory scanning has
+  // no per-stack form: `directoriesApi.scan` takes no arguments and rescans
+  // every monitored directory. DashboardPage's Refresh posts to the same
+  // endpoint, but do not read the two as equivalent: it refetches its own two
+  // queries directly and then invalidates the stats counter, while this drops
+  // four cache keys including the stack's git probe, which the dashboard has no
+  // reason to touch and this cannot do without.
   //
-  // Narrowing on it also gives the ~130 lines below `GitRepoStatus` for free,
-  // so a future field read on the non-repo branch is a compile error rather
-  // than an `undefined` rendered into the chip.
-  if (isLoading || error || !gitStatus || !gitStatus.isRepo) {
+  // The scan is the only thing that rewrites the cached `Stack.isGitRepo` the
+  // badges elsewhere read: `command grep -rn "IsGitRepo" backend
+  // --include=*.go` shows the field constructed only in services/scanner.go
+  // (:1170, :1328), every other hit reading or persisting it, and UpsertStack
+  // in database/stacks.go is an `INSERT OR REPLACE`, so a scan overwrites the
+  // stored value outright rather than leaving a stale one behind.
+  //
+  // Hence four keys rather than one. That field rides on the directory rows as
+  // well as the stack rows, and the dashboard's git badge reads the directories
+  // query (DashboardPage.tsx -> DirectoriesTab.tsx), which is the surface the
+  // button's own tooltip sends the user to look at. The same pairing is the
+  // convention here: hooks/useCreateStack.ts and GitSettingsSection invalidate
+  // directories after a directory-affecting mutation, and a full rescan is the
+  // most directory-affecting mutation there is.
+  //
+  // One honest limit, considered rather than missed: for the majority of stacks
+  // that simply have no git in them, this is a no-op nothing on screen can
+  // show, and only a failure toasts. A successful no-op and a swallowed error
+  // therefore look alike. The alternative is a spinner and a success toast on a
+  // chip whose whole point is to stay quiet.
+  const handleRescan = async () => {
+    setIsRescanning(true)
+    try {
+      await directoriesApi.scan()
+      // Every cache the scan can have changed: this stack's git probe, and the
+      // stack and directory rows carrying `isGitRepo` for the badges on the
+      // other pages.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.git.all(stack.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.stacks() }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.stack.all() }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.directories() }),
+      ])
+    } catch (err) {
+      toast.error(`Rescan failed: ${classifyError(err).message}`)
+    } finally {
+      setIsRescanning(false)
+    }
+  }
+
+  // The three genuinely blank states, and only these three: still loading, a
+  // failed request, no data. `!gitStatus.isRepo` used to be a fourth arm here
+  // and is now its own branch below — folding it in rendered nothing for a
+  // non-git directory, and keeping it here would make a still-loading stack
+  // flash that chip (agent-os-omvy).
+  if (isLoading || error || !gitStatus) {
     return null
+  }
+
+  // A directory with no repository in it. The endpoint answers this with 200
+  // `{isRepo: false}` rather than a 404 (agent-os-x40a), so it arrives as DATA
+  // and never as `error` — which is the point: a 404 put a red failed request
+  // in the console of every non-git stack for something nobody did wrong.
+  //
+  // Rendering nothing for it was a dead end (agent-os-omvy): the stack header
+  // went blank with no statement of the fact. Quiet, though. For most stacks
+  // this is an ordinary state and not a fault, so it gets the muted chip rather
+  // than a warning.
+  //
+  // The Rescan on the chip clears a stale TRUE, and it is worth being exact
+  // about the direction, because the opposite reading is intuitive and wrong.
+  // This endpoint is a LIVE probe: handlers/git.go never consults the cached
+  // `Stack.isGitRepo` (`command grep -n "IsGitRepo" backend/internal/handlers/
+  // git.go` returns nothing) and derives `isRepo` from the real path at request
+  // time. So a directory that BECOMES a repository answers `isRepo: true` on
+  // the very next fetch, with no rescan, and this chip is never on screen for
+  // it. The reverse persists: a directory whose `.git` has gone since the last
+  // scan answers `isRepo: false` here while the dashboard and sidebar badges
+  // still read the cached field and show a branch that no longer exists.
+  // Rescan reconciles those two, which is why it invalidates the stack keys.
+  //
+  // Narrowing here also gives the ~130 lines below `GitRepoStatus` for free, so
+  // a future field read on the non-repo branch is a compile error rather than
+  // an `undefined` rendered into the chip.
+  if (!gitStatus.isRepo) {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-0.5 text-xs text-muted-foreground"
+        aria-label="Git status: not a git repository"
+      >
+        <GitBranch className="h-3 w-3" aria-hidden="true" />
+        not a git repository
+        <button
+          type="button"
+          onClick={handleRescan}
+          disabled={isRescanning}
+          className="underline underline-offset-2 hover:text-foreground disabled:opacity-60"
+          title="Rescans the monitored directories. Use it if this stack still shows a git branch elsewhere in the UI."
+        >
+          {isRescanning ? 'Rescanning…' : 'Rescan'}
+        </button>
+      </span>
+    )
   }
 
   // A `git init`'d directory with no commits yet (agent-os-4a4a). It used to
