@@ -11,6 +11,14 @@ export default defineConfig(({ mode }) => ({
     },
   },
   server: {
+    // This also serves `vite preview`: vite resolves the preview proxy as
+    // `preview?.proxy ?? server.proxy`, so adding a `preview.proxy` block here
+    // would be a no-op duplicate, and a second place for the target below to
+    // drift out of sync. Verified on vite 8.2.1 by proxying a live request
+    // through `vite preview` against a config with no `preview` key. What
+    // usually gets misread as a missing preview proxy is the real trap:
+    // `vite preview` must be run from `frontend/`, or no vite.config.ts is
+    // loaded at all and /api falls through to index.html via the SPA fallback.
     proxy: {
       '/api': {
         target: 'http://localhost:5001',
