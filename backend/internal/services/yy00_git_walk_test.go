@@ -92,6 +92,22 @@ func yy00RequireCleanAncestry(t *testing.T, dir string) {
 	}
 }
 
+// yy00RequireCleanAncestryAbove is yy00RequireCleanAncestry for the arms that
+// deliberately seed a BROKEN repository inside the fixture: the chain from dir
+// UPWARD must be clean, but dir's own subtree is where the fault lives, so the
+// check starts at dir's parent.
+//
+// Without it, "the walk found nothing" and "the walk found something further up
+// that nobody meant to seed" are the same green.
+func yy00RequireCleanAncestryAbove(t *testing.T, dir string) {
+	t.Helper()
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatalf("resolving %s: %v", dir, err)
+	}
+	yy00RequireCleanAncestry(t, filepath.Dir(abs))
+}
+
 // ---------------------------------------------------------------------------
 // Arm 1 — the monorepo layout the bead was filed for.
 // ---------------------------------------------------------------------------
@@ -171,7 +187,7 @@ func TestResolveGitState_NoRepositoryAnywhereAboveIsNotARepo(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Arm 4 — the deliberate fail-open, which is scoped to the stack's OWN .git.
+// Arm 4 — the deliberate fail-open, which is scoped to the START directory.
 // ---------------------------------------------------------------------------
 
 // yy00LoopedGitEntry seeds <dir>/.git as a symlink loop. ELOOP is a structural
@@ -207,7 +223,8 @@ func TestResolveGitState_OwnGitStatFaultStillFailsOpen(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Arm 5 — the fail-open must NOT generalise to ancestors.
+// Arm 5 — the fail-open must NOT generalise to ancestors. Nor may the walk
+// STOP at one; see the grandparent arm at the bottom of this file.
 // ---------------------------------------------------------------------------
 
 // A permission-denied or otherwise unreadable ANCESTOR is not evidence that the
@@ -215,6 +232,16 @@ func TestResolveGitState_OwnGitStatFaultStillFailsOpen(t *testing.T) {
 // would turn every stack under one such directory into a badge reading
 // "unknown (read failed)" — a worse regression than the missing badges this
 // change fixes, and one that only appears in a deployment nobody tests on.
+//
+// THIS IS THE WEAKEST OF THE THREE ANCESTOR ARMS, and it is kept rather than
+// relied on. Its fixture breaks os.Stat(.git) itself, so it exercises the one
+// ancestor fault the walk was always going to notice. The shapes that actually
+// occur in a deployment are the ones below, where .git stats perfectly and
+// cannot be READ -- and an implementation can pass this arm while failing every
+// one of those. It did: the first version of this change routed an unreadable
+// located .git to "repository, branch unknown" at every level, which is exactly
+// the wall of badges the paragraph above says it prevents, and this arm was
+// green throughout.
 func TestResolveGitState_AncestorStatFaultDoesNotFailOpen(t *testing.T) {
 	root := t.TempDir()
 	ancestor := yy00MkdirAll(t, filepath.Join(root, "unreadable"))
@@ -225,7 +252,7 @@ func TestResolveGitState_AncestorStatFaultDoesNotFailOpen(t *testing.T) {
 
 	if isGitRepo {
 		t.Fatalf("isGitRepo = true because an ANCESTOR's .git could not be stat'd; want false. "+
-			"Fail-open is scoped to the stack's own .git (branch = %q)", branch)
+			"Fail-open is scoped to the START directory (branch = %q)", branch)
 	}
 	if branch != "" {
 		t.Fatalf("branch = %q; want the empty string", branch)
@@ -288,5 +315,191 @@ func TestResolveGitState_RelativePathTerminates(t *testing.T) {
 
 	if isGitRepo || branch != "" {
 		t.Fatalf("resolveGitState(%q) = (%v, %q); want (false, \"\")", "plain", isGitRepo, branch)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The arms that discriminate by LEVEL rather than by what failed. The fault set
+// is the same at every level -- an unstattable .git, a broken gitdir pointer, an
+// unreadable HEAD, an unparseable HEAD. What differs is WHERE:
+//
+//	at the START directory   fail open, true + "unknown (read failed)"
+//	at an ANCESTOR           absent, and the walk CONTINUES
+//
+// The ancestor half is what git does. MEASURED with an ordinary `git init`,
+// probing `git rev-parse --git-dir` from a child directory: an ancestor .git at
+// mode 000 and an ancestor HEAD at mode 000 both exit 128 with "not a git
+// repository (or any parent up to mount point /)" -- not a repository, and
+// discovery carried on upward past it rather than stopping.
+// ---------------------------------------------------------------------------
+
+// yy00UnreadableHead seeds <dir>/.git as a real git directory whose HEAD cannot
+// be read, by making HEAD a DIRECTORY. os.Stat(.git) succeeds and only the read
+// fails, which is the shape a deployment actually produces and the one the
+// symlink-loop fixture above cannot reach.
+//
+// EISDIR is a structural property of the path, resolved before any permission
+// check, so this arms whatever uid the suite runs as. `chmod 000` does not: it
+// is a no-op for root (CAP_DAC_OVERRIDE), which would leave the arm silently
+// unarmed wherever the suite runs privileged. Same reason
+// jieh_git_state_test.go avoids chmod.
+func yy00UnreadableHead(t *testing.T, dir string) {
+	t.Helper()
+	gitPath := filepath.Join(dir, ".git")
+	if err := os.MkdirAll(filepath.Join(gitPath, "HEAD"), 0o755); err != nil {
+		t.Fatalf("seeding the unreadable HEAD at %s: %v", gitPath, err)
+	}
+	if _, err := os.Stat(gitPath); err != nil {
+		t.Fatalf("fixture precondition violated: stat(%s) = %v; the .git entry must stat "+
+			"cleanly, otherwise this arm degenerates into the stat-fault arm", gitPath, err)
+	}
+	if _, err := os.ReadFile(filepath.Join(gitPath, "HEAD")); err == nil {
+		t.Fatalf("fixture precondition violated: HEAD under %s is readable; want a read fault", gitPath)
+	}
+}
+
+// P1. An ancestor whose .git stats fine and whose HEAD cannot be read does not
+// serve this stack, and must not paint every stack beneath it with an unknown
+// branch.
+func TestResolveGitState_AncestorWithUnreadableHeadIsNotARepository(t *testing.T) {
+	root := t.TempDir()
+	ancestor := yy00MkdirAll(t, filepath.Join(root, "broken"))
+	yy00UnreadableHead(t, ancestor)
+	stack := yy00MkdirAll(t, filepath.Join(ancestor, "stacks", "web"))
+	yy00RequireCleanAncestryAbove(t, root)
+
+	isGitRepo, branch := resolveGitState(stack)
+
+	if isGitRepo {
+		t.Fatalf("isGitRepo = true because an ANCESTOR holds a .git whose HEAD cannot be read; "+
+			"want false (branch = %q)", branch)
+	}
+	if branch != "" {
+		t.Fatalf("branch = %q; want the empty string", branch)
+	}
+}
+
+// P1's other half, on the same instrument: at the START directory the identical
+// fault fails OPEN. Without this arm, "returns false" above is satisfied by an
+// implementation that dropped the deliberate agent-os-d5ff fail-open entirely.
+func TestResolveGitState_OwnUnreadableHeadStillFailsOpen(t *testing.T) {
+	root := t.TempDir()
+	stack := yy00MkdirAll(t, filepath.Join(root, "web"))
+	yy00UnreadableHead(t, stack)
+
+	isGitRepo, branch := resolveGitState(stack)
+
+	if !isGitRepo {
+		t.Fatalf("isGitRepo = false when the stack's OWN HEAD could not be read; want true (fail-open)")
+	}
+	if branch != yy00Unknown {
+		t.Fatalf("branch = %q; want %q", branch, yy00Unknown)
+	}
+}
+
+// P2. The gitdir-pointer fault: an ancestor whose .git is a FILE naming nothing
+// resolvable. Structural, like P1, with no permissions involved.
+func TestResolveGitState_AncestorWithBrokenGitdirPointerIsNotARepository(t *testing.T) {
+	root := t.TempDir()
+	ancestor := yy00MkdirAll(t, filepath.Join(root, "broken-worktree"))
+	if err := os.WriteFile(filepath.Join(ancestor, ".git"), []byte("gitdir: ./nowhere\n"), 0o644); err != nil {
+		t.Fatalf("seeding the broken .git pointer file: %v", err)
+	}
+	stack := yy00MkdirAll(t, filepath.Join(ancestor, "stacks", "web"))
+	yy00RequireCleanAncestryAbove(t, root)
+
+	isGitRepo, branch := resolveGitState(stack)
+
+	if isGitRepo {
+		t.Fatalf("isGitRepo = true because an ANCESTOR's .git file points nowhere; want false "+
+			"(branch = %q)", branch)
+	}
+	if branch != "" {
+		t.Fatalf("branch = %q; want the empty string", branch)
+	}
+}
+
+// The fourth fault kind: an ancestor holding a real .git whose HEAD reads fine
+// and parses as neither a symref nor an object name.
+func TestResolveGitState_AncestorWithUnparseableHeadIsNotARepository(t *testing.T) {
+	root := t.TempDir()
+	ancestor := yy00MkdirAll(t, filepath.Join(root, "corrupt"))
+	yy00WriteRepoAt(t, ancestor, "this is neither a ref nor an object name\n")
+	stack := yy00MkdirAll(t, filepath.Join(ancestor, "stacks", "web"))
+	yy00RequireCleanAncestryAbove(t, root)
+
+	isGitRepo, branch := resolveGitState(stack)
+
+	if isGitRepo {
+		t.Fatalf("isGitRepo = true because an ANCESTOR's HEAD does not parse; want false "+
+			"(branch = %q)", branch)
+	}
+	if branch != "" {
+		t.Fatalf("branch = %q; want the empty string", branch)
+	}
+}
+
+// P3. THE ARM THAT PINS "CONTINUE" RATHER THAN "STOP". Every arm above answers
+// false, and a walk that HALTS at the first unreadable ancestor satisfies all of
+// them. Only a healthy repository ABOVE the broken one tells the two apart: git
+// carries on searching upward past what it cannot read, and so must this.
+func TestResolveGitState_HealthyGrandparentAboveAnUnreadableParentIsFound(t *testing.T) {
+	root := t.TempDir()
+	grandparent := yy00MkdirAll(t, filepath.Join(root, "monorepo"))
+	yy00WriteRepoAt(t, grandparent, "ref: refs/heads/release\n")
+	parent := yy00MkdirAll(t, filepath.Join(grandparent, "broken"))
+	yy00UnreadableHead(t, parent)
+	stack := yy00MkdirAll(t, filepath.Join(parent, "web"))
+
+	isGitRepo, branch := resolveGitState(stack)
+
+	if !isGitRepo {
+		t.Fatalf("isGitRepo = false; the walk stopped at the unreadable parent instead of " +
+			"continuing to the healthy grandparent")
+	}
+	// The branch, not just the boolean: true with the unknown sentinel would
+	// mean the broken parent was reported as the serving repository rather than
+	// walked past.
+	if branch != "release" {
+		t.Fatalf("branch = %q; want %q, the grandparent's branch. %q would mean the unreadable "+
+			"parent was reported as the serving repository instead of walked past",
+			branch, "release", yy00Unknown)
+	}
+}
+
+// The chmod shape, kept because it is the one an operator actually hits, and
+// guarded because it cannot be trusted to arm: `chmod 000` is a no-op for root,
+// so on a privileged runner this would pass while testing nothing. The
+// precondition turns that into a stated SKIP rather than a vacuous green. P1
+// covers the same code path structurally and always arms; this corroborates it
+// rather than carrying it.
+func TestResolveGitState_AncestorWithUnreadableGitDirIsNotARepository(t *testing.T) {
+	root := t.TempDir()
+	ancestor := yy00MkdirAll(t, filepath.Join(root, "denied"))
+	yy00WriteRepoAt(t, ancestor, "ref: refs/heads/main\n")
+	gitPath := filepath.Join(ancestor, ".git")
+	stack := yy00MkdirAll(t, filepath.Join(ancestor, "stacks", "web"))
+	yy00RequireCleanAncestryAbove(t, root)
+
+	if err := os.Chmod(gitPath, 0o000); err != nil {
+		t.Fatalf("chmod on the .git directory: %v", err)
+	}
+	// t.TempDir's cleanup cannot descend into a 000 directory.
+	t.Cleanup(func() { _ = os.Chmod(gitPath, 0o755) })
+
+	if _, err := os.ReadFile(filepath.Join(gitPath, "HEAD")); err == nil {
+		t.Skip("chmod 000 does not deny reads for this uid (root holds CAP_DAC_OVERRIDE), so " +
+			"this fixture cannot arm here; the structural arm " +
+			"TestResolveGitState_AncestorWithUnreadableHeadIsNotARepository covers the same path")
+	}
+
+	isGitRepo, branch := resolveGitState(stack)
+
+	if isGitRepo {
+		t.Fatalf("isGitRepo = true because an ANCESTOR's .git contents could not be read; "+
+			"want false (branch = %q)", branch)
+	}
+	if branch != "" {
+		t.Fatalf("branch = %q; want the empty string", branch)
 	}
 }

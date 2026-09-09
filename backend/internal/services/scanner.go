@@ -976,6 +976,11 @@ func rootContainsPath(root, path string) bool {
 // that stat could not resolve, a broken worktree pointer, or a HEAD whose
 // contents parse as neither a symbolic ref nor an object name.
 //
+// Since agent-os-yy00 that is true only of the directory the scan STARTED at.
+// resolveGitState walks up, and the same four faults at an ANCESTOR yield the
+// empty branch with isGitRepo=false instead, because git treats an unreadable
+// repository as no repository and carries on searching. See resolveGitState.
+//
 // It exists because those states used to be indistinguishable from a detached
 // HEAD and from a healthy repo with no branch: all four produced "" and both
 // screens render "" as an em dash (agent-os-jieh). An operator cannot act on an
@@ -998,12 +1003,16 @@ const gitShortSHALen = 7
 type gitLevelState int
 
 const (
-	// gitLevelAbsent: definitely no repository at this level. Keep walking.
+	// gitLevelAbsent: nothing repository-shaped at this level. Keep walking.
 	gitLevelAbsent gitLevelState = iota
-	// gitLevelFound: a repository serves this level. The branch is set, and is
-	// gitStateUnknown when the repository is there but unreadable.
+	// gitLevelFound: a repository serves this level AND its branch was read.
+	// Only a resolved branch counts as found.
 	gitLevelFound
-	// gitLevelFault: could not find out whether there is one.
+	// gitLevelFault: something repository-shaped is here and could not be
+	// resolved -- .git would not stat, its pointer would not follow, or HEAD
+	// would not read or would not parse. All four are one state on purpose:
+	// what a fault MEANS depends on the level it happened at, which is
+	// resolveGitState's decision and not this type's.
 	gitLevelFault
 )
 
@@ -1036,16 +1045,34 @@ const (
 // directory under a .git is ever registered or scanned. A refactor that relaxed
 // that skip would break this silently.
 //
-// Only os.IsNotExist means "not a repository"; every other stat error means
-// "could not find out" (the agent-os-d5ff shape). A fault at path's OWN .git
-// returns isGitRepo=true with gitStateUnknown: true is the honest half of
-// "there is a .git entry here that I could not read", and returning false would
-// hide the failure entirely rather than merely blanking the branch. That
-// fail-open is deliberately NOT generalised to ancestors -- an unreadable
-// ancestor stops the walk and answers "not a repository". Widening it would let
-// one permission-denied directory turn every stack beneath it into a badge
-// reading "unknown (read failed)": a worse regression than the missing badges
-// this replaced, and one that surfaces only in a deployment nobody tests on.
+// FAULTS ARE DISCRIMINATED BY LEVEL, NOT BY WHAT FAILED. The fault set is the
+// same everywhere -- a .git that will not stat, a gitdir pointer that will not
+// follow, a HEAD that will not read, a HEAD that will not parse -- and the
+// answer differs only by where it happened.
+//
+// At the START directory any fault returns isGitRepo=true with
+// gitStateUnknown. That is a deliberate divergence from git, and it preserves
+// the agent-os-d5ff decision unchanged: the operator registered THIS directory
+// on purpose, so true is the honest half of "there is something here I could
+// not read", and answering false would hide the fault entirely rather than
+// merely blanking the branch.
+//
+// At an ANCESTOR the same faults are ABSENT and the walk CONTINUES, which is
+// what git does. MEASURED with an ordinary `git init`, probing
+// `git rev-parse --git-dir` from a child directory: an ancestor .git at mode
+// 000, and an ancestor HEAD at mode 000, both exit 128 with "not a git
+// repository (or any parent up to mount point /)". Unreadable is not a
+// repository to git, and discovery carries on past it.
+//
+// CONTINUING MATTERS AS MUCH AS NOT FAILING OPEN, and they are separate
+// properties. Failing open at an ancestor would let one permission-denied
+// directory turn every stack beneath it into a badge reading
+// "unknown (read failed)" -- a worse regression than the missing badges this
+// replaced, and one that surfaces only in a deployment nobody tests on.
+// STOPPING at that ancestor would instead hide a healthy grandparent that is
+// the real repository serving the stack. An earlier version of this function
+// did both: it reported an unreadable ancestor as a repository, because it
+// classified a fault by whether .git had been located rather than by level.
 //
 // FILESYSTEM BOUNDARIES: git stops discovery at a mount point unless
 // GIT_DISCOVERY_ACROSS_FILESYSTEM=1; this walk does not compare st_dev. The
@@ -1082,14 +1109,13 @@ func resolveGitState(path string) (isGitRepo bool, branch string) {
 
 	for dir := start; ; {
 		state, levelBranch := gitStateAtLevel(dir)
-		switch state {
-		case gitLevelFound:
+		if state == gitLevelFound {
 			return true, levelBranch
-		case gitLevelFault:
-			if dir == start {
-				return true, gitStateUnknown
-			}
-			return false, ""
+		}
+		// The only level-sensitive line in the walk. Everywhere else a fault is
+		// indistinguishable from an absence, which is why they share the tail.
+		if state == gitLevelFault && dir == start {
+			return true, gitStateUnknown
 		}
 
 		parent := filepath.Dir(dir)
@@ -1108,6 +1134,11 @@ func resolveGitState(path string) (isGitRepo bool, branch string) {
 // a file naming a git directory elsewhere for a linked worktree or a submodule
 // checkout), or dir IS a git directory (the bare layout, which has no working
 // tree and therefore no .git of its own).
+//
+// It reports gitLevelFound ONLY with a branch it actually read. Everything
+// repository-shaped that could not be resolved is gitLevelFault, deliberately
+// undifferentiated, because this function does not know which level it is on
+// and the level is the whole discriminator.
 func gitStateAtLevel(dir string) (gitLevelState, string) {
 	gitPath := filepath.Join(dir, ".git")
 
@@ -1116,7 +1147,7 @@ func gitStateAtLevel(dir string) (gitLevelState, string) {
 		if !os.IsNotExist(err) {
 			slog.Warn("Could not determine whether directory is a git repository",
 				"directory", dir, "error", err)
-			return gitLevelFault, gitStateUnknown
+			return gitLevelFault, ""
 		}
 		if bareBranch, ok := bareGitBranch(dir); ok {
 			return gitLevelFound, bareBranch
@@ -1141,10 +1172,15 @@ func gitStateAtLevel(dir string) (gitLevelState, string) {
 		if err != nil {
 			slog.Warn("Could not follow the gitdir pointer in a .git file",
 				"directory", dir, "error", err)
-			return gitLevelFound, gitStateUnknown
+			return gitLevelFault, ""
 		}
 	}
-	return gitLevelFound, readGitBranch(dir, gitDir)
+
+	branch, ok := readGitBranch(dir, gitDir)
+	if !ok {
+		return gitLevelFault, ""
+	}
+	return gitLevelFound, branch
 }
 
 // bareGitBranch reports whether dir IS a git directory rather than holding one,
@@ -1155,14 +1191,6 @@ func gitStateAtLevel(dir string) (gitLevelState, string) {
 // The triple alone is the weaker instrument: any directory that happens to hold
 // those three names would light a git badge on a non-repository. parseGitHead
 // already supplies the stronger half, so requiring both costs one file read.
-//
-// An unparseable HEAD therefore gets the OPPOSITE disposition here from the one
-// it gets under a located .git, deliberately. A .git entry is near-proof of a
-// repository, so gitStateAtLevel answers "there is a repository here and I
-// cannot name its branch" and stops the walk. The bare triple is three ordinary
-// directory names and is weak evidence on its own -- parseGitHead is what makes
-// it strong -- so failing it means "not shown to be a repository here", and the
-// walk continues rather than claiming one.
 //
 // Unlike readGitBranch this reports no warnings: every ordinary non-git
 // directory of every scan reaches it, so a warning here would be noise rather
@@ -1183,11 +1211,15 @@ func bareGitBranch(dir string) (string, bool) {
 	return parseGitHead(string(content))
 }
 
-// readGitBranch reads HEAD under gitDir and renders it, answering
-// gitStateUnknown for a repository whose state could not be read. dir is
-// carried only so the warnings name the directory an operator recognises rather
-// than the git directory it points at.
-func readGitBranch(dir string, gitDir string) string {
+// readGitBranch reads HEAD under gitDir and renders it. ok is false when
+// something is there and its state could not be read, which the caller turns
+// into a fault AT THAT LEVEL rather than into a branch string -- returning the
+// gitStateUnknown sentinel from here is what previously let an unreadable
+// ancestor pass itself off as the repository serving the stack.
+//
+// dir is carried only so the warnings name the directory an operator recognises
+// rather than the git directory it points at.
+func readGitBranch(dir string, gitDir string) (string, bool) {
 	headPath := filepath.Join(gitDir, "HEAD")
 
 	//nolint:gosec // same provenance as bareGitBranch's read: a path recursed into from, or walked up from, the configured stacks directories
@@ -1195,16 +1227,16 @@ func readGitBranch(dir string, gitDir string) string {
 	if err != nil {
 		slog.Warn("Could not read the git HEAD of a repository",
 			"directory", dir, "head", headPath, "error", err)
-		return gitStateUnknown
+		return "", false
 	}
 
 	branch, ok := parseGitHead(string(content))
 	if !ok {
 		slog.Warn("Could not parse the git HEAD of a repository",
 			"directory", dir, "head", headPath)
-		return gitStateUnknown
+		return "", false
 	}
-	return branch
+	return branch, true
 }
 
 // readGitdirPointer resolves the "gitdir: <path>" line a .git FILE holds into
