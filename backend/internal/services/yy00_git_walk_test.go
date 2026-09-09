@@ -353,6 +353,7 @@ func yy00UnreadableHead(t *testing.T, dir string) {
 		t.Fatalf("fixture precondition violated: stat(%s) = %v; the .git entry must stat "+
 			"cleanly, otherwise this arm degenerates into the stat-fault arm", gitPath, err)
 	}
+	//nolint:gosec // gitPath is a t.TempDir()-rooted fixture this helper created three lines above; the read is the precondition PROVING the arm is armed, and removing it would let the unreadable-HEAD arm silently degenerate into the stat-fault arm
 	if _, err := os.ReadFile(filepath.Join(gitPath, "HEAD")); err == nil {
 		t.Fatalf("fixture precondition violated: HEAD under %s is readable; want a read fault", gitPath)
 	}
@@ -485,8 +486,10 @@ func TestResolveGitState_AncestorWithUnreadableGitDirIsNotARepository(t *testing
 		t.Fatalf("chmod on the .git directory: %v", err)
 	}
 	// t.TempDir's cleanup cannot descend into a 000 directory.
+	//nolint:gosec // G302: 0755 is REQUIRED here, not lax. This restores the directory's own traversal bits so t.TempDir's RemoveAll can descend into it; 0600 clears the execute bit on a DIRECTORY, which leaves it unlistable and leaks the fixture
 	t.Cleanup(func() { _ = os.Chmod(gitPath, 0o755) })
 
+	//nolint:gosec // gitPath is a t.TempDir()-rooted fixture this test created; the read decides whether chmod 000 actually denies for this uid, and without it the arm would pass vacuously wherever the suite runs as root
 	if _, err := os.ReadFile(filepath.Join(gitPath, "HEAD")); err == nil {
 		t.Skip("chmod 000 does not deny reads for this uid (root holds CAP_DAC_OVERRIDE), so " +
 			"this fixture cannot arm here; the structural arm " +
