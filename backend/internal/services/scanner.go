@@ -1022,20 +1022,39 @@ const (
 // file change, so it stays a handful of filesystem reads.
 //
 // "Served by", not "holds", is the whole point (agent-os-yy00). It used to stat
-// path/.git and stop, which is narrower than the question git answers: a stack
-// nested inside a parent repository, and a bare repository, both returned false
-// here while GET /api/v1/git returned a real branch for the same path. SIX
+// path/.git and stop, which is narrower than the question git answers, and a
+// stack nested inside a parent repository returned false here while
+// GET /api/v1/git returned a real branch for the same path. SIX
 // expressions across FOUR components gate a git affordance on the resulting
 // isGitRepo -- StacksTab (two), StackRow, StackDetail, DirectoriesTab (two) --
 // so every disagreement hid UI that works. An earlier version of this comment
 // said "both screens", which understated the blast radius by half.
 //
-// The walk mirrors git's own setup_git_directory_gently_1: at each level, test
-// whether the directory holds a .git entry and whether it IS a git directory
-// (the bare layout), then move to the parent. The bare test runs at EVERY
-// level, not only at the starting directory, because that is what git does --
-// so scanning a directory inside a bare repository agrees with git rather than
-// contradicting it.
+// A bare repository answered false here too, and is fixed by the same walk, but
+// the endpoint comparison above is NOT available as evidence for it: no bare
+// repository ever produces a Stack row (ScanDirectoryWithRoot upserts the
+// Directory row at scanner.go:1501, then creates stacks only per compose file
+// it globs at :1506-1509, and a bare repo has no working tree), and
+// gitApi.status(stackId) is the endpoint's only caller in the product
+// (frontend/src/hooks/useGit.ts:11), always with a stackId. The API layer WOULD
+// answer a ?dir= query about one -- handlers/git.go:47 takes stackId first and
+// falls through to c.Query("dir") at :70 -- so this is unobservable in the
+// product rather than impossible at the API. Either way the bare half of
+// this fix is justified by the two ConfiguredDir sites in DirectoriesTab, which
+// render for scanned DIRECTORIES whether or not they hold a compose file, and
+// not by a disagreement anyone has observed.
+//
+// At each level the walk tests whether the directory holds a .git entry and
+// whether it IS a git directory (the bare layout), then moves to the parent.
+// The bare test runs at EVERY level, not only at the starting directory.
+//
+// Nobody in this change has read git's source, so nothing here cites it. Every
+// claim of git parity below is MATCHING GIT'S OBSERVED BEHAVIOUR on constructed
+// fixtures, measured on this machine with an ordinary `git init` and probed
+// with `git rev-parse --git-dir` / `--abbrev-ref HEAD` from a child directory.
+// The probes and their controls are recorded on agent-os-yy00. One of them
+// fixes the ORDER used here: a directory holding both a .git and a valid bare
+// triple answers `--git-dir: .git`, so .git is tested before bare, as below.
 //
 // A consequence of that, named here rather than left implicit because it is a
 // dependency on a guard enforced elsewhere in this file: a .git DIRECTORY
@@ -1070,9 +1089,29 @@ const (
 // "unknown (read failed)" -- a worse regression than the missing badges this
 // replaced, and one that surfaces only in a deployment nobody tests on.
 // STOPPING at that ancestor would instead hide a healthy grandparent that is
-// the real repository serving the stack. An earlier version of this function
-// did both: it reported an unreadable ancestor as a repository, because it
-// classified a fault by whether .git had been located rather than by level.
+// the real repository serving the stack -- MEASURED, and recorded on
+// agent-os-yy00: with a healthy grandparent above a parent repository whose
+// .git is at mode 000, git answers the GRANDPARENT's branch, exit 0, and does
+// the same when the parent's HEAD alone is unreadable. The control, that same
+// parent readable, answers the parent's branch, so the probe discriminates.
+//
+// The stronger argument for continuing is not parity, though: the git service
+// shells out with cmd.Dir set to the stack directory and no
+// GIT_CEILING_DIRECTORIES (git_credentials.go:304), so a Pull from that panel
+// ACTS ON the grandparent. Reporting anything else would put the badge out of
+// step with the button beside it.
+//
+// TWO COSTS OF CONTINUING, so a reader who meets them does not file a bug. An
+// unreadable ancestor repository becomes invisible -- there is no warning
+// anywhere and the operator's only signal is a branch that is not the one they
+// expected. And two sibling stacks disagree about the same fault: a stack AT an
+// unreadable monorepo root gets "unknown (read failed)" from the start-directory
+// fail-open, while every stack NESTED inside it gets the grandparent's branch.
+// Both are the rule working as intended.
+//
+// An earlier version of this function did neither: it reported an unreadable
+// ancestor as the repository itself, because it classified a fault by whether
+// .git had been located rather than by level.
 //
 // FILESYSTEM BOUNDARIES: git stops discovery at a mount point unless
 // GIT_DISCOVERY_ACROSS_FILESYSTEM=1; this walk does not compare st_dev. The
@@ -1090,10 +1129,14 @@ const (
 // the fix is a per-level st_dev comparison, not a ceiling directory.
 //
 // NO BOUND AND NO CACHE ARE NEEDED, and adding either buys an invalidation bug
-// for nothing: defaultScanDepth is 1, the watcher rescans a SINGLE directory per
-// debounced event, and the walk stops at the first repository -- so the nested
-// case costs one or two extra stats and only a genuinely non-git directory walks
-// to the root.
+// for nothing. defaultScanDepth is 1 and the watcher rescans a SINGLE directory
+// per debounced event, so nothing here drives a tree walk. Size it on the
+// EXPENSIVE case rather than the nested one: a directory with no repository
+// anywhere walks to the root at 2 stats per level (.git ENOENT, then objects
+// ENOENT, which short-circuits before refs), so /opt/stacks/web costs about 8
+// against 1 before. That is still far below the os.ReadDir every scanned
+// directory already pays. The nested case is cheaper again, since the walk
+// stops at the first repository.
 func resolveGitState(path string) (isGitRepo bool, branch string) {
 	// Absolute first. filepath.Dir(".") is ".", so a walk over a relative path
 	// would never terminate. On an absolute path filepath.Dir strictly shortens
@@ -1112,8 +1155,18 @@ func resolveGitState(path string) (isGitRepo bool, branch string) {
 		if state == gitLevelFound {
 			return true, levelBranch
 		}
-		// The only level-sensitive line in the walk. Everywhere else a fault is
-		// indistinguishable from an absence, which is why they share the tail.
+		// THE ONLY LEVEL-SENSITIVE LINE IN THE WALK, and the sole discriminator
+		// between failing open and failing closed for every fault class.
+		// Everywhere else a fault is indistinguishable from an absence, which
+		// is why they share the tail.
+		//
+		// INVARIANT: this is not a path comparison. The loop assigns dir =
+		// start on its first iteration, so the test is "first iteration", and
+		// the two are identical strings rather than two spellings of one
+		// directory. Anything that perturbs the first iteration -- normalising
+		// dir, resolving symlinks, hoisting the parent step above this test --
+		// silently flips the start directory to fail-closed, and both answers
+		// are plausible booleans, so nothing would look wrong.
 		if state == gitLevelFault && dir == start {
 			return true, gitStateUnknown
 		}
@@ -1186,11 +1239,36 @@ func gitStateAtLevel(dir string) (gitLevelState, string) {
 // bareGitBranch reports whether dir IS a git directory rather than holding one,
 // and on which branch.
 //
-// The test is git's own is_git_directory triple -- HEAD, objects/ and refs/ --
-// AND the half git adds on top of it, that HEAD names a valid ref or object.
-// The triple alone is the weaker instrument: any directory that happens to hold
-// those three names would light a git badge on a non-repository. parseGitHead
-// already supplies the stronger half, so requiring both costs one file read.
+// The test is the HEAD + objects/ + refs/ triple AND that parseGitHead accepts
+// HEAD. The triple alone is the weaker instrument: any directory holding those
+// three names would light a git badge on a non-repository, and the HEAD check
+// is what makes it strong enough to act on.
+//
+// KNOWN LIMIT, and the veto is NARROWER THAN GIT rather than equal to it.
+// MEASURED on this machine, four complete bare triples differing only in HEAD,
+// probed with `git rev-parse --git-dir`:
+//
+//	ref: refs/heads/main           git accepts    parseGitHead accepts
+//	ref: refs/remotes/origin/main  git accepts    parseGitHead REJECTS
+//	ref: refs/tags/v1              git accepts    parseGitHead REJECTS
+//	ref: MYHEAD                    git rejects    parseGitHead rejects
+//
+// (Control: a HEAD of junk is rejected by both, so the probe discriminates.)
+// Git takes any valid refname under refs/ and rejects only a one-level name, so
+// a bare repository whose HEAD points outside refs/heads/ reads as ABSENT here
+// and the walk continues past a real repository. That is tolerated rather than
+// fixed: widening parseGitHead would also change the branch STRING rendered on
+// the ordinary .git path, which is a materially larger blast radius than this
+// change carries and would land with nothing pinning it.
+//
+// An unparseable HEAD therefore gets the opposite disposition here from the one
+// it gets under a located .git AT THE START DIRECTORY -- and only there, since
+// at an ancestor both are absent and the walk continues either way. A .git
+// entry is near-proof of a repository, so an unreadable HEAD under one is a
+// FAULT and the start directory fails open on any fault. A bare triple failing
+// the HEAD check is not a fault at all but a NEGATIVE FINDING about membership:
+// three ordinary directory names are weak evidence, the HEAD check is what
+// makes them strong, and failing it means "not shown to be a repository here".
 //
 // Unlike readGitBranch this reports no warnings: every ordinary non-git
 // directory of every scan reaches it, so a warning here would be noise rather

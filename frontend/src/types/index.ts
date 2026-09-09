@@ -113,12 +113,21 @@ export interface Stack {
  * GET /api/v1/git, repo branch.
  *
  * `isRepo` is NOT named `isGitRepo`, and since agent-os-yy00 the difference is
- * FRESHNESS rather than strength. The two predicates now AGREE on what counts
- * as a repository: the scanner's `resolveGitState` walks up for a parent
- * repository and detects a bare one, which is the question git answers, so a
- * stack nested inside a monorepo has `isGitRepo: true` and the branch this
- * endpoint reports. Gating a git affordance on `Stack.isGitRepo` no longer
- * hides a working panel.
+ * no longer that one is a weaker predicate. They now agree on the QUESTION
+ * "is this directory served by a git repository": the scanner's
+ * `resolveGitState` walks up for a parent repository and detects a bare one, so
+ * a stack nested inside a monorepo has `isGitRepo: true`, and gating a git
+ * affordance on `Stack.isGitRepo` no longer hides a working panel.
+ *
+ * They do NOT agree on the branch STRING, and that divergence is by design and
+ * predates this change. The endpoint runs `rev-parse --abbrev-ref HEAD`
+ * (services/git.go); the scanner parses HEAD itself. MEASURED on a real
+ * detached checkout: git prints the literal `HEAD`, while `Stack.gitBranch`
+ * carries `detached@<short sha>` — deliberately, so an operator can tell a
+ * detached checkout from a scan that failed (agent-os-jieh). An unborn HEAD
+ * diverges too: the scanner reports the symref's branch name while this
+ * endpoint answers `hasCommits: false` (backend/internal/handlers/git.go:178).
+ * Do not treat the two branch fields as interchangeable.
  *
  * What still differs is WHEN each was computed. `Stack.isGitRepo` above is the
  * CACHED form: the scanner writes it, so it only changes on a scan and a

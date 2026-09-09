@@ -503,3 +503,30 @@ func TestResolveGitState_AncestorWithUnreadableGitDirIsNotARepository(t *testing
 		t.Fatalf("branch = %q; want the empty string", branch)
 	}
 }
+
+// The start directory is identified by `dir == start` on the walk's first
+// iteration, which is a first-iteration test rather than a path comparison.
+// These pin it through the two start forms filepath.Abs rewrites before the
+// loop ever runs -- an embedded ".." and a trailing separator -- because a
+// future normalisation moved one line later would flip the start directory to
+// fail-CLOSED, and false is as plausible a boolean as true. Nothing else here
+// asserts the fail-open through a path that is not already clean.
+func TestResolveGitState_FailOpenSurvivesAPathCleanRewrites(t *testing.T) {
+	root := t.TempDir()
+	stack := yy00MkdirAll(t, filepath.Join(root, "web"))
+	yy00MkdirAll(t, filepath.Join(stack, "sub"))
+	yy00UnreadableHead(t, stack)
+
+	for _, form := range []string{
+		filepath.Join(stack, "sub") + string(filepath.Separator) + "..",
+		stack + string(filepath.Separator),
+	} {
+		isGitRepo, branch := resolveGitState(form)
+
+		if !isGitRepo || branch != yy00Unknown {
+			t.Fatalf("resolveGitState(%q) = (%v, %q); want (true, %q). The path names the "+
+				"START directory, so the fault must fail open exactly as it does for the "+
+				"already-clean spelling", form, isGitRepo, branch, yy00Unknown)
+		}
+	}
+}
