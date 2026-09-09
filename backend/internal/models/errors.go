@@ -59,6 +59,17 @@ const (
 	ErrRateLimited           = "RATE_LIMITED"
 	ErrEncryptionUnavailable = "ENCRYPTION_KEY_MISSING"
 	ErrOperationInProgress   = "OPERATION_IN_PROGRESS"
+	// ErrBackupRepoUnreachable is a configured backup repository that could not
+	// be read: it may exist and hold every snapshot the user has, but this
+	// request could not see it. It is deliberately NOT ErrNotFound — the
+	// snapshot listing used to answer this state with an empty 200, which reads
+	// as "you have never taken a backup" and invites the user to initialise a
+	// repository over one that is merely unreachable (agent-os-81vr).
+	//
+	// It carries 503 rather than 500: the request is well-formed and the server
+	// is healthy, a dependency is not, and 503 is what makes the failure
+	// retryable to a client that reads status classes.
+	ErrBackupRepoUnreachable = "BACKUP_REPO_UNREACHABLE"
 )
 
 type AppError struct {

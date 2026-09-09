@@ -320,7 +320,9 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 		"hostname":                hostname,
 		"resticAvailable":         av.ResticPresent,
 		"rcloneAvailable":         av.RclonePresent,
-		"repositoryInitialized":   repoStatus.RepoReachable,
+		"repositoryInitialized":   repoStatus.RepoState == services.RepoStateOK,
+		"repoState":               repoStatus.RepoState,
+		"repoStateMessage":        repoStatus.Message,
 	})
 }
 
@@ -747,7 +749,9 @@ func (h *BackupHandler) getStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"resticAvailable":       av.ResticPresent,
 		"rcloneAvailable":       av.RclonePresent,
-		"repositoryInitialized": repoStatus.RepoReachable,
+		"repositoryInitialized": repoStatus.RepoState == services.RepoStateOK,
+		"repoState":             repoStatus.RepoState,
+		"repoStateMessage":      repoStatus.Message,
 		"enabledStackCount":     len(policies),
 		"lastRun":               lastRun,
 		"lastVerify":            lastVerify,
@@ -884,6 +888,31 @@ func (h *BackupHandler) getRunDetail(c *gin.Context) {
 // Snapshots
 // ───────────────────────────────────────────
 
+// repoCouldNotBeRead reports whether the repository state means "configured,
+// but this request could not read it" — as opposed to "no repository exists",
+// which is an ordinary state a fresh install is in and not a fault.
+//
+// The two states it covers share one response because they share one meaning
+// for the client: retry, and do not treat the absence of data as data. Which
+// of the two holds is carried in the response details rather than in the
+// status code, because RepoState is the field a client branches on.
+func repoCouldNotBeRead(av services.BackupAvailability) bool {
+	return av.RepoState == services.RepoStateUnreachable ||
+		av.RepoState == services.RepoStateSettingsUnreadable
+}
+
+// repoFault builds the 503 a repository that could not be read earns, carrying
+// both the state a client branches on and the sentence CheckRepository already
+// computed and that every caller used to throw away.
+func repoFault(av services.BackupAvailability) *models.AppError {
+	return models.NewAppErrorWithDetails(
+		http.StatusServiceUnavailable,
+		models.ErrBackupRepoUnreachable,
+		av.Message,
+		gin.H{"repoState": av.RepoState},
+	)
+}
+
 func (h *BackupHandler) listSnapshots(c *gin.Context) {
 	av := h.svc.Available()
 	if !av.ResticPresent {
@@ -892,10 +921,18 @@ func (h *BackupHandler) listSnapshots(c *gin.Context) {
 	}
 
 	repoStatus := h.svc.CheckRepository(c.Request.Context())
-	if !repoStatus.RepoReachable {
-		c.JSON(http.StatusOK, []models.BackupSnapshot{})
+	if repoCouldNotBeRead(repoStatus) {
+		// The empty 200 below is reserved for repositories that genuinely hold
+		// no snapshots. Answering an unreadable one the same way is
+		// indistinguishable from "you have never taken a backup", and the
+		// obvious next action from that screen — initialise a repository — is
+		// the destructive-adjacent one (agent-os-81vr).
+		c.JSON(http.StatusServiceUnavailable, repoFault(repoStatus))
 		return
 	}
+	// RepoStateUninitialized falls through deliberately: a repository that has
+	// never been created genuinely has zero snapshots, and listSnapshotsViaRestic
+	// answers that with the same empty list a fresh install has always seen.
 
 	stackID := c.Query("stackId")
 
@@ -933,11 +970,19 @@ func (h *BackupHandler) previewSnapshot(c *gin.Context) {
 	}
 
 	repoStatus := h.svc.CheckRepository(c.Request.Context())
-	if !repoStatus.RepoReachable {
+	if repoCouldNotBeRead(repoStatus) {
+		c.JSON(http.StatusServiceUnavailable, repoFault(repoStatus))
+		return
+	}
+	if repoStatus.RepoState == services.RepoStateUninitialized {
+		// 404 rather than 503: no repository exists, so this snapshot really is
+		// absent. The previous message named both causes and committed to
+		// neither, which left an operator unable to tell a missing snapshot
+		// from a missing repository from a broken one.
 		c.JSON(http.StatusNotFound, models.NewAppError(
 			http.StatusNotFound,
 			models.ErrNotFound,
-			"Repository not initialized or unreachable",
+			"Backup repository has not been initialised",
 		))
 		return
 	}
@@ -1260,8 +1305,20 @@ func (h *BackupHandler) repoInit(c *gin.Context) {
 	defer cancel()
 
 	repoStatus := h.svc.CheckRepository(ctx)
-	if repoStatus.RepoReachable {
+	if repoStatus.RepoState == services.RepoStateOK {
 		c.JSON(http.StatusOK, gin.H{"initialized": true})
+		return
+	}
+	// Creating a repository is only correct when there is none. On
+	// RepoStateUnreachable one may well exist and hold every backup the user
+	// has, and on RepoStateSettingsUnreadable we do not even know WHICH
+	// repository is configured — initialising in either state points every
+	// later backup at a new, empty repository while the real one still exists.
+	// This is the coupling CheckRepository's own docblock flags, and it is why
+	// this branch is narrower than the !RepoReachable it replaced
+	// (agent-os-81vr).
+	if repoStatus.RepoState != services.RepoStateUninitialized {
+		c.JSON(http.StatusServiceUnavailable, repoFault(repoStatus))
 		return
 	}
 
