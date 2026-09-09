@@ -250,6 +250,34 @@ describe('StacksTab — the git indicator', () => {
     // a live scanner; read from those three sites.
     expect(screen.queryByTestId('git-repo-s2')).not.toBeInTheDocument()
   })
+
+  // agent-os-yy00. The group header is the second of StacksTab's two gates on
+  // isGitRepo and the only one that had no assertion, so the widened predicate
+  // could have stopped reaching it without a test noticing. Both arms on one
+  // instrument: the header icon appears when the group's first stack is a
+  // repository and is absent when it is not.
+  it('marks a git-backed group header, and leaves a non-git one unmarked', () => {
+    const { unmount } = renderTab({
+      stacks: [
+        stack({ id: 's1', projectName: 'web', directory: '/srv/stacks/apps', isGitRepo: true }),
+        stack({ id: 's2', projectName: 'api', directory: '/srv/stacks/apps', isGitRepo: true }),
+      ],
+    })
+
+    expect(screen.getByText('2 stacks')).toBeInTheDocument()
+    expect(screen.getByTestId(/^git-repo-group-/)).toBeInTheDocument()
+    unmount()
+
+    renderTab({
+      stacks: [
+        stack({ id: 's1', projectName: 'web', directory: '/srv/stacks/apps', isGitRepo: false }),
+        stack({ id: 's2', projectName: 'api', directory: '/srv/stacks/apps', isGitRepo: false }),
+      ],
+    })
+
+    expect(screen.getByText('2 stacks')).toBeInTheDocument()
+    expect(screen.queryByTestId(/^git-repo-group-/)).not.toBeInTheDocument()
+  })
 })
 
 describe('StacksTab — grouping', () => {

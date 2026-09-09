@@ -112,16 +112,25 @@ export interface Stack {
 /**
  * GET /api/v1/git, repo branch.
  *
- * `isRepo` is NOT named `isGitRepo`, and the difference is load-bearing rather
- * than stylistic. `Stack.isGitRepo` above is a DIFFERENT and weaker predicate:
- * it comes from the scanner stat'ing the stack's own directory for a `.git`,
- * while this endpoint asks git, which walks UP to a parent repository. A stack
- * nested inside a monorepo has `isGitRepo: false` and a real branch here, so
- * gating the git panel on `Stack.isGitRepo` hides a working panel — that
- * approach was implemented and reverted (agent-os-a786). Keeping the two names
- * distinct means a `grep isGitRepo` still finds exactly the sites carrying the
- * wrong predicate and none carrying the right one. Do not rename for
- * consistency.
+ * `isRepo` is NOT named `isGitRepo`, and since agent-os-yy00 the difference is
+ * FRESHNESS rather than strength. The two predicates now AGREE on what counts
+ * as a repository: the scanner's `resolveGitState` walks up for a parent
+ * repository and detects a bare one, which is the question git answers, so a
+ * stack nested inside a monorepo has `isGitRepo: true` and the branch this
+ * endpoint reports. Gating a git affordance on `Stack.isGitRepo` no longer
+ * hides a working panel.
+ *
+ * What still differs is WHEN each was computed. `Stack.isGitRepo` above is the
+ * CACHED form: the scanner writes it, so it only changes on a scan and a
+ * `git init` inside an already-registered stack stays invisible until the next
+ * one. `isRepo` here is the LIVE form, asked of git on the request. The names
+ * stay distinct for that reason, so a `grep isGitRepo` still enumerates exactly
+ * the sites reading a cached value — which is what a staleness question needs.
+ * Do not rename for consistency.
+ *
+ * The stat-walk approximates git rather than being it: it does not stop at a
+ * filesystem boundary, which git does by default. `resolveGitState` in
+ * backend/internal/services/scanner.go says why that divergence is accepted.
  */
 export interface GitRepoStatus {
   isRepo: true
