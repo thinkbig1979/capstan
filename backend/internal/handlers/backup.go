@@ -320,9 +320,18 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 		"hostname":                hostname,
 		"resticAvailable":         av.ResticPresent,
 		"rcloneAvailable":         av.RclonePresent,
-		"repositoryInitialized":   repoStatus.RepoState == services.RepoStateOK,
-		"repoState":               repoStatus.RepoState,
-		"repoStateMessage":        repoStatus.Message,
+		// repositoryInitialized is "positively confirmed reachable AND
+		// initialised". FALSE DOES NOT MEAN THE REPOSITORY IS ABSENT: it is also
+		// false when a repository exists but could not be read, and when the
+		// settings naming it could not be read at all. A caller that needs to tell
+		// those apart -- and anything offering to CREATE a repository does -- must
+		// read repoState, not this boolean. That conflation is the defect
+		// agent-os-81vr was filed for; the name is kept for now because three
+		// frontend components read it as "can we back up right now", which is what
+		// it still measures (renaming it is agent-os-ssqt).
+		"repositoryInitialized": repoStatus.RepoState == services.RepoStateOK,
+		"repoState":             repoStatus.RepoState,
+		"repoStateMessage":      repoStatus.Message,
 	})
 }
 
@@ -747,8 +756,17 @@ func (h *BackupHandler) getStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"resticAvailable":       av.ResticPresent,
-		"rcloneAvailable":       av.RclonePresent,
+		"resticAvailable": av.ResticPresent,
+		"rcloneAvailable": av.RclonePresent,
+		// repositoryInitialized is "positively confirmed reachable AND
+		// initialised". FALSE DOES NOT MEAN THE REPOSITORY IS ABSENT: it is also
+		// false when a repository exists but could not be read, and when the
+		// settings naming it could not be read at all. A caller that needs to tell
+		// those apart -- and anything offering to CREATE a repository does -- must
+		// read repoState, not this boolean. That conflation is the defect
+		// agent-os-81vr was filed for; the name is kept for now because three
+		// frontend components read it as "can we back up right now", which is what
+		// it still measures (renaming it is agent-os-ssqt).
 		"repositoryInitialized": repoStatus.RepoState == services.RepoStateOK,
 		"repoState":             repoStatus.RepoState,
 		"repoStateMessage":      repoStatus.Message,
