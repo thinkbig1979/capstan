@@ -57,13 +57,40 @@ const DatabaseBackupTag = "capstan-database"
 // types during a restore. A random path would make the runbook unwritable.
 const databaseStagingDir = "backup-staging"
 
+// RepoState names which of the repository's mutually exclusive states a probe
+// found. It exists because RepoReachable is one boolean over four distinct
+// facts, and two of them call for opposite actions: a repository that has never
+// been initialised should be created, one that exists but could not be read
+// must NOT be (agent-os-81vr).
+type RepoState string
+
+const (
+	// RepoStateOK: the repository answered the probe.
+	RepoStateOK RepoState = "ok"
+	// RepoStateUninitialized: no repository exists at the configured location.
+	RepoStateUninitialized RepoState = "uninitialized"
+	// RepoStateUnreachable: a repository is configured but the probe failed for
+	// some other reason — network, permissions, a wrong password. It may well
+	// exist and hold every backup the user has.
+	RepoStateUnreachable RepoState = "unreachable"
+	// RepoStateSettingsUnreadable: the settings could not be read, so WHICH
+	// repository is configured is itself unknown.
+	RepoStateSettingsUnreadable RepoState = "settings_unreadable"
+)
+
 // BackupAvailability describes which parts of the engine are functional.
+//
+// RepoState is empty on any value that did not probe the repository —
+// Available() never does, and CheckRepository returns before probing when
+// restic is absent. Empty therefore means "not probed", which is why it is
+// omitempty rather than defaulted to one of the four states.
 type BackupAvailability struct {
-	ResticPresent bool   `json:"resticPresent"`
-	RclonePresent bool   `json:"rclonePresent"`
-	RepoReachable bool   `json:"repoReachable"`
-	Available     bool   `json:"available"`
-	Message       string `json:"message,omitempty"`
+	ResticPresent bool      `json:"resticPresent"`
+	RclonePresent bool      `json:"rclonePresent"`
+	RepoReachable bool      `json:"repoReachable"`
+	RepoState     RepoState `json:"repoState,omitempty"`
+	Available     bool      `json:"available"`
+	Message       string    `json:"message,omitempty"`
 }
 
 // dockerStopper is the narrow interface BackupService needs from DockerService.
@@ -511,8 +538,15 @@ func (s *BackupService) Available() BackupAvailability {
 	return av
 }
 
-// CheckRepository probes the restic repository and returns whether it is
-// reachable. Unlike Available() this performs an actual exec call.
+// resticExitRepoDoesNotExist is restic's exit code for "repository does not
+// exist" — documented since 0.17 and the discriminator CheckRepository uses.
+const resticExitRepoDoesNotExist = 10
+
+// CheckRepository probes the restic repository and reports which of four
+// states it is in. Unlike Available() this performs an actual exec call.
+//
+// RepoState is the field callers branch on; RepoReachable is retained and
+// still means exactly "the probe answered", i.e. RepoState == RepoStateOK.
 func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability {
 	av := s.Available()
 	if !av.ResticPresent {
@@ -526,11 +560,11 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 	// OBSERVED at this commit with
 	// `awk '/^func /{fn=$0} /h\.svc\.CheckRepository\(/{print NR": "fn}'`),
 	// include two that gate destructive or restore-facing work: repoInit
-	// CREATES a repository when this reports unreachable, and
-	// listSnapshots/previewSnapshot produce the snapshot list an operator then
-	// restores FROM. Reporting <DataDir>/restic-repo as reachable while the
-	// configured repository was never read would point all three at the wrong
-	// repository.
+	// CREATES a repository (now only on RepoStateUninitialized — creating on
+	// unreachable was agent-os-81vr), and listSnapshots/previewSnapshot produce
+	// the snapshot list an operator then restores FROM. Reporting
+	// <DataDir>/restic-repo as reachable while the configured repository was
+	// never read would point all three at the wrong repository.
 	//
 	// Note the name collision: ResticManager also has a CheckRepository
 	// (backup_restic.go:201), and it is that one — not this method — that
@@ -539,6 +573,7 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 	if err != nil {
 		av.RepoReachable = false
 		av.Available = false
+		av.RepoState = RepoStateSettingsUnreadable
 		av.Message = "backup settings could not be read; repository state is unknown"
 		return av
 	}
@@ -546,12 +581,35 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 	if err := restic.CheckRepository(ctx); err != nil {
 		av.RepoReachable = false
 		av.Available = false
+
+		// Exit code 10 is restic's documented "repository does not exist", and
+		// it is the ONLY way to tell "never initialised" from "exists but I
+		// could not read it" without matching on error text, which restic does
+		// not treat as a contract. Same reasoning the rclone path already
+		// applies to its exit code 3 (see remoteHasSnapshots).
+		//
+		// MEASURED with restic 0.18.0, `restic snapshots --quiet`, three arms:
+		// no repository at the path -> exit 10; initialised repository with
+		// zero snapshots -> exit 0; repository directory chmod 000 -> exit 1.
+		// The shipped binary is newer (docker/Dockerfile pins RESTIC_VER
+		// 0.19.1) and exit 10 has been stable since 0.17.
+		//
+		// The error chain reaches an *exec.ExitError because every wrap on the
+		// way here uses %w: execRunner.Run, then ResticManager.CheckRepository.
+		if isExitCode(err, resticExitRepoDoesNotExist) {
+			av.RepoState = RepoStateUninitialized
+			av.Message = "backup repository has not been initialised yet"
+			return av
+		}
+
+		av.RepoState = RepoStateUnreachable
 		av.Message = fmt.Sprintf("repository not reachable: %v", err)
 		return av
 	}
 
 	av.RepoReachable = true
 	av.Available = true
+	av.RepoState = RepoStateOK
 	return av
 }
 

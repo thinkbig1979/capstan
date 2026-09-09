@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -1863,6 +1862,16 @@ type recordingResticRunner struct {
 	// false when the repository must look reachable (e.g. snapshot listing,
 	// which returns an empty list early if the probe fails).
 	failRepoProbe bool
+
+	// repoProbeExitCode is the process exit code the failed probe reports, and
+	// it defaults to 10 because CheckRepository now discriminates on it
+	// (agent-os-81vr): 10 is restic's "repository does not exist", which is the
+	// state failRepoProbe's own comment describes, while any other code means
+	// the repository exists but could not be read and repoInit must refuse to
+	// create over it. MEASURED with restic 0.18.0: `snapshots --quiet` exits 10
+	// against a path holding no repository, 0 against an initialised but empty
+	// one, and 1 against one whose directory is unreadable.
+	repoProbeExitCode int
 }
 
 type recordedResticCall struct {
@@ -1934,7 +1943,11 @@ func (r *recordingResticRunner) Run(
 	// `snapshots --json` (the listing path) is a different invocation and must
 	// never be failed by this probe.
 	if r.failRepoProbe && argsContainAll(args, []string{"snapshots", "--quiet"}) {
-		return errors.New("repository does not exist")
+		code := r.repoProbeExitCode
+		if code == 0 {
+			code = 10
+		}
+		return fakeExitError{code: code}
 	}
 	return nil
 }
@@ -2649,4 +2662,242 @@ func TestBackupHistory_HugePageDoesNotWrapToPageOne(t *testing.T) {
 	body := getBackupHistory(t, r, "?page=9223372036854775807&limit=50")
 	assert.Empty(t, runIDsFromBody(t, body), "a page past the end must never return page one's rows")
 	assert.Equal(t, float64(4), body["total"], "total still describes the whole match set")
+}
+
+// ============================================================
+// agent-os-81vr — the three repository states on the wire
+// ============================================================
+
+// fakeExitError simulates os/exec's *exec.ExitError so a test can drive the
+// exit code BackupService.CheckRepository discriminates on.
+//
+// It is a second copy of the double with the same name in
+// internal/services/backup_test.go, and deliberately so: that one is
+// unexported in package services and unreachable from package handlers. The
+// shape is the contract (an "ExitCode() int" method, matched by isExitCode's
+// exitCoder interface via errors.As), not the type.
+type fakeExitError struct {
+	code int
+}
+
+func (e fakeExitError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+func (e fakeExitError) ExitCode() int { return e.code }
+
+// backupProbeRouter wires a BackupHandler whose restic probe (`restic
+// snapshots --quiet`) exits with probeExitCode. Zero means the probe succeeds,
+// i.e. the repository is reachable.
+//
+// Every arm of the agent-os-81vr tests runs on this ONE instrument, varying
+// only the exit code, so a difference in the response is attributable to the
+// repository state and not to a differently built fixture.
+func backupProbeRouter(t *testing.T, probeExitCode int) (*gin.Engine, *recordingResticRunner) {
+	t.Helper()
+
+	db := newBackupHandlerDB(t)
+	require.NoError(t, db.SetSetting("restic_password", "test-repo-password"))
+
+	svc := buildBackupSvc(t, db, true, false)
+	runner := &recordingResticRunner{
+		failRepoProbe:     probeExitCode != 0,
+		repoProbeExitCode: probeExitCode,
+	}
+	svc.SetResticMgrFactory(func(bc services.BackupConfig) *services.ResticManager {
+		return services.NewResticManagerForTest(bc, runner, slog.Default())
+	})
+
+	h := NewBackupHandler(svc, db, slog.Default())
+	// See agent-os-80n: h.Stop() must run before the DB and TempDir cleanups
+	// registered above, and t.Cleanup runs LIFO.
+	t.Cleanup(h.Stop)
+	return newBackupRouter(h), runner
+}
+
+// repoStateOf returns the repoState an error response carries in its details.
+func repoStateOf(t *testing.T, body map[string]interface{}) string {
+	t.Helper()
+	details, ok := body["details"].(map[string]interface{})
+	require.True(t, ok, "error body must carry a details object naming the repository state, got %v", body)
+	state, ok := details["repoState"].(string)
+	require.True(t, ok, "details must carry repoState, got %v", details)
+	return state
+}
+
+// TestListSnapshots_EmptyRepositoryVsUnreachable is the load-bearing arm of
+// agent-os-81vr, and it is TWO-SIDED on one instrument.
+//
+// Before the fix, an UNREACHABLE repository was answered with 200 and an empty
+// array — byte-identical to "you have never taken a backup" — so a user whose
+// repository had gone away was shown no backups and invited to initialise one.
+// The fix must NOT be bought by erroring on the empty case too: a repository
+// that is initialised with zero snapshots exits 0 and is a legitimate 200 [].
+// An implementation that fails both arms passes half of acceptance criterion 2
+// and is worse than the bug.
+func TestListSnapshots_EmptyRepositoryVsUnreachable(t *testing.T) {
+	// Not parallel — injects a manager factory on the service.
+
+	t.Run("initialised and empty still answers 200 with an empty array", func(t *testing.T) {
+		r, _ := backupProbeRouter(t, 0)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots", nil))
+
+		require.Equal(t, http.StatusOK, w.Code,
+			"a reachable repository with zero snapshots is a genuine empty state, not a fault")
+		var snapshots []models.BackupSnapshot
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &snapshots))
+		assert.Empty(t, snapshots)
+	})
+
+	t.Run("never initialised also answers 200 with an empty array", func(t *testing.T) {
+		r, _ := backupProbeRouter(t, 10)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots", nil))
+
+		require.Equal(t, http.StatusOK, w.Code,
+			"a fresh install that has never initialised a repository genuinely has no snapshots")
+		var snapshots []models.BackupSnapshot
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &snapshots))
+		assert.Empty(t, snapshots)
+	})
+
+	t.Run("unreachable is distinguishable from empty", func(t *testing.T) {
+		r, _ := backupProbeRouter(t, 1)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots", nil))
+
+		require.Equal(t, http.StatusServiceUnavailable, w.Code,
+			"an unreachable repository must not be reported as an ordinary empty list")
+		body := decodeBody(t, w)
+		assert.Equal(t, "BACKUP_REPO_UNREACHABLE", body["code"])
+		assert.Equal(t, "unreachable", repoStateOf(t, body))
+		assert.NotEmpty(t, body["message"], "the human sentence CheckRepository already computes must be surfaced")
+	})
+}
+
+// TestPreviewSnapshot_ReportsWhichCauseHolds pins acceptance criterion 3: the
+// handler used to answer "Repository not initialized or unreachable", naming
+// two causes and committing to neither. Whichever cause actually holds is now
+// the one reported.
+func TestPreviewSnapshot_ReportsWhichCauseHolds(t *testing.T) {
+	// Not parallel — injects a manager factory on the service.
+
+	const snapshotID = "abc12345"
+
+	t.Run("never initialised", func(t *testing.T) {
+		r, _ := backupProbeRouter(t, 10)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots/"+snapshotID+"/preview", nil))
+
+		require.Equal(t, http.StatusNotFound, w.Code)
+		body := decodeBody(t, w)
+		message, _ := body["message"].(string)
+		assert.NotContains(t, message, " or ",
+			"the message must name the cause that holds, not enumerate candidates")
+		assert.Contains(t, strings.ToLower(message), "initialis",
+			"the uninitialised cause must be the one named")
+	})
+
+	t.Run("unreachable", func(t *testing.T) {
+		r, _ := backupProbeRouter(t, 1)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots/"+snapshotID+"/preview", nil))
+
+		require.Equal(t, http.StatusServiceUnavailable, w.Code)
+		body := decodeBody(t, w)
+		assert.Equal(t, "BACKUP_REPO_UNREACHABLE", body["code"])
+		assert.Equal(t, "unreachable", repoStateOf(t, body))
+		message, _ := body["message"].(string)
+		assert.NotContains(t, message, " or ",
+			"the message must name the cause that holds, not enumerate candidates")
+	})
+}
+
+// TestRepoInit_CreatesOnlyWhenUninitialised pins acceptance criterion 5, the
+// destructive-adjacent arm this bead was filed for.
+//
+// repoInit used to branch on !RepoReachable, which is true for BOTH "never
+// initialised" and "exists but could not be read". Creating a repository
+// because the configured one could not be read points every later backup at a
+// new, empty repository while the real one still exists.
+func TestRepoInit_CreatesOnlyWhenUninitialised(t *testing.T) {
+	// Not parallel — injects a manager factory on the service.
+
+	t.Run("uninitialised creates", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 10)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodPost, "/api/backups/repo/init", map[string]interface{}{}))
+
+		require.Equal(t, http.StatusOK, w.Code)
+		_, ok := runner.repoFor("init")
+		assert.True(t, ok, "a repository that does not exist must still be created")
+	})
+
+	t.Run("unreachable refuses to create", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 1)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodPost, "/api/backups/repo/init", map[string]interface{}{}))
+
+		require.Equal(t, http.StatusServiceUnavailable, w.Code)
+		body := decodeBody(t, w)
+		assert.Equal(t, "BACKUP_REPO_UNREACHABLE", body["code"])
+		assert.Equal(t, "unreachable", repoStateOf(t, body))
+
+		_, ok := runner.repoFor("init")
+		assert.False(t, ok,
+			"a repository that exists but could not be read must NOT be created over")
+	})
+
+	t.Run("already initialised does not re-create", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodPost, "/api/backups/repo/init", map[string]interface{}{}))
+
+		require.Equal(t, http.StatusOK, w.Code)
+		_, ok := runner.repoFor("init")
+		assert.False(t, ok, "an already-reachable repository must not be initialised again")
+	})
+}
+
+// TestRepositoryInitializedReportsWhatItsNameSays pins acceptance criterion 6.
+// The field used to alias RepoReachable; it now reports confirmed
+// initialisation, and the three ways it can be false are told apart by the
+// repoState it ships alongside.
+func TestRepositoryInitializedReportsWhatItsNameSays(t *testing.T) {
+	// Not parallel — injects a manager factory on the service.
+
+	cases := []struct {
+		name          string
+		probeExitCode int
+		initialized   bool
+		repoState     string
+	}{
+		{"reachable", 0, true, "ok"},
+		{"never initialised", 10, false, "uninitialized"},
+		{"exists but unreadable", 1, false, "unreachable"},
+	}
+
+	for _, endpoint := range []string{"/api/backups/status", "/api/settings/backup"} {
+		for _, tc := range cases {
+			t.Run(endpoint+"/"+tc.name, func(t *testing.T) {
+				r, _ := backupProbeRouter(t, tc.probeExitCode)
+
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, jsonReq(t, http.MethodGet, endpoint, nil))
+
+				require.Equal(t, http.StatusOK, w.Code)
+				body := decodeBody(t, w)
+				assert.Equal(t, tc.initialized, body["repositoryInitialized"],
+					"repositoryInitialized must mean the repository has been initialised")
+				assert.Equal(t, tc.repoState, body["repoState"],
+					"the state must be on the wire so a client can tell the three false cases apart")
+			})
+		}
+	}
 }

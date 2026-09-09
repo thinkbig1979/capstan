@@ -347,6 +347,14 @@ func dbFaultCases() []dbFaultCase {
 				if av.Message == "" {
 					t.Fatal("CheckRepository refused without a Message naming the cause class")
 				}
+				// agent-os-81vr: the cause class is now also machine-readable,
+				// and this is the one arm that produces it from a genuinely
+				// unreadable configuration rather than from a fake exit code.
+				if av.RepoState != RepoStateSettingsUnreadable {
+					t.Fatalf("CheckRepository reported RepoState=%q on an unreadable setting; want %q — "+
+						"a caller that cannot tell this from 'no repository exists' will offer to create one",
+						av.RepoState, RepoStateSettingsUnreadable)
+				}
 				return nil
 			},
 		},

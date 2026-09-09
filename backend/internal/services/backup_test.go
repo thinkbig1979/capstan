@@ -2671,3 +2671,114 @@ func TestDatabaseSnapshotPath_IsUnderDataDir(t *testing.T) {
 		filepath.Join(svc.Config().DataDir, "backup-staging", "capstan.db"),
 		svc.DatabaseSnapshotPath())
 }
+
+// TestCheckRepository_DiscriminatesRepositoryStates pins acceptance criterion 4
+// of agent-os-81vr: the three failure states are told apart at the SERVICE
+// boundary, not guessed at by a caller reading prose.
+//
+// Before this, "no repository exists" and "a repository exists but could not be
+// read" were one branch producing one message, which is what let repoInit
+// create a repository over an unreachable one. The discriminator is restic's
+// process exit code, not its wording — MEASURED with restic 0.18.0: `restic
+// snapshots --quiet` exits 10 against a path holding no repository, 0 against
+// an initialised repository with zero snapshots, and 1 against one whose
+// directory it cannot read.
+//
+// The Message assertions are the "do not regress" half of the criterion: the
+// two sentences CheckRepository already computed must still be the sentences it
+// computes for the two states it already separated.
+func TestCheckRepository_DiscriminatesRepositoryStates(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		runErr        error
+		wantState     RepoState
+		wantReachable bool
+		wantMessage   func(t *testing.T, message string)
+	}{
+		{
+			name:          "reachable",
+			runErr:        nil,
+			wantState:     RepoStateOK,
+			wantReachable: true,
+			wantMessage: func(t *testing.T, message string) {
+				assert.Empty(t, message, "a reachable repository has nothing to explain")
+			},
+		},
+		{
+			name:          "never initialised",
+			runErr:        fakeExitError{code: 10},
+			wantState:     RepoStateUninitialized,
+			wantReachable: false,
+			wantMessage: func(t *testing.T, message string) {
+				assert.NotEmpty(t, message)
+				assert.NotContains(t, message, "not reachable",
+					"a repository that does not exist is not an unreachable one")
+			},
+		},
+		{
+			name:          "exists but unreadable",
+			runErr:        fakeExitError{code: 1},
+			wantState:     RepoStateUnreachable,
+			wantReachable: false,
+			wantMessage: func(t *testing.T, message string) {
+				assert.Contains(t, message, "repository not reachable:",
+					"the sentence this state already produced must not move — "+
+						"BackupAvailability.Message is on the wire elsewhere")
+			},
+		},
+		{
+			name:          "failed with no exit code to read",
+			runErr:        errors.New("context deadline exceeded"),
+			wantState:     RepoStateUnreachable,
+			wantReachable: false,
+			wantMessage: func(t *testing.T, message string) {
+				assert.Contains(t, message, "repository not reachable:")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := newBackupTestDB(t)
+			docker := &fakeDocker{}
+			runner := &fakeRunner{runErr: tc.runErr}
+			svc := buildSvc(t, db, docker, runner, runner)
+
+			av := svc.CheckRepository(context.Background())
+
+			assert.Equal(t, tc.wantState, av.RepoState)
+			assert.Equal(t, tc.wantReachable, av.RepoReachable,
+				"RepoReachable must keep meaning exactly 'the probe answered', so the change stays additive")
+			tc.wantMessage(t, av.Message)
+		})
+	}
+
+	t.Run("settings unreadable", func(t *testing.T) {
+		t.Parallel()
+
+		// The fourth state, on the fixture built for it: a configured
+		// repository that cannot be read out of the database at all, so WHICH
+		// repository is configured is itself unknown.
+		db := closedDBWithSettings(t, map[string]string{
+			"restic_repository": dbFaultConfiguredRepo,
+		})
+		cfg := &config.Config{
+			DataDir:        t.TempDir(),
+			ResticPassword: dbFaultEnvPassword,
+		}
+		svc, restic, _, _, _ := dbFaultSvc(t, db, cfg)
+
+		av := svc.CheckRepository(context.Background())
+
+		assert.Equal(t, RepoStateSettingsUnreadable, av.RepoState)
+		assert.False(t, av.RepoReachable)
+		assert.Equal(t, "backup settings could not be read; repository state is unknown", av.Message,
+			"the sentence this state already produced must not move")
+		assert.Empty(t, restic.calls,
+			"restic must not be probed at all when the settings could not be read")
+	})
+}
