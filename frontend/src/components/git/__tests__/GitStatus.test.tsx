@@ -102,14 +102,27 @@ describe('GitStatus', () => {
   // narrow and real: this chip renders when the live probe says no repository
   // while the cached `Stack.isGitRepo` behind the badges may still say yes, and
   // the scan is what rewrites that field.
-  it('runs a directory rescan when Rescan is clicked', async () => {
+  it('runs a directory rescan and refreshes every cache the scan rewrites', async () => {
     const user = userEvent.setup()
     mockUseGitStatus.mockReturnValue({ isLoading: false, error: null, data: { isRepo: false } })
-    renderWithProviders(<GitStatus stack={mockStack} />)
+    const { queryClient } = renderWithProviders(<GitStatus stack={mockStack} />)
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
 
     await user.click(screen.getByRole('button', { name: /rescan/i }))
 
     await waitFor(() => expect(vi.mocked(directoriesApi.scan)).toHaveBeenCalledTimes(1))
+
+    // The key SET, not merely that the request went out. A scan rewrites
+    // `is_git_repo` on the stack rows AND the directory rows, and the
+    // dashboard's git badge reads the directories query
+    // (DashboardPage.tsx:99 -> DirectoriesTab.tsx:347), so a missing key here
+    // leaves a branch on screen that the scan has just disproved. Asserting
+    // only `scan` was called cannot see that.
+    await waitFor(() =>
+      expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+        expect.arrayContaining([['git', mockStack.id], ['stacks'], ['stack'], ['directories']])
+      )
+    )
   })
 
   // Also the control on agent-os-omvy's affordance: a real repository must keep

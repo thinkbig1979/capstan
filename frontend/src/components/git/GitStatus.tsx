@@ -40,23 +40,44 @@ export function GitStatus({ stack }: GitStatusProps) {
 
   // Backs the Rescan offered on the non-repo chip below. Directory scanning has
   // no per-stack form: `directoriesApi.scan` takes no arguments and rescans
-  // every monitored directory (lib/api.ts, the same call behind the dashboard's
-  // Refresh at pages/DashboardPage.tsx). It is the only thing that rewrites the
-  // cached `Stack.isGitRepo` the badges elsewhere read: `command grep -rn
-  // "IsGitRepo" backend --include=*.go` shows the field constructed only in
-  // services/scanner.go (:1170, :1328), every other hit reading or persisting
-  // it. That cached field is why the two stack keys are invalidated below
-  // alongside this stack's git key.
+  // every monitored directory. DashboardPage's Refresh posts to the same
+  // endpoint, but do not read the two as equivalent: it refetches its own two
+  // queries directly and then invalidates the stats counter, while this drops
+  // four cache keys including the stack's git probe, which the dashboard has no
+  // reason to touch and this cannot do without.
+  //
+  // The scan is the only thing that rewrites the cached `Stack.isGitRepo` the
+  // badges elsewhere read: `command grep -rn "IsGitRepo" backend
+  // --include=*.go` shows the field constructed only in services/scanner.go
+  // (:1170, :1328), every other hit reading or persisting it, and UpsertStack
+  // in database/stacks.go is an `INSERT OR REPLACE`, so a scan overwrites the
+  // stored value outright rather than leaving a stale one behind.
+  //
+  // Hence four keys rather than one. That field rides on the directory rows as
+  // well as the stack rows, and the dashboard's git badge reads the directories
+  // query (DashboardPage.tsx -> DirectoriesTab.tsx), which is the surface the
+  // button's own tooltip sends the user to look at. The same pairing is the
+  // convention here: hooks/useCreateStack.ts and GitSettingsSection invalidate
+  // directories after a directory-affecting mutation, and a full rescan is the
+  // most directory-affecting mutation there is.
+  //
+  // One honest limit, considered rather than missed: for the majority of stacks
+  // that simply have no git in them, this is a no-op nothing on screen can
+  // show, and only a failure toasts. A successful no-op and a swallowed error
+  // therefore look alike. The alternative is a spinner and a success toast on a
+  // chip whose whole point is to stay quiet.
   const handleRescan = async () => {
     setIsRescanning(true)
     try {
       await directoriesApi.scan()
-      // The answer lives in two caches: this stack's git probe, and the stack
-      // rows carrying `isGitRepo` for the badges on the other pages.
+      // Every cache the scan can have changed: this stack's git probe, and the
+      // stack and directory rows carrying `isGitRepo` for the badges on the
+      // other pages.
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.git.all(stack.id) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.stacks() }),
         queryClient.invalidateQueries({ queryKey: queryKeys.stack.all() }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.directories() }),
       ])
     } catch (err) {
       toast.error(`Rescan failed: ${classifyError(err).message}`)
