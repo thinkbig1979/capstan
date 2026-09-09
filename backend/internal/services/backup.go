@@ -1496,6 +1496,68 @@ func (s *BackupService) Prune(ctx context.Context, dryRun bool, out chan<- Strea
 	return nil
 }
 
+// VerifyRepositoryData reads repository DATA and reports whether the restic
+// repository is intact. It is a different question from CheckRepository above,
+// which only establishes that the repository ANSWERS (agent-os-j1jw): see
+// ResticManager.VerifyRepositoryData for the observation that the metadata
+// probe exits 0 against a repository whose pack files are gone.
+//
+// A failing verification WARNS; it does not block. Nothing here writes a flag
+// that the scheduler consults, and BackupSchedulerService.runCycle does not
+// read one. The reasoning: this probe is slow, optional, and can fail for
+// transient reasons (a network blip against a remote backend, a repository
+// locked by a concurrent prune). Gating scheduled backups on it would let a
+// transient fault silently stop backups, which turns a diagnostic into an
+// outage — strictly worse than the condition it reports. The operator sees the
+// result instead: the run is persisted as a failed "verify" run and surfaced
+// as lastVerify on GET /backups/status.
+//
+// It deliberately does NOT take the global backup lock that Prune and
+// RunBackup take. That lock is acquired non-blocking (tryAcquireGlobal) and a
+// caller that loses it gets ErrBackupBusy immediately, so holding it for the
+// minutes a data read can take would make a scheduled backup FAIL for the
+// duration — the exact blocking this design rejects. The overlap that would
+// actually be unsafe is restic's to refuse, and it does: OBSERVED with restic
+// 0.18.0, `restic prune` against a repository being read by a running
+// `restic check --read-data` exits 11 with "repository is already locked
+// exclusively", while the check itself completes normally.
+func (s *BackupService) VerifyRepositoryData(ctx context.Context, subset string, out chan<- StreamLine) error {
+	if s.resticBin == "" {
+		return ErrBackupUnavailable
+	}
+
+	subset, err := ValidateVerifySubset(subset)
+	if err != nil {
+		return err
+	}
+
+	bc, err := s.resolveOrRefuse("verify repository")
+	if err != nil {
+		return err
+	}
+	restic := s.newResticMgr(bc)
+
+	stream(out, "info", fmt.Sprintf("Verifying repository integrity (reading %s of pack data)", subset))
+	if err := restic.VerifyRepositoryData(ctx, subset, out); err != nil {
+		// Logged on the failure path too: an integrity failure is the event an
+		// operator most needs a durable record of.
+		s.actions.Log("system", nil, ActionBackup, map[string]interface{}{
+			"kind":   "verify",
+			"subset": subset,
+			"result": "failed",
+		})
+		return err
+	}
+
+	stream(out, "info", "Repository integrity verified")
+	s.actions.Log("system", nil, ActionBackup, map[string]interface{}{
+		"kind":   "verify",
+		"subset": subset,
+		"result": "success",
+	})
+	return nil
+}
+
 // --- helpers ---
 
 // resolveTargetPolicies returns the set of BackupPolicies to run against.

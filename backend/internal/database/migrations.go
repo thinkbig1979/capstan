@@ -625,6 +625,78 @@ WHERE completed_at IS NOT NULL
   AND strftime('%Y-%m-%dT%H:%M:%SZ', completed_at) IS NOT NULL;
 `,
 	},
+	{
+		Version: 16,
+		Name:    "backup_runs_verify_kind",
+		SQL: `
+-- backup_runs.kind gains 'verify' (agent-os-j1jw): repository integrity
+-- verification is a sixth durable run kind alongside backup/sync/restore/
+-- dr_restore/prune, and services.RunKindVerify writes that string. Without
+-- this the INSERT in LaunchVerify fails the CHECK constraint at runtime.
+--
+-- SQLite still has no ALTER COLUMN for CHECK constraints, so this is another
+-- full rebuild of backup_runs. It follows migration 12's recipe exactly and
+-- for exactly the reasons documented there -- read that comment first; the
+-- two hazards it names (SQLite rewriting backup_run_items' FK text on a
+-- RENAME, and the FK CASCADE firing during DROP TABLE inside the migration
+-- runner's transaction) are properties of this table pair, not of that one
+-- migration, so they apply here unchanged. Only the CHECK list differs.
+--
+-- Note there are now three "kind IN (...)" spellings in this file (v11's
+-- original CREATE, v12's rebuild, and this one). They are sequential history,
+-- not three live constraints: each rebuild replaces the table the previous
+-- one left behind, so the constraint in force after a full migration run is
+-- this one. Neither earlier migration is edited -- editing applied history
+-- would leave already-migrated databases on a schema no migration describes.
+CREATE TABLE backup_run_items_v16 AS SELECT * FROM backup_run_items;
+
+CREATE TABLE backup_runs_new (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL CHECK (kind IN ('backup','sync','restore','dr_restore','prune','verify')),
+    trigger       TEXT NOT NULL CHECK (trigger IN ('manual','scheduled')),
+    status        TEXT NOT NULL CHECK (status IN ('running','success','partial','failed','interrupted')),
+    started_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at   DATETIME,
+    stacks_total  INTEGER NOT NULL DEFAULT 0,
+    stacks_ok     INTEGER NOT NULL DEFAULT 0,
+    stacks_failed INTEGER NOT NULL DEFAULT 0,
+    bytes_added   INTEGER,
+    error_message TEXT
+);
+
+INSERT INTO backup_runs_new (id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message)
+SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message
+FROM backup_runs;
+
+DROP TABLE backup_run_items;
+DROP TABLE backup_runs;
+
+ALTER TABLE backup_runs_new RENAME TO backup_runs;
+
+CREATE TABLE backup_run_items (
+    id            TEXT PRIMARY KEY,
+    run_id        TEXT NOT NULL,
+    stack_id      TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('skipped','success','failed')),
+    snapshot_id   TEXT,
+    stop_applied  BOOLEAN NOT NULL DEFAULT FALSE,
+    duration_ms   INTEGER,
+    error_message TEXT,
+    FOREIGN KEY (run_id) REFERENCES backup_runs(id) ON DELETE CASCADE
+);
+
+INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message)
+SELECT id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message
+FROM backup_run_items_v16;
+
+DROP TABLE backup_run_items_v16;
+
+CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_backup_runs_kind ON backup_runs(kind);
+CREATE INDEX IF NOT EXISTS idx_backup_run_items_run_id ON backup_run_items(run_id);
+CREATE INDEX IF NOT EXISTS idx_backup_run_items_stack_id ON backup_run_items(stack_id);
+`,
+	},
 }
 
 // checkNoCaseCollidingUsernames is migration 13's PreCheck. It detects

@@ -259,6 +259,8 @@ Direct Docker resource management, independent of any stack.
 - `POST /api/v1/backups/dr-restore` — disaster-recovery restore (whole
   instance, onto a fresh host)
 - `POST /api/v1/backups/prune` — apply retention and prune old snapshots
+- `POST /api/v1/backups/verify` — verify repository integrity by reading pack
+  data (`readDataSubset` defaults to 5%; `100%` reads every pack)
 - `POST /api/v1/backups/repo/init` — initialize the restic repository
 - `POST /api/v1/backups/cloud/test` — test the configured cloud remote's
   connectivity/credentials
@@ -272,6 +274,8 @@ Direct Docker resource management, independent of any stack.
   DR-restore run's progress
 - `GET /api/v1/ws/backups/prune/:runId` — WebSocket stream of a prune run's
   progress
+- `GET /api/v1/ws/backups/verify/:runId` — WebSocket stream of a repository
+  verification run's progress
 
 ## Keeping this page honest
 

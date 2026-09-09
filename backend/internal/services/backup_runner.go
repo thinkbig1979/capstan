@@ -13,8 +13,12 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
-// RunKind names the five durable streamable operation types stored in the
+// RunKind names the six durable streamable operation types stored in the
 // backup_runs table.
+//
+// This set is mirrored by a CHECK constraint on backup_runs.kind, so adding a
+// member here without a migration makes every INSERT of the new kind fail at
+// runtime — "verify" needed migration 16 (agent-os-j1jw).
 type RunKind string
 
 const (
@@ -23,6 +27,7 @@ const (
 	RunKindRestore   RunKind = "restore"
 	RunKindDRRestore RunKind = "dr_restore"
 	RunKindPrune     RunKind = "prune"
+	RunKindVerify    RunKind = "verify"
 )
 
 // durableRun is the in-memory state of a single running (or recently finished)
@@ -650,6 +655,68 @@ func (reg *BackupRunnerRegistry) execPrune(dr *durableRun, dryRun bool) {
 	dr.reason = "prune completed"
 	reg.finaliseRunStatus(dr.runID, "success", "")
 	reg.logger.Info("durable prune finished", "run_id", dr.runID)
+}
+
+// LaunchVerify pre-creates a running BackupRun row and starts a repository
+// integrity verification. subset is the share of pack data to read; the empty
+// string means DefaultVerifyReadDataSubset.
+//
+// It is validated here as well as inside the service so that a bad subset is a
+// launch error the HTTP caller sees, rather than a run row that is created and
+// then immediately fails (agent-os-j1jw).
+func (reg *BackupRunnerRegistry) LaunchVerify(subset string) (string, error) {
+	subset, err := ValidateVerifySubset(subset)
+	if err != nil {
+		return "", err
+	}
+
+	runID := uuid.New().String()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	row := &models.BackupRun{
+		ID:        runID,
+		Kind:      string(RunKindVerify),
+		Trigger:   TriggerManual,
+		Status:    "running",
+		StartedAt: now,
+	}
+	if err := reg.db.CreateBackupRun(row); err != nil {
+		return "", fmt.Errorf("persist verify run record: %w", err)
+	}
+
+	dr := &durableRun{runID: runID, kind: RunKindVerify, done: make(chan struct{})}
+	if err := reg.registerAndAdd(dr); err != nil {
+		return "", err
+	}
+	go reg.execVerify(dr, subset)
+	return runID, nil
+}
+
+func (reg *BackupRunnerRegistry) execVerify(dr *durableRun, subset string) {
+	// See execBackup's defer ordering comment: declared first so it runs last.
+	defer reg.wg.Done()
+	defer close(dr.done)
+	defer reg.recoverExec(dr)
+
+	out, finish := reg.drainLoop(dr)
+	defer finish()
+	ctx := context.Background()
+
+	err := reg.svc.VerifyRepositoryData(ctx, subset, out)
+	finish()
+
+	if err != nil {
+		dr.outcome = "failed"
+		dr.reason = err.Error()
+		reg.finaliseRunStatus(dr.runID, "failed", err.Error())
+		reg.logger.Error("durable verify failed", "run_id", dr.runID, "error", err)
+		return
+	}
+
+	dr.outcome = "success"
+	dr.reason = "verify completed"
+	reg.finaliseRunStatus(dr.runID, "success", "")
+	reg.logger.Info("durable verify finished", "run_id", dr.runID)
 }
 
 // --- Attach ---

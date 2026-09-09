@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -133,6 +134,7 @@ func (h *BackupHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.POST("/backups/restore", h.runRestore)
 	group.POST("/backups/dr-restore", h.runDRRestore)
 	group.POST("/backups/prune", h.runPrune)
+	group.POST("/backups/verify", h.runVerify)
 
 	// Repo / cloud utility
 	group.POST("/backups/repo/init", h.repoInit)
@@ -718,12 +720,37 @@ func (h *BackupHandler) getStatus(c *gin.Context) {
 		repoSizeBytes = h.svc.RepoSizeBytes(c.Request.Context())
 	}
 
+	// lastVerify is the WARNING CHANNEL for repository integrity
+	// (agent-os-j1jw). A failed verification does not block backups -- see
+	// services.VerifyRepositoryData for why -- so this is where an operator
+	// learns that the repository could not be read. It is reported separately
+	// from lastRun because lastRun is the newest run of ANY kind, and a
+	// verify failure would be hidden by the next backup that succeeds.
+	//
+	// Refused rather than defaulted, for the same reason lastRun above is:
+	// reporting "no verification on record" from a database that could not be
+	// read would understate a failure as an absence.
+	verifyRuns, _, err := h.db.GetBackupRunsFiltered(models.BackupHistoryFilters{
+		Kind:  string(services.RunKindVerify),
+		Page:  1,
+		Limit: 1,
+	})
+	if err != nil {
+		h.internalError(c, "Failed to read the most recent verify run", err)
+		return
+	}
+	var lastVerify *models.BackupRun
+	if len(verifyRuns) > 0 {
+		lastVerify = &verifyRuns[0]
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"resticAvailable":       av.ResticPresent,
 		"rcloneAvailable":       av.RclonePresent,
 		"repositoryInitialized": repoStatus.RepoReachable,
 		"enabledStackCount":     len(policies),
 		"lastRun":               lastRun,
+		"lastVerify":            lastVerify,
 		"nextRunAt":             h.svc.NextRunAt(),
 		"repoSizeBytes":         repoSizeBytes,
 		"schedulerRunning":      h.svc.SchedulerRunning(),
@@ -1163,6 +1190,57 @@ func (h *BackupHandler) runPrune(c *gin.Context) {
 	})
 }
 
+// runVerifyRequest is the POST /backups/verify request body. An absent or
+// empty readDataSubset means services.DefaultVerifyReadDataSubset.
+type runVerifyRequest struct {
+	ReadDataSubset string `json:"readDataSubset"`
+}
+
+// runVerify starts a repository integrity verification (agent-os-j1jw).
+//
+// Unlike runPrune this needs no confirm flag: the operation only READS the
+// repository. What it costs is time, and the subset bounds that.
+func (h *BackupHandler) runVerify(c *gin.Context) {
+	var req runVerifyRequest
+	// An empty body is legitimate here (every field is optional), and
+	// ShouldBindJSON reports io.EOF for one, so that case is admitted rather
+	// than rejected as malformed.
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid request body",
+		))
+		return
+	}
+
+	// Validated here, before the run row exists, so a malformed subset is a
+	// 400 rather than a 202 followed by a run that fails for a caller error.
+	if _, err := services.ValidateVerifySubset(req.ReadDataSubset); err != nil {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			err.Error(),
+		))
+		return
+	}
+
+	if err := h.requireAvailable(c); err != nil {
+		return
+	}
+
+	runID, err := h.registry.LaunchVerify(req.ReadDataSubset)
+	if err != nil {
+		h.respondForLaunchError(c, "verify", err)
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"runId": runID,
+		"wsUrl": "/ws/backups/verify/" + runID,
+	})
+}
+
 // ───────────────────────────────────────────
 // Repo init & cloud test
 // ───────────────────────────────────────────
@@ -1269,6 +1347,7 @@ func (h *BackupHandler) RegisterWSRoutes(group *gin.RouterGroup, jwtSecret strin
 	group.GET("/ws/backups/restore/:runId", h.wsAttach(jwtSecret, authDisabled, "restore"))
 	group.GET("/ws/backups/dr-restore/:runId", h.wsAttach(jwtSecret, authDisabled, "dr-restore"))
 	group.GET("/ws/backups/prune/:runId", h.wsAttach(jwtSecret, authDisabled, "prune"))
+	group.GET("/ws/backups/verify/:runId", h.wsAttach(jwtSecret, authDisabled, "verify"))
 }
 
 // wsAttach returns a handler that attaches a WS client to a durable run.
