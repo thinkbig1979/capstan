@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"syscall"
 	"time"
@@ -218,6 +219,83 @@ func (m *ResticManager) CheckRepository(ctx context.Context) error {
 		return fmt.Errorf("cannot access restic repository: %w", err)
 	}
 	close(out)
+	return nil
+}
+
+// DefaultVerifyReadDataSubset is the share of pack files a verification reads
+// when the caller names none.
+//
+// Why a subset rather than a bare --read-data: --read-data downloads and
+// re-hashes EVERY pack in the repository, so on a multi-gigabyte repo it is an
+// hours-long operation, and an integrity probe nobody can afford to run is
+// worth nothing. A subset is not a weaker answer to the failure this exists to
+// catch: `restic check` always reconciles the index against a LIST of the
+// backend's pack files, and a backend listing cannot be served from the local
+// cache, so a repository that has LOST its packs fails at any subset — OBSERVED
+// with restic 0.18.0, `--read-data-subset=100%` and plain `check` both exit 1
+// on a repo whose data/ directory was moved away, while `restic snapshots
+// --quiet` (what CheckRepository runs) exits 0 on the same repo with a warm
+// cache. The subset bounds only how much pack CONTENT is re-hashed, i.e. how
+// much silent bitrot one run can find.
+const DefaultVerifyReadDataSubset = "5%"
+
+// verifySubsetPattern accepts the three forms `restic check --read-data-subset`
+// documents: a percentage ("5%", "2.5%"), a group selector ("1/12"), or a size
+// ("5G"). The value is validated rather than passed through because it is the
+// only caller-supplied element of restic's argv on this path; everything else
+// is a literal.
+var verifySubsetPattern = regexp.MustCompile(`^(?:[0-9]+(?:\.[0-9]+)?%|[0-9]+/[0-9]+|[0-9]+[KMGT])$`)
+
+// ValidateVerifySubset returns the subset string to hand restic, substituting
+// DefaultVerifyReadDataSubset for the empty string, and refuses anything that
+// is not one of restic's documented forms.
+func ValidateVerifySubset(subset string) (string, error) {
+	if subset == "" {
+		return DefaultVerifyReadDataSubset, nil
+	}
+	if !verifySubsetPattern.MatchString(subset) {
+		return "", fmt.Errorf("invalid read-data subset %q: expected a percentage (5%%), a group (1/12) or a size (5G)", subset)
+	}
+	return subset, nil
+}
+
+// VerifyRepositoryData runs `restic check --read-data-subset=<subset>`, which
+// reads repository DATA and fails on a repository that has lost or corrupted
+// its pack files.
+//
+// This is NOT the same probe as CheckRepository above, and the difference is
+// the whole point of the method (agent-os-j1jw). CheckRepository runs `restic
+// snapshots`, which reads snapshot METADATA and which restic will happily
+// serve out of the local cache at /home/appuser/.cache/restic: OBSERVED with
+// restic 0.18.0, against a repository whose data/ directory had been moved
+// away, `restic snapshots --quiet` exits 0 and prints the snapshot, while
+// `restic check --read-data` on the same repository in the same state exits 1
+// with "Fatal: repository contains errors". A restore that consults only the
+// metadata probe can therefore report success against a repository that can no
+// longer restore anything, which is the defect this exists to remove.
+//
+// No --no-cache flag is passed and none is needed: `restic check` uses a
+// temporary cache of its own rather than the shared one, and the observation
+// above was made with the shared cache warm.
+func (m *ResticManager) VerifyRepositoryData(ctx context.Context, subset string, out chan<- StreamLine) error {
+	subset, err := ValidateVerifySubset(subset)
+	if err != nil {
+		return err
+	}
+
+	pwFile, cleanup, err := m.withPasswordFile()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	// No context timeout here, unlike CheckRepository's 30s: this reads pack
+	// data and legitimately runs for minutes. Cancellation is the caller's,
+	// carried by ctx.
+	args := []string{"check", "--read-data-subset=" + subset}
+	if err := m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out); err != nil {
+		return fmt.Errorf("repository integrity check failed: %w", err)
+	}
 	return nil
 }
 

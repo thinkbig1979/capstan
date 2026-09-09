@@ -43,12 +43,12 @@ import (
 //
 // Deliberately a literal rather than a reference to the database package's own
 // count: a test that derives the expected value from the thing it is checking
-// cannot fail. Adding migration 16 is meant to fail this test and make someone
+// cannot fail. Adding migration 17 is meant to fail this test and make someone
 // look at the template — that friction is the feature. It did exactly that for
-// migration 15 (agent-os-lmbn): the template is rebuilt from the database
-// package's own migration list, so it picked 15 up automatically and only this
-// literal needed moving.
-const wantSchemaMigrations = 15
+// migration 15 (agent-os-lmbn) and again for migration 16 (agent-os-j1jw): the
+// template is rebuilt from the database package's own migration list, so it
+// picked each up automatically and only this literal needed moving.
+const wantSchemaMigrations = 16
 
 // backupSchemaTemplate returns the bytes of a fully migrated, empty Capstan
 // database, built exactly once per test binary.
