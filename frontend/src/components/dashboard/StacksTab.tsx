@@ -214,7 +214,10 @@ export function StacksTab({
               {node.name}
             </span>
             {node.stacks[0]?.isGitRepo && (
-              <GitBranch className="inline h-3 w-3 ml-1.5 text-muted-foreground align-middle" />
+              <GitBranch
+                className="inline h-3 w-3 ml-1.5 text-muted-foreground align-middle"
+                data-testid={`git-repo-group-${node.name}`}
+              />
             )}
             <span className="text-xs text-muted-foreground ml-2">
               {totalStacks} stack{totalStacks !== 1 ? 's' : ''}
