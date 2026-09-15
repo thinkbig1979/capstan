@@ -566,7 +566,19 @@ export interface BackupSettings {
   hostname: string
   resticAvailable: boolean
   rcloneAvailable: boolean
-  repositoryInitialized: boolean
+  /**
+   * Which of the repository's mutually exclusive states the last probe found,
+   * mirroring the Go constants in backend/internal/services/backup.go. `''` is
+   * "not probed" and is genuinely on the wire: both handlers build their
+   * response as a `gin.H` map, so the Go `omitempty` never applies and the key
+   * ships empty when restic is absent. The states are NOT interchangeable --
+   * `uninitialized` calls for creating a repository and `unreachable` must not,
+   * since a repository that merely went unreadable may hold every backup the
+   * user has.
+   */
+  repoState: '' | 'ok' | 'uninitialized' | 'unreachable' | 'settings_unreadable'
+  /** Human-readable cause behind a non-`ok` `repoState`. Empty when there is none. */
+  repoStateMessage: string
   /** Whether backups run on a fixed interval or at a time of day. */
   scheduleMode: 'interval' | 'scheduled'
   /** "HH:MM" in server local time. */
@@ -581,7 +593,19 @@ export interface BackupSettings {
 export interface BackupStatus {
   resticAvailable: boolean
   rcloneAvailable: boolean
-  repositoryInitialized: boolean
+  /**
+   * Which of the repository's mutually exclusive states the last probe found,
+   * mirroring the Go constants in backend/internal/services/backup.go. `''` is
+   * "not probed" and is genuinely on the wire: both handlers build their
+   * response as a `gin.H` map, so the Go `omitempty` never applies and the key
+   * ships empty when restic is absent. The states are NOT interchangeable --
+   * `uninitialized` calls for creating a repository and `unreachable` must not,
+   * since a repository that merely went unreadable may hold every backup the
+   * user has.
+   */
+  repoState: '' | 'ok' | 'uninitialized' | 'unreachable' | 'settings_unreadable'
+  /** Human-readable cause behind a non-`ok` `repoState`. Empty when there is none. */
+  repoStateMessage: string
   enabledStackCount: number
   lastRun: BackupRun | null
   nextRunAt: string | null

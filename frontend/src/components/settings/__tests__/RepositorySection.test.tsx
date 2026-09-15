@@ -28,7 +28,8 @@ function makeSettings(overrides: Partial<BackupSettings> = {}): BackupSettings {
     hostname: 'capstan',
     resticAvailable: true,
     rcloneAvailable: false,
-    repositoryInitialized: true,
+    repoState: 'ok',
+    repoStateMessage: '',
     scheduleMode: 'interval',
     scheduleTime: '03:00',
     scheduleDays: [0, 1, 2, 3, 4, 5, 6],
@@ -182,5 +183,147 @@ describe('RepositorySection credential hint', () => {
     expect(plain.getAttribute('aria-describedby')).not.toContain(
       'backup-repository-credential-hint',
     )
+  })
+})
+
+
+/**
+ * agent-os-ssqt. This section used to render a BOOLEAN -- "Initialized" /
+ * "Not initialized" -- fed by a field that measured reachability. A repository
+ * that existed but had gone unreachable therefore read "Not initialized" beside
+ * an "Initialize repository" button: the destructive recovery offered for the
+ * fault that calls for the opposite one.
+ *
+ * The arms below are deliberately two-sided on one instrument. `uninitialized`
+ * must still say "Not initialized" and must still OFFER the button, or the fix
+ * would have been bought by disabling everything.
+ */
+/**
+ * The label is read by its PROSE, not by a test id, so an arm that fails does so
+ * on the word actually on screen rather than on a missing hook. Exact string
+ * matching is load-bearing: "Initialized" must not match "Not initialized".
+ */
+const REPO_STATE_LABELS = ['Initialized', 'Not initialized', 'Unreachable', 'Unknown'] as const
+
+function repositoryStateText() {
+  const found = REPO_STATE_LABELS.filter((label) => screen.queryByText(label) !== null)
+  expect(found.length).toBe(1)
+  return found[0]
+}
+
+function repositoryStateElement() {
+  return screen.getByText(repositoryStateText())
+}
+
+function initButton() {
+  return screen.getByRole('button', { name: /initialize repository/i }) as HTMLButtonElement
+}
+
+describe('RepositorySection repository state', () => {
+  it('says Initialized only when the repository actually answered the probe', () => {
+    renderSection(makeSettings({ repoState: 'ok' }), '/data/restic-repo')
+
+    expect(repositoryStateText()).toBe('Initialized')
+    // The server does NOT refuse here — it returns 200 {"initialized": true}
+    // and creates nothing. That benign success is exactly the problem: the
+    // toast in useBackupActions reads `initialized` and would announce
+    // "Repository initialized successfully" for an operation that did not run.
+    expect(initButton().disabled).toBe(true)
+  })
+
+  it('says Not initialized and STILL offers Initialize when no repository exists', () => {
+    // The control arm. This is the one state where creating is the right
+    // recovery, and it must survive the change untouched.
+    renderSection(makeSettings({ repoState: 'uninitialized' }), '/data/restic-repo')
+
+    expect(repositoryStateText()).toBe('Not initialized')
+    expect(initButton().disabled).toBe(false)
+  })
+
+  it('does NOT claim Not initialized when the repository merely went unreachable', () => {
+    // The defect this bead exists for. A repository that holds every backup the
+    // user has must not be reported as absent, and must not be offered for
+    // creation -- the backend refuses it anyway (agent-os-81vr).
+    renderSection(
+      makeSettings({
+        repoState: 'unreachable',
+        repoStateMessage: 'repository not reachable: dial tcp: connection refused',
+      }),
+      '/data/restic-repo',
+    )
+
+    expect(repositoryStateText()).toBe('Unreachable')
+    expect(screen.queryByText('Not initialized')).toBeNull()
+    expect(initButton().disabled).toBe(true)
+    // The cause is already on the wire and was consumed by nothing; surfacing
+    // it is what turns "Unreachable" into something actionable.
+    expect(repositoryStateElement().getAttribute('title')).toContain('connection refused')
+  })
+
+  it('says Unknown when the settings naming the repository could not be read', () => {
+    // restic is PRESENT here: the settings themselves are what could not be
+    // read, so which repository is configured is itself unknown. Calling this
+    // "Unreachable" would assert a probe result nobody obtained.
+    renderSection(
+      makeSettings({ repoState: 'settings_unreadable', resticAvailable: true }),
+      '/data/restic-repo',
+    )
+
+    expect(repositoryStateText()).toBe('Unknown')
+    expect(initButton().disabled).toBe(true)
+  })
+
+  it('says Unknown when restic is absent, the only state that ships an empty repoState', () => {
+    // `resticAvailable: false ⟹ repoState: ''` is a backend INVARIANT, not a
+    // race: CheckRepository returns before probing when restic is missing, and
+    // the binary is fixed at construction. A fixture pairing '' with restic
+    // present would assert a wire shape the server cannot emit AND would leave
+    // initRefusal through its last branch where production takes its first.
+    renderSection(makeSettings({ repoState: '', resticAvailable: false }), '/data/restic-repo')
+
+    expect(repositoryStateText()).toBe('Unknown')
+    expect(initButton().disabled).toBe(true)
+    // The restic refusal outranks the repository state, and this is the branch
+    // production actually reaches. Its discriminating partner is the enabled
+    // arm above: restic PRESENT + 'uninitialized' leaves the button live, so
+    // these two together show which condition did the disabling.
+    expect(initButton().getAttribute('title')).toMatch(/restic not available/i)
+  })
+
+  /**
+   * Drift arms. Unreachable under the TYPE — deleting the index fallback makes
+   * tsc report TS7053, so the lookup is total — but reachable at RUNTIME two
+   * ways: a cached SPA bundle talking to a backend that has added a fifth
+   * state, and a response missing the key altogether. Both must fail CLOSED.
+   */
+  describe('when the wire drifts from the type', () => {
+    function withoutRepoState() {
+      const settings = makeSettings()
+      delete (settings as Partial<BackupSettings>).repoState
+      return settings
+    }
+
+    it('renders Unknown for a state this build has never heard of', () => {
+      renderSection(
+        makeSettings({ repoState: 'quantum_superposition' as BackupSettings['repoState'] }),
+        '/data/restic-repo',
+      )
+
+      expect(repositoryStateText()).toBe('Unknown')
+    })
+
+    it('renders Unknown when the key is absent altogether', () => {
+      renderSection(withoutRepoState(), '/data/restic-repo')
+
+      expect(repositoryStateText()).toBe('Unknown')
+    })
+
+    it('leaves Initialize DISABLED when the key is absent', () => {
+      // Failing closed is the whole point: an absent key must not be read as
+      // "uninitialized" and offered the one action that can lose data.
+      renderSection(withoutRepoState(), '/data/restic-repo')
+
+      expect(initButton().disabled).toBe(true)
+    })
   })
 })

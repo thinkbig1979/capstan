@@ -19,16 +19,26 @@ import { queryKeys } from '@/lib/query-keys'
 import { useQueryClient } from '@tanstack/react-query'
 import { formatRelativeTime, formatBytes } from '@/lib/format'
 
-function EngineUnavailableBanner({ resticAvailable }: { resticAvailable: boolean }) {
+function EngineUnavailableBanner({
+  resticAvailable,
+  repoStateMessage,
+}: {
+  resticAvailable: boolean
+  repoStateMessage: string
+}) {
   return (
     <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
       <div className="text-sm">
         <p className="font-medium text-amber-800 dark:text-amber-300">Backup engine unavailable</p>
         <p className="mt-0.5 text-amber-700 dark:text-amber-400">
+          {/* The server's own sentence, for the reason given in BackupToggle:
+              this arm covers unreachable and settings_unreadable as well, and
+              naming only "not initialised" would invite the one recovery that
+              destroys data when the repository is merely unreadable. */}
           {!resticAvailable
             ? 'restic is not installed. Configure backups in Settings → Backup.'
-            : 'Backup repository is not initialised. Configure backups in Settings → Backup.'}
+            : `${repoStateMessage || 'Backup repository is unavailable.'} Configure backups in Settings → Backup.`}
         </p>
       </div>
     </div>
@@ -161,8 +171,12 @@ export function BackupStatusCard() {
     )
   }
 
+  // "Can we back up RIGHT NOW", so `ok` is the only acceptable state: every
+  // other one -- uninitialized, unreachable, settings_unreadable, and the empty
+  // "not probed" -- means a backup would fail. Undefined statusData falls to
+  // unavailable, which is the safe direction.
   const engineUnavailable =
-    !statusData?.resticAvailable || !statusData?.repositoryInitialized
+    !statusData?.resticAvailable || statusData?.repoState !== 'ok'
 
   return (
     <Card>
@@ -197,7 +211,10 @@ export function BackupStatusCard() {
 
       <CardContent className="space-y-4">
         {engineUnavailable && statusData && (
-          <EngineUnavailableBanner resticAvailable={statusData.resticAvailable} />
+          <EngineUnavailableBanner
+            resticAvailable={statusData.resticAvailable}
+            repoStateMessage={statusData.repoStateMessage}
+          />
         )}
 
         {/* Status grid */}

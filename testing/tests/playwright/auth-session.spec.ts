@@ -162,7 +162,8 @@ test.describe('Auth session E2E', () => {
       '/api/v1/backups/status': {
         resticAvailable: false,
         rcloneAvailable: false,
-        repositoryInitialized: false,
+        repoState: '',
+        repoStateMessage: '',
         enabledStackCount: 0,
         lastRun: null,
         nextRunAt: null,

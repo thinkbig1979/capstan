@@ -357,7 +357,7 @@ func TestGetSettings_ShapeContainsExpectedFields(t *testing.T) {
 		"keepDaily", "keepWeekly", "keepMonthly", "keepYearly",
 		"autoPrune", "scheduleIntervalMinutes", "syncAfterBackup",
 		"rcloneRemote", "rclonePath", "rcloneTransfers", "hostname",
-		"resticAvailable", "rcloneAvailable", "repositoryInitialized",
+		"resticAvailable", "rcloneAvailable", "repoState", "repoStateMessage",
 	}
 	for _, key := range expectedKeys {
 		_, ok := body[key]
@@ -884,7 +884,7 @@ func TestGetStatus_Shape(t *testing.T) {
 	body := decodeBody(t, w)
 
 	for _, key := range []string{
-		"resticAvailable", "rcloneAvailable", "repositoryInitialized",
+		"resticAvailable", "rcloneAvailable", "repoState", "repoStateMessage",
 		"enabledStackCount", "lastRun", "schedulerRunning",
 	} {
 		_, ok := body[key]
@@ -1974,7 +1974,7 @@ func (r *recordingResticRunner) Output(
 //
 // Observed on a real container before the fix: init logged path=restic-repo and
 // created /app/restic-repo, while GET /settings/backup reported
-// /app/data/restic-repo and repositoryInitialized=false.
+// /app/data/restic-repo and a repository state of "not initialised".
 //
 // This test fails against the old code for the right reason: repoInit built its
 // own ResticManager with services.NewResticManager, bypassing the service
@@ -2865,39 +2865,70 @@ func TestRepoInit_CreatesOnlyWhenUninitialised(t *testing.T) {
 	})
 }
 
-// TestRepositoryInitializedReportsWhatItsNameSays pins acceptance criterion 6.
-// The field used to alias RepoReachable; it now reports confirmed
-// initialisation, and the three ways it can be false are told apart by the
-// repoState it ships alongside.
-func TestRepositoryInitializedReportsWhatItsNameSays(t *testing.T) {
+// TestRepoStateDiscriminatesRepositoryStatesOnTheWire replaces
+// TestRepositoryInitializedReportsWhatItsNameSays (agent-os-ssqt).
+// repositoryInitialized was one boolean over four distinct facts: its name
+// asserted "a repository exists" while its value measured "the probe answered",
+// so a repository that existed but had gone unreachable reported false and the
+// UI offered to create one. It is DELETED rather than renamed, because
+// repoState already carries the whole distinction and a second field that never
+// disagrees with the first is the thing to remove.
+//
+// The restic-absent row pins the response SHAPE rather than a value. Both
+// handlers build their body as a gin.H literal and copy the field across by
+// hand, so the `omitempty` on BackupAvailability.RepoState never applies: the
+// key ships as "" instead of being absent. The frontend union has to admit ”
+// because of this, which is why the row is here and not just in prose.
+func TestRepoStateDiscriminatesRepositoryStatesOnTheWire(t *testing.T) {
 	// Not parallel — injects a manager factory on the service.
 
 	cases := []struct {
-		name          string
-		probeExitCode int
-		initialized   bool
-		repoState     string
+		name      string
+		router    func(t *testing.T) *gin.Engine
+		repoState string
 	}{
-		{"reachable", 0, true, "ok"},
-		{"never initialised", 10, false, "uninitialized"},
-		{"exists but unreadable", 1, false, "unreachable"},
+		{"reachable", func(t *testing.T) *gin.Engine { r, _ := backupProbeRouter(t, 0); return r }, "ok"},
+		{"never initialised", func(t *testing.T) *gin.Engine { r, _ := backupProbeRouter(t, 10); return r }, "uninitialized"},
+		{"exists but unreadable", func(t *testing.T) *gin.Engine { r, _ := backupProbeRouter(t, 1); return r }, "unreachable"},
+		{"restic absent", backupNoResticRouter, ""},
 	}
 
 	for _, endpoint := range []string{"/api/backups/status", "/api/settings/backup"} {
 		for _, tc := range cases {
 			t.Run(endpoint+"/"+tc.name, func(t *testing.T) {
-				r, _ := backupProbeRouter(t, tc.probeExitCode)
+				r := tc.router(t)
 
 				w := httptest.NewRecorder()
 				r.ServeHTTP(w, jsonReq(t, http.MethodGet, endpoint, nil))
 
 				require.Equal(t, http.StatusOK, w.Code)
 				body := decodeBody(t, w)
-				assert.Equal(t, tc.initialized, body["repositoryInitialized"],
-					"repositoryInitialized must mean the repository has been initialised")
-				assert.Equal(t, tc.repoState, body["repoState"],
-					"the state must be on the wire so a client can tell the three false cases apart")
+
+				state, present := body["repoState"]
+				require.True(t, present,
+					"repoState must be on the wire in every state, including the one that never probed")
+				assert.Equal(t, tc.repoState, state,
+					"the state must be on the wire so a client can tell the fault cases apart")
+
+				_, stale := body["repositoryInitialized"]
+				assert.False(t, stale,
+					"repositoryInitialized asserted a distinction its value did not carry; it is deleted, not renamed")
 			})
 		}
 	}
+}
+
+// backupNoResticRouter builds the handler with no restic binary — the one state
+// in which CheckRepository returns before probing, leaving RepoState empty.
+func backupNoResticRouter(t *testing.T) *gin.Engine {
+	t.Helper()
+
+	db := newBackupHandlerDB(t)
+	svc := buildBackupSvc(t, db, false, false)
+
+	h := NewBackupHandler(svc, db, slog.Default())
+	// See agent-os-80n: h.Stop() must run before the DB and TempDir cleanups
+	// registered above, and t.Cleanup runs LIFO.
+	t.Cleanup(h.Stop)
+	return newBackupRouter(h)
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BackupToggle } from '../BackupToggle'
+import type { BackupStatus } from '@/types'
 
 // Radix UI Select uses scrollIntoView internally; jsdom does not implement it.
 window.HTMLElement.prototype.scrollIntoView = vi.fn()
@@ -47,12 +48,17 @@ function makePolicy(enabled: boolean, stopPolicy: 'stop' | 'hot' = 'stop') {
   }
 }
 
-function makeStatus(resticAvailable = true, repositoryInitialized = true) {
+function makeStatus(
+  resticAvailable = true,
+  repoState: BackupStatus['repoState'] = 'ok',
+  repoStateMessage = '',
+) {
   return {
     data: {
       resticAvailable,
       rcloneAvailable: true,
-      repositoryInitialized,
+      repoState,
+      repoStateMessage,
       enabledStackCount: 1,
       lastRun: null,
       nextRunAt: null,
@@ -67,7 +73,8 @@ function makeStatusWithLastRun(status: 'success' | 'failed' | 'interrupted') {
     data: {
       resticAvailable: true,
       rcloneAvailable: true,
-      repositoryInitialized: true,
+      repoState: 'ok',
+      repoStateMessage: '',
       enabledStackCount: 1,
       lastRun: {
         id: 'run-1',
@@ -102,21 +109,45 @@ beforeEach(() => {
 
 describe('BackupToggle — disabled state (engine unavailable)', () => {
   it('renders a disabled switch when restic is not available', () => {
-    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatus(false, false))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatus(false, ''))
     render(<BackupToggle stackId={STACK_ID} />)
 
     expect(screen.getByRole('switch')).toBeDisabled()
   })
 
   it('renders a disabled switch when repository is not initialized', () => {
-    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatus(true, false))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatus(true, 'uninitialized'))
     render(<BackupToggle stackId={STACK_ID} />)
 
     expect(screen.getByRole('switch')).toBeDisabled()
   })
 
+  it('renders a disabled switch when the repository EXISTS but is unreachable', () => {
+    // agent-os-ssqt. The predicate is repoState === 'ok', not "not
+    // uninitialized": a repository that went unreachable cannot be backed up
+    // either, and the old boolean happened to cover this only by accident.
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeStatus(true, 'unreachable'),
+    )
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    expect(screen.getByRole('switch')).toBeDisabled()
+  })
+
+  it('renders an ENABLED switch when the repository is reachable and initialised', () => {
+    // The control arm (agent-os-ssqt criterion 4). Without it every assertion
+    // above is satisfied by a component that disables the switch unconditionally.
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatus(true, 'ok'))
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    expect(screen.getByRole('switch')).not.toBeDisabled()
+    expect(
+      document.querySelector(`[data-testid="backup-toggle-disabled-${STACK_ID}"]`),
+    ).not.toBeInTheDocument()
+  })
+
   it('uses the data-testid for the disabled wrapper', () => {
-    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatus(false, false))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatus(false, ''))
     render(<BackupToggle stackId={STACK_ID} />)
 
     expect(document.querySelector(`[data-testid="backup-toggle-disabled-${STACK_ID}"]`)).toBeInTheDocument()
@@ -193,7 +224,7 @@ describe('BackupToggle — toggle interaction', () => {
   })
 
   it('does not call mutate when switch is disabled (engine unavailable)', () => {
-    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatus(false, false))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatus(false, ''))
     render(<BackupToggle stackId={STACK_ID} />)
 
     fireEvent.click(screen.getByRole('switch'))
@@ -336,5 +367,65 @@ describe('BackupToggle — showLastRunStatus=false suppresses the icon', () => {
     render(<BackupToggle stackId={STACK_ID} showLastRunStatus />)
 
     expect(screen.getByLabelText('Last backup succeeded')).toBeInTheDocument()
+  })
+})
+
+/**
+ * agent-os-ssqt, the in-class sibling. The locked tooltip's else-arm is reached
+ * by `unreachable`, `settings_unreadable` and `''` as well as `uninitialized`,
+ * so a hardcoded "Backup repository not initialised." asserted the same
+ * falsehood the deleted boolean did -- in prose, where no sweep keyed on the
+ * field name could ever find it. It now renders the server's own sentence.
+ */
+describe('BackupToggle — the locked tooltip names the fault the server found', () => {
+  function lockedTooltipText(status: ReturnType<typeof makeStatus>) {
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(status)
+    render(<BackupToggle stackId={STACK_ID} />)
+    const trigger = document.querySelector(
+      `[data-testid="backup-toggle-disabled-${STACK_ID}"]`,
+    ) as HTMLElement
+    fireEvent.focus(trigger)
+    return screen.getByRole('tooltip').textContent ?? ''
+  }
+
+  it('names the unreachable cause and does NOT claim the repository is uninitialised', () => {
+    // The load-bearing arm. A repository that went unreachable still holds
+    // every backup the user has; telling them it was never initialised invites
+    // the one recovery that replaces it with an empty one.
+    const text = lockedTooltipText(
+      makeStatus(true, 'unreachable', 'repository not reachable: connection refused'),
+    )
+
+    expect(text).toContain('repository not reachable: connection refused')
+    expect(text).not.toMatch(/not initialised/i)
+  })
+
+  it('does NOT claim uninitialised when the settings themselves could not be read', () => {
+    const text = lockedTooltipText(
+      makeStatus(
+        true,
+        'settings_unreadable',
+        'backup settings could not be read; repository state is unknown',
+      ),
+    )
+
+    expect(text).toContain('backup settings could not be read')
+    expect(text).not.toMatch(/not initialised/i)
+  })
+
+  it('still says so when the repository genuinely has never been initialised', () => {
+    // The control. The claim was never wrong in THIS state, and the fix must
+    // not have been bought by removing a true sentence along with the false one.
+    const text = lockedTooltipText(
+      makeStatus(true, 'uninitialized', 'backup repository has not been initialised yet'),
+    )
+
+    expect(text).toContain('backup repository has not been initialised yet')
+  })
+
+  it('leaves the restic-absent arm alone', () => {
+    const text = lockedTooltipText(makeStatus(false, '', 'restic binary not found in PATH'))
+
+    expect(text).toContain('restic / rclone not installed.')
   })
 })
