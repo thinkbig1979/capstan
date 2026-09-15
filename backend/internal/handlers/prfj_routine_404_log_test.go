@@ -202,12 +202,18 @@ func TestHandleError_RoutineMarkerDoesNotDisturbLogServerFault(t *testing.T) {
 // the level rule there.
 //
 // models.ErrNotFound is the row that matters. It is deliberately NOT in
-// routineErrorCodes even though two in-class sites in handlers/env.go answer
-// with it (agent-os-hjmf, "No env file associated with this stack"), because
-// the SAME code is also the genuine "Stack not found" client error. Adding it
-// to the list would silence both. Those sites must call
+// routineErrorCodes even though an in-class site in handlers/env.go answers
+// with it (agent-os-hjmf, "No env file associated with this stack" on the
+// write path), because the SAME code is also the genuine "Stack not found"
+// client error. Adding it to the list would silence both. That site must call
 // middleware.MarkRoutineOutcome directly instead, and this assertion is what
 // stops the shortcut being taken here.
+//
+// It was two sites until agent-os-bt5y made the READ path answer that state
+// 200 with a `hasEnvFile` discriminator instead of a 404; only the write path
+// still mints it. Nothing about the argument above changes — one site needing
+// the per-site marker is as much reason to keep ErrNotFound off the list as
+// two were.
 func TestHandleError_MarksOnlyListedCodes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

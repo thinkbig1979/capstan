@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
-import type { EnvEntry } from '@/types'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { EnvUnlockDialog } from '@/components/EnvUnlockDialog'
 import { useAuth } from '@/hooks/useAuth'
@@ -62,20 +61,16 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     nextRowId,
   })
 
+  // No 404 branch. "This stack has no env file" arrives as a 200 carrying
+  // `hasEnvFile: false` (agent-os-bt5y), so a catch-404-return-null here would
+  // not be dead code — it would be live and wrong. Two states still answer
+  // 404: an unknown stack, and a configured env file missing from disk. It
+  // would swallow both and render them as "no env file", hiding a real fault
+  // behind an empty editor. Only the no-env-file 404 stopped existing; those
+  // two belong in isError.
   const { data: envData, isLoading, isError } = useQuery({
     queryKey: queryKeys.stack.env(stackId),
-    queryFn: async () => {
-      try {
-        const data = await stacksApi.getEnv(stackId)
-        return data as { filename: string; entries: EnvEntry[]; raw?: string; locked?: boolean } | undefined
-      } catch (error: unknown) {
-        const err = error as { response?: { status?: number }; status?: number }
-        if (err.response?.status === 404 || err.status === 404) {
-          return null
-        }
-        throw error
-      }
-    },
+    queryFn: () => stacksApi.getEnv(stackId),
   })
 
   // Hydrate local editable state whenever a new envData query result arrives.
@@ -85,7 +80,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   const [prevEnvData, setPrevEnvData] = useState(envData)
   if (envData !== prevEnvData) {
     setPrevEnvData(envData)
-    if (envData) {
+    if (envData?.hasEnvFile) {
       // A reveal is stored as `sensitive: false` on the row itself, so a refetch
       // would silently re-mask whatever the user had uncovered. That refetch is
       // now routine: unlocking invalidates this query to swap the blanked values
@@ -126,7 +121,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // The backend redacted this payload: sensitive values arrived blank and there
   // is no raw file. Editing is therefore off the table until the unlock window
   // opens — saving would persist the blanks, and the backend 403s the write.
-  const locked = envData?.locked === true
+  const locked = envData?.hasEnvFile === true && envData.locked === true
 
   if (isLoading) {
     return <EnvLoadingState />
@@ -140,8 +135,9 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
     )
   }
 
-  // envData === null means the backend returned 404 (no env file).
-  // showEnvSection is set to true either after a successful create or when data loads.
+  // `hasEnvFile: false` is the backend saying this stack has no env file — a
+  // 200, not a 404 (agent-os-bt5y). showEnvSection is set to true either after
+  // a successful create or when a file-present payload loads.
   if (!showEnvSection) {
     return (
       <EnvNoFileState

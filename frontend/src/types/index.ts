@@ -219,6 +219,64 @@ export interface EnvEntry {
   comment?: boolean
 }
 
+/**
+ * GET /api/v1/stacks/:id/env, file-present branch.
+ *
+ * `raw` is absent and `locked` is true when the request carried no live unlock
+ * token: the backend withholds every secret value in that state, so a locked
+ * payload must never be saved back — it would persist the blanks
+ * (agent-os-7o5s).
+ *
+ * An absent `raw` does NOT by itself mean "withheld". The backend tags it
+ * `json:"raw,omitempty"`, so a genuinely empty file omits it too. MEASURED
+ * against the real handler, all four combinations:
+ *
+ *   empty  + unlocked -> {"hasEnvFile":true,"filename":".env","entries":[]}
+ *   empty  + locked   -> {... ,"entries":[],"locked":true}
+ *   secret + locked   -> {... ,"entries":[{...,"value":""}],"locked":true}
+ *   secret + unlocked -> {... ,"raw":"API_KEY=s3cret\nTZ=UTC\n"}
+ *
+ * So `locked` IS the discriminator, and it is the only one: read `locked`,
+ * never the absence of `raw`. `locked !== true` with no `raw` means the file
+ * is genuinely empty; `locked === true` means the server withheld it. Writing
+ * `if (!raw) { ...assume withheld... }` gets an empty file wrong.
+ *
+ * `entries` is always an array, never null, including for an empty file —
+ * parseEnvFile mints `[]EnvEntry{}` rather than a nil slice precisely so this
+ * type can be non-nullable (agent-os-bt5y).
+ */
+export interface EnvFilePresent {
+  hasEnvFile: true
+  filename: string
+  entries: EnvEntry[]
+  raw?: string
+  locked?: boolean
+}
+
+/**
+ * GET /api/v1/stacks/:id/env, no-file branch: a 200, because most stacks have
+ * no env file and that is ordinary configuration rather than a client error
+ * (agent-os-bt5y). A 404 here painted a red entry in the browser DevTools
+ * console every time the Editor tab was opened on such a stack; the status is
+ * what produces that line, so demoting the server log level (agent-os-hjmf)
+ * could not reach it.
+ *
+ * `filename` and `entries` are ABSENT rather than empty, for the reason
+ * agent-os-x40a gave on GET /api/v1/git: a `filename: ''` with `entries: []`
+ * is indistinguishable from an empty file that really exists. The union below
+ * turns a read of either into a compile error.
+ *
+ * A stack whose CONFIGURED env file has vanished from disk is a different
+ * state and still an error (404 NOT_FOUND, "Env file not found on disk") — it
+ * never arrives here. So is a PUT for a stack with no env file: that write
+ * cannot be fulfilled and keeps its 404.
+ */
+export interface EnvFileAbsent {
+  hasEnvFile: false
+}
+
+export type EnvFileResponse = EnvFilePresent | EnvFileAbsent
+
 export interface CommandResult {
   status: string
   output: string

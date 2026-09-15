@@ -23,6 +23,7 @@ import type {
   UpdateSettings,
   RetentionSettings,
   UpdateHistoryFilters,
+  EnvFileResponse,
   GitStatus,
   GitCommit,
   BackupPolicy,
@@ -426,13 +427,17 @@ export const stacksApi = {
   },
 
   /**
-   * `raw` is absent and `locked` is true when the request carried no live unlock
-   * token: the backend withholds every secret value in that state, so a locked
-   * payload must never be saved back — it would persist the blanks
+   * Always resolves for a stack that exists: a stack with no env file answers
+   * 200 with `hasEnvFile: false` rather than 404 (agent-os-bt5y), so callers
+   * discriminate on the field and must NOT catch a 404 to detect that state.
+   * A rejection here is a real fault — an unknown stack, or a configured env
+   * file that has vanished from disk.
+   *
+   * See EnvFilePresent for why `raw` can be absent on the present branch
    * (agent-os-7o5s).
    */
   getEnv: async (id: string) => {
-    const response = await apiClient.get<{ filename: string; entries: Array<{ key: string; value: string; line: number; sensitive: boolean; comment: boolean }>; raw?: string; locked?: boolean }>(`/stacks/${encodeURIComponent(id)}/env`)
+    const response = await apiClient.get<EnvFileResponse>(`/stacks/${encodeURIComponent(id)}/env`)
     return response.data
   },
 

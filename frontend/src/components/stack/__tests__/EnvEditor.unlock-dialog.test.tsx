@@ -44,6 +44,7 @@ import { EnvEditor } from '../EnvEditor'
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const envDataWithSensitive = {
+  hasEnvFile: true,
   filename: '.env',
   entries: [{ key: 'API_KEY', value: 'secret-value', sensitive: true, comment: false, line: 1 }],
   raw: 'API_KEY=secret-value\n',

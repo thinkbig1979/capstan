@@ -39,6 +39,7 @@ import { EnvEditor } from '../EnvEditor'
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const twoEntryEnvData = {
+  hasEnvFile: true,
   filename: '.env',
   entries: [
     { key: 'PORT', value: '8080', sensitive: false, comment: false, line: 1 },
@@ -92,6 +93,7 @@ describe('EnvEditor entry editing', () => {
   it('editing a key to match a sensitive pattern flips the row to masked rendering', async () => {
     const user = userEvent.setup()
     mockGetEnv.mockResolvedValue({
+      hasEnvFile: true,
       filename: '.env',
       entries: [{ key: 'FOO', value: 'bar', sensitive: false, comment: false, line: 1 }],
       raw: 'FOO=bar\n',
@@ -116,6 +118,7 @@ describe('EnvEditor entry editing', () => {
 
   it('renders comment rows with a disabled, non-editable key input and italic value', async () => {
     mockGetEnv.mockResolvedValue({
+      hasEnvFile: true,
       filename: '.env',
       entries: [
         { key: '', value: '# a leading comment', sensitive: false, comment: true, line: 1 },
@@ -137,6 +140,7 @@ describe('EnvEditor entry editing', () => {
 
   it('disables the Visible checkbox whenever the key matches a sensitive naming pattern, regardless of the stored flag', async () => {
     mockGetEnv.mockResolvedValue({
+      hasEnvFile: true,
       filename: '.env',
       entries: [{ key: 'DB_PASSWORD', value: 'x', sensitive: false, comment: false, line: 1 }],
       raw: 'DB_PASSWORD=x\n',

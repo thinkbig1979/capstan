@@ -34,17 +34,23 @@ type EnvEntry struct {
 	Comment   bool   `json:"comment,omitempty"`
 }
 
-// EnvResponse is the wire shape of GET /:id/env.
+// EnvResponse is the wire shape of GET /:id/env when the stack HAS an env file.
+//
+// HasEnvFile is always true here and is not omitempty: the no-file answer is a
+// separate 200 payload carrying `{"hasEnvFile": false}` and nothing else
+// (agent-os-bt5y), so the field has to be present on both branches for a client
+// to discriminate on it.
 //
 // Raw is omitempty and Locked is set because the response is redacted for a
 // session that has not re-entered its password: see redactEnvResponse. A caller
 // must therefore treat a missing "raw" as "not authorised to see it", not as
 // "the file is empty" — Locked tells the two apart.
 type EnvResponse struct {
-	Filename string     `json:"filename"`
-	Entries  []EnvEntry `json:"entries"`
-	Raw      string     `json:"raw,omitempty"`
-	Locked   bool       `json:"locked,omitempty"`
+	HasEnvFile bool       `json:"hasEnvFile"`
+	Filename   string     `json:"filename"`
+	Entries    []EnvEntry `json:"entries"`
+	Raw        string     `json:"raw,omitempty"`
+	Locked     bool       `json:"locked,omitempty"`
 }
 
 type EnvRequest struct {
@@ -85,21 +91,27 @@ func (h *EnvHandler) Get(c *gin.Context) {
 		return
 	}
 
-	// A stack with no env file is ordinary configuration, not a client mistake,
-	// and the frontend asks this of every stack whose Env tab is opened — so
-	// without the marker this 404 fills the log with warnings nobody can act on
-	// (agent-os-hjmf). Marked per-site rather than by adding models.ErrNotFound
-	// to respond.go's routineErrorCodes, because the SAME code answers the
-	// genuine "Stack not found" above and "Env file not found on disk" below,
-	// both of which must keep warning. prfj_routine_404_log_test.go's
-	// TestHandleError_MarksOnlyListedCodes pins ErrNotFound out of that list.
+	// A stack with no env file is ordinary configuration, not a client mistake:
+	// most stacks have none, and the frontend asks this of every stack whose
+	// Editor tab is opened. Answering 200 with an explicit discriminator rather
+	// than a 404 is what keeps that from painting a red entry in the browser
+	// console (agent-os-bt5y) — the console line is produced by the STATUS, so
+	// agent-os-hjmf's demotion of the log level could not reach it.
+	//
+	// The env-file fields — filename, entries, raw, locked — are absent rather
+	// than zero-valued, mirroring the shape agent-os-x40a and agent-os-4a4a
+	// settled on for GET /api/v1/git: a `filename: ""` with `entries: []` would
+	// be indistinguishable from an empty file that really exists, which is a
+	// state this endpoint genuinely has and answers separately.
+	//
+	// "Configured env file missing from disk" below keeps its 404 and is NOT
+	// this state: the DB and the filesystem disagreeing is something that went
+	// wrong, and fusing the two is the regression this change must not make.
+	// The write path keeps its 404 too — a PUT naming env content for a stack
+	// with no env file cannot be fulfilled, and there is a separate verb for
+	// it (Create, POST /stacks/:id/env).
 	if stack.EnvFile == "" {
-		middleware.MarkRoutineOutcome(c)
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrNotFound,
-			"No env file associated with this stack",
-		))
+		c.JSON(http.StatusOK, gin.H{"hasEnvFile": false})
 		return
 	}
 
@@ -132,10 +144,11 @@ func (h *EnvHandler) Get(c *gin.Context) {
 	entries := h.parseEnvFile(string(content))
 
 	resp := EnvResponse{
-		Filename: stack.EnvFile,
-		Entries:  entries,
-		Raw:      string(content),
-		Locked:   !envUnlocked(c),
+		HasEnvFile: true,
+		Filename:   stack.EnvFile,
+		Entries:    entries,
+		Raw:        string(content),
+		Locked:     !envUnlocked(c),
 	}
 	if resp.Locked {
 		redactEnvResponse(&resp)
@@ -205,8 +218,18 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		return
 	}
 
-	// Routine for the same reason as the read path above (agent-os-hjmf); the
-	// write path mints the identical answer and so needs the identical marker.
+	// The write path keeps the 404 that the read path above gave up
+	// (agent-os-bt5y): a PUT naming env content for a stack with no env file
+	// CANNOT be fulfilled, so a 200 here would report success on a write that
+	// never happened. It is also a client mistake in its own right — POST to
+	// Create is the verb for this — which is why it is out of the class bt5y
+	// changed. So the marker stays: this is still a 404 that must not WARN
+	// (agent-os-hjmf). It is marked per-site rather than by adding
+	// models.ErrNotFound to respond.go's routineErrorCodes, because the SAME
+	// code answers the genuine "Stack not found" above and "Env file not found
+	// on disk" in Get, both of which must keep warning.
+	// prfj_routine_404_log_test.go's TestHandleError_MarksOnlyListedCodes pins
+	// ErrNotFound out of that list.
 	if stack.EnvFile == "" {
 		middleware.MarkRoutineOutcome(c)
 		c.JSON(http.StatusNotFound, models.NewAppError(
@@ -459,7 +482,13 @@ func verifyEnvRoundTrip(envPath, intended string) *truth.ActionResult {
 }
 
 func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
-	var entries []EnvEntry
+	// Empty, not nil: an existing but empty env file yields zero iterations
+	// below, and a nil slice serialises as `"entries": null`. EnvResponse.Entries
+	// is declared to the frontend as a non-nullable array (EnvFilePresent in
+	// types/index.ts), which EnvEditor maps over unguarded — a null is a
+	// TypeError there. The contract is made true here, where the value is
+	// minted, rather than by widening the client type to admit the null.
+	entries := []EnvEntry{}
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	lineNum := 0
 

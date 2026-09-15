@@ -48,6 +48,7 @@ describe('EnvEditor row identity stability', () => {
   it('typing a key character-by-character keeps the row mounted and completes every keystroke', async () => {
     const user = userEvent.setup()
     mockGetEnv.mockResolvedValue({
+      hasEnvFile: true,
       filename: '.env',
       entries: [{ key: 'FOO', value: 'bar', sensitive: false, comment: false, line: 1 }],
       raw: 'FOO=bar\n',
@@ -68,6 +69,7 @@ describe('EnvEditor row identity stability', () => {
   it("a row's underlying DOM node survives editing its own key field (desktop table row)", async () => {
     const user = userEvent.setup()
     mockGetEnv.mockResolvedValue({
+      hasEnvFile: true,
       filename: '.env',
       entries: [{ key: 'FOO', value: 'bar', sensitive: false, comment: false, line: 1 }],
       raw: 'FOO=bar\n',

@@ -40,6 +40,7 @@ import { EnvEditor } from '../EnvEditor'
 
 /** What the backend sends without a valid unlock token: blanks, and no `raw`. */
 const lockedPayload = {
+  hasEnvFile: true,
   filename: '.env',
   locked: true,
   entries: [
@@ -50,6 +51,7 @@ const lockedPayload = {
 
 /** What it sends once the token is in play. */
 const unlockedPayload = {
+  hasEnvFile: true,
   filename: '.env',
   entries: [
     { key: 'API_KEY', value: 'secret-value', sensitive: true, comment: false, line: 1 },
