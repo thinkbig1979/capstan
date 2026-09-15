@@ -100,7 +100,18 @@ const (
 // RepoState is empty on any value that did not probe the repository —
 // Available() never does, and CheckRepository returns before probing when
 // restic is absent. Empty therefore means "not probed", which is why it is
-// omitempty rather than defaulted to one of the four states.
+// omitempty rather than defaulted to one of the six states.
+//
+// Note that "not probed" now covers two different reasons, and only the first
+// leaves RepoState empty: restic absent returns before a state is assigned,
+// while a missing password returns WITH RepoStatePasswordMissing. The second is
+// a probe result — "there is nothing to probe with" is a finding about the
+// repository's readability, and the operator needs it named.
+//
+// Message is empty on RepoStateOK and is CLEARED there explicitly, because
+// Available() sets one when rclone is absent and that value would otherwise
+// travel through CheckRepository's OK branch and be shipped to the UI as the
+// explanation for a healthy repository.
 type BackupAvailability struct {
 	ResticPresent bool      `json:"resticPresent"`
 	RclonePresent bool      `json:"rclonePresent"`
