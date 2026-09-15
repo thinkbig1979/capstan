@@ -39,6 +39,7 @@ import { EnvEditor } from '../EnvEditor'
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const baseEnvData = {
+  hasEnvFile: true,
   filename: '.env',
   entries: [{ key: 'PORT', value: '8080', sensitive: false, comment: false, line: 1 }],
   raw: 'PORT=8080\n',

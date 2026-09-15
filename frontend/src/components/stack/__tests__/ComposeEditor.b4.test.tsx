@@ -146,7 +146,7 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
 
   it('atomic: updateComposeAndEnv called once with (id, composeContent, envRaw) and no sequential puts', async () => {
     await withSelection('nginx')
-    mockGetEnv.mockResolvedValue({ filename: '.env', raw: 'EXISTING=1\n', entries: [] })
+    mockGetEnv.mockResolvedValue({ hasEnvFile: true, filename: '.env', raw: 'EXISTING=1\n', entries: [] })
     mockUpdateComposeAndEnv.mockResolvedValue({ outcome: 'success', reason: 'compose and env saved' })
 
     const user = userEvent.setup()
@@ -194,7 +194,7 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
 
   it('fallback: when atomic 404s, env is written BEFORE compose (safe ordering)', async () => {
     await withSelection('nginx')
-    mockGetEnv.mockResolvedValue({ filename: '.env', raw: '', entries: [] })
+    mockGetEnv.mockResolvedValue({ hasEnvFile: true, filename: '.env', raw: '', entries: [] })
     mockUpdateComposeAndEnv.mockRejectedValue({ status: 404 })
     // Both sequential puts succeed
     mockApiPut.mockResolvedValue({ data: { saved: true } })
@@ -234,7 +234,7 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
 
   it('non-404 atomic error → toast.error, no sequential fallback', async () => {
     await withSelection('nginx')
-    mockGetEnv.mockResolvedValue({ filename: '.env', raw: '', entries: [] })
+    mockGetEnv.mockResolvedValue({ hasEnvFile: true, filename: '.env', raw: '', entries: [] })
     mockUpdateComposeAndEnv.mockRejectedValue({ status: 500 })
 
     const user = userEvent.setup()
@@ -260,7 +260,7 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
 
   it('failed ActionResult from atomic endpoint → toast.error with backend reason', async () => {
     await withSelection('nginx')
-    mockGetEnv.mockResolvedValue({ filename: '.env', raw: '', entries: [] })
+    mockGetEnv.mockResolvedValue({ hasEnvFile: true, filename: '.env', raw: '', entries: [] })
     mockUpdateComposeAndEnv.mockResolvedValue({
       outcome: 'failed',
       reason: 'Compose validation failed',

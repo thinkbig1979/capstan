@@ -74,11 +74,18 @@ export function useExtractToEnv({
       let currentEnv = ''
       try {
         const envData = await stacksApi.getEnv(stackId)
-        if (envData?.raw) {
+        // `hasEnvFile: false` is the no-file answer and arrives as a 200
+        // (agent-os-bt5y) — the endpoint will create the file.
+        if (envData.hasEnvFile && envData.raw) {
           currentEnv = envData.raw
         }
       } catch {
-        // No .env file yet — the atomic endpoint will create it.
+        // Swallows EVERY read failure, not an enumerated set: a 500 on an
+        // existing .env (e.g. EACCES) lands here too, leaving currentEnv '' so
+        // the atomic write below replaces a file we could not read with a
+        // single line. Pre-existing and deliberately left alone by
+        // agent-os-bt5y; noted so the next reader does not mistake this for a
+        // checked-safe catch.
       }
 
       const newEnvLine = `${varName}=${selectedText}`

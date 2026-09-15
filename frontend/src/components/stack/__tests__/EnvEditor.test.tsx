@@ -33,6 +33,7 @@ import { toast } from 'sonner'
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const baseEnvData = {
+  hasEnvFile: true,
   filename: '.env',
   entries: [
     { key: 'PORT', value: '8080', sensitive: false, comment: false, line: 1 },
@@ -55,17 +56,39 @@ describe('EnvEditor', () => {
     expect(screen.getByText('Loading...')).toBeInTheDocument()
   })
 
-  it('shows no env file message when GET returns 404', async () => {
-    mockGetEnv.mockRejectedValue({ status: 404 })
+  // Three arms on one instrument, because the fix that removes the console
+  // error is also the fix that could swallow a real fault. `hasEnvFile: false`
+  // is a 200 (agent-os-bt5y) and must reach the no-file state; a REJECTION is
+  // a fault — an unknown stack, or a configured env file that has vanished
+  // from disk, which the backend still answers 404 — and must reach the error
+  // state, not the no-file state; and the present payload must still render
+  // the editor. An arm that only checked the first would pass just as well if
+  // the component treated every failure as "no env file".
+  it('shows the no env file message when GET answers 200 with hasEnvFile false', async () => {
+    mockGetEnv.mockResolvedValue({ hasEnvFile: false })
     renderWithProviders(<EnvEditor stackId="test-stack" />)
 
     await vi.waitFor(() => {
       expect(screen.getByText('No environment file found for this stack')).toBeInTheDocument()
     })
+    expect(screen.queryByText('Failed to load environment file')).not.toBeInTheDocument()
+  })
+
+  it('shows the error state, NOT the no-env-file state, when GET rejects', async () => {
+    mockGetEnv.mockRejectedValue({ status: 404, message: 'Env file not found on disk' })
+    renderWithProviders(<EnvEditor stackId="test-stack" />)
+
+    await vi.waitFor(() => {
+      expect(screen.getByText('Failed to load environment file')).toBeInTheDocument()
+    })
+    expect(
+      screen.queryByText('No environment file found for this stack'),
+    ).not.toBeInTheDocument()
   })
 
   it('renders table view with env entries', async () => {
     mockGetEnv.mockResolvedValue({
+      hasEnvFile: true,
       filename: '.env',
       entries: [
         { key: 'PORT', value: '8080', sensitive: false, comment: false, line: 1 },
@@ -92,6 +115,7 @@ describe('EnvEditor', () => {
 
   it('masks sensitive values with password input', async () => {
     mockGetEnv.mockResolvedValue({
+      hasEnvFile: true,
       filename: '.env',
       entries: [
         { key: 'API_KEY', value: 'secret', sensitive: true, comment: false, line: 1 },
@@ -226,7 +250,7 @@ describe('EnvEditor', () => {
 
   it('Create Environment File button calls createEnv and reveals editor on success', async () => {
     // GET returns 404 → no env file
-    mockGetEnv.mockRejectedValue({ status: 404 })
+    mockGetEnv.mockResolvedValue({ hasEnvFile: false })
     mockCreateEnv.mockResolvedValue({ outcome: 'success', reason: 'Created' })
 
     const user = userEvent.setup()
@@ -247,7 +271,7 @@ describe('EnvEditor', () => {
   })
 
   it('Create Environment File button shows error when createEnv fails', async () => {
-    mockGetEnv.mockRejectedValue({ status: 404 })
+    mockGetEnv.mockResolvedValue({ hasEnvFile: false })
     mockCreateEnv.mockResolvedValue({ outcome: 'failed', reason: 'No permission' })
 
     const user = userEvent.setup()

@@ -73,9 +73,16 @@ func routine404Fixture(t *testing.T) (*gin.Engine, string, string) {
 	return r, noEnvID, missingEnvID
 }
 
-// TestEnvHandler_RoutineNoEnvFile404LogLevel is the pin for agent-os-hjmf: a
-// stack with no env file is an ordinary state, so asking for its env must not
-// write a WARN line.
+// TestEnvHandler_RoutineNoEnvFile404LogLevel is the pin for agent-os-hjmf:
+// PUT-ing env content to a stack with no env file is a routine refusal, so it
+// must not write a WARN line.
+//
+// It reads as a GET test and is not one. Until agent-os-bt5y the same claim
+// held for the read path, and the first row here was a GET. That row is gone
+// because the state no longer produces a log line to level at all: the read
+// path answers 200 with a hasEnvFile discriminator, and
+// TestEnvHandler_Get_NoEnvFileIs200WithDiscriminator is where the GET half of
+// this argument now lives.
 //
 // The routine rows are only half the test, and the smaller half. The three
 // must-still-WARN rows are what distinguishes the fix from the two ways of
@@ -84,9 +91,20 @@ func routine404Fixture(t *testing.T) (*gin.Engine, string, string) {
 // The second of those is separately trapped by
 // TestHandleError_MarksOnlyListedCodes in prfj_routine_404_log_test.go; the
 // first is trapped only here, because "Env file not found on disk" is minted
-// by the same handler, with the same status, and even with the same
+// by the same EnvHandler, with the same status, and even with the same
 // models.ErrNotFound code as the routine answer. Nothing but a per-site marker
-// separates those two rows.
+// separates those two rows — VERIFIED by mutation, not by reading: adding
+// middleware.MarkRoutineOutcome at that site under `go test -overlay` turns
+// the missing-on-disk row from WARN to INFO and it fails.
+//
+// KNOWN WEAKER SINCE bt5y, and worth knowing before trusting this file. The
+// routine/non-routine contrast used to be two GETs differing only in the
+// marker. It is now cross-method: PUT-routine against GET-warn. Both failure
+// modes are still trapped — blanket-marking Get flips "GET env file missing on
+// disk", and blanket-marking Put flips "PUT unknown stack" — so the test still
+// does its job, but it no longer isolates the marker within a single method.
+// A future reader adding a row should not assume the within-method comparison
+// is still available here.
 func TestEnvHandler_RoutineNoEnvFile404LogLevel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -99,16 +117,14 @@ func TestEnvHandler_RoutineNoEnvFile404LogLevel(t *testing.T) {
 		body   string
 		want   string
 	}{
+		// No GET row for the no-env-file case: the loop below asserts 404 on
+		// every row, and that state answers 200 since bt5y, so the row was
+		// deleted rather than retargeted. See the docblock above.
 		{
-			name:   "GET no env file is routine: Info",
-			method: http.MethodGet,
-			id:     noEnvID,
-			want:   "INFO",
-		},
-		{
-			// The same in-class response is minted a second time on the write
-			// path, so the marker has to be applied at both sites. A fix that
-			// touched only Get leaves this row red.
+			// The write path still mints the in-class 404 (a PUT for a stack
+			// with no env file cannot be fulfilled), so the marker still has to
+			// be applied at that site. This row is what holds it in place now
+			// that Get no longer carries one.
 			name:   "PUT no env file is routine: Info",
 			method: http.MethodPut,
 			id:     noEnvID,

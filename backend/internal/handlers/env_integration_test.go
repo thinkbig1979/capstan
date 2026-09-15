@@ -93,13 +93,17 @@ func TestEnvHandler_Get_NoEnvFile(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	// 200, not 404: having no env file is ordinary configuration, and the
+	// status is what paints the browser console (agent-os-bt5y). The
+	// discriminator, the absent fields and the two sibling states are pinned in
+	// env_nofile_discriminator_test.go.
+	assert.Equal(t, http.StatusOK, w.Code)
 
 	var response map[string]interface{}
 	err = json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 
-	assert.Equal(t, "NOT_FOUND", response["code"])
+	assert.Equal(t, false, response["hasEnvFile"])
 }
 
 func TestEnvHandler_Put_Success(t *testing.T) {

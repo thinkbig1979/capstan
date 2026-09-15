@@ -41,10 +41,16 @@ const RoutineOutcomeKey = "routineOutcome"
 //	command grep -rn "c.JSON(http.Status(NotFound|BadRequest|Unauthorized|Forbidden|Conflict|UnprocessableEntity)" backend/internal/handlers/*.go
 //
 // returns 122 such bare sites across 13 files, none of them reachable by a
-// marker set inside handleError. Two of them are in class and are filed
+// marker set inside handleError. One of them is in class and was filed
 // separately as agent-os-hjmf (handlers/env.go, "No env file associated with
-// this stack"); they will call this function directly. Pin that 122 to its SHA
-// — counts here go stale on every merge, so re-measure before quoting it.
+// this stack" on the WRITE path); it calls this function directly. Pin that
+// 122 to its SHA — counts here go stale on every merge, so re-measure before
+// quoting it.
+//
+// It was two sites until agent-os-bt5y: the READ path answered the same state
+// and now answers 200 with a hasEnvFile discriminator instead, so it mints no
+// 4xx and needs no marker. The 122 above is unaffected — it counts bare 4xx
+// sites at 14d54a6, not in-class ones.
 //
 // Callers decide routineness from the CODE they are answering with, never from
 // the status or the request path. A path- or status-keyed rule would also
