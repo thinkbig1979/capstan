@@ -1859,9 +1859,33 @@ type recordingResticRunner struct {
 	// failRepoProbe makes `restic snapshots --quiet` fail, which is how
 	// BackupService.CheckRepository decides a repository is not reachable.
 	// Set it when the code under test should proceed to `restic init`; leave it
-	// false when the repository must look reachable (e.g. snapshot listing,
-	// which returns an empty list early if the probe fails).
+	// false when the repository must look reachable.
+	//
+	// It does NOT affect the snapshot listing: that is `snapshots --json`, a
+	// separate invocation reaching Output() rather than Run(), and failListing
+	// below is the field that fails it. The two are deliberately independent —
+	// a healthy repository can still fail a listing (agent-os-rg8h).
 	failRepoProbe bool
+
+	// failListing makes `restic snapshots --json` — the LISTING path, through
+	// Output() — fail with exit code listingExitCode.
+	//
+	// It exists because before agent-os-rg8h this fixture had no way to fail a
+	// listing at all: Output() returned []byte(`[]`), nil unconditionally, so
+	// every test that thought it was exercising the listing path was reading a
+	// fabricated success. The uninitialised 500 this wave fixes was invisible
+	// to CI for exactly that reason.
+	//
+	// It is a SEPARATE field from failRepoProbe on purpose: every pre-existing
+	// arm sets only failRepoProbe and must keep the behaviour it was written
+	// against.
+	failListing bool
+
+	// listingExitCode is the exit code a failed listing reports, defaulting to
+	// 10 to match repoProbeExitCode's default. The handler does not
+	// discriminate on it — any non-zero listing exit is an error ListSnapshots
+	// wraps — so it exists for readability, not for branching.
+	listingExitCode int
 
 	// repoProbeExitCode is the process exit code the failed probe reports, and
 	// it defaults to 10 because CheckRepository now discriminates on it
@@ -1940,8 +1964,9 @@ func (r *recordingResticRunner) Run(
 ) error {
 	r.record(args, env)
 	// BackupService.CheckRepository probes with `restic snapshots --quiet`.
-	// `snapshots --json` (the listing path) is a different invocation and must
-	// never be failed by this probe.
+	// `snapshots --json` (the listing path) is a different invocation, it
+	// arrives at Output() rather than here, and this flag must never decide its
+	// outcome — failListing does, and independently.
 	if r.failRepoProbe && argsContainAll(args, []string{"snapshots", "--quiet"}) {
 		code := r.repoProbeExitCode
 		if code == 0 {
@@ -1959,6 +1984,13 @@ func (r *recordingResticRunner) Output(
 	env []string,
 ) ([]byte, error) {
 	r.record(args, env)
+	if r.failListing && argsContainAll(args, []string{"snapshots", "--json"}) {
+		code := r.listingExitCode
+		if code == 0 {
+			code = 10
+		}
+		return nil, fakeExitError{code: code}
+	}
 	return []byte(`[]`), nil
 }
 
@@ -2712,6 +2744,40 @@ func backupProbeRouter(t *testing.T, probeExitCode int) (*gin.Engine, *recording
 	return newBackupRouter(h), runner
 }
 
+// backupNoPasswordRouter is backupProbeRouter's sibling for the ONE state that
+// cannot be expressed by a probe exit code: no restic password configured.
+//
+// It deliberately does not seed restic_password, which is the default state of
+// a fresh install — both shipped compose files leave RESTIC_PASSWORD commented
+// out.
+//
+// MEASURED, by removing CheckRepository's password check and re-running: with
+// this fixture the repository then reports RepoStateUnreachable carrying
+// "repository not reachable: restic password is not configured". NOT "perfectly
+// healthy", which is what an earlier draft of this comment claimed — the probe
+// runner is wired to succeed, but ResticManager.withPasswordFile refuses an
+// empty password before the runner is ever reached, so the failure is a
+// MISATTRIBUTED fault rather than a hidden one. That misattribution, sending an
+// operator to check a remote and a mount that are both fine, IS the defect
+// agent-os-l04z was filed for, and it is what this fixture catches.
+func backupNoPasswordRouter(t *testing.T) (*gin.Engine, *recordingResticRunner) {
+	t.Helper()
+
+	db := newBackupHandlerDB(t)
+
+	svc := buildBackupSvc(t, db, true, false)
+	runner := &recordingResticRunner{}
+	svc.SetResticMgrFactory(func(bc services.BackupConfig) *services.ResticManager {
+		return services.NewResticManagerForTest(bc, runner, slog.Default())
+	})
+
+	h := NewBackupHandler(svc, db, slog.Default())
+	// See agent-os-80n: h.Stop() must run before the DB and TempDir cleanups
+	// registered above, and t.Cleanup runs LIFO.
+	t.Cleanup(h.Stop)
+	return newBackupRouter(h), runner
+}
+
 // repoStateOf returns the repoState an error response carries in its details.
 func repoStateOf(t *testing.T, body map[string]interface{}) string {
 	t.Helper()
@@ -2748,17 +2814,80 @@ func TestListSnapshots_EmptyRepositoryVsUnreachable(t *testing.T) {
 		assert.Empty(t, snapshots)
 	})
 
-	t.Run("never initialised also answers 200 with an empty array", func(t *testing.T) {
-		r, _ := backupProbeRouter(t, 10)
+	// agent-os-rg8h. This sub-test used to assert 200 and an empty array, and it
+	// was green for the wrong reason: recordingResticRunner.Output() returned
+	// []byte(`[]`), nil UNCONDITIONALLY, so the listing path could not fail in
+	// any test and the 500 an uninitialised repository really produced was
+	// invisible to CI. failListing is what makes the listing capable of failing
+	// at all, and it is left ON here on purpose — it is now the assertion that
+	// the short-circuit happens BEFORE restic is called, because a handler that
+	// still reached the listing would answer 500 rather than 409.
+	//
+	// OBSERVED with failListing wired and the handler unfixed:
+	//   --- FAIL: …/never_initialised_also_answers_200_with_an_empty_array
+	//       Error: Not equal: expected: 200 / actual: 500
+	t.Run("never initialised answers 409 and names the state", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 10)
+		runner.failListing = true
 
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots", nil))
 
-		require.Equal(t, http.StatusOK, w.Code,
-			"a fresh install that has never initialised a repository genuinely has no snapshots")
-		var snapshots []models.BackupSnapshot
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &snapshots))
-		assert.Empty(t, snapshots)
+		require.Equal(t, http.StatusConflict, w.Code,
+			"a repository that does not exist yet is a named, recoverable state, not a server fault")
+		body := decodeBody(t, w)
+		assert.Equal(t, models.ErrBackupRepoUninitialized, body["code"])
+		assert.Equal(t, "uninitialized", repoStateOf(t, body))
+		message, _ := body["message"].(string)
+		assert.NotEmpty(t, message,
+			"the sentence CheckRepository already computed must be surfaced, not discarded")
+		assert.NotContains(t, message, "Failed to list snapshots",
+			"the old answer reported a server fault for an ordinary fresh-install state")
+	})
+
+	// The other side of the same instrument, and the arm that keeps
+	// failListing alive. After the short-circuit above, NOTHING else in the
+	// permanent suite exercises a failing listing — a dead fixture field is
+	// invisible to --- FAIL counting, and worse, the short-circuit could
+	// silently swallow GENUINE listing failures with no gate noticing.
+	//
+	// probeExitCode 0 means the repository is healthy and initialised, so the
+	// handler reaches the listing; failListing then fails it.
+	//
+	// WHAT THIS ARM STANDS FOR. "CheckRepository said ok, the listing failed
+	// anyway" is not a contrived pairing — there are at least six production
+	// routes to it, and the first is the one worth knowing:
+	//
+	//  1. TWO INDEPENDENT CONFIG RESOLUTIONS, milliseconds apart. OBSERVED:
+	//     CheckRepository resolves at services/backup.go:625
+	//     (resolveOrRefuse("check repository")), then the listing resolves
+	//     AGAIN at services/backup.go:296 (resolveOrRefuse("build restic
+	//     manager")), reached through handlers/backup.go's
+	//     listSnapshotsViaRestic. A database fault between the two is already
+	//     modelled by backup_config_dbfault_test.go.
+	//  2. withPasswordFile's filesystem arms — CreateTemp, Chmod, WriteString,
+	//     Close — on a full disk, a read-only /tmp, or fd exhaustion.
+	//  3. TOCTOU: the probe's timeout is 30s and the listing's is 60s, and they
+	//     are separate calls against a remote that can go away between them.
+	//  4. Different argv: the probe issues `snapshots --quiet`, the listing
+	//     `snapshots --json` plus --tag and --latest.
+	//  5. A caller-supplied --tag value restic rejects.
+	//  6. json.Unmarshal failing AFTER a clean exit 0 — a failure mode no exit
+	//     code can represent, so no probe could ever have predicted it.
+	//
+	// Guarding the short-circuit against all six is what this arm does; without
+	// it the D2 branch could swallow every one of them and stay green.
+	t.Run("a genuine listing failure on a healthy repository still answers 500", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+		runner.failListing = true
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots", nil))
+
+		require.Equal(t, http.StatusInternalServerError, w.Code,
+			"the uninitialized short-circuit must not swallow real listing failures")
+		body := decodeBody(t, w)
+		assert.Equal(t, "Failed to list snapshots", body["message"])
 	})
 
 	t.Run("unreachable is distinguishable from empty", func(t *testing.T) {
@@ -2776,6 +2905,239 @@ func TestListSnapshots_EmptyRepositoryVsUnreachable(t *testing.T) {
 	})
 }
 
+// TestListSnapshots_ResticAbsentIsAFaultNotAnEmptyList pins agent-os-9f5c.
+//
+// listSnapshots answered a MISSING RESTIC BINARY with 200 and an empty array —
+// byte-identical to "you have never taken a backup" — five lines above the
+// comment agent-os-81vr added declaring that the empty 200 is reserved for
+// repositories that genuinely hold no snapshots. Available() computed the fault
+// flag AND the cause sentence in the same branch and the handler discarded
+// both: the same struct, the same Message field, the same caller and the same
+// file as the 81vr fix, which its close sweep never looked upward to find.
+//
+// The shape is 409 BACKUP_UNAVAILABLE, NOT BACKUP_REPO_UNREACHABLE: the
+// repository is not the thing that failed, and on this path CheckRepository is
+// never called, so reachability has not even been asked. details.cause says
+// which binary, and there is deliberately no repoState — claiming one would
+// assert a probe result nobody obtained.
+func TestListSnapshots_ResticAbsentIsAFaultNotAnEmptyList(t *testing.T) {
+	// Not parallel — injects a manager factory on the service.
+
+	t.Run("restic absent is distinguishable from an empty repository", func(t *testing.T) {
+		r := backupNoResticRouter(t)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots", nil))
+
+		require.Equal(t, http.StatusConflict, w.Code,
+			"an absent backup engine must not be reported as an ordinary empty list")
+		body := decodeBody(t, w)
+		assert.Equal(t, "BACKUP_UNAVAILABLE", body["code"])
+		assert.NotEqual(t, "BACKUP_REPO_UNREACHABLE", body["code"],
+			"the repository is not the thing that failed, and was never contacted")
+		assert.Equal(t, "restic binary not found in PATH", body["message"],
+			"the cause Available() already computed must be surfaced, not discarded for a literal")
+
+		details, ok := body["details"].(map[string]interface{})
+		require.True(t, ok, "the answer must name which binary is missing, got %v", body)
+		assert.Equal(t, "restic_missing", details["cause"])
+		_, claimsRepoState := details["repoState"]
+		assert.False(t, claimsRepoState,
+			"CheckRepository is never called on this path, so no repository state may be claimed")
+	})
+
+	// The other side, on the same endpoint: the empty 200 still exists and
+	// still belongs to a repository that is reachable, initialised and holds
+	// nothing for this stack. An implementation that errors on both arms passes
+	// half of acceptance criterion 2 and is worse than the bug. The third
+	// 200-[] path — reachable and initialised, but --tag stackID matching
+	// nothing, the ORDINARY case for a new stack in a shared repository — takes
+	// this same branch and is covered by the stackId arm.
+	t.Run("restic present and repository genuinely empty still answers 200", func(t *testing.T) {
+		r, _ := backupProbeRouter(t, 0)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots?stackId=some-stack", nil))
+
+		require.Equal(t, http.StatusOK, w.Code,
+			"a reachable, initialised repository with no snapshots for this stack is a genuine empty state")
+		var snapshots []models.BackupSnapshot
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &snapshots))
+		assert.Empty(t, snapshots)
+	})
+}
+
+// TestBackupUnavailableHasOneShapeEverywhere pins the consistency defect found
+// by the adversary pass on this wave's own diff.
+//
+// This wave folded previewSnapshot's 404 into listSnapshots' 409 on the stated
+// grounds that two CODES for one state in one handler file is the defect
+// agent-os-rg8h was filed about — and then shipped two SHAPES for one code in
+// that same file: listSnapshots carried details.cause and the other five
+// BACKUP_UNAVAILABLE sites were bare. A client branching on details.cause would
+// have had to know WHICH endpoint it asked to know whether the field was there,
+// which is the same failure one level down.
+//
+// All six now go through engineUnavailable(). This test is what stops them
+// drifting apart again: "one code, one shape" is otherwise an unenforced claim
+// in a docblock, and the six sites are far enough apart in the file that
+// nothing else would notice.
+//
+// The fixture has BOTH binaries absent, which also pins the derived cause. The
+// two rclone-guarded endpoints refuse because rclone is missing, but Available()
+// returns EARLY on absent restic, so the sentence they ship is restic's — and
+// the cause must agree with that sentence rather than with the guard that
+// fired, or the body would contradict itself.
+func TestBackupUnavailableHasOneShapeEverywhere(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   map[string]interface{}
+	}{
+		{"listSnapshots", http.MethodGet, "/api/backups/snapshots", nil},
+		{"previewSnapshot", http.MethodGet, "/api/backups/snapshots/abc12345/preview", nil},
+		{"repoInit", http.MethodPost, "/api/backups/repo/init", map[string]interface{}{}},
+		// confirm:true is REQUIRED here and is not fixture noise. runDRRestore
+		// checks its destructive-operation confirmation BEFORE the availability
+		// guard, so an empty body answers 400 CONFIRMATION_REQUIRED and never
+		// reaches the branch under test — which would read as this test finding
+		// a defect when it had only failed to arrive.
+		{"runDRRestore", http.MethodPost, "/api/backups/dr-restore", map[string]interface{}{"confirm": true}},
+		{"cloudTest", http.MethodPost, "/api/backups/cloud/test", map[string]interface{}{}},
+		{"requireAvailable via runBackup", http.MethodPost, "/api/backups/run", map[string]interface{}{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := backupNoResticRouter(t)
+
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, jsonReq(t, tc.method, tc.path, tc.body))
+
+			require.Equal(t, http.StatusConflict, w.Code)
+			body := decodeBody(t, w)
+			assert.Equal(t, "BACKUP_UNAVAILABLE", body["code"])
+
+			details, ok := body["details"].(map[string]interface{})
+			require.True(t, ok,
+				"every BACKUP_UNAVAILABLE carries details; a client must not have to know which endpoint it asked. got %v", body)
+			assert.Equal(t, "restic_missing", details["cause"])
+
+			// The half that proves cause is DERIVED and not hardcoded per
+			// site: it must name the same binary the sentence does, including
+			// at the two endpoints whose own guard is about rclone.
+			assert.Equal(t, "restic binary not found in PATH", body["message"],
+				"the cause and the sentence must never disagree about which binary is missing")
+		})
+	}
+}
+
+// TestBackupRepoCredentialStatesAreNamed pins agent-os-l04z on the wire, and it
+// is TWO-SIDED on one instrument in the direction that matters: the two new
+// credential states must be named, AND a genuinely unreachable repository must
+// STILL report unreachable. An implementation that reclassifies every failure
+// as a credential problem passes the first half and is worse than the bug.
+//
+// Both new states route through repoCouldNotBeRead, which is a POSITIVE
+// whitelist shared with previewSnapshot. That is why previewSnapshot is asserted
+// here too rather than assumed: a state added to RepoState and not added to that
+// helper falls out of it silently — no compiler diagnostic, no failing test —
+// and previewSnapshot then runs restic with no password and answers 500.
+func TestBackupRepoCredentialStatesAreNamed(t *testing.T) {
+	// Not parallel — injects a manager factory on the service.
+
+	const snapshotID = "abc12345"
+	endpoints := []string{
+		"/api/backups/snapshots",
+		"/api/backups/snapshots/" + snapshotID + "/preview",
+	}
+
+	t.Run("no password configured", func(t *testing.T) {
+		for _, endpoint := range endpoints {
+			t.Run(endpoint, func(t *testing.T) {
+				r, runner := backupNoPasswordRouter(t)
+
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, jsonReq(t, http.MethodGet, endpoint, nil))
+
+				require.Equal(t, http.StatusServiceUnavailable, w.Code,
+					"the fresh-install state must be a named fault, not a 500 and not an empty list")
+				body := decodeBody(t, w)
+				assert.Equal(t, "BACKUP_REPO_UNREACHABLE", body["code"])
+				assert.Equal(t, "password_missing", repoStateOf(t, body),
+					"the state is what the UI branches on to choose a recovery")
+				message, _ := body["message"].(string)
+				assert.NotContains(t, message, "not reachable",
+					"nothing was contacted; sending an operator to check the remote or the mount is the bug")
+
+				// NOT a pin on this fix, and labelled that way on purpose.
+				// MEASURED by mutation: with CheckRepository's password check
+				// removed, the two assertions above go red and THIS ONE STAYS
+				// GREEN, because withPasswordFile refuses before the runner is
+				// reached either way. No handler-level assertion on runner.calls
+				// can discriminate this fix — the property is invariant across
+				// it. The ordering proof lives one layer down, at
+				// services/backup_test.go's "password missing" sub-test, where
+				// buildSvc's factory ignores its BackupConfig and hardcodes a
+				// password, so absent the check restic genuinely IS invoked.
+				//
+				// It is kept because it still guards something real, just not
+				// this: if withPasswordFile were ever relaxed to tolerate an
+				// empty password, restic would start being invoked with no
+				// credential and this would catch it.
+				assert.Empty(t, runner.calls,
+					"restic must not be invoked with no password configured; "+
+						"it answers an empty password with exit 1, which is "+
+						"indistinguishable from a genuine I/O failure")
+			})
+		}
+	})
+
+	t.Run("password rejected by the repository", func(t *testing.T) {
+		for _, endpoint := range endpoints {
+			t.Run(endpoint, func(t *testing.T) {
+				r, _ := backupProbeRouter(t, 12)
+
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, jsonReq(t, http.MethodGet, endpoint, nil))
+
+				require.Equal(t, http.StatusServiceUnavailable, w.Code)
+				body := decodeBody(t, w)
+				assert.Equal(t, "BACKUP_REPO_UNREACHABLE", body["code"])
+				assert.Equal(t, "wrong_password", repoStateOf(t, body),
+					"restic exit 12 is a clean discriminator and must not collapse into unreachable")
+				message, _ := body["message"].(string)
+				assert.NotContains(t, message, "not reachable",
+					"the repository answered and was read far enough to try the key; only the credential is wrong")
+			})
+		}
+	})
+
+	// The control arm. Exit 1 is a genuine I/O failure and must be untouched by
+	// this change — this is the assertion that a reclassifying implementation
+	// fails.
+	t.Run("a genuinely unreachable repository still reports unreachable", func(t *testing.T) {
+		for _, endpoint := range endpoints {
+			t.Run(endpoint, func(t *testing.T) {
+				r, _ := backupProbeRouter(t, 1)
+
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, jsonReq(t, http.MethodGet, endpoint, nil))
+
+				require.Equal(t, http.StatusServiceUnavailable, w.Code)
+				body := decodeBody(t, w)
+				assert.Equal(t, "unreachable", repoStateOf(t, body),
+					"widening the credential states must not narrow what unreachable still means")
+			})
+		}
+	})
+}
+
 // TestPreviewSnapshot_ReportsWhichCauseHolds pins acceptance criterion 3: the
 // handler used to answer "Repository not initialized or unreachable", naming
 // two causes and committing to neither. Whichever cause actually holds is now
@@ -2785,14 +3147,27 @@ func TestPreviewSnapshot_ReportsWhichCauseHolds(t *testing.T) {
 
 	const snapshotID = "abc12345"
 
+	// agent-os-rg8h folded this from 404 NOT_FOUND into the same 409 that
+	// listSnapshots answers for the same CheckRepository value. The 404's own
+	// argument was that the snapshot is genuinely absent — but the sentence it
+	// shipped described the REPOSITORY, and 404 is the one status on which
+	// classifyError replaces `message` with a fixed string, which defeats the
+	// naming the 404 existed to provide.
+	//
+	// Note what does NOT follow, because it is the tempting inference and it
+	// is false: preview is not left with a 404 meaning "unknown snapshot id".
+	// This was its only one. An id naming no snapshot answers 500 today.
 	t.Run("never initialised", func(t *testing.T) {
 		r, _ := backupProbeRouter(t, 10)
 
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots/"+snapshotID+"/preview", nil))
 
-		require.Equal(t, http.StatusNotFound, w.Code)
+		require.Equal(t, http.StatusConflict, w.Code,
+			"one state must have one shape: listSnapshots answers this same CheckRepository value with 409")
 		body := decodeBody(t, w)
+		assert.Equal(t, models.ErrBackupRepoUninitialized, body["code"])
+		assert.Equal(t, "uninitialized", repoStateOf(t, body))
 		message, _ := body["message"].(string)
 		assert.NotContains(t, message, " or ",
 			"the message must name the cause that holds, not enumerate candidates")
@@ -2913,6 +3288,25 @@ func TestRepoStateDiscriminatesRepositoryStatesOnTheWire(t *testing.T) {
 				_, stale := body["repositoryInitialized"]
 				assert.False(t, stale,
 					"repositoryInitialized asserted a distinction its value did not carry; it is deleted, not renamed")
+
+				// A healthy repository explains nothing, and it must not
+				// explain something ELSE. backupProbeRouter builds its service
+				// with buildBackupSvc(t, db, true, false) — restic present,
+				// RCLONE ABSENT — which is the exact install on which
+				// Available()'s rclone cause (added in this wave so the two
+				// "rclone is not available" handlers have a sentence to
+				// forward) would otherwise ride through CheckRepository's OK
+				// branch untouched and be shipped here as the explanation for a
+				// repository that is fine. types/index.ts documents
+				// repoStateMessage as "Empty when there is none", and both
+				// dashboard surfaces render it, so this arm is what keeps that
+				// true. OBSERVED red on exactly this assertion after the
+				// Available() change and before CheckRepository's OK branch
+				// cleared the message.
+				if tc.repoState == "ok" {
+					assert.Equal(t, "", body["repoStateMessage"],
+						"a repository in the ok state has nothing to explain, and must not borrow an unrelated fault's sentence")
+				}
 			})
 		}
 	}

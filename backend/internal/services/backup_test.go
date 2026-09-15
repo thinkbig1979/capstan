@@ -135,6 +135,24 @@ func seedStack(t *testing.T, db *database.DB, stackID string, stopPolicy string)
 // buildSvc constructs a BackupService wired with the given fakeDocker and fake
 // commandRunners for restic/rclone. resticBin/rcloneBin are set to non-empty
 // so availability checks pass without real binaries on the test host.
+//
+// cfg carries the restic password, and that is not decoration. The `bc` below
+// is captured by the MANAGER FACTORIES only; CheckRepository resolves its own
+// BackupConfig through resolveOrRefuse -> resolveBackupConfig, which reads the
+// database and then falls back to cfg — and neither carried a password. So this
+// fixture declared `ResticPassword: "test-password"` while the config the code
+// under test actually resolved had none, a disagreement that was invisible
+// until CheckRepository gained RepoStatePasswordMissing (agent-os-l04z), at
+// which point every arm here reported that state instead of the one it was
+// written to measure.
+//
+// It goes on cfg rather than into the settings table because restic_password is
+// an ENCRYPTED setting and newBackupTestDB builds a database with no encryptor:
+// db.SetSetting("restic_password", …) fails there with "no encryption key
+// configured". The cfg fallback is resolveBackupConfig's own path for the
+// RESTIC_PASSWORD environment variable, so this is the production route, not a
+// test-only back door. Tests that want the password ABSENT clear
+// svc.cfg.ResticPassword explicitly.
 func buildSvc(
 	t *testing.T,
 	db *database.DB,
@@ -161,10 +179,11 @@ func buildSvc(
 	// cfg must be non-nil because resolveBackupConfig dereferences it.
 	// Use a minimal config; the actual manager config comes from the factories.
 	cfg := &config.Config{
-		DataDir:      t.TempDir(),
-		StacksDir:    "/opt/stacks",
-		AuthDisabled: true,
-		JWTSecret:    "test-secret-32-chars-padding-here",
+		DataDir:        t.TempDir(),
+		StacksDir:      "/opt/stacks",
+		AuthDisabled:   true,
+		JWTSecret:      "test-secret-32-chars-padding-here",
+		ResticPassword: "test-password",
 	}
 
 	svc := &BackupService{
@@ -289,6 +308,15 @@ func TestAvailable_ResticPresentOnly(t *testing.T) {
 	assert.True(t, av.Available, "restic alone is enough for local backups")
 	assert.True(t, av.ResticPresent)
 	assert.False(t, av.RclonePresent)
+	// The Message half was missing, and it was missing on precisely the field
+	// this wave changes. Four handlers answer an absent binary with a hardcoded
+	// "restic is not available" / "rclone is not available" instead of the
+	// sentence the service already computes; giving the rclone case a cause is
+	// what lets them forward it, and this is the assertion that pins the cause
+	// exists. Available stays true on purpose: rclone is optional for local
+	// backups and requireAvailable gates on this flag.
+	assert.Equal(t, "rclone binary not found in PATH", av.Message,
+		"an absent rclone must carry its own cause, so the handlers that refuse on it can forward one")
 }
 
 func TestAvailable_BothPresent(t *testing.T) {
@@ -2673,8 +2701,12 @@ func TestDatabaseSnapshotPath_IsUnderDataDir(t *testing.T) {
 }
 
 // TestCheckRepository_DiscriminatesRepositoryStates pins acceptance criterion 4
-// of agent-os-81vr: the three failure states are told apart at the SERVICE
-// boundary, not guessed at by a caller reading prose.
+// of agent-os-81vr, extended by agent-os-l04z: the failure states are told
+// apart at the SERVICE boundary, not guessed at by a caller reading prose.
+// There are five of them now — uninitialized, wrong_password, unreachable,
+// password_missing and settings_unreadable — and the last two have their own
+// sub-tests below because each needs a fixture the table cannot express: one
+// must show restic was never invoked, the other needs a database that refuses.
 //
 // Before this, "no repository exists" and "a repository exists but could not be
 // read" were one branch producing one message, which is what let repoInit
@@ -2737,6 +2769,24 @@ func TestCheckRepository_DiscriminatesRepositoryStates(t *testing.T) {
 				assert.Contains(t, message, "repository not reachable:")
 			},
 		},
+		{
+			// agent-os-l04z. Exit 12 is "wrong password or no key found"
+			// (MEASURED, restic 0.18.0). The repository answered and was read
+			// far enough to try the key, so the recovery is the OPPOSITE of
+			// unreachable's: fix the credential, do not go and inspect a mount
+			// that is working.
+			name:          "wrong password",
+			runErr:        fakeExitError{code: 12},
+			wantState:     RepoStateWrongPassword,
+			wantReachable: false,
+			wantMessage: func(t *testing.T, message string) {
+				assert.NotEmpty(t, message)
+				assert.NotContains(t, message, "not reachable",
+					"a repository that rejected a password is reachable; saying otherwise is the bug")
+				assert.Contains(t, strings.ToLower(message), "password",
+					"the credential must be named as the cause")
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -2756,6 +2806,42 @@ func TestCheckRepository_DiscriminatesRepositoryStates(t *testing.T) {
 			tc.wantMessage(t, av.Message)
 		})
 	}
+
+	t.Run("password missing", func(t *testing.T) {
+		t.Parallel()
+
+		// agent-os-l04z, and it is the DEFAULT state of a fresh install: both
+		// shipped compose files leave RESTIC_PASSWORD commented out and
+		// config.go reads it from the environment with no default. It used to
+		// land in unreachable, whose hint sends an operator to inspect a remote
+		// and a mount that are both fine.
+		//
+		// The password is cleared explicitly rather than by relying on buildSvc
+		// not to supply one: buildSvc DOES supply it, deliberately, because
+		// CheckRepository resolves its own config and every other arm here
+		// needs that resolution to produce a usable password.
+		db := newBackupTestDB(t)
+		docker := &fakeDocker{}
+		runner := &fakeRunner{}
+		svc := buildSvc(t, db, docker, runner, runner)
+		svc.cfg.ResticPassword = ""
+
+		av := svc.CheckRepository(context.Background())
+
+		assert.Equal(t, RepoStatePasswordMissing, av.RepoState)
+		assert.False(t, av.RepoReachable)
+		assert.False(t, av.Available)
+		assert.NotEmpty(t, av.Message)
+		assert.NotContains(t, av.Message, "not reachable",
+			"nothing was contacted, so nothing was found unreachable — that hint is the bug")
+		// The load-bearing half. restic answers an EMPTY password with exit 1,
+		// which is the same code an unreadable repository directory produces
+		// (MEASURED, 0.18.0), so there is no exit code to recover this state
+		// from afterwards. It is only distinguishable because the check runs
+		// BEFORE the probe, and this assertion is what pins that ordering.
+		assert.Empty(t, runner.calls,
+			"restic must not be invoked at all when no password is configured")
+	})
 
 	t.Run("settings unreadable", func(t *testing.T) {
 		t.Parallel()

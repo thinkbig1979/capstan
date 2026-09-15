@@ -323,18 +323,140 @@ describe('BackupsTab — repository fault (agent-os-eo4u)', () => {
     expect(screen.queryByText(/your snapshots are not missing/i)).not.toBeInTheDocument()
   })
 
-  it('keeps the availability hedge in the reconciled empty state', async () => {
-    // NOT a fail-first arm for agent-os-eo4u — it passes before and after the
-    // change. It is a regression guard against a specific, tempting error.
+  // ─── agent-os-l04z / 9f5c / rg8h ────────────────────────────────────────
+  //
+  // These arms exist because tsc CANNOT pin them. repoFaultFrom casts
+  // details.repoState to a plain `string` and has a `default` arm, so the
+  // compiler sees no missing case and stays green however many states the
+  // backend mints. The RepositorySection `satisfies Record` failure covers the
+  // settings display and nothing here; every arm below was seen failing first.
+
+  it('points a missing restic password at Backup settings, never at the mount', async () => {
+    // The DEFAULT state of a fresh install: both shipped compose files leave
+    // RESTIC_PASSWORD commented out. It used to arrive as 'unreachable' and be
+    // answered with "check the remote or the mount" — hardware that is fine.
     //
-    // Once the 503 branch above exists it looks safe to tighten this copy: an
-    // UNREACHABLE repository now errors and can no longer reach this empty
-    // state. But listSnapshots still answers 200 with an EMPTY ARRAY when restic
-    // is absent entirely (the !av.ResticPresent early return in
-    // backend/internal/handlers/backup.go), and that lands here while the
-    // repository is genuinely unavailable. Asserting "the repository answered"
-    // would be false on that path, so the hedge stays until that early return is
-    // fixed.
+    // The copy points at Backup settings rather than at the env var because the
+    // password can be set from the settings UI as well as from RESTIC_PASSWORD,
+    // and settings is the route that works in both deployments.
+    mockListSnapshots.mockRejectedValue(
+      repoFault('password_missing', 'no restic password is configured, so the repository was not contacted'),
+    )
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    // Matched on a phrase unique to THIS hint, not on /backup settings/i:
+    // password_missing, wrong_password and uninitialized all point at Backup
+    // settings, so the loose matcher survived a hint-swap mutant. "never
+    // contacted" is true of this state alone — the other two both reached the
+    // repository.
+    await waitFor(() => {
+      expect(screen.getByText(/never contacted/i)).toBeInTheDocument()
+    })
+    expect(screen.getByText(/set the restic password in backup settings/i)).toBeInTheDocument()
+    expect(screen.queryByText(/check the remote or the mount/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/could not determine the cause/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/failed to load snapshots/i)).not.toBeInTheDocument()
+    // The two sibling hints, excluded by name so a swap cannot pass.
+    expect(screen.queryByText(/the credential is what is wrong/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/initialise the repository in backup settings, then run/i)).not.toBeInTheDocument()
+  })
+
+  it('names the credential, not the mount, when the password is rejected', async () => {
+    // restic exit 12. The repository answered and was read far enough to try
+    // the key; the remote and the mount are both working.
+    mockListSnapshots.mockRejectedValue(
+      repoFault('wrong_password', 'the configured restic password was rejected by the repository'),
+    )
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText(/the credential is what is wrong/i)).toBeInTheDocument()
+    })
+    expect(screen.getByText(/your snapshots are not missing/i)).toBeInTheDocument()
+    expect(screen.queryByText(/check the remote or the mount/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/could not determine the cause/i)).not.toBeInTheDocument()
+    // The destructive-adjacent recovery must not be offered for a state where a
+    // repository full of snapshots exists and only the key is wrong.
+    expect(screen.queryByText(/initialise the repository in backup settings, then run/i)).not.toBeInTheDocument()
+  })
+
+  it('tells the operator to initialise when the repository does not exist yet', async () => {
+    // A DIFFERENT CODE, not just a different repoState: repoFaultFrom returned
+    // null for anything other than BACKUP_REPO_UNREACHABLE, so this needed a
+    // new arm either way. Before agent-os-rg8h this state never reached the
+    // frontend as a fault at all — it arrived as a 500 and rendered as the
+    // generic "Failed to load snapshots."
+    mockListSnapshots.mockRejectedValue({
+      code: 'BACKUP_REPO_UNINITIALIZED',
+      message: 'backup repository has not been initialised yet',
+      details: { repoState: 'uninitialized' },
+      status: 409,
+    })
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText(/initialise the repository/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/failed to load snapshots/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/run a backup to create the first one/i)).not.toBeInTheDocument()
+  })
+
+  it('names an absent restic binary instead of showing an empty repository', async () => {
+    // agent-os-9f5c. This used to be 200 with an empty array, so the operator
+    // saw the ordinary empty state and, with no successful runs in history,
+    // "Run a backup to create the first one" — which cannot work, because the
+    // binary that would run it is missing. frontend/src had ZERO arms for
+    // BACKUP_UNAVAILABLE before this one.
+    mockListSnapshots.mockRejectedValue({
+      code: 'BACKUP_UNAVAILABLE',
+      message: 'restic binary not found in PATH',
+      details: { cause: 'restic_missing' },
+      status: 409,
+    })
+    mockGetHistory.mockResolvedValue({ runs: [] })
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText(/restic binary not found in PATH/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/run a backup to create the first one/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/failed to load snapshots/i)).not.toBeInTheDocument()
+  })
+
+  it('still shows "Run a backup to create the first one" for a genuinely empty repository', async () => {
+    // The OTHER SIDE of the two arms above, on the same instrument. Row 7 of the
+    // state table: reachable, initialised, zero snapshots for this stack — which
+    // is also the ordinary case for a new stack in a shared repository. The copy
+    // is correct here and must survive being made unreachable everywhere else.
+    // An implementation that removes it outright passes the arms above and is
+    // worse than the bug.
+    mockListSnapshots.mockResolvedValue([])
+    mockGetHistory.mockResolvedValue({ runs: [] })
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText('No snapshots yet')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/run a backup to create the first one/i)).toBeInTheDocument()
+  })
+
+  it('drops the availability hedge now that a 200 proves the repository answered', async () => {
+    // The inverse of what this arm asserted under agent-os-eo4u, and the
+    // condition it named as its own expiry has now been met. It used to require
+    // the hedge because listSnapshots answered 200 with an EMPTY ARRAY when
+    // restic was absent, from an early return BEFORE CheckRepository — so this
+    // state was reachable with availability genuinely unknown.
+    //
+    // agent-os-9f5c deleted that path. Reaching this branch now requires a 200,
+    // which the handler emits only after CheckRepository returned RepoStateOK
+    // and restic listed successfully. Telling an operator the repository "may be
+    // unavailable" when it demonstrably answered is the wrong-fault-named defect
+    // this wave exists to remove.
     mockListSnapshots.mockResolvedValue([])
     mockGetHistory.mockResolvedValue({ runs: [makeRun({ status: 'success' })] })
     const wrapper = createWrapper()
@@ -343,7 +465,8 @@ describe('BackupsTab — repository fault (agent-os-eo4u)', () => {
     await waitFor(() => {
       expect(screen.getByText('No snapshots listed')).toBeInTheDocument()
     })
-    expect(screen.getByText(/may be unavailable/i)).toBeInTheDocument()
+    expect(screen.getByText(/the repository answered/i)).toBeInTheDocument()
+    expect(screen.queryByText(/may be unavailable/i)).not.toBeInTheDocument()
   })
 })
 

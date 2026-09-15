@@ -27,12 +27,38 @@ import { SourceBadge } from './SourceBadge'
  * occurs with restic absent, which is an unconfigured install rather than a
  * fault, and the banner above already says restic is missing; amber here would
  * dress a normal pre-install state as a problem.
+ *
+ * `password_missing` is the same judgement applied again, and it is the reason
+ * it is NOT amber. It is the default state of a fresh install — both shipped
+ * compose files leave RESTIC_PASSWORD commented out — so it is an unfinished
+ * setup rather than something that broke, and the password field it points at
+ * is directly above. `wrong_password` IS amber: a password was configured and
+ * the repository rejected it, which means something is wrong right now.
+ *
+ * Neither says "Unreachable". The repository is reachable in both cases —
+ * untested in the first because no credential existed to try, and demonstrably
+ * so in the second — and sending an operator to check a remote and a mount that
+ * are working is the defect agent-os-l04z was filed for.
+ *
+ * The `satisfies Record<BackupSettings['repoState'], unknown>` below is what
+ * makes adding a state to the union a COMPILE ERROR here rather than a silent
+ * fallback. Keep it.
  */
 const REPO_STATE_DISPLAY = {
   ok: { label: 'Initialized', Icon: CheckCircle2, className: 'text-success font-medium' },
   uninitialized: { label: 'Not initialized', Icon: XCircle, className: 'text-muted-foreground' },
   unreachable: { label: 'Unreachable', Icon: AlertTriangle, className: 'text-warning font-medium' },
   settings_unreadable: { label: 'Unknown', Icon: AlertTriangle, className: 'text-warning font-medium' },
+  password_missing: {
+    label: 'No password set',
+    Icon: KeyRound,
+    className: 'text-muted-foreground',
+  },
+  wrong_password: {
+    label: 'Password rejected',
+    Icon: AlertTriangle,
+    className: 'text-warning font-medium',
+  },
   '': { label: 'Unknown', Icon: AlertTriangle, className: 'text-muted-foreground' },
 } as const satisfies Record<BackupSettings['repoState'], unknown>
 
@@ -78,28 +104,58 @@ export function RepositorySection({
     settings.hasEmbeddedCredential === true && repository === (settings.repository ?? '')
 
   const repoStateDisplay = REPO_STATE_DISPLAY[settings.repoState] ?? REPO_STATE_DISPLAY['']
-  // Creating is correct for exactly one state, and the other three are refused
-  // for TWO different reasons, so they cannot share one sentence.
+  // Creating is correct for exactly one state, and the other FIVE are refused
+  // for THREE different reasons, so they cannot share one sentence.
   //
   // On `ok` the server does NOT refuse: handlers/backup.go returns 200
   // {"initialized": true} and creates nothing. The button is disabled because
   // there is nothing to create and that benign success would be reported to the
   // operator as "Repository initialized successfully".
   //
-  // On `unreachable`, `settings_unreadable` and `''` the server genuinely
-  // refuses, with 503, and the reason is data loss rather than tidiness: a
-  // repository that could not be read may well exist and hold every backup the
-  // user has, and when the settings themselves are unreadable we do not know
-  // WHICH repository is configured. Initialising in either state points every
-  // later backup at a new, empty repository while the real one still exists.
+  // On `unreachable`, `settings_unreadable`, `wrong_password` and
+  // `password_missing` the server refuses with 503 BACKUP_REPO_UNREACHABLE —
+  // repoInit's guard is `RepoState != RepoStateUninitialized`, so all four take
+  // that one branch. The reason is data loss rather than tidiness for the first
+  // three: a repository that could not be read may well exist and hold every
+  // backup the user has, one that rejected a password certainly does, and when
+  // the settings themselves are unreadable we do not know WHICH repository is
+  // configured. Initialising in any of them points every later backup at a new,
+  // empty repository while the real one still exists. `password_missing` shares
+  // the status but not the reason: nothing was attempted at all, there is no
+  // credential with which to create or read a repository, and the field that
+  // fixes it is on this same form.
+  //
+  // On `''` the server answers 409 BACKUP_UNAVAILABLE, NOT 503, and it never
+  // reaches the repo-state guard at all: repoInit's `!av.ResticPresent` check
+  // returns before CheckRepository is called, which is the same reason `''`
+  // means "not probed". This distinction is why the refusal below tests
+  // `!settings.resticAvailable` FIRST — that is the branch production takes,
+  // and the state-keyed arms never see `''`.
+  //
+  // The gate stays `=== 'uninitialized'` ONLY. Neither credential state may
+  // enable it: initialising over a repository whose password is merely wrong
+  // would create a new, empty one beside a repository holding every backup the
+  // user has, which is precisely the destructive-adjacent action agent-os-81vr
+  // exists to prevent. The backend refuses both independently (repoInit's guard
+  // is a negative test on this same state), so this is defence in depth.
   const canInitialize = settings.resticAvailable && settings.repoState === 'uninitialized'
+  // Each refused state gets its OWN sentence. There is no exhaustiveness check
+  // on a ternary chain and tsc stays green on it however many states exist, so
+  // the fall-through arm silently claims whatever it last said — and what it
+  // said, "the repository could not be read, so it may already exist", is a non
+  // sequitur for a missing password, where nothing was read because nothing was
+  // attempted.
   const initRefusal = !settings.resticAvailable
     ? 'restic not available'
     : settings.repoState === 'ok'
       ? 'This repository is already initialized'
       : settings.repoState === 'uninitialized'
         ? undefined
-        : 'The repository could not be read, so it may already exist — initializing is refused'
+        : settings.repoState === 'password_missing'
+          ? 'Set a restic password first — without one the repository cannot be created or read'
+          : settings.repoState === 'wrong_password'
+            ? 'A repository exists here and rejected this password — correct the password rather than initializing over it'
+            : 'The repository could not be read, so it may already exist — initializing is refused'
 
   return (
     <div className="space-y-4">
