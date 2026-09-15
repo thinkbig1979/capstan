@@ -188,7 +188,7 @@ async function ensureBackupEngine(request: APIRequestContext): Promise<void> {
       'on the machine running the backend; this spec cannot fix it.',
   ).toBe(true)
 
-  if (status.repositoryInitialized) return
+  if (status.repoState === 'ok') return
 
   const settingsResp = await apiMutate(request, 'PUT', '/api/v1/settings/backup', {
     repository: BACKUP_REPO_PATH,
@@ -203,11 +203,12 @@ async function ensureBackupEngine(request: APIRequestContext): Promise<void> {
   expect(after.status(), 'GET /backups/status (after init)').toBe(200)
   const afterStatus = await after.json()
   expect(
-    afterStatus.repositoryInitialized,
-    `Backup repository at ${BACKUP_REPO_PATH} is still not initialised after ` +
-      'PUT /settings/backup + POST /backups/repo/init. BackupToggle will render ' +
+    afterStatus.repoState,
+    `Backup repository at ${BACKUP_REPO_PATH} did not reach repoState "ok" after ` +
+      'PUT /settings/backup + POST /backups/repo/init — it is either still ' +
+      'uninitialised or exists but could not be read. BackupToggle will render ' +
       'its locked branch, which has no backup-switch testid.',
-  ).toBe(true)
+  ).toBe('ok')
 }
 
 // ─── Page helpers ────────────────────────────────────────────────────────────

@@ -44,8 +44,12 @@ export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggle
     syncState()
   }, [policy?.enabled, policy?.stopPolicy])
 
+  // "Can we back up RIGHT NOW", so `ok` is the only acceptable state: every
+  // other one -- uninitialized, unreachable, settings_unreadable, and the empty
+  // "not probed" -- means a backup would fail. Undefined statusData falls to
+  // unavailable, which is the safe direction.
   const engineUnavailable =
-    !statusData?.resticAvailable || !statusData?.repositoryInitialized
+    !statusData?.resticAvailable || statusData?.repoState !== 'ok'
 
   const handleToggle = (checked: boolean) => {
     setOptimisticEnabled(checked)
@@ -109,7 +113,12 @@ export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggle
               </>
             ) : (
               <>
-                <p>Backup repository not initialised.</p>
+                {/* The server's own sentence about the state it actually found.
+                    A hardcoded "not initialised" here would repeat this bead's
+                    defect in prose: unreachable and settings_unreadable reach
+                    this arm too, and a repository that merely went unreadable
+                    still holds every backup the user has. */}
+                <p>{statusData?.repoStateMessage || 'Backup repository is unavailable.'}</p>
                 <p>Configure backups in Settings &rarr; Backup.</p>
               </>
             )}

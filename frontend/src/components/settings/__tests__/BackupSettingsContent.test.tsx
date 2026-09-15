@@ -26,7 +26,8 @@ vi.mock('@/lib/api', () => ({
     getStatus: vi.fn().mockResolvedValue({
       resticAvailable: true,
       rcloneAvailable: true,
-      repositoryInitialized: false,
+      repoState: 'uninitialized',
+      repoStateMessage: '',
       enabledStackCount: 0,
       lastRun: null,
       nextRunAt: null,
@@ -52,7 +53,8 @@ function makeSettings(overrides: Partial<{
   repository: string
   resticAvailable: boolean
   rcloneAvailable: boolean
-  repositoryInitialized: boolean
+  repoState: BackupSettings['repoState']
+  repoStateMessage: string
   scheduleIntervalMinutes: number
   scheduleMode: 'interval' | 'scheduled'
   scheduleTime: string
@@ -85,7 +87,8 @@ function makeSettings(overrides: Partial<{
     hostname: 'mock-host',
     resticAvailable: true,
     rcloneAvailable: true,
-    repositoryInitialized: false,
+    repoState: 'uninitialized' as const,
+    repoStateMessage: '',
     ...overrides,
   }
 }
@@ -180,7 +183,7 @@ describe('BackupSettingsContent — renders effective settings', () => {
   })
 
   it('renders "Initialized" status when repository is initialized', async () => {
-    mockGetSettings.mockResolvedValue(makeSettings({ repositoryInitialized: true }))
+    mockGetSettings.mockResolvedValue(makeSettings({ repoState: 'ok' }))
     const wrapper = createWrapper()
     render(<BackupSettingsContent />, { wrapper })
 

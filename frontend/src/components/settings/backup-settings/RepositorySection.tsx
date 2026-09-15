@@ -3,9 +3,38 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { HelpHint } from '@/components/ui/help-hint'
-import { CheckCircle2, Eye, EyeOff, KeyRound, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Eye, EyeOff, KeyRound, XCircle } from 'lucide-react'
 import type { BackupSettings } from '@/types'
 import { SourceBadge } from './SourceBadge'
+
+/**
+ * agent-os-ssqt. This used to be a boolean fed by a field that measured
+ * REACHABILITY under a name asserting INITIALISATION, so a repository that
+ * existed but had gone unreachable rendered "Not initialized" beside a button
+ * offering to create one — the destructive recovery for the fault that calls
+ * for the opposite. The question this section asks is "does a repository
+ * EXIST", which is not the question the dashboard asks ("can we back up right
+ * now"), so it reads repoState directly rather than collapsing it again.
+ *
+ * `''` is "nothing probed it" and is genuinely on the wire, not a placeholder:
+ * both handlers build their response as a Go map, so the struct tag that would
+ * omit the key never applies. It is reported as unknown rather than as a probe
+ * result nobody obtained.
+ *
+ * `''` and `settings_unreadable` share the word "Unknown" but deliberately not
+ * the colour. `settings_unreadable` is a FAULT — the settings should have been
+ * readable and were not — so it is amber like `unreachable`. `''` only ever
+ * occurs with restic absent, which is an unconfigured install rather than a
+ * fault, and the banner above already says restic is missing; amber here would
+ * dress a normal pre-install state as a problem.
+ */
+const REPO_STATE_DISPLAY = {
+  ok: { label: 'Initialized', Icon: CheckCircle2, className: 'text-success font-medium' },
+  uninitialized: { label: 'Not initialized', Icon: XCircle, className: 'text-muted-foreground' },
+  unreachable: { label: 'Unreachable', Icon: AlertTriangle, className: 'text-warning font-medium' },
+  settings_unreadable: { label: 'Unknown', Icon: AlertTriangle, className: 'text-warning font-medium' },
+  '': { label: 'Unknown', Icon: AlertTriangle, className: 'text-muted-foreground' },
+} as const satisfies Record<BackupSettings['repoState'], unknown>
 
 interface RepositorySectionProps {
   settings: BackupSettings
@@ -47,6 +76,30 @@ export function RepositorySection({
   // holds "***" again and saving it would be rejected.
   const showCredentialHint =
     settings.hasEmbeddedCredential === true && repository === (settings.repository ?? '')
+
+  const repoStateDisplay = REPO_STATE_DISPLAY[settings.repoState] ?? REPO_STATE_DISPLAY['']
+  // Creating is correct for exactly one state, and the other three are refused
+  // for TWO different reasons, so they cannot share one sentence.
+  //
+  // On `ok` the server does NOT refuse: handlers/backup.go returns 200
+  // {"initialized": true} and creates nothing. The button is disabled because
+  // there is nothing to create and that benign success would be reported to the
+  // operator as "Repository initialized successfully".
+  //
+  // On `unreachable`, `settings_unreadable` and `''` the server genuinely
+  // refuses, with 503, and the reason is data loss rather than tidiness: a
+  // repository that could not be read may well exist and hold every backup the
+  // user has, and when the settings themselves are unreadable we do not know
+  // WHICH repository is configured. Initialising in either state points every
+  // later backup at a new, empty repository while the real one still exists.
+  const canInitialize = settings.resticAvailable && settings.repoState === 'uninitialized'
+  const initRefusal = !settings.resticAvailable
+    ? 'restic not available'
+    : settings.repoState === 'ok'
+      ? 'This repository is already initialized'
+      : settings.repoState === 'uninitialized'
+        ? undefined
+        : 'The repository could not be read, so it may already exist — initializing is refused'
 
   return (
     <div className="space-y-4">
@@ -173,8 +226,8 @@ export function RepositorySection({
           variant="outline"
           size="sm"
           onClick={onInitRepo}
-          disabled={isInitializing || !settings.resticAvailable}
-          title={!settings.resticAvailable ? 'restic not available' : undefined}
+          disabled={isInitializing || !canInitialize}
+          title={initRefusal}
         >
           {isInitializing ? (
             <>
@@ -185,17 +238,13 @@ export function RepositorySection({
             'Initialize repository'
           )}
         </Button>
-        {settings.repositoryInitialized ? (
-          <span className="inline-flex items-center gap-1.5 text-sm text-success font-medium">
-            <CheckCircle2 className="h-4 w-4" />
-            Initialized
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-            <XCircle className="h-4 w-4" />
-            Not initialized
-          </span>
-        )}
+        <span
+          className={`inline-flex items-center gap-1.5 text-sm ${repoStateDisplay.className}`}
+          title={settings.repoStateMessage || undefined}
+        >
+          <repoStateDisplay.Icon className="h-4 w-4" />
+          {repoStateDisplay.label}
+        </span>
       </div>
     </div>
   )

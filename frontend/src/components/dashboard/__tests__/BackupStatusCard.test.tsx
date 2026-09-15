@@ -53,16 +53,21 @@ function makeRun(overrides: Partial<BackupRun>): BackupRun {
   }
 }
 
-function makeStatus(lastRun: BackupRun | null): BackupStatus {
+function makeStatus(
+  lastRun: BackupRun | null,
+  overrides: Partial<BackupStatus> = {},
+): BackupStatus {
   return {
     resticAvailable: true,
     rcloneAvailable: true,
-    repositoryInitialized: true,
+    repoState: 'ok',
+    repoStateMessage: '',
     enabledStackCount: 1,
     lastRun,
     nextRunAt: null,
     repoSizeBytes: null,
     schedulerRunning: false,
+    ...overrides,
   }
 }
 
@@ -115,4 +120,96 @@ describe('BackupStatusCard — zero-stack backup badge', () => {
       expect(screen.queryByText('No stacks backed up')).not.toBeInTheDocument()
     },
   )
+})
+
+/**
+ * agent-os-ssqt. The "Back up now" button gates on the same question the stack
+ * toggle asks -- "can we back up RIGHT NOW" -- so its predicate is
+ * repoState === 'ok', and every other state, fault or not-yet-probed, disables it.
+ */
+describe('BackupStatusCard — engine availability', () => {
+  function renderWithState(overrides: Partial<BackupStatus>) {
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeStatus(null, overrides),
+      isLoading: false,
+    })
+    renderCard()
+    return screen.getByRole('button', { name: /back up now/i }) as HTMLButtonElement
+  }
+
+  it('ENABLES Back up now when the repository is reachable and initialised', () => {
+    // The control arm (criterion 4). Every disabled-state assertion below is
+    // satisfied by a card that disables the button unconditionally; this is the
+    // one that is not.
+    expect(renderWithState({ repoState: 'ok' }).disabled).toBe(false)
+  })
+
+  it.each([
+    ['no repository exists', 'uninitialized' as const],
+    ['the repository exists but is unreachable', 'unreachable' as const],
+    ['the settings naming it could not be read', 'settings_unreadable' as const],
+    ['nothing probed it', '' as const],
+  ])('disables Back up now when %s', (_label, repoState) => {
+    expect(renderWithState({ repoState }).disabled).toBe(true)
+  })
+
+  it('disables Back up now when restic is absent, whatever the repository state', () => {
+    expect(renderWithState({ resticAvailable: false, repoState: 'ok' }).disabled).toBe(true)
+  })
+})
+
+/**
+ * The same in-class sibling as BackupToggle's tooltip: the banner's else-arm is
+ * reached by every non-`ok` state, so a hardcoded "not initialised" was false
+ * for three of them. It now renders the server's own sentence (agent-os-ssqt).
+ */
+describe('BackupStatusCard — the unavailable banner names the fault the server found', () => {
+  function bannerText(overrides: Partial<BackupStatus>) {
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeStatus(null, overrides),
+      isLoading: false,
+    })
+    renderCard()
+    return screen.getByText(/Backup engine unavailable/i).parentElement?.textContent ?? ''
+  }
+
+  it('names the unreachable cause and does NOT claim the repository is uninitialised', () => {
+    const text = bannerText({
+      repoState: 'unreachable',
+      repoStateMessage: 'repository not reachable: connection refused',
+    })
+
+    expect(text).toContain('repository not reachable: connection refused')
+    expect(text).not.toMatch(/not initialised/i)
+  })
+
+  it('does NOT claim uninitialised when the settings themselves could not be read', () => {
+    const text = bannerText({
+      repoState: 'settings_unreadable',
+      repoStateMessage: 'backup settings could not be read; repository state is unknown',
+    })
+
+    expect(text).toContain('backup settings could not be read')
+    expect(text).not.toMatch(/not initialised/i)
+  })
+
+  it('still says so when the repository genuinely has never been initialised', () => {
+    // The control: the sentence was true in this state and must survive.
+    const text = bannerText({
+      repoState: 'uninitialized',
+      repoStateMessage: 'backup repository has not been initialised yet',
+    })
+
+    expect(text).toContain('backup repository has not been initialised yet')
+  })
+
+  it('leaves the restic-absent arm alone', () => {
+    const text = bannerText({
+      resticAvailable: false,
+      repoState: '',
+      repoStateMessage: 'restic binary not found in PATH',
+    })
+
+    expect(text).toContain('restic is not installed.')
+  })
 })

@@ -22,7 +22,8 @@ vi.mock('@/lib/api', () => ({
     getStatus: vi.fn().mockResolvedValue({
       resticAvailable: true,
       rcloneAvailable: true,
-      repositoryInitialized: true,
+      repoState: 'ok',
+      repoStateMessage: '',
       enabledStackCount: 1,
       lastRun: null,
       nextRunAt: null,
