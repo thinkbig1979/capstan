@@ -109,8 +109,16 @@ export function RepositorySection({
   //
   // On `ok` the server does NOT refuse: handlers/backup.go returns 200
   // {"initialized": true} and creates nothing. The button is disabled because
-  // there is nothing to create and that benign success would be reported to the
-  // operator as "Repository initialized successfully".
+  // there is nothing to create — a press here is a no-op dressed as an action.
+  //
+  // That used to be the WEAKER half of the argument, because the toast then
+  // announced "Repository initialized successfully" for the no-op, so disabling
+  // the button was also the only thing standing between the operator and a
+  // false claim. agent-os-nhiv removed the false claim at its source: both of
+  // repoInit's 200 paths are byte-identical and the frontend cannot tell the
+  // no-op from a real initialisation, so the toast now states the resulting
+  // STATE, which is true either way. Disabling here is no longer load-bearing
+  // for honesty; it stands on its own, that there is nothing to create.
   //
   // On `unreachable`, `settings_unreadable`, `wrong_password` and
   // `password_missing` the server refuses with 503 BACKUP_REPO_UNREACHABLE —

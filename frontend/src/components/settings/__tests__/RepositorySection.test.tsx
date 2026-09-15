@@ -232,9 +232,17 @@ describe('RepositorySection repository state', () => {
 
     expect(repositoryStateText()).toBe('Initialized')
     // The server does NOT refuse here — it returns 200 {"initialized": true}
-    // and creates nothing. That benign success is exactly the problem: the
-    // toast in useBackupActions reads `initialized` and would announce
-    // "Repository initialized successfully" for an operation that did not run.
+    // and creates nothing, so a press is a no-op dressed as an action.
+    //
+    // When this arm was written the no-op was also MISREPORTED: the toast in
+    // useBackupActions read `initialized` and announced "Repository initialized
+    // successfully" for an operation that did not run. Neither half of that is
+    // still true — agent-os-nhiv deleted the `initialized` read (both of
+    // repoInit's 200 paths are byte-identical, so it could never discriminate)
+    // and the toast now states the resulting state instead of the action. This
+    // assertion is unchanged and still correct; only its rationale narrowed,
+    // from "disabled, or the operator is told something false" to "disabled,
+    // because there is nothing here to create".
     expect(initButton().disabled).toBe(true)
   })
 
