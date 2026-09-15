@@ -2846,11 +2846,31 @@ func TestListSnapshots_EmptyRepositoryVsUnreachable(t *testing.T) {
 	// silently swallow GENUINE listing failures with no gate noticing.
 	//
 	// probeExitCode 0 means the repository is healthy and initialised, so the
-	// handler reaches the listing; failListing then fails it. Such failures are
-	// reachable in production independently of repository state: the probe runs
-	// `snapshots --quiet` while the listing runs `snapshots --json --tag <id>`,
-	// json.Unmarshal can fail on malformed output from a perfectly healthy
-	// repository, and a network remote can drop between the two calls.
+	// handler reaches the listing; failListing then fails it.
+	//
+	// WHAT THIS ARM STANDS FOR. "CheckRepository said ok, the listing failed
+	// anyway" is not a contrived pairing — there are at least six production
+	// routes to it, and the first is the one worth knowing:
+	//
+	//  1. TWO INDEPENDENT CONFIG RESOLUTIONS, milliseconds apart. OBSERVED:
+	//     CheckRepository resolves at services/backup.go:625
+	//     (resolveOrRefuse("check repository")), then the listing resolves
+	//     AGAIN at services/backup.go:296 (resolveOrRefuse("build restic
+	//     manager")), reached through handlers/backup.go's
+	//     listSnapshotsViaRestic. A database fault between the two is already
+	//     modelled by backup_config_dbfault_test.go.
+	//  2. withPasswordFile's filesystem arms — CreateTemp, Chmod, WriteString,
+	//     Close — on a full disk, a read-only /tmp, or fd exhaustion.
+	//  3. TOCTOU: the probe's timeout is 30s and the listing's is 60s, and they
+	//     are separate calls against a remote that can go away between them.
+	//  4. Different argv: the probe issues `snapshots --quiet`, the listing
+	//     `snapshots --json` plus --tag and --latest.
+	//  5. A caller-supplied --tag value restic rejects.
+	//  6. json.Unmarshal failing AFTER a clean exit 0 — a failure mode no exit
+	//     code can represent, so no probe could ever have predicted it.
+	//
+	// Guarding the short-circuit against all six is what this arm does; without
+	// it the D2 branch could swallow every one of them and stay green.
 	t.Run("a genuine listing failure on a healthy repository still answers 500", func(t *testing.T) {
 		r, runner := backupProbeRouter(t, 0)
 		runner.failListing = true
