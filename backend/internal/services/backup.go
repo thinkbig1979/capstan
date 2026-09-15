@@ -76,6 +76,23 @@ const (
 	// RepoStateSettingsUnreadable: the settings could not be read, so WHICH
 	// repository is configured is itself unknown.
 	RepoStateSettingsUnreadable RepoState = "settings_unreadable"
+	// RepoStatePasswordMissing: no restic password is configured, so the
+	// repository was never contacted. This is the DEFAULT state of a fresh
+	// install — both shipped compose files leave RESTIC_PASSWORD commented out
+	// — and it used to be reported as unreachable, which sent an operator to
+	// inspect a remote and a mount that were both fine (agent-os-l04z).
+	//
+	// It is detected service-side, at the point the password would be written
+	// to a file, and NOT from an exit code: MEASURED with restic 0.18.0, an
+	// empty password exits 1, which is the same code a genuinely unreadable
+	// repository directory produces. restic offers no discriminator here.
+	RepoStatePasswordMissing RepoState = "password_missing"
+	// RepoStateWrongPassword: a password is configured and restic rejected it.
+	// The repository is reachable and healthy; the credential is wrong, so the
+	// recovery is the opposite of unreachable's. MEASURED with restic 0.18.0:
+	// `snapshots` against an initialised repository with the wrong password
+	// exits 12, "wrong password or no key found".
+	RepoStateWrongPassword RepoState = "wrong_password"
 )
 
 // BackupAvailability describes which parts of the engine are functional.
@@ -534,7 +551,24 @@ func (s *BackupService) Available() BackupAvailability {
 		return av
 	}
 
+	// Available stays TRUE with rclone absent: rclone drives only the cloud
+	// mirror and the DR restore, local backups need restic alone, and
+	// requireAvailable (handlers/backup.go) gates every backup operation on
+	// this flag. Flipping it would refuse ordinary local backups on an install
+	// that never configured a remote.
+	//
+	// The Message is set anyway, and that is the whole point of this branch:
+	// runDRRestore and cloudTest refuse on !RclonePresent with a hardcoded
+	// sentence, and until now there was no computed cause for them to forward
+	// instead. Note the ORDER this creates a hazard in — CheckRepository copies
+	// this value and its OK branch must clear the Message, or a healthy
+	// repository on an rclone-less install explains itself with an unrelated
+	// fault. That clearing is in CheckRepository, pinned by the repoState=="ok"
+	// arm of TestRepoStateDiscriminatesRepositoryStatesOnTheWire.
 	av.Available = true
+	if !av.RclonePresent {
+		av.Message = "rclone binary not found in PATH"
+	}
 	return av
 }
 
@@ -542,7 +576,15 @@ func (s *BackupService) Available() BackupAvailability {
 // exist" — documented since 0.17 and the discriminator CheckRepository uses.
 const resticExitRepoDoesNotExist = 10
 
-// CheckRepository probes the restic repository and reports which of four
+// resticExitWrongPassword is restic's exit code for "wrong password or no key
+// found". MEASURED with restic 0.18.0 against an initialised repository with a
+// deliberately wrong password: `snapshots --json` exits 12. It reaches
+// isExitCode on identical terms to exit 10 — every wrap between cmd.Wait() and
+// CheckRepository uses %w and there is no exit-10-specific machinery in that
+// path.
+const resticExitWrongPassword = 12
+
+// CheckRepository probes the restic repository and reports which of six
 // states it is in. Unlike Available() this performs an actual exec call.
 //
 // RepoState is the field callers branch on; RepoReachable is retained and
@@ -577,6 +619,29 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 		av.Message = "backup settings could not be read; repository state is unknown"
 		return av
 	}
+
+	// Checked BEFORE restic runs, and by state rather than by string.
+	// ResticManager.withPasswordFile refuses an empty password with a plain
+	// fmt.Errorf carrying no exit code (backup_restic.go, withPasswordFile), so
+	// errors.As cannot reach through it and the only thing left to match on
+	// would be the sentence — which is not a contract on either side. Reading
+	// the resolved config directly is the sound discriminator, and it is also
+	// the only one available: restic answers an empty password with exit 1,
+	// indistinguishable from a genuine I/O failure (MEASURED, restic 0.18.0,
+	// `snapshots --json` against an initialised repository).
+	//
+	// This is the fresh-install state, not an edge case: both shipped compose
+	// files leave RESTIC_PASSWORD commented out, and BackupsTab mounts on every
+	// stack, so before agent-os-l04z every new deployment was told to go and
+	// check a remote and a mount that were both fine.
+	if bc.ResticPassword == "" {
+		av.RepoReachable = false
+		av.Available = false
+		av.RepoState = RepoStatePasswordMissing
+		av.Message = "no restic password is configured, so the repository was not contacted"
+		return av
+	}
+
 	restic := s.newResticMgr(bc)
 	if err := restic.CheckRepository(ctx); err != nil {
 		av.RepoReachable = false
@@ -602,6 +667,18 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 			return av
 		}
 
+		// Exit 12 is "wrong password or no key found", and it is a genuine
+		// discriminator where the empty-password case above is not: the
+		// repository answered, it was read far enough to try the key, and it
+		// is the CREDENTIAL that is wrong. Collapsing it into unreachable told
+		// an operator to check the remote and the mount, both of which are
+		// working (agent-os-l04z).
+		if isExitCode(err, resticExitWrongPassword) {
+			av.RepoState = RepoStateWrongPassword
+			av.Message = "the configured restic password was rejected by the repository"
+			return av
+		}
+
 		av.RepoState = RepoStateUnreachable
 		av.Message = fmt.Sprintf("repository not reachable: %v", err)
 		return av
@@ -610,6 +687,16 @@ func (s *BackupService) CheckRepository(ctx context.Context) BackupAvailability 
 	av.RepoReachable = true
 	av.Available = true
 	av.RepoState = RepoStateOK
+	// Cleared, not left alone. av arrives from Available(), which now sets a
+	// Message when rclone is absent, and two handlers ship repoStatus.Message
+	// to the UI as repoStateMessage — documented in types/index.ts as "Empty
+	// when there is none" and rendered by both dashboard surfaces. Without this
+	// line a healthy, initialised repository on an install with no rclone
+	// explains itself with an unrelated fault, which is the exact class this
+	// change exists to remove. OBSERVED failing on
+	// TestRepoStateDiscriminatesRepositoryStatesOnTheWire's two "reachable"
+	// arms with this line absent.
+	av.Message = ""
 	return av
 }
 

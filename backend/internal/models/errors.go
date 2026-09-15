@@ -70,6 +70,24 @@ const (
 	// is healthy, a dependency is not, and 503 is what makes the failure
 	// retryable to a client that reads status classes.
 	ErrBackupRepoUnreachable = "BACKUP_REPO_UNREACHABLE"
+	// ErrBackupRepoUninitialized is a backup repository that does not exist
+	// yet: the probe reached the configured location and found nothing there.
+	// It is emphatically NOT ErrBackupRepoUnreachable — the recoveries are
+	// opposites. Creating a repository is correct here and destructive-adjacent
+	// there, which is the whole distinction agent-os-81vr introduced RepoState
+	// to carry.
+	//
+	// It carries 409 rather than 404 or 500. The snapshot listing used to
+	// answer this state with 500 "Failed to list snapshots" (agent-os-rg8h),
+	// because a comment claimed the state fell through to an empty list and it
+	// did not: restic exits 10, which becomes an error. 409 is the house shape
+	// for "the server is fine, this resource is in a state that refuses the
+	// request", it is what the same handler file already answers for
+	// BACKUP_UNAVAILABLE, and it is the one status class the frontend's
+	// classifyError passes `message` through intact — a 404 has it replaced
+	// with a fixed string and a 5xx has it discarded, so a 409 is the shape
+	// that survives an accidental future routing.
+	ErrBackupRepoUninitialized = "BACKUP_REPO_UNINITIALIZED"
 )
 
 type AppError struct {

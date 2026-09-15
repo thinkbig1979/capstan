@@ -890,13 +890,45 @@ func (h *BackupHandler) getRunDetail(c *gin.Context) {
 // but this request could not read it" — as opposed to "no repository exists",
 // which is an ordinary state a fresh install is in and not a fault.
 //
-// The two states it covers share one response because they share one meaning
-// for the client: retry, and do not treat the absence of data as data. Which
-// of the two holds is carried in the response details rather than in the
-// status code, because RepoState is the field a client branches on.
+// The FOUR states it covers share one response because they share one meaning
+// for the client: this is not an empty repository, retry after fixing the named
+// cause, and do not treat the absence of data as data. Which of the four holds
+// is carried in the response details rather than in the status code, because
+// RepoState is the field a client branches on, and the four recoveries differ:
+// set a password, correct a password, check the remote or the mount, or repair
+// the settings.
+//
+// IT IS A POSITIVE WHITELIST AND IT IS SHARED, which is the hazard to know
+// about before adding a state to RepoState. Its callers are listSnapshots and
+// previewSnapshot. A new state that is not named here falls OUT of it silently
+// — the function keeps returning false, nothing fails to compile, and no test
+// goes red — and both callers then run restic anyway and answer a 500 where
+// they should have answered a named 503. That is how password_missing and
+// wrong_password would have shipped as "Failed to preview snapshot"
+// (agent-os-l04z). Extending this helper rather than branching in each caller
+// is deliberate: it fixes both callers at once and leaves ONE list to keep in
+// step with the RepoState constants.
 func repoCouldNotBeRead(av services.BackupAvailability) bool {
 	return av.RepoState == services.RepoStateUnreachable ||
-		av.RepoState == services.RepoStateSettingsUnreadable
+		av.RepoState == services.RepoStateSettingsUnreadable ||
+		av.RepoState == services.RepoStatePasswordMissing ||
+		av.RepoState == services.RepoStateWrongPassword
+}
+
+// repoUninitialized builds the 409 a repository that does not exist yet earns.
+//
+// It is a separate shape from repoFault's 503 because the two call for opposite
+// actions: this state is fixed by CREATING a repository, and the unreachable
+// one must never be (agent-os-81vr). The state travels in details.repoState
+// alongside the cause sentence, exactly as repoFault does, so a client branches
+// on one field in both cases.
+func repoUninitialized(av services.BackupAvailability) *models.AppError {
+	return models.NewAppErrorWithDetails(
+		http.StatusConflict,
+		models.ErrBackupRepoUninitialized,
+		av.Message,
+		gin.H{"repoState": av.RepoState},
+	)
 }
 
 // repoFault builds the 503 a repository that could not be read earns, carrying
@@ -911,26 +943,56 @@ func repoFault(av services.BackupAvailability) *models.AppError {
 	)
 }
 
+// listSnapshots answers with one explicit branch per repository state. There is
+// no fall-through: every state below either returns a named fault or reaches
+// the listing, and the empty 200 at the end belongs to exactly one of them.
+//
+// The empty 200 is reserved for repositories that genuinely hold no snapshots
+// for this stack. Answering any fault the same way is indistinguishable from
+// "you have never taken a backup", and the obvious next action from that screen
+// — initialise a repository — is the destructive-adjacent one (agent-os-81vr).
 func (h *BackupHandler) listSnapshots(c *gin.Context) {
 	av := h.svc.Available()
 	if !av.ResticPresent {
-		c.JSON(http.StatusOK, []models.BackupSnapshot{})
+		// Was an empty 200, which is the same defect agent-os-81vr fixed six
+		// lines below and its close sweep never looked upward to find
+		// (agent-os-9f5c). Note what is NOT known on this path: Available()
+		// only tests whether a binary path is non-empty, and the return happens
+		// before CheckRepository, so repository reachability has not been
+		// asked. The answer says restic is missing and claims nothing about the
+		// repository, which is why it carries details.cause rather than a
+		// repoState it does not have.
+		c.JSON(http.StatusConflict, models.NewAppErrorWithDetails(
+			http.StatusConflict,
+			"BACKUP_UNAVAILABLE",
+			av.Message,
+			gin.H{"cause": "restic_missing"},
+		))
 		return
 	}
 
 	repoStatus := h.svc.CheckRepository(c.Request.Context())
 	if repoCouldNotBeRead(repoStatus) {
-		// The empty 200 below is reserved for repositories that genuinely hold
-		// no snapshots. Answering an unreadable one the same way is
-		// indistinguishable from "you have never taken a backup", and the
-		// obvious next action from that screen — initialise a repository — is
-		// the destructive-adjacent one (agent-os-81vr).
 		c.JSON(http.StatusServiceUnavailable, repoFault(repoStatus))
 		return
 	}
-	// RepoStateUninitialized falls through deliberately: a repository that has
-	// never been created genuinely has zero snapshots, and listSnapshotsViaRestic
-	// answers that with the same empty list a fresh install has always seen.
+	if repoStatus.RepoState == services.RepoStateUninitialized {
+		// SHORT-CIRCUITED BEFORE restic is invoked, and the ordering is the
+		// fix, not a detail. CheckRepository has ALREADY established this state
+		// by reading restic's exit 10; calling restic again to rediscover it
+		// produces exit 10 a second time, which ListSnapshots wraps into an
+		// error and this handler answered with 500 "Failed to list snapshots"
+		// — a server fault reported for an ordinary fresh-install state
+		// (agent-os-rg8h).
+		//
+		// A comment here used to claim this state fell through to the same
+		// empty list a fresh install has always seen. It never did. MEASURED
+		// with restic 0.18.0: `snapshots --json` and `snapshots --quiet` BOTH
+		// exit 10 against a path holding no repository, so nothing suppressed
+		// it on the listing path.
+		c.JSON(http.StatusConflict, repoUninitialized(repoStatus))
+		return
+	}
 
 	stackID := c.Query("stackId")
 
@@ -962,7 +1024,7 @@ func (h *BackupHandler) previewSnapshot(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
 			"BACKUP_UNAVAILABLE",
-			"restic is not available",
+			av.Message,
 		))
 		return
 	}
@@ -973,15 +1035,27 @@ func (h *BackupHandler) previewSnapshot(c *gin.Context) {
 		return
 	}
 	if repoStatus.RepoState == services.RepoStateUninitialized {
-		// 404 rather than 503: no repository exists, so this snapshot really is
-		// absent. The previous message named both causes and committed to
-		// neither, which left an operator unable to tell a missing snapshot
-		// from a missing repository from a broken one.
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrNotFound,
-			"Backup repository has not been initialised",
-		))
+		// This was a 404 NOT_FOUND, on the argument that no repository exists
+		// so the snapshot really is absent. That argument is answered rather
+		// than ignored, and it loses on two counts.
+		//
+		// First, the sentence it shipped — "Backup repository has not been
+		// initialised" — is a statement about the REPOSITORY, not about this
+		// snapshot id, so the 404 was already describing a different resource
+		// than the one the status referred to. Folding into 409 frees 404 to
+		// mean what that comment wanted it to mean: an id that does not name a
+		// snapshot in a repository which does exist.
+		//
+		// Second, and decisively, the 404's own goal was to name the cause that
+		// holds instead of enumerating candidates — and 404 is the status that
+		// defeats it. classifyError REPLACES message with a fixed string on 404
+		// and preserves it on 409, so the cause survives to the operator only
+		// under the status this now uses.
+		//
+		// It is also the same CheckRepository value listSnapshots answers with
+		// this exact shape. Two codes for one state in one handler file is the
+		// defect agent-os-rg8h was filed about, not a nuance worth keeping.
+		c.JSON(http.StatusConflict, repoUninitialized(repoStatus))
 		return
 	}
 
@@ -1162,10 +1236,16 @@ func (h *BackupHandler) runDRRestore(c *gin.Context) {
 
 	av := h.svc.Available()
 	if !av.RclonePresent {
+		// av.Message, not a literal. Forwarding it was a REGRESSION until
+		// Available() was given a cause for the rclone-absent case: it used to
+		// set a Message only for missing restic, so the two rclone sites would
+		// have replaced a true-if-generic sentence with an empty string — this
+		// wave's own class, introduced by the fix for it. The cause exists now
+		// and is pinned by TestAvailable_ResticPresentOnly.
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
 			"BACKUP_UNAVAILABLE",
-			"rclone is not available",
+			av.Message,
 		))
 		return
 	}
@@ -1294,7 +1374,7 @@ func (h *BackupHandler) repoInit(c *gin.Context) {
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
 			"BACKUP_UNAVAILABLE",
-			"restic is not available",
+			av.Message,
 		))
 		return
 	}
@@ -1307,14 +1387,23 @@ func (h *BackupHandler) repoInit(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"initialized": true})
 		return
 	}
-	// Creating a repository is only correct when there is none. On
-	// RepoStateUnreachable one may well exist and hold every backup the user
-	// has, and on RepoStateSettingsUnreadable we do not even know WHICH
-	// repository is configured — initialising in either state points every
-	// later backup at a new, empty repository while the real one still exists.
-	// This is the coupling CheckRepository's own docblock flags, and it is why
-	// this branch is narrower than the !RepoReachable it replaced
-	// (agent-os-81vr).
+	// Creating a repository is only correct when there is none, and the guard
+	// stays a NEGATIVE test for that one state rather than a whitelist of the
+	// states it refuses. That is deliberate and load-bearing: every RepoState
+	// added later is refused here automatically, with no edit and no chance of
+	// the silent omission that a positive list invites (repoCouldNotBeRead had
+	// exactly that defect). The two states added by agent-os-l04z are refused
+	// by this line as written.
+	//
+	// What is at stake in each refused state: on RepoStateUnreachable a
+	// repository may well exist and hold every backup the user has; on
+	// RepoStateWrongPassword it certainly does and only the credential is
+	// wrong; on RepoStatePasswordMissing nothing has been contacted at all; and
+	// on RepoStateSettingsUnreadable we do not even know WHICH repository is
+	// configured. Initialising in any of them points every later backup at a
+	// new, empty repository while the real one still exists. This is the
+	// coupling CheckRepository's own docblock flags, and it is why this branch
+	// is narrower than the !RepoReachable it replaced (agent-os-81vr).
 	if repoStatus.RepoState != services.RepoStateUninitialized {
 		c.JSON(http.StatusServiceUnavailable, repoFault(repoStatus))
 		return
@@ -1337,10 +1426,16 @@ func (h *BackupHandler) repoInit(c *gin.Context) {
 func (h *BackupHandler) cloudTest(c *gin.Context) {
 	av := h.svc.Available()
 	if !av.RclonePresent {
+		// av.Message, not a literal. Forwarding it was a REGRESSION until
+		// Available() was given a cause for the rclone-absent case: it used to
+		// set a Message only for missing restic, so the two rclone sites would
+		// have replaced a true-if-generic sentence with an empty string — this
+		// wave's own class, introduced by the fix for it. The cause exists now
+		// and is pinned by TestAvailable_ResticPresentOnly.
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
 			"BACKUP_UNAVAILABLE",
-			"rclone is not available",
+			av.Message,
 		))
 		return
 	}
