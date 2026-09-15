@@ -292,10 +292,18 @@ string per code and should be surfaced, not replaced.
 
 | code | status | `details` | means | recovery |
 |---|---|---|---|---|
-| `BACKUP_UNAVAILABLE` | 409 | `cause` on the snapshot listing | the engine binary is missing — restic, or rclone for the cloud paths. No repository was contacted, so nothing is claimed about it | install/restore the binary; this is a deployment fault, not a settings one |
+| `BACKUP_UNAVAILABLE` | 409 | `cause` (always) | the engine binary is missing — restic, or rclone for the cloud paths. No repository was contacted, so nothing is claimed about it | install/restore the binary; this is a deployment fault, not a settings one |
 | `BACKUP_REPO_UNINITIALIZED` | 409 | `repoState: "uninitialized"` | no repository exists at the configured location | initialise the repository (`POST /api/v1/backups/repo/init`) |
 | `BACKUP_REPO_UNREACHABLE` | 503 | `repoState` | a repository is configured but this request could not read it. `repoState` says which of four causes holds | depends on `repoState`, below |
 | `BACKUP_BUSY` | 409 | — | another backup operation holds the lock | retry once it finishes |
+
+`details.cause` under `BACKUP_UNAVAILABLE` is `"restic_missing"` or
+`"rclone_missing"`. It is derived from the same availability value that produced
+`message`, so the two can never name different binaries — which matters in the
+one case that surprises: **when BOTH binaries are absent, the cloud endpoints
+report `restic_missing`**, not `rclone_missing`, even though their own guard is
+about rclone. Availability resolves restic first and stops there, so restic is
+the fault to fix first and it is the one both fields name.
 
 `details.repoState` under `BACKUP_REPO_UNREACHABLE`, and the reason the four
 are not interchangeable:
@@ -327,9 +335,20 @@ repository that had never been initialised — restic exits 10 on the listing
 path just as it does on the probe — and now answers **409
 `BACKUP_REPO_UNINITIALIZED`**.
 `GET /api/v1/backups/snapshots/:snapshotId/preview` answered that same state
-with **404**, and now answers the same 409, so one state has one shape. A 404
-from that endpoint now means what it says: the snapshot id was not found in a
-repository that does exist.
+with **404**, and now answers the same 409, so one state has one shape.
+
+**That endpoint no longer emits 404 at all**, and this is stated rather than
+left implied because the obvious inference is wrong: folding the repository
+state into 409 does NOT leave 404 free to mean "unknown snapshot id". It was the
+endpoint's only 404 and it is gone. A well-formed id naming a snapshot that does
+not exist currently reaches restic and answers **500 `INTERNAL_ERROR`**; a
+malformed id answers 400. Preview's complete set of shapes is now 200, 400, 409
+(engine unavailable), 409 (repository uninitialised), 503 and 500.
+
+Answering an unknown id with 500 is arguably the same class of defect this
+section documents — a nameable client-side condition reported as a server fault
+— but changing it is a behaviour change, and it is filed separately rather than
+folded in here.
 
 ## Keeping this page honest
 

@@ -1065,9 +1065,17 @@ func (h *BackupHandler) previewSnapshot(c *gin.Context) {
 		// First, the sentence it shipped — "Backup repository has not been
 		// initialised" — is a statement about the REPOSITORY, not about this
 		// snapshot id, so the 404 was already describing a different resource
-		// than the one the status referred to. Folding into 409 frees 404 to
-		// mean what that comment wanted it to mean: an id that does not name a
-		// snapshot in a repository which does exist.
+		// than the one the status referred to.
+		//
+		// It does NOT follow that 404 is now free to mean "an id that names no
+		// snapshot", and an earlier draft of this comment said exactly that.
+		// VERIFIED by sweeping StatusNotFound over this file function by
+		// function: this was previewSnapshot's ONLY 404, so removing it leaves
+		// the handler with none. A well-formed id naming no snapshot reaches
+		// previewSnapshotViaRestic and answers 500. That is arguably this
+		// wave's own class one step along, and it is left for a separate bead
+		// rather than widened into here — but the false claim must not stand in
+		// the meantime.
 		//
 		// Second, and decisively, the 404's own goal was to name the cause that
 		// holds instead of enumerating candidates — and 404 is the status that

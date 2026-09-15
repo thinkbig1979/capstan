@@ -2749,11 +2749,17 @@ func backupProbeRouter(t *testing.T, probeExitCode int) (*gin.Engine, *recording
 //
 // It deliberately does not seed restic_password, which is the default state of
 // a fresh install — both shipped compose files leave RESTIC_PASSWORD commented
-// out. The probe runner is wired to SUCCEED, so if CheckRepository ever stopped
-// detecting this state before invoking restic, the repository would read as
-// perfectly healthy and every assertion built on this router would flip in the
-// benign direction. That is the failure this fixture is shaped to catch
-// (agent-os-l04z).
+// out.
+//
+// MEASURED, by removing CheckRepository's password check and re-running: with
+// this fixture the repository then reports RepoStateUnreachable carrying
+// "repository not reachable: restic password is not configured". NOT "perfectly
+// healthy", which is what an earlier draft of this comment claimed — the probe
+// runner is wired to succeed, but ResticManager.withPasswordFile refuses an
+// empty password before the runner is ever reached, so the failure is a
+// MISATTRIBUTED fault rather than a hidden one. That misattribution, sending an
+// operator to check a remote and a mount that are both fine, IS the defect
+// agent-os-l04z was filed for, and it is what this fixture catches.
 func backupNoPasswordRouter(t *testing.T) (*gin.Engine, *recordingResticRunner) {
 	t.Helper()
 
@@ -3069,9 +3075,25 @@ func TestBackupRepoCredentialStatesAreNamed(t *testing.T) {
 				assert.NotContains(t, message, "not reachable",
 					"nothing was contacted; sending an operator to check the remote or the mount is the bug")
 
+				// NOT a pin on this fix, and labelled that way on purpose.
+				// MEASURED by mutation: with CheckRepository's password check
+				// removed, the two assertions above go red and THIS ONE STAYS
+				// GREEN, because withPasswordFile refuses before the runner is
+				// reached either way. No handler-level assertion on runner.calls
+				// can discriminate this fix — the property is invariant across
+				// it. The ordering proof lives one layer down, at
+				// services/backup_test.go's "password missing" sub-test, where
+				// buildSvc's factory ignores its BackupConfig and hardcodes a
+				// password, so absent the check restic genuinely IS invoked.
+				//
+				// It is kept because it still guards something real, just not
+				// this: if withPasswordFile were ever relaxed to tolerate an
+				// empty password, restic would start being invoked with no
+				// credential and this would catch it.
 				assert.Empty(t, runner.calls,
-					"restic must not be invoked at all: it answers an empty password with exit 1, "+
-						"which is indistinguishable from a genuine I/O failure")
+					"restic must not be invoked with no password configured; "+
+						"it answers an empty password with exit 1, which is "+
+						"indistinguishable from a genuine I/O failure")
 			})
 		}
 	})
@@ -3130,8 +3152,11 @@ func TestPreviewSnapshot_ReportsWhichCauseHolds(t *testing.T) {
 	// argument was that the snapshot is genuinely absent — but the sentence it
 	// shipped described the REPOSITORY, and 404 is the one status on which
 	// classifyError replaces `message` with a fixed string, which defeats the
-	// naming the 404 existed to provide. 404 is now free to mean an unknown id
-	// against a repository that does exist.
+	// naming the 404 existed to provide.
+	//
+	// Note what does NOT follow, because it is the tempting inference and it
+	// is false: preview is not left with a 404 meaning "unknown snapshot id".
+	// This was its only one. An id naming no snapshot answers 500 today.
 	t.Run("never initialised", func(t *testing.T) {
 		r, _ := backupProbeRouter(t, 10)
 

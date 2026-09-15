@@ -58,10 +58,11 @@ const DatabaseBackupTag = "capstan-database"
 const databaseStagingDir = "backup-staging"
 
 // RepoState names which of the repository's mutually exclusive states a probe
-// found. It exists because RepoReachable is one boolean over four distinct
-// facts, and two of them call for opposite actions: a repository that has never
-// been initialised should be created, one that exists but could not be read
-// must NOT be (agent-os-81vr).
+// found. It exists because RepoReachable is one boolean over six distinct
+// facts, and they call for opposite actions: a repository that has never been
+// initialised should be created, one that exists but could not be read must
+// NOT be (agent-os-81vr), and one that merely rejected a password must not be
+// either — it is intact and holds every backup the user has.
 type RepoState string
 
 const (
@@ -70,8 +71,14 @@ const (
 	// RepoStateUninitialized: no repository exists at the configured location.
 	RepoStateUninitialized RepoState = "uninitialized"
 	// RepoStateUnreachable: a repository is configured but the probe failed for
-	// some other reason — network, permissions, a wrong password. It may well
+	// some other reason — network, a missing mount, permissions. It may well
 	// exist and hold every backup the user has.
+	//
+	// NOT a wrong password: that was one of this state's listed causes until
+	// agent-os-l04z gave it RepoStateWrongPassword below, because the two call
+	// for opposite actions — check the remote, versus leave the remote alone
+	// and fix the credential. This state is now the genuine residue: everything
+	// that is not a recognised exit code and not a missing password.
 	RepoStateUnreachable RepoState = "unreachable"
 	// RepoStateSettingsUnreadable: the settings could not be read, so WHICH
 	// repository is configured is itself unknown.
@@ -589,7 +596,12 @@ const resticExitRepoDoesNotExist = 10
 
 // resticExitWrongPassword is restic's exit code for "wrong password or no key
 // found". MEASURED with restic 0.18.0 against an initialised repository with a
-// deliberately wrong password: `snapshots --json` exits 12. It reaches
+// deliberately wrong password, BOTH argv forms, because only one of them is the
+// one this code runs: `snapshots --quiet` — the form CheckRepository's probe
+// actually issues — exits 12, and `snapshots --json` exits 12 as well. The
+// exit-10 comment below is careful about the same distinction; citing only the
+// --json measurement here would have been evidence about a command this path
+// never executes. It reaches
 // isExitCode on identical terms to exit 10 — every wrap between cmd.Wait() and
 // CheckRepository uses %w and there is no exit-10-specific machinery in that
 // path.

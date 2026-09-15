@@ -345,12 +345,21 @@ describe('BackupsTab — repository fault (agent-os-eo4u)', () => {
     const wrapper = createWrapper()
     render(<BackupsTab stackId={STACK_ID} />, { wrapper })
 
+    // Matched on a phrase unique to THIS hint, not on /backup settings/i:
+    // password_missing, wrong_password and uninitialized all point at Backup
+    // settings, so the loose matcher survived a hint-swap mutant. "never
+    // contacted" is true of this state alone — the other two both reached the
+    // repository.
     await waitFor(() => {
-      expect(screen.getByText(/backup settings/i)).toBeInTheDocument()
+      expect(screen.getByText(/never contacted/i)).toBeInTheDocument()
     })
+    expect(screen.getByText(/set the restic password in backup settings/i)).toBeInTheDocument()
     expect(screen.queryByText(/check the remote or the mount/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/could not determine the cause/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/failed to load snapshots/i)).not.toBeInTheDocument()
+    // The two sibling hints, excluded by name so a swap cannot pass.
+    expect(screen.queryByText(/the credential is what is wrong/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/initialise the repository in backup settings, then run/i)).not.toBeInTheDocument()
   })
 
   it('names the credential, not the mount, when the password is rejected', async () => {
