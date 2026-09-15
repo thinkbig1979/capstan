@@ -70,6 +70,60 @@ function formatDate(iso: string): string {
   }
 }
 
+/**
+ * A backup repository that could not be read answers this query with 503 and
+ * code BACKUP_REPO_UNREACHABLE, minted by repoFault() in
+ * backend/internal/handlers/backup.go. That body carries two things beyond the
+ * code: `details.repoState`, which of the two fault states holds, and `message`,
+ * the cause sentence CheckRepository already computed. The axios interceptor in
+ * lib/api.ts rejects with the body spread verbatim, so all three arrive here
+ * untouched.
+ *
+ * Keys on `code` alone and never on the 503: the code is what the backend treats
+ * as the client's branch point, and a status check here would go stale the moment
+ * the same fault were reported under a different status.
+ *
+ * Deliberately NOT routed through classifyError(). Its 5xx branch discards
+ * `message` and answers "503: Something went wrong on the server" — a status
+ * code, where an operator needs a cause and a recovery. The recovery is the
+ * whole point: an unreachable repository is fixed by checking the remote or the
+ * mount, an uninitialised one by initialising, and offering the second for the
+ * first is destructive-adjacent.
+ */
+function repoFaultFrom(
+  error: unknown,
+): { title: string; hint: string; detail: string } | null {
+  if (!error || typeof error !== 'object') return null
+  const body = error as { code?: string; message?: string; details?: { repoState?: string } }
+  if (body.code !== 'BACKUP_REPO_UNREACHABLE') return null
+
+  const detail = body.message ?? ''
+  switch (body.details?.repoState) {
+    case 'unreachable':
+      return {
+        title: 'The backup repository could not be reached.',
+        hint: 'Your snapshots are not missing. The repository did not answer, so check the remote or the mount — initialising a new repository would not bring them back.',
+        detail,
+      }
+    case 'settings_unreadable':
+      return {
+        title: 'Backup repository state is unknown.',
+        hint: 'Capstan could not load the backup settings, so it cannot tell which repository this stack uses. Check the Backup settings.',
+        detail,
+      }
+    default:
+      // Both specifics are POSITIVE arms and this is the fallback, deliberately
+      // that way round. Prescribing a recovery by default means a repoState added
+      // backend-side would be answered with advice written for a different fault,
+      // silently and with no failing test. Say only what the code itself carries.
+      return {
+        title: 'The backup repository could not be read.',
+        hint: 'Capstan could not determine the cause. Check the Backup settings and the repository.',
+        detail,
+      }
+  }
+}
+
 // ─── Preview panel ────────────────────────────────────────────────────────────
 
 function PreviewPanel({ snapshotId, onClose }: { snapshotId: string; onClose: () => void }) {
@@ -304,7 +358,9 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
     data: snapshots,
     isLoading: snapshotsLoading,
     isError: snapshotsError,
+    error: snapshotsErrorCause,
   } = useBackupSnapshots(stackId)
+  const repoFault = repoFaultFrom(snapshotsErrorCause)
 
   // Recent runs (global history — all runs are relevant when backup is enabled)
   const { runs, isLoading: runsLoading } = useStackBackupRuns(stackId, 20)
@@ -409,14 +465,38 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
         )}
 
         {snapshotsError && (
-          <div className="flex items-center gap-2 text-sm text-destructive py-4">
-            <AlertCircle className="h-4 w-4" />
-            Failed to load snapshots.
-          </div>
+          repoFault ? (
+            <div className="flex items-start gap-2 text-sm py-4">
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-destructive" />
+              <div>
+                <p className="text-destructive font-medium">{repoFault.title}</p>
+                <p className="text-muted-foreground mt-1 max-w-prose">{repoFault.hint}</p>
+                {repoFault.detail && (
+                  <p className="text-muted-foreground mt-1 break-all font-mono text-xs">
+                    {repoFault.detail}
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-destructive py-4">
+              <AlertCircle className="h-4 w-4" />
+              Failed to load snapshots.
+            </div>
+          )
         )}
 
         {!snapshotsLoading && !snapshotsError && (!snapshots || snapshots.length === 0) && (
           hasSuccessfulBackupRuns ? (
+            /* The hedge here stays, and the tempting tightening is wrong. An
+               UNREACHABLE repository now 503s into the error branch above and can
+               no longer reach this state — but listSnapshots returns 200 with an
+               EMPTY ARRAY when restic is absent (the !av.ResticPresent early
+               return in backend/internal/handlers/backup.go), which sits BEFORE
+               CheckRepository and so never probes the repository at all. That
+               lands here with availability genuinely unknown, so "may be
+               unavailable" is true on a reachable path and "the repository
+               answered" would be false on it (agent-os-eo4u). */
             <EmptyState
               title="No snapshots listed"
               description="Recent runs report success, but no snapshots are in the repository right now. The repository may be unavailable or was reset, check the Backup settings and repository."

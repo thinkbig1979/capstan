@@ -235,6 +235,118 @@ describe('BackupsTab — snapshots table', () => {
   })
 })
 
+describe('BackupsTab — repository fault (agent-os-eo4u)', () => {
+  // The 503 body repoFault() mints in backend/internal/handlers/backup.go, shaped
+  // as the axios interceptor in lib/api.ts rejects it: the response body spread
+  // with the status injected. It is hand-built here because vi.mock('@/lib/api')
+  // above replaces the api module, so the real interceptor never runs in this
+  // file. That this shape IS what the interceptor produces is pinned separately,
+  // against the real interceptor, in src/lib/__tests__/apiInterceptorError.test.ts.
+  function repoFault(repoState: string, message: string) {
+    return {
+      code: 'BACKUP_REPO_UNREACHABLE',
+      message,
+      details: { repoState },
+      status: 503,
+    }
+  }
+
+  it('names an unreachable repository as the cause, not a generic failure', async () => {
+    mockListSnapshots.mockRejectedValue(
+      repoFault('unreachable', 'repository not reachable: dial tcp: connection refused'),
+    )
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText(/your snapshots are not missing/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/failed to load snapshots/i)).not.toBeInTheDocument()
+  })
+
+  it('names unreadable backup settings as the cause', async () => {
+    mockListSnapshots.mockRejectedValue(
+      repoFault(
+        'settings_unreadable',
+        'backup settings could not be read; repository state is unknown',
+      ),
+    )
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText(/could not load the backup settings/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/failed to load snapshots/i)).not.toBeInTheDocument()
+  })
+
+  it('surfaces the cause sentence the backend computed', async () => {
+    mockListSnapshots.mockRejectedValue(
+      repoFault('unreachable', 'repository not reachable: dial tcp: connection refused'),
+    )
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/repository not reachable: dial tcp: connection refused/i),
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('prescribes no recovery for a repoState it does not recognise', async () => {
+    // The two known states are positive arms; anything else falls back. A future
+    // backend repoState must NOT inherit advice written for 'unreachable' —
+    // "initialising would not bring them back" could be exactly wrong for it.
+    mockListSnapshots.mockRejectedValue(repoFault('some_future_state', 'a new fault'))
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText(/could not determine the cause/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/would not bring them back/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/failed to load snapshots/i)).not.toBeInTheDocument()
+  })
+
+  it('leaves every other query failure on the generic message', async () => {
+    // Two-sided against the arms above on one instrument: a rejection that is NOT
+    // the repository fault must keep the original sentence. Guards against a fix
+    // that turns every snapshots failure into a repository story.
+    mockListSnapshots.mockRejectedValue({ code: 'INTERNAL_ERROR', message: 'boom', status: 500 })
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText(/failed to load snapshots/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/your snapshots are not missing/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps the availability hedge in the reconciled empty state', async () => {
+    // NOT a fail-first arm for agent-os-eo4u — it passes before and after the
+    // change. It is a regression guard against a specific, tempting error.
+    //
+    // Once the 503 branch above exists it looks safe to tighten this copy: an
+    // UNREACHABLE repository now errors and can no longer reach this empty
+    // state. But listSnapshots still answers 200 with an EMPTY ARRAY when restic
+    // is absent entirely (the !av.ResticPresent early return in
+    // backend/internal/handlers/backup.go), and that lands here while the
+    // repository is genuinely unavailable. Asserting "the repository answered"
+    // would be false on that path, so the hedge stays until that early return is
+    // fixed.
+    mockListSnapshots.mockResolvedValue([])
+    mockGetHistory.mockResolvedValue({ runs: [makeRun({ status: 'success' })] })
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    await waitFor(() => {
+      expect(screen.getByText('No snapshots listed')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/may be unavailable/i)).toBeInTheDocument()
+  })
+})
+
 describe('BackupsTab — restore flow', () => {
   it('opens the ConfirmDialog when Restore is clicked', async () => {
     const wrapper = createWrapper()
