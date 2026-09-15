@@ -576,7 +576,14 @@ export interface BackupSettings {
    * since a repository that merely went unreadable may hold every backup the
    * user has.
    */
-  repoState: '' | 'ok' | 'uninitialized' | 'unreachable' | 'settings_unreadable'
+  repoState:
+    | ''
+    | 'ok'
+    | 'uninitialized'
+    | 'unreachable'
+    | 'settings_unreadable'
+    | 'password_missing'
+    | 'wrong_password'
   /** Human-readable cause behind a non-`ok` `repoState`. Empty when there is none. */
   repoStateMessage: string
   /** Whether backups run on a fixed interval or at a time of day. */
@@ -603,7 +610,14 @@ export interface BackupStatus {
    * since a repository that merely went unreadable may hold every backup the
    * user has.
    */
-  repoState: '' | 'ok' | 'uninitialized' | 'unreachable' | 'settings_unreadable'
+  repoState:
+    | ''
+    | 'ok'
+    | 'uninitialized'
+    | 'unreachable'
+    | 'settings_unreadable'
+    | 'password_missing'
+    | 'wrong_password'
   /** Human-readable cause behind a non-`ok` `repoState`. Empty when there is none. */
   repoStateMessage: string
   enabledStackCount: number

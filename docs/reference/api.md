@@ -277,6 +277,60 @@ Direct Docker resource management, independent of any stack.
 - `GET /api/v1/ws/backups/verify/:runId` — WebSocket stream of a repository
   verification run's progress
 
+## Backup error codes
+
+This page listed routes and no error codes at all until 2026-09-15. It gains
+this section rather than a line in the Backups list because the backup handlers
+are the ones whose failures a client must TELL APART: several distinct faults
+share a status, and the recoveries for them are mutually exclusive. A client
+branches on `code`, and on `details.repoState` where one is present — never on
+the status alone.
+
+Every error body is `{"code", "message", "details"?}`. `message` is a sentence
+computed server-side naming the cause that actually holds; it is not a fixed
+string per code and should be surfaced, not replaced.
+
+| code | status | `details` | means | recovery |
+|---|---|---|---|---|
+| `BACKUP_UNAVAILABLE` | 409 | `cause` on the snapshot listing | the engine binary is missing — restic, or rclone for the cloud paths. No repository was contacted, so nothing is claimed about it | install/restore the binary; this is a deployment fault, not a settings one |
+| `BACKUP_REPO_UNINITIALIZED` | 409 | `repoState: "uninitialized"` | no repository exists at the configured location | initialise the repository (`POST /api/v1/backups/repo/init`) |
+| `BACKUP_REPO_UNREACHABLE` | 503 | `repoState` | a repository is configured but this request could not read it. `repoState` says which of four causes holds | depends on `repoState`, below |
+| `BACKUP_BUSY` | 409 | — | another backup operation holds the lock | retry once it finishes |
+
+`details.repoState` under `BACKUP_REPO_UNREACHABLE`, and the reason the four
+are not interchangeable:
+
+| `repoState` | means | recovery |
+|---|---|---|
+| `password_missing` | no restic password is configured, so the repository was never contacted. This is the DEFAULT state of a new install: both shipped compose files leave `RESTIC_PASSWORD` commented out | set the restic password in Backup settings. Do NOT go looking at the remote or the mount |
+| `wrong_password` | a password is configured and the repository rejected it (restic exit 12). The repository is reachable and holds its snapshots | correct the password. Do NOT initialise over it |
+| `unreachable` | the repository could not be read for some other reason — network, permissions, a missing mount. It may well exist and hold every backup | check the remote or the mount |
+| `settings_unreadable` | the backup settings could not be read, so WHICH repository is configured is itself unknown | repair the settings/database |
+
+`GET /api/v1/backups/status` and `GET /api/v1/settings/backup` carry the same
+`repoState` on a 200, alongside `repoStateMessage`. Both also use `"ok"`, and
+`""` for "not probed" — which ships when restic is absent, since the probe
+returns before running. `repoStateMessage` is empty whenever `repoState` is
+`"ok"`.
+
+### Wire contract change, 2026-09-15
+
+`GET /api/v1/backups/snapshots` previously answered **200 with an empty array**
+when the restic binary was absent. It now answers **409 `BACKUP_UNAVAILABLE`**.
+A client that treated the empty array as "this stack has no backups" was being
+told a fault was a benign state, which is why this changed; a client that still
+reads 200 `[]` that way remains correct, because the empty array now means only
+what it says.
+
+The same endpoint previously answered **500 "Failed to list snapshots"** for a
+repository that had never been initialised — restic exits 10 on the listing
+path just as it does on the probe — and now answers **409
+`BACKUP_REPO_UNINITIALIZED`**.
+`GET /api/v1/backups/snapshots/:snapshotId/preview` answered that same state
+with **404**, and now answers the same 409, so one state has one shape. A 404
+from that endpoint now means what it says: the snapshot id was not found in a
+repository that does exist.
+
 ## Keeping this page honest
 
 `scripts/check-api-docs.sh` extracts every `group.METHOD("path", ...)` call

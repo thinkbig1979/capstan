@@ -203,7 +203,14 @@ describe('RepositorySection credential hint', () => {
  * on the word actually on screen rather than on a missing hook. Exact string
  * matching is load-bearing: "Initialized" must not match "Not initialized".
  */
-const REPO_STATE_LABELS = ['Initialized', 'Not initialized', 'Unreachable', 'Unknown'] as const
+const REPO_STATE_LABELS = [
+  'Initialized',
+  'Not initialized',
+  'Unreachable',
+  'Unknown',
+  'No password set',
+  'Password rejected',
+] as const
 
 function repositoryStateText() {
   const found = REPO_STATE_LABELS.filter((label) => screen.queryByText(label) !== null)
@@ -258,6 +265,65 @@ describe('RepositorySection repository state', () => {
     // The cause is already on the wire and was consumed by nothing; surfacing
     // it is what turns "Unreachable" into something actionable.
     expect(repositoryStateElement().getAttribute('title')).toContain('connection refused')
+  })
+
+  it('names a missing restic password and refuses to initialize on it', () => {
+    // agent-os-l04z. The DEFAULT state of a fresh install: both shipped compose
+    // files leave RESTIC_PASSWORD commented out, so this is what a new operator
+    // sees. It used to arrive as `unreachable` and be labelled Unreachable,
+    // which asserts a probe result nobody obtained — restic was never run.
+    renderSection(
+      makeSettings({
+        repoState: 'password_missing',
+        repoStateMessage: 'no restic password is configured, so the repository was not contacted',
+        resticAvailable: true,
+      }),
+      '/data/restic-repo',
+    )
+
+    expect(repositoryStateText()).toBe('No password set')
+    expect(screen.queryByText('Unreachable')).toBeNull()
+    expect(screen.queryByText('Not initialized')).toBeNull()
+    expect(initButton().disabled).toBe(true)
+    // The refusal must name THIS cause. The fall-through arm says the
+    // repository "could not be read, so it may already exist", which is a non
+    // sequitur when nothing was attempted — and a ternary chain has no
+    // exhaustiveness check, so tsc stays green on exactly that mistake.
+    expect(initButton().getAttribute('title')).toMatch(/set a restic password first/i)
+    expect(initButton().getAttribute('title')).not.toMatch(/may already exist/i)
+  })
+
+  it('names a rejected password and refuses to initialize OVER the repository', () => {
+    // restic exit 12. This is the destructive-adjacent one: a repository exists
+    // here and holds every backup the user has, and only the key is wrong.
+    // Enabling Initialize would create a new, empty repository beside it.
+    renderSection(
+      makeSettings({
+        repoState: 'wrong_password',
+        repoStateMessage: 'the configured restic password was rejected by the repository',
+        resticAvailable: true,
+      }),
+      '/data/restic-repo',
+    )
+
+    expect(repositoryStateText()).toBe('Password rejected')
+    expect(screen.queryByText('Not initialized')).toBeNull()
+    expect(initButton().disabled).toBe(true)
+    expect(initButton().getAttribute('title')).toMatch(/correct the password rather than initializing over it/i)
+    expect(repositoryStateElement().getAttribute('title')).toContain('rejected by the repository')
+  })
+
+  it('still offers Initialize for uninitialized ONLY, with both new states present', () => {
+    // The discriminating control for the two arms above. They show the button
+    // disabled; without this one, a build that disabled it unconditionally
+    // would pass both and be worse than the bug. Same instrument, same
+    // fixture-shape, one field changed.
+    renderSection(
+      makeSettings({ repoState: 'uninitialized', resticAvailable: true }),
+      '/data/restic-repo',
+    )
+
+    expect(initButton().disabled).toBe(false)
   })
 
   it('says Unknown when the settings naming the repository could not be read', () => {

@@ -71,34 +71,81 @@ function formatDate(iso: string): string {
 }
 
 /**
- * A backup repository that could not be read answers this query with 503 and
- * code BACKUP_REPO_UNREACHABLE, minted by repoFault() in
- * backend/internal/handlers/backup.go. That body carries two things beyond the
- * code: `details.repoState`, which of the two fault states holds, and `message`,
- * the cause sentence CheckRepository already computed. The axios interceptor in
- * lib/api.ts rejects with the body spread verbatim, so all three arrive here
- * untouched.
+ * The snapshots query answers a repository fault with one of THREE codes, all
+ * minted in backend/internal/handlers/backup.go:
  *
- * Keys on `code` alone and never on the 503: the code is what the backend treats
- * as the client's branch point, and a status check here would go stale the moment
- * the same fault were reported under a different status.
+ *   BACKUP_REPO_UNREACHABLE   503, repoFault()         — configured, not readable
+ *   BACKUP_REPO_UNINITIALIZED 409, repoUninitialized() — no repository exists yet
+ *   BACKUP_UNAVAILABLE        409, listSnapshots       — restic itself is missing
+ *
+ * The first two carry `details.repoState`, which of the states holds, plus
+ * `message`, the cause sentence CheckRepository already computed. The third
+ * carries `details.cause` and NO repoState, deliberately: on that path
+ * CheckRepository is never called, so no repository state was ever obtained and
+ * claiming one would be a fabrication. The axios interceptor in lib/api.ts
+ * rejects with the body spread verbatim, so all of it arrives here untouched.
+ *
+ * Keys on `code` and `repoState`, never on the status: the code is what the
+ * backend treats as the client's branch point, and a status check here would go
+ * stale the moment the same fault were reported under a different status — which
+ * is exactly what happened to the uninitialised state, which used to arrive as a
+ * 500 and now arrives as a 409.
  *
  * Deliberately NOT routed through classifyError(). Its 5xx branch discards
  * `message` and answers "503: Something went wrong on the server" — a status
  * code, where an operator needs a cause and a recovery. The recovery is the
- * whole point: an unreachable repository is fixed by checking the remote or the
- * mount, an uninitialised one by initialising, and offering the second for the
- * first is destructive-adjacent.
+ * whole point, and the recoveries here are mutually exclusive: an unreachable
+ * repository is fixed by checking the remote or the mount, an uninitialised one
+ * by initialising, a password fault by correcting a credential — and offering
+ * any of the others for an unreachable repository is destructive-adjacent.
  */
 function repoFaultFrom(
   error: unknown,
 ): { title: string; hint: string; detail: string } | null {
   if (!error || typeof error !== 'object') return null
   const body = error as { code?: string; message?: string; details?: { repoState?: string } }
-  if (body.code !== 'BACKUP_REPO_UNREACHABLE') return null
 
   const detail = body.message ?? ''
+
+  // Restic itself is missing, so nothing about the repository is known and
+  // nothing about it is claimed. Before agent-os-9f5c this path answered 200
+  // with an empty array and rendered as the ordinary empty state — including
+  // "Run a backup to create the first one", which cannot work when the binary
+  // that would run it is absent.
+  if (body.code === 'BACKUP_UNAVAILABLE') {
+    return {
+      title: 'The backup engine is not available.',
+      hint: 'Capstan could not find the restic binary, so it could not read the repository or tell you whether any snapshots exist. This is a deployment problem rather than a settings one.',
+      detail,
+    }
+  }
+
+  // A different CODE, not merely a different repoState: this function returned
+  // null for anything but BACKUP_REPO_UNREACHABLE, so a new code needs its own
+  // arm regardless. Initialising is the correct recovery here and ONLY here.
+  if (body.code === 'BACKUP_REPO_UNINITIALIZED') {
+    return {
+      title: 'The backup repository does not exist yet.',
+      hint: 'Nothing has been lost. Initialise the repository in Backup settings, then run a backup.',
+      detail,
+    }
+  }
+
+  if (body.code !== 'BACKUP_REPO_UNREACHABLE') return null
+
   switch (body.details?.repoState) {
+    case 'password_missing':
+      return {
+        title: 'No restic password is configured.',
+        hint: 'The repository was never contacted, so nothing is known to be wrong with it. Set the restic password in Backup settings — the remote and the mount are not the problem.',
+        detail,
+      }
+    case 'wrong_password':
+      return {
+        title: 'The restic password was rejected.',
+        hint: 'The repository answered and your snapshots are not missing; the credential is what is wrong. Correct the restic password in Backup settings — do not initialise a new repository over this one.',
+        detail,
+      }
     case 'unreachable':
       return {
         title: 'The backup repository could not be reached.',
@@ -112,10 +159,13 @@ function repoFaultFrom(
         detail,
       }
     default:
-      // Both specifics are POSITIVE arms and this is the fallback, deliberately
-      // that way round. Prescribing a recovery by default means a repoState added
-      // backend-side would be answered with advice written for a different fault,
-      // silently and with no failing test. Say only what the code itself carries.
+      // Every specific state is a POSITIVE arm and this is the fallback,
+      // deliberately that way round. Prescribing a recovery by default means a
+      // repoState added backend-side would be answered with advice written for a
+      // different fault, silently and with no failing test — tsc cannot help
+      // here, because details.repoState is a plain string and this switch has a
+      // default, so the compiler sees no missing case however many states the
+      // backend mints. Say only what the code itself carries.
       return {
         title: 'The backup repository could not be read.',
         hint: 'Capstan could not determine the cause. Check the Backup settings and the repository.',
@@ -488,18 +538,29 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
 
         {!snapshotsLoading && !snapshotsError && (!snapshots || snapshots.length === 0) && (
           hasSuccessfulBackupRuns ? (
-            /* The hedge here stays, and the tempting tightening is wrong. An
-               UNREACHABLE repository now 503s into the error branch above and can
-               no longer reach this state — but listSnapshots returns 200 with an
-               EMPTY ARRAY when restic is absent (the !av.ResticPresent early
-               return in backend/internal/handlers/backup.go), which sits BEFORE
-               CheckRepository and so never probes the repository at all. That
-               lands here with availability genuinely unknown, so "may be
-               unavailable" is true on a reachable path and "the repository
-               answered" would be false on it (agent-os-eo4u). */
+            /* The hedge is GONE, and removing it is the point rather than a
+               tidy-up. agent-os-eo4u tried this and reverted, correctly at the
+               time: listSnapshots still answered 200 with an EMPTY ARRAY when
+               restic was absent, from an early return sitting BEFORE
+               CheckRepository, so that path landed here with availability
+               genuinely unknown and "the repository answered" would have been
+               false on it.
+
+               agent-os-9f5c deleted that path. Reaching this branch now requires
+               a 200, and the handler emits one only after CheckRepository
+               returned RepoStateOK and restic listed successfully — every other
+               state is a named 409 or 503 into the error branch above, and
+               useBackupSnapshots has no error fallback that could turn a
+               rejection into an empty array. So the repository demonstrably
+               answered, and the remaining explanations are retention, a reset or
+               re-initialised repository, or runs that wrote to a different
+               repository than the one configured now. Saying "may be
+               unavailable" here would be the wrong-fault-named defect this wave
+               exists to remove, pointing an operator at a repository that is
+               working. */
             <EmptyState
               title="No snapshots listed"
-              description="Recent runs report success, but no snapshots are in the repository right now. The repository may be unavailable or was reset, check the Backup settings and repository."
+              description="Recent runs report success and the repository answered, but it holds no snapshots for this stack. They may have been pruned by retention, or the repository may have been reset or repointed since those runs."
             />
           ) : (
             <EmptyState
