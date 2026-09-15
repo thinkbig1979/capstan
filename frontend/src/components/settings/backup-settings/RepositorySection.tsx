@@ -112,17 +112,25 @@ export function RepositorySection({
   // there is nothing to create and that benign success would be reported to the
   // operator as "Repository initialized successfully".
   //
-  // On `unreachable`, `settings_unreadable`, `wrong_password` and `''` the
-  // server genuinely refuses, with 503, and the reason is data loss rather than
-  // tidiness: a repository that could not be read may well exist and hold every
+  // On `unreachable`, `settings_unreadable`, `wrong_password` and
+  // `password_missing` the server refuses with 503 BACKUP_REPO_UNREACHABLE —
+  // repoInit's guard is `RepoState != RepoStateUninitialized`, so all four take
+  // that one branch. The reason is data loss rather than tidiness for the first
+  // three: a repository that could not be read may well exist and hold every
   // backup the user has, one that rejected a password certainly does, and when
   // the settings themselves are unreadable we do not know WHICH repository is
   // configured. Initialising in any of them points every later backup at a new,
-  // empty repository while the real one still exists.
+  // empty repository while the real one still exists. `password_missing` shares
+  // the status but not the reason: nothing was attempted at all, there is no
+  // credential with which to create or read a repository, and the field that
+  // fixes it is on this same form.
   //
-  // On `password_missing` nothing has been attempted at all, so the refusal is
-  // neither of the above: there is no credential with which to create or read a
-  // repository, and the field that fixes it is on this same form.
+  // On `''` the server answers 409 BACKUP_UNAVAILABLE, NOT 503, and it never
+  // reaches the repo-state guard at all: repoInit's `!av.ResticPresent` check
+  // returns before CheckRepository is called, which is the same reason `''`
+  // means "not probed". This distinction is why the refusal below tests
+  // `!settings.resticAvailable` FIRST — that is the branch production takes,
+  // and the state-keyed arms never see `''`.
   //
   // The gate stays `=== 'uninitialized'` ONLY. Neither credential state may
   // enable it: initialising over a repository whose password is merely wrong

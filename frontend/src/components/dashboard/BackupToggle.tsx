@@ -45,9 +45,15 @@ export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggle
   }, [policy?.enabled, policy?.stopPolicy])
 
   // "Can we back up RIGHT NOW", so `ok` is the only acceptable state: every
-  // other one -- uninitialized, unreachable, settings_unreadable, and the empty
-  // "not probed" -- means a backup would fail. Undefined statusData falls to
-  // unavailable, which is the safe direction.
+  // other one -- uninitialized, unreachable, settings_unreadable,
+  // password_missing, wrong_password, and the empty "not probed" -- means a
+  // backup would fail. Undefined statusData falls to unavailable, which is the
+  // safe direction.
+  //
+  // Deliberately a NEGATIVE test against `ok` rather than a list of the failing
+  // states, which is why agent-os-l04z's two new states needed no edit here: a
+  // state added backend-side is refused automatically. The enumeration above is
+  // documentation and must be kept honest, but nothing branches on it.
   const engineUnavailable =
     !statusData?.resticAvailable || statusData?.repoState !== 'ok'
 

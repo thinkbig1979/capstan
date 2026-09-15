@@ -103,7 +103,17 @@ function repoFaultFrom(
   error: unknown,
 ): { title: string; hint: string; detail: string } | null {
   if (!error || typeof error !== 'object') return null
-  const body = error as { code?: string; message?: string; details?: { repoState?: string } }
+  // `cause` is declared because the backend ALWAYS sends it on
+  // BACKUP_UNAVAILABLE (every one of its six sites goes through
+  // engineUnavailable), not because this function branches on it — it does not
+  // need to, since only listSnapshots' errors reach here and that endpoint
+  // guards on restic alone. Declared anyway so the type states what the wire
+  // actually carries rather than a subset of it.
+  const body = error as {
+    code?: string
+    message?: string
+    details?: { repoState?: string; cause?: string }
+  }
 
   const detail = body.message ?? ''
 

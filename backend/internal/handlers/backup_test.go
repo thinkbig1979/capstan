@@ -2961,6 +2961,76 @@ func TestListSnapshots_ResticAbsentIsAFaultNotAnEmptyList(t *testing.T) {
 	})
 }
 
+// TestBackupUnavailableHasOneShapeEverywhere pins the consistency defect found
+// by the adversary pass on this wave's own diff.
+//
+// This wave folded previewSnapshot's 404 into listSnapshots' 409 on the stated
+// grounds that two CODES for one state in one handler file is the defect
+// agent-os-rg8h was filed about — and then shipped two SHAPES for one code in
+// that same file: listSnapshots carried details.cause and the other five
+// BACKUP_UNAVAILABLE sites were bare. A client branching on details.cause would
+// have had to know WHICH endpoint it asked to know whether the field was there,
+// which is the same failure one level down.
+//
+// All six now go through engineUnavailable(). This test is what stops them
+// drifting apart again: "one code, one shape" is otherwise an unenforced claim
+// in a docblock, and the six sites are far enough apart in the file that
+// nothing else would notice.
+//
+// The fixture has BOTH binaries absent, which also pins the derived cause. The
+// two rclone-guarded endpoints refuse because rclone is missing, but Available()
+// returns EARLY on absent restic, so the sentence they ship is restic's — and
+// the cause must agree with that sentence rather than with the guard that
+// fired, or the body would contradict itself.
+func TestBackupUnavailableHasOneShapeEverywhere(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   map[string]interface{}
+	}{
+		{"listSnapshots", http.MethodGet, "/api/backups/snapshots", nil},
+		{"previewSnapshot", http.MethodGet, "/api/backups/snapshots/abc12345/preview", nil},
+		{"repoInit", http.MethodPost, "/api/backups/repo/init", map[string]interface{}{}},
+		// confirm:true is REQUIRED here and is not fixture noise. runDRRestore
+		// checks its destructive-operation confirmation BEFORE the availability
+		// guard, so an empty body answers 400 CONFIRMATION_REQUIRED and never
+		// reaches the branch under test — which would read as this test finding
+		// a defect when it had only failed to arrive.
+		{"runDRRestore", http.MethodPost, "/api/backups/dr-restore", map[string]interface{}{"confirm": true}},
+		{"cloudTest", http.MethodPost, "/api/backups/cloud/test", map[string]interface{}{}},
+		{"requireAvailable via runBackup", http.MethodPost, "/api/backups/run", map[string]interface{}{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := backupNoResticRouter(t)
+
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, jsonReq(t, tc.method, tc.path, tc.body))
+
+			require.Equal(t, http.StatusConflict, w.Code)
+			body := decodeBody(t, w)
+			assert.Equal(t, "BACKUP_UNAVAILABLE", body["code"])
+
+			details, ok := body["details"].(map[string]interface{})
+			require.True(t, ok,
+				"every BACKUP_UNAVAILABLE carries details; a client must not have to know which endpoint it asked. got %v", body)
+			assert.Equal(t, "restic_missing", details["cause"])
+
+			// The half that proves cause is DERIVED and not hardcoded per
+			// site: it must name the same binary the sentence does, including
+			// at the two endpoints whose own guard is about rclone.
+			assert.Equal(t, "restic binary not found in PATH", body["message"],
+				"the cause and the sentence must never disagree about which binary is missing")
+		})
+	}
+}
+
 // TestBackupRepoCredentialStatesAreNamed pins agent-os-l04z on the wire, and it
 // is TWO-SIDED on one instrument in the direction that matters: the two new
 // credential states must be named, AND a genuinely unreachable repository must

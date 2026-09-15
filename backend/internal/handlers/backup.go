@@ -931,6 +931,38 @@ func repoUninitialized(av services.BackupAvailability) *models.AppError {
 	)
 }
 
+// engineUnavailable builds the 409 an absent engine binary earns. It is the
+// ONE builder for BACKUP_UNAVAILABLE, and every one of its six emission sites
+// goes through it.
+//
+// It exists because those six sites had drifted into two shapes for one code —
+// five bare, one carrying details.cause — which is the defect this wave was
+// filed about, at one remove: a client branching on details.cause would have
+// had to know WHICH endpoint it had asked in order to know whether the field
+// would be there. One state, one shape; one code, one shape.
+//
+// The cause is DERIVED from the same value that produced the Message rather
+// than hardcoded per call site, and that is the point rather than tidiness.
+// Available() sets the restic sentence and returns EARLY, so when both binaries
+// are absent the Message is restic's even at the two rclone-guarded sites. A
+// hardcoded "rclone_missing" at cloudTest would then contradict the very
+// sentence it ships beside. Deriving both from one value makes them incapable
+// of disagreeing, which is the property this wave exists to restore.
+func engineUnavailable(av services.BackupAvailability) *models.AppError {
+	// Mirrors Available()'s own branch order, which is what keeps cause and
+	// Message in lockstep.
+	cause := "rclone_missing"
+	if !av.ResticPresent {
+		cause = "restic_missing"
+	}
+	return models.NewAppErrorWithDetails(
+		http.StatusConflict,
+		"BACKUP_UNAVAILABLE",
+		av.Message,
+		gin.H{"cause": cause},
+	)
+}
+
 // repoFault builds the 503 a repository that could not be read earns, carrying
 // both the state a client branches on and the sentence CheckRepository already
 // computed and that every caller used to throw away.
@@ -962,12 +994,7 @@ func (h *BackupHandler) listSnapshots(c *gin.Context) {
 		// asked. The answer says restic is missing and claims nothing about the
 		// repository, which is why it carries details.cause rather than a
 		// repoState it does not have.
-		c.JSON(http.StatusConflict, models.NewAppErrorWithDetails(
-			http.StatusConflict,
-			"BACKUP_UNAVAILABLE",
-			av.Message,
-			gin.H{"cause": "restic_missing"},
-		))
+		c.JSON(http.StatusConflict, engineUnavailable(av))
 		return
 	}
 
@@ -1021,11 +1048,7 @@ func (h *BackupHandler) previewSnapshot(c *gin.Context) {
 
 	av := h.svc.Available()
 	if !av.ResticPresent {
-		c.JSON(http.StatusConflict, models.NewAppError(
-			http.StatusConflict,
-			"BACKUP_UNAVAILABLE",
-			av.Message,
-		))
+		c.JSON(http.StatusConflict, engineUnavailable(av))
 		return
 	}
 
@@ -1242,11 +1265,7 @@ func (h *BackupHandler) runDRRestore(c *gin.Context) {
 		// have replaced a true-if-generic sentence with an empty string — this
 		// wave's own class, introduced by the fix for it. The cause exists now
 		// and is pinned by TestAvailable_ResticPresentOnly.
-		c.JSON(http.StatusConflict, models.NewAppError(
-			http.StatusConflict,
-			"BACKUP_UNAVAILABLE",
-			av.Message,
-		))
+		c.JSON(http.StatusConflict, engineUnavailable(av))
 		return
 	}
 
@@ -1371,11 +1390,7 @@ func (h *BackupHandler) runVerify(c *gin.Context) {
 func (h *BackupHandler) repoInit(c *gin.Context) {
 	av := h.svc.Available()
 	if !av.ResticPresent {
-		c.JSON(http.StatusConflict, models.NewAppError(
-			http.StatusConflict,
-			"BACKUP_UNAVAILABLE",
-			av.Message,
-		))
+		c.JSON(http.StatusConflict, engineUnavailable(av))
 		return
 	}
 
@@ -1432,11 +1447,7 @@ func (h *BackupHandler) cloudTest(c *gin.Context) {
 		// have replaced a true-if-generic sentence with an empty string — this
 		// wave's own class, introduced by the fix for it. The cause exists now
 		// and is pinned by TestAvailable_ResticPresentOnly.
-		c.JSON(http.StatusConflict, models.NewAppError(
-			http.StatusConflict,
-			"BACKUP_UNAVAILABLE",
-			av.Message,
-		))
+		c.JSON(http.StatusConflict, engineUnavailable(av))
 		return
 	}
 
@@ -1718,11 +1729,7 @@ func (h *BackupHandler) sendDoneFrame(conn *Connection, runID, outcome, reason s
 func (h *BackupHandler) requireAvailable(c *gin.Context) error {
 	av := h.svc.Available()
 	if !av.Available {
-		err := models.NewAppError(
-			http.StatusConflict,
-			"BACKUP_UNAVAILABLE",
-			av.Message,
-		)
+		err := engineUnavailable(av)
 		c.JSON(http.StatusConflict, err)
 		return err
 	}
