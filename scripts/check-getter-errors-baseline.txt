@@ -3,7 +3,7 @@ internal/database/backup.go DISCARD=1 SOFT=0 MERGE=0
 internal/database/retention.go DISCARD=2 SOFT=0 MERGE=0
 internal/database/update_history.go DISCARD=1 SOFT=0 MERGE=0
 internal/handlers/auth.go DISCARD=0 SOFT=0 MERGE=1
-internal/handlers/backup.go DISCARD=0 SOFT=1 MERGE=1
+internal/handlers/backup.go DISCARD=0 SOFT=5 MERGE=0
 internal/handlers/compose.go DISCARD=0 SOFT=0 MERGE=1
 internal/handlers/env.go DISCARD=0 SOFT=1 MERGE=0
 internal/handlers/git.go DISCARD=0 SOFT=3 MERGE=0
@@ -25,10 +25,10 @@ internal/services/docker.go DISCARD=1 SOFT=2 MERGE=0
 internal/services/docker_lifecycle.go DISCARD=0 SOFT=0 MERGE=1
 internal/services/docker_update.go DISCARD=3 SOFT=3 MERGE=1
 internal/services/exec_env.go DISCARD=1 SOFT=0 MERGE=0
-internal/services/git.go DISCARD=12 SOFT=7 MERGE=0
+internal/services/git.go DISCARD=11 SOFT=6 MERGE=0
 internal/services/linter.go DISCARD=0 SOFT=1 MERGE=0
 internal/services/redact_url.go DISCARD=5 SOFT=3 MERGE=0
 internal/services/scanner.go DISCARD=0 SOFT=4 MERGE=0
 internal/services/schedule.go DISCARD=2 SOFT=0 MERGE=0
 internal/services/watcher.go DISCARD=0 SOFT=1 MERGE=0
-TOTAL FILES=33 DISCARD=39 SOFT=46 MERGE=14
+TOTAL FILES=33 DISCARD=38 SOFT=49 MERGE=13

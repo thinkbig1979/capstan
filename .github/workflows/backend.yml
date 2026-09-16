@@ -127,6 +127,35 @@ jobs:
         working-directory: backend
         run: go test ./... -count=1
 
+      # The getter-errors ratchet (agent-os-8f2g) is a go/ast program, so until
+      # agent-os-946e it had NO CI route at all. Its only one was through
+      # scripts/check-docs.sh, which runs in the "Docs structure and coverage
+      # gates" job -- deliberately dependency-free bash, hence no Go, hence the
+      # scanner skipped there and that required check went green without it
+      # having run. agent-os-ozt0 is the drift that reached main through the
+      # gap: two files past their baseline, neither visible to any PR.
+      #
+      # It is wired HERE rather than by adding actions/setup-go to the docs job
+      # because check-docs.sh:860-864 states the dependency-free property of
+      # that workflow as a design decision, and this job already has Go, the
+      # module cache, and a place in main's required checks -- so enforcement
+      # arrives with no branch-protection change.
+      #
+      # AFTER the unit tests, not before: the ratchet is a policy gate and a
+      # step that fails stops the job, so running it first would hide a genuine
+      # test failure behind a baseline one. Runner time is not the constraint
+      # (self-hosted); information per run is.
+      #
+      # --self-test FIRST, mirroring check-docs.sh:873-880. A scanner that has
+      # silently stopped firing looks exactly like a clean tree, and this step
+      # is the thing whose green will be cited. The self-test runs the scanner
+      # against fixtures it MUST report, so a broken instrument turns this red
+      # instead of passing every PR.
+      - name: Getter-errors ratchet
+        run: |
+          bash scripts/check-getter-errors.sh --self-test
+          bash scripts/check-getter-errors.sh
+
   # This codebase is the profile the race detector is built for:
   # goroutine-per-connection WebSocket handlers, background tickers, a session
   # map behind a mutex, a connection manager behind an RWMutex.

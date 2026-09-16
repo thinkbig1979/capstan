@@ -862,10 +862,30 @@ check_getter_errors() {
   # absent the check reports SKIP and returns 3, which main() counts
   # separately: a silent PASS on a runner that cannot run the scanner is the
   # same false zero the check exists to prevent, wearing a third costume.
+  # The reassurance printed below used to name "the backend CI jobs", and
+  # nothing kept that promise: no workflow invoked the scanner at all, so the
+  # ratchet ran on developer machines only and agent-os-ozt0's drift reached
+  # main unseen (agent-os-946e). The clause now names one job, and the grep
+  # above the SKIP checks that the job still calls it -- a reassurance that
+  # cannot be verified where it is made is how this failed the first time, and
+  # a grep needs no Go, so it works on exactly the runner that has to skip.
   if ! command -v go >/dev/null 2>&1; then
+    local enforcer="$REPO_ROOT/.github/workflows/backend.yml"
+    if ! grep -q "check-getter-errors.sh" "$enforcer" 2>/dev/null; then
+      echo "FAIL: getter-errors - the scanner cannot run here ('go' is not on PATH)"
+      echo "  AND $enforcer no longer invokes it, so nothing enforces the ratchet."
+      echo "  Either restore the 'Getter-errors ratchet' step in that workflow's"
+      echo "  'Build, vet, and unit tests' job, or point this check at whatever"
+      echo "  replaced it. Do not relax this into a SKIP: a skip here is only"
+      echo "  honest while some other required job is known to run the scanner."
+      return 1
+    fi
     echo "SKIP: getter-errors - 'go' is not on PATH, so the AST scanner did not run."
-    echo "  This is NOT a pass. The ratchet is enforced wherever Go is present"
-    echo "  (every developer machine, and the backend CI jobs); run it there with"
+    echo "  This is NOT a pass. The ratchet is enforced wherever Go is present:"
+    echo "  every developer machine, and the 'Build, vet, and unit tests' job of"
+    echo "  .github/workflows/backend.yml, which runs it directly. That job is one"
+    echo "  of main's required checks, and the grep above confirmed it still"
+    echo "  invokes the scanner. Run it here with:"
     echo "  bash scripts/check-getter-errors.sh"
     return 3
   fi

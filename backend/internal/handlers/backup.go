@@ -285,6 +285,18 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	// scheduleDays is always an array, never null: the UI iterates it directly
 	// and a JSON null would break that. An unparseable stored value degrades to
 	// the empty array rather than failing the whole settings read.
+	//
+	// LEGITIMATE for the getter-errors ratchet, and not on the strength of that
+	// degradation alone: the WRITE path is what makes the error unreachable. The
+	// only route a value takes into backup_schedule_days is
+	// validateScheduleFields, which runs this same ParseWeekdays and returns its
+	// error to the caller, so anything stored has already parsed once. An error
+	// here would therefore mean the column was changed underneath the
+	// application rather than that a user sent something bad -- and even then
+	// nothing is lost, because the scheduler re-reads and re-validates the
+	// column itself (services.ParseDailySchedule, called from the backup
+	// service's schedule lookups) instead of trusting this read-back, which
+	// exists only to render the settings form.
 	scheduleDays := []int{}
 	if parsed, err := services.ParseWeekdays(bc.ScheduleDays); err == nil {
 		for _, day := range parsed {
@@ -792,6 +804,18 @@ func (h *BackupHandler) getHistory(c *gin.Context) {
 		Trigger: c.Query("trigger"),
 	}
 
+	// The four parses below -- page, limit, from, to -- are LEGITIMATE for the
+	// getter-errors ratchet, and they are the reason this file's SOFT count
+	// moved. Every one reads a URL QUERY PARAMETER, so the error means "the
+	// client sent something that is not a number / not an RFC3339 timestamp",
+	// never that a database or the Docker daemon could not be reached. There is
+	// no fault to surface and nothing to log: the value is attacker-controlled
+	// and arrives wrong as a matter of course. Ignoring it leaves the documented
+	// default in place, which is this endpoint's stated contract (see the
+	// docblock above) and matches the update log it was modelled on.
+	//
+	// The genuine faults in this handler are NOT softened: GetBackupRunsFiltered
+	// below returns its error to internalError.
 	if p := c.Query("page"); p != "" {
 		if v, err := strconv.Atoi(p); err == nil && v > 0 {
 			filters.Page = v
