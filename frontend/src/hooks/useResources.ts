@@ -23,11 +23,65 @@ export function resolveUpdateScanSuccess() {
   toast.success('Update check complete', { id: UPDATE_SCAN_TOAST_ID, duration: 3000 })
 }
 
-export function resolveUpdateScanError() {
+/**
+ * The update scan's ONE actionable wire code, 503 DOCKER_UNAVAILABLE, carrying
+ * DockerUnavailableMessage (backend respond.go:186): "Docker daemon
+ * unreachable: the server started without a usable Docker connection. Check
+ * that the Docker socket is mounted and the daemon is running, then restart
+ * Capstan." That is a cause and a recovery, where 'Update check failed' reads
+ * to an operator as "no updates were found".
+ *
+ * WHAT THIS DOES NOT COVER, stated so the next reader does not believe
+ * otherwise: the 503 is reachable ONLY when Capstan BOOTED without Docker.
+ * GET /resources/updates?refresh=true returns 202 Accepted whenever the
+ * scheduler exists (updates.go:36-50), and the scheduler is built iff the
+ * Docker service is (main.go:379-382). So if Docker was up at boot and the
+ * daemon dies later, the refresh still answers 202 and the failure arrives on
+ * the WS update_scan_failed event, which carries no cause at all — see
+ * resolveUpdateScanError's caller in useStackEvents. This function changes
+ * nothing for that case. The scan's reason in that world is served on the
+ * update-settings query instead (agent-os-xhn6).
+ *
+ * Keys on the CODE and renders only `message`. Deliberately NOT routed through
+ * classifyError(), which is the idiom everywhere else in this file: its 5xx
+ * branch discards `message` and answers "503: Something went wrong on the
+ * server" (error-handler.ts), and this site IS a 5xx — it is the one most
+ * exposed to that trap.
+ */
+function updateScanFault(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null
+  const body = error as { code?: string; message?: string }
+  if (body.code !== 'DOCKER_UNAVAILABLE') return null
+  return body.message || null
+}
+
+/**
+ * `error` is OPTIONAL because this function has two callers and only one of
+ * them has an error to give it. The HTTP caller (useCheckUpdatesRefresh below)
+ * passes the rejected response; the WS caller
+ * (useStackEvents' handleUpdateScanFailedEvent) is a message handler whose
+ * payload is `{ type, timestamp }` and nothing else, so it passes nothing and
+ * gets the generic sentence. That is correct and expected rather than a
+ * shortfall: the emitter (services/scheduler.go:342) HOLDS the error — it
+ * writes err.Error() into the update_scan_last_error setting a few lines
+ * earlier — and ships only the type and the timestamp, a deliberate
+ * server-side decision. Making the WS caller invent a cause would fabricate
+ * one, which is the whole defect this line of work exists to stop.
+ *
+ * The parameter goes on the SHARED function rather than the cause being read
+ * at the call site because this is a store transition, not a toast: it is
+ * gated on isScanning and calls finishScan(). Reading the cause at the call
+ * site would mean duplicating that body, or skipping finishScan() and
+ * stranding isScanning=true with the loading toast unresolved until the
+ * watcher's safety net.
+ */
+export function resolveUpdateScanError(error?: unknown) {
   const store = useUpdateScanStore.getState()
   if (!store.isScanning) return
   store.finishScan()
-  toast.error('Update check failed', { id: UPDATE_SCAN_TOAST_ID, duration: 4000 })
+  const cause = updateScanFault(error)
+  const options = { id: UPDATE_SCAN_TOAST_ID, duration: 4000 }
+  toast.error('Update check failed', cause ? { ...options, description: cause } : options)
 }
 
 export function useImages() {
@@ -397,8 +451,11 @@ export function useCheckUpdatesRefresh() {
         resolveUpdateScanSuccess()
       }
     },
-    onError: () => {
-      resolveUpdateScanError()
+    // Takes the error. It used to take nothing, so the 503's message was
+    // unreadable in principle rather than merely unread — no unused variable
+    // and no type error to notice (agent-os-82lk).
+    onError: (error) => {
+      resolveUpdateScanError(error)
     },
   })
 }

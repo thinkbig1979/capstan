@@ -17,6 +17,58 @@ import { toast } from 'sonner'
 import { queryKeys } from '@/lib/query-keys'
 import type { DirectoryCredentialStatusValue } from '@/types'
 
+/**
+ * The credentials save's two ACTIONABLE wire codes. PUT /directories/credentials
+ * answers with four: VALIDATION_ERROR and INTERNAL_ERROR, which say nothing an
+ * operator can act on and keep the generic sentence, plus these two, which do:
+ *
+ *   NOT_FOUND               404, "Directory not found" — the directory this form
+ *                           is editing is gone from the DB, so no amount of
+ *                           retyping the token will help (directories.go:169,
+ *                           inside UpdateCredentials).
+ *   ENCRYPTION_KEY_MISSING  422, EncryptionUnavailableMessage (respond.go:222),
+ *                           minted by respondIfEncryptionUnavailable and reached
+ *                           from this endpoint's own write at directories.go:185.
+ *                           It carries a cause AND a recovery ("Set STORAGE_KEY
+ *                           (or JWT_SECRET) ... and restart Capstan"), and
+ *                           respond.go names git_https_token — this form's own
+ *                           payload — as a trigger.
+ *
+ * KEY ON THE WIRE VALUE, not on the Go identifier: the constant is
+ * models.ErrEncryptionUnavailable and its VALUE is "ENCRYPTION_KEY_MISSING"
+ * (the same trap as models.ErrValidation = "VALIDATION_ERROR").
+ *
+ * Keys on the CODE, never on "did something carry a message", and renders
+ * exactly ONE field, `message` — not `details`, not the whole body. This is the
+ * git CREDENTIALS endpoint, so the allow-list is the bound on what server text
+ * can ever reach a toast from here. Stated accurately: there is NO leak being
+ * repaired. Every message UpdateCredentials emits today is a fixed Go literal,
+ * none interpolates req.Path/HTTPSUser/HTTPSToken or an err, AppError.Cause is
+ * `json:"-"`, and directories.go:211 blanks GitHTTPSToken before the 200. The
+ * allow-list is future-proofing against a message added to this endpoint later.
+ *
+ * Deliberately NOT routed through classifyError(): its 5xx branch discards
+ * `message` and answers "503: Something went wrong on the server", a status code
+ * where an operator needs a cause.
+ *
+ * Module-private rather than an arm on lib/backup-repo-fault.ts's repoFaultFrom,
+ * and that FOLLOWS the house reasoning rather than departing from it.
+ * repoFaultFrom is scoped to the three backup repository codes and is read by
+ * the stack Backups panel and both backup-settings toasts, so a NOT_FOUND arm
+ * there would change those consumers' rendering as a side effect of fixing this
+ * form. useBackupActions.ts reads VALIDATION_ERROR locally for exactly that
+ * reason, and its module-private `validationMessage` — including the docblock
+ * re-teaching this same wire-value trap — is the shape copied here. The
+ * duplication that put repoFaultFrom in lib/ does not arise: one endpoint, one
+ * consumer, no second copy to drift.
+ */
+function credentialSaveFault(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null
+  const body = error as { code?: string; message?: string }
+  if (body.code !== 'NOT_FOUND' && body.code !== 'ENCRYPTION_KEY_MISSING') return null
+  return body.message || null
+}
+
 interface GitSettingsSectionProps {
   directoryPath: string
   remoteURL?: string
@@ -77,7 +129,19 @@ export function GitSettingsSection({
       queryClient.invalidateQueries({ queryKey: queryKeys.directories() })
       setLoaded(false)
     },
-    onError: () => toast.error('Failed to save credentials'),
+    // Takes the error. It used to take nothing, which made both codes above
+    // unreadable in principle rather than merely unread: there was no unused
+    // variable and no type error for anyone to notice (agent-os-82lk, the same
+    // shape agent-os-nhiv and agent-os-3wyv repaired in backup settings). A real
+    // production 404 sat behind this sentence for months (agent-os-p7r).
+    //
+    // The generic sentence stays as the TITLE and the server's own message
+    // arrives as the description, so a code outside the allow-list renders
+    // exactly what it rendered before.
+    onError: (error) => {
+      const cause = credentialSaveFault(error)
+      toast.error('Failed to save credentials', cause ? { description: cause } : undefined)
+    },
   })
 
   const hasCustomCreds = authType !== 'inherit' && authType !== ''
