@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { toast } from 'sonner'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
@@ -29,6 +29,8 @@ vi.mock('sonner', () => ({
 
 import { useStackEvents } from '../useStackEvents'
 import { UPDATE_SCAN_TOAST_ID } from '../useResources'
+import { queryClient } from '@/lib/query-client'
+import { queryKeys } from '@/lib/query-keys'
 
 beforeEach(() => {
   capturedOnMessage = null
@@ -72,5 +74,45 @@ describe('useStackEvents update-scan completion', () => {
 
     expect(toast.success).not.toHaveBeenCalled()
     expect(useUpdateScanStore.getState().isScanning).toBe(false)
+  })
+})
+
+describe('useStackEvents update-scan invalidation', () => {
+  // scheduleInvalidations debounces by 750ms, so the assertions run on fake timers.
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const flushInvalidations = () => {
+    vi.advanceTimersByTime(750)
+    return vi.mocked(queryClient.invalidateQueries).mock.calls.map(([arg]) => arg!.queryKey)
+  }
+
+  it('invalidates the update-settings query on update_scan_failed, so lastScanError is refetched', () => {
+    useUpdateScanStore.setState({ isScanning: true })
+    renderHook(() => useStackEvents())
+
+    capturedOnMessage!({ type: 'update_scan_failed', timestamp: '' })
+
+    expect(flushInvalidations()).toEqual([
+      queryKeys.resources.updates(),
+      queryKeys.settings.updates(),
+    ])
+  })
+
+  it('still invalidates both queries on update_scan_complete', () => {
+    useUpdateScanStore.setState({ isScanning: true })
+    renderHook(() => useStackEvents())
+
+    capturedOnMessage!({ type: 'update_scan_complete', timestamp: '' })
+
+    expect(flushInvalidations()).toEqual([
+      queryKeys.resources.updates(),
+      queryKeys.settings.updates(),
+    ])
   })
 })
