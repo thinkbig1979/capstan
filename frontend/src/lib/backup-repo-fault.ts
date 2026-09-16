@@ -1,10 +1,11 @@
 /**
- * Three backup endpoints answer a repository fault with one of THREE codes, all
+ * Four backup endpoints answer a repository fault with one of THREE codes, all
  * minted in backend/internal/handlers/backup.go:
  *
  *   BACKUP_REPO_UNREACHABLE   503, repoFault()         — configured, not readable
  *   BACKUP_REPO_UNINITIALIZED 409, repoUninitialized() — no repository exists yet
- *   BACKUP_UNAVAILABLE        409, engineUnavailable() — restic itself is missing
+ *   BACKUP_UNAVAILABLE        409, engineUnavailable() — a backup binary is absent,
+ *                                                        which one is in details.cause
  *
  * The first two carry `details.repoState`, which of the states holds, plus
  * `message`, the cause sentence CheckRepository already computed. The third
@@ -30,8 +31,9 @@
  * WHY THIS LIVES IN lib/ RATHER THAN IN ITS FIRST CONSUMER (agent-os-nhiv):
  * it started module-private inside components/stack/BackupsTab.tsx, when
  * listSnapshots was the only caller whose errors reached it. It now serves the
- * snapshot preview panel in that same component AND the repository Initialize
- * toast in settings/backup-settings/useBackupActions.ts. A settings hook must
+ * snapshot preview panel in that same component AND both toasts in
+ * settings/backup-settings/useBackupActions.ts — the repository Initialize one,
+ * and the cloud connectivity test that agent-os-3wyv added. A settings hook must
  * not import from a stack component, and two copies of this mapping would
  * drift, so there is one definition and the consumers differ only in how much
  * of the returned object they render.
@@ -52,18 +54,29 @@ export function repoFaultFrom(error: unknown): RepoFault | null {
   if (!error || typeof error !== 'object') return null
   // `cause` is declared because the backend ALWAYS sends it on
   // BACKUP_UNAVAILABLE (every one of its six sites goes through
-  // engineUnavailable), not because this function branches on it — it does not
-  // need to. Each of the three endpoints whose errors reach here guards on
-  // `!av.ResticPresent` ALONE and returns before anything else is checked, so
-  // `cause` is `restic_missing` on every path that gets this far. The other
-  // value engineUnavailable can mint, `rclone_missing`, comes only from
-  // cloudTest, whose errors do not reach this function. Declared anyway so the
-  // type states what the wire actually carries rather than a subset of it.
+  // engineUnavailable) AND because this function now branches on it. It did
+  // not, and the comment that used to sit here said it never would: it claimed
+  // every endpoint reaching this function guarded on `!av.ResticPresent` alone,
+  // so `cause` was `restic_missing` on every path, and that `rclone_missing`
+  // "comes only from cloudTest, whose errors do not reach this function".
   //
-  // That is a claim about three specific handlers, so it has to be re-checked
-  // whenever a fourth endpoint starts routing errors through here: if one of
-  // them ever guards on rclone as well, this function needs a `cause` arm and
-  // the sentence above stops being true.
+  // Both halves were wrong, and the second more broadly than agent-os-3wyv
+  // first supposed. MEASURED on 2528c1c — engineUnavailable's six call sites in
+  // backup.go are :997 listSnapshots, :1051 previewSnapshot, :1276 runDRRestore,
+  // :1401 repoInit, :1458 cloudTest and :1740 requireAvailable. TWO of them
+  // guard on `!av.RclonePresent`, cloudTest AND runDRRestore, and the code's own
+  // comment at both calls them "the two rclone sites"; requireAvailable guards
+  // on the generic `!av.Available` and can carry either cause. So
+  // `rclone_missing` was never cloudTest's alone, and cloudTest's errors now
+  // reach here — the re-check condition the old comment wrote for itself has
+  // fired, and this is the `cause` arm it asked for.
+  //
+  // The arm is POSITIVE per value with a fallback that names NEITHER binary,
+  // the same way round as the repoState switch below and for the same reason:
+  // requireAvailable can reach here having computed no cause at all, and a
+  // default that kept the restic copy would fabricate one. `details.cause` is a
+  // plain string, so tsc cannot pin this — only the unit tests in
+  // lib/__tests__/backup-repo-fault.test.ts can.
   const body = error as {
     code?: string
     message?: string
@@ -72,15 +85,36 @@ export function repoFaultFrom(error: unknown): RepoFault | null {
 
   const detail = body.message ?? ''
 
-  // Restic itself is missing, so nothing about the repository is known and
+  // A backup binary is missing, so nothing about the repository is known and
   // nothing about it is claimed. Before agent-os-9f5c this path answered 200
   // with an empty array and rendered as the ordinary empty state — including
   // "Run a backup to create the first one", which cannot work when the binary
   // that would run it is absent.
   if (body.code === 'BACKUP_UNAVAILABLE') {
+    // rclone is the cloud leg, not the engine that reads the repository, so
+    // this arm claims nothing about snapshots: at the two rclone-guarded sites
+    // restic may be perfectly present and the repository perfectly readable.
+    if (body.details?.cause === 'rclone_missing') {
+      return {
+        title: 'The cloud sync engine is not available.',
+        hint: 'Capstan could not find the rclone binary, so it could not reach the cloud remote. This is a deployment problem rather than a settings one.',
+        detail,
+      }
+    }
+
+    if (body.details?.cause === 'restic_missing') {
+      return {
+        title: 'The backup engine is not available.',
+        hint: 'Capstan could not find the restic binary, so it could not read the repository or tell you whether any snapshots exist. This is a deployment problem rather than a settings one.',
+        detail,
+      }
+    }
+
+    // No cause, so no binary is named. requireAvailable guards on the generic
+    // `!av.Available`, and `detail` still carries the server's own sentence.
     return {
       title: 'The backup engine is not available.',
-      hint: 'Capstan could not find the restic binary, so it could not read the repository or tell you whether any snapshots exist. This is a deployment problem rather than a settings one.',
+      hint: 'Capstan could not determine which backup component is missing. This is a deployment problem rather than a settings one.',
       detail,
     }
   }

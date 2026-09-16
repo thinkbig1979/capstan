@@ -679,6 +679,13 @@ describe('BackupSettingsContent — error handling', () => {
   })
 
   it('shows an error toast when the cloud test request fails', async () => {
+    // The NEGATIVE arm for the onError route, and it must survive agent-os-3wyv.
+    // A bare Error carries no `code`, so neither repoFaultFrom nor the
+    // VALIDATION_ERROR read below it accepts this, and the generic sentence is
+    // all there is to say. This arm has a real producer: the axios interceptor's
+    // no-response branch (lib/api.ts) fires on a transport failure, and a 500
+    // carries no code either. Making every cloud-test failure a named story
+    // would be the fabrication this bead exists to stop.
     mockTestCloud.mockRejectedValue(new Error('fail'))
     const wrapper = createWrapper()
     render(<BackupSettingsContent />, { wrapper })
@@ -690,16 +697,83 @@ describe('BackupSettingsContent — error handling', () => {
     })
   })
 
-  it('shows an error toast when testCloud succeeds but reports not ok', async () => {
-    mockTestCloud.mockResolvedValue({ ok: false })
+  it('names a missing rclone binary rather than "Cloud connectivity test failed"', async () => {
+    // cloudTest guards on `!av.RclonePresent` and answers 409 BACKUP_UNAVAILABLE,
+    // so the cause on the wire is `rclone_missing` — NOT the `restic_missing`
+    // every other consumer of repoFaultFrom sends. Routing this site through the
+    // helper before it grew a cause arm would have told an operator whose rclone
+    // is absent that their restic is missing, green under both gates.
+    mockTestCloud.mockRejectedValue({
+      code: 'BACKUP_UNAVAILABLE',
+      message: 'rclone binary not found in PATH',
+      details: { cause: 'rclone_missing' },
+      status: 409,
+    })
     const wrapper = createWrapper()
     render(<BackupSettingsContent />, { wrapper })
 
     fireEvent.click(await screen.findByRole('button', { name: /test connectivity/i }))
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('Cloud connectivity test failed')
+      expect(toast.error).toHaveBeenCalledWith('The cloud sync engine is not available.', {
+        description: 'rclone binary not found in PATH',
+      })
     })
+    expect(toast.error).not.toHaveBeenCalledWith('Cloud connectivity test failed')
+    // The fabrication this arm exists to prevent, named explicitly: the restic
+    // copy is what repoFaultFrom answered for EVERY BACKUP_UNAVAILABLE before
+    // the cause arm, and it is wrong here in the one way that matters.
+    expect(toast.error).not.toHaveBeenCalledWith(
+      'The backup engine is not available.',
+      expect.anything(),
+    )
+  })
+
+  it('names an unconfigured rclone remote, which this endpoint answers with VALIDATION_ERROR', async () => {
+    // The 400 half of the onError route. repoFaultFrom declines this code by
+    // design and must keep declining it: previewSnapshot mints VALIDATION_ERROR
+    // too, so a VALIDATION arm in the shared helper would change a different
+    // consumer's rendering. This site reads the server's own message itself.
+    mockTestCloud.mockRejectedValue({
+      code: 'VALIDATION_ERROR',
+      message: 'rclone remote is not configured',
+      status: 400,
+    })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /test connectivity/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('rclone remote is not configured')
+    })
+    expect(toast.error).not.toHaveBeenCalledWith('Cloud connectivity test failed')
+  })
+
+  it('names why the connectivity test failed when the server answers 200 with ok:false', async () => {
+    // This case used to mock `{ ok: false }` with NO error field and assert the
+    // generic sentence — a body backup.go's cloudTest CANNOT SEND. Its single
+    // ok:false emitter always carries `"error": err.Error()`, and both error
+    // returns inside rclone's TestConnectivity are fmt.Errorf with non-empty
+    // literals. So the old case pinned a dead branch, which is exactly the
+    // defect handleInitRepo's comment records this wave as having just deleted.
+    // Rewritten to the shape the server actually sends rather than deleted,
+    // because this route is the one SITE B discards and it needs an arm.
+    mockTestCloud.mockResolvedValue({
+      ok: false,
+      error: 'rclone: directory not found: remote "offsite" does not exist',
+    })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /test connectivity/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        'rclone: directory not found: remote "offsite" does not exist',
+      )
+    })
+    expect(toast.error).not.toHaveBeenCalledWith('Cloud connectivity test failed')
   })
 })
 
