@@ -125,11 +125,18 @@ export function useBackupActions() {
         }
 
         // Nothing discriminating was carried, so nothing is claimed. This arm
-        // has real producers: the axios interceptor's no-response branch builds
-        // a body with no server code on a transport failure, and a 500 carries
-        // none either. Keying the read above on the CODE rather than on "does
-        // it have a message" is what keeps this reachable — that interceptor
-        // branch does set `message`, to axios's own text.
+        // has TWO real producers, and they are reachable for different reasons.
+        // On a transport failure the axios interceptor's no-response branch
+        // builds a body whose `code` is AXIOS's (`error.code || 'UNKNOWN'`)
+        // rather than a server one. A 500, by contrast, DOES carry a server
+        // code: cloudTest's two `h.internalError` calls mint INTERNAL_ERROR
+        // (backup.go:1757-1767). It is simply not a DISCRIMINATING one — it is
+        // none of repoFaultFrom's three codes and it is not VALIDATION_ERROR,
+        // so both readers above decline it and fall through to here.
+        //
+        // Keying the VALIDATION_ERROR read on the CODE rather than on "does it
+        // have a message" is what keeps this arm reachable at all — that
+        // interceptor branch does set `message`, to axios's own text.
         toast.error('Cloud connectivity test failed')
       },
     })
