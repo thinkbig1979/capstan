@@ -300,8 +300,9 @@ run_tool() {
   if ! command -v go >/dev/null 2>&1; then
     echo "getter-errors: FAIL - 'go' is not on PATH, so the scanner cannot run." >&2
     echo "  This is a failure, not a skip: a scanner that silently stops firing" >&2
-    echo "  looks exactly like a clean tree. CI installs Go for this check" >&2
-    echo "  (.github/workflows/docs.yml)." >&2
+    echo "  looks exactly like a clean tree. CI installs Go for this check in the" >&2
+    echo "  'Build, vet, and unit tests' job (.github/workflows/backend.yml), which" >&2
+    echo "  is where this scanner is invoked." >&2
     return 1
   fi
   go run "$TOOL" "$@"

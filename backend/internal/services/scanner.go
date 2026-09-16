@@ -1270,13 +1270,36 @@ func gitStateAtLevel(dir string) (gitLevelState, string) {
 // three ordinary directory names are weak evidence, the HEAD check is what
 // makes them strong, and failing it means "not shown to be a repository here".
 //
-// Unlike readGitBranch this reports no warnings: every ordinary non-git
-// directory of every scan reaches it, so a warning here would be noise rather
-// than a fault report.
+// Unlike readGitBranch this stays silent on the ORDINARY outcomes: every
+// non-git directory of every scan reaches it and answers "no" -- via a plain
+// ENOENT on objects/refs, or a HEAD that is absent or unparseable -- and a
+// warning on those would be noise rather than a fault report.
+//
+// It does warn on the one outcome that is neither ordinary nor a finding: a
+// stat on objects/ or refs/ failing with something OTHER than ENOENT, which
+// says the directory could not be read rather than that it is not a
+// repository. That is rare by construction rather than by luck. This function
+// is reached from one call site, and only where os.Stat(dir/.git) already
+// failed with an IsNotExist error (gitStateAtLevel, above): an unreadable dir
+// fails THAT stat with EACCES, which is not IsNotExist, so it is reported as a
+// fault there and never arrives here.
 func bareGitBranch(dir string) (string, bool) {
 	for _, sub := range []string{"objects", "refs"} {
 		info, err := os.Stat(filepath.Join(dir, sub))
-		if err != nil || !info.IsDir() {
+		if err != nil {
+			// A fault is NOT a negative finding, and merging the two here hid
+			// the only case worth reporting: a repository-shaped directory the
+			// walk then skipped in silence, attributing the stack's git state
+			// to a parent or to nothing. The verdict is unchanged either way --
+			// membership must not widen on evidence we failed to read -- so
+			// what the split buys is the log line, not a different answer.
+			if !os.IsNotExist(err) {
+				slog.Warn("Could not determine whether directory is a bare git repository",
+					"directory", dir, "entry", sub, "error", err)
+			}
+			return "", false
+		}
+		if !info.IsDir() {
 			return "", false
 		}
 	}
