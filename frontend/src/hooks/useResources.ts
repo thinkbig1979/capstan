@@ -34,8 +34,9 @@ export function resolveUpdateScanSuccess() {
  * WHAT THIS DOES NOT COVER, stated so the next reader does not believe
  * otherwise: the 503 is reachable ONLY when Capstan BOOTED without Docker.
  * GET /resources/updates?refresh=true returns 202 Accepted whenever the
- * scheduler exists (updates.go:36-50), and the scheduler is built iff the
- * Docker service is (main.go:379-382). So if Docker was up at boot and the
+ * scheduler exists (checkUpdates, updates.go:36; the scheduler branch is
+ * entered at :40 and its c.JSON(http.StatusAccepted, ...) is at :82), and the
+ * scheduler is built iff the Docker service is (main.go:379-382). So if Docker was up at boot and the
  * daemon dies later, the refresh still answers 202 and the failure arrives on
  * the WS update_scan_failed event, which carries no cause at all — see
  * resolveUpdateScanError's caller in useStackEvents. This function changes

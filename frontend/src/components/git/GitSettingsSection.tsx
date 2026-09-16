@@ -18,9 +18,9 @@ import { queryKeys } from '@/lib/query-keys'
 import type { DirectoryCredentialStatusValue } from '@/types'
 
 /**
- * The credentials save's two ACTIONABLE wire codes. PUT /directories/credentials
- * answers with four: VALIDATION_ERROR and INTERNAL_ERROR, which say nothing an
- * operator can act on and keep the generic sentence, plus these two, which do:
+ * The credentials save's two ACTIONABLE wire codes. UpdateCredentials MINTS four
+ * — VALIDATION_ERROR and INTERNAL_ERROR, which say nothing an operator can act
+ * on and keep the generic sentence, plus these two, which do:
  *
  *   NOT_FOUND               404, "Directory not found" — the directory this form
  *                           is editing is gone from the DB, so no amount of
@@ -38,6 +38,23 @@ import type { DirectoryCredentialStatusValue } from '@/types'
  * models.ErrEncryptionUnavailable and its VALUE is "ENCRYPTION_KEY_MISSING"
  * (the same trap as models.ErrValidation = "VALIDATION_ERROR").
  *
+ * WHAT THE HANDLER MINTS IS NOT WHAT THE ROUTE ANSWERS, and the difference is
+ * the reason this reads as an ALLOW-LIST rather than as a list of the codes to
+ * skip. PUT /directories/credentials is registered on the protected group
+ * (main.go:523 -> directories.go:32), which sits behind three rejecting
+ * middlewares (main.go:511-513) plus the engine-level stack at main.go:455-463,
+ * and those write their own JSON bodies as bare gin.H — invisible to any sweep
+ * keyed on models.NewAppError. MEASURED at this commit, the route can answer
+ * with ELEVEN distinct codes: the four above, plus SESSION_EXPIRED
+ * (auth.go:202,215,217,232,248,270,282) and FORBIDDEN (auth.go:181), INVALID_KEY
+ * (ratelimit.go:298) and RATE_LIMITED (ratelimit.go:309), and CSRF_COOKIE_MISSING
+ * / CSRF_TOKEN_MISSING / CSRF_TOKEN_INVALID (csrf.go:60,71,96). Two further
+ * middleware sites add EMITTERS rather than codes and so do not raise the count:
+ * validation.go:126 mints VALIDATION_ERROR and recovery.go:54 and auth.go:257
+ * mint INTERNAL_ERROR, both already in the handler's four. All seven of the
+ * middleware-only codes fall through this function's `null` to the bare generic
+ * sentence, which is correct — none is special-cased and none needs to be.
+ *
  * Keys on the CODE, never on "did something carry a message", and renders
  * exactly ONE field, `message` — not `details`, not the whole body. This is the
  * git CREDENTIALS endpoint, so the allow-list is the bound on what server text
@@ -47,9 +64,27 @@ import type { DirectoryCredentialStatusValue } from '@/types'
  * `json:"-"`, and directories.go:211 blanks GitHTTPSToken before the 200. The
  * allow-list is future-proofing against a message added to this endpoint later.
  *
- * Deliberately NOT routed through classifyError(): its 5xx branch discards
- * `message` and answers "503: Something went wrong on the server", a status code
- * where an operator needs a cause.
+ * BUT BE PRECISE ABOUT WHAT IS BOUNDED: the allow-list bounds the CODE, and
+ * NOTHING HERE BOUNDS THE MESSAGE. If a NOT_FOUND or ENCRYPTION_KEY_MISSING
+ * message ever becomes interpolated, this predicate renders it verbatim. That is
+ * not hypothetical — the interpolating idiom is already in this codebase and a
+ * contributor will copy it; stack_crud.go:125 builds an AppError message with
+ * fmt.Sprintf carrying client-supplied text. The safety of this site rests on
+ * the two allowed messages staying fixed Go literals, so anyone making one of
+ * them dynamic has to revisit this function.
+ *
+ * Deliberately NOT routed through classifyError(), and the reason is SPECIFIC TO
+ * THIS SITE's two statuses rather than the 5xx one this prohibition is usually
+ * argued from — neither code here is a 5xx, so that argument would not apply.
+ * MEASURED: classifyError's 404 branch (error-handler.ts:170) hardcodes "The
+ * requested resource was not found" and discards `message`, which is exactly the
+ * discard this function exists to stop — so routing NOT_FOUND through it would
+ * defeat the fix. Its 422 branch (error-handler.ts:193-207) would NOT: with no
+ * `details` on the body, fieldMessage falls back to `message` and the server's
+ * recovery sentence would survive. The prohibition is therefore not uniform
+ * across the two codes, and it is written out rather than asserted flatly so
+ * that nobody later "simplifies" this into a classifyError call on the strength
+ * of the 422 half. One code-keyed predicate covering both is the point.
  *
  * Module-private rather than an arm on lib/backup-repo-fault.ts's repoFaultFrom,
  * and that FOLLOWS the house reasoning rather than departing from it.
