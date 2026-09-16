@@ -134,6 +134,15 @@ export function repoFaultFrom(error: unknown): RepoFault | null {
     // wave has spent its time deleting. An unreachable default that SAYS it is
     // unreachable is a different thing from a dead branch dressed as a live
     // path. `detail` still carries the server's own sentence.
+    //
+    // DO NOT COLLAPSE THIS INTO THE restic ARM AS A DEFAULT. agent-os-3wyv left
+    // two unreachable fallbacks behind and only ONE of them was ever deletable:
+    // the cloud test's 200 ok:false arm is UNWRITABLE, because the discriminated
+    // union in lib/api.ts leaves no `undefined` to handle, whereas this one is
+    // UNAVOIDABLE, because `details.cause` is `string | undefined` and tsc forces
+    // a return past the two literal arms above. Deleting this arm does not
+    // compile. Defaulting it to the restic copy DOES compile, passes both gates,
+    // and fabricates a cause — the one thing this arm exists to prevent.
     return {
       title: 'The backup engine is not available.',
       hint: 'Capstan could not determine which backup component is missing. This is a deployment problem rather than a settings one.',
