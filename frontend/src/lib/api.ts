@@ -745,6 +745,24 @@ export const resourcesApi = {
   },
 }
 
+/**
+ * cloudTest answers a FAILED connectivity test with 200, not an error status, so
+ * the failure never reaches a mutation's onError — it lands in onSuccess. The
+ * cause is on the wire in `error`, and the type used to be `{ ok: boolean }`,
+ * which omitted the field entirely: the cause was discarded with no unused
+ * variable, no failing test and no red compiler (agent-os-3wyv).
+ *
+ * Discriminated on `ok` rather than given an optional `error?: string`, and that
+ * is load-bearing rather than tidy. backend/internal/handlers/backup.go's single
+ * ok:false emitter ALWAYS carries `"error": err.Error()`, and both error returns
+ * inside the rclone manager's TestConnectivity are fmt.Errorf with non-empty
+ * literals — so on the false arm `error` is a required string and a "what if it
+ * is missing" fallback is not merely unnecessary, it is unwritable. An optional
+ * field would invite exactly the dead branch this wave deleted from
+ * handleInitRepo.
+ */
+export type CloudTestResult = { ok: true } | { ok: false; error: string }
+
 export const backupApi = {
   // Settings
   getSettings: async () => {
@@ -836,7 +854,7 @@ export const backupApi = {
   },
 
   testCloud: async () => {
-    const response = await apiClient.post<{ ok: boolean }>('/backups/cloud/test')
+    const response = await apiClient.post<CloudTestResult>('/backups/cloud/test')
     return response.data
   },
 

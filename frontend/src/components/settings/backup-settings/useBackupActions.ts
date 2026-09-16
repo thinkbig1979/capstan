@@ -8,6 +8,19 @@ import { repoFaultFrom } from '@/lib/backup-repo-fault'
  * request itself fails, and testCloud separately when the request succeeds but
  * the response reports the operation didn't actually succeed.
  */
+/**
+ * cloudTest's 400. Keys on the exact code the backend mints
+ * (models.ErrValidation is the string "VALIDATION_ERROR", not "VALIDATION") so
+ * that a plain Error, or an axios transport failure whose `message` is axios's
+ * own text rather than the server's, cannot be mistaken for a server sentence.
+ */
+function validationMessage(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null
+  const body = error as { code?: string; message?: string }
+  if (body.code !== 'VALIDATION_ERROR') return null
+  return body.message || null
+}
+
 export function useBackupActions() {
   const initRepo = useInitRepo()
   const testCloud = useTestCloud()
@@ -59,14 +72,73 @@ export function useBackupActions() {
 
   const handleTestCloud = () => {
     testCloud.mutate(undefined, {
+      // A FAILED connectivity test arrives as 200, not as an error status, so
+      // it never reaches onError — cloudTest answers `{ok: false, error}` and
+      // the failure lands here (agent-os-3wyv). The cause was on the wire the
+      // whole time; what threw it away was the response TYPE, which declared
+      // `{ ok: boolean }` and omitted `error` entirely, so there was no unused
+      // variable and no compiler error to notice.
+      //
+      // There is no "failed, cause unknown" arm and its absence is the point.
+      // `error` is a required string on the false arm of CloudTestResult
+      // because the server's single ok:false emitter always sends it, so a
+      // fallback here would be a dead branch — the same one handleInitRepo's
+      // comment above records this wave as having just deleted. Do not add it.
       onSuccess: (data) => {
         if (data.ok) {
           toast.success('Cloud connectivity test passed')
-        } else {
-          toast.error('Cloud connectivity test failed')
+          return
         }
+        toast.error(data.error)
       },
-      onError: () => toast.error('Cloud connectivity test failed'),
+
+      // Takes the error. It used to take nothing, so the cause was unreadable
+      // in principle rather than merely unread (agent-os-3wyv, same shape as
+      // handleInitRepo's site above). This endpoint mints TWO discriminating
+      // codes and they need two different readings:
+      //
+      // BACKUP_UNAVAILABLE goes through the shared mapping — but ONLY because
+      // that mapping now branches on `details.cause`. cloudTest guards on
+      // `!av.RclonePresent`, so the cause here is `rclone_missing`, and before
+      // the cause arm existed repoFaultFrom answered every BACKUP_UNAVAILABLE
+      // with restic copy. Routing this site through it unchanged would have
+      // told an operator whose rclone is absent that their restic is missing: a
+      // fabricated cause, green under both tsc and vitest, and precisely the
+      // defect this line of work exists to stop.
+      //
+      // VALIDATION_ERROR is read HERE rather than in repoFaultFrom, and that is
+      // deliberate. It is not a repository fault, and previewSnapshot mints the
+      // same code, so an arm in the shared helper would change that consumer's
+      // rendering as a side effect of fixing this one. The server's own message
+      // ("rclone remote is not configured") is already the whole answer.
+      onError: (error) => {
+        const fault = repoFaultFrom(error)
+        if (fault) {
+          toast.error(fault.title, fault.detail ? { description: fault.detail } : undefined)
+          return
+        }
+
+        const invalid = validationMessage(error)
+        if (invalid) {
+          toast.error(invalid)
+          return
+        }
+
+        // Nothing discriminating was carried, so nothing is claimed. This arm
+        // has TWO real producers, and they are reachable for different reasons.
+        // On a transport failure the axios interceptor's no-response branch
+        // builds a body whose `code` is AXIOS's (`error.code || 'UNKNOWN'`)
+        // rather than a server one. A 500, by contrast, DOES carry a server
+        // code: cloudTest's two `h.internalError` calls mint INTERNAL_ERROR
+        // (backup.go:1757-1767). It is simply not a DISCRIMINATING one — it is
+        // none of repoFaultFrom's three codes and it is not VALIDATION_ERROR,
+        // so both readers above decline it and fall through to here.
+        //
+        // Keying the VALIDATION_ERROR read on the CODE rather than on "does it
+        // have a message" is what keeps this arm reachable at all — that
+        // interceptor branch does set `message`, to axios's own text.
+        toast.error('Cloud connectivity test failed')
+      },
     })
   }
 
