@@ -582,6 +582,10 @@ describe('BackupSettingsContent — error handling', () => {
   })
 
   it('shows an error toast when the repository initialization request fails', async () => {
+    // Criterion 3's NEGATIVE arm for this site, and it predates agent-os-nhiv:
+    // a bare Error carries no `code`, so repoFaultFrom declines it and the
+    // generic sentence must survive. Making every failure a repository story
+    // would be worse than the bug this file's next two cases pin.
     mockInitRepo.mockRejectedValue(new Error('fail'))
     const wrapper = createWrapper()
     render(<BackupSettingsContent />, { wrapper })
@@ -593,16 +597,85 @@ describe('BackupSettingsContent — error handling', () => {
     })
   })
 
-  it('shows an error toast when initRepo succeeds but reports not-initialized', async () => {
-    mockInitRepo.mockResolvedValue({ initialized: false })
+  it('names an unreachable repository instead of "Failed to initialize repository"', async () => {
+    // agent-os-81vr stopped the server CREATING a repository over an
+    // unreachable one. It did not fix what the operator is then told, so the
+    // retry loop it set out to break survived in the toast.
+    mockInitRepo.mockRejectedValue({
+      code: 'BACKUP_REPO_UNREACHABLE',
+      message: 'backup repository did not answer',
+      details: { repoState: 'unreachable' },
+      status: 503,
+    })
     const wrapper = createWrapper()
     render(<BackupSettingsContent />, { wrapper })
 
     fireEvent.click(await screen.findByRole('button', { name: /initialize repository/i }))
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('Repository initialization reported not-initialized')
+      expect(toast.error).toHaveBeenCalledWith('The backup repository could not be reached.', {
+        description: 'backup repository did not answer',
+      })
     })
+    expect(toast.error).not.toHaveBeenCalledWith('Failed to initialize repository')
+  })
+
+  it('names a rejected restic password rather than a generic init failure', async () => {
+    mockInitRepo.mockRejectedValue({
+      code: 'BACKUP_REPO_UNREACHABLE',
+      message: 'restic rejected the configured password',
+      details: { repoState: 'wrong_password' },
+      status: 503,
+    })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /initialize repository/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('The restic password was rejected.', {
+        description: 'restic rejected the configured password',
+      })
+    })
+  })
+
+  it('names a missing backup engine, which this endpoint answers with its own code', async () => {
+    // repoInit's `!av.ResticPresent` guard returns BEFORE CheckRepository, so
+    // this site emits BACKUP_UNAVAILABLE as well as the 503 — which is why the
+    // helper is reused whole rather than narrowed to one code here.
+    mockInitRepo.mockRejectedValue({
+      code: 'BACKUP_UNAVAILABLE',
+      message: 'restic binary not found',
+      details: { cause: 'restic_missing' },
+      status: 409,
+    })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /initialize repository/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('The backup engine is not available.', {
+        description: 'restic binary not found',
+      })
+    })
+  })
+
+  it('states the resulting state on success instead of claiming work happened', async () => {
+    // The success body is gin.H{"initialized": true} at BOTH of repoInit's 200
+    // returns, and the FIRST fires on RepoStateOK having created nothing. So
+    // "Repository initialized successfully" was false exactly half the time,
+    // for an operator who cannot tell which half they got.
+    mockInitRepo.mockResolvedValue({ initialized: true })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /initialize repository/i }))
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('Backup repository is ready')
+    })
+    expect(toast.success).not.toHaveBeenCalledWith('Repository initialized successfully')
   })
 
   it('shows an error toast when the cloud test request fails', async () => {

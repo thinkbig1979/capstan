@@ -30,6 +30,7 @@ import {
   X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { repoFaultFrom, type RepoFault } from '@/lib/backup-repo-fault'
 import type { BackupSnapshot, BackupRun } from '@/types'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { TableSearch } from '@/components/ui/table-search'
@@ -71,123 +72,39 @@ function formatDate(iso: string): string {
 }
 
 /**
- * The snapshots query answers a repository fault with one of THREE codes, all
- * minted in backend/internal/handlers/backup.go:
- *
- *   BACKUP_REPO_UNREACHABLE   503, repoFault()         — configured, not readable
- *   BACKUP_REPO_UNINITIALIZED 409, repoUninitialized() — no repository exists yet
- *   BACKUP_UNAVAILABLE        409, listSnapshots       — restic itself is missing
- *
- * The first two carry `details.repoState`, which of the states holds, plus
- * `message`, the cause sentence CheckRepository already computed. The third
- * carries `details.cause` and NO repoState, deliberately: on that path
- * CheckRepository is never called, so no repository state was ever obtained and
- * claiming one would be a fabrication. The axios interceptor in lib/api.ts
- * rejects with the body spread verbatim, so all of it arrives here untouched.
- *
- * Keys on `code` and `repoState`, never on the status: the code is what the
- * backend treats as the client's branch point, and a status check here would go
- * stale the moment the same fault were reported under a different status — which
- * is exactly what happened to the uninitialised state, which used to arrive as a
- * 500 and now arrives as a 409.
- *
- * Deliberately NOT routed through classifyError(). Its 5xx branch discards
- * `message` and answers "503: Something went wrong on the server" — a status
- * code, where an operator needs a cause and a recovery. The recovery is the
- * whole point, and the recoveries here are mutually exclusive: an unreachable
- * repository is fixed by checking the remote or the mount, an uninitialised one
- * by initialising, a password fault by correcting a credential — and offering
- * any of the others for an unreachable repository is destructive-adjacent.
+ * One rendering for a named repository fault, used by both queries on this tab.
+ * `font-sans` is explicit because the preview panel sets `font-mono` on its
+ * container for the file listing, and prose inherited into that is unreadable —
+ * the `detail` line re-asserts mono for itself, since that one IS server output.
  */
-function repoFaultFrom(
-  error: unknown,
-): { title: string; hint: string; detail: string } | null {
-  if (!error || typeof error !== 'object') return null
-  // `cause` is declared because the backend ALWAYS sends it on
-  // BACKUP_UNAVAILABLE (every one of its six sites goes through
-  // engineUnavailable), not because this function branches on it — it does not
-  // need to, since only listSnapshots' errors reach here and that endpoint
-  // guards on restic alone. Declared anyway so the type states what the wire
-  // actually carries rather than a subset of it.
-  const body = error as {
-    code?: string
-    message?: string
-    details?: { repoState?: string; cause?: string }
-  }
-
-  const detail = body.message ?? ''
-
-  // Restic itself is missing, so nothing about the repository is known and
-  // nothing about it is claimed. Before agent-os-9f5c this path answered 200
-  // with an empty array and rendered as the ordinary empty state — including
-  // "Run a backup to create the first one", which cannot work when the binary
-  // that would run it is absent.
-  if (body.code === 'BACKUP_UNAVAILABLE') {
-    return {
-      title: 'The backup engine is not available.',
-      hint: 'Capstan could not find the restic binary, so it could not read the repository or tell you whether any snapshots exist. This is a deployment problem rather than a settings one.',
-      detail,
-    }
-  }
-
-  // A different CODE, not merely a different repoState: this function returned
-  // null for anything but BACKUP_REPO_UNREACHABLE, so a new code needs its own
-  // arm regardless. Initialising is the correct recovery here and ONLY here.
-  if (body.code === 'BACKUP_REPO_UNINITIALIZED') {
-    return {
-      title: 'The backup repository does not exist yet.',
-      hint: 'Nothing has been lost. Initialise the repository in Backup settings, then run a backup.',
-      detail,
-    }
-  }
-
-  if (body.code !== 'BACKUP_REPO_UNREACHABLE') return null
-
-  switch (body.details?.repoState) {
-    case 'password_missing':
-      return {
-        title: 'No restic password is configured.',
-        hint: 'The repository was never contacted, so nothing is known to be wrong with it. Set the restic password in Backup settings — the remote and the mount are not the problem.',
-        detail,
-      }
-    case 'wrong_password':
-      return {
-        title: 'The restic password was rejected.',
-        hint: 'The repository answered and your snapshots are not missing; the credential is what is wrong. Correct the restic password in Backup settings — do not initialise a new repository over this one.',
-        detail,
-      }
-    case 'unreachable':
-      return {
-        title: 'The backup repository could not be reached.',
-        hint: 'Your snapshots are not missing. The repository did not answer, so check the remote or the mount — initialising a new repository would not bring them back.',
-        detail,
-      }
-    case 'settings_unreadable':
-      return {
-        title: 'Backup repository state is unknown.',
-        hint: 'Capstan could not load the backup settings, so it cannot tell which repository this stack uses. Check the Backup settings.',
-        detail,
-      }
-    default:
-      // Every specific state is a POSITIVE arm and this is the fallback,
-      // deliberately that way round. Prescribing a recovery by default means a
-      // repoState added backend-side would be answered with advice written for a
-      // different fault, silently and with no failing test — tsc cannot help
-      // here, because details.repoState is a plain string and this switch has a
-      // default, so the compiler sees no missing case however many states the
-      // backend mints. Say only what the code itself carries.
-      return {
-        title: 'The backup repository could not be read.',
-        hint: 'Capstan could not determine the cause. Check the Backup settings and the repository.',
-        detail,
-      }
-  }
+function RepoFaultNotice({ fault }: { fault: RepoFault }) {
+  return (
+    <div className="flex items-start gap-2 text-sm py-4 font-sans">
+      <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-destructive" />
+      <div>
+        <p className="text-destructive font-medium">{fault.title}</p>
+        <p className="text-muted-foreground mt-1 max-w-prose">{fault.hint}</p>
+        {fault.detail && (
+          <p className="text-muted-foreground mt-1 break-all font-mono text-xs">
+            {fault.detail}
+          </p>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // ─── Preview panel ────────────────────────────────────────────────────────────
 
 function PreviewPanel({ snapshotId, onClose }: { snapshotId: string; onClose: () => void }) {
-  const { data, isLoading, isError } = usePreviewSnapshot(snapshotId)
+  const { data, isLoading, isError, error } = usePreviewSnapshot(snapshotId)
+  // Reached only when the snapshot list ALREADY loaded — the fault panel below
+  // replaces the table, and the button that opens this panel lives in a row of
+  // it. So this is the repository dying under an open tab: a mount dropping, a
+  // remote going away. The operator is looking at snapshots that exist and is
+  // told the preview failed, which reads as a bad snapshot rather than a sick
+  // repository, and sends them to the wrong recovery.
+  const previewFault = repoFaultFrom(error)
 
   return (
     <div className="mt-2 rounded-lg border bg-muted/40">
@@ -205,10 +122,14 @@ function PreviewPanel({ snapshotId, onClose }: { snapshotId: string; onClose: ()
           </div>
         )}
         {isError && (
-          <div className="flex items-center gap-2 text-destructive">
-            <AlertCircle className="h-4 w-4" />
-            Failed to load preview.
-          </div>
+          previewFault ? (
+            <RepoFaultNotice fault={previewFault} />
+          ) : (
+            <div className="flex items-center gap-2 text-destructive">
+              <AlertCircle className="h-4 w-4" />
+              Failed to load preview.
+            </div>
+          )
         )}
         {data && data.entries.length === 0 && (
           <span className="text-muted-foreground">No entries found in snapshot.</span>
@@ -526,18 +447,7 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
 
         {snapshotsError && (
           repoFault ? (
-            <div className="flex items-start gap-2 text-sm py-4">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-destructive" />
-              <div>
-                <p className="text-destructive font-medium">{repoFault.title}</p>
-                <p className="text-muted-foreground mt-1 max-w-prose">{repoFault.hint}</p>
-                {repoFault.detail && (
-                  <p className="text-muted-foreground mt-1 break-all font-mono text-xs">
-                    {repoFault.detail}
-                  </p>
-                )}
-              </div>
-            </div>
+            <RepoFaultNotice fault={repoFault} />
           ) : (
             <div className="flex items-center gap-2 text-sm text-destructive py-4">
               <AlertCircle className="h-4 w-4" />
