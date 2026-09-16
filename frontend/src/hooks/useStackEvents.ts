@@ -173,6 +173,10 @@ export function useStackEvents() {
     resolveUpdateScanError()
     scheduleInvalidations([
       queryKeys.resources.updates(),
+      // The scan's cause lands in update_scan_last_error, served on the
+      // update-settings query — the one place a failed scan's reason is
+      // readable. Without this it stays stale on the event that sets it.
+      queryKeys.settings.updates(),
     ])
   }, [scheduleInvalidations])
 
