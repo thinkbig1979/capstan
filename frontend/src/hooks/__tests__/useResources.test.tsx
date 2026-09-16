@@ -19,7 +19,12 @@ vi.mock('sonner', () => ({
   toast: { loading: vi.fn(), success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
 }))
 
-import { useCheckUpdates, useUpdateScanWatcher, UPDATE_SCAN_TOAST_ID } from '../useResources'
+import {
+  useCheckUpdates,
+  useCheckUpdatesRefresh,
+  useUpdateScanWatcher,
+  UPDATE_SCAN_TOAST_ID,
+} from '../useResources'
 import { queryKeys } from '@/lib/query-keys'
 
 function createWrapper() {
@@ -162,5 +167,63 @@ describe('useUpdateScanWatcher', () => {
       id: UPDATE_SCAN_TOAST_ID,
       duration: 3000,
     })
+  })
+})
+
+// The manual "Check for updates" refresh (agent-os-82lk). Its onError used to be
+// zero-arity and render a fixed 'Update check failed' for every failure, so the
+// one actionable code the route can answer with was thrown away.
+describe('useCheckUpdatesRefresh', () => {
+  // respond.go's DockerUnavailableMessage, verbatim.
+  const DOCKER_UNAVAILABLE_MESSAGE =
+    'Docker daemon unreachable: the server started without a usable Docker connection. Check that the Docker socket is mounted and the daemon is running, then restart Capstan.'
+
+  it('names the Docker outage on a 503 DOCKER_UNAVAILABLE', async () => {
+    mockCheckUpdates.mockRejectedValue({
+      status: 503,
+      code: 'DOCKER_UNAVAILABLE',
+      message: DOCKER_UNAVAILABLE_MESSAGE,
+    })
+
+    const { wrapper } = createWrapper()
+    const { result } = renderHook(() => useCheckUpdatesRefresh(), { wrapper })
+    act(() => result.current.mutate())
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(toast.error).toHaveBeenCalledWith('Update check failed', {
+      id: UPDATE_SCAN_TOAST_ID,
+      duration: 4000,
+      description: DOCKER_UNAVAILABLE_MESSAGE,
+    })
+    expect(useUpdateScanStore.getState().isScanning).toBe(false)
+  })
+
+  // The negative arm, and it is a REGRESSION GUARD rather than a fail-first one:
+  // before this change every failure rendered the bare sentence, so this was
+  // already green. It pins that nothing outside the allow-list reaches the toast.
+  //
+  // The producer here is a TRANSPORT failure, not a server-minted error code,
+  // and that is deliberate: GET /resources/updates?refresh=true answers 202 or
+  // 503 DOCKER_UNAVAILABLE and nothing else on the production path, so mocking a
+  // different server code would pin a response the route cannot produce. This
+  // body is the shape lib/api.ts's interceptor builds when there is no response
+  // at all — axios's own code and message, never the server's.
+  it('keeps the generic sentence on a transport failure', async () => {
+    mockCheckUpdates.mockRejectedValue({
+      error: 'Unknown error',
+      code: 'ECONNABORTED',
+      message: 'timeout of 120000ms exceeded',
+    })
+
+    const { wrapper } = createWrapper()
+    const { result } = renderHook(() => useCheckUpdatesRefresh(), { wrapper })
+    act(() => result.current.mutate())
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(toast.error).toHaveBeenCalledWith('Update check failed', {
+      id: UPDATE_SCAN_TOAST_ID,
+      duration: 4000,
+    })
+    expect(useUpdateScanStore.getState().isScanning).toBe(false)
   })
 })
