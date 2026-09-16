@@ -1,6 +1,7 @@
 /**
- * Four backup endpoints answer a repository fault with one of THREE codes, all
- * minted in backend/internal/handlers/backup.go:
+ * Four backup endpoints route their faults through this function — listSnapshots,
+ * previewSnapshot, repoInit and cloudTest — and they answer with one of THREE
+ * codes, all minted in backend/internal/handlers/backup.go:
  *
  *   BACKUP_REPO_UNREACHABLE   503, repoFault()         — configured, not readable
  *   BACKUP_REPO_UNINITIALIZED 409, repoUninitialized() — no repository exists yet
@@ -60,23 +61,29 @@ export function repoFaultFrom(error: unknown): RepoFault | null {
   // so `cause` was `restic_missing` on every path, and that `rclone_missing`
   // "comes only from cloudTest, whose errors do not reach this function".
   //
-  // Both halves were wrong, and the second more broadly than agent-os-3wyv
-  // first supposed. MEASURED on 2528c1c — engineUnavailable's six call sites in
+  // Both halves were wrong. MEASURED — engineUnavailable's six call sites in
   // backup.go are :997 listSnapshots, :1051 previewSnapshot, :1276 runDRRestore,
-  // :1401 repoInit, :1458 cloudTest and :1740 requireAvailable. TWO of them
-  // guard on `!av.RclonePresent`, cloudTest AND runDRRestore, and the code's own
-  // comment at both calls them "the two rclone sites"; requireAvailable guards
-  // on the generic `!av.Available` and can carry either cause. So
-  // `rclone_missing` was never cloudTest's alone, and cloudTest's errors now
-  // reach here — the re-check condition the old comment wrote for itself has
-  // fired, and this is the `cause` arm it asked for.
+  // :1401 repoInit, :1458 cloudTest and :1740 requireAvailable. EXACTLY TWO can
+  // mint `rclone_missing`: runDRRestore and cloudTest, the only two guarded on
+  // `!av.RclonePresent`, and the code's own comment at :1272 and :1454 calls
+  // them "the two rclone sites". So `rclone_missing` was never cloudTest's
+  // alone, and cloudTest's errors now reach here — the re-check condition the
+  // old comment wrote for itself has fired, and this is the `cause` arm it
+  // asked for.
   //
-  // The arm is POSITIVE per value with a fallback that names NEITHER binary,
-  // the same way round as the repoState switch below and for the same reason:
-  // requireAvailable can reach here having computed no cause at all, and a
-  // default that kept the restic copy would fabricate one. `details.cause` is a
-  // plain string, so tsc cannot pin this — only the unit tests in
-  // lib/__tests__/backup-repo-fault.test.ts can.
+  // The other four, requireAvailable INCLUDED, always mint `restic_missing`,
+  // and requireAvailable's generic-looking `!av.Available` guard does not make
+  // it a third case: Available() (services/backup.go) returns early with
+  // Available at its zero value when restic is absent and sets `Available =
+  // true` only after that check, so `!av.Available` holds IFF
+  // `!av.ResticPresent`. Its own comment says so in words — "Available stays
+  // TRUE with rclone absent: rclone drives only the cloud mirror and the DR
+  // restore, local backups need restic alone."
+  //
+  // The arm is POSITIVE per value, the same way round as the repoState switch
+  // below and for the same reason: `details.cause` is a plain string, so tsc
+  // cannot pin this, and a THIRD value minted backend-side must not be answered
+  // with copy written for one of the two that exist today.
   const body = error as {
     code?: string
     message?: string
@@ -110,8 +117,23 @@ export function repoFaultFrom(error: unknown): RepoFault | null {
       }
     }
 
-    // No cause, so no binary is named. requireAvailable guards on the generic
-    // `!av.Available`, and `detail` still carries the server's own sentence.
+    // Neither known cause, so NO BINARY IS NAMED — say only what the code
+    // itself carries. NO CURRENT PRODUCER REACHES THIS RETURN, and that is
+    // stated rather than left for the next reader to discover: engineUnavailable
+    // (backup.go:951-964) sets `gin.H{"cause": cause}` unconditionally and
+    // `cause` is always one of the two literals handled above, and it is the
+    // only thing that mints BACKUP_UNAVAILABLE at all.
+    //
+    // It exists for the same reason the repoState `switch`'s `default` at the
+    // bottom of this file does, and that arm is the precedent for both its shape
+    // and its treatment: forward-compatibility with a THIRD cause added
+    // backend-side, which must not be answered with copy written for one of the
+    // two that exist today. `details.cause` is a plain string, so tsc cannot
+    // pin it. Like that `default`, it is deliberately NOT pinned by a test:
+    // asserting against a body the server cannot send is the dead branch this
+    // wave has spent its time deleting. An unreachable default that SAYS it is
+    // unreachable is a different thing from a dead branch dressed as a live
+    // path. `detail` still carries the server's own sentence.
     return {
       title: 'The backup engine is not available.',
       hint: 'Capstan could not determine which backup component is missing. This is a deployment problem rather than a settings one.',

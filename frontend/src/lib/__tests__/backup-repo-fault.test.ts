@@ -46,21 +46,15 @@ describe('repoFaultFrom — BACKUP_UNAVAILABLE cause arm', () => {
     expect(fault?.hint).not.toContain('rclone')
   })
 
-  it('names neither binary when no cause is carried', () => {
-    // requireAvailable guards on the generic `!av.Available`, so a cause it did
-    // not compute must not be invented here. Same rule as the repoState switch's
-    // default: every specific value is a POSITIVE arm and the fallback says only
-    // what it was actually told.
-    const fault = repoFaultFrom({
-      code: 'BACKUP_UNAVAILABLE',
-      message: 'backup tooling is not available',
-    })
-
-    expect(fault).not.toBeNull()
-    expect(fault?.hint).not.toContain('restic')
-    expect(fault?.hint).not.toContain('rclone')
-    expect(fault?.detail).toBe('backup tooling is not available')
-  })
+  // There is deliberately NO case here for a BACKUP_UNAVAILABLE carrying no
+  // cause. engineUnavailable always sets `details.cause` to one of the two
+  // literals above, and it is the only thing in the backend that mints this
+  // code (backup.go:960), so such a body cannot arrive. The neutral return in
+  // repoFaultFrom exists because `details.cause` is typed `string | undefined`
+  // and TypeScript forces a return, not because the route is reachable —
+  // pinning it would assert against a shape the server cannot send, which is
+  // the dead branch this wave has spent its time deleting. The repoState
+  // switch's own `default` arm is untested for exactly the same reason.
 
   it('declines VALIDATION_ERROR, which is not a repository fault', () => {
     // Pins criterion 5's boundary. cloudTest's 400 is served by a site-local
