@@ -60,10 +60,10 @@ describe('useStackEvents update-scan completion', () => {
     capturedOnMessage!({ type: 'update_scan_failed', timestamp: '' })
 
     expect(useUpdateScanStore.getState().isScanning).toBe(false)
-    expect(toast.error).toHaveBeenCalledWith(
-      'Update check failed',
-      expect.objectContaining({ id: UPDATE_SCAN_TOAST_ID }),
-    )
+    expect(toast.error).toHaveBeenCalledWith('Update check failed', {
+      id: UPDATE_SCAN_TOAST_ID,
+      duration: 4000,
+    })
   })
 
   it('does not toast when a background scan completes with no user-initiated scan', () => {
