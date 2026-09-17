@@ -33,12 +33,31 @@ export function EnvLoadingState() {
 
 interface EnvErrorStateProps {
   onRetry: () => void
+  /**
+   * What actually failed, when the failure named it (agent-os-rtn8).
+   *
+   * This component used to take `onRetry` alone, so it could not display a
+   * cause even when its caller had one — and env.go's Get answers two distinct
+   * 404s that both land here, "Stack not found" and "Env file not found on
+   * disk", which the operator saw as one sentence. The prop is optional
+   * because a network failure or an unclassified 5xx carries nothing to show,
+   * and inventing a cause there would be the worse defect.
+   */
+  cause?: string
 }
 
-export function EnvErrorState({ onRetry }: EnvErrorStateProps) {
+export function EnvErrorState({ onRetry, cause }: EnvErrorStateProps) {
   return (
     <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+      {/*
+        The fixed sentence stays as the headline and the cause goes BENEATH it,
+        rather than replacing it: it says which surface failed, which the
+        backend's message does not (agent-os-zlw0 criterion 2 is then satisfied
+        structurally — a cause-less failure renders exactly what it renders
+        today). Same shape as DashboardPage.tsx and StackPage.tsx.
+      */}
       <p>Failed to load environment file</p>
+      {cause && <p className="mt-1 text-sm">{cause}</p>}
       <Button variant="outline" onClick={onRetry} className="mt-4">
         Retry
       </Button>
