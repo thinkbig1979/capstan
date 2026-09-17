@@ -84,9 +84,13 @@ const (
 	// for "the server is fine, this resource is in a state that refuses the
 	// request", it is what the same handler file already answers for
 	// BACKUP_UNAVAILABLE, and it is the one status class the frontend's
-	// classifyError passes `message` through intact — a 404 has it replaced
-	// with a fixed string and a 5xx has it discarded, so a 409 is the shape
-	// that survives an accidental future routing.
+	// classifyError passes `message` through intact. 404 used to replace it
+	// with a fixed string and no longer does (agent-os-mc4i), so 409 is no
+	// longer the ONLY surviving shape — but a 5xx still discards the message
+	// entirely, and 409 remains the correct status here on its own merits:
+	// "the server is fine, this resource is in a state that refuses the
+	// request", matching what this handler file already answers for
+	// BACKUP_UNAVAILABLE.
 	ErrBackupRepoUninitialized = "BACKUP_REPO_UNINITIALIZED"
 )
 

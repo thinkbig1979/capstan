@@ -199,7 +199,24 @@ export function classifyError(error: unknown): AppError {
 
   if (status === 404) {
     return {
-      message: 'The requested resource was not found',
+      // agent-os-mc4i: this arm used to hardcode the sentence and drop the
+      // backend's message unconditionally. All 33 backend 404 emissions were
+      // read before this changed. Every one names the resource that was absent
+      // -- "Env file not found on disk", "No env file associated with this
+      // stack", "Compose file not found on disk", "Not a git repository",
+      // "Repository has no commits yet", "Stack directory does not exist on
+      // disk", "Backup run not found", "Job not found", "Directory not found",
+      // "Stack not found" -- which is strictly more than "the requested
+      // resource". None is sensitive; the one that interpolates an error string
+      // (BackupHandler.wsAttach, backend/internal/handlers/backup.go) is on a
+      // WebSocket handshake, which classifyError never observes.
+      //
+      // `backendMessage`, not `message`: `message` ends in `?? 'An error
+      // occurred'` and is therefore never empty, so it cannot distinguish "the
+      // backend said nothing" from "the backend said something" and the
+      // `message || ...` idiom used by the 409 and 428 arms can never reach its
+      // fallback.
+      message: backendMessage ?? 'The requested resource was not found',
       type: 'server',
       status,
       retryable: false,

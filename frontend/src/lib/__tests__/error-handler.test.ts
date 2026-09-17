@@ -158,6 +158,82 @@ describe('classifyError', () => {
     })
   })
 
+  // agent-os-mc4i: the 404 branch used to hardcode its sentence and discard the
+  // backend's message unconditionally. All 33 backend 404 emissions were read
+  // first: every one names the resource that was absent ("Env file not found on
+  // disk", "Not a git repository", "Repository has no commits yet", "Backup run
+  // not found"), which is strictly more than "the requested resource". None is
+  // sensitive and none interpolates client-supplied text on a path classifyError
+  // can observe.
+  describe('404 preserves the backend cause (agent-os-mc4i)', () => {
+    it('keeps the cause from the flat interceptor shape', () => {
+      const result = classifyError({
+        status: 404,
+        code: 'NOT_FOUND',
+        message: 'Env file not found on disk',
+      })
+      expect(result.message).toBe('Env file not found on disk')
+      expect(result.type).toBe('server')
+      expect(result.status).toBe(404)
+      expect(result.retryable).toBe(false)
+    })
+
+    it('keeps the cause from a nested axios-shaped body', () => {
+      const result = classifyError({
+        response: { status: 404, data: { message: 'Not a git repository' } },
+      })
+      expect(result.message).toBe('Not a git repository')
+    })
+
+    // The two git 404s a Class B site renders side by side. They are the reason
+    // the branch mattered: both were shown as one indistinguishable sentence.
+    it('tells the two git 404s apart', () => {
+      const notRepo = classifyError({ status: 404, code: 'GIT_NOT_REPO', message: 'Not a git repository' })
+      const noCommits = classifyError({ status: 404, code: 'GIT_NO_COMMITS', message: 'Repository has no commits yet' })
+      expect(notRepo.message).not.toBe(noCommits.message)
+      expect(notRepo.message).toBe('Not a git repository')
+      expect(noCommits.message).toBe('Repository has no commits yet')
+    })
+
+    // The 404 arm ALSO sets `context` from details.resource. The cause and the
+    // context are separate fields and both must survive the same response.
+    it('keeps context and cause together, not one at the expense of the other', () => {
+      const result = classifyError({
+        status: 404,
+        message: 'Stack not found',
+        details: { resource: 'stacks~myapp:default' },
+      })
+      expect(result.message).toBe('Stack not found')
+      expect(result.context).toBe('stacks~myapp:default')
+    })
+
+    // TWO-SIDED: a 404 with no body carries nothing to show, and must still get
+    // the generic sentence rather than 'An error occurred'. Green before the fix
+    // and must stay green after it. `message` cannot express this case -- it is
+    // never empty (`?? 'An error occurred'`) -- which is why the arm reads
+    // `backendMessage`.
+    it('falls back to the generic sentence when the body carries no message', () => {
+      const result = classifyError({ status: 404 })
+      expect(result.message).toBe('The requested resource was not found')
+    })
+
+    // A proxy or gateway 404, whose HTML body the interceptor spreads into
+    // something with no `message` at all. Same requirement as above by a
+    // different route.
+    it('falls back when the body is not this backend error shape', () => {
+      const result = classifyError({ response: { status: 404, data: '<html>404</html>' } })
+      expect(result.message).toBe('The requested resource was not found')
+    })
+
+    // 404 becomes a THIRD escape path for a non-string message once the arm
+    // stops minting its own sentence -- the same shape as the 409 arm's test.
+    it('does not let a non-string message escape on the 404 route', () => {
+      const result = classifyError({ response: { status: 404, data: { message: { a: 1 } } } })
+      expect(typeof result.message).toBe('string')
+      expect(result.message).toBe('The requested resource was not found')
+    })
+  })
+
   it('classifies 404 as server', () => {
     const result = classifyError({
       response: { status: 404, data: { error: 'Not Found' } },
