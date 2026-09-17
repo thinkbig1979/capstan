@@ -6,6 +6,7 @@ import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { useGitSettings, useUpdateGitSettings } from '@/hooks/useResources'
 import { Eye, EyeOff } from 'lucide-react'
 import { toast } from 'sonner'
+import { settingsSaveFault } from '@/lib/settings-save-fault'
 
 export function GitSettingsContent() {
   const { data: gitSettings, isLoading } = useGitSettings()
@@ -33,7 +34,18 @@ export function GitSettingsContent() {
         toast.success('Git settings saved')
         setHttpsToken('')
       },
-      onError: () => toast.error('Failed to save git settings'),
+      // Takes the error (agent-os-zlw0). UpdateGitSettings refuses pasted key
+      // material with a 400 naming the mistake, and answers 422
+      // ENCRYPTION_KEY_MISSING on the token write with the recovery in it — both
+      // were discarded by the zero-arity callback.
+      // Branch rather than a conditional second argument: see the WHY at
+      // UpdateScheduleContent.tsx's onError. The no-cause path stays a
+      // single-argument call that a pre-existing test still pins.
+      onError: (error) => {
+        const cause = settingsSaveFault(error)
+        if (cause) toast.error('Failed to save git settings', { description: cause })
+        else toast.error('Failed to save git settings')
+      },
     })
   }
 

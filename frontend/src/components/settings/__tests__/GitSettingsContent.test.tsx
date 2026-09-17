@@ -179,3 +179,74 @@ describe('GitSettingsContent', () => {
     await waitFor(() => expect(mockUpdateGit).toHaveBeenCalledWith({ httpsUser: 'git' }))
   })
 })
+
+/**
+ * agent-os-zlw0. UpdateGitSettings (backend/internal/handlers/settings.go:914)
+ * answers with two VALIDATION_ERROR 400s — bad body, and an SSH field holding
+ * pasted key material rather than a path — plus ENCRYPTION_KEY_MISSING, a 422
+ * from respondIfEncryptionUnavailable (respond.go:229) reached from its own
+ * token write at settings.go:968. That last one carries the recovery ("Set
+ * STORAGE_KEY ... and restart Capstan"), and the zero-arity onError threw it away.
+ */
+describe('GitSettingsContent — why the save failed', () => {
+  it('names what the server rejected', async () => {
+    mockUpdateGit.mockRejectedValue({
+      error: 'Bad Request',
+      code: 'VALIDATION_ERROR',
+      message: 'git SSH key must be a path to a key file, not the key contents',
+      status: 400,
+    })
+    renderPanel()
+
+    fireEvent.change(await screen.findByLabelText('SSH Private Key Path'), {
+      target: { value: '-----BEGIN OPENSSH PRIVATE KEY-----' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Git Settings' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to save git settings', {
+        description: 'git SSH key must be a path to a key file, not the key contents',
+      }),
+    )
+  })
+
+  it('passes on the missing-encryption-key recovery', async () => {
+    mockUpdateGit.mockRejectedValue({
+      error: 'Unprocessable Entity',
+      code: 'ENCRYPTION_KEY_MISSING',
+      message:
+        'Cannot store this value: no encryption key is configured. Set STORAGE_KEY (or JWT_SECRET) in the environment and restart Capstan, then try again.',
+      status: 422,
+    })
+    renderPanel()
+
+    fireEvent.change(await screen.findByLabelText(/Personal Access Token/), {
+      target: { value: 'ghp_secret' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Git Settings' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to save git settings', {
+        description: expect.stringContaining('Set STORAGE_KEY'),
+      }),
+    )
+  })
+
+  // MUST-PASS side, same instrument.
+  it('shows the generic sentence alone when the failure carries no server cause', async () => {
+    mockUpdateGit.mockRejectedValue({
+      error: 'Unknown error',
+      code: 'ERR_NETWORK',
+      message: 'Network Error',
+    })
+    renderPanel()
+
+    fireEvent.change(await screen.findByLabelText('Username'), { target: { value: 'git' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Git Settings' }))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    const call = vi.mocked(toast.error).mock.calls.find((c) => c[0] === 'Failed to save git settings')
+    expect(call).toBeDefined()
+    expect(call?.[1]).toBeUndefined()
+  })
+})

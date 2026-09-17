@@ -436,3 +436,58 @@ describe('UpdateScheduleContent — apply schedule', () => {
     ).not.toBeInTheDocument()
   })
 })
+
+/**
+ * agent-os-zlw0. This panel's onError took NO parameter, so the sentence the
+ * server sent could not be read even in principle — there was no unused
+ * variable and no type error for anyone to notice. UpdateUpdateSettings
+ * (backend/internal/handlers/settings.go:647) answers with FIVE distinct
+ * VALIDATION_ERROR 400s — bad body, scan interval below 15, invalid apply
+ * mode, unparseable apply time, bad weekday list — and the operator was told
+ * only "Failed to save settings" for all five.
+ */
+describe('UpdateScheduleContent — why the save failed', () => {
+  it('names what the server rejected', async () => {
+    mockUpdateUpdates.mockRejectedValue({
+      error: 'Bad Request',
+      code: 'VALIDATION_ERROR',
+      message: 'Scan interval must be 0 (disabled) or at least 15 minutes',
+      status: 400,
+    })
+    const user = userEvent.setup()
+    renderPanel()
+
+    await user.click(await screen.findByRole('combobox', { name: 'Scan Interval' }))
+    await user.click(await screen.findByRole('option', { name: 'Every hour' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to save settings', {
+        description: 'Scan interval must be 0 (disabled) or at least 15 minutes',
+      }),
+    )
+  })
+
+  // The MUST-PASS side, on the same instrument. A network failure carries a
+  // non-empty axios `message` ("Network Error", lib/api.ts:131) that never came
+  // from the backend, so a helper keyed on "did something carry a message"
+  // would present an axios internal string as though the server had said it.
+  // Asserted on the second argument rather than on the call arity, so this arm
+  // is a guard on the network case and not an echo of the signature change.
+  it('shows the generic sentence alone when the failure carries no server cause', async () => {
+    mockUpdateUpdates.mockRejectedValue({
+      error: 'Unknown error',
+      code: 'ERR_NETWORK',
+      message: 'Network Error',
+    })
+    const user = userEvent.setup()
+    renderPanel()
+
+    await user.click(await screen.findByRole('combobox', { name: 'Scan Interval' }))
+    await user.click(await screen.findByRole('option', { name: 'Every hour' }))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    const call = vi.mocked(toast.error).mock.calls.find((c) => c[0] === 'Failed to save settings')
+    expect(call).toBeDefined()
+    expect(call?.[1]).toBeUndefined()
+  })
+})

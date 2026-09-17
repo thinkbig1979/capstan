@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { useUpdateBackupSettings } from '@/hooks/useBackup'
 import type { BackupSettings } from '@/types'
 import { buildPayload, toDraft } from './backup-payload'
+import { settingsSaveFault } from '@/lib/settings-save-fault'
 import type { Draft } from './types'
 
 /**
@@ -51,7 +52,18 @@ export function useBackupForm(settings: BackupSettings | undefined) {
         toast.success('Backup settings saved')
         setPassword('')
       },
-      onError: () => toast.error('Failed to save backup settings'),
+      // Takes the error (agent-os-zlw0). This endpoint refuses a repository
+      // still carrying the *** redaction marker, and an inline credential, with
+      // a 422 VALIDATION_ERROR whose sentence is the only way to tell the two
+      // apart — plus 422 ENCRYPTION_KEY_MISSING on the password write.
+      // Branch rather than a conditional second argument: see the WHY at
+      // UpdateScheduleContent.tsx's onError. The no-cause path stays a
+      // single-argument call that a pre-existing test still pins.
+      onError: (error) => {
+        const cause = settingsSaveFault(error)
+        if (cause) toast.error('Failed to save backup settings', { description: cause })
+        else toast.error('Failed to save backup settings')
+      },
     })
   }
 

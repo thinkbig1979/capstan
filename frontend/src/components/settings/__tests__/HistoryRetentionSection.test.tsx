@@ -148,3 +148,59 @@ describe('HistoryRetentionSection', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to update retention'))
   })
 })
+
+/**
+ * agent-os-zlw0. UpdateLogRetention (backend/internal/handlers/settings.go:456)
+ * answers with THREE distinct VALIDATION_ERROR 400s — bad body, a value below
+ * MinRetentionDays, and no field supplied — and the zero-arity onError rendered
+ * one sentence for all three.
+ */
+describe('HistoryRetentionSection — why the save failed', () => {
+  // The healthy-read setup lives in the sibling describe's beforeEach, so it is
+  // repeated here: without it getRetention resolves undefined and the component
+  // renders its refusal state, which has no Save button to press.
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetRetention.mockResolvedValue(SETTINGS)
+  })
+
+  it('names what the server rejected', async () => {
+    const { toast } = await import('sonner')
+    mockUpdateRetention.mockRejectedValue({
+      error: 'Bad Request',
+      code: 'VALIDATION_ERROR',
+      message: 'Retention days must be at least 7',
+      status: 400,
+    })
+    renderSection()
+
+    fireEvent.change(await screen.findByLabelText('Audit log'), { target: { value: '120' } })
+    fireEvent.click(screen.getByRole('button', { name: /save retention/i }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to update retention', {
+        description: 'Retention days must be at least 7',
+      }),
+    )
+  })
+
+  // MUST-PASS side, same instrument: axios's own "Network Error" is not a
+  // backend sentence and must not be presented as one (lib/api.ts:131).
+  it('shows the generic sentence alone when the failure carries no server cause', async () => {
+    const { toast } = await import('sonner')
+    mockUpdateRetention.mockRejectedValue({
+      error: 'Unknown error',
+      code: 'ERR_NETWORK',
+      message: 'Network Error',
+    })
+    renderSection()
+
+    fireEvent.change(await screen.findByLabelText('Audit log'), { target: { value: '120' } })
+    fireEvent.click(screen.getByRole('button', { name: /save retention/i }))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    const call = vi.mocked(toast.error).mock.calls.find((c) => c[0] === 'Failed to update retention')
+    expect(call).toBeDefined()
+    expect(call?.[1]).toBeUndefined()
+  })
+})

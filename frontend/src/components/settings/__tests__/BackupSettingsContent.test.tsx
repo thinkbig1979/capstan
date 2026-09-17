@@ -1055,3 +1055,61 @@ describe('buildPayload — scheduleDays is compared by value, not by reference',
     expect(buildPayload(remote, draft, '')).toEqual({})
   })
 })
+
+/**
+ * agent-os-zlw0. useBackupForm's save onError took no parameter. The backup
+ * updateSettings handler (backend/internal/handlers/backup.go:402) answers with
+ * VALIDATION_ERROR for a bad body and for every schedule field, and — unusually
+ * — at 422 rather than 400 for the two repository refusals at backup.go:449 and
+ * :462, plus ENCRYPTION_KEY_MISSING (422) from its password write at :475. The
+ * two 422 VALIDATION_ERRORs are why the cause reader keys on the CODE: a
+ * status-keyed one looking for 400 would drop the two most actionable sentences
+ * on this endpoint.
+ */
+describe('BackupSettingsContent — why the save failed', () => {
+  it('names what the server rejected', async () => {
+    mockUpdateSettings.mockRejectedValue({
+      error: 'Unprocessable Entity',
+      code: 'VALIDATION_ERROR',
+      message:
+        'The repository value still contains the redacted credential marker (***). Re-enter the full repository URI including its credentials, or leave the field unchanged.',
+      status: 422,
+    })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.change(await screen.findByLabelText('Repository path'), {
+      target: { value: 'rest:https://***@host/repo/' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to save backup settings', {
+        description: expect.stringContaining('redacted credential marker'),
+      }),
+    )
+  })
+
+  // MUST-PASS side, same instrument.
+  it('shows the generic sentence alone when the failure carries no server cause', async () => {
+    mockUpdateSettings.mockRejectedValue({
+      error: 'Unknown error',
+      code: 'ERR_NETWORK',
+      message: 'Network Error',
+    })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.change(await screen.findByLabelText('Repository path'), {
+      target: { value: '/new/path' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    const call = vi
+      .mocked(toast.error)
+      .mock.calls.find((c) => c[0] === 'Failed to save backup settings')
+    expect(call).toBeDefined()
+    expect(call?.[1]).toBeUndefined()
+  })
+})
