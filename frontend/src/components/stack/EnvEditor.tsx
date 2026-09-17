@@ -16,6 +16,7 @@ import { EnvTableView } from './env-editor/EnvTableView'
 import { EnvRawView } from './env-editor/EnvRawView'
 import type { EnvEntryRow } from './env-editor/types'
 import { queryKeys } from '@/lib/query-keys'
+import { classifyError } from '@/lib/error-handler'
 
 interface EnvEditorProps {
   stackId: string
@@ -68,7 +69,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // would swallow both and render them as "no env file", hiding a real fault
   // behind an empty editor. Only the no-env-file 404 stopped existing; those
   // two belong in isError.
-  const { data: envData, isLoading, isError } = useQuery({
+  const { data: envData, isLoading, isError, error } = useQuery({
     queryKey: queryKeys.stack.env(stackId),
     queryFn: () => stacksApi.getEnv(stackId),
   })
@@ -130,6 +131,14 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   if (isError) {
     return (
       <EnvErrorState
+        // agent-os-rtn8: the two 404s the comment above routes into isError --
+        // "Stack not found" and "Env file not found on disk" -- reached here and
+        // were rendered as one sentence. classifyError is the house reader for
+        // this (DashboardPage.tsx, StackPage.tsx do the same), and its 404 arm
+        // only stopped replacing the backend's message in agent-os-mc4i, so this
+        // prop would have shown "The requested resource was not found" for both
+        // states before that landed.
+        cause={classifyError(error).message}
         onRetry={() => queryClient.invalidateQueries({ queryKey: queryKeys.stack.env(stackId) })}
       />
     )

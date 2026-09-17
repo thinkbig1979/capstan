@@ -86,6 +86,52 @@ describe('EnvEditor', () => {
     ).not.toBeInTheDocument()
   })
 
+  // agent-os-rtn8: EnvErrorState took only `onRetry`, so it structurally could
+  // not display a cause even when the caller had one. env.go's Get answers TWO
+  // distinct 404s -- "Stack not found" (env.go:83) and "Env file not found on
+  // disk" (env.go:133) -- and the comment at EnvEditor.tsx:64-70 says both
+  // deliberately land in isError. They arrived as one indistinguishable
+  // sentence. (The cause only reaches the component because agent-os-mc4i
+  // stopped classifyError's 404 arm replacing it; before that this test could
+  // not have passed no matter what the component did.)
+  describe('the error state shows the backend cause (agent-os-rtn8)', () => {
+    it('renders the cause alongside the fixed sentence, not instead of it', async () => {
+      mockGetEnv.mockRejectedValue({ status: 404, message: 'Env file not found on disk' })
+      renderWithProviders(<EnvEditor stackId="test-stack" />)
+
+      await vi.waitFor(() => {
+        expect(screen.getByText('Failed to load environment file')).toBeInTheDocument()
+      })
+      expect(screen.getByText('Env file not found on disk')).toBeInTheDocument()
+    })
+
+    // The whole point of the bead: the two 404s must not read the same. An
+    // assertion on one of them alone passes if the component hardcodes it.
+    it('tells the two 404 states apart', async () => {
+      mockGetEnv.mockRejectedValue({ status: 404, message: 'Stack not found' })
+      const { unmount } = renderWithProviders(<EnvEditor stackId="test-stack" />)
+      await vi.waitFor(() => {
+        expect(screen.getByText('Stack not found')).toBeInTheDocument()
+      })
+      expect(screen.queryByText('Env file not found on disk')).not.toBeInTheDocument()
+      unmount()
+    })
+
+    // TWO-SIDED (agent-os-zlw0 criterion 2): a failure carrying no cause must
+    // still show the fixed sentence and must NOT invent one. Green before the
+    // prop existed and must stay green after it.
+    it('shows only the fixed sentence when the failure carries no cause', async () => {
+      mockGetEnv.mockRejectedValue({ status: 500 })
+      renderWithProviders(<EnvEditor stackId="test-stack" />)
+
+      await vi.waitFor(() => {
+        expect(screen.getByText('Failed to load environment file')).toBeInTheDocument()
+      })
+      expect(screen.queryByText('Env file not found on disk')).not.toBeInTheDocument()
+      expect(screen.queryByText('Stack not found')).not.toBeInTheDocument()
+    })
+  })
+
   it('renders table view with env entries', async () => {
     mockGetEnv.mockResolvedValue({
       hasEnvFile: true,
