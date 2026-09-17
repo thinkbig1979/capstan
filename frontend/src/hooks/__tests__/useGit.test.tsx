@@ -283,3 +283,69 @@ describe('useGitPull — ActionResult outcomes', () => {
     await waitFor(() => expect(mockGitPull).toHaveBeenCalledWith('my-stack', true))
   })
 })
+
+// ─── agent-os-06c1: unchecked-cast narrowing ─────────────────────────────────
+
+describe('normalisePullResult — a legacy body is asserted, not validated', () => {
+  // The legacy arm casts `raw` to a shape with four REQUIRED string/string[]
+  // fields, then calls .slice(0, 7) on two of them. Unlike every other site in
+  // this class, a non-string here does not render oddly — it THROWS.
+  it('does not throw when the legacy commit fields are not strings', () => {
+    expect(() =>
+      normalisePullResult({
+        success: true,
+        previousCommit: { sha: 'abc' },
+        currentCommit: 42,
+        changedFiles: [],
+        redeployedStacks: [],
+      } as unknown as GitPullResult),
+    ).not.toThrow()
+  })
+
+  it('does not let a non-array changedFiles escape into string[]', () => {
+    const result = normalisePullResult({
+      success: true,
+      previousCommit: 'aaaaaaa1',
+      currentCommit: 'bbbbbbb2',
+      changedFiles: 'not-an-array',
+      redeployedStacks: [{ nested: true }],
+    } as unknown as GitPullResult)
+    expect(Array.isArray(result.details?.changedFiles)).toBe(true)
+    expect(result.details?.changedFiles).toEqual([])
+    expect(result.details?.redeployedStacks).toEqual([])
+  })
+
+  it('still maps a well-formed legacy body unchanged, so nothing reachable moved', () => {
+    const result = normalisePullResult({
+      success: true,
+      previousCommit: 'aaaaaaa1111',
+      currentCommit: 'bbbbbbb2222',
+      changedFiles: ['compose.yaml'],
+      redeployedStacks: ['myapp'],
+    } as unknown as GitPullResult)
+    expect(result.outcome).toBe('success')
+    expect(result.reason).toBe('Pulled aaaaaaa \u2192 bbbbbbb')
+    expect(result.details?.changedFiles).toEqual(['compose.yaml'])
+    expect(result.details?.redeployedStacks).toEqual(['myapp'])
+  })
+})
+
+describe('useGitPull — failed-redeploy names are asserted, not validated', () => {
+  it('does not render a non-string stack name into the warning toast', async () => {
+    mockGitPull.mockResolvedValue({
+      outcome: 'partial',
+      reason: 'Pull succeeded but redeploy failed',
+      details: { failedRedeploys: [{ stack: { name: 'myapp' }, reason: 'boom' }] },
+    } as unknown as GitPullResult)
+
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useGitPull(), { wrapper })
+    act(() => {
+      result.current.mutate({ stackId: 'stack1', redeploy: true })
+    })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    const warned = (toast.warning as ReturnType<typeof vi.fn>).mock.calls.flat().join(' ')
+    expect(warned).not.toContain('[object Object]')
+  })
+})

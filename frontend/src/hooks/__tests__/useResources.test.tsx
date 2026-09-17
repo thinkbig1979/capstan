@@ -6,10 +6,12 @@ import { toast } from 'sonner'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
 
 const mockCheckUpdates = vi.fn()
+const mockCreateNetwork = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   resourcesApi: {
     checkUpdates: (...args: unknown[]) => mockCheckUpdates(...args),
+    createNetwork: (...args: unknown[]) => mockCreateNetwork(...args),
   },
   settingsApi: {},
   autoUpdateApi: {},
@@ -22,6 +24,7 @@ vi.mock('sonner', () => ({
 import {
   useCheckUpdates,
   useCheckUpdatesRefresh,
+  useCreateNetwork,
   useUpdateScanWatcher,
   UPDATE_SCAN_TOAST_ID,
 } from '../useResources'
@@ -225,5 +228,63 @@ describe('useCheckUpdatesRefresh', () => {
       duration: 4000,
     })
     expect(useUpdateScanStore.getState().isScanning).toBe(false)
+  })
+})
+
+// ─── agent-os-06c1: unchecked-cast narrowing ─────────────────────────────────
+
+describe('useCheckUpdatesRefresh — the fault message is asserted, not validated', () => {
+  it('falls back to the bare sentence when message is not a string', async () => {
+    // updateScanFault declares `string | null` and reaches it through
+    // `error as { code?: string; message?: string }`. A non-string message
+    // would land in sonner's `description`, typed ReactNode, inside the
+    // Toaster subtree.
+    mockCheckUpdates.mockRejectedValue({
+      status: 503,
+      code: 'DOCKER_UNAVAILABLE',
+      message: { detail: 'not a sentence' },
+    })
+
+    const { wrapper } = createWrapper()
+    const { result } = renderHook(() => useCheckUpdatesRefresh(), { wrapper })
+    act(() => result.current.mutate())
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(toast.error).toHaveBeenCalledWith('Update check failed', {
+      id: UPDATE_SCAN_TOAST_ID,
+      duration: 4000,
+    })
+  })
+})
+
+describe('useCreateNetwork — details.name is asserted, not validated', () => {
+  it('does not render a non-string network name into the success toast', async () => {
+    mockCreateNetwork.mockResolvedValue({
+      outcome: 'success',
+      reason: 'Network created',
+      details: { name: { value: 'bridge-1' } },
+    })
+
+    const { wrapper } = createWrapper()
+    const { result } = renderHook(() => useCreateNetwork(), { wrapper })
+    act(() => result.current.mutate({ name: 'bridge-1' }))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    const said = (toast.success as ReturnType<typeof vi.fn>).mock.calls.flat().join(' ')
+    expect(said).not.toContain('[object Object]')
+  })
+
+  it('still renders a real string name, so nothing reachable moved', async () => {
+    mockCreateNetwork.mockResolvedValue({
+      outcome: 'success',
+      reason: 'Network created',
+      details: { name: 'bridge-1' },
+    })
+
+    const { wrapper } = createWrapper()
+    const { result } = renderHook(() => useCreateNetwork(), { wrapper })
+    act(() => result.current.mutate({ name: 'bridge-1' }))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Network "bridge-1" created'))
   })
 })

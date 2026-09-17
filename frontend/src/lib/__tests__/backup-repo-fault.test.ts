@@ -65,4 +65,26 @@ describe('repoFaultFrom — BACKUP_UNAVAILABLE cause arm', () => {
       repoFaultFrom({ code: 'VALIDATION_ERROR', message: 'rclone remote is not configured' }),
     ).toBeNull()
   })
+
+  // agent-os-06c1: `detail` is declared `string` on RepoFault and is reached
+  // through an unchecked assertion on an `unknown` error.
+  it('does not let a non-string message escape into RepoFault.detail', () => {
+    const fault = repoFaultFrom({
+      code: 'BACKUP_UNAVAILABLE',
+      message: { nested: 'object' },
+      details: { cause: 'restic_missing' },
+    })
+    expect(fault).not.toBeNull()
+    expect(typeof fault!.detail).toBe('string')
+    expect(fault!.detail).toBe('')
+  })
+
+  it('still carries a real string message, so nothing reachable changed', () => {
+    const fault = repoFaultFrom({
+      code: 'BACKUP_UNAVAILABLE',
+      message: 'restic is not installed',
+      details: { cause: 'restic_missing' },
+    })
+    expect(fault!.detail).toBe('restic is not installed')
+  })
 })

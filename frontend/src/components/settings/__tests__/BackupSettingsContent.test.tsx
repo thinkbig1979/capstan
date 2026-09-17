@@ -750,6 +750,25 @@ describe('BackupSettingsContent — error handling', () => {
     expect(toast.error).not.toHaveBeenCalledWith('Cloud connectivity test failed')
   })
 
+  // agent-os-06c1: validationMessage declares `string | null` and reaches it
+  // through `error as { code?: string; message?: string }`. Its result becomes
+  // the toast TITLE, so a non-string would be rendered as the whole message.
+  it('falls through to the generic sentence when VALIDATION_ERROR carries a non-string message', async () => {
+    mockTestCloud.mockRejectedValue({
+      code: 'VALIDATION_ERROR',
+      message: { remote: 'offsite' },
+      status: 400,
+    })
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /test connectivity/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Cloud connectivity test failed')
+    })
+  })
+
   it('names why the connectivity test failed when the server answers 200 with ok:false', async () => {
     // This case used to mock `{ ok: false }` with NO error field and assert the
     // generic sentence — a body backup.go's cloudTest CANNOT SEND. Its single

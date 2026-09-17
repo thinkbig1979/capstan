@@ -5,6 +5,7 @@ import { WSClient } from '@/lib/ws'
 import { reconcileOnClose } from '@/lib/ws-reconcile'
 import { queryKeys } from '@/lib/query-keys'
 import type { BackupPolicy, BackupOperationResult, BackupHistoryFilters } from '@/types'
+import { messageOrNull } from '@/lib/narrow'
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -363,22 +364,35 @@ export function useBackupStreaming(): BackupStreamState {
       (data) => {
         if (typeof data !== 'string') return
         try {
+          // agent-os-06c1: the four rendered fields are `unknown`. JSON.parse
+          // returns `any` and this frame is the one producer in the class
+          // that genuinely can send anything.
           const msg = JSON.parse(data) as {
             type: string
-            line?: string
-            message?: string
+            line?: unknown
+            message?: unknown
             // Action Truth Contract fields (B5 backend, migrated backends)
             outcome?: 'success' | 'no_change' | 'partial' | 'failed'
-            reason?: string
+            reason?: unknown
             // Legacy fields (pre-migration backends)
             success?: boolean
-            error?: string
+            error?: unknown
           }
 
-          if (msg.type === 'data' && msg.line) {
-            setLines((prev) => [...prev, msg.line!])
-          } else if (msg.type === 'phase' && msg.message) {
-            setLines((prev) => [...prev, `--- ${msg.message} ---`])
+          // agent-os-06c1: JSON.parse returns `any`, so the cast above claims a
+          // shape nothing validated — this is the one site in that class whose
+          // producer really can send anything. Every field below lands in
+          // `lines` (string[]) or `error` (string), and `msg.reason` also
+          // reaches refusedStreamMessage, which calls .match on it.
+          const line = messageOrNull(msg.line)
+          const phase = messageOrNull(msg.message)
+          const reason = messageOrNull(msg.reason)
+          const error = messageOrNull(msg.error)
+
+          if (msg.type === 'data' && line) {
+            setLines((prev) => [...prev, line])
+          } else if (msg.type === 'phase' && phase) {
+            setLines((prev) => [...prev, `--- ${phase} ---`])
           } else if (msg.type === 'done') {
             const finalStatus = doneFrameToStatus(msg)
 
@@ -390,15 +404,15 @@ export function useBackupStreaming(): BackupStreamState {
 
             if (finalStatus === 'success') {
               setStatus('success')
-              const label = msg.reason || 'Backup completed successfully.'
+              const label = reason ?? 'Backup completed successfully.'
               setLines((prev) => [...prev, label])
             } else if (finalStatus === 'partial') {
               setStatus('partial')
-              const label = msg.reason || 'Backup partially completed.'
+              const label = reason ?? 'Backup partially completed.'
               setLines((prev) => [...prev, label])
             } else {
               // error / failed
-              const errMsg = msg.error || msg.reason || 'Backup failed'
+              const errMsg = error ?? reason ?? 'Backup failed'
               setStatus('error')
               setError(errMsg)
               setLines((prev) => [...prev, `Error: ${errMsg}`])
@@ -420,7 +434,7 @@ export function useBackupStreaming(): BackupStreamState {
             // append the "connection closed" note or treat it as a lost
             // stream. No "Error:" prefix on the line, consumers paint that as
             // a failure.
-            const why = refusedStreamMessage(msg.reason)
+            const why = refusedStreamMessage(reason ?? undefined)
             completedRef.current = true
             setStatus('unavailable')
             setError(why)
@@ -432,7 +446,7 @@ export function useBackupStreaming(): BackupStreamState {
             clientRef.current = null
             onDone?.('unavailable')
           } else if (msg.type === 'error') {
-            const errMsg = msg.error || 'Unknown error'
+            const errMsg = error ?? 'Unknown error'
             setStatus('error')
             setError(errMsg)
             setLines((prev) => [...prev, `Error: ${errMsg}`])

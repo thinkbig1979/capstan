@@ -27,9 +27,13 @@ const mockViewState = {
 const mockDispatch = vi.fn()
 
 let capturedOnChange: ((content: string) => void) | undefined
+// agent-os-06c1: the editor's initial doc is the only observable the fetched
+// compose body reaches in a unit test, the real editor being mocked out.
+let capturedDoc: unknown
+const capturedDocs: unknown[] = []
 
 vi.mock('@/hooks/useCodeMirrorEditor', () => ({
-  useCodeMirrorEditor: vi.fn((_ref: unknown, opts: { onChange?: (content: string) => void }) => {
+  useCodeMirrorEditor: vi.fn((_ref: unknown, opts: { onChange?: (content: string) => void; doc?: unknown }) => {
     const viewRef = useRef<{
       state: typeof mockViewState
       dispatch: typeof mockDispatch
@@ -37,6 +41,8 @@ vi.mock('@/hooks/useCodeMirrorEditor', () => ({
     } | null>(null)
     viewRef.current = { state: mockViewState, dispatch: mockDispatch, destroy: vi.fn() }
     capturedOnChange = opts.onChange
+    capturedDoc = opts.doc
+    capturedDocs.push(opts.doc)
     return { viewRef, isDark: false }
   }),
 }))
@@ -120,5 +126,38 @@ describe('ComposeEditor — Save button tracks editor dirtiness', () => {
 
     await waitFor(() => expect(mockApiPut).toHaveBeenCalled())
     await waitFor(() => expect(screen.getByText('Save')).toBeDisabled())
+  })
+})
+
+// ─── agent-os-06c1: the compose body is asserted, not validated ──────────────
+
+describe('ComposeEditor — GET /compose response body', () => {
+  it('does not let a non-string content reach the editor doc', async () => {
+    // ComposeEditor.tsx reaches a string-typed React state through
+    // `(response.data as { content: string }).content` on an unvalidated body.
+    //
+    // Every doc seen across renders is checked, not just the last, and the
+    // wait is on the LOADING state clearing rather than on the editor mock
+    // being called. Waiting on the mock alone passes on the FIRST render,
+    // before the query has resolved, where the doc is still the empty initial
+    // string — the arm then agrees for a reason that has nothing to do with
+    // the narrowing and cannot fail.
+    capturedDocs.length = 0
+    mockApiGet.mockResolvedValue({ data: { content: { yaml: 'services:' } } })
+
+    renderWithProviders(<ComposeEditor stackId="test-stack" />)
+    await waitFor(() =>
+      expect(screen.queryByText('Loading compose file...')).not.toBeInTheDocument(),
+    )
+
+    expect(capturedDocs.length).toBeGreaterThan(0)
+    expect(capturedDocs.every((d) => typeof d === 'string')).toBe(true)
+  })
+
+  it('still passes a real string body straight through', async () => {
+    mockApiGet.mockResolvedValue({ data: { content: 'services:\n  web:\n    image: nginx\n' } })
+
+    renderWithProviders(<ComposeEditor stackId="test-stack" />)
+    await waitFor(() => expect(capturedDoc).toBe('services:\n  web:\n    image: nginx\n'))
   })
 })

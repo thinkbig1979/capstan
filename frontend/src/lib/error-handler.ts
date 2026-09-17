@@ -12,6 +12,8 @@
  * When a mutation both has an inline surface AND navigates/runs in the background,
  * prefer inline for the validation phase and a toast only for the async result.
  */
+import { messageOrNull } from './narrow'
+
 type ErrorType = 'network' | 'auth' | 'validation' | 'server' | 'timeout' | 'unknown'
 
 export interface AppError {
@@ -96,9 +98,12 @@ export function classifyError(error: unknown): AppError {
   const err = error as {
     status?: number;
     details?: Record<string, unknown>;
-    response?: { status?: number; data?: { error?: string; message?: string; code?: string; details?: Record<string, unknown> } };
+    response?: { status?: number; data?: { error?: unknown; message?: unknown; code?: string; details?: Record<string, unknown> } };
     code?: string;
-    message?: string
+    // agent-os-06c1: `unknown`, not `string`. Nobody validated this body, so a
+    // `string` here is a claim tsc would then stop checking — declaring what
+    // is actually known forces every reader through messageOrNull.
+    message?: unknown
   }
   // The interceptor (api.ts) rejects with a flat object carrying `status` AND
   // `details` at the top level, not nested under `.response` (agent-os-yj0).
@@ -107,7 +112,16 @@ export function classifyError(error: unknown): AppError {
   // field-level validation messages below — missing it silently degrades
   // those to their generic fallback text.
   const status = readStatus(error)
-  const message = err.response?.data?.error || err.response?.data?.message || err.message || 'An error occurred'
+  // agent-os-06c1: narrowed, not asserted. `error` is `unknown` and `message`
+  // is declared `string` on AppError, but it also reaches `.toLowerCase()`
+  // further down — so an unnarrowed non-string throws rather than merely
+  // rendering oddly. messageOrNull keeps the `||` semantics this chain had:
+  // an empty candidate falls through to the next one exactly as before.
+  const message =
+    messageOrNull(err.response?.data?.error) ??
+    messageOrNull(err.response?.data?.message) ??
+    messageOrNull(err.message) ??
+    'An error occurred'
   const details = err.details ?? err.response?.data?.details
   // Nested FIRST, unlike `status` and `details` above, and deliberately so:
   // axios stamps its OWN code at the top level on a 4xx — settle.js:21 rejects
@@ -174,7 +188,10 @@ export function classifyError(error: unknown): AppError {
       status,
       retryable: false,
       originalError: error,
-      context: details?.resource as string,
+      // agent-os-06c1: `details` is Record<string, unknown>, so `as string`
+      // here asserts a shape nobody validated, exactly as `as { ... }` does
+      // elsewhere in this class. `context` is rendered.
+      context: messageOrNull(details?.resource) ?? undefined,
     }
   }
 
@@ -185,7 +202,10 @@ export function classifyError(error: unknown): AppError {
       status,
       retryable: false,
       originalError: error,
-      context: details?.resource as string,
+      // agent-os-06c1: `details` is Record<string, unknown>, so `as string`
+      // here asserts a shape nobody validated, exactly as `as { ... }` does
+      // elsewhere in this class. `context` is rendered.
+      context: messageOrNull(details?.resource) ?? undefined,
       action: 'Refresh',
     }
   }
@@ -213,7 +233,8 @@ export function classifyError(error: unknown): AppError {
       status,
       retryable: false,
       originalError: error,
-      context: details?.directory as string,
+      // agent-os-06c1: see the 404 arm above.
+      context: messageOrNull(details?.directory) ?? undefined,
       action: 'Confirm',
     }
   }

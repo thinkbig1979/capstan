@@ -10,6 +10,7 @@ import { SaveConfirmDialog } from './compose-editor/SaveConfirmDialog'
 import { useComposeSaveAndLint } from './compose-editor/useComposeSaveAndLint'
 import { useExtractToEnv } from './compose-editor/useExtractToEnv'
 import { queryKeys } from '@/lib/query-keys'
+import { stringOr } from '@/lib/narrow'
 
 interface ComposeEditorProps {
   stackId: string
@@ -32,7 +33,11 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
     queryKey: queryKeys.stack.compose(stackId),
     queryFn: async () => {
       const response = await apiClient.get(`/stacks/${stackId}/compose`)
-      return (response.data as { content: string }).content
+      // agent-os-06c1: narrowed, not asserted. This value becomes a
+      // string-typed React state and the editor's initial document.
+      // '' rather than undefined keeps `data || content` and `if (data)`
+      // behaving exactly as they did for an absent body.
+      return stringOr((response.data as { content?: unknown } | undefined)?.content, '')
     },
   })
 

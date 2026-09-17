@@ -4,6 +4,7 @@ import { gitApi, type GitPullResult } from '@/lib/api'
 import { isActionResult, type ActionResult } from '@/lib/action-result'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import { queryKeys } from '@/lib/query-keys'
+import { stringArrayOr, stringOr } from '@/lib/narrow'
 
 export function useGitStatus(stackId: string) {
   return useQuery({
@@ -76,40 +77,46 @@ export function normalisePullResult(raw: GitPullResult): ActionResult<{
   }
 
   // Legacy shape
+  // agent-os-06c1: every field but `success` is `unknown`. The old shape
+  // declared four REQUIRED strings/arrays on a body nothing validated, and
+  // two of them were then handed to .slice(0, 7).
   const legacy = raw as {
     success: boolean
-    previousCommit: string
-    currentCommit: string
-    changedFiles: string[]
-    redeployedStacks: string[]
+    previousCommit?: unknown
+    currentCommit?: unknown
+    changedFiles?: unknown
+    redeployedStacks?: unknown
   }
 
   if (!legacy.success) {
     return { outcome: 'failed', reason: 'Git pull failed', details: {} }
   }
 
-  if (legacy.previousCommit === legacy.currentCommit) {
+  // agent-os-06c1: narrowed, not asserted. The cast above claims four
+  // REQUIRED fields on a body that reached us unvalidated, and unlike every
+  // other site in that class this one calls .slice(0, 7) on two of them — so
+  // a non-string here throws a TypeError rather than rendering oddly.
+  const previousCommit = stringOr(legacy.previousCommit, '')
+  const currentCommit = stringOr(legacy.currentCommit, '')
+  const details = {
+    previousCommit,
+    currentCommit,
+    changedFiles: stringArrayOr(legacy.changedFiles, []),
+    redeployedStacks: stringArrayOr(legacy.redeployedStacks, []),
+  }
+
+  if (previousCommit === currentCommit) {
     return {
       outcome: 'no_change',
       reason: 'Already up to date',
-      details: {
-        previousCommit: legacy.previousCommit,
-        currentCommit: legacy.currentCommit,
-        changedFiles: legacy.changedFiles,
-        redeployedStacks: legacy.redeployedStacks,
-      },
+      details,
     }
   }
 
   return {
     outcome: 'success',
-    reason: `Pulled ${legacy.previousCommit.slice(0, 7)} → ${legacy.currentCommit.slice(0, 7)}`,
-    details: {
-      previousCommit: legacy.previousCommit,
-      currentCommit: legacy.currentCommit,
-      changedFiles: legacy.changedFiles,
-      redeployedStacks: legacy.redeployedStacks,
-    },
+    reason: `Pulled ${previousCommit.slice(0, 7)} → ${currentCommit.slice(0, 7)}`,
+    details,
   }
 }
 
@@ -146,11 +153,17 @@ export function useGitPull() {
       // On partial outcome, toastForResult already fired a warning.
       // Append the failed-redeploy details if available for more context.
       if (result.outcome === 'partial') {
-        const failedRedeploys = (result.details as {
-          failedRedeploys?: Array<{ stack: string; reason: string }>
-        } | undefined)?.failedRedeploys ?? []
+        // agent-os-06c1: narrowed, not asserted. `?? []` only ever caught an
+        // ABSENT list; a non-array threw on .map and a non-string member
+        // rendered as [object Object] in the operator's warning.
+        const rawFailed = (result.details as {
+          failedRedeploys?: unknown
+        } | undefined)?.failedRedeploys
+        const failedRedeploys = Array.isArray(rawFailed) ? rawFailed : []
         if (failedRedeploys.length > 0) {
-          const names = failedRedeploys.map((f) => f.stack).join(', ')
+          const names = failedRedeploys
+            .map((f) => stringOr((f as { stack?: unknown } | null)?.stack, 'unknown'))
+            .join(', ')
           toast.warning(`Failed to redeploy: ${names}`)
         }
       }

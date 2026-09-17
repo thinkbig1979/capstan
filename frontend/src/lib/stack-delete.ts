@@ -1,4 +1,5 @@
 import { stacksApi, type StackDeleteResult } from '@/lib/api'
+import { stringArrayOr, stringOr } from '@/lib/narrow'
 
 const COLLATERAL_CODE = 'STACK_DELETE_COLLATERAL'
 
@@ -32,11 +33,17 @@ export class StackDeleteCancelledError extends Error {
  * the AxiosError), so that is exactly the shape callers see here.
  */
 function collateralDetails(err: unknown): { directory: string; collateral: string[] } | null {
-  const body = err as { code?: string; details?: { directory?: string; collateral?: string[] } } | null | undefined
+  // agent-os-06c1: the detail fields are `unknown`, not `string`/`string[]`.
+  // Nothing validated this body, and both fields are rendered into the
+  // confirmation a user reads before agreeing to a destructive delete.
+  const body = err as { code?: string; details?: { directory?: unknown; collateral?: unknown } } | null | undefined
   if (!body || body.code !== COLLATERAL_CODE) return null
+  // agent-os-06c1: narrowed, not asserted. Both fields are rendered into the
+  // confirmation a user reads before agreeing to a destructive delete, and
+  // `collateral.join(', ')` throws outright when it is not an array.
   return {
-    directory: body.details?.directory ?? '',
-    collateral: body.details?.collateral ?? [],
+    directory: stringOr(body.details?.directory, ''),
+    collateral: stringArrayOr(body.details?.collateral, []),
   }
 }
 

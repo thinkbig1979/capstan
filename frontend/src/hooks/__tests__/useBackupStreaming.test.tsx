@@ -441,3 +441,70 @@ describe('useBackupStreaming — refused attach is a refused stream, not a faile
     expect(onDone).toHaveBeenCalledWith('success')
   })
 })
+
+// ─── agent-os-06c1: a WS frame is JSON.parse'd and asserted, not validated ────
+
+describe('useBackupStreaming — the parsed frame is asserted, not validated', () => {
+  // This is the most reachable site in the class by a distance: JSON.parse
+  // returns `any` and the frame is cast to a shape with four optional string
+  // fields, all of which land in `lines` (string[]) or `error` (string).
+  it('does not append a non-string data line to lines', async () => {
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper })
+
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    act(() => { send({ type: 'data', line: { text: 'Running backup...' } }) })
+
+    expect(result.current.lines.every((l) => typeof l === 'string')).toBe(true)
+    expect(result.current.lines.join(' ')).not.toContain('[object Object]')
+  })
+
+  it('does not render a non-string phase message into lines', async () => {
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper })
+
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    act(() => { send({ type: 'phase', message: { phase: 'uploading' } }) })
+
+    expect(result.current.lines.join(' ')).not.toContain('[object Object]')
+  })
+
+  it('does not let a non-string error escape into the error string', async () => {
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper })
+
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    act(() => { send({ type: 'done', outcome: 'failed', error: { cause: 'disk full' } }) })
+
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(typeof result.current.error).toBe('string')
+    expect(result.current.error).not.toContain('[object Object]')
+  })
+
+  // Found by tsc, not by reading: declaring the frame's rendered fields
+  // `unknown` turned this second escape into a compile error. Reading the
+  // handler top-down had stopped at the `done` branch and missed it.
+  it('does not let a non-string error frame escape into the error string', async () => {
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper })
+
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    act(() => { send({ type: 'error', error: { cause: 'disk full' } }) })
+
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(typeof result.current.error).toBe('string')
+    expect(result.current.error).not.toContain('[object Object]')
+  })
+
+  it('still carries real string frames through unchanged', async () => {
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper })
+
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    act(() => { send({ type: 'data', line: 'Running backup...' }) })
+    act(() => { send({ type: 'phase', message: 'uploading' }) })
+
+    expect(result.current.lines).toContain('Running backup...')
+    expect(result.current.lines).toContain('--- uploading ---')
+  })
+})
