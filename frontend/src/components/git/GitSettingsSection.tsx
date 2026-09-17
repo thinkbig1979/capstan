@@ -75,17 +75,21 @@ import { messageOrNull } from '@/lib/narrow'
  * them dynamic has to revisit this function.
  *
  * Deliberately NOT routed through classifyError(), and the reason is SPECIFIC TO
- * THIS SITE's two statuses rather than the 5xx one this prohibition is usually
- * argued from — neither code here is a 5xx, so that argument would not apply.
- * MEASURED: classifyError's 404 branch (error-handler.ts:170) hardcodes "The
- * requested resource was not found" and discards `message`, which is exactly the
- * discard this function exists to stop — so routing NOT_FOUND through it would
- * defeat the fix. Its 422 branch (error-handler.ts:193-207) would NOT: with no
+ * THIS SITE's two statuses rather than the 5xx one this prohibition used to be
+ * argued from — neither code here is a 5xx, so that argument never applied here.
+ * MEASURED, AND SINCE OVERTAKEN: the 404 branch hardcoded "The requested
+ * resource was not found" and discarded `message`, which was exactly the discard
+ * this function exists to stop. agent-os-mc4i removed that discard, so routing
+ * NOT_FOUND through classifyError would no longer defeat the fix. This function
+ * stays because it is ONE code-keyed predicate covering BOTH codes uniformly,
+ * which is what the paragraph below argues for and what classifyError still does
+ * not give. Its 422 branch would NOT have discarded anything even then: with no
  * `details` on the body, fieldMessage falls back to `message` and the server's
- * recovery sentence would survive. The prohibition is therefore not uniform
- * across the two codes, and it is written out rather than asserted flatly so
- * that nobody later "simplifies" this into a classifyError call on the strength
- * of the 422 half. One code-keyed predicate covering both is the point.
+ * recovery sentence would survive. So the asymmetry that argument rested on is
+ * gone in BOTH directions now, and this is written out rather than asserted
+ * flatly so that nobody "simplifies" this into a classifyError call on the
+ * strength of it. One code-keyed predicate covering both is the point, and that
+ * is a claim about THIS function's shape, not about classifyError's branches.
  *
  * Module-private rather than an arm on lib/backup-repo-fault.ts's repoFaultFrom,
  * and that FOLLOWS the house reasoning rather than departing from it.

@@ -243,6 +243,77 @@ describe('classifyError', () => {
     expect(result.retryable).toBe(false)
   })
 
+  // agent-os-mc4i: the 5xx arm discarded the backend's message entirely and
+  // answered a bare status code. All 138 5xx emission regions were read first.
+  // AppError.Cause is `json:"-"` and never serialized, so Message is the
+  // backend's own sanitised, client-safe string and is ALREADY on the wire --
+  // the only thing that changed is whether the frontend renders what it already
+  // received. Of 101 distinct message literals only two are the generic
+  // "Internal server error"; exactly two emissions interpolate anything, and
+  // both interpolate server-controlled values, not client input.
+  //
+  // The status stays in the rendered string. This arm is the one place where
+  // the status itself is diagnostic -- 503 means "try later / Docker is down"
+  // and 500 means "this is a bug" -- so the cause is ADDED to what was shown
+  // before rather than swapped for it.
+  describe('5xx preserves the backend cause (agent-os-mc4i)', () => {
+    it('keeps the cause and the status together', () => {
+      const result = classifyError({
+        status: 500,
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to read the backup retention and schedule settings',
+      })
+      expect(result.message).toBe('500: Failed to read the backup retention and schedule settings')
+      expect(result.type).toBe('server')
+      expect(result.retryable).toBe(true)
+      expect(result.action).toBe('Retry')
+    })
+
+    // The whole reason the arm mattered: DockerUnavailableMessage
+    // (handlers/respond.go:186) is a 503 carrying the RECOVERY, and it was
+    // rendered as the three characters "503".
+    it('keeps the Docker outage recovery text on a 503', () => {
+      const result = classifyError({
+        status: 503,
+        code: 'DOCKER_UNAVAILABLE',
+        message:
+          'Docker daemon unreachable: the server started without a usable Docker connection. Check that the Docker socket is mounted and the daemon is running, then restart Capstan.',
+      })
+      expect(result.message).toContain('Check that the Docker socket is mounted')
+      expect(result.message).toContain('503')
+    })
+
+    // 502 exists here too (services/git.go:501) and must take the same route,
+    // not fall past the arm.
+    it('covers 502 as well as 500 and 503', () => {
+      const result = classifyError({
+        response: { status: 502, data: { message: 'Could not read from the git remote' } },
+      })
+      expect(result.message).toBe('502: Could not read from the git remote')
+    })
+
+    // TWO-SIDED: a 5xx carrying no message renders exactly what it renders
+    // today. Green before the fix and must stay green after it.
+    it('falls back to the generic sentence when the body carries no message', () => {
+      const result = classifyError({ status: 500 })
+      expect(result.message).toBe('500: Something went wrong on the server')
+    })
+
+    // An ActionResult rejection has `reason`, not `message`, so backendMessage
+    // is null and the fallback fires -- the shape useActionMutation already
+    // relies on. Pinned here so the 5xx arm cannot quietly start reading it.
+    it('does not mistake an ActionResult reason for a backend message', () => {
+      const result = classifyError({ outcome: 'failed', reason: 'restic exited 10', status: 500 })
+      expect(result.message).toBe('500: Something went wrong on the server')
+    })
+
+    it('does not let a non-string message escape on the 5xx route', () => {
+      const result = classifyError({ response: { status: 500, data: { message: { a: 1 } } } })
+      expect(typeof result.message).toBe('string')
+      expect(result.message).toBe('500: Something went wrong on the server')
+    })
+  })
+
   it('classifies 429 as server with retryable', () => {
     const result = classifyError({
       response: { status: 429, data: {} },

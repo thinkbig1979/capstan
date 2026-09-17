@@ -45,10 +45,13 @@ export function resolveUpdateScanSuccess() {
  * update-settings query instead (agent-os-xhn6).
  *
  * Keys on the CODE and renders only `message`. Deliberately NOT routed through
- * classifyError(), which is the idiom everywhere else in this file: its 5xx
- * branch discards `message` and answers "503: Something went wrong on the
- * server" (error-handler.ts), and this site IS a 5xx — it is the one most
- * exposed to that trap.
+ * classifyError(), which is the idiom everywhere else in this file. The
+ * original reason no longer holds: that arm discarded `message` and answered
+ * "503: Something went wrong on the server", and agent-os-mc4i made it render
+ * the cause. What remains is narrower but still decides it — this returns the
+ * bare sentence for a toast DESCRIPTION, where classifyError's 5xx arm prefixes
+ * the status (the status being diagnostic is why it keeps it), and keying on
+ * DOCKER_UNAVAILABLE is what makes this fire for that outage and nothing else.
  */
 function updateScanFault(error: unknown): string | null {
   if (!error || typeof error !== 'object') return null
