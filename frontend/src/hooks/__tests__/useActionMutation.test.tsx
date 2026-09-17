@@ -186,6 +186,78 @@ describe('useActionMutation — partial outcome', () => {
   })
 })
 
+// ─── rejected ActionResult (agent-os-ug4t) ────────────────────────────────────
+//
+// A FAILED action answers 5xx, so axios rejects and api.ts's interceptor hands
+// onError {...body, status} — i.e. the ActionResult itself. classifyError reads
+// data.error / data.message / err.message and an ActionResult carries none of
+// them, so before this fix the cause was replaced by a bare status string.
+//
+// This is NOT the "failed outcome" case above: that one RESOLVES a 200 carrying
+// outcome:'failed' and goes through onSuccess. It is green either way and
+// cannot discriminate this change.
+
+describe('useActionMutation — rejected ActionResult', () => {
+  it('renders the reason from a 503 Docker-outage ActionResult, not the status string', async () => {
+    const queryClient = makeClient()
+    const dockerOutage = {
+      outcome: 'failed',
+      reason:
+        'Docker daemon unreachable: the server started without a usable Docker connection. Check that the Docker socket is mounted and the daemon is running, then restart Capstan.',
+      status: 503,
+    }
+
+    const { result: hook } = renderHook(
+      () =>
+        useActionMutation({
+          mutationFn: vi.fn().mockRejectedValue(dockerOutage),
+        }),
+      { wrapper: wrapper(queryClient) },
+    )
+
+    await act(async () => {
+      hook.current.mutate(undefined as unknown as never)
+    })
+
+    await waitFor(() => expect(hook.current.isError).toBe(true))
+    expect(toast.error).toHaveBeenCalledWith(dockerOutage.reason)
+  })
+
+  it('renders the reason from a 500 failed ActionResult', async () => {
+    const queryClient = makeClient()
+    const failed = { outcome: 'failed', reason: 'failed to create network', status: 500 }
+
+    const { result: hook } = renderHook(
+      () => useActionMutation({ mutationFn: vi.fn().mockRejectedValue(failed) }),
+      { wrapper: wrapper(queryClient) },
+    )
+
+    await act(async () => {
+      hook.current.mutate(undefined as unknown as never)
+    })
+
+    await waitFor(() => expect(hook.current.isError).toBe(true))
+    expect(toast.error).toHaveBeenCalledWith('failed to create network')
+  })
+
+  it('falls back to the classified message when the ActionResult has an empty reason', async () => {
+    const queryClient = makeClient()
+    const emptyReason = { outcome: 'failed', reason: '', status: 500 }
+
+    const { result: hook } = renderHook(
+      () => useActionMutation({ mutationFn: vi.fn().mockRejectedValue(emptyReason) }),
+      { wrapper: wrapper(queryClient) },
+    )
+
+    await act(async () => {
+      hook.current.mutate(undefined as unknown as never)
+    })
+
+    await waitFor(() => expect(hook.current.isError).toBe(true))
+    expect(toast.error).toHaveBeenCalledWith('500: Something went wrong on the server')
+  })
+})
+
 // ─── network/throw error ──────────────────────────────────────────────────────
 
 describe('useActionMutation — mutationFn throws', () => {
