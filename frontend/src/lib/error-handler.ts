@@ -117,11 +117,18 @@ export function classifyError(error: unknown): AppError {
   // further down — so an unnarrowed non-string throws rather than merely
   // rendering oddly. messageOrNull keeps the `||` semantics this chain had:
   // an empty candidate falls through to the next one exactly as before.
-  const message =
+  //
+  // Split in two deliberately (agent-os-mc4i). `backendMessage` is null when the
+  // response carried no message at all; `message` keeps the old always-a-string
+  // shape for every existing reader. Branches that substitute a fixed sentence
+  // need to tell "the backend said nothing" from "the backend said something",
+  // and `message` cannot express that — it is never empty, so the `message || ...`
+  // idiom in the 409 and 428 arms below can never actually reach its fallback.
+  const backendMessage =
     messageOrNull(err.response?.data?.error) ??
     messageOrNull(err.response?.data?.message) ??
-    messageOrNull(err.message) ??
-    'An error occurred'
+    messageOrNull(err.message)
+  const message = backendMessage ?? 'An error occurred'
   const details = err.details ?? err.response?.data?.details
   // Nested FIRST, unlike `status` and `details` above, and deliberately so:
   // axios stamps its OWN code at the top level on a 4xx — settle.js:21 rejects
@@ -172,7 +179,16 @@ export function classifyError(error: unknown): AppError {
 
   if (status === 403) {
     return {
-      message: 'You do not have permission to perform this action',
+      // agent-os-mc4i: this arm used to hardcode the sentence and drop the
+      // backend's message unconditionally. Every 403 this backend emits carries
+      // more than "not permitted" — settings.go:317 and env.go:197 carry the
+      // RECOVERY ("Re-enter your password to edit ..."), csrf.go:59 carries
+      // "Reload the page and retry", health.go:84 names the env var to set — so
+      // the hardcoded sentence told the operator they were refused when the
+      // truth was that they needed to re-authenticate. All 13 backend 403
+      // emissions were read before this changed; none is sensitive and none
+      // interpolates client-supplied text.
+      message: backendMessage ?? 'You do not have permission to perform this action',
       type: 'auth',
       status,
       retryable: false,
