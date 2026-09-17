@@ -21,10 +21,13 @@
  * is exactly what happened to the uninitialised state, which used to arrive as a
  * 500 and now arrives as a 409.
  *
- * Deliberately NOT routed through classifyError(). Its 5xx branch discards
- * `message` and answers "503: Something went wrong on the server" — a status
- * code, where an operator needs a cause and a recovery. The recovery is the
- * whole point, and the recoveries here are mutually exclusive: an unreachable
+ * Deliberately NOT routed through classifyError(), though no longer for the
+ * reason first written here: that argument was "its 5xx branch discards
+ * `message` and answers '503: Something went wrong on the server'", and
+ * agent-os-mc4i made that arm render the cause. The STANDING reason is what
+ * this function does that classifyError does not — it maps a code to a title,
+ * a hint and a detail, where classifyError yields one sentence. The recovery is
+ * the whole point, and the recoveries here are mutually exclusive: an unreachable
  * repository is fixed by checking the remote or the mount, an uninitialised one
  * by initialising, a password fault by correcting a credential — and offering
  * any of the others for an unreachable repository is destructive-adjacent.

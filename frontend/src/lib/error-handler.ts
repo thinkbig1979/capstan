@@ -285,7 +285,26 @@ export function classifyError(error: unknown): AppError {
 
   if (status && status >= 500) {
     return {
-      message: `${status}: Something went wrong on the server`,
+      // agent-os-mc4i: this arm discarded the backend's message entirely and
+      // answered a bare status code. All 138 5xx emission regions in backend/
+      // were read before this changed.
+      //
+      // Nothing new goes on the wire: AppError.Cause is `json:"-"` and is never
+      // serialized (models/errors.go), so Message is the backend's own
+      // sanitised, client-safe string and the response body already carried it.
+      // The only thing that changed is whether the frontend RENDERS what it
+      // already received. Of 101 distinct message literals just two are the
+      // generic "Internal server error"; exactly two emissions interpolate
+      // anything, and both interpolate server-controlled values -- the six
+      // literal `action` strings at respondForLaunchError's call sites, and an
+      // err.Error() that goes into `details` (already serialized) rather than
+      // into the message.
+      //
+      // The status STAYS. Unlike the 403 and 404 arms, this is the one place
+      // where the status is itself diagnostic -- 503 says "try later, Docker is
+      // down", 500 says "this is a bug" -- so the cause is added to what was
+      // shown before rather than swapped for it, and no caller loses anything.
+      message: `${status}: ${backendMessage ?? 'Something went wrong on the server'}`,
       type: 'server',
       status,
       retryable: true,
