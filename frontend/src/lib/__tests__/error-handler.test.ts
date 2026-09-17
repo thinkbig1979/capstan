@@ -116,6 +116,48 @@ describe('classifyError', () => {
     expect(result.status).toBe(403)
   })
 
+  // agent-os-mc4i: the 403 branch used to hardcode its sentence and discard the
+  // backend's message unconditionally. Every 403 this backend emits carries
+  // something MORE useful than "you do not have permission" — several carry the
+  // recovery itself — so replacing them told the operator the opposite of the
+  // truth: refused, when the truth was "re-authenticate".
+  describe('403 preserves the backend cause (agent-os-mc4i)', () => {
+    it('keeps the recovery sentence from the interceptor-shaped body', () => {
+      const result = classifyError({
+        status: 403,
+        code: 'FORBIDDEN',
+        message: 'Re-enter your password to edit global environment variables',
+      })
+      expect(result.message).toBe('Re-enter your password to edit global environment variables')
+      expect(result.type).toBe('auth')
+      expect(result.status).toBe(403)
+    })
+
+    it('keeps the cause from a nested axios-shaped body', () => {
+      const result = classifyError({
+        response: { status: 403, data: { message: 'Cannot change password when auth is disabled' } },
+      })
+      expect(result.message).toBe('Cannot change password when auth is disabled')
+    })
+
+    it('keeps the CSRF recovery', () => {
+      const result = classifyError({
+        status: 403,
+        code: 'CSRF_COOKIE_MISSING',
+        message: 'CSRF cookie required. Reload the page and retry.',
+      })
+      expect(result.message).toBe('CSRF cookie required. Reload the page and retry.')
+    })
+
+    // TWO-SIDED: a 403 with no body carries nothing to show, and must still get
+    // the generic sentence rather than 'An error occurred'. This one is green
+    // before the fix and must stay green after it.
+    it('falls back to the generic sentence when the body carries no message', () => {
+      const result = classifyError({ status: 403 })
+      expect(result.message).toBe('You do not have permission to perform this action')
+    })
+  })
+
   it('classifies 404 as server', () => {
     const result = classifyError({
       response: { status: 404, data: { error: 'Not Found' } },
