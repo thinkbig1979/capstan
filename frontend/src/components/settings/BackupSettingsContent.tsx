@@ -6,6 +6,7 @@ import { EnvUnlockStatus } from '@/components/EnvUnlockStatus'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { useAuth } from '@/hooks/useAuth'
 import { useBackupSettings } from '@/hooks/useBackup'
+import { classifyError } from '@/lib/error-handler'
 import { CloudSection } from './backup-settings/CloudSection'
 import { EngineAvailabilityBanner } from './backup-settings/EngineAvailabilityBanner'
 import { RepositorySection } from './backup-settings/RepositorySection'
@@ -17,7 +18,7 @@ import { useBackupForm } from './backup-settings/useBackupForm'
 import { usePasswordReveal } from './backup-settings/usePasswordReveal'
 
 export function BackupSettingsContent() {
-  const { data: settings, isLoading, isError } = useBackupSettings()
+  const { data: settings, isLoading, isError, error } = useBackupSettings()
   const { authDisabled } = useAuth()
   const isUnlocked = useEnvUnlockStore((s) => s.isUnlocked)
   const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
@@ -54,9 +55,22 @@ export function BackupSettingsContent() {
   }
 
   if (isError || !settings || !draft) {
+    // agent-os-rtn8: getSettings emits ONLY a 200 and three 500s, and
+    // backup.go:266-270 states the distinctness is DELIBERATE -- "all three
+    // refuse the same request, and an operator reading the log needs to know
+    // WHICH read failed". The backend did that work and this screen threw it
+    // away. (It reaches us at all only because agent-os-mc4i stopped
+    // classifyError's 5xx arm discarding the message.)
+    //
+    // Gated on isError, NOT on the whole condition: three states route into this
+    // branch and only the first carries an error. A resolved payload that is
+    // merely empty has no cause, and manufacturing one would be the worse
+    // defect. The fixed sentence stays as the headline in every case.
+    const cause = isError ? classifyError(error).message : null
     return (
       <div className="py-4 text-sm text-destructive">
-        Failed to load backup settings.
+        <p>Failed to load backup settings.</p>
+        {cause && <p className="mt-1">{cause}</p>}
       </div>
     )
   }

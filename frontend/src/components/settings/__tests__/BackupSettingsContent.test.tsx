@@ -150,6 +150,86 @@ describe('BackupSettingsContent — loading / error states', () => {
       { timeout: 3000 },
     )
   })
+
+  // agent-os-rtn8: getSettings (backup.go:148-338) emits ONLY a 200 and three
+  // 500s, and backup.go:266-270 says the distinctness is deliberate -- "all
+  // three refuse the same request, and an operator reading the log needs to
+  // know WHICH read failed". The screen said "Failed to load backup settings."
+  // (The cause only reaches here because agent-os-mc4i stopped classifyError's
+  // 5xx arm discarding it; before that this test could not have passed.)
+  describe('the error state shows which read failed (agent-os-rtn8)', () => {
+    it('renders the backend cause alongside the fixed sentence', async () => {
+      mockGetSettings.mockRejectedValue({
+        status: 500,
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to read the backup retention and schedule settings',
+      })
+      render(<BackupSettingsContent />, { wrapper: createWrapper() })
+
+      await waitFor(
+        () => {
+          expect(screen.getByText(/failed to load backup settings/i)).toBeInTheDocument()
+        },
+        { timeout: 3000 },
+      )
+      expect(
+        screen.getByText(/Failed to read the backup retention and schedule settings/),
+      ).toBeInTheDocument()
+    })
+
+    // The backend's three call sites carry TWO distinct strings. An assertion on
+    // one alone passes against a hardcoded string, so pin that they differ.
+    it('tells the two distinct reads apart', async () => {
+      mockGetSettings.mockRejectedValue({
+        status: 500,
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to read backup settings',
+      })
+      render(<BackupSettingsContent />, { wrapper: createWrapper() })
+
+      await waitFor(
+        () => {
+          expect(screen.getByText(/500: Failed to read backup settings/)).toBeInTheDocument()
+        },
+        { timeout: 3000 },
+      )
+      expect(
+        screen.queryByText(/retention and schedule/),
+      ).not.toBeInTheDocument()
+    })
+
+    // TWO-SIDED: a failure carrying no cause still shows the fixed sentence
+    // alone. Green before the change and must stay green.
+    it('shows only the fixed sentence when the failure carries no cause', async () => {
+      mockGetSettings.mockRejectedValue({ status: 500 })
+      render(<BackupSettingsContent />, { wrapper: createWrapper() })
+
+      await waitFor(
+        () => {
+          expect(screen.getByText(/failed to load backup settings/i)).toBeInTheDocument()
+        },
+        { timeout: 3000 },
+      )
+      expect(screen.queryByText(/Failed to read/)).not.toBeInTheDocument()
+    })
+
+    // THE TRAP AT THIS CALL SITE: `isError || !settings || !draft` routes THREE
+    // conditions into one branch, and only the first has an error to read.
+    // A resolved-but-empty payload must not be given a cause -- there is none,
+    // and inventing one is the worse defect.
+    it('does not claim a cause when the query succeeded but carried no settings', async () => {
+      mockGetSettings.mockResolvedValue(undefined)
+      render(<BackupSettingsContent />, { wrapper: createWrapper() })
+
+      await waitFor(
+        () => {
+          expect(screen.getByText(/failed to load backup settings/i)).toBeInTheDocument()
+        },
+        { timeout: 3000 },
+      )
+      expect(screen.queryByText(/^5\d\d:/)).not.toBeInTheDocument()
+    })
+  })
 })
 
 describe('BackupSettingsContent — renders effective settings', () => {
