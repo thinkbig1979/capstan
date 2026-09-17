@@ -13,6 +13,7 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { classifyError } from '@/lib/error-handler'
+import { isActionResult } from '@/lib/action-result'
 import { deleteStackWithCollateralConfirm, StackDeleteCancelledError } from '@/lib/stack-delete'
 import { useParams, useNavigate, useLocation } from 'react-router'
 import { toast } from 'sonner'
@@ -108,7 +109,33 @@ export function StackPage() {
       // A declined collateral confirmation is a user cancel, not a failure —
       // no error toast, just re-enable the Delete button.
       if (!(err instanceof StackDeleteCancelledError)) {
-        toast.error('Failed to delete stack')
+        // The delete endpoint answers a truth.ActionResult, so the cause was
+        // being dropped whole (agent-os-5obt): classifyError cannot read that
+        // body — it looks for data.error / data.message / err.message and an
+        // ActionResult carries none of them — and this site never called it
+        // anyway. Worst case was the Docker outage, whose reason IS the
+        // recovery instruction.
+        //
+        // The reason is the DESCRIPTION, not the title: it can be a paragraph,
+        // and the fixed title is what carries the action context.
+        //
+        // `err.reason` is checked, not just the type, because an empty reason
+        // would render an empty description — worse than the generic sentence
+        // on its own. Both arms are pinned: the empty-reason fall-through has
+        // its own test, because dropping this conjunct is a one-token mutation
+        // that nothing else in the suite notices.
+        //
+        // Branch rather than pass a conditional second argument: sonner renders
+        // toast.error(t) and toast.error(t, undefined) identically but a vitest
+        // spy does not, so the no-cause path stays a single-argument call. The
+        // full argument is at UpdateScheduleContent.tsx:116-137 — the sibling
+        // sites, HistoryRetentionSection.tsx among them, repeat the shape but
+        // not the reason, so that is the one worth reading.
+        if (isActionResult(err) && err.reason) {
+          toast.error('Failed to delete stack', { description: err.reason })
+        } else {
+          toast.error('Failed to delete stack')
+        }
       }
       setIsDeleting(false)
     },

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Routes, Route } from 'react-router'
 import type { Stack } from '@/types'
@@ -363,6 +364,123 @@ describe('StackPage', () => {
       expect(screen.queryByText('Failed to load stack')).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: /Back to Dashboard/ })).toBeInTheDocument()
       expect(getStack).not.toHaveBeenCalled()
+    })
+  })
+  describe('delete failures (agent-os-5obt)', () => {
+    // Copied verbatim from handlers/respond.go:186 DockerUnavailableMessage,
+    // which renderDockerResult puts in the 503 ActionResult when the socket is
+    // missing — the worst case the fixed string used to swallow, because this
+    // text IS the recovery instruction. Kept verbatim rather than paraphrased
+    // so it stays honest about what the operator actually receives; at 170
+    // characters it is also why the reason is the description and not the
+    // title.
+    const DOCKER_REASON =
+      'Docker daemon unreachable: the server started without a usable Docker connection. ' +
+      'Check that the Docker socket is mounted and the daemon is running, then restart Capstan.'
+
+    // Walks the whole real delete path rather than poking the mutation: the
+    // portalled Radix menu, then the typed confirmation the destructive dialog
+    // demands. deleteStackWithCollateralConfirm is NOT mocked, so what reaches
+    // onError is whatever that wrapper re-throws.
+    async function requestDelete(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(await screen.findByRole('button', { name: 'More stack actions' }))
+      await user.click(await screen.findByText('Delete Stack'))
+      await user.type(await screen.findByLabelText('Type my-stack to confirm'), 'my-stack')
+      await user.click(screen.getByRole('button', { name: 'Delete' }))
+    }
+
+    it('renders the ActionResult reason as the toast description', async () => {
+      // A FAILED delete answers 5xx with a truth.ActionResult body, and api.ts's
+      // interceptor rejects with {...body, status} — so this object, verbatim,
+      // is what onError sees (stack-delete.ts re-throws it untouched: its
+      // collateral branch keys on `code`, which an ActionResult has not got).
+      deleteStack.mockRejectedValue({ outcome: 'failed', reason: DOCKER_REASON, status: 503 })
+      renderPage()
+      await screen.findByTestId('stack-detail')
+
+      await requestDelete(userEvent.setup())
+
+      const { toast } = await import('sonner')
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalledWith('Failed to delete stack', {
+          description: DOCKER_REASON,
+        })
+      })
+      // ONE toast, not two. This is the arm that gates the double-toast: delete
+      // the `else` and `if (c) { X } else { Y }` becomes `if (c) { X } { Y }`, a
+      // bare block that always runs, so this path fires the description toast
+      // AND the bare one. toHaveBeenCalledWith alone still passes that mutant —
+      // the first call matches — so the count is what sees it.
+      expect(toast.error).toHaveBeenCalledTimes(1)
+    })
+
+    it('leaves the generic sentence alone when the failure carries no reason', async () => {
+      // The other side of the same instrument: a cause-less rejection must stay
+      // a SINGLE-argument call. Sonner renders toast.error(t) and
+      // toast.error(t, undefined) identically but a spy does not, so this is
+      // what stops the fix above turning every delete toast two-argument.
+      deleteStack.mockRejectedValue(new Error('boom'))
+      renderPage()
+      await screen.findByTestId('stack-detail')
+
+      await requestDelete(userEvent.setup())
+
+      const { toast } = await import('sonner')
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to delete stack'))
+      expect(toast.error).toHaveBeenCalledTimes(1)
+    })
+
+    it('falls back to the bare sentence when the ActionResult reason is empty', async () => {
+      // Pins the `&& err.reason` conjunct, NOT the isActionResult type check.
+      // This body IS an ActionResult, so the type guard alone passes it through
+      // and the description would render empty — a toast with a blank second
+      // line, worse than the generic sentence on its own. Dropping that one
+      // token is a mutation the other three arms do not notice.
+      deleteStack.mockRejectedValue({ outcome: 'failed', reason: '', status: 503 })
+      renderPage()
+      await screen.findByTestId('stack-detail')
+
+      await requestDelete(userEvent.setup())
+
+      const { toast } = await import('sonner')
+      // Single-argument, asserted the same way the cause-less control is:
+      // toHaveBeenCalledWith(msg, undefined) would NOT match a one-argument
+      // call, so it would go red for a reason no operator can see.
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to delete stack'))
+      // Not this arm's own mutant — an empty reason fails the guard, so the
+      // `else`-deletion mutant still fires exactly one toast here. Kept so all
+      // three positive arms state the same thing and a reader is not left
+      // wondering which one is deliberately weaker.
+      expect(toast.error).toHaveBeenCalledTimes(1)
+    })
+
+    it('shows no toast at all when the collateral confirmation is declined', async () => {
+      // A declined second confirmation is a user cancel, not a failure. This is
+      // the arm most likely to break silently: it stays green only while the
+      // StackDeleteCancelledError early-return sits OUTSIDE the reason branch.
+      deleteStack.mockRejectedValue({
+        code: 'STACK_DELETE_COLLATERAL',
+        message: 'stack directory holds more than the stack itself',
+        details: { directory: '/stacks/s1', collateral: ['data/'] },
+        status: 428,
+      })
+      const user = userEvent.setup()
+      renderPage()
+      await screen.findByTestId('stack-detail')
+
+      await requestDelete(user)
+
+      await screen.findByText('Also delete these files?')
+      await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      // One call only: declining must never re-issue the delete with the
+      // confirm-collateral flag.
+      await waitFor(() => expect(deleteStack).toHaveBeenCalledTimes(1))
+      await act(async () => { await Promise.resolve() })
+
+      const { toast } = await import('sonner')
+      expect(toast.error).not.toHaveBeenCalled()
+      expect(toast.success).not.toHaveBeenCalled()
     })
   })
 })
