@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { classifyError } from '@/lib/error-handler'
+import { isActionResult } from '@/lib/action-result'
 import { DialogLoadingFallback } from '@/components/LoadingSkeleton'
 import type { DashboardStats, DashboardContainerInfo, CommandResult } from '@/types'
 import type { DashboardContainerMetric } from '@/hooks/useDashboardMetrics'
@@ -97,7 +98,23 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       if (mode === 'stack') queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
-    onError: (err) => toast.error(classifyError(err).message || `Failed to start ${label}`),
+    // Branch on the guard (agent-os-mc4i): in stack mode start/stop/restart/pull
+    // hit stack_lifecycle.go's renderDockerResult, which answers a
+    // truth.ActionResult carrying `reason` and neither `error` nor `message` -- a
+    // body classifyError structurally cannot read, so the Docker-outage recovery
+    // paragraph reached the operator as "503: Something went wrong on the server".
+    // Branch rather than a conditional second argument: sonner renders
+    // toast.error(t, undefined) and toast.error(t) alike but a vitest spy does
+    // not, so the conditional form cannot be pinned. Precedent:
+    // HistoryRetentionSection.tsx. The container-mode route answers an AppError
+    // and still takes the classifyError arm below.
+    onError: (err) => {
+      if (isActionResult(err) && err.reason) {
+        toast.error(`Failed to start ${label}`, { description: err.reason })
+        return
+      }
+      toast.error(classifyError(err).message || `Failed to start ${label}`)
+    },
   })
 
   const stopMutation = useMutation({
@@ -111,7 +128,14 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       if (mode === 'stack') queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
-    onError: (err) => toast.error(classifyError(err).message || `Failed to stop ${label}`),
+    // Same ActionResult guard as startMutation above.
+    onError: (err) => {
+      if (isActionResult(err) && err.reason) {
+        toast.error(`Failed to stop ${label}`, { description: err.reason })
+        return
+      }
+      toast.error(classifyError(err).message || `Failed to stop ${label}`)
+    },
   })
 
   const restartMutation = useMutation({
@@ -125,7 +149,14 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       if (mode === 'stack') queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
-    onError: (err) => toast.error(classifyError(err).message || `Failed to restart ${label}`),
+    // Same ActionResult guard as startMutation above.
+    onError: (err) => {
+      if (isActionResult(err) && err.reason) {
+        toast.error(`Failed to restart ${label}`, { description: err.reason })
+        return
+      }
+      toast.error(classifyError(err).message || `Failed to restart ${label}`)
+    },
   })
 
   const pullMutation = useMutation({
@@ -138,8 +169,14 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
         queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       }
     },
+    // Same ActionResult guard as startMutation above.
     onError: (err) => {
-      if (mode === 'stack') toast.error(classifyError(err).message || 'Failed to pull images')
+      if (mode !== 'stack') return
+      if (isActionResult(err) && err.reason) {
+        toast.error('Failed to pull images', { description: err.reason })
+        return
+      }
+      toast.error(classifyError(err).message || 'Failed to pull images')
     },
   })
 
@@ -430,7 +467,16 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
-    onError: (err) => toast.error(classifyError(err).message || 'Failed to remove container'),
+    // Same ActionResult guard as startMutation above, but via a different route:
+    // deleteContainer answers renderDockerResult at resource_mutations.go:172 in
+    // both modes, so this site was never covered by the AppError repair.
+    onError: (err) => {
+      if (isActionResult(err) && err.reason) {
+        toast.error('Failed to remove container', { description: err.reason })
+        return
+      }
+      toast.error(classifyError(err).message || 'Failed to remove container')
+    },
   })
 
   const handleDeleteContainer = async (containerId: string, containerName: string, isRunning: boolean) => {
