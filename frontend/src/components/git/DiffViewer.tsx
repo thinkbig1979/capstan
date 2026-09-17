@@ -10,6 +10,7 @@ import {
   SelectItem,
 } from '@/components/ui/select'
 import { parseDiff } from '@/lib/diff-parser'
+import { classifyError } from '@/lib/error-handler'
 
 type DiffView = 'unified' | 'split'
 
@@ -57,7 +58,26 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
   }
 
   if (error || !diffData) {
-    return <div className="flex items-center justify-center py-4 text-muted-foreground">Failed to load diff</div>
+    // agent-os-rtn8: GetDiff answers with more than one refusal and this branch
+    // rendered one sentence for all of them -- a 400 "Invalid commit hash
+    // format" minted in the handler (git.go:299), and the 404s that reach
+    // handleError at :292 and :309 ("Stack not found", "Not a git repository").
+    // A malformed hash and a missing repository need different operator actions.
+    //
+    // The cause reaches us at all only because agent-os-mc4i stopped
+    // classifyError's 404 arm replacing the backend's message.
+    //
+    // Gated on `error` alone, NOT on the whole condition: two states route into
+    // this branch and only the first carries an error. A request that RESOLVES
+    // with nothing has no cause, and manufacturing one would be the worse
+    // defect. The fixed sentence stays as the HEADLINE in both cases.
+    const cause = error ? classifyError(error).message : null
+    return (
+      <div className="flex flex-col items-center justify-center gap-1 py-4 text-center text-muted-foreground">
+        <p>Failed to load diff</p>
+        {cause && <p>{cause}</p>}
+      </div>
+    )
   }
 
   if (files.length === 0) {

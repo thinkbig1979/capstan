@@ -74,6 +74,49 @@ describe('DiffViewer — load states', () => {
     expect(await screen.findByText('Failed to load diff')).toBeInTheDocument()
   })
 
+  /**
+   * agent-os-rtn8. GetDiff (handlers/git.go) answers with more than one
+   * refusal and this branch rendered one sentence for all of them: a 400
+   * "Invalid commit hash format" minted in the handler itself (git.go:299),
+   * plus the 404s resolvePathFromStack and services/git.go return through
+   * handleError at :292 and :309 -- "Stack not found", "Not a git repository".
+   * A malformed hash and a missing repository need different operator actions.
+   *
+   * The fixture is the FLAT shape api.ts's interceptor rejects with
+   * (api.ts:127-131), which is what actually reaches the component.
+   */
+  it.each([
+    [400, 'VALIDATION_ERROR', 'Invalid commit hash format'],
+    [404, 'GIT_NOT_REPO', 'Not a git repository'],
+    [404, 'NOT_FOUND', 'Stack not found'],
+  ])('names the cause the backend sent for a %s %s failure', async (status, code, message) => {
+    mockDiff.mockRejectedValue({ status, code, message })
+    renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
+
+    expect(await screen.findByText('Failed to load diff')).toBeInTheDocument()
+    expect(screen.getByText(message)).toBeInTheDocument()
+  })
+
+  /**
+   * The multi-condition half, and the reason the cause is gated on `error`
+   * alone rather than on the whole branch condition. `error || !diffData`
+   * routes TWO states here and only the first carries an error: a request that
+   * RESOLVES with nothing has no cause, and manufacturing one would be the
+   * worse defect. Same shape #408 pinned on BackupSettingsContent.
+   *
+   * This is also the two-sided arm (agent-os-zlw0 criterion 2): the fixed
+   * sentence stays as the headline, so this case renders exactly what it
+   * rendered before the cause was ever added.
+   */
+  it('adds no cause when the request resolved with no payload', async () => {
+    mockDiff.mockResolvedValue(undefined)
+    renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
+
+    expect(await screen.findByText('Failed to load diff')).toBeInTheDocument()
+    expect(screen.queryByText('An unexpected error occurred')).not.toBeInTheDocument()
+    expect(screen.queryByText('An error occurred')).not.toBeInTheDocument()
+  })
+
   it('says there is no diff when the response carries no parseable files', async () => {
     mockDiff.mockResolvedValue({ diff: '' })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
