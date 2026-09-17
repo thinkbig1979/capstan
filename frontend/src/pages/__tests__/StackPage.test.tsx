@@ -423,6 +423,25 @@ describe('StackPage', () => {
       await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to delete stack'))
     })
 
+    it('falls back to the bare sentence when the ActionResult reason is empty', async () => {
+      // Pins the `&& err.reason` conjunct, NOT the isActionResult type check.
+      // This body IS an ActionResult, so the type guard alone passes it through
+      // and the description would render empty — a toast with a blank second
+      // line, worse than the generic sentence on its own. Dropping that one
+      // token is a mutation the other three arms do not notice.
+      deleteStack.mockRejectedValue({ outcome: 'failed', reason: '', status: 503 })
+      renderPage()
+      await screen.findByTestId('stack-detail')
+
+      await requestDelete(userEvent.setup())
+
+      const { toast } = await import('sonner')
+      // Single-argument, asserted the same way the cause-less control is:
+      // toHaveBeenCalledWith(msg, undefined) would NOT match a one-argument
+      // call, so it would go red for a reason no operator can see.
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to delete stack'))
+    })
+
     it('shows no toast at all when the collateral confirmation is declined', async () => {
       // A declined second confirmation is a user cancel, not a failure. This is
       // the arm most likely to break silently: it stays green only while the

@@ -121,10 +121,16 @@ export function StackPage() {
         //
         // `err.reason` is checked, not just the type, because an empty reason
         // would render an empty description — worse than the generic sentence
-        // on its own. Branch rather than pass a conditional second argument:
-        // sonner renders toast.error(t) and toast.error(t, undefined)
-        // identically but a spy does not, so the no-cause path stays a
-        // single-argument call (same reasoning as HistoryRetentionSection.tsx).
+        // on its own. Both arms are pinned: the empty-reason fall-through has
+        // its own test, because dropping this conjunct is a one-token mutation
+        // that nothing else in the suite notices.
+        //
+        // Branch rather than pass a conditional second argument: sonner renders
+        // toast.error(t) and toast.error(t, undefined) identically but a vitest
+        // spy does not, so the no-cause path stays a single-argument call. The
+        // full argument is at UpdateScheduleContent.tsx:116-137 — the sibling
+        // sites, HistoryRetentionSection.tsx among them, repeat the shape but
+        // not the reason, so that is the one worth reading.
         if (isActionResult(err) && err.reason) {
           toast.error('Failed to delete stack', { description: err.reason })
         } else {
