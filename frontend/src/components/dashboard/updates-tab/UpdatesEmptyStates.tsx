@@ -40,16 +40,31 @@ interface RetryCardProps {
   onCheck: () => void
 }
 
+/**
+ * agent-os-rtn8: NOT RetryCardProps. This card is the only one of the two that
+ * has an error to describe -- NeverScannedCard below shares the retry button but
+ * has no error and never will, so widening the shared interface would put a
+ * `cause` prop on a component that can never fill it.
+ *
+ * `cause` is optional because a failure that carries no describable cause must
+ * render exactly what this card rendered before it existed. The caller decides
+ * whether one exists; inventing one here would be the worse defect.
+ */
+interface UpdateCheckErrorCardProps extends RetryCardProps {
+  cause?: string
+}
+
 /** Shown when the check-updates query errored and there is no cached data to fall back to. */
-export function UpdateCheckErrorCard({ onCheck }: RetryCardProps) {
+export function UpdateCheckErrorCard({ onCheck, cause }: UpdateCheckErrorCardProps) {
   return (
     <Card>
       <CardContent className="flex flex-col items-center justify-center py-12">
         <p className="text-lg font-semibold mb-2">Failed to Check for Updates</p>
-        <p className="text-sm text-muted-foreground mb-4">
+        <p className="text-sm text-muted-foreground mb-1 text-center">
           An error occurred while checking for container image updates
         </p>
-        <Button onClick={onCheck}>
+        {cause && <p className="text-sm text-muted-foreground mb-4 text-center">{cause}</p>}
+        <Button className={cause ? undefined : 'mt-3'} onClick={onCheck}>
           <Download className="mr-2 h-4 w-4" />
           Retry
         </Button>
