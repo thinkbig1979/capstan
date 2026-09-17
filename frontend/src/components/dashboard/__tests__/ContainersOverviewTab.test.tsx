@@ -16,8 +16,22 @@ import type { DashboardStats, DashboardContainerInfo } from '@/types'
  * renderDockerResult), which answers a truth.ActionResult: a body carrying
  * `outcome`/`reason` and neither `error` nor `message`, so classifyError cannot
  * see the reason at all. A mode="standalone" arm would go green without the fix
- * and prove nothing. Containers land in the stack tab by having a projectName
- * (isStandaloneContainer), so every fixture below carries one.
+ * and prove nothing.
+ *
+ * TWO INDEPENDENT THINGS PIN EVERY ARM BELOW TO mode="stack", and the first is
+ * the one that would evaporate silently, so it is written down here:
+ *  1. The locators are the SINGULAR getByLabelText('Start stack') etc., which
+ *     throw on zero or multiple matches. A standalone row's button is labelled
+ *     'Start container' (`label` is derived from `mode`), so a passing click is
+ *     provably on a stack-mode button. If those aria-labels are ever
+ *     de-duplicated across modes this discriminator is gone and these arms stop
+ *     proving what they claim -- reintroduce one by asserting on `mode` directly.
+ *  2. isStandaloneContainer is `!c.projectName`, and every fixture sets one, so
+ *     a standalone row cannot exist in these renders at all.
+ *
+ * Each arm also asserts toHaveBeenCalledTimes(1). Without it the suite cannot
+ * see a handler that fires the description toast AND then falls through to the
+ * laundered sentence: toHaveBeenCalledWith passes when ANY recorded call matches.
  */
 
 const DOCKER_REASON =
@@ -118,6 +132,8 @@ describe('ContainersOverviewTab — ActionResult reasons reach the operator', ()
         description: DOCKER_REASON,
       }),
     )
+    // Pins the else arm: the laundered sentence must not follow the description.
+    expect(toast.error).toHaveBeenCalledTimes(1)
     expect(stacksMock.start).toHaveBeenCalledWith('stack-1')
   })
 
@@ -132,6 +148,8 @@ describe('ContainersOverviewTab — ActionResult reasons reach the operator', ()
         description: DOCKER_REASON,
       }),
     )
+    // Pins the else arm: the laundered sentence must not follow the description.
+    expect(toast.error).toHaveBeenCalledTimes(1)
     expect(stacksMock.stop).toHaveBeenCalledWith('stack-1')
   })
 
@@ -146,6 +164,8 @@ describe('ContainersOverviewTab — ActionResult reasons reach the operator', ()
         description: DOCKER_REASON,
       }),
     )
+    // Pins the else arm: the laundered sentence must not follow the description.
+    expect(toast.error).toHaveBeenCalledTimes(1)
     expect(stacksMock.restart).toHaveBeenCalledWith('stack-1')
   })
 
@@ -160,6 +180,8 @@ describe('ContainersOverviewTab — ActionResult reasons reach the operator', ()
         description: DOCKER_REASON,
       }),
     )
+    // Pins the else arm: the laundered sentence must not follow the description.
+    expect(toast.error).toHaveBeenCalledTimes(1)
     expect(stacksMock.pull).toHaveBeenCalledWith('stack-1')
   })
 
@@ -175,6 +197,8 @@ describe('ContainersOverviewTab — ActionResult reasons reach the operator', ()
         description: DOCKER_REASON,
       }),
     )
+    // Pins the else arm: the laundered sentence must not follow the description.
+    expect(toast.error).toHaveBeenCalledTimes(1)
     expect(resourcesMock.deleteContainer).toHaveBeenCalledWith('c1', true)
   })
 })
@@ -193,6 +217,21 @@ describe('ContainersOverviewTab — non-ActionResult errors keep the classifier 
     expect(toast.error).toHaveBeenCalledTimes(1)
     expect(vi.mocked(toast.error).mock.calls[0]).toHaveLength(1)
     expect(vi.mocked(toast.error).mock.calls[0][0]).toContain(DOCKER_REASON)
+  })
+
+  // Pins the `&& err.reason` conjunct. A failed ActionResult may carry an empty
+  // reason; without the conjunct this renders an empty toast description, which
+  // is worse than the generic sentence it replaced.
+  it('start falls through to the classifier when the ActionResult reason is empty', async () => {
+    stacksMock.start.mockRejectedValue({ outcome: 'failed', reason: '', details: {}, status: 503 })
+    renderTab(makeContainer({ state: 'exited' }))
+
+    fireEvent.click(screen.getByLabelText('Start stack'))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(toast.error).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(toast.error).mock.calls[0]).toHaveLength(1)
+    expect(vi.mocked(toast.error).mock.calls[0][0]).toBe('503: Something went wrong on the server')
   })
 
   it('delete keeps the single-argument classifier toast for an AppError body', async () => {

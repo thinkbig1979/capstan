@@ -103,17 +103,24 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
     // truth.ActionResult carrying `reason` and neither `error` nor `message` -- a
     // body classifyError structurally cannot read, so the Docker-outage recovery
     // paragraph reached the operator as "503: Something went wrong on the server".
-    // Branch rather than a conditional second argument: sonner renders
-    // toast.error(t, undefined) and toast.error(t) alike but a vitest spy does
-    // not, so the conditional form cannot be pinned. Precedent:
-    // HistoryRetentionSection.tsx. The container-mode route answers an AppError
-    // and still takes the classifyError arm below.
+    // The container-mode route answers an AppError and still takes the else arm.
+    //
+    // Two branches rather than toast.error(TITLE, reason ? { description } :
+    // undefined): sonner renders those identically but a vitest spy does not, so
+    // the conditional form makes every call two-argument and silently breaks
+    // one-argument assertions. The full argument, including the four legacy
+    // assertions it protects, is at UpdateScheduleContent.tsx:116-137.
+    //
+    // `&& err.reason` is load-bearing: a failed ActionResult may carry an empty
+    // reason, and an empty description renders worse than the generic sentence.
+    // if/else rather than an early return so the two toasts are mutually
+    // exclusive by syntax -- see useActionMutation.ts:51 for the same conjunct.
     onError: (err) => {
       if (isActionResult(err) && err.reason) {
         toast.error(`Failed to start ${label}`, { description: err.reason })
-        return
+      } else {
+        toast.error(classifyError(err).message || `Failed to start ${label}`)
       }
-      toast.error(classifyError(err).message || `Failed to start ${label}`)
     },
   })
 
@@ -132,9 +139,9 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
     onError: (err) => {
       if (isActionResult(err) && err.reason) {
         toast.error(`Failed to stop ${label}`, { description: err.reason })
-        return
+      } else {
+        toast.error(classifyError(err).message || `Failed to stop ${label}`)
       }
-      toast.error(classifyError(err).message || `Failed to stop ${label}`)
     },
   })
 
@@ -153,9 +160,9 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
     onError: (err) => {
       if (isActionResult(err) && err.reason) {
         toast.error(`Failed to restart ${label}`, { description: err.reason })
-        return
+      } else {
+        toast.error(classifyError(err).message || `Failed to restart ${label}`)
       }
-      toast.error(classifyError(err).message || `Failed to restart ${label}`)
     },
   })
 
@@ -174,9 +181,9 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       if (mode !== 'stack') return
       if (isActionResult(err) && err.reason) {
         toast.error('Failed to pull images', { description: err.reason })
-        return
+      } else {
+        toast.error(classifyError(err).message || 'Failed to pull images')
       }
-      toast.error(classifyError(err).message || 'Failed to pull images')
     },
   })
 
@@ -473,9 +480,9 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
     onError: (err) => {
       if (isActionResult(err) && err.reason) {
         toast.error('Failed to remove container', { description: err.reason })
-        return
+      } else {
+        toast.error(classifyError(err).message || 'Failed to remove container')
       }
-      toast.error(classifyError(err).message || 'Failed to remove container')
     },
   })
 
