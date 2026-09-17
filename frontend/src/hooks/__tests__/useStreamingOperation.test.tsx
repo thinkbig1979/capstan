@@ -269,3 +269,46 @@ describe('useStreamingOperation — reset', () => {
     expect(result.current.error).toBeNull()
   })
 })
+
+// ─── agent-os-06c1: the parsed frame is asserted, not validated ──────────────
+
+describe('useStreamingOperation — the parsed frame is asserted, not validated', () => {
+  // The exact twin of useBackup.ts's handler. Fixing one and leaving the other
+  // is this repo's most-repeated defect, so both move together.
+  it('does not append a non-string data line to lines', async () => {
+    const { result } = renderHook(() => useStreamingOperation())
+    act(() => { result.current.execute('my-stack', 'start') })
+    act(() => { send({ type: 'data', line: { text: 'starting' } }) })
+
+    expect(result.current.lines.every((l) => typeof l === 'string')).toBe(true)
+    expect(result.current.lines.join(' ')).not.toContain('[object Object]')
+  })
+
+  it('does not render a non-string phase message into lines', async () => {
+    const { result } = renderHook(() => useStreamingOperation())
+    act(() => { result.current.execute('my-stack', 'start') })
+    act(() => { send({ type: 'phase', message: { phase: 'pulling' } }) })
+
+    expect(result.current.lines.join(' ')).not.toContain('[object Object]')
+  })
+
+  it('does not let a non-string error escape into the error string', async () => {
+    const { result } = renderHook(() => useStreamingOperation())
+    act(() => { result.current.execute('my-stack', 'start') })
+    act(() => { send({ type: 'error', error: { cause: 'no such image' } }) })
+
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(typeof result.current.error).toBe('string')
+    expect(result.current.error).not.toContain('[object Object]')
+  })
+
+  it('still carries real string frames through unchanged', async () => {
+    const { result } = renderHook(() => useStreamingOperation())
+    act(() => { result.current.execute('my-stack', 'start') })
+    act(() => { send({ type: 'data', line: 'starting' }) })
+    act(() => { send({ type: 'phase', message: 'pulling' }) })
+
+    expect(result.current.lines).toContain('starting')
+    expect(result.current.lines).toContain('--- pulling ---')
+  })
+})

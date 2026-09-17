@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, useEffect } from 'react'
 import { WSClient } from '@/lib/ws'
 import { reconcileOnClose } from '@/lib/ws-reconcile'
+import { messageOrNull } from '@/lib/narrow'
 
 /**
  * OperationStatus mirrors the Action Truth Contract outcomes for stack
@@ -19,12 +20,15 @@ export type OperationStatus = 'idle' | 'running' | 'success' | 'no_change' | 'pa
 
 interface OperationLine {
   type: string
-  line?: string
+  // agent-os-06c1: the rendered fields are `unknown`, not `string`. JSON.parse
+  // returns `any`, so declaring them `string` is a claim tsc then stops
+  // checking. This is the twin of useBackup.ts's frame handler.
+  line?: unknown
   /** @deprecated Use outcome instead — kept for backward compatibility with backends not yet migrated. */
   success?: boolean
-  error?: string
+  error?: unknown
   phase?: string
-  message?: string
+  message?: unknown
   action?: string
   stack?: string
   /**
@@ -33,7 +37,7 @@ interface OperationLine {
    */
   outcome?: 'success' | 'no_change' | 'partial' | 'failed'
   /** Human-readable description of the outcome. */
-  reason?: string
+  reason?: unknown
 }
 
 export interface StreamingOperation {
@@ -116,10 +120,17 @@ export function useStreamingOperation(): StreamingOperation {
         try {
           const msg = JSON.parse(data) as OperationLine
 
-          if (msg.type === 'data' && msg.line) {
-            setLines(prev => [...prev, msg.line!])
-          } else if (msg.type === 'phase' && msg.message) {
-            setLines(prev => [...prev, `--- ${msg.message} ---`])
+          // agent-os-06c1: narrowed once, then used. Every field below lands in
+          // `lines` (string[]) or `error` (string).
+          const line = messageOrNull(msg.line)
+          const phase = messageOrNull(msg.message)
+          const reason = messageOrNull(msg.reason)
+          const error = messageOrNull(msg.error)
+
+          if (msg.type === 'data' && line) {
+            setLines(prev => [...prev, line])
+          } else if (msg.type === 'phase' && phase) {
+            setLines(prev => [...prev, `--- ${phase} ---`])
           } else if (msg.type === 'start') {
             // initial handshake — no UI change needed
           } else if (msg.type === 'done') {
@@ -132,20 +143,20 @@ export function useStreamingOperation(): StreamingOperation {
 
             if (finalStatus === 'success') {
               setStatus('success')
-              const label = msg.reason || 'Operation completed successfully.'
+              const label = reason ?? 'Operation completed successfully.'
               setLines(prev => [...prev, label])
             } else if (finalStatus === 'no_change') {
               setStatus('no_change')
-              const label = msg.reason || 'No change — already in desired state.'
+              const label = reason ?? 'No change — already in desired state.'
               setLines(prev => [...prev, label])
             } else if (finalStatus === 'partial') {
               setStatus('partial')
-              const label = msg.reason || 'Operation partially completed.'
+              const label = reason ?? 'Operation partially completed.'
               setLines(prev => [...prev, label])
             } else {
               // error / failed
               setStatus('error')
-              const errMsg = msg.error || msg.reason || 'Operation failed'
+              const errMsg = error ?? reason ?? 'Operation failed'
               setError(errMsg)
               setLines(prev => [...prev, `Error: ${errMsg}`])
             }
@@ -154,7 +165,7 @@ export function useStreamingOperation(): StreamingOperation {
             clientRef.current = null
           } else if (msg.type === 'error') {
             setStatus('error')
-            const errMsg = msg.error || 'Unknown error'
+            const errMsg = error ?? 'Unknown error'
             setError(errMsg)
             setLines(prev => [...prev, `Error: ${errMsg}`])
           }

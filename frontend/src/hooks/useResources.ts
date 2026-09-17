@@ -8,6 +8,7 @@ import { isActionResult, toastForResult, type ActionResult } from '@/lib/action-
 import { classifyError } from '@/lib/error-handler'
 import type { UpdateHistoryFilters } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
+import { messageOrNull, stringOr } from '@/lib/narrow'
 
 // Shared sonner id so the loading toast is replaced (not stacked) on completion.
 export const UPDATE_SCAN_TOAST_ID = 'update-scan'
@@ -51,9 +52,11 @@ export function resolveUpdateScanSuccess() {
  */
 function updateScanFault(error: unknown): string | null {
   if (!error || typeof error !== 'object') return null
-  const body = error as { code?: string; message?: string }
+  const body = error as { code?: string; message?: unknown }
   if (body.code !== 'DOCKER_UNAVAILABLE') return null
-  return body.message || null
+  // agent-os-06c1: narrowed, not asserted. This lands in sonner's
+  // `description`, typed ReactNode, inside the Toaster subtree.
+  return messageOrNull(body.message)
 }
 
 /**
@@ -194,8 +197,10 @@ export function useCreateNetwork() {
     onSuccess: (data) => {
       if (isActionResult(data)) {
         // details.name is set by the backend (createNetwork returns {id, name} in details)
-        const networkName = (data.details as { name?: string } | undefined)?.name
-        toast.success(`Network "${networkName ?? 'unknown'}" created`)
+        // agent-os-06c1: narrowed, not asserted. `?? 'unknown'` only ever
+        // caught an ABSENT name; a non-string one rendered as [object Object].
+        const networkName = stringOr((data.details as { name?: unknown } | undefined)?.name, 'unknown')
+        toast.success(`Network "${networkName}" created`)
       }
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.networks() })
     },

@@ -45,4 +45,20 @@ describe('collapsed-set-storage', () => {
     localStorage.setItem(KEY, '{not valid json')
     expect(loadCollapsedSet(KEY, LEGACY_KEY)).toBeNull()
   })
+
+  // agent-os-06c1: JSON.parse returns `any`, and localStorage is editable by
+  // anyone at the keyboard, so the parsed value reached a declared Set<string>
+  // unchecked. The consequence is a silent .has() miss rather than bad copy,
+  // which is exactly why nothing would have noticed.
+  it('does not let non-string members into the Set<string>', () => {
+    localStorage.setItem(KEY, JSON.stringify(['/ok', 42, { a: 1 }]))
+    const set = loadCollapsedSet(KEY, LEGACY_KEY)
+    expect(set).not.toBeNull()
+    expect([...set!].every((v) => typeof v === 'string')).toBe(true)
+  })
+
+  it('still loads a well-formed all-string list unchanged', () => {
+    localStorage.setItem(KEY, JSON.stringify(['/a', '/b']))
+    expect([...loadCollapsedSet(KEY, LEGACY_KEY)!]).toEqual(['/a', '/b'])
+  })
 })

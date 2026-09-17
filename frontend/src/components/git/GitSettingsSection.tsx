@@ -16,6 +16,7 @@ import { directoriesApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { queryKeys } from '@/lib/query-keys'
 import type { DirectoryCredentialStatusValue } from '@/types'
+import { messageOrNull } from '@/lib/narrow'
 
 /**
  * The credentials save's two ACTIONABLE wire codes. UpdateCredentials MINTS four
@@ -99,9 +100,11 @@ import type { DirectoryCredentialStatusValue } from '@/types'
  */
 function credentialSaveFault(error: unknown): string | null {
   if (!error || typeof error !== 'object') return null
-  const body = error as { code?: string; message?: string }
+  const body = error as { code?: string; message?: unknown }
   if (body.code !== 'NOT_FOUND' && body.code !== 'ENCRYPTION_KEY_MISSING') return null
-  return body.message || null
+  // agent-os-06c1: narrowed, not asserted. This lands in sonner's
+  // `description`, and `|| null` is preserved by messageOrNull.
+  return messageOrNull(body.message)
 }
 
 interface GitSettingsSectionProps {

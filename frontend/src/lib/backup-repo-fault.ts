@@ -45,6 +45,8 @@
  * as a toast, consumes those two and leaves `hint` alone rather than
  * duplicating the mapping to reword it.
  */
+import { messageOrNull } from './narrow'
+
 export interface RepoFault {
   title: string
   hint: string
@@ -86,11 +88,14 @@ export function repoFaultFrom(error: unknown): RepoFault | null {
   // with copy written for one of the two that exist today.
   const body = error as {
     code?: string
-    message?: string
+    // agent-os-06c1: `unknown`, not `string` — see lib/narrow.ts.
+    message?: unknown
     details?: { repoState?: string; cause?: string }
   }
 
-  const detail = body.message ?? ''
+  // agent-os-06c1: narrowed, not asserted. `detail` is declared `string` on
+  // RepoFault and is rendered into a panel and a toast description.
+  const detail = messageOrNull(body.message) ?? ''
 
   // A backup binary is missing, so nothing about the repository is known and
   // nothing about it is claimed. Before agent-os-9f5c this path answered 200

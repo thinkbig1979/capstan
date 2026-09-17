@@ -1,6 +1,7 @@
 import { toast } from 'sonner'
 import { useInitRepo, useTestCloud } from '@/hooks/useBackup'
 import { repoFaultFrom } from '@/lib/backup-repo-fault'
+import { messageOrNull } from '@/lib/narrow'
 
 /**
  * The two standalone backup engine actions: initializing the restic
@@ -16,9 +17,10 @@ import { repoFaultFrom } from '@/lib/backup-repo-fault'
  */
 function validationMessage(error: unknown): string | null {
   if (!error || typeof error !== 'object') return null
-  const body = error as { code?: string; message?: string }
+  const body = error as { code?: string; message?: unknown }
   if (body.code !== 'VALIDATION_ERROR') return null
-  return body.message || null
+  // agent-os-06c1: narrowed, not asserted. This becomes the toast TITLE.
+  return messageOrNull(body.message)
 }
 
 export function useBackupActions() {

@@ -161,5 +161,26 @@ describe('GitSettingsSection', () => {
       expect(title).toBe('Failed to save credentials')
       expect(options?.description).toBeUndefined()
     })
+
+    // agent-os-06c1: credentialSaveFault declares `string | null` and reaches
+    // it through `error as { code?: string; message?: string }`. A non-string
+    // message would land in sonner's `description`, typed ReactNode.
+    it('falls back to the bare title when the fault message is not a string', async () => {
+      mockUpdateCredentials.mockRejectedValue({
+        status: 404,
+        code: 'NOT_FOUND',
+        message: { path: '/opt/stacks/app' },
+      })
+
+      await submitSave()
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalled())
+      const [title, options] = vi.mocked(toast.error).mock.calls[0] as [
+        string,
+        { description?: unknown } | undefined,
+      ]
+      expect(title).toBe('Failed to save credentials')
+      expect(options?.description).toBeUndefined()
+    })
   })
 })

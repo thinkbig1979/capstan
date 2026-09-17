@@ -234,4 +234,61 @@ describe('classifyError', () => {
     })
     expect(result.context).toBe('stacks~myapp:default')
   })
+
+  // agent-os-06c1: classifyError reaches AppError.message, declared `string`,
+  // through an unchecked `error as { message?: string }` assertion. tsc cannot
+  // see a non-string escaping it, so this is the arm that can.
+  it('does not let a non-string message escape into AppError.message', () => {
+    // The no-status route is the one that RETURNS `message`, and it also
+    // reaches `message.toLowerCase()` at error-handler.ts:243 — so an
+    // unnarrowed non-string does not merely render oddly here, it throws.
+    expect(() => classifyError({ message: { a: 1 } })).not.toThrow()
+    expect(typeof classifyError({ message: { a: 1 } }).message).toBe('string')
+    expect(classifyError({ message: { a: 1 } }).message).toBe('An error occurred')
+    expect(typeof classifyError({ message: 42 }).message).toBe('string')
+  })
+
+  it('does not let a non-string message escape on the 409 route either', () => {
+    // 409 renders `message || <fallback>`, so it is a SECOND escape path and
+    // not the same line re-tested. 500 is deliberately NOT used: that branch
+    // mints its own sentence and discards `message`, so it would pass without
+    // exercising anything — the arm would agree for the wrong reason.
+    const result = classifyError({ response: { status: 409, data: { error: { a: 1 } } } })
+    expect(typeof result.message).toBe('string')
+    expect(result.message).not.toContain('[object Object]')
+  })
+
+  it('still prefers a real string message, so the narrowing changed nothing reachable', () => {
+    expect(classifyError({ message: 'Disk full' }).message).toBe('Disk full')
+    expect(
+      classifyError({ response: { status: 409, data: { error: 'Already deploying' } } }).message,
+    ).toBe('Already deploying')
+  })
+
+  // agent-os-06c1, second route: `details` is Record<string, unknown> and the
+  // 404/409/428 arms reached AppError.context through a bare `as string`.
+  // The `as { ... }` sweep key cannot see this shape at all.
+  it('does not let a non-string details field escape into AppError.context', () => {
+    const notFound = classifyError({
+      response: { status: 404, data: { error: 'Not found', details: { resource: { id: 7 } } } },
+    })
+    expect(notFound.context === undefined || typeof notFound.context === 'string').toBe(true)
+
+    const collateral = classifyError({
+      status: 428,
+      message: 'Collateral',
+      details: { directory: { path: '/srv/app' } },
+    })
+    expect(collateral.context === undefined || typeof collateral.context === 'string').toBe(true)
+  })
+
+  it('still carries a real string context, so nothing reachable moved', () => {
+    const result = classifyError({
+      response: {
+        status: 404,
+        data: { error: 'Not found', details: { resource: 'stacks~myapp:default' } },
+      },
+    })
+    expect(result.context).toBe('stacks~myapp:default')
+  })
 })
