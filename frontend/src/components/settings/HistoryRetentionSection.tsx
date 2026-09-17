@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { settingsSaveFault } from '@/lib/settings-save-fault'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -79,7 +80,17 @@ export function HistoryRetentionSection() {
         toast.success('Retention updated')
         setDraft({})
       },
-      onError: () => toast.error('Failed to update retention'),
+      // Takes the error (agent-os-zlw0): UpdateLogRetention mints three
+      // distinct 400s and the zero-arity callback rendered one sentence for all
+      // three. Generic sentence stays as the title when there is no cause.
+      // Branch rather than a conditional second argument: see the WHY at
+      // UpdateScheduleContent.tsx's onError. The no-cause path stays a
+      // single-argument call that a pre-existing test still pins.
+      onError: (error) => {
+        const cause = settingsSaveFault(error)
+        if (cause) toast.error('Failed to update retention', { description: cause })
+        else toast.error('Failed to update retention')
+      },
     })
   }
 

@@ -9,6 +9,7 @@ import { formatDateFull } from '@/lib/format'
 import { ScheduleModeFields } from '@/components/settings/ScheduleModeFields'
 import { AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
+import { settingsSaveFault } from '@/lib/settings-save-fault'
 import {
   Select,
   SelectContent,
@@ -105,7 +106,40 @@ export function UpdateScheduleContent() {
     }
     updateSettingsMutation.mutate(payload, {
       onSuccess: () => toast.success('Settings saved'),
-      onError: () => toast.error('Failed to save settings'),
+      // Takes the error (agent-os-zlw0). It used to take nothing, so the five
+      // distinct 400s UpdateUpdateSettings mints — bad body, interval below 15,
+      // invalid apply mode, unparseable apply time, bad weekday list — were
+      // unreadable in principle rather than merely unread. The generic sentence
+      // stays as the TITLE, so a failure with no usable cause renders exactly
+      // what it rendered before.
+      //
+      // THE BRANCH IS DELIBERATE, and the one place in this change it is
+      // explained — the other three sites repeat the shape, not the reason.
+      // The obvious spelling is the sibling's,
+      //     toast.error(TITLE, cause ? { description: cause } : undefined)
+      // which is what credentialSaveFault's caller uses
+      // (components/git/GitSettingsSection.tsx:183). Sonner renders the two
+      // identically, so no operator can tell them apart. A vitest spy can: the
+      // unconditional form makes EVERY call two-argument, which breaks four
+      // pre-existing assertions of the form
+      //     expect(toast.error).toHaveBeenCalledWith('<generic title>')
+      // at UpdateScheduleContent.test.tsx:173, HistoryRetentionSection.test.tsx:148,
+      // GitSettingsContent.test.tsx:168 and BackupSettingsContent.test.tsx:647.
+      // Each rejects with a bare `new Error('boom')`, which carries no `code`,
+      // so settingsSaveFault returns null — meaning those four ALREADY assert
+      // the thing this change most needs pinned: a failure with no usable cause
+      // still shows the generic sentence and nothing else. They were written
+      // before this change by someone with no stake in it. Left untouched and
+      // green they are independent witnesses; rewritten to expect a trailing
+      // `undefined` they would become four assertions this change's own author
+      // edited to match it, and would stop being evidence. Keeping the branch
+      // costs one line and consistency with one sibling's call shape. That is
+      // the cheaper of the two.
+      onError: (error) => {
+        const cause = settingsSaveFault(error)
+        if (cause) toast.error('Failed to save settings', { description: cause })
+        else toast.error('Failed to save settings')
+      },
     })
   }
 
