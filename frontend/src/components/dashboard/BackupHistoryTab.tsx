@@ -24,6 +24,7 @@ import {
 import type { BackupHistoryFilters, BackupRun } from '@/types'
 import { formatRelativeTime, formatDurationShort, formatBytes } from '@/lib/format'
 import { RunStatusBadge } from './backup-run-status'
+import { classifyError } from '@/lib/error-handler'
 
 const RUN_SEARCH_FIELDS = [
   (r: BackupRun) => r.id,
@@ -88,7 +89,7 @@ const ITEM_STATUS_CLASS: Record<'skipped' | 'success' | 'failed', string> = {
 }
 
 function RunDetail({ runId, status }: { runId: string; status: BackupRun['status'] }) {
-  const { data, isLoading, isError } = useBackupRunDetail(runId, status)
+  const { data, isLoading, isError, error } = useBackupRunDetail(runId, status)
 
   if (isLoading) {
     return (
@@ -100,10 +101,26 @@ function RunDetail({ runId, status }: { runId: string; status: BackupRun['status
   }
 
   if (isError) {
+    // agent-os-rtn8: getRunDetail answers with THREE distinct refusals and this
+    // branch rendered one sentence for all of them -- a 404 "Backup run not
+    // found", and two 500s the handler deliberately keeps apart, "Failed to
+    // load backup run" (the run row) and "Failed to fetch backup run items"
+    // (the per-stack rows). The 404 means the row you clicked is stale; the
+    // 500s mean the database is broken and name WHICH read failed.
+    //
+    // The 5xx cases reach us at all only because agent-os-mc4i stopped
+    // classifyError's 5xx arm answering a bare status code.
+    //
+    // Single-condition branch, so `error` is the only state here and reading it
+    // needs no further gate. The fixed sentence stays as the HEADLINE, so a
+    // failure the backend said nothing about renders what it rendered before.
     return (
-      <div className="flex items-center gap-2 px-4 py-3 text-sm text-destructive">
-        <AlertCircle className="h-4 w-4" />
-        Failed to load run details.
+      <div className="px-4 py-3 text-sm text-destructive">
+        <div className="flex items-center gap-2">
+          <AlertCircle className="h-4 w-4" />
+          Failed to load run details.
+        </div>
+        <p className="mt-1 pl-6">{classifyError(error).message}</p>
       </div>
     )
   }

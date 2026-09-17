@@ -429,6 +429,40 @@ describe('BackupHistoryTab — expandable run rows', () => {
     expect(await screen.findByText('No per-stack records for this run.')).toBeInTheDocument()
   })
 
+  /**
+   * agent-os-rtn8. getRunDetail (handlers/backup.go:873-907) answers with
+   * THREE distinct refusals and this branch rendered one sentence for all of
+   * them: a 404 "Backup run not found", and two 500s the handler deliberately
+   * keeps apart -- "Failed to load backup run" (the run row) and "Failed to
+   * fetch backup run items" (the per-stack rows). The 404 says the run is gone
+   * and the row is stale; the 500s say the database is broken and name WHICH
+   * read failed. The operator saw "Failed to load run details." for all three.
+   *
+   * The 5xx cases reach us at all only because agent-os-mc4i stopped
+   * classifyError's 5xx arm answering a bare status code, and they carry that
+   * arm's deliberate `${status}: ` prefix -- 503 vs 500 is itself diagnostic.
+   *
+   * The fixture is the FLAT shape api.ts's interceptor rejects with
+   * (api.ts:127-131), which is what actually reaches the component.
+   */
+  it.each([
+    [404, 'NOT_FOUND', 'Backup run not found', 'Backup run not found'],
+    [500, 'INTERNAL_ERROR', 'Failed to load backup run', '500: Failed to load backup run'],
+    [500, 'INTERNAL_ERROR', 'Failed to fetch backup run items', '500: Failed to fetch backup run items'],
+  ])('names the cause the backend sent for a %s %s failure', async (status, code, message, rendered) => {
+    const user = userEvent.setup()
+    mockGetRun.mockRejectedValue({ status, code, message })
+    renderTab()
+
+    await screen.findByText('run-1')
+    await user.click(screen.getByRole('button', { name: /Show details for run run-1/ }))
+
+    expect(
+      await screen.findByText('Failed to load run details.', {}, { timeout: 5000 }),
+    ).toBeInTheDocument()
+    expect(screen.getByText(rendered)).toBeInTheDocument()
+  })
+
   it('reports a failed run-detail fetch instead of showing an empty panel', async () => {
     const user = userEvent.setup()
     mockGetRun.mockRejectedValue(new Error('nope'))
