@@ -406,6 +406,12 @@ describe('StackPage', () => {
           description: DOCKER_REASON,
         })
       })
+      // ONE toast, not two. This is the arm that gates the double-toast: delete
+      // the `else` and `if (c) { X } else { Y }` becomes `if (c) { X } { Y }`, a
+      // bare block that always runs, so this path fires the description toast
+      // AND the bare one. toHaveBeenCalledWith alone still passes that mutant —
+      // the first call matches — so the count is what sees it.
+      expect(toast.error).toHaveBeenCalledTimes(1)
     })
 
     it('leaves the generic sentence alone when the failure carries no reason', async () => {
@@ -421,6 +427,7 @@ describe('StackPage', () => {
 
       const { toast } = await import('sonner')
       await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to delete stack'))
+      expect(toast.error).toHaveBeenCalledTimes(1)
     })
 
     it('falls back to the bare sentence when the ActionResult reason is empty', async () => {
@@ -440,6 +447,11 @@ describe('StackPage', () => {
       // toHaveBeenCalledWith(msg, undefined) would NOT match a one-argument
       // call, so it would go red for a reason no operator can see.
       await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to delete stack'))
+      // Not this arm's own mutant — an empty reason fails the guard, so the
+      // `else`-deletion mutant still fires exactly one toast here. Kept so all
+      // three positive arms state the same thing and a reader is not left
+      // wondering which one is deliberately weaker.
+      expect(toast.error).toHaveBeenCalledTimes(1)
     })
 
     it('shows no toast at all when the collateral confirmation is declined', async () => {
