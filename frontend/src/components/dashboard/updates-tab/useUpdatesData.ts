@@ -17,7 +17,7 @@ import { UPDATE_SEARCH_FIELDS, type SortKey, type UpdateItem } from './types'
  * toast wording depends on the same container data the table renders.
  */
 export function useUpdatesData() {
-  const { data: updateData, isLoading, isError } = useCheckUpdates()
+  const { data: updateData, isLoading, isError, error } = useCheckUpdates()
   const refreshMutation = useCheckUpdatesRefresh()
   const updateMutation = useUpdateContainer()
   const { data: policiesData } = useAutoUpdatePolicies()
@@ -102,6 +102,10 @@ export function useUpdatesData() {
   return {
     isLoading,
     isError,
+    // agent-os-rtn8: passed through unclassified. AvailableUpdatesPanel is the
+    // site that decides what to render, so it calls classifyError itself --
+    // same split as EnvEditor/EnvErrorState (#406).
+    error,
     isRefreshing,
     neverScanned,
     hasData,

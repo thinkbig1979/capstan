@@ -117,11 +117,19 @@ function makePolicy(overrides: Partial<AutoUpdatePolicy> = {}): AutoUpdatePolicy
   }
 }
 
-function setCheckUpdates(overrides: Partial<{ data: unknown; isLoading: boolean; isError: boolean }> = {}) {
+function setCheckUpdates(
+  overrides: Partial<{ data: unknown; isLoading: boolean; isError: boolean; error: unknown }> = {},
+) {
   mockCheckUpdates.mockReturnValue({
     data: undefined,
     isLoading: false,
     isError: false,
+    // agent-os-rtn8: deliberately absent by default. Every pre-existing caller
+    // of this helper sets isError WITHOUT an error object, and those callers are
+    // the must-stay-green arm for the cause wiring below: a branch that read
+    // classifyError(error) on isError alone would print the invented sentence
+    // "An unexpected error occurred" for all of them.
+    error: undefined,
     ...overrides,
   })
 }
@@ -168,6 +176,56 @@ describe('UpdatesTab — Available Updates state machine', () => {
     fireEvent.click(screen.getByRole('button', { name: /retry/i }))
 
     expect(mockRefreshMutate).toHaveBeenCalled()
+  })
+
+  /**
+   * agent-os-rtn8. useCheckUpdates calls resourcesApi.checkUpdates(FALSE), so
+   * the only refusals that reach this card come from the non-refresh branch of
+   * handlers/updates.go: three 500s carrying two distinct sentences, "Failed to
+   * get cached updates" (the cache read) and "Failed to read the last scan time"
+   * (the settings read, emitted from two places). "the registry is unreachable"
+   * and "the database will not answer" are different operator problems and the
+   * card said "An error occurred while checking for container image updates"
+   * for both.
+   *
+   * NOT the 503 DOCKER_UNAVAILABLE path: that is emitted only under
+   * refresh=true, which is useCheckUpdatesRefresh's route and already toasts
+   * via resolveUpdateScanError. The backend's own docker_unavailable_test.go
+   * route table lists `checkUpdatesRefresh` as "/api/resources/updates?refresh=true"
+   * and does not list the bare route, which is the second arm on that.
+   *
+   * The causes reach us at all only because agent-os-mc4i stopped classifyError's
+   * 5xx arm answering a bare status code; they keep that arm's deliberate
+   * `${status}: ` prefix, since 503 vs 500 is itself diagnostic.
+   */
+  it.each([
+    ['Failed to get cached updates', '500: Failed to get cached updates'],
+    ['Failed to read the last scan time', '500: Failed to read the last scan time'],
+  ])('names the cause the backend sent for a %s failure', (message, rendered) => {
+    setCheckUpdates({ isError: true, error: { status: 500, code: 'INTERNAL_ERROR', message } })
+    render(<UpdatesTab />)
+
+    expect(screen.getByText('Failed to Check for Updates')).toBeInTheDocument()
+    expect(screen.getByText(rendered)).toBeInTheDocument()
+  })
+
+  /**
+   * The two-sided arm, and the reason the cause is gated on `error` rather than
+   * on `isError`. classifyError(undefined) returns the INVENTED sentence "An
+   * unexpected error occurred", so a branch keyed on isError alone would
+   * manufacture a cause for a failure the backend never described -- the worse
+   * defect, and the one this whole line of work exists to stop.
+   *
+   * The generic fallback line is asserted absent rather than the cause line,
+   * because "no cause rendered" is what must hold.
+   */
+  it('invents no cause when the query errored without an error object', () => {
+    setCheckUpdates({ isError: true })
+    render(<UpdatesTab />)
+
+    expect(screen.getByText('Failed to Check for Updates')).toBeInTheDocument()
+    expect(screen.queryByText('An unexpected error occurred')).not.toBeInTheDocument()
+    expect(screen.queryByText('An error occurred')).not.toBeInTheDocument()
   })
 
   it('does not show the error card when errored but serving cached data', () => {
