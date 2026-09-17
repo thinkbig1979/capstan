@@ -367,11 +367,16 @@ describe('StackPage', () => {
     })
   })
   describe('delete failures (agent-os-5obt)', () => {
-    // The real reason the stack-delete handler sends when the Docker socket is
-    // missing (handlers/respond.go DockerUnavailableMessage) — the worst case
-    // the fixed string used to swallow, because it IS the recovery.
+    // Copied verbatim from handlers/respond.go:186 DockerUnavailableMessage,
+    // which renderDockerResult puts in the 503 ActionResult when the socket is
+    // missing — the worst case the fixed string used to swallow, because this
+    // text IS the recovery instruction. Kept verbatim rather than paraphrased
+    // so it stays honest about what the operator actually receives; at 170
+    // characters it is also why the reason is the description and not the
+    // title.
     const DOCKER_REASON =
-      'Docker daemon unreachable: check that the Docker socket is mounted and the daemon is running.'
+      'Docker daemon unreachable: the server started without a usable Docker connection. ' +
+      'Check that the Docker socket is mounted and the daemon is running, then restart Capstan.'
 
     // Walks the whole real delete path rather than poking the mutation: the
     // portalled Radix menu, then the typed confirmation the destructive dialog
