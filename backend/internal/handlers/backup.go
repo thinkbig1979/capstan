@@ -1101,11 +1101,14 @@ func (h *BackupHandler) previewSnapshot(c *gin.Context) {
 		// rather than widened into here — but the false claim must not stand in
 		// the meantime.
 		//
-		// Second, and decisively, the 404's own goal was to name the cause that
-		// holds instead of enumerating candidates — and 404 is the status that
-		// defeats it. classifyError REPLACES message with a fixed string on 404
-		// and preserves it on 409, so the cause survives to the operator only
-		// under the status this now uses.
+		// Second, the 404's own goal was to name the cause that holds instead of
+		// enumerating candidates — and at the time, 404 was the status that
+		// defeated it, because classifyError replaced message with a fixed
+		// string on 404 while preserving it on 409. THAT ARGUMENT NO LONGER
+		// HOLDS: agent-os-mc4i made the 404 arm read the backend's message too.
+		// It is recorded rather than deleted because it is why the change was
+		// made. The first argument above is untouched by that and still decides
+		// this on its own, as does the last one below.
 		//
 		// It is also the same CheckRepository value listSnapshots answers with
 		// this exact shape. Two codes for one state in one handler file is the
