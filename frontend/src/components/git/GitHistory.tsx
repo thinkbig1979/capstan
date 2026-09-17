@@ -6,6 +6,7 @@ import { useGitLog } from '@/hooks/useGit'
 import { DiffViewer } from './DiffViewer'
 import { Search, X } from 'lucide-react'
 import { formatRelativeTime } from '@/lib/format'
+import { classifyError } from '@/lib/error-handler'
 
 interface GitHistoryProps {
   stackId: string
@@ -56,7 +57,24 @@ export function GitHistory({ stackId }: GitHistoryProps) {
   }
 
   if (error && offset === 0) {
-    return <div className="flex items-center justify-center py-8 text-muted-foreground">Failed to load git history</div>
+    // agent-os-rtn8: GetLog routes three DISTINCT 404s into this one branch --
+    // GIT_NOT_REPO "Not a git repository", GIT_NO_COMMITS "Repository has no
+    // commits yet" and STACK_DIR_MISSING "Stack directory does not exist on
+    // disk" (services/git.go:782, :118, :769) -- and they ask for three
+    // different operator actions. The screen said the same thing for all three.
+    //
+    // The cause reaches us at all only because agent-os-mc4i stopped
+    // classifyError's 404 arm replacing the backend's message.
+    //
+    // Single-condition branch, so `error` is the only state here and reading it
+    // needs no further gate. The fixed sentence stays as the HEADLINE, so a
+    // failure the backend said nothing about renders what it rendered before.
+    return (
+      <div className="flex flex-col items-center justify-center gap-1 py-8 text-center text-muted-foreground">
+        <p>Failed to load git history</p>
+        <p>{classifyError(error).message}</p>
+      </div>
+    )
   }
 
   return (
