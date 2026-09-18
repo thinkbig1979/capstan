@@ -697,6 +697,40 @@ CREATE INDEX IF NOT EXISTS idx_backup_run_items_run_id ON backup_run_items(run_i
 CREATE INDEX IF NOT EXISTS idx_backup_run_items_stack_id ON backup_run_items(stack_id);
 `,
 	},
+	{
+		Version: 17,
+		Name:    "docker_cleanup_runs",
+		SQL: `
+-- Docker image cleanup gets its own run table (agent-os-fn7x), NOT a seventh
+-- backup_runs.kind. backup_runs is semantically about restic backups, and its
+-- kind column carries a CHECK constraint SQLite cannot alter in place -- which
+-- is why migration 16 had to DROP and recreate both backup_runs and
+-- backup_run_items just to add 'verify'. This table deliberately carries no
+-- CHECK-constrained kind column, so a future cleanup kind costs an INSERT
+-- rather than a table rebuild.
+--
+-- min_age_hours is recorded per row rather than read back from the live
+-- policy: a history entry has to stay interpretable after the policy changes,
+-- and "why did this run remove so much" is unanswerable without the age floor
+-- the run actually applied.
+CREATE TABLE IF NOT EXISTS docker_cleanup_runs (
+    id                    TEXT PRIMARY KEY,
+    trigger               TEXT NOT NULL,
+    status                TEXT NOT NULL,
+    started_at            DATETIME NOT NULL,
+    finished_at           DATETIME,
+    images_deleted        INTEGER NOT NULL DEFAULT 0,
+    bytes_reclaimed       INTEGER NOT NULL DEFAULT 0,
+    cache_bytes_reclaimed INTEGER NOT NULL DEFAULT 0,
+    min_age_hours         INTEGER NOT NULL,
+    error_message         TEXT
+);
+
+-- The history view is newest-first over started_at, the same access pattern
+-- idx_backup_runs_started_at exists for.
+CREATE INDEX IF NOT EXISTS idx_docker_cleanup_runs_started_at ON docker_cleanup_runs(started_at);
+`,
+	},
 }
 
 // checkNoCaseCollidingUsernames is migration 13's PreCheck. It detects

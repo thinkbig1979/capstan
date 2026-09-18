@@ -397,3 +397,22 @@ type BackupSnapshot struct {
 	Paths     []string `json:"paths"`
 	SizeBytes int64    `json:"sizeBytes,omitempty"`
 }
+
+// DockerCleanupRun is one execution of the Docker image cleanup job.
+//
+// MinAgeHours is stored per row rather than read from the live policy at
+// display time: a history entry has to stay interpretable after the policy
+// changes, and "why did this run remove so much" is unanswerable without the
+// age floor that run actually applied.
+type DockerCleanupRun struct {
+	ID                  string  `json:"id"`
+	Trigger             string  `json:"trigger"` // "scheduled" | "manual"
+	Status              string  `json:"status"`  // "success" | "failed"
+	StartedAt           string  `json:"startedAt"`
+	FinishedAt          *string `json:"finishedAt,omitempty"`
+	ImagesDeleted       int     `json:"imagesDeleted"`
+	BytesReclaimed      int64   `json:"bytesReclaimed"`
+	CacheBytesReclaimed int64   `json:"cacheBytesReclaimed"`
+	MinAgeHours         int     `json:"minAgeHours"`
+	ErrorMessage        string  `json:"errorMessage,omitempty"`
+}
