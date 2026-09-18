@@ -49,15 +49,45 @@ func TestMigration17_CreatesCleanupRunsTableAndPreservesData(t *testing.T) {
 
 	require.NoError(t, RunMigrations(db))
 
-	// Migration 17 is the LAST element of the slice, not merely present in it:
-	// RunMigrations reads migrations[len(migrations)-1].Version as the version
-	// this binary understands, so an entry spliced in mid-slice would leave the
-	// forward-version guard comparing against 16 while 17 applies.
-	assert.Equal(t, 17, migrations[len(migrations)-1].Version, "migration 17 must be appended at the end of the migrations slice")
+	// Migration 17 exists and is the one this test is about. This half is
+	// owned by this bead, and unlike a "17 is last" assertion it does not move
+	// when migration 18 lands.
+	var seventeen *Migration
+	for i := range migrations {
+		if migrations[i].Version == 17 {
+			seventeen = &migrations[i]
+		}
+	}
+	require.NotNil(t, seventeen, "a migration with Version 17 must exist")
+	assert.Equal(t, "docker_cleanup_runs", seventeen.Name)
+
+	// The slice is strictly ascending by Version -- the general form of the
+	// defect, asserted over the whole slice rather than as "17 is last" so it
+	// keeps holding, and keeps guarding, once migration 18 is appended.
+	//
+	// It matters because RunMigrations reads migrations[len(migrations)-1]
+	// .Version as the version this binary understands: the LAST element, not
+	// the maximum. An entry spliced in mid-slice therefore leaves
+	// latestKnownVersion reading low while the migrations still all apply and
+	// the database stamps higher. Nothing fails at migration time -- that run
+	// succeeds. The NEXT boot hits the forward-version guard's FATAL refusal,
+	// telling the operator their image is older than the database and pointing
+	// at CAPSTAN_ALLOW_SCHEMA_DOWNGRADE, both of which are untrue and wrong.
+	// Seen failing: migration 17 moved between 15 and 16, unchanged otherwise.
+	for i := 1; i < len(migrations); i++ {
+		assert.Greater(t, migrations[i].Version, migrations[i-1].Version,
+			"migrations must be strictly ascending by Version, but slice index %d holds v%d after v%d",
+			i, migrations[i].Version, migrations[i-1].Version)
+	}
 
 	var stamped int
 	require.NoError(t, db.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&stamped))
-	assert.Equal(t, 17, stamped)
+	assert.GreaterOrEqual(t, stamped, 17, "migration 17 must have been applied and recorded")
+	// The stamp tracks the newest migration, which is not this bead's business
+	// to pin to a literal -- but it must agree with what the binary reports as
+	// its latest version, and under a mid-slice insert it does not.
+	assert.Equal(t, migrations[len(migrations)-1].Version, stamped,
+		"the database stamp must equal the version RunMigrations reports as this binary's latest")
 
 	// The v16 row survived.
 	var legacyStatus, legacyStartedAt string
