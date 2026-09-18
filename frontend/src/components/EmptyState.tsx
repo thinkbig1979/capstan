@@ -89,15 +89,6 @@ export function NoContainers() {
   )
 }
 
-export function NoGitHistory() {
-  return (
-    <EmptyState
-      title="No git history"
-      description="This directory is not a git repository or has no commits."
-    />
-  )
-}
-
 export function NoLogs() {
   return (
     <EmptyState
