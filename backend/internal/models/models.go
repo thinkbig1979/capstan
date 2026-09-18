@@ -150,20 +150,25 @@ type DiffResult struct {
 }
 
 type DashboardContainerInfo struct {
-	ID           string        `json:"id"`
-	Name         string        `json:"name"`
-	Image        string        `json:"image"`
-	State        string        `json:"state"`
-	Status       string        `json:"status"`
-	Health       string        `json:"health"`
-	Ports        []PortBinding `json:"ports"`
-	StackID      string        `json:"stackId"`
-	ProjectName  string        `json:"projectName"`
-	RestartCount int           `json:"restartCount"`
-	Created      time.Time     `json:"created"`
-	StartedAt    time.Time     `json:"startedAt"`
-	DiskSize     int64         `json:"diskSize"`
-	ImageSize    int64         `json:"imageSize"`
+	ID      string        `json:"id"`
+	Name    string        `json:"name"`
+	Image   string        `json:"image"`
+	State   string        `json:"state"`
+	Status  string        `json:"status"`
+	Health  string        `json:"health"`
+	Ports   []PortBinding `json:"ports"`
+	StackID string        `json:"stackId"`
+	// StackLookupFailed distinguishes the two causes of an empty StackID: the
+	// compose project is genuinely not a stack, or the stacks table could not be
+	// READ. Consumers that route on StackID must not conflate them -- see
+	// resolveDashboardStackAssociation (services/docker.go) and agent-os-g482.
+	StackLookupFailed bool      `json:"stackLookupFailed"`
+	ProjectName       string    `json:"projectName"`
+	RestartCount      int       `json:"restartCount"`
+	Created           time.Time `json:"created"`
+	StartedAt         time.Time `json:"startedAt"`
+	DiskSize          int64     `json:"diskSize"`
+	ImageSize         int64     `json:"imageSize"`
 }
 
 type DockerImage struct {

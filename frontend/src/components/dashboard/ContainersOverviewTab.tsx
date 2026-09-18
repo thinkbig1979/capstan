@@ -69,8 +69,29 @@ function StatPlaceholder({ state, status }: { state: string; status: MetricsStat
   return <span className="block h-1.5 w-16 rounded-full bg-muted animate-pulse" aria-label="Loading stats" />
 }
 
+// agent-os-yrgn. A container is standalone when it carries no compose project at
+// all, OR when it carries one that Capstan has no stack row for. The second half
+// is the decision the backend already takes on the update path:
+// resolveUpdateStrategy (services/docker_update.go) returns updateViaStandalone
+// for exactly this state, under a docblock reading "Anything genuinely absent is
+// standalone." Before this, such a row rendered mode="stack" and the three
+// lifecycle mutations fell through to the single-container route while `label`,
+// derived from `mode` alone, announced "Stack started".
+//
+// stackLookupFailed is checked FIRST, and it is not a refinement of the stackId
+// test. An empty stackId has two causes on the wire and only one of them is an
+// absent stack row; when the stacks table could not be READ the row stays in
+// stack mode rather than being silently reclassified, because answering a failed
+// read with "not a compose stack" is agent-os-g482's P2 defect (backend
+// docker_update_apply_fake_test.go:240 pins it on the update path).
+//
+// The conservative direction is deliberate: a stack row that should have read
+// standalone is a wrong LABEL, while a compose container reclassified as
+// standalone is a wrong ROUTE.
 function isStandaloneContainer(c: DashboardContainerInfo): boolean {
-  return !c.projectName
+  if (!c.projectName) return true
+  if (c.stackLookupFailed) return false
+  return !c.stackId
 }
 
 interface ContainerActionsProps {
@@ -83,12 +104,20 @@ interface ContainerActionsProps {
   deletePending: boolean
 }
 
-// agent-os-yke1. A compose container whose project has no stack row in Capstan's
-// database arrives with a projectName and an EMPTY stackId: backend
-// GetDashboardContainers declares `var stackID string` and leaves it "" when
-// lookupStackByProject returns no stack AND no error, a branch that does not even
-// log. isStandaloneContainer keys on projectName alone, so such a row still lands
-// in the Stack Containers tab and still renders mode="stack" with its Pull button.
+// agent-os-yke1, re-scoped by agent-os-yrgn. A stack-mode row can still arrive
+// with an EMPTY stackId, but only one of the two ways it used to.
+//
+// The common case -- a compose project Capstan has no stack row for -- now
+// renders as STANDALONE and has no Pull button at all, so it can no longer reach
+// this guard. What remains is the backend's `stackErr != nil` branch
+// (resolveDashboardStackAssociation, services/docker.go): the stacks table could
+// not be READ, so the dashboard defaults stackId to "" and sets
+// stackLookupFailed, and isStandaloneContainer deliberately keeps that row in
+// stack mode rather than reclassifying it on the strength of a failed read.
+//
+// So this guard is still REACHABLE through the UI, not merely defence in depth,
+// and its test drives it through that state rather than by rendering the
+// component directly.
 //
 // Wording avoids "network", "invalid" and "validation": classifyError REWRITES the
 // message when it contains any of those, so the operator would see a connection
@@ -99,7 +128,24 @@ export const NO_STACK_FOR_PULL =
 function ContainerActions({ mode, stackId, containerId, containerName, containerState, onDelete, deletePending }: ContainerActionsProps) {
   const queryClient = useQueryClient()
   const isRunning = containerState === 'running'
+  // `label` names the ROW's context and feeds the button titles and aria-labels
+  // only. It stays keyed on `mode` deliberately: the docblock at the top of
+  // ContainersOverviewTab.test.tsx pins those singular aria-labels as the
+  // discriminator proving an arm clicked a stack-mode button, and de-duplicating
+  // them across modes would silently retire it.
   const label = mode === 'stack' ? 'stack' : 'container'
+
+  // agent-os-yrgn. What was ACTIONED is a separate question from how the row
+  // renders, and the two diverge for exactly one state: mode="stack" with an
+  // empty stackId. After yrgn that means the stacks table could not be READ --
+  // isStandaloneContainer keeps such a row in stack mode rather than
+  // reclassifying it on a failed read -- and the three lifecycle mutationFns
+  // below fall through to the single-container route for it. Deriving the toast
+  // from `mode` there announces "Stack started" for one container and
+  // invalidates a query the action did not change: the original yrgn defect,
+  // surviving on its one remaining reachable path.
+  const actedOnStack = mode === 'stack' && Boolean(stackId)
+  const actioned = actedOnStack ? 'stack' : 'container'
 
   const startMutation = useMutation({
     mutationFn: async (): Promise<CommandResult> => {
@@ -108,9 +154,9 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       return { status: 'started', output: res.message, duration: 0 }
     },
     onSuccess: () => {
-      toast.success(`${label.charAt(0).toUpperCase() + label.slice(1)} started`)
+      toast.success(`${actioned.charAt(0).toUpperCase() + actioned.slice(1)} started`)
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
-      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
+      if (actedOnStack) queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
     // Branch on the guard (agent-os-mc4i): in stack mode start/stop/restart/pull
     // hit stack_lifecycle.go's renderDockerResult, which answers a
@@ -131,9 +177,9 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
     // exclusive by syntax -- see useActionMutation.ts:51 for the same conjunct.
     onError: (err) => {
       if (isActionResult(err) && err.reason) {
-        toast.error(`Failed to start ${label}`, { description: err.reason })
+        toast.error(`Failed to start ${actioned}`, { description: err.reason })
       } else {
-        toast.error(classifyError(err).message || `Failed to start ${label}`)
+        toast.error(classifyError(err).message || `Failed to start ${actioned}`)
       }
     },
   })
@@ -145,16 +191,16 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       return { status: 'stopped', output: res.message, duration: 0 }
     },
     onSuccess: () => {
-      toast.success(`${label.charAt(0).toUpperCase() + label.slice(1)} stopped`)
+      toast.success(`${actioned.charAt(0).toUpperCase() + actioned.slice(1)} stopped`)
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
-      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
+      if (actedOnStack) queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
     // Same ActionResult guard as startMutation above.
     onError: (err) => {
       if (isActionResult(err) && err.reason) {
-        toast.error(`Failed to stop ${label}`, { description: err.reason })
+        toast.error(`Failed to stop ${actioned}`, { description: err.reason })
       } else {
-        toast.error(classifyError(err).message || `Failed to stop ${label}`)
+        toast.error(classifyError(err).message || `Failed to stop ${actioned}`)
       }
     },
   })
@@ -166,16 +212,16 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       return { status: 'restarted', output: res.message, duration: 0 }
     },
     onSuccess: () => {
-      toast.success(`${label.charAt(0).toUpperCase() + label.slice(1)} restarted`)
+      toast.success(`${actioned.charAt(0).toUpperCase() + actioned.slice(1)} restarted`)
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
-      if (mode === 'stack') queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
+      if (actedOnStack) queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
     // Same ActionResult guard as startMutation above.
     onError: (err) => {
       if (isActionResult(err) && err.reason) {
-        toast.error(`Failed to restart ${label}`, { description: err.reason })
+        toast.error(`Failed to restart ${actioned}`, { description: err.reason })
       } else {
-        toast.error(classifyError(err).message || `Failed to restart ${label}`)
+        toast.error(classifyError(err).message || `Failed to restart ${actioned}`)
       }
     },
   })

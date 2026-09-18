@@ -66,6 +66,13 @@ export interface DashboardContainerInfo {
   health: string
   ports: PortBinding[]
   stackId: string
+  /**
+   * Which of the two causes of an empty `stackId` this row hit: the compose
+   * project is genuinely not a stack (false), or the stacks table could not be
+   * READ (true). Set by resolveDashboardStackAssociation in the backend
+   * (services/docker.go). isStandaloneContainer routes on it -- see agent-os-g482.
+   */
+  stackLookupFailed: boolean
   projectName: string
   restartCount: number
   created: string

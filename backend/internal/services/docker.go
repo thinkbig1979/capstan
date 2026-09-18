@@ -439,23 +439,27 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 			}
 		}
 
-		var stackID string
-		stack, stackErr := lookupStackByProject(db, projectName)
-		switch {
-		case stackErr != nil:
-			// agent-os-g482. This one IS a display: stackID reaches
-			// DashboardContainerInfo and nothing else (BuildStackStatuses below
-			// buckets by ProjectName, not by StackID), so it defaults rather than
-			// refuses. It still logs, because a dashboard silently missing every
-			// stack association is indistinguishable from a host with no stacks.
-			// Once per call, not once per container: this is the dashboard poll.
-			if !stackLookupFailed {
-				stackLookupFailed = true
-				slog.Error("Cannot resolve compose stacks for the container list; containers are reported with no stack id",
-					"project", projectName, "cause", stackErr)
-			}
-		case stack != nil:
-			stackID = stack.ID
+		// agent-os-g482, revised by agent-os-yrgn. A failed read still DEFAULTS
+		// rather than refuses: this is the dashboard poll, and a dashboard that
+		// fails because one table is briefly unreadable is worse than one drawn
+		// without stack associations.
+		//
+		// What changed is that it no longer defaults SILENTLY into a state the
+		// consumer cannot tell from a real answer. StackID is no longer
+		// display-only -- ContainersOverviewTab.tsx now routes on it, rendering a
+		// compose container with no stack row as standalone -- and an empty
+		// StackID has two causes. Carrying only the empty string would make an
+		// unreadable stacks table indistinguishable from "genuinely not a
+		// stack", which is precisely g482's P2 defect on a second path.
+		//
+		// The ERROR fires once per call, not once per container: a dashboard
+		// silently missing every stack association is indistinguishable from a
+		// host with no stacks, but this is a poll.
+		assoc, stackErr := resolveDashboardStackAssociation(db, projectName)
+		if stackErr != nil && !stackLookupFailed {
+			stackLookupFailed = true
+			slog.Error("Cannot resolve compose stacks for the container list; containers are reported with no stack id",
+				"project", projectName, "cause", stackErr)
 		}
 
 		name := ""
@@ -468,19 +472,20 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 		health := ""
 
 		info := models.DashboardContainerInfo{
-			ID:           c.ID,
-			Name:         name,
-			Image:        c.Image,
-			State:        c.State,
-			Status:       c.Status,
-			Health:       health,
-			Ports:        ports,
-			StackID:      stackID,
-			ProjectName:  projectName,
-			RestartCount: restartCount,
-			Created:      time.Unix(c.Created, 0),
-			DiskSize:     c.SizeRw,
-			ImageSize:    c.SizeRootFs,
+			ID:                c.ID,
+			Name:              name,
+			Image:             c.Image,
+			State:             c.State,
+			Status:            c.Status,
+			Health:            health,
+			Ports:             ports,
+			StackID:           assoc.StackID,
+			StackLookupFailed: assoc.LookupFailed,
+			ProjectName:       projectName,
+			RestartCount:      restartCount,
+			Created:           time.Unix(c.Created, 0),
+			DiskSize:          c.SizeRw,
+			ImageSize:         c.SizeRootFs,
 		}
 
 		if c.State == "running" {
@@ -596,6 +601,43 @@ func (s *DockerService) GetRunningContainerIDs(ctx context.Context) ([]string, e
 
 type DashboardDB interface {
 	GetStackByProjectName(projectName string) (*models.Stack, error)
+}
+
+// dashboardStackAssociation is how one container's compose project resolved
+// against the stacks table for the dashboard.
+//
+// LookupFailed is not a redundant encoding of an empty StackID. An empty StackID
+// has two causes and they are different states: the project is genuinely not a
+// stack -- an ordinary not-found, which resolveUpdateStrategy already treats as
+// standalone -- or the stacks table could not be READ, which that function
+// refuses outright rather than guessing (agent-os-g482: answering a failed read
+// with "not a compose stack" recreated compose-managed containers down the
+// standalone apply path). The dashboard defaults instead of refusing because it
+// is only a read, but it must still report WHICH of the two happened, or its
+// consumer cannot avoid reinstating the same defect.
+type dashboardStackAssociation struct {
+	StackID      string
+	LookupFailed bool
+}
+
+// resolveDashboardStackAssociation is the per-container decision
+// GetAllContainersWithDetails makes, extracted so it can be tested without a
+// Docker daemon: DockerService.client is a concrete *client.Client, not an
+// interface, so the loop that calls this cannot be driven from a unit test at
+// all. Same constraint, and deliberately the same shape, as
+// resolveUpdateStrategy in docker_update.go.
+//
+// It returns the error as well as the flag so the caller keeps its existing
+// once-per-call log line; the flag is what reaches the wire.
+func resolveDashboardStackAssociation(db DashboardDB, projectName string) (dashboardStackAssociation, error) {
+	stack, err := lookupStackByProject(db, projectName)
+	switch {
+	case err != nil:
+		return dashboardStackAssociation{LookupFailed: true}, err
+	case stack != nil:
+		return dashboardStackAssociation{StackID: stack.ID}, nil
+	}
+	return dashboardStackAssociation{}, nil
 }
 
 // LiveStatus is a stack's live state derived from the shared container snapshot:
