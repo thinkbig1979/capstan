@@ -30,6 +30,17 @@ func timeOfDayUTC(ts time.Time) time.Duration {
 // older than the `days`-ago cutoff while sharing its date, which is the only
 // case the separator mismatch decides. The margin is the cutoff's whole time
 // of day, up to 24h, so drift between Go's clock and SQLite's cannot flip it.
+//
+// DO NOT simplify this to the obvious "N days and an hour ago". That
+// construction is correct 23 hours in 24 and silently wrong in the 24th:
+// between 00:00 and 01:00 UTC, now-7d-1h lands on the calendar date BEFORE the
+// cutoff's, the date prefix then decides the comparison correctly, and the
+// UNFIXED code returns the right answer -- so the arm passes against the very
+// bug it exists to catch, once a day, forever. Every local run outside that
+// hour agrees with the simplification, which is what makes it so easy to make.
+// Midnight of the cutoff's own date is on that date by construction rather
+// than by arithmetic against the wall clock, so only the separator is left to
+// decide the row.
 func olderSameDate(t *testing.T, days int) string {
 	t.Helper()
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
@@ -38,6 +49,9 @@ func olderSameDate(t *testing.T, days int) string {
 		// own date, so the fixture would not discriminate. Wait the window out
 		// instead of t.Skip: a skipped regression test is indistinguishable
 		// from a passing one.
+		t.Logf("cutoff %s is within 2s of midnight UTC; waiting it out so the "+
+			"fixture has room earlier on the cutoff's own date. This sleep is "+
+			"load-bearing -- do not delete it.", cutoff.Format(time.RFC3339))
 		time.Sleep(2 * time.Second)
 		cutoff = time.Now().UTC().AddDate(0, 0, -days)
 	}
@@ -55,6 +69,10 @@ func newerSameDate(t *testing.T, days int) string {
 	if timeOfDayUTC(cutoff) > 24*time.Hour-2*time.Second {
 		// Mirror of the guard above, at the other end of the day: sleeping
 		// past midnight leaves the whole day's room ahead of the new cutoff.
+		t.Logf("cutoff %s is within 2s of the end of its UTC date; waiting "+
+			"past midnight so the fixture has room later on the cutoff's own "+
+			"date. This sleep is load-bearing -- do not delete it.",
+			cutoff.Format(time.RFC3339))
 		time.Sleep(3 * time.Second)
 		cutoff = time.Now().UTC().AddDate(0, 0, -days)
 	}
