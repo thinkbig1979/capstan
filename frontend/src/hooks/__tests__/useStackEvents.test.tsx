@@ -31,6 +31,15 @@ import { useStackEvents } from '../useStackEvents'
 import { UPDATE_SCAN_TOAST_ID } from '../useResources'
 import { queryClient } from '@/lib/query-client'
 import { queryKeys } from '@/lib/query-keys'
+import type { UpdateJobOutcome } from '@/stores/updateJobStore'
+
+// scheduleInvalidations debounces by 750ms, so every invalidation assertion has to
+// let the timer fire first -- read before it does and the call list is still empty,
+// which passes on the broken handler as readily as on the fixed one.
+const flushInvalidations = () => {
+  vi.advanceTimersByTime(750)
+  return vi.mocked(queryClient.invalidateQueries).mock.calls.map(([arg]) => arg!.queryKey)
+}
 
 beforeEach(() => {
   capturedOnMessage = null
@@ -87,11 +96,6 @@ describe('useStackEvents update-scan invalidation', () => {
     vi.useRealTimers()
   })
 
-  const flushInvalidations = () => {
-    vi.advanceTimersByTime(750)
-    return vi.mocked(queryClient.invalidateQueries).mock.calls.map(([arg]) => arg!.queryKey)
-  }
-
   it('invalidates the update-settings query on update_scan_failed, so lastScanError is refetched', () => {
     useUpdateScanStore.setState({ isScanning: true })
     renderHook(() => useStackEvents())
@@ -113,6 +117,69 @@ describe('useStackEvents update-scan invalidation', () => {
     expect(flushInvalidations()).toEqual([
       queryKeys.resources.updates(),
       queryKeys.settings.updates(),
+    ])
+  })
+})
+
+describe('useStackEvents update-completion invalidation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const jobCompleteEvent = (outcome: UpdateJobOutcome) => ({
+    type: 'update_job_complete',
+    jobId: 'job-1',
+    targetType: 'container',
+    targetId: 'ctr-1',
+    stackId: 'stack-1',
+    name: 'web',
+    status: outcome === 'success' ? 'success' : 'error',
+    outcome,
+  })
+
+  it('invalidates the update-settings query on update_completed, so the 7/30-day stats refetch', () => {
+    renderHook(() => useStackEvents())
+
+    capturedOnMessage!({ type: 'update_completed', timestamp: '' })
+
+    expect(flushInvalidations()).toEqual([
+      queryKeys.updateHistory.all(),
+      queryKeys.settings.updates(),
+      queryKeys.resources.updates(),
+      queryKeys.dashboardStats(),
+      queryKeys.stacks(),
+    ])
+  })
+
+  it('invalidates the update-settings query on a successful update_job_complete', () => {
+    renderHook(() => useStackEvents())
+
+    capturedOnMessage!(jobCompleteEvent('success'))
+
+    expect(flushInvalidations()).toEqual([
+      queryKeys.updateHistory.all(),
+      queryKeys.settings.updates(),
+      queryKeys.dashboardStats(),
+      queryKeys.stacks(),
+      queryKeys.resources.updates(),
+    ])
+  })
+
+  it('invalidates the update-settings query on a failed update_job_complete too', () => {
+    renderHook(() => useStackEvents())
+
+    capturedOnMessage!(jobCompleteEvent('failed'))
+
+    expect(flushInvalidations()).toEqual([
+      queryKeys.updateHistory.all(),
+      queryKeys.settings.updates(),
+      queryKeys.dashboardStats(),
+      queryKeys.stacks(),
+      queryKeys.resources.updates(),
     ])
   })
 })
