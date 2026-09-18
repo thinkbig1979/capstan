@@ -15,7 +15,32 @@ import (
 func (d *DB) CreateDockerCleanupRun(r *models.DockerCleanupRun) error {
 	query := `INSERT INTO docker_cleanup_runs (id, trigger, status, started_at, finished_at, images_deleted, bytes_reclaimed, cache_bytes_reclaimed, min_age_hours, error_message)
 	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := d.db.Exec(query, r.ID, r.Trigger, r.Status, r.StartedAt, r.FinishedAt,
+	// agent-os-fn7x.8: started_at and finished_at are ORDERed and compared as
+	// TEXT -- GetDockerCleanupRuns below sorts on started_at -- so a row
+	// written in a local-offset or sub-second spelling does not sort by
+	// instant against a UTC one. canonicalTimestamp is the same write-side
+	// chokepoint update_history uses, and migration 15 exists because that
+	// table learned this the expensive way: a mixed table keeps mis-sorting
+	// until retention prunes the old rows, which can take months.
+	//
+	// The option NOT taken was to bind verbatim and name the spelling in each
+	// writer's brief, which is what backup_runs does -- its one writer spells
+	// it correctly in BackupRunnerRegistry.LaunchBackup and nothing enforces
+	// that. It keeps the two run tables consistent with each other, at the
+	// cost of relying on every caller added later getting it right. That
+	// reliance is exactly what failed for update_history, so this table gets
+	// the chokepoint instead: a caller cannot forget it. backup_runs is left
+	// as it was rather than changed from here; it is tracked as agent-os-zsgy.
+	//
+	// Normalised into locals, never back into *r -- the caller owns that
+	// struct and may reuse it after the write.
+	startedAt := canonicalTimestamp(r.StartedAt)
+	var finishedAt interface{}
+	if r.FinishedAt != nil {
+		finishedAt = canonicalTimestamp(*r.FinishedAt)
+	}
+
+	_, err := d.db.Exec(query, r.ID, r.Trigger, r.Status, startedAt, finishedAt,
 		r.ImagesDeleted, r.BytesReclaimed, r.CacheBytesReclaimed, r.MinAgeHours, r.ErrorMessage)
 	return err
 }

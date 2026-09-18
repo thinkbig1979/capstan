@@ -207,3 +207,91 @@ func TestDockerCleanupRunRecorded(t *testing.T) {
 	assert.Equal(t, "run-null-error", withNull[0].ID)
 	assert.Equal(t, "", withNull[0].ErrorMessage)
 }
+
+// TestDockerCleanupRunTimestamp pins the WRITE-side spelling of
+// docker_cleanup_runs.started_at and finished_at (agent-os-fn7x.8).
+//
+// GetDockerCleanupRuns sorts `ORDER BY started_at DESC` over a TEXT column, so
+// the ordering is lexical, not chronological: two rows written in different
+// spellings of RFC3339 do not order by instant. That is the exact defect
+// migration 15 exists to repair in update_history, and this table has the same
+// column shape and the same TEXT sort. The two spellings that break it are a
+// non-UTC offset and sub-second precision, and both are exercised below.
+//
+// The ordering arm is what makes this discriminating. Asserting only that a
+// stored value comes back canonical would still pass against a writer that
+// normalised on the READ side, which fixes nothing: the rows on disk would
+// stay mixed and every SQL comparison over them -- the ORDER BY here, any
+// future retention bound -- would keep using the raw text.
+func TestDockerCleanupRunTimestamp(t *testing.T) {
+	db, err := NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	// Three distinct instants, so "newest first" has exactly one correct
+	// answer and no pair can tie.
+	//
+	// Lexically the raw strings run "11..." > "10..." > "09...", so a verbatim
+	// bind returns subsecond, older, newer -- the middle two swapped against
+	// the instants they denote. By instant it is subsecond (11:00Z), newer
+	// (09:00Z), older (08:00Z).
+	olderFinished := "2026-01-01T10:30:00+02:00" // = 2026-01-01T08:30:00Z
+	older := &models.DockerCleanupRun{
+		ID:          "run-older",
+		Trigger:     "scheduled",
+		Status:      "success",
+		StartedAt:   "2026-01-01T10:00:00+02:00", // = 2026-01-01T08:00:00Z
+		FinishedAt:  &olderFinished,
+		MinAgeHours: 24,
+	}
+	newer := &models.DockerCleanupRun{
+		ID:          "run-newer",
+		Trigger:     "manual",
+		Status:      "success",
+		StartedAt:   "2026-01-01T09:00:00Z",
+		MinAgeHours: 24,
+	}
+	subsecond := &models.DockerCleanupRun{
+		ID:          "run-subsecond",
+		Trigger:     "scheduled",
+		Status:      "success",
+		StartedAt:   "2026-01-01T11:00:00.500Z",
+		MinAgeHours: 24,
+	}
+
+	// Inserted in none of the orders asserted below, so neither insertion
+	// order nor rowid can satisfy the ordering arm.
+	require.NoError(t, db.CreateDockerCleanupRun(newer))
+	require.NoError(t, db.CreateDockerCleanupRun(subsecond))
+	require.NoError(t, db.CreateDockerCleanupRun(older))
+
+	runs, err := db.GetDockerCleanupRuns(10)
+	require.NoError(t, err)
+	require.Len(t, runs, 3)
+
+	ids := []string{runs[0].ID, runs[1].ID, runs[2].ID}
+	assert.Equal(t, []string{"run-subsecond", "run-newer", "run-older"}, ids,
+		"rows must order by instant, not by the text they were written in")
+
+	// What is ON DISK is canonical, not merely what the getter returns: read
+	// the column directly rather than through GetDockerCleanupRuns, so a
+	// read-side fix cannot satisfy this.
+	var storedStart, storedFinish string
+	require.NoError(t, db.db.QueryRow(
+		`SELECT started_at, finished_at FROM docker_cleanup_runs WHERE id = 'run-older'`,
+	).Scan(&storedStart, &storedFinish))
+	assert.Equal(t, "2026-01-01T08:00:00Z", storedStart, "started_at must be stored as UTC")
+	assert.Equal(t, "2026-01-01T08:30:00Z", storedFinish, "finished_at must be normalised too, not just started_at")
+
+	require.NoError(t, db.db.QueryRow(
+		`SELECT started_at FROM docker_cleanup_runs WHERE id = 'run-subsecond'`,
+	).Scan(&storedStart))
+	assert.Equal(t, "2026-01-01T11:00:00Z", storedStart,
+		"sub-second precision must be truncated: '...00.500Z' sorts BELOW '...00Z' in the same second")
+
+	// The caller owns the struct it passed and several callers reuse it after
+	// the write, so normalising must happen in locals -- never back into *r.
+	assert.Equal(t, "2026-01-01T10:00:00+02:00", older.StartedAt, "the caller's struct must not be mutated")
+	require.NotNil(t, older.FinishedAt)
+	assert.Equal(t, "2026-01-01T10:30:00+02:00", *older.FinishedAt, "the caller's struct must not be mutated")
+}
