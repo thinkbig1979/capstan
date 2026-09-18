@@ -82,6 +82,19 @@ interface ContainerActionsProps {
   deletePending: boolean
 }
 
+// agent-os-yke1. A compose container whose project has no stack row in Capstan's
+// database arrives with a projectName and an EMPTY stackId: backend
+// GetDashboardContainers declares `var stackID string` and leaves it "" when
+// lookupStackByProject returns no stack AND no error, a branch that does not even
+// log. isStandaloneContainer keys on projectName alone, so such a row still lands
+// in the Stack Containers tab and still renders mode="stack" with its Pull button.
+//
+// Wording avoids "network", "invalid" and "validation": classifyError REWRITES the
+// message when it contains any of those, so the operator would see a connection
+// hint instead of this sentence.
+export const NO_STACK_FOR_PULL =
+  'Capstan has no stack record for this compose project, so its images cannot be pulled.'
+
 function ContainerActions({ mode, stackId, containerId, containerName, containerState, onDelete, deletePending }: ContainerActionsProps) {
   const queryClient = useQueryClient()
   const isRunning = containerState === 'running'
@@ -168,7 +181,14 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
 
   const pullMutation = useMutation({
     mutationFn: async (): Promise<void> => {
-      if (mode === 'stack' && stackId) await stacksApi.pull(stackId)
+      if (mode !== 'stack') return
+      // agent-os-yke1: throw rather than resolve. The old `if (mode === 'stack'
+      // && stackId)` resolved undefined for a stack row with no stackId, which
+      // React Query reads as success, so onSuccess announced "Images pulled" for
+      // a request never sent. Failing here routes it to the onError arm below
+      // instead of making onSuccess re-derive the same guard.
+      if (!stackId) throw new Error(NO_STACK_FOR_PULL)
+      await stacksApi.pull(stackId)
     },
     onSuccess: () => {
       if (mode === 'stack') {

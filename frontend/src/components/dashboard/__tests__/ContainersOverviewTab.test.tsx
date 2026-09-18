@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { toast } from 'sonner'
 import { renderWithProviders } from '@/test/utils'
-import { ContainersOverviewTab } from '../ContainersOverviewTab'
+import { ContainersOverviewTab, NO_STACK_FOR_PULL } from '../ContainersOverviewTab'
 import type { DashboardStats, DashboardContainerInfo } from '@/types'
 
 /**
@@ -244,5 +244,54 @@ describe('ContainersOverviewTab — non-ActionResult errors keep the classifier 
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
     expect(vi.mocked(toast.error).mock.calls[0]).toHaveLength(1)
     expect(vi.mocked(toast.error).mock.calls[0][0]).toContain(DOCKER_REASON)
+  })
+})
+
+describe('ContainersOverviewTab — a stack-mode row with no stackId', () => {
+  /**
+   * agent-os-yke1. pullMutation guarded the WORK on `stackId` and the SUCCESS
+   * MESSAGE on `mode` alone, so a stack-mode row with a falsy stackId resolved
+   * undefined without calling stacksApi.pull, React Query read that as success,
+   * and the operator was told "Images pulled" for a request never sent.
+   *
+   * This is reachable by ordinary operation, not a synthetic shape. Backend
+   * GetDashboardContainers declares `var stackID string` and leaves it "" when
+   * lookupStackByProject returns no stack and no error — a compose project
+   * running on the host that Capstan has no stack row for. That branch does not
+   * even log. projectName still comes off the com.docker.compose.project label,
+   * and isStandaloneContainer is `!c.projectName`, so the row lands in the Stack
+   * Containers tab and renders mode="stack" with stackId="".
+   *
+   * THE TWO ARMS ARE ONE INSTRUMENT. The first asserts toast.success is NOT
+   * called; on its own that would also pass if toast.success were unreachable in
+   * this fixture for any unrelated reason. The second varies ONLY stackId and
+   * requires toast.success to fire, which is what makes the first arm's absence
+   * mean something.
+   */
+  it('does not report success, and says why, when stackId is empty', async () => {
+    renderTab(makeContainer({ stackId: '' }))
+
+    fireEvent.click(screen.getByLabelText('Pull images for stack'))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    // Single-argument, matching the classifier arm: an Error carries no
+    // ActionResult reason, so onError takes its else branch. Asserted by arity
+    // rather than toHaveBeenCalledWith(msg, undefined), which does not match a
+    // one-argument call.
+    expect(vi.mocked(toast.error).mock.calls[0]).toHaveLength(1)
+    expect(vi.mocked(toast.error).mock.calls[0][0]).toBe(NO_STACK_FOR_PULL)
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(stacksMock.pull).not.toHaveBeenCalled()
+  })
+
+  it('still reports success for a row that does have a stackId', async () => {
+    stacksMock.pull.mockResolvedValue(undefined)
+    renderTab(makeContainer({ stackId: 'stack-1' }))
+
+    fireEvent.click(screen.getByLabelText('Pull images for stack'))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Images pulled'))
+    expect(stacksMock.pull).toHaveBeenCalledWith('stack-1')
+    expect(toast.error).not.toHaveBeenCalled()
   })
 })
