@@ -74,8 +74,11 @@ vi.mock('../StackUpdatesTab', () => ({ StackUpdatesTab: () => <div data-testid="
 vi.mock('../BackupsTab', () => ({ BackupsTab: () => <div data-testid="backups-tab" /> }))
 vi.mock('../../git/GitHistory', () => ({ GitHistory: () => <div data-testid="git-history" /> }))
 vi.mock('@/components/dashboard/AutoUpdateToggle', () => ({
-  AutoUpdateToggle: (props: { globalDisabled: boolean }) => (
-    <div data-testid="auto-update-toggle" data-global-disabled={String(props.globalDisabled)} />
+  // Surfaces the tri-state the real component takes (agent-os-bueb): a boolean
+  // here could not tell a failed policies query from a master switch that is
+  // deliberately off, which is the defect this stub has to be able to show.
+  AutoUpdateToggle: (props: { globalState: string }) => (
+    <div data-testid="auto-update-toggle" data-global-state={props.globalState} />
   ),
 }))
 vi.mock('@/components/dashboard/BackupToggle', () => ({ BackupToggle: () => <div data-testid="backup-toggle" /> }))
@@ -318,7 +321,7 @@ describe('StackDetail — auto-update wiring', () => {
     renderDetail()
 
     const toggle = await screen.findByTestId('auto-update-toggle')
-    await waitFor(() => expect(toggle).toHaveAttribute('data-global-disabled', 'true'))
+    await waitFor(() => expect(toggle).toHaveAttribute('data-global-state', 'disabled'))
   })
 
   it('treats auto-update as available when the global switch is on', async () => {
@@ -326,7 +329,22 @@ describe('StackDetail — auto-update wiring', () => {
     renderDetail()
 
     const toggle = await screen.findByTestId('auto-update-toggle')
-    await waitFor(() => expect(toggle).toHaveAttribute('data-global-disabled', 'false'))
+    await waitFor(() => expect(toggle).toHaveAttribute('data-global-state', 'enabled'))
+  })
+
+  /**
+   * agent-os-bueb. `globalDisabled={!policiesData?.globalEnabled}` made a FAILED
+   * policies query indistinguishable from a switch that is genuinely off, and
+   * the tooltip then told the operator to go enable a setting that was never
+   * the cause. Two-sided against the arm directly above, on one instrument: the
+   * same query, rejected here and resolved to `globalEnabled: false` there.
+   */
+  it('does not report a failed policies query as a switched-off master switch', async () => {
+    mockGetPolicies.mockRejectedValue(new Error('policies unreachable'))
+    renderDetail()
+
+    const toggle = await screen.findByTestId('auto-update-toggle')
+    await waitFor(() => expect(toggle).toHaveAttribute('data-global-state', 'unavailable'))
   })
 
   it('notes when individual containers carry their own policies', async () => {

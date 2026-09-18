@@ -81,8 +81,23 @@ vi.mock('@/components/dashboard/DashboardMetricsTab', () => ({
 // Surfaces the sort/filter the page hands down, so the localStorage-restore
 // contract is observable without exercising StacksTab's internals.
 vi.mock('@/components/dashboard/StacksTab', () => ({
-  StacksTab: ({ sortBy, statusFilter }: { sortBy: string; statusFilter: string }) => (
-    <div data-testid="tab-stacks" data-sort-by={sortBy} data-status-filter={statusFilter} />
+  StacksTab: ({
+    sortBy,
+    statusFilter,
+    globalAutoUpdateState,
+  }: {
+    sortBy: string
+    statusFilter: string
+    globalAutoUpdateState: string
+  }) => (
+    <div
+      data-testid="tab-stacks"
+      data-sort-by={sortBy}
+      data-status-filter={statusFilter}
+      // agent-os-bueb: the page owns the policies query, so the state it
+      // derives is only observable here.
+      data-global-auto-update-state={globalAutoUpdateState}
+    />
   ),
 }))
 vi.mock('@/components/dashboard/ContainersOverviewTab', () => ({
@@ -371,6 +386,48 @@ describe('DashboardPage', () => {
 
       await waitFor(() => expect(screen.getByTestId('dashboard-header')).toBeInTheDocument())
       expect(screen.queryByText('Quick Start')).not.toBeInTheDocument()
+    })
+  })
+
+  /**
+   * agent-os-bueb. This page owns the auto-update policies query and hands the
+   * result to the stacks table, so it is the only place the three states can be
+   * told apart: `globalEnabled ?? false` collapsed a FAILED request into "the
+   * master switch is off", and every row's tooltip then told the operator to go
+   * flip a setting that was never the cause.
+   *
+   * Two-sided on one instrument: the same query, rejected in one arm and
+   * resolved to `globalEnabled: false` in the other. A one-sided arm cannot
+   * tell a fixed conflation from a lock that was simply removed.
+   */
+  describe('the auto-update state it hands the stacks table', () => {
+    it('reports a failed policies query as unavailable, not as globally off', async () => {
+      getAutoUpdatePolicies.mockRejectedValue(new Error('policies unreachable'))
+
+      renderPage('/?tab=stacks')
+
+      const tab = await screen.findByTestId('tab-stacks')
+      await waitFor(() =>
+        expect(tab).toHaveAttribute('data-global-auto-update-state', 'unavailable'),
+      )
+    })
+
+    it('still reports a genuinely disabled master switch as disabled', async () => {
+      getAutoUpdatePolicies.mockResolvedValue({ globalEnabled: false, policies: [] })
+
+      renderPage('/?tab=stacks')
+
+      const tab = await screen.findByTestId('tab-stacks')
+      await waitFor(() => expect(tab).toHaveAttribute('data-global-auto-update-state', 'disabled'))
+    })
+
+    it('reports an enabled master switch as enabled', async () => {
+      getAutoUpdatePolicies.mockResolvedValue({ globalEnabled: true, policies: [] })
+
+      renderPage('/?tab=stacks')
+
+      const tab = await screen.findByTestId('tab-stacks')
+      await waitFor(() => expect(tab).toHaveAttribute('data-global-auto-update-state', 'enabled'))
     })
   })
 })

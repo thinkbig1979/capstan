@@ -295,3 +295,56 @@ describe('ContainersOverviewTab — a stack-mode row with no stackId', () => {
     expect(toast.error).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * agent-os-bueb. A FAILED policies query was rendered as a deliberate
+ * configuration state: `globalDisabled={!policiesData?.globalEnabled}` made
+ * `undefined` and `false` the same thing, so a failed GET told the operator to
+ * go flip a switch in Settings that was never the cause.
+ *
+ * TWO-SIDED ON ONE INSTRUMENT, and that is the point: the same query, rejected
+ * in one arm and resolved to `globalEnabled: false` in the other. A one-sided
+ * arm cannot tell a fixed conflation from a removed lock — a fix that turned
+ * every falsy value into an error state would be worse than the bug.
+ *
+ * Asserted on the aria-label, NOT on the tooltip copy: Radix renders
+ * TooltipContent in a portal that is not in the DOM until the trigger is
+ * hovered or focused, so a queryByText over the copy returns null whether or
+ * not the defect is present.
+ */
+describe('ContainersOverviewTab — the auto-update lock names the state it is in', () => {
+  const findToggle = () =>
+    screen.findByRole('switch', { name: /^Auto-update container c1/ })
+
+  it('does not blame the global switch when the policies query fails', async () => {
+    autoUpdateMock.getPolicies.mockRejectedValue(new Error('policies unreachable'))
+    renderTab()
+
+    const toggle = await findToggle()
+    await waitFor(() =>
+      expect(toggle.getAttribute('aria-label')).toContain('auto-update policy state unavailable'),
+    )
+    expect(toggle.getAttribute('aria-label')).not.toContain('global auto-update is off')
+    // The lock is the safe failure and stays: only the explanation was wrong.
+    expect(toggle).toBeDisabled()
+  })
+
+  it('still blames the global switch when it is genuinely off', async () => {
+    autoUpdateMock.getPolicies.mockResolvedValue({ policies: [], globalEnabled: false })
+    renderTab()
+
+    const toggle = await findToggle()
+    await waitFor(() =>
+      expect(toggle.getAttribute('aria-label')).toContain('global auto-update is off'),
+    )
+    expect(toggle).toBeDisabled()
+  })
+
+  it('leaves the toggle interactive when auto-update is globally on', async () => {
+    autoUpdateMock.getPolicies.mockResolvedValue({ policies: [], globalEnabled: true })
+    renderTab()
+
+    await waitFor(async () => expect(await findToggle()).not.toBeDisabled())
+    expect((await findToggle()).getAttribute('aria-label')).toBe('Auto-update container c1')
+  })
+})

@@ -9,6 +9,7 @@ import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { StackRowActions } from '@/components/dashboard/StackRowActions'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
+import type { GlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import {
   buildDirectoryTree,
@@ -70,7 +71,9 @@ interface StacksTabProps {
    *  component stays prop-driven. BackupToggle self-fetches instead — its
    *  queries are react-query keyed, so the rows dedupe. */
   autoUpdatePolicies: AutoUpdatePolicy[]
-  globalAutoUpdateEnabled: boolean
+  /** Tri-state rather than a boolean, so a failed policies query is not
+   *  rendered as a deliberately disabled global switch (agent-os-bueb). */
+  globalAutoUpdateState: GlobalAutoUpdateState
 }
 
 export function StacksTab({
@@ -93,7 +96,7 @@ export function StacksTab({
   deletePending,
   isAnimating,
   autoUpdatePolicies,
-  globalAutoUpdateEnabled,
+  globalAutoUpdateState,
 }: StacksTabProps) {
   const navigate = useNavigate()
 
@@ -132,7 +135,7 @@ export function StacksTab({
               enabled={policy?.enabled ?? false}
               paused={policy?.paused ?? false}
               consecutiveFailures={policy?.consecutiveFailures ?? 0}
-              globalDisabled={!globalAutoUpdateEnabled}
+              globalState={globalAutoUpdateState}
             />
           </div>
         </TableCell>
