@@ -6,13 +6,39 @@ import { toast } from 'sonner'
 import { useToggleAutoUpdate } from '@/hooks/useResources'
 import { classifyError } from '@/lib/error-handler'
 
+import type { GlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
+
+/** Why the toggle is locked, in the words the operator needs. */
+const LOCK_REASON: Record<
+  Exclude<GlobalAutoUpdateState, 'enabled'>,
+  { label: string; explain: (targetType: string) => string }
+> = {
+  disabled: {
+    label: 'global auto-update is off',
+    explain: (targetType) =>
+      `The global master switch is off, enable it in Settings to unlock per-${targetType} toggles.`,
+  },
+  loading: {
+    label: 'checking global auto-update',
+    explain: () => 'Checking whether auto-update is switched on globally.',
+  },
+  unavailable: {
+    label: 'auto-update policy state unavailable',
+    // Deliberately prescribes nothing: the global switch may well be on, and
+    // sending the operator to Settings over a failed request is the bug.
+    explain: () => 'The auto-update policy state could not be loaded, so the toggle stays locked.',
+  },
+}
+
 interface AutoUpdateToggleProps {
   targetType: 'container' | 'stack'
   targetId: string
   enabled: boolean
   paused: boolean
   consecutiveFailures: number
-  globalDisabled?: boolean
+  /** Required, not defaulted: a call site that forgets it is a `tsc` error
+   *  rather than a toggle that silently claims the wrong reason. */
+  globalState: GlobalAutoUpdateState
 }
 
 export function AutoUpdateToggle({
@@ -21,7 +47,7 @@ export function AutoUpdateToggle({
   enabled,
   paused,
   consecutiveFailures,
-  globalDisabled = false,
+  globalState,
 }: AutoUpdateToggleProps) {
   const [optimisticEnabled, setOptimisticEnabled] = useState(enabled)
   const toggleMutation = useToggleAutoUpdate()
@@ -53,7 +79,8 @@ export function AutoUpdateToggle({
 
   const isChecked = optimisticEnabled && !paused
 
-  if (globalDisabled) {
+  if (globalState !== 'enabled') {
+    const reason = LOCK_REASON[globalState]
     return (
       <TooltipProvider>
         <Tooltip>
@@ -62,14 +89,14 @@ export function AutoUpdateToggle({
               <Switch
                 checked={false}
                 disabled
-                aria-label={`Auto-update ${targetType} ${targetId} (locked, global auto-update is off)`}
+                aria-label={`Auto-update ${targetType} ${targetId} (locked, ${reason.label})`}
               />
               <Lock className="h-3 w-3 text-muted-foreground" />
             </div>
           </TooltipTrigger>
           <TooltipContent>
             <p>Auto-update is locked.</p>
-            <p>The global master switch is off — enable it in Settings to unlock per-{targetType} toggles.</p>
+            <p>{reason.explain(targetType)}</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>

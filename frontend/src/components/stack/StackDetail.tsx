@@ -9,6 +9,7 @@ import { ActivityTab } from './ActivityTab'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { HelpHint } from '@/components/ui/help-hint'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
+import { toGlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { TabErrorBoundary } from '@/components/TabErrorBoundary'
 import { Info } from 'lucide-react'
@@ -49,7 +50,8 @@ function OverviewTabContent({
   stack: Stack
   onTabChange: (tab: string) => void
 }) {
-  const { data: policiesData } = useAutoUpdatePolicies()
+  const policiesQuery = useAutoUpdatePolicies()
+  const policiesData = policiesQuery.data
 
   const stackPolicy: AutoUpdatePolicy | undefined = policiesData?.policies?.find(
     (p) => p.targetType === 'stack' && p.targetId === stack.id,
@@ -116,7 +118,7 @@ function OverviewTabContent({
               enabled={stackPolicy?.enabled ?? false}
               paused={stackPolicy?.paused ?? false}
               consecutiveFailures={stackPolicy?.consecutiveFailures ?? 0}
-              globalDisabled={!policiesData?.globalEnabled}
+              globalState={toGlobalAutoUpdateState(policiesQuery)}
             />
           </div>
           <div className="flex items-center justify-between gap-2 border-t px-4 py-2.5">

@@ -32,6 +32,18 @@ const { autoUpdateChange, backupChange, backupState } = vi.hoisted(() => ({
   backupState: { engineUnavailable: false },
 }))
 
+/**
+ * The locked labels mirror AutoUpdateToggle's own, one per non-enabled state
+ * (agent-os-bueb). `data-global-state` is what actually pins this table's
+ * pass-through: the label could match for the wrong reason, the state value
+ * cannot.
+ */
+const LOCK_LABEL: Record<string, string> = {
+  disabled: 'global auto-update is off',
+  loading: 'checking global auto-update',
+  unavailable: 'auto-update policy state unavailable',
+}
+
 vi.mock('@/components/dashboard/AutoUpdateToggle', async () => {
   const { Switch } = await vi.importActual<typeof import('@/components/ui/switch')>(
     '@/components/ui/switch',
@@ -41,25 +53,29 @@ vi.mock('@/components/dashboard/AutoUpdateToggle', async () => {
       targetType,
       targetId,
       enabled,
-      globalDisabled,
+      globalState,
     }: {
       targetType: string
       targetId: string
       enabled: boolean
-      globalDisabled?: boolean
+      globalState: string
     }) =>
-      globalDisabled ? (
-        <Switch
-          checked={false}
-          disabled
-          aria-label={`Auto-update ${targetType} ${targetId} (locked, global auto-update is off)`}
-        />
+      globalState !== 'enabled' ? (
+        <span data-testid={`auto-update-${targetId}`} data-global-state={globalState}>
+          <Switch
+            checked={false}
+            disabled
+            aria-label={`Auto-update ${targetType} ${targetId} (locked, ${LOCK_LABEL[globalState]})`}
+          />
+        </span>
       ) : (
-        <Switch
-          checked={enabled}
-          onCheckedChange={(checked: boolean) => autoUpdateChange(targetId, checked)}
-          aria-label={`Auto-update ${targetType} ${targetId}`}
-        />
+        <span data-testid={`auto-update-${targetId}`} data-global-state={globalState}>
+          <Switch
+            checked={enabled}
+            onCheckedChange={(checked: boolean) => autoUpdateChange(targetId, checked)}
+            aria-label={`Auto-update ${targetType} ${targetId}`}
+          />
+        </span>
       ),
   }
 })
@@ -138,7 +154,7 @@ function renderTab(over: Partial<React.ComponentProps<typeof StacksTab>> = {}) {
     deletePending: false,
     isAnimating: () => false,
     autoUpdatePolicies: [],
-    globalAutoUpdateEnabled: true,
+    globalAutoUpdateState: 'enabled' as const,
     ...h,
     ...over,
   }
@@ -379,7 +395,7 @@ describe('StacksTab — the toggle columns', () => {
   })
 
   it('locks every Auto update cell when the global master switch is off', () => {
-    renderTab({ stacks: GROUPED, globalAutoUpdateEnabled: false })
+    renderTab({ stacks: GROUPED, globalAutoUpdateState: 'disabled' })
 
     for (const id of ['s1', 's2']) {
       const locked = screen.getByRole('switch', {
@@ -391,13 +407,54 @@ describe('StacksTab — the toggle columns', () => {
   })
 
   it('leaves the Auto update cells unlocked when the master switch is on', () => {
-    renderTab({ stacks: GROUPED, globalAutoUpdateEnabled: true })
+    renderTab({ stacks: GROUPED, globalAutoUpdateState: 'enabled' })
 
     for (const id of ['s1', 's2']) {
       expect(screen.getByRole('switch', { name: `Auto-update stack ${id}` })).toBeEnabled()
     }
     expect(
       screen.queryByRole('switch', { name: /Auto-update stack s1 \(locked/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  /**
+   * agent-os-bueb. The pair above and the pair below are the same instrument on
+   * four inputs: a genuinely-off switch must still say so, and a policies query
+   * that has not answered must not. DashboardPage owns the query, so the state
+   * arrives here as a prop — the query-rejected half of this contract is pinned
+   * at the source in DashboardPage.test.tsx and ContainersOverviewTab.test.tsx.
+   */
+  it('does not claim the master switch is off when the policy state is unavailable', () => {
+    renderTab({ stacks: GROUPED, globalAutoUpdateState: 'unavailable' })
+
+    for (const id of ['s1', 's2']) {
+      expect(screen.getByTestId(`auto-update-${id}`)).toHaveAttribute(
+        'data-global-state',
+        'unavailable',
+      )
+      const locked = screen.getByRole('switch', {
+        name: `Auto-update stack ${id} (locked, auto-update policy state unavailable)`,
+      })
+      // The lock is the safe failure and stays; only the explanation changes.
+      expect(locked).toBeDisabled()
+    }
+    expect(
+      screen.queryByRole('switch', { name: /global auto-update is off/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('does not claim the master switch is off while the policy state is loading', () => {
+    renderTab({ stacks: GROUPED, globalAutoUpdateState: 'loading' })
+
+    for (const id of ['s1', 's2']) {
+      expect(
+        screen.getByRole('switch', {
+          name: `Auto-update stack ${id} (locked, checking global auto-update)`,
+        }),
+      ).toBeDisabled()
+    }
+    expect(
+      screen.queryByRole('switch', { name: /global auto-update is off/ }),
     ).not.toBeInTheDocument()
   })
 

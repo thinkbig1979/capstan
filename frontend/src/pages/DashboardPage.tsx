@@ -32,6 +32,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import type { ConfiguredDir } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
 import { useAutoUpdatePolicies } from '@/hooks/useResources'
+import { toGlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
 
 // Lazy: CreateStackDialog pulls in codemirror (its inline compose editor) but was
 // previously mounted unconditionally on every Dashboard visit, keeping codemirror
@@ -129,7 +130,8 @@ export function DashboardPage() {
   )
 
   // Fetched here rather than inside StacksTab so the tab stays prop-driven.
-  const { data: autoUpdatePoliciesData } = useAutoUpdatePolicies()
+  const autoUpdatePoliciesQuery = useAutoUpdatePolicies()
+  const autoUpdatePoliciesData = autoUpdatePoliciesQuery.data
 
   const { start: startMutation, stop: stopMutation, restart: restartMutation, delete: deleteMutation } = useStackActions({
     onSuccess: (action) => {
@@ -359,7 +361,7 @@ export function DashboardPage() {
               deletePending={deleteMutation.isPending}
               isAnimating={isAnimating}
               autoUpdatePolicies={autoUpdatePoliciesData?.policies ?? []}
-              globalAutoUpdateEnabled={autoUpdatePoliciesData?.globalEnabled ?? false}
+              globalAutoUpdateState={toGlobalAutoUpdateState(autoUpdatePoliciesQuery)}
             />
             <HostStrip
               stats={dashboardStats}

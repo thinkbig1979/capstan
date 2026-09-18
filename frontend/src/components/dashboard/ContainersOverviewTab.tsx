@@ -30,6 +30,7 @@ import { PruneButton } from '@/components/dashboard/PruneButton'
 import { useConfirm } from '@/hooks/useConfirm'
 import { useAutoUpdatePolicies } from '@/hooks/useResources'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
+import { toGlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { formatBytes, formatUptime } from '@/lib/format'
 import { queryKeys } from '@/lib/query-keys'
@@ -292,7 +293,9 @@ function ContainerTable({
   renderActions: (container: DashboardContainerInfo, deletePending: boolean) => React.ReactNode
   onInspect: (container: DashboardContainerInfo) => void
 }) {
-  const { data: policiesData } = useAutoUpdatePolicies()
+  const policiesQuery = useAutoUpdatePolicies()
+  const policiesData = policiesQuery.data
+  const globalAutoUpdateState = toGlobalAutoUpdateState(policiesQuery)
 
   const policyMap = useMemo(() => {
     if (!policiesData?.policies) return new Map<string, boolean>()
@@ -447,7 +450,7 @@ function ContainerTable({
                       enabled={policyMap.get(container.id) ?? false}
                       paused={false}
                       consecutiveFailures={0}
-                      globalDisabled={!policiesData?.globalEnabled}
+                      globalState={globalAutoUpdateState}
                     />
                   </div>
                 </TableCell>
