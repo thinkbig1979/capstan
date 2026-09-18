@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { toast } from 'sonner'
 import { renderWithProviders } from '@/test/utils'
 import { ContainersOverviewTab, NO_STACK_FOR_PULL } from '../ContainersOverviewTab'
+import { queryKeys } from '@/lib/query-keys'
 import type { DashboardStats, DashboardContainerInfo } from '@/types'
 
 /**
@@ -26,8 +28,11 @@ import type { DashboardStats, DashboardContainerInfo } from '@/types'
  *     provably on a stack-mode button. If those aria-labels are ever
  *     de-duplicated across modes this discriminator is gone and these arms stop
  *     proving what they claim -- reintroduce one by asserting on `mode` directly.
- *  2. isStandaloneContainer is `!c.projectName`, and every fixture sets one, so
- *     a standalone row cannot exist in these renders at all.
+ *  2. Every fixture sets BOTH a projectName and a non-empty stackId, and
+ *     isStandaloneContainer (rewritten by agent-os-yrgn) sends a row to the
+ *     standalone bucket when EITHER is missing -- a project-less container, or a
+ *     compose project with no stack row. Setting both is therefore what keeps a
+ *     standalone row out of these renders; projectName alone no longer does it.
  *
  * Each arm also asserts toHaveBeenCalledTimes(1). Without it the suite cannot
  * see a handler that fires the description toast AND then falls through to the
@@ -97,6 +102,7 @@ function makeContainer(overrides: Partial<DashboardContainerInfo> = {}): Dashboa
     health: '',
     ports: [],
     stackId: 'stack-1',
+    stackLookupFailed: false,
     projectName: 'myproject',
     restartCount: 0,
     created: '2026-01-01T00:00:00Z',
@@ -113,6 +119,24 @@ function renderTab(container: DashboardContainerInfo = makeContainer()) {
     <ContainersOverviewTab stats={stats} latestMetrics={{}} metricsStatus="connected" />,
   )
 }
+
+/**
+ * agent-os-yrgn. Whether queryKeys.stacks() was invalidated is the SECOND half
+ * of the defect and it leaves no toast behind, so it needs its own instrument.
+ * renderWithProviders returns the very QueryClient the component resolves
+ * through useQueryClient, so spying on the instance after render still
+ * intercepts the onSuccess calls — no refetch timing to race against.
+ */
+function spyOnInvalidations(queryClient: { invalidateQueries: (...a: never[]) => unknown }) {
+  return vi.spyOn(queryClient, 'invalidateQueries')
+}
+
+const invalidatedStacks = (spy: ReturnType<typeof spyOnInvalidations>) =>
+  spy.mock.calls.some(
+    ([arg]) =>
+      JSON.stringify((arg as { queryKey?: unknown })?.queryKey) ===
+      JSON.stringify(queryKeys.stacks()),
+  )
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -254,13 +278,20 @@ describe('ContainersOverviewTab — a stack-mode row with no stackId', () => {
    * undefined without calling stacksApi.pull, React Query read that as success,
    * and the operator was told "Images pulled" for a request never sent.
    *
-   * This is reachable by ordinary operation, not a synthetic shape. Backend
-   * GetDashboardContainers declares `var stackID string` and leaves it "" when
-   * lookupStackByProject returns no stack and no error — a compose project
-   * running on the host that Capstan has no stack row for. That branch does not
-   * even log. projectName still comes off the com.docker.compose.project label,
-   * and isStandaloneContainer is `!c.projectName`, so the row lands in the Stack
-   * Containers tab and renders mode="stack" with stackId="".
+   * STILL reachable by ordinary operation after agent-os-yrgn, but by a
+   * NARROWER route, and the fixture below is pinned to it. yrgn made a compose
+   * project with no stack row render as STANDALONE, and a standalone row has no
+   * Pull button, so that state can no longer reach this guard. What remains is
+   * the backend's `stackErr != nil` branch (resolveDashboardStackAssociation,
+   * services/docker.go): the stacks table could not be READ, so stackId defaults
+   * to "" and stackLookupFailed is set, and isStandaloneContainer deliberately
+   * keeps such a row in stack mode rather than reclassifying it on the strength
+   * of a failed read (agent-os-g482).
+   *
+   * Hence `stackLookupFailed: true` in the first arm. It is not decoration: it is
+   * the only production route that still renders mode="stack" with an empty
+   * stackId. Drop it and the arm stops exercising this guard and starts
+   * asserting against a standalone row that has no Pull button at all.
    *
    * THE TWO ARMS ARE ONE INSTRUMENT. The first asserts toast.success is NOT
    * called; on its own that would also pass if toast.success were unreachable in
@@ -269,7 +300,7 @@ describe('ContainersOverviewTab — a stack-mode row with no stackId', () => {
    * mean something.
    */
   it('does not report success, and says why, when stackId is empty', async () => {
-    renderTab(makeContainer({ stackId: '' }))
+    renderTab(makeContainer({ stackId: '', stackLookupFailed: true }))
 
     fireEvent.click(screen.getByLabelText('Pull images for stack'))
 
@@ -293,6 +324,102 @@ describe('ContainersOverviewTab — a stack-mode row with no stackId', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Images pulled'))
     expect(stacksMock.pull).toHaveBeenCalledWith('stack-1')
     expect(toast.error).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * agent-os-yrgn. SPEC option 3: a container carrying a compose project that
+ * Capstan has no stack row for is treated as STANDALONE, because that is the
+ * decision the backend has already taken elsewhere -- resolveUpdateStrategy
+ * (services/docker_update.go) returns updateViaStandalone for exactly this
+ * state, under a docblock reading "Anything genuinely absent is standalone."
+ *
+ * Before this change the row rendered mode="stack" with an empty stackId, so
+ * start/stop/restart fell through to the single-container route while `label`,
+ * derived from `mode` alone, announced "Stack started" and invalidated
+ * queryKeys.stacks(): a sentence wider than the work actually performed.
+ *
+ * THE THIRD ARM IS NOT A DUPLICATE OF THE FIRST, and this is the load-bearing
+ * part. An empty stackId has TWO causes on the wire and they are NOT the same
+ * state: the stack row is genuinely absent, or the stacks table could not be
+ * READ (GetAllContainersWithDetails' `stackErr != nil` branch, which defaults
+ * stackID to ""). Treating the second as standalone is agent-os-g482's P2
+ * defect -- a compose-managed container handled down the standalone path on the
+ * strength of a read that FAILED -- which backend
+ * docker_update_apply_fake_test.go:240 pins on the update path. The
+ * stackLookupFailed field is what keeps the two apart here, so the third arm is
+ * the frontend half of that same guard.
+ */
+describe('ContainersOverviewTab — a compose project with no stack record', () => {
+  it('treats a genuinely absent stack record as a standalone container', async () => {
+    resourcesMock.startContainer.mockResolvedValue({ message: 'started' })
+    renderTab(makeContainer({ state: 'exited', stackId: '', stackLookupFailed: false }))
+
+    // The two buckets are Radix TabsContent and only the ACTIVE one mounts, so
+    // the row has to be reached through its tab. That is also the assertion that
+    // it moved: before yrgn this row rendered under "Stack Containers" and the
+    // Other tab showed the empty-state card instead.
+    //
+    // userEvent, not fireEvent: a Radix TabsTrigger does not switch on a bare
+    // click event — same reason given at DashboardPage.test.tsx:224.
+    await userEvent.setup().click(screen.getByRole('tab', { name: /Other Containers/ }))
+    fireEvent.click(await screen.findByLabelText('Start container'))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Container started'))
+    // The narrower route is the whole point: the stack route must not be taken.
+    expect(resourcesMock.startContainer).toHaveBeenCalledWith('c1')
+    expect(stacksMock.start).not.toHaveBeenCalled()
+  })
+
+  it('still renders a row that HAS a stack record in stack mode, and does invalidate the stacks query', async () => {
+    stacksMock.start.mockResolvedValue({ status: 'started', output: '', duration: 0 })
+    const { queryClient } = renderTab(makeContainer({ state: 'exited', stackId: 'stack-1' }))
+    const spy = spyOnInvalidations(queryClient)
+
+    fireEvent.click(screen.getByLabelText('Start stack'))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Stack started'))
+    expect(stacksMock.start).toHaveBeenCalledWith('stack-1')
+    expect(resourcesMock.startContainer).not.toHaveBeenCalled()
+    // The positive control for invalidatedStacks. Without it the negative
+    // assertion in the fall-through arm below would also pass if the helper
+    // simply never matched anything.
+    expect(invalidatedStacks(spy)).toBe(true)
+  })
+
+  it('keeps a row whose stack lookup FAILED in stack mode, rather than reclassifying it', async () => {
+    renderTab(makeContainer({ state: 'exited', stackId: '', stackLookupFailed: true }))
+
+    // Both directions, and the second half is the one that matters. Asserting
+    // only that the stack control exists would also pass if the row had been
+    // duplicated into both buckets; the Other tab must show its empty state.
+    expect(screen.getByLabelText('Start stack')).toBeInTheDocument()
+
+    await userEvent.setup().click(screen.getByRole('tab', { name: /Other Containers/ }))
+    expect(await screen.findByText('No Standalone Containers')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Start container')).toBeNull()
+  })
+
+  it('names the container, not the stack, when a stack-mode row falls through to the container route', async () => {
+    resourcesMock.startContainer.mockResolvedValue({ message: 'started' })
+    const { queryClient } = renderTab(makeContainer({ state: 'exited', stackId: '', stackLookupFailed: true }))
+
+    // The row renders in STACK mode -- the button is labelled "Start stack" --
+    // but no stackId means the mutation falls through to the single-container
+    // route. The sentence must follow the route taken, not the mode rendered,
+    // and queryKeys.stacks() must not be invalidated for work that did not
+    // touch a stack. This is the yrgn defect on its one surviving path, so an
+    // arm keyed only on the standalone bucket cannot see it.
+    const spy = spyOnInvalidations(queryClient)
+
+    fireEvent.click(screen.getByLabelText('Start stack'))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Container started'))
+    expect(resourcesMock.startContainer).toHaveBeenCalledWith('c1')
+    expect(stacksMock.start).not.toHaveBeenCalled()
+    // The bead's second complaint: the action "additionally invalidates
+    // queryKeys.stacks(), a query whose contents the action did not change".
+    expect(invalidatedStacks(spy)).toBe(false)
   })
 })
 

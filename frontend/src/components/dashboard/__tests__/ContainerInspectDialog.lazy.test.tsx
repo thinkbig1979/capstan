@@ -49,6 +49,7 @@ const mockStats: DashboardStats = {
       health: '',
       ports: [],
       stackId: 'stack-1',
+      stackLookupFailed: false,
       projectName: 'myproject',
       restartCount: 0,
       created: new Date().toISOString(),
