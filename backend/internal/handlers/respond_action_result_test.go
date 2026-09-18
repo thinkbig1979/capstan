@@ -40,6 +40,28 @@ func renderedBody(t *testing.T, r truth.ActionResult) string {
 	return string(b)
 }
 
+// goldenFailedBody spells the failed-ActionResult wire body out key by key, so
+// the key names in the expectation come from THIS file rather than from
+// truth.ActionResult's own struct tags. renderedBody above re-marshals the very
+// struct the renderer wrote, so it moves with a json tag rename and cannot see
+// one; a literal can (agent-os-nyx0). These are the same keys stacks_test.go
+// decodes by name and the frontend reads off the wire.
+//
+// detailsJSON is the already-encoded value for "details", or "" for a result
+// with no Details — json:"details,omitempty" then drops the key entirely. Only
+// the reason VALUE is marshalled, because prose escaping is not what this arm
+// guards and one caller passes a long handler const.
+func goldenFailedBody(t *testing.T, reason, detailsJSON string) string {
+	t.Helper()
+	reasonJSON, err := json.Marshal(reason)
+	require.NoError(t, err)
+	body := `{"outcome":"failed","reason":` + string(reasonJSON)
+	if detailsJSON != "" {
+		body += `,"details":` + detailsJSON
+	}
+	return body + "}"
+}
+
 // logLineContaining returns the single captured line holding needle, so a
 // test can assert on attrs of THAT line rather than anywhere in the buffer.
 func logLineContaining(t *testing.T, buf *syncLogBuffer, needle string) string {
@@ -204,6 +226,54 @@ func TestRenderDockerResult_DockerUnavailableLogs503(t *testing.T) {
 	line := logLineContaining(t, buf, "stack start")
 	if !strings.Contains(line, "status=503") {
 		t.Fatalf("docker-unavailable ActionResult logged without status=503: %s", line)
+	}
+}
+
+// TestRenderDockerResult_FailedLiteralBodyPinsWireKeys is the key-pinning
+// sibling of TestRenderDockerResult_FailedLiteralLogsCause above: same result,
+// same renderer, but the expectation is a literal. The sibling compares the
+// body to renderedBody, which derives its expectation from the same struct
+// tags the renderer used, so both sides move together under a tag rename and
+// it stays green through one; this arm goes red (agent-os-nyx0).
+func TestRenderDockerResult_FailedLiteralBodyPinsWireKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	captureHandlerLogs(t)
+
+	cause := errors.New("literal-sentinel-nyx0-b2")
+	r := truth.ActionResult{
+		Outcome: truth.OutcomeFailed,
+		Reason:  "compose up did not verify as running",
+		Details: map[string]any{"status": "error"},
+		Err:     cause,
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	renderDockerResult(c, cause, r)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	if got, want := strings.TrimSpace(w.Body.String()), goldenFailedBody(t, r.Reason, `{"status":"error"}`); got != want {
+		t.Fatalf("wire keys moved:\n got %s\nwant %s", got, want)
+	}
+}
+
+// TestRenderDockerResult_DockerUnavailableBodyPinsWireKeys is the same
+// key-pinning arm for renderDockerResult's 503 substitution, whose sibling
+// TestRenderDockerResult_DockerUnavailableLogs503 is tautological for the same
+// reason. Details is nil here, so json:"details,omitempty" must drop the key —
+// the literal pins that too (agent-os-nyx0).
+func TestRenderDockerResult_DockerUnavailableBodyPinsWireKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	captureHandlerLogs(t)
+
+	cause := fmt.Errorf("stack start: %w", services.ErrDockerUnavailable)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	renderDockerResult(c, cause, truth.Failed("ignored-when-docker-is-down", cause))
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	if got, want := strings.TrimSpace(w.Body.String()), goldenFailedBody(t, DockerUnavailableMessage, ""); got != want {
+		t.Fatalf("503 wire keys moved:\n got %s\nwant %s", got, want)
 	}
 }
 
