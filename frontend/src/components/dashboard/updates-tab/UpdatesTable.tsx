@@ -169,12 +169,17 @@ export function UpdatesTable({
                     <StatusBadge status={container.state === 'running' ? 'running' : 'stopped'} />
                   </TableCell>
                   <TableCell>
-                    {/* globalState is pinned to 'enabled' because this table
-                        has never honoured the global master switch: before
-                        agent-os-bueb made the prop required these two toggles
-                        passed nothing at all, and the old `globalDisabled`
-                        default was false. Wiring the real state here would be a
-                        behaviour change, so it is left as a separate defect. */}
+                    {/* THESE TWO TOGGLES ARE STILL WRONG -- see agent-os-2f08.
+                        This table has never honoured the global master switch:
+                        before agent-os-bueb made the prop required they passed
+                        nothing at all and the old `globalDisabled` default was
+                        false, so the tab does not lock even when auto-update is
+                        genuinely off globally. 'enabled' is pinned here only to
+                        preserve that existing behaviour under a now-required
+                        prop; it is NOT a decision that this tab should stay
+                        unlocked, and the explicit value is NOT the fix. Wiring
+                        the real state is a behaviour change and belongs to
+                        agent-os-2f08. */}
                     <div className="flex items-center gap-2">
                       {activePolicy ? (
                         <AutoUpdateToggle
