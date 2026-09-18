@@ -191,6 +191,10 @@ export function useStackEvents() {
   const handleUpdateCompletedEvent = useCallback(() => {
     scheduleInvalidations([
       queryKeys.updateHistory.all(),
+      // The completed update writes an update_history row, and the update-settings
+      // query serves the 7/30-day success counts derived from that table. Without
+      // this the auto-update stats stay stale on the event that changes them.
+      queryKeys.settings.updates(),
       queryKeys.resources.updates(),
       queryKeys.dashboardStats(),
       queryKeys.stacks(),
@@ -227,6 +231,9 @@ export function useStackEvents() {
     // Always invalidate history and stats.
     const keys: QueryKey[] = [
       queryKeys.updateHistory.all(),
+      // Same reason as handleUpdateCompletedEvent: the history row this job just
+      // wrote feeds the update-settings query's 7/30-day counts.
+      queryKeys.settings.updates(),
       queryKeys.dashboardStats(),
       queryKeys.stacks(),
     ]
