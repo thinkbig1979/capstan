@@ -342,12 +342,25 @@ func (d *DB) GetUpdateStats() (enabledContainers int, last7Days int, last30Days 
 		return
 	}
 
-	err = d.db.QueryRow("SELECT COUNT(*) FROM update_history WHERE status = 'success' AND started_at >= datetime('now', '-7 days')").Scan(&last7Days)
+	// started_at is compared as TEXT, so the cutoff has to be spelled the way
+	// the column is. SQLite's datetime() returns "YYYY-MM-DD HH:MM:SS", with a
+	// space where the stored RFC3339 value has a 'T'; 'T' (0x54) outranks ' '
+	// (0x20), so a datetime() cutoff was decided at the separator and counted
+	// every row sharing its calendar date whatever time of day it held. The
+	// bound is computed here instead, in the canonical spelling
+	// GetUpdateHistory's From/To filters already use.
+	now := time.Now().UTC()
+
+	err = d.db.QueryRow(
+		"SELECT COUNT(*) FROM update_history WHERE status = 'success' AND started_at >= ?",
+		now.AddDate(0, 0, -7).Format(time.RFC3339)).Scan(&last7Days)
 	if err != nil {
 		return
 	}
 
-	err = d.db.QueryRow("SELECT COUNT(*) FROM update_history WHERE status = 'success' AND started_at >= datetime('now', '-30 days')").Scan(&last30Days)
+	err = d.db.QueryRow(
+		"SELECT COUNT(*) FROM update_history WHERE status = 'success' AND started_at >= ?",
+		now.AddDate(0, 0, -30).Format(time.RFC3339)).Scan(&last30Days)
 	if err != nil {
 		return
 	}
