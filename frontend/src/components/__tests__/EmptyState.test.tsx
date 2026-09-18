@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { EmptyState, NoDirectories, NoStacks, NoContainers, NoGitHistory, NoLogs, NoEnvVars } from '../EmptyState'
+import { EmptyState, NoDirectories, NoStacks, NoContainers, NoLogs, NoEnvVars } from '../EmptyState'
 
 describe('EmptyState', () => {
   it('renders title', () => {
@@ -53,13 +53,6 @@ describe('NoContainers', () => {
   it('renders no containers message', () => {
     render(<NoContainers />)
     expect(screen.getByText('No containers')).toBeInTheDocument()
-  })
-})
-
-describe('NoGitHistory', () => {
-  it('renders no git history message', () => {
-    render(<NoGitHistory />)
-    expect(screen.getByText('No git history')).toBeInTheDocument()
   })
 })
 
