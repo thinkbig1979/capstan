@@ -170,7 +170,7 @@ export function ImagesTab() {
                 : 'Scheduled cleanup is off.'}{' '}
               <Link
                 to="/settings/docker-cleanup"
-                className="underline underline-offset-4 hover:text-foreground"
+                className="text-primary hover:underline"
               >
                 Cleanup settings
               </Link>

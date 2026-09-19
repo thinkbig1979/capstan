@@ -43,7 +43,11 @@ const POLICY = {
   minAllowedAgeHours: 1,
   minAllowedIntervalHours: 1,
 }
-const EMPTY_PREVIEW = { candidates: [], reclaimableBytes: 0, minAgeHours: 168 }
+// 72, deliberately NOT the policy's 168. The readout must name the floor the
+// PREVIEW was computed at; with both fixtures on the same number, an
+// implementation reading the policy (or hard-coding 168) passes and the test
+// has measured nothing.
+const EMPTY_PREVIEW = { candidates: [], reclaimableBytes: 0, minAgeHours: 72 }
 
 const image = (over: Partial<DockerImage> = {}): DockerImage => ({
   id: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -89,7 +93,7 @@ describe('ImagesTab — the scheduled-cleanup readout', () => {
         { id: 'sha256:2222222222222222', size: 1024 * 1024 * 1024, created: 1750000001 },
       ],
       reclaimableBytes: 3221225472,
-      minAgeHours: 168,
+      minAgeHours: 72,
     })
     renderTab()
 
@@ -98,7 +102,10 @@ describe('ImagesTab — the scheduled-cleanup readout', () => {
     const readout = await screen.findByTestId('cleanup-reclaimable')
     expect(readout).toHaveTextContent('3.00 GB')
     expect(readout).toHaveTextContent('2 dangling images')
-    expect(readout).toHaveTextContent('created more than 168 hours ago')
+    // 72 is the preview's floor; the policy fixture says 168. Only a readout
+    // reading the response can produce this.
+    expect(readout).toHaveTextContent('created more than 72 hours ago')
+    expect(readout).not.toHaveTextContent('168')
     // The floor comes off the response, not out of the policy query.
     await waitFor(() => expect(mockPreviewCleanup).toHaveBeenCalledWith())
   })
@@ -120,15 +127,18 @@ describe('ImagesTab — the scheduled-cleanup readout', () => {
 
     const readout = await screen.findByTestId('cleanup-reclaimable')
     expect(readout).toHaveTextContent(
-      'Nothing for scheduled cleanup to reclaim: no dangling image was created more than 168 hours ago.',
+      'Nothing for scheduled cleanup to reclaim: no dangling image was created more than 72 hours ago.',
     )
     expect(readout).not.toHaveTextContent('0 B')
   })
 
   it('renders no readout at all when the preview fails, even with a readable policy', async () => {
-    // 503 DOCKER_UNAVAILABLE is the shape a Docker-less host returns. The whole
-    // block goes, schedule sentence and link included: a schedule line with no
-    // number beside it reads as "nothing to reclaim".
+    // A preview that fails while the image list is healthy — a transient error
+    // on the preview call alone. (A Docker-less host is NOT this case: the
+    // images query fails too and the tab early-returns to EmptyState before the
+    // readout is ever evaluated, ImagesTab.tsx:96-105.) The whole block goes,
+    // schedule sentence and link included: a schedule line with no figure
+    // beside it reads as "nothing to reclaim".
     mockPreviewCleanup.mockRejectedValue(new Error('docker unavailable'))
     renderTab()
 

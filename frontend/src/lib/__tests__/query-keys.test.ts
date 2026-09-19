@@ -115,6 +115,7 @@ describe('queryKeys prefix relationships', () => {
       queryKeys.resources.buildCache(),
       queryKeys.resources.updates(),
       queryKeys.resources.updateJobs(),
+      queryKeys.resources.cleanupPreview(),
     ]) {
       expect(isPrefixOf(queryKeys.resources.all(), key)).toBe(true)
     }

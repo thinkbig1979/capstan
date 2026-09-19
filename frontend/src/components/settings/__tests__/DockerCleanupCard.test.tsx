@@ -78,7 +78,10 @@ const SUCCESS_RUN = {
   imagesDeleted: 3,
   bytesReclaimed: 5 * 1024 * 1024,
   cacheBytesReclaimed: 2 * 1024 * 1024,
-  minAgeHours: 168,
+  // 72, deliberately NOT the policy's 168: minAgeHours is stored PER RUN so a
+  // run stays interpretable after the policy changes, and a fixture sharing the
+  // policy's number cannot tell a per-row read from a live-policy read.
+  minAgeHours: 72,
 }
 
 const FAILED_RUN = {
@@ -89,7 +92,7 @@ const FAILED_RUN = {
   imagesDeleted: 0,
   bytesReclaimed: 0,
   cacheBytesReclaimed: 0,
-  minAgeHours: 168,
+  minAgeHours: 72,
   errorMessage: 'Cannot connect to the Docker daemon',
 }
 
@@ -131,8 +134,10 @@ describe('DockerCleanupCard', () => {
       // bytesReclaimed would under-report every run that cleared cache.
       expect(screen.getByText('7.00 MB')).toBeInTheDocument()
       expect(screen.getByText('3')).toBeInTheDocument()
-      // The floor the run actually applied, stored per row, not the live policy.
-      expect(screen.getByText('168 h')).toBeInTheDocument()
+      // The floor the run actually applied, stored per row, not the live policy,
+      // which this fixture sets to 168.
+      expect(screen.getByText('72 h')).toBeInTheDocument()
+      expect(screen.queryByText('168 h')).toBeNull()
     })
 
     it('shows why a failed run failed', async () => {
