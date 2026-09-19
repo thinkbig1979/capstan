@@ -84,6 +84,11 @@ func TestResourcesHandler_NoDocker_RefusesEveryDockerRoute(t *testing.T) {
 		{"pruneBuildCache", http.MethodPost, "/api/resources/build-cache/prune"},
 		{"checkUpdatesRefresh", http.MethodGet, "/api/resources/updates?refresh=true"},
 		{"updateContainer", http.MethodPost, "/api/resources/containers/abc/update"},
+		// agent-os-fn7x.3. Added here as well as in docker_cleanup_test.go, so
+		// this test's claim ("every Docker route") stays true rather than
+		// becoming a route list that silently stopped keeping up.
+		{"previewCleanup", http.MethodPost, "/api/resources/cleanup/preview"},
+		{"runCleanup", http.MethodPost, "/api/resources/cleanup/run"},
 	}
 
 	for _, rt := range routes {
