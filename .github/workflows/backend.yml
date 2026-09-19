@@ -166,6 +166,39 @@ jobs:
           go build -C tools/geterrors -o "$RUNNER_TEMP/geterrors" ./cmd/geterrors
           go vet -vettool="$RUNNER_TEMP/geterrors" ./...
 
+      # The frontend's wire types are generated from the Go structs that serve
+      # them (backend/tygo.yaml), so a Go field that changes without its
+      # TypeScript is a contract break the browser discovers at runtime. This
+      # step regenerates and fails if the result differs from what is committed.
+      #
+      # It lives HERE, in a required job, rather than in a job of its own: a new
+      # job would not be a required check, so it would report the drift without
+      # ever blocking it. frontend.yml cannot host it either — that job sets up
+      # no Go toolchain.
+      #
+      # `git -C ..` is load-bearing. working-directory puts this step in
+      # backend/, and a repo-root pathspec evaluated from there is an "ambiguous
+      # argument" — git exits 128, which is not 0, so the step would appear to
+      # pass its own failure. -C returns to the repo root so the pathspec
+      # resolves and a real difference exits 1.
+      #
+      # `add --intent-to-add` is load-bearing for a different reason, and it was
+      # found by running this step against a tree that did not have the
+      # generated files: `git diff` does not see UNTRACKED files, so if the two
+      # outputs are missing from the repo entirely, tygo recreates them and the
+      # diff is empty — the step exits 0 and reports green over a contract that
+      # is not committed at all. --intent-to-add registers them so a
+      # never-committed file reads as a difference rather than as absence.
+      #
+      # go run pkg@version needs no go.mod entry and there is no backend/vendor,
+      # so this pins tygo without touching the module graph.
+      - name: Generated wire types are current
+        working-directory: backend
+        run: |
+          go run github.com/gzuidhof/tygo@v0.2.21 generate
+          git -C .. add --intent-to-add frontend/src/types/generated.ts frontend/src/types/generated-truth.ts
+          git -C .. diff --exit-code -- frontend/src/types/generated.ts frontend/src/types/generated-truth.ts
+
   # This codebase is the profile the race detector is built for:
   # goroutine-per-connection WebSocket handlers, background tickers, a session
   # map behind a mutex, a connection manager behind an RWMutex.

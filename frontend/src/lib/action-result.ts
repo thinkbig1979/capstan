@@ -1,6 +1,24 @@
 import { toast } from 'sonner'
 
+import type { Outcome } from '@/types'
+
 type ActionOutcome = 'success' | 'no_change' | 'partial' | 'failed'
+
+/**
+ * ActionOutcome is spelled out rather than aliased to Outcome so the switch in
+ * toastForResult stays exhaustive and readable at the point of use. The cost of
+ * spelling it out is that it can drift from the Go constants it mirrors, so the
+ * two unions are proved equal at compile time instead.
+ *
+ * Exact is bidirectional on purpose: a one-way `extends` would stay green if the
+ * backend GREW a new outcome, which is exactly the case that must fail — a new
+ * Go constant reaching a switch that has no arm for it is the bug this guards.
+ * Rename or add a truth.Outcome constant and this line is a TS2344 naming both
+ * unions, not a silent widening discovered in a browser.
+ */
+type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+type AssertTrue<T extends true> = T
+export type ActionOutcomeMatchesWire = AssertTrue<Exact<ActionOutcome, Outcome>>
 
 export interface ActionResult<D = Record<string, unknown>> {
   outcome: ActionOutcome

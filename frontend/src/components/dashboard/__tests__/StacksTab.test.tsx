@@ -104,6 +104,10 @@ vi.mock('@/components/dashboard/BackupToggle', async () => {
 })
 
 const stack = (over: Partial<Stack> = {}): Stack => ({
+  envFile: '',
+  gitBranch: '',
+  gitCommit: '',
+  containers: [],
   id: 's1',
   directory: '/srv/stacks/web',
   composeFile: 'compose.yml',
@@ -187,7 +191,11 @@ describe('StacksTab — the table', () => {
   })
 
   it('renders a row per stack with its name, and no compose filename', () => {
-    renderTab({ stacks: [stack({ projectName: 'web', composeFile: 'docker-compose.yml' })] })
+    renderTab({ stacks: [stack({
+      envFile: '',
+      gitBranch: '',
+      gitCommit: '',
+      containers: [], projectName: 'web', composeFile: 'docker-compose.yml' })] })
 
     expect(screen.getByText('web')).toBeInTheDocument()
     expect(screen.queryByText('docker-compose.yml')).not.toBeInTheDocument()

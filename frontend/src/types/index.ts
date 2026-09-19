@@ -1,15 +1,202 @@
-export interface User {
-  id: string
-  username: string
-  createdAt?: string
+/**
+ * The frontend's type surface.
+ *
+ * Wire shapes are NOT declared here. They are generated from the Go structs
+ * that serve them — see backend/tygo.yaml — and re-exported below, so a
+ * backend field that changes without its TypeScript is a failing required
+ * check rather than a runtime surprise in the browser. Do not hand-edit
+ * ./generated.ts or ./generated-truth.ts; regenerate them.
+ *
+ * Three things still live here by hand, each for a reason that is not going
+ * away:
+ *
+ *  1. LITERAL UNIONS. Go has no enum type, so a field the backend constrains
+ *     to a fixed set of strings generates as a bare `string`. Those fields are
+ *     re-narrowed below with `Omit<Wire, 'f'> & { f: Union }`. The generated
+ *     interface still owns the FIELD SET and every other field's type, so an
+ *     added or renamed Go field still flows through and still trips the gate;
+ *     only the union is hand-maintained. Each one says which Go field it
+ *     narrows. Do not "simplify" them away — nothing generates them.
+ *
+ *  2. SHAPES WITH NO SINGLE GO STRUCT BEHIND THEM. Responses composed from a
+ *     `gin.H` literal, discriminated unions with a raw-map arm, and shapes
+ *     that exist only in the browser.
+ *
+ *  3. REQUEST shapes. tygo generates responses; query and body types are the
+ *     caller's contract, not the server's.
+ */
+
+import type {
+  ActionResult as WireActionResult,
+  Outcome,
+} from './generated-truth'
+import type {
+  ActionLog,
+  AppError,
+  AutoUpdatePolicy as WireAutoUpdatePolicy,
+  BackupPolicy as WireBackupPolicy,
+  BackupRun as WireBackupRun,
+  BackupRunItem as WireBackupRunItem,
+  BackupSnapshot,
+  CachedUpdate,
+  Container as WireContainer,
+  ContainerMetrics,
+  ContainerUpdateInfo,
+  DashboardContainerInfo as WireDashboardContainerInfo,
+  DiffResult,
+  Directory,
+  DockerCleanupRun as WireDockerCleanupRun,
+  DockerImage,
+  DockerNetwork,
+  DockerVolume,
+  GitCommit,
+  GitStatusResult,
+  LintResult as WireLintResult,
+  LogResult,
+  PortBinding,
+  Session,
+  Stack as WireStack,
+  StackEvent,
+  UpdateHistoryEntry as WireUpdateHistoryEntry,
+  UpdateResult,
+  UpdateSettingsResponse,
+  User,
+} from './generated'
+
+/* ------------------------------------------------------------------ *
+ * Generated wire types, re-exported unchanged.
+ * ------------------------------------------------------------------ */
+
+export type {
+  ActionLog,
+  AppError,
+  BackupSnapshot,
+  CachedUpdate,
+  ContainerMetrics,
+  ContainerUpdateInfo,
+  DiffResult,
+  Directory,
+  DockerImage,
+  DockerNetwork,
+  DockerVolume,
+  GitCommit,
+  GitStatusResult,
+  LogResult,
+  Outcome,
+  PortBinding,
+  Session,
+  StackEvent,
+  UpdateResult,
+  User,
+  WireActionResult,
+}
+
+/* ------------------------------------------------------------------ *
+ * Generated wire types, re-narrowed where Go cannot express the union.
+ * ------------------------------------------------------------------ */
+
+type ContainerState = 'created' | 'running' | 'paused' | 'restarting' | 'removing' | 'exited' | 'dead'
+
+export type StackStatus = 'running' | 'stopped' | 'partial' | 'unknown' | 'error'
+
+/**
+ * Re-points a generated array field at this file's narrowed element type while
+ * keeping whatever nullability the GENERATED field declares.
+ *
+ * Omit is not enough on its own for a field whose element type is itself
+ * narrowed here: `Omit<WireStack, 'status'>` leaves `containers` typed as the
+ * GENERATED Container (`state: string`), which is not assignable to this
+ * file's Container (`state: ContainerState`), and every consumer passing a
+ * stack's containers to a Container-typed parameter fails.
+ *
+ * Extract<Wire, null> is how the nullability stays generated rather than
+ * hand-copied: it is `null` when the Go field carries tstype:"T[] | null" and
+ * `never` — which unions away to nothing — when it does not. Drop the Go tag
+ * and this type follows, with no edit here.
+ */
+type NarrowedArray<Wire, Element> = Element[] | Extract<Wire, null>
+
+// narrows models.Stack.Status, a Go string, and re-points Containers at the
+// narrowed Container above
+export type Stack = Omit<WireStack, 'status' | 'containers'> & {
+  status: StackStatus
+  containers: NarrowedArray<WireStack['containers'], Container>
+}
+
+// narrows models.Container.State, a Go string
+export type Container = Omit<WireContainer, 'state'> & { state: ContainerState }
+
+// narrows models.DashboardContainerInfo.State, a Go string
+export type DashboardContainerInfo = Omit<WireDashboardContainerInfo, 'state'> & {
+  state: ContainerState
+}
+
+// narrows models.LintResult.Level, a Go string
+export type LintResult = Omit<WireLintResult, 'level'> & {
+  level: 'error' | 'warning' | 'info'
+}
+
+// narrows models.AutoUpdatePolicy.TargetType, a Go string
+export type AutoUpdatePolicy = Omit<WireAutoUpdatePolicy, 'targetType'> & {
+  targetType: 'container' | 'stack'
+}
+
+// narrows models.BackupPolicy.TargetType and .StopPolicy, both Go strings
+export type BackupPolicy = Omit<WireBackupPolicy, 'targetType' | 'stopPolicy'> & {
+  targetType: 'stack'
+  stopPolicy: 'stop' | 'hot'
+}
+
+// narrows models.BackupRun.Kind, .Trigger and .Status, all Go strings.
+// FinishedAt and BytesAdded are Go pointers WITH omitempty, so a nil omits the
+// key entirely — the generated `?:` is right and the `| null` this type used to
+// carry described a wire that cannot occur.
+export type BackupRun = Omit<WireBackupRun, 'kind' | 'trigger' | 'status'> & {
+  kind: 'backup' | 'sync' | 'restore' | 'dr_restore' | 'prune' | 'verify'
+  trigger: 'manual' | 'scheduled'
+  status: 'running' | 'success' | 'partial' | 'failed' | 'interrupted'
+}
+
+// narrows models.BackupRunItem.Status, a Go string
+export type BackupRunItem = Omit<WireBackupRunItem, 'status'> & {
+  status: 'skipped' | 'success' | 'failed'
+}
+
+// narrows models.UpdateHistoryEntry.Status and .Trigger, both Go strings
+export type UpdateHistoryEntry = Omit<WireUpdateHistoryEntry, 'status' | 'trigger'> & {
+  status: 'pending' | 'success' | 'failed' | 'paused'
+  trigger: 'manual' | 'auto'
+}
+
+// narrows models.DockerCleanupRun.Trigger and .Status, both Go strings
+export type DockerCleanupRun = Omit<WireDockerCleanupRun, 'trigger' | 'status'> & {
+  trigger: 'scheduled' | 'manual'
+  status: 'success' | 'failed'
+}
+
+// narrows models.UpdateSettingsResponse.ApplyMode, a Go string.
+// LastScanAt and LastScanError are Go strings WITH omitempty: an empty value
+// omits the key, so they arrive absent and never as null.
+export type UpdateSettings = Omit<UpdateSettingsResponse, 'applyMode'> & {
+  applyMode: 'immediate' | 'scheduled'
+}
+
+/* ------------------------------------------------------------------ *
+ * Shapes with no single Go struct behind them, and request types.
+ * ------------------------------------------------------------------ */
+
+interface DiskUsageBreakdown {
+  images: number
+  containers: number
+  volumes: number
+  buildCache: number
+  total: number
 }
 
 export interface AuthResponse {
   token: string
   user: User
 }
-
-type ContainerState = 'created' | 'running' | 'paused' | 'restarting' | 'removing' | 'exited' | 'dead'
 
 export interface ConfiguredDir {
   path: string
@@ -39,56 +226,6 @@ export interface DirectoryCredentialStatus {
   status: DirectoryCredentialStatusValue
 }
 
-export type StackStatus = 'running' | 'stopped' | 'partial' | 'unknown' | 'error'
-
-export interface Container {
-  id: string
-  name: string
-  image: string
-  state: ContainerState
-  status: string
-  ports: PortBinding[]
-  health?: string
-}
-
-interface PortBinding {
-  host: string
-  container: string
-  protocol: string
-}
-
-export interface DashboardContainerInfo {
-  id: string
-  name: string
-  image: string
-  state: ContainerState
-  status: string
-  health: string
-  ports: PortBinding[]
-  stackId: string
-  /**
-   * Which of the two causes of an empty `stackId` this row hit: the compose
-   * project is genuinely not a stack (false), or the stacks table could not be
-   * READ (true). Set by resolveDashboardStackAssociation in the backend
-   * (services/docker.go). isStandaloneContainer routes on it -- see agent-os-g482.
-   */
-  stackLookupFailed: boolean
-  projectName: string
-  restartCount: number
-  created: string
-  startedAt: string
-  diskSize: number
-  imageSize: number
-}
-
-interface DiskUsageBreakdown {
-  images: number
-  containers: number
-  volumes: number
-  buildCache: number
-  total: number
-}
-
 export interface DashboardStats {
   totalStacks: number
   runningStacks: number
@@ -100,54 +237,6 @@ export interface DashboardStats {
   containers: DashboardContainerInfo[]
 }
 
-export interface Stack {
-  id: string
-  directory: string
-  composeFile: string
-  envFile?: string
-  projectName: string
-  status: StackStatus
-  isGitRepo: boolean
-  gitBranch?: string
-  gitCommit?: string
-  gitDirty: boolean
-  gitAhead: number
-  gitBehind: number
-  containers?: Container[]
-}
-
-/**
- * GET /api/v1/git, repo branch.
- *
- * `isRepo` is NOT named `isGitRepo`, and since agent-os-yy00 the difference is
- * no longer that one is a weaker predicate. They now agree on the QUESTION
- * "is this directory served by a git repository": the scanner's
- * `resolveGitState` walks up for a parent repository and detects a bare one, so
- * a stack nested inside a monorepo has `isGitRepo: true`, and gating a git
- * affordance on `Stack.isGitRepo` no longer hides a working panel.
- *
- * They do NOT agree on the branch STRING, and that divergence is by design and
- * predates this change. The endpoint runs `rev-parse --abbrev-ref HEAD`
- * (services/git.go); the scanner parses HEAD itself. MEASURED on a real
- * detached checkout: git prints the literal `HEAD`, while `Stack.gitBranch`
- * carries `detached@<short sha>` — deliberately, so an operator can tell a
- * detached checkout from a scan that failed (agent-os-jieh). An unborn HEAD
- * diverges too: the scanner reports the symref's branch name while this
- * endpoint answers `hasCommits: false` (backend/internal/handlers/git.go:178).
- * Do not treat the two branch fields as interchangeable.
- *
- * What still differs is WHEN each was computed. `Stack.isGitRepo` above is the
- * CACHED form: the scanner writes it, so it only changes on a scan and a
- * `git init` inside an already-registered stack stays invisible until the next
- * one. `isRepo` here is the LIVE form, asked of git on the request. The names
- * stay distinct for that reason, so a `grep isGitRepo` still enumerates exactly
- * the sites reading a cached value — which is what a staleness question needs.
- * Do not rename for consistency.
- *
- * The stat-walk approximates git rather than being it: it does not stop at a
- * filesystem boundary, which git does by default. `resolveGitState` in
- * backend/internal/services/scanner.go says why that divergence is accepted.
- */
 export interface GitRepoStatus {
   isRepo: true
   hasCommits: true
@@ -164,59 +253,16 @@ export interface GitRepoStatus {
   remote: string
 }
 
-/**
- * GET /api/v1/git, non-repo branch: a 200, because "this directory is not a git
- * repository" is a normal answer and not a client error (agent-os-x40a).
- *
- * The repo fields are ABSENT rather than null or zero-valued. A `branch: ''`
- * would be indistinguishable from a failed read and would invite callers to
- * render it; absence plus the union below makes reading one a compile error.
- *
- * A directory that does not EXIST is a different condition and still an error
- * (404 STACK_DIR_MISSING) — it never arrives here.
- */
 export interface GitNotRepoStatus {
   isRepo: false
 }
 
-/**
- * GET /api/v1/git, empty-repo branch: a `git init`'d directory with no commits
- * yet. Also a 200, for the same reason (agent-os-4a4a).
- *
- * `isRepo` is TRUE here, and that is the whole point of the second field. An
- * empty repository IS a repository, so answering `isRepo: false` would tell the
- * UI there is no git where there is some. What is not true is the promise
- * `isRepo: true` used to carry on its own — that a branch, a commit and an
- * ahead/behind count are readable — which is why the split is a separate field
- * rather than an overload of the first.
- *
- * Every repo-only field is ABSENT, not zero-valued: `ahead: 0` would mean both
- * "up to date" and "no commits exist", the conflation agent-os-x40a rejected
- * when it chose absent-over-null on this endpoint. The union below turns a read
- * of one into a compile error instead of an `undefined` in the DOM.
- */
 export interface GitEmptyRepoStatus {
   isRepo: true
   hasCommits: false
 }
 
 export type GitStatus = GitRepoStatus | GitEmptyRepoStatus | GitNotRepoStatus
-
-export interface GitCommit {
-  hash: string
-  short: string
-  author: string
-  email: string
-  message: string
-  date: string
-}
-
-export interface LintResult {
-  level: 'error' | 'warning' | 'info'
-  line?: number
-  message: string
-  rule: string
-}
 
 export interface EnvEntry {
   key: string
@@ -226,32 +272,6 @@ export interface EnvEntry {
   comment?: boolean
 }
 
-/**
- * GET /api/v1/stacks/:id/env, file-present branch.
- *
- * `raw` is absent and `locked` is true when the request carried no live unlock
- * token: the backend withholds every secret value in that state, so a locked
- * payload must never be saved back — it would persist the blanks
- * (agent-os-7o5s).
- *
- * An absent `raw` does NOT by itself mean "withheld". The backend tags it
- * `json:"raw,omitempty"`, so a genuinely empty file omits it too. MEASURED
- * against the real handler, all four combinations:
- *
- *   empty  + unlocked -> {"hasEnvFile":true,"filename":".env","entries":[]}
- *   empty  + locked   -> {... ,"entries":[],"locked":true}
- *   secret + locked   -> {... ,"entries":[{...,"value":""}],"locked":true}
- *   secret + unlocked -> {... ,"raw":"API_KEY=s3cret\nTZ=UTC\n"}
- *
- * So `locked` IS the discriminator, and it is the only one: read `locked`,
- * never the absence of `raw`. `locked !== true` with no `raw` means the file
- * is genuinely empty; `locked === true` means the server withheld it. Writing
- * `if (!raw) { ...assume withheld... }` gets an empty file wrong.
- *
- * `entries` is always an array, never null, including for an empty file —
- * parseEnvFile mints `[]EnvEntry{}` rather than a nil slice precisely so this
- * type can be non-nullable (agent-os-bt5y).
- */
 export interface EnvFilePresent {
   hasEnvFile: true
   filename: string
@@ -260,24 +280,6 @@ export interface EnvFilePresent {
   locked?: boolean
 }
 
-/**
- * GET /api/v1/stacks/:id/env, no-file branch: a 200, because most stacks have
- * no env file and that is ordinary configuration rather than a client error
- * (agent-os-bt5y). A 404 here painted a red entry in the browser DevTools
- * console every time the Editor tab was opened on such a stack; the status is
- * what produces that line, so demoting the server log level (agent-os-hjmf)
- * could not reach it.
- *
- * `filename` and `entries` are ABSENT rather than empty, for the reason
- * agent-os-x40a gave on GET /api/v1/git: a `filename: ''` with `entries: []`
- * is indistinguishable from an empty file that really exists. The union below
- * turns a read of either into a compile error.
- *
- * A stack whose CONFIGURED env file has vanished from disk is a different
- * state and still an error (404 NOT_FOUND, "Env file not found on disk") — it
- * never arrives here. So is a PUT for a stack with no env file: that write
- * cannot be fulfilled and keeps its 404.
- */
 export interface EnvFileAbsent {
   hasEnvFile: false
 }
@@ -290,67 +292,12 @@ export interface CommandResult {
   duration: number
 }
 
-/**
- * The shape of `error.response.data` — the raw HTTP response BODY the
- * backend serializes for an AppError (models/errors.go:44-49): `code`/
- * `message`/`details` only. There is no `error` field on this body; the
- * backend never sends one, so a consumer reading `.error` off it was
- * permanently dead code (agent-os-m2x). This is the ONLY thing this type
- * models — see api.ts:87,94.
- *
- * It does NOT model the value api.ts's response interceptor ultimately
- * rejects with, which is a different, untyped object:
- *   - on an HTTP error response: this body flattened with `status` injected
- *     (api.ts:117) — still no `.error`.
- *   - on a network/timeout failure with no HTTP response at all: a
- *     synthesized `{ error: 'Unknown error', code, message }` (api.ts:118),
- *     where `.error` IS real. error-handler.ts's `data?.error` arm exists
- *     for that path (and for the older bare `gin.H{"error":...}` handlers),
- *     not for this type.
- */
 export interface ApiError {
   code: string
   message: string
   details?: Record<string, unknown>
 }
 
-export interface DockerImage {
-  id: string
-  repoTags: string[]
-  size: number
-  created: number
-  containers: number
-}
-
-export interface DockerVolume {
-  name: string
-  driver: string
-  mountpoint: string
-  size: number
-  sizeKnown: boolean
-  inUse: boolean
-  created: string
-  stack: string
-}
-
-export interface DockerNetwork {
-  id: string
-  name: string
-  driver: string
-  scope: string
-  internal: boolean
-  containers: number
-  labels: string[]
-  created: string
-  stack: string
-}
-
-/**
- * GET /resources/build-cache. Mirrors handlers.BuildCacheEntry — the backend
- * declares its own response type rather than serializing the Docker SDK struct,
- * so these are lowerCamelCase like the rest of the API. `parents` is omitted
- * when empty (agent-os-iuby).
- */
 export interface BuildCacheEntry {
   id: string
   type: string
@@ -364,94 +311,11 @@ export interface BuildCacheEntry {
   parents?: string[]
 }
 
-export interface ContainerUpdateInfo {
-  containerId: string
-  containerName: string
-  image: string
-  imageRef: string
-  state: string
-  stackId: string
-  projectName: string
-  serviceName: string
-  isCompose: boolean
-}
-
-export interface CachedUpdate {
-  id: string
-  containerId: string
-  containerName: string
-  image: string
-  imageRef: string
-  state: string
-  stackId?: string
-  projectName?: string
-  serviceName?: string
-  isCompose: boolean
-  localDigest: string
-  remoteDigest: string
-  scannedAt: string
-}
-
-export interface UpdateHistoryEntry {
-  id: string
-  containerId: string
-  containerName: string
-  stackId?: string
-  stackName?: string
-  image: string
-  oldDigest?: string
-  newDigest?: string
-  oldImageRef?: string
-  newImageRef?: string
-  status: 'pending' | 'success' | 'failed' | 'paused'
-  trigger: 'manual' | 'auto'
-  startedAt: string
-  completedAt?: string
-  durationMs?: number
-  errorMessage?: string
-}
-
-export interface AutoUpdatePolicy {
-  id: string
-  targetType: 'container' | 'stack'
-  targetId: string
-  enabled: boolean
-  consecutiveFailures: number
-  paused: boolean
-  createdAt: string
-  updatedAt: string
-}
-
-/** How long each history table is kept, in days. `minRetentionDays` is the
- *  server-enforced floor — a prune is irreversible, so the API rejects less. */
 export interface RetentionSettings {
   retentionDays: number
   updateHistoryRetentionDays: number
   backupHistoryRetentionDays: number
   minRetentionDays: number
-}
-
-export interface UpdateSettings {
-  scanIntervalMinutes: number
-  lastScanAt: string | null
-  lastScanError: string | null
-  globalAutoUpdate: boolean
-  autoUpdateStats: {
-    enabledContainers: number
-    updatesLast7Days: number
-    updatesLast30Days: number
-  }
-  /** Whether detected updates apply as soon as they are found, or on a schedule. */
-  applyMode: 'immediate' | 'scheduled'
-  /** "HH:MM" in server local time. */
-  applyTime: string
-  /** Go weekday ints, 0 = Sunday. Never null. */
-  applyDays: number[]
-  /** RFC3339. Omitted while no scheduled apply is pending. */
-  nextApplyAt?: string
-  /** The server's own zone, reported for display. There is no timezone setting. */
-  serverTimezone: string
-  serverTimeOffset: string
 }
 
 export interface UpdateHistoryFilters {
@@ -465,44 +329,6 @@ export interface UpdateHistoryFilters {
   to?: string
 }
 
-// ────────────────────────────────────────────────
-// Backup types
-// ────────────────────────────────────────────────
-
-export interface BackupPolicy {
-  id: string
-  targetType: 'stack'
-  targetId: string
-  enabled: boolean
-  stopPolicy: 'stop' | 'hot'
-  createdAt: string
-  updatedAt: string
-}
-
-export interface BackupRun {
-  id: string
-  kind: 'backup' | 'sync' | 'restore' | 'dr_restore' | 'prune' | 'verify'
-  trigger: 'manual' | 'scheduled'
-  // 'interrupted' (agent-os-pid): a run left 'running' by a crash or a
-  // restore from a mid-run snapshot. Distinct from 'failed' -- it never
-  // reported a real outcome and may have succeeded on the original instance.
-  status: 'running' | 'success' | 'partial' | 'failed' | 'interrupted'
-  startedAt: string
-  finishedAt?: string | null
-  stacksTotal: number
-  stacksOk: number
-  stacksFailed: number
-  bytesAdded?: number | null
-  errorMessage?: string
-}
-
-/**
- * Query shape for GET /backups/history, mirroring the handler's own parser
- * (backend/internal/handlers/backup.go, getHistory). `page` and `limit` are
- * required here because every caller paginates; the server clamps `limit` to
- * 100 and falls back to its own defaults on an unparseable value rather than
- * erroring. `from`/`to` are RFC3339.
- */
 export interface BackupHistoryFilters {
   page: number
   limit: number
@@ -513,39 +339,12 @@ export interface BackupHistoryFilters {
   to?: string
 }
 
-/**
- * GET /backups/history. `runs` keeps its original name and meaning -- the
- * pagination fields were added alongside it -- and the handler guarantees an
- * array, never null, so no `?? []` defence is needed at the call sites.
- * `totalPages` is 0 when `total` is 0.
- */
 export interface BackupHistoryResponse {
   runs: BackupRun[]
   total: number
   page: number
   limit: number
   totalPages: number
-}
-
-export interface BackupRunItem {
-  id: string
-  runId: string
-  stackId: string
-  status: 'skipped' | 'success' | 'failed'
-  snapshotId?: string
-  stopApplied: boolean
-  durationMs: number
-  errorMessage?: string
-}
-
-export interface BackupSnapshot {
-  id: string
-  shortId: string
-  time: string
-  hostname: string
-  tags: string[]
-  paths: string[]
-  sizeBytes?: number
 }
 
 export interface BackupSettings {
@@ -644,24 +443,17 @@ export interface BackupStatus {
   schedulerRunning: boolean
 }
 
-/** Response shape for operation endpoints that stream output over WS */
 export interface BackupOperationResult {
   runId: string
   wsUrl: string
 }
 
-/** Build identity of the running backend, from GET /api/v1/version. */
 export interface VersionInfo {
   version: string
   commit: string
   buildDate: string
 }
 
-/** Scheduled Docker cleanup policy, from GET/PUT /resources/cleanup/policy.
- *  `minAllowedAgeHours` and `minAllowedIntervalHours` are the server-enforced
- *  floors, sent so the form can refuse a value before submitting it rather than
- *  discovering the 400 on save. A prune is irreversible, so the API rejects
- *  anything below them instead of quietly clamping. */
 export interface DockerCleanupPolicy {
   enabled: boolean
   minAgeHours: number
@@ -670,10 +462,6 @@ export interface DockerCleanupPolicy {
   minAllowedIntervalHours: number
 }
 
-/** One dangling image a cleanup run would remove. `repository` is OMITTED (not
- *  empty) for the fully-untagged `<none>:<none>` form — the common case for
- *  locally built superseded images — so every reader needs an id fallback or it
- *  renders a blank row. */
 export interface DockerCleanupCandidate {
   id: string
   repository?: string
@@ -682,42 +470,14 @@ export interface DockerCleanupCandidate {
   created: number
 }
 
-/** What a cleanup run WOULD remove, from POST /resources/cleanup/preview.
- *  Producing it removes nothing. */
 export interface DockerCleanupPreview {
   candidates: DockerCleanupCandidate[]
   reclaimableBytes: number
   minAgeHours: number
 }
 
-/** One recorded execution of the Docker cleanup job, from
- *  GET /resources/cleanup/history.
- *
- *  `finishedAt` and `errorMessage` are OMITTED, never null: models.go:411 makes
- *  finishedAt a *string with omitempty and :416 gives errorMessage a plain Go
- *  string with omitempty. A reader that interpolates either into a template
- *  literal prints "undefined" on the majority of rows.
- *
- *  `minAgeHours` is the floor THAT run applied, stored per row, so a run stays
- *  interpretable after the policy changes. */
-export interface DockerCleanupRun {
-  id: string
-  trigger: 'scheduled' | 'manual'
-  status: 'success' | 'failed'
-  /** RFC3339. */
-  startedAt: string
-  finishedAt?: string
-  imagesDeleted: number
-  bytesReclaimed: number
-  cacheBytesReclaimed: number
-  minAgeHours: number
-  errorMessage?: string
-}
-
-/** GET /resources/cleanup/history. `runs` is never null — the handler coerces a
- *  nil slice to [] (docker_cleanup.go:367-369). `limit` is the limit the server
- *  actually applied after clamping to [1,100], not the one that was asked for. */
 export interface DockerCleanupHistory {
   runs: DockerCleanupRun[]
   limit: number
 }
+

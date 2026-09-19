@@ -68,7 +68,8 @@ const answersSlowly = <T,>(value: T, afterMs: number) => () =>
 // ever comes back. Not a rejection -- a promise that never settles.
 const neverAnswers = () => new Promise<never>(() => {})
 
-const testUser: User = { id: 'u1', username: 'someone', createdAt: '2026-01-01T00:00:00Z' }
+const testUser: User = {
+  updatedAt: '', id: 'u1', username: 'someone', createdAt: '2026-01-01T00:00:00Z' }
 
 describe('App boot probes are bounded per attempt when the backend accepts but never answers', () => {
   beforeEach(() => {

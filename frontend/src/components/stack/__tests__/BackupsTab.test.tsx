@@ -64,6 +64,7 @@ function makeSnapshot(overrides: Partial<{
   shortId: string
   time: string
   tags: string[]
+  paths: string[]
   sizeBytes: number
 }> = {}) {
   return {
@@ -727,5 +728,67 @@ describe('BackupsTab — restore progress panel', () => {
       'This run already has 24 viewers. Close another viewer and reconnect. The restore continues on the server; check Recent runs for its result.',
     )
     expect(screen.queryByText('Restore failed')).not.toBeInTheDocument()
+  })
+})
+
+// agent-os-yino.1 — SEEN-FAILING-FIRST for the untagged-snapshot crash.
+//
+// BackupSnapshot.Tags and .Paths are copied straight out of restic's JSON by
+// ListSnapshots with no guard, and restic OMITS the "tags" key entirely for a
+// snapshot that carries none. A nil Go slice marshals to JSON null, so the
+// browser receives `"tags": null` — while the hand-written TypeScript declared
+// `tags: string[]`, which made `snapshot.tags.length` and `s.tags.join(' ')`
+// look total when they were not.
+//
+// Both arms below throw a TypeError on the pre-fix component. They are not a
+// test of the TYPE — `tsc` cannot see a fixture cast into place — but of the
+// runtime behaviour the type was wrong about.
+//
+// The two arms are separate because the two sites fail under different
+// conditions: the badge cell dereferences .tags on EVERY render of the row,
+// whereas the search accessors only run once a non-empty query exists
+// (useTextFilter returns early on a blank query), so a render-only test cannot
+// reach them.
+describe('BackupsTab — snapshots with no tags or paths (agent-os-yino.1)', () => {
+  it('renders an untagged snapshot instead of throwing', async () => {
+    // beforeEach already wires history, policies and the rest; only the
+    // snapshot list differs. listSnapshots resolves a bare ARRAY here, which is
+    // the shape the component consumes.
+    mockListSnapshots.mockResolvedValue([makeSnapshot({ tags: null as unknown as string[] })])
+
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    // The row renders, and the tag cell degrades to the em dash placeholder
+    // rather than taking .length of null.
+    expect(await screen.findByText('abc12345')).toBeInTheDocument()
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+  })
+
+  it('filters an untagged snapshot instead of throwing', async () => {
+    mockListSnapshots.mockResolvedValue([
+      makeSnapshot({
+        tags: null as unknown as string[],
+        paths: null as unknown as string[],
+      }),
+    ])
+
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+    expect(await screen.findByText('abc12345')).toBeInTheDocument()
+
+    // The query must MISS shortId, id and time. useTextFilter matches with
+    // accessors.some(), which short-circuits on the first truthy result, so a
+    // query matching shortId returns before the tags and paths accessors are
+    // ever evaluated — a test searching for 'abc12345' passes against the
+    // unguarded code and proves nothing. Verified: reverting only lines 48-49
+    // with that query left all 38 tests green.
+    fireEvent.change(screen.getByPlaceholderText('Filter snapshots…'), {
+      target: { value: 'zzz-matches-nothing' },
+    })
+
+    // Reaching the "no match" message means every accessor ran to completion,
+    // including the two that dereference null tags and paths.
+    expect(await screen.findByText('No snapshots match.')).toBeInTheDocument()
   })
 })

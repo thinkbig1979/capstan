@@ -15,6 +15,9 @@ import type { Stack } from '@/types'
  */
 
 const stack = (overrides: Partial<Stack> = {}): Stack => ({
+  envFile: '',
+  gitBranch: '',
+  gitCommit: '',
   id: 's1',
   directory: '/srv/stacks/web',
   composeFile: 'docker-compose.yaml',

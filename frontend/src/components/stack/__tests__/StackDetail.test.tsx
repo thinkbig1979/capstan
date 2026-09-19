@@ -92,6 +92,9 @@ import { StackDetail } from '../StackDetail'
 
 function stack(overrides: Partial<Stack> = {}): Stack {
   return {
+    envFile: '',
+    gitBranch: '',
+    gitCommit: '',
     id: 'stack-1',
     projectName: 'my-stack',
     directory: '/srv/stacks/my-stack',
@@ -217,7 +220,8 @@ describe('StackDetail — Overview detail grid', () => {
         composeFile: 'docker-compose.yaml',
         envFile: '.env',
         containers: [
-          { id: 'c1', name: 'web', image: 'nginx:1', state: 'running', status: 'Up', ports: [] },
+          {
+            health: '', id: 'c1', name: 'web', image: 'nginx:1', state: 'running', status: 'Up', ports: [] },
         ] as Stack['containers'],
       }),
     })
