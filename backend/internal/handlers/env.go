@@ -3,8 +3,6 @@ package handlers
 import (
 	"bufio"
 	"bytes"
-	"database/sql"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -75,19 +73,12 @@ func (h *EnvHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *EnvHandler) Get(c *gin.Context) {
 	id := c.Param("id")
 
-	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
-	// always returns either &stack or a non-nil err, never (nil, nil)).
+	// nil arm dropped, dead per GetStack's return shape (GetStack() in
+	// internal/database/stacks.go always returns either &stack or a non-nil
+	// err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.NewAppError(
-				http.StatusNotFound,
-				models.ErrStackNotFound,
-				"Stack not found",
-			))
-			return
-		}
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 
@@ -202,19 +193,12 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		return
 	}
 
-	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
-	// always returns either &stack or a non-nil err, never (nil, nil)).
+	// nil arm dropped, dead per GetStack's return shape (GetStack() in
+	// internal/database/stacks.go always returns either &stack or a non-nil
+	// err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.NewAppError(
-				http.StatusNotFound,
-				models.ErrStackNotFound,
-				"Stack not found",
-			))
-			return
-		}
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 
@@ -306,19 +290,12 @@ func (h *EnvHandler) Put(c *gin.Context) {
 func (h *EnvHandler) Create(c *gin.Context) {
 	id := c.Param("id")
 
-	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
-	// always returns either &stack or a non-nil err, never (nil, nil)).
+	// nil arm dropped, dead per GetStack's return shape (GetStack() in
+	// internal/database/stacks.go always returns either &stack or a non-nil
+	// err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.NewAppError(
-				http.StatusNotFound,
-				models.ErrStackNotFound,
-				"Stack not found",
-			))
-			return
-		}
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 

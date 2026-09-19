@@ -16,7 +16,7 @@ func (d *DB) GetSetting(key string) (string, error) {
 	query := `SELECT value FROM settings WHERE key = ?`
 	err := d.db.QueryRow(query, key).Scan(&value)
 	if err != nil {
-		return "", err
+		return "", notFound(err, "setting", key)
 	}
 	if d.encryptor != nil && sensitiveSettingKeys[key] && value != "" {
 		decrypted, err := d.encryptor.Decrypt(value)

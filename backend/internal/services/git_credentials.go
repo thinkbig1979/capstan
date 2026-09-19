@@ -1,7 +1,6 @@
 package services
 
 import (
-	"database/sql"
 	"errors"
 	"log/slog"
 	"os"
@@ -68,7 +67,7 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 	if s.db != nil {
 		cred, err := s.db.GetDirectoryCredentials(dirPath)
 		switch {
-		case errors.Is(err, sql.ErrNoRows):
+		case errors.Is(err, errdefs.ErrNotFound):
 			// No row for dirPath: this directory was never configured with a
 			// credential of its own, so inheriting the global one below is the
 			// intended behaviour.
@@ -121,14 +120,14 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 		// the per-directory read above, no dirPath applies here — this setting is
 		// global — so the log line names the setting instead of a path.
 		//
-		// sql.ErrNoRows is the healthy default state (no global credential ever
+		// errdefs.ErrNotFound is the healthy default state (no global credential ever
 		// configured) and must stay silent; only a genuinely unreadable stored
 		// value is worth an operator's attention (agent-os-2tt).
 		v, err := s.db.GetSetting("git_https_token")
 		switch {
 		case err == nil:
 			token = v
-		case errors.Is(err, sql.ErrNoRows):
+		case errors.Is(err, errdefs.ErrNotFound):
 			// No global credential configured at all — nothing to report.
 		case errors.Is(err, errdefs.ErrEncryptionUnavailable):
 			// A row exists but there is no key to decrypt it with. Falling
@@ -169,7 +168,7 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 		//
 		// NOT TESTED BY A FAULT ROUTE INTO THIS BRANCH, because no such route
 		// exists: every branch of the token switch above that is neither nil nor
-		// sql.ErrNoRows has already returned "", "", and a database-level fault
+		// errdefs.ErrNotFound has already returned "", "", and a database-level fault
 		// would have hit that read first. Verified by reading the switch at
 		// :128-157, and OBSERVED: a `go test -overlay` mutant that swallows this
 		// default branch entirely leaves ./internal/services GREEN, 0 `--- FAIL`,
@@ -188,11 +187,11 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 		switch {
 		case err == nil:
 			user = storedUser
-		case errors.Is(err, sql.ErrNoRows):
+		case errors.Is(err, errdefs.ErrNotFound):
 			// No username was ever stored — the healthy default. The config/env
 			// value below, then defaultGitHTTPSUser, are the intended fallbacks
 			// and this must stay silent (agent-os-2tt, same reasoning as the
-			// token read's sql.ErrNoRows branch above).
+			// token read's errdefs.ErrNotFound branch above).
 		default:
 			// Same fail-closed shape as the two token branches above, for the
 			// same reason. The error is logged as "error", err following this

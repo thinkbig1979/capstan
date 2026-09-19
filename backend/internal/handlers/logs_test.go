@@ -24,7 +24,7 @@ import (
 // faulted database, not just a missing row — to the same silent 404, so a
 // database outage never logged and never even reported the correct status
 // code. faultyDB (faulty_db_test.go) forces GetStack to fail with "sql:
-// database is closed", never sql.ErrNoRows.
+// database is closed", never errdefs.ErrNotFound.
 //
 // Two-sided per the brief: TestLogsHandler_GetLogs_NotFoundStaysSilent below
 // is the control proving the ordinary 404 path is unchanged and still silent.

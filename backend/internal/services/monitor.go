@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -16,6 +15,8 @@ import (
 	"github.com/docker/docker/client"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 type MonitorService struct {
@@ -240,7 +241,7 @@ func unassociatedStackEvent(action, containerID string, ts time.Time) (models.St
 //
 // The two are now separated, and NEITHER drops the event:
 //
-//   - sql.ErrNoRows: not an error. Emit unassociated, log at DEBUG.
+//   - errdefs.ErrNotFound: not an error. Emit unassociated, log at DEBUG.
 //   - any other error: a real read fault. Emit unassociated as well, and log at
 //     ERROR. The container really did start or die; that fact does not depend on
 //     the database, and a database fault is the worst moment for the fleet to go
@@ -260,7 +261,7 @@ func (s *MonitorService) stackEventFor(action, containerID, projectName string, 
 		switch {
 		case err == nil:
 			stackID = stack.ID
-		case errors.Is(err, sql.ErrNoRows):
+		case errors.Is(err, errdefs.ErrNotFound):
 			slog.Debug("No stack row for compose project; emitting the container event without a stack association",
 				"project", projectName)
 			return unassociatedStackEvent(action, containerID, ts)

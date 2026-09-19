@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net"
@@ -13,6 +12,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 var PublicPaths = []string{
@@ -244,7 +245,7 @@ func AuthMiddleware(db *database.DB, jwtSecret string, authDisabled bool, authAl
 			// `|| session == nil` arm this replaces was dead — GetSession
 			// returns the bare Scan error and never (nil, nil)
 			// (database/users.go).
-			if errors.Is(err, sql.ErrNoRows) {
+			if errors.Is(err, errdefs.ErrNotFound) {
 				c.JSON(401, models.NewAppError(401, models.ErrSessionExpired, "Session not found or expired"))
 				c.Abort()
 				return

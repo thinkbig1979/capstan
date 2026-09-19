@@ -3,7 +3,6 @@ package services
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +21,8 @@ import (
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // containerUpdateAPI is the subset of *client.Client that UpdateContainer and
@@ -127,7 +128,7 @@ const (
 // stacks table could not be read".
 //
 // database.DB.GetStackByProjectName returns the bare Scan error
-// (database/stacks.go:127-138), so an absent row arrives as sql.ErrNoRows.
+// (database/stacks.go:127-138), so an absent row arrives as errdefs.ErrNotFound.
 // Every caller here used to test only `err == nil`, which cannot tell that
 // apart from a closed or locked database, and so answered a DB fault with "not
 // a compose stack" (agent-os-g482 — the same softening as agent-os-l42o).
@@ -142,7 +143,7 @@ func lookupStackByProject(db DashboardDB, projectName string) (*models.Stack, er
 	}
 	stack, err := db.GetStackByProjectName(projectName)
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, errdefs.ErrNotFound):
 		return nil, nil
 	case err != nil:
 		return nil, fmt.Errorf("reading stack for compose project %q: %w", projectName, err)

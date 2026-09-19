@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,6 +15,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // scanStartIsBenign reports whether a StartBackgroundScan error is one of the
@@ -214,7 +215,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 		case err == nil:
 			stackID = stack.ID
 			stackName = stack.ProjectName
-		case errors.Is(err, sql.ErrNoRows):
+		case errors.Is(err, errdefs.ErrNotFound):
 			// Not managed here; the history row carries empty stack fields.
 		default:
 			slog.Error("Failed to look up the stack for the update history row",
@@ -373,7 +374,7 @@ func (h *ResourcesHandler) updateContainerSync(c *gin.Context, id string) {
 		case err == nil:
 			stackID = stack.ID
 			stackName = stack.ProjectName
-		case errors.Is(err, sql.ErrNoRows):
+		case errors.Is(err, errdefs.ErrNotFound):
 			// Not managed here; the history row carries empty stack fields.
 		default:
 			slog.Error("Failed to look up the stack for the update history row",
@@ -535,7 +536,7 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 		// kept as a defensive no-op: database/stacks.go's GetStack always
 		// returns either &stack or a non-nil err, never both zero — nil arm
 		// dropped, dead per GetStack's return shape.
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, errdefs.ErrNotFound) {
 			handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
 			return
 		}
@@ -888,7 +889,7 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 	// STRICT) fails this read while the replace below succeeds. That is the
 	// fixture the regression uses.
 	existing, err := h.db.GetAutoUpdatePolicy(targetType, targetId)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && !errors.Is(err, errdefs.ErrNotFound) {
 		slog.Error("Failed to read the existing auto-update policy", "error", err)
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read the existing auto-update policy", err))
 		return
@@ -903,7 +904,7 @@ func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 		UpdatedAt:  now,
 	}
 
-	// err is nil or sql.ErrNoRows past the guard above, so a non-nil existing is
+	// err is nil or errdefs.ErrNotFound past the guard above, so a non-nil existing is
 	// exactly "the row was found". Spelled as the nil check alone rather than
 	// left as a conjunction of the nil-error and non-nil-row tests: a guarded
 	// site that still matches the class sweep would be a permanent false

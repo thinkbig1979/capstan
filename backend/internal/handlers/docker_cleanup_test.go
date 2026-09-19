@@ -352,7 +352,7 @@ func TestDockerCleanupPolicyGetReturnsDefaultsAndTheFloor(t *testing.T) {
 //
 // Two-sided on the same fixture: hiddenTableDB's own control
 // (TestHiddenTableDB_FaultsOneTableAndNotTheOthers) establishes that the fault
-// arrives as "no such table", NOT sql.ErrNoRows — which is precisely the branch
+// arrives as "no such table", NOT errdefs.ErrNotFound — which is precisely the branch
 // this handler has to discriminate.
 func TestDockerCleanupPolicyGetRefusesOnAReadFault(t *testing.T) {
 	db, hide, restore := hiddenTableDB(t, "settings")

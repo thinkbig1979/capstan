@@ -10,6 +10,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // hiddenSettingsDB returns a fully migrated ON-DISK database plus hide/restore
@@ -29,7 +31,7 @@ import (
 //     pins SetMaxOpenConns(1) for the in-memory DSN (database.go:109) and
 //     in-memory SQLite is per-connection, so a side connection would be a
 //     DIFFERENT database.
-//   - The fault arrives as "no such table: settings", NOT sql.ErrNoRows, which
+//   - The fault arrives as "no such table: settings", NOT errdefs.ErrNotFound, which
 //     is exactly the branch the fix must discriminate.
 //   - A per-key NULL row is NOT an alternative: settings is
 //     `key TEXT PRIMARY KEY, value TEXT NOT NULL` (migrations.go:165-168) and
@@ -81,8 +83,8 @@ func TestHiddenSettingsDB_FaultsOnlyTheSettingsRead(t *testing.T) {
 	v, err := db.GetSetting("scan_depth")
 	t.Logf("FAULTED   GetSetting      -> %q err=%v", v, err)
 	require.Error(t, err, "settings must be unreadable while hidden")
-	require.NotErrorIs(t, err, sql.ErrNoRows,
-		"the fault must NOT be sql.ErrNoRows -- that is the arm the fix keeps, not the arm it refuses on")
+	require.NotErrorIs(t, err, errdefs.ErrNotFound,
+		"the fault must NOT be errdefs.ErrNotFound -- that is the arm the fix keeps, not the arm it refuses on")
 
 	dirs, dirErr := db.ListDirectories()
 	t.Logf("FAULTED   ListDirectories -> %d rows err=%v", len(dirs), dirErr)
@@ -225,7 +227,7 @@ func TestPruneStaleStacks_TransientScanDepthFault_DeletesNothing(t *testing.T) {
 }
 
 // TestPruneStaleStacks_HealthyNoScanDepthRow_PrunesAtDepth1 is CONTROL 1: the
-// fresh-install case. An ABSENT scan_depth row arrives as sql.ErrNoRows and
+// fresh-install case. An ABSENT scan_depth row arrives as errdefs.ErrNotFound and
 // must keep today's behaviour byte-for-byte -- depth 1, and the depth-2 row
 // pruned -- with NO ERROR logged. Without this arm, "refuses on a fault" and
 // "never prunes anything" are indistinguishable.

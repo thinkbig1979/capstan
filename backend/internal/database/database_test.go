@@ -5,7 +5,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -15,6 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // newTestDB creates an in-memory DB with all migrations applied.
@@ -162,7 +163,7 @@ func TestGetBackupPolicy_ByTargetID(t *testing.T) {
 	assert.Equal(t, "bp-002", got.ID)
 
 	_, err = db.GetBackupPolicy("stacks~nonexistent")
-	assert.ErrorIs(t, err, sql.ErrNoRows)
+	assert.ErrorIs(t, err, errdefs.ErrNotFound)
 }
 
 func TestGetEnabledBackupPolicies(t *testing.T) {
@@ -652,7 +653,7 @@ func TestGetLatestRunItemForStack_NotFound(t *testing.T) {
 	db := newTestDB(t)
 
 	_, err := db.GetLatestRunItemForStack("stacks~nonexistent")
-	assert.ErrorIs(t, err, sql.ErrNoRows)
+	assert.ErrorIs(t, err, errdefs.ErrNotFound)
 }
 
 func TestFKCascade_DeleteRunRemovesItems(t *testing.T) {

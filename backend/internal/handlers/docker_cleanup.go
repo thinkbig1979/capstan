@@ -75,7 +75,7 @@ func newCleanupPolicyResponse(p services.DockerCleanupPolicy) cleanupPolicyRespo
 // rendering "disabled", because a policy page showing "off" during a database
 // fault is indistinguishable from an operator having turned it off, and the only
 // other symptom is the disk filling. ResolveDockerCleanupPolicy draws that line
-// (it maps sql.ErrNoRows, and only that, to the default); this handler just
+// (it maps errdefs.ErrNotFound, and only that, to the default); this handler just
 // honours it. Same rule as upsertAutoUpdatePolicy (updates.go:890-895,
 // agent-os-1gqn) and GetLogRetention (settings.go, agent-os-r1kc).
 func (h *ResourcesHandler) getCleanupPolicy(c *gin.Context) {

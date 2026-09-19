@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -189,4 +190,23 @@ func (d *DB) VacuumInto(dest string) error {
 		return fmt.Errorf("vacuum into %s: %w", dest, err)
 	}
 	return nil
+}
+
+// notFound converts the driver's absence signal into the backend-wide
+// errdefs.ErrNotFound identity, leaving every other error exactly as it was.
+//
+// This is the single place sql.ErrNoRows is discriminated (agent-os-ymyc).
+// Before it, each of the 13 single-row getters returned sql.ErrNoRows raw and
+// ~50 call sites re-derived "absent, not faulted" by hand; the ones that got it
+// backwards reported a database that could not answer as a resource that does
+// not exist. kind names the entity for the HTTP boundary's code and message;
+// key is kept for logs and is never written into a response body.
+//
+// A non-absence error is returned UNWRAPPED and unchanged, so callers that
+// inspect it (a decrypt failure, a closed database) see what they saw before.
+func notFound(err error, kind, key string) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return &errdefs.NotFoundError{Kind: kind, Key: key}
+	}
+	return err
 }

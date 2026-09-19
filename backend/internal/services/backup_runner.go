@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // RunKind names the six durable streamable operation types stored in the
@@ -303,7 +304,7 @@ func (reg *BackupRunnerRegistry) evictFinished() {
 		case <-dr.done:
 			dbRun, err := reg.db.GetBackupRunByID(id)
 			switch {
-			case errors.Is(err, sql.ErrNoRows):
+			case errors.Is(err, errdefs.ErrNotFound):
 				// The row is gone, so no future tick can ever read a
 				// FinishedAt for this entry and the ONLY way it leaves the
 				// registry is here. Keeping it would leak it forever AND
@@ -861,7 +862,7 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 	// Not in registry — fall back to DB.
 	dbRun, err := reg.db.GetBackupRunByID(runID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, errdefs.ErrNotFound) {
 			return nil, fmt.Errorf("run %q not found", runID)
 		}
 		return nil, fmt.Errorf("look up run %q: %w", runID, err)

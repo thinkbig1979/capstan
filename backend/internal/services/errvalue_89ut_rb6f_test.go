@@ -3,7 +3,6 @@ package services
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +13,8 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // agent-os-89ut and agent-os-rb6f are two sites of ONE class: a read that could
@@ -120,13 +121,13 @@ func TestEvictFinished_ReadFaultIsReportedAndTheEntryIsKept(t *testing.T) {
 	}
 }
 
-// TestEvictFinished_MissingRowIsEvictedAndReported. sql.ErrNoRows is NOT a read
+// TestEvictFinished_MissingRowIsEvictedAndReported. errdefs.ErrNotFound is NOT a read
 // fault, and it is not "not finished yet" either: no future tick can ever read
 // a FinishedAt for a row that is gone, so the entry is unreachable garbage.
 // Keeping it would leak it AND re-log every five minutes forever.
 func TestEvictFinished_MissingRowIsEvictedAndReported(t *testing.T) {
 	buf := evCaptureLogs(t)
-	reg, id := evRegistry(evRunStore{err: sql.ErrNoRows})
+	reg, id := evRegistry(evRunStore{err: errdefs.ErrNotFound})
 
 	reg.evictFinished()
 

@@ -1,12 +1,13 @@
 package services
 
 import (
-	"database/sql"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // agent-os-xzoe. httpsCredentials read git_https_user as
@@ -20,7 +21,7 @@ import (
 //
 // It CANNOT pin the new default branch by driving a fault into it, because no
 // such route exists. git_credentials.go:158 is reached only when the token read
-// at :127 returned nil or sql.ErrNoRows -- both other branches `return "", ""`
+// at :127 returned nil or errdefs.ErrNotFound -- both other branches `return "", ""`
 // -- and git_https_user is not in sensitiveSettingKeys (database/settings.go:9-12
 // = {git_https_token, restic_password}), so its only failure mode is a
 // database-level error, which the token read would have hit first. There is no
@@ -70,7 +71,7 @@ const (
 //
 // hiddenSettingsDB (scanner_dbfault_test.go, agent-os-obgr) is the one that
 // works: it hides only `settings`, leaving `directories` readable, so
-// GetDirectoryCredentials returns sql.ErrNoRows and execution falls through to
+// GetDirectoryCredentials returns errdefs.ErrNotFound and execution falls through to
 // the settings block that both reads live in.
 func TestHiddenSettingsDB_ReachesTheSettingsReadInHTTPSCredentials(t *testing.T) {
 	db, hide, restore := hiddenSettingsDB(t)
@@ -81,20 +82,20 @@ func TestHiddenSettingsDB_ReachesTheSettingsReadInHTTPSCredentials(t *testing.T)
 
 	_, credErr := db.GetDirectoryCredentials("/stacks/never-registered")
 	t.Logf("FAULTED   GetDirectoryCredentials -> err=%v", credErr)
-	require.ErrorIs(t, credErr, sql.ErrNoRows,
+	require.ErrorIs(t, credErr, errdefs.ErrNotFound,
 		"the directory read must stay healthy and answer ErrNoRows, or httpsCredentials returns at :93 and never reaches either settings read")
 
 	_, tokErr := db.GetSetting("git_https_token")
 	t.Logf("FAULTED   GetSetting(git_https_token) -> err=%v", tokErr)
 	require.Error(t, tokErr, "settings must be unreadable while hidden")
-	require.NotErrorIs(t, tokErr, sql.ErrNoRows,
-		"the fault must NOT be sql.ErrNoRows -- that is the arm the fix keeps, not the arm it refuses on")
+	require.NotErrorIs(t, tokErr, errdefs.ErrNotFound,
+		"the fault must NOT be errdefs.ErrNotFound -- that is the arm the fix keeps, not the arm it refuses on")
 
 	_, userErr := db.GetSetting("git_https_user")
 	t.Logf("FAULTED   GetSetting(git_https_user)  -> err=%v", userErr)
 	require.Error(t, userErr,
 		"the user read must fault too, or the ordering test below could not tell a reorder from a no-op")
-	require.NotErrorIs(t, userErr, sql.ErrNoRows)
+	require.NotErrorIs(t, userErr, errdefs.ErrNotFound)
 
 	restore()
 	v, err := db.GetSetting("git_https_user")
@@ -158,7 +159,7 @@ func TestHTTPSCredentials_StoredUser_HealthyDB_Wins(t *testing.T) {
 }
 
 // TestHTTPSCredentials_NoStoredUserRow_HealthyDB_FallsBackToConfig is the second
-// half: an ABSENT row (sql.ErrNoRows) keeps today's config fallback
+// half: an ABSENT row (errdefs.ErrNotFound) keeps today's config fallback
 // byte-for-byte and stays silent. This is the arm the fix must NOT convert --
 // treating absence as a fault would refuse every install that has never stored
 // a username.

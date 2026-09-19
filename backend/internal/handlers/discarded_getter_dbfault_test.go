@@ -15,6 +15,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // agent-os-1gqn: the third sibling of agent-os-7lg1's 404 collapse and
@@ -49,7 +51,7 @@ import (
 // The dataDir must be a real directory and never ":memory:" — in-memory SQLite
 // is per-connection, so the side connection would be a different database.
 //
-// The fault arrives as "no such table: X", which is NOT sql.ErrNoRows: exactly
+// The fault arrives as "no such table: X", which is NOT errdefs.ErrNotFound: exactly
 // the branch every conversion in this bead has to discriminate.
 func hiddenTableDB(t *testing.T, table string) (*database.DB, func(), func()) {
 	t.Helper()
@@ -92,15 +94,15 @@ func TestHiddenTableDB_FaultsOneTableAndNotTheOthers(t *testing.T) {
 	// BEFORE: settings answers with the ordinary not-found predicate.
 	_, err := db.GetSetting("nope")
 	require.Error(t, err, "healthy settings read returned no error; the control never fired")
-	require.True(t, errors.Is(err, sql.ErrNoRows),
-		"healthy settings read did not fail with sql.ErrNoRows, got %v — the not-found assumption is wrong", err)
+	require.True(t, errors.Is(err, errdefs.ErrNotFound),
+		"healthy settings read did not fail with errdefs.ErrNotFound, got %v — the not-found assumption is wrong", err)
 
 	hide()
 
 	// DURING: settings faults, and NOT with the not-found predicate.
 	_, err = db.GetSetting("nope")
 	require.Error(t, err, "hide() did not make the settings table unreadable")
-	require.False(t, errors.Is(err, sql.ErrNoRows),
+	require.False(t, errors.Is(err, errdefs.ErrNotFound),
 		"hidden settings failed with the SAME predicate as ordinary not-found: %v — this fixture cannot discriminate the branch under test", err)
 	require.Contains(t, err.Error(), "no such table")
 
@@ -112,7 +114,7 @@ func TestHiddenTableDB_FaultsOneTableAndNotTheOthers(t *testing.T) {
 
 	restore()
 	_, err = db.GetSetting("nope")
-	require.True(t, errors.Is(err, sql.ErrNoRows), "restore() did not put the settings table back: %v", err)
+	require.True(t, errors.Is(err, errdefs.ErrNotFound), "restore() did not put the settings table back: %v", err)
 }
 
 // corruptedPolicyRowDB seeds one auto_update_policies row and then writes a
@@ -367,7 +369,7 @@ func TestSettingOrFault_AbsentIsNotAFault(t *testing.T) {
 	hide()
 	_, err = settingOrFault(db, "present_key")
 	require.Error(t, err, "a database that cannot answer must not read as an absent row")
-	require.False(t, errors.Is(err, sql.ErrNoRows))
+	require.False(t, errors.Is(err, errdefs.ErrNotFound))
 	require.Contains(t, err.Error(), `read setting "present_key"`,
 		"the error must name WHICH read failed; without that a grouped refusal cannot be attributed to a site")
 	require.Contains(t, err.Error(), "no such table")
@@ -632,7 +634,7 @@ func TestListAutoUpdatePolicies_AbsentGlobalFlagStillReturns200(t *testing.T) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. auth.go — UserCount at the public /status probe and the setup fast path.
-//    No sql.ErrNoRows arm exists for either: UserCount is a COUNT(*), which
+//    No errdefs.ErrNotFound arm exists for either: UserCount is a COUNT(*), which
 //    always yields a row, so faultyDB is the right fixture here.
 // ─────────────────────────────────────────────────────────────────────────────
 
