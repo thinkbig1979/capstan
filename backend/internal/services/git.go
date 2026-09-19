@@ -139,7 +139,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 
 	dirty := false
 	dirtyCount := 0
-	if output, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain"); err == nil { //geterrors:ignore arguably in class and left as-is deliberately (agent-os-qyg7.2): rev-parse has already succeeded above, so a failure here reads as "clean" rather than "unknown" -- but changing getStatusCLI's contract is outside this bead, and it is recorded rather than blessed
+	if output, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain"); err == nil { //geterrors:ignore NOT a judgement that this is fine: a status-probe failure leaves dirty=false, a WRONG value rather than an absent one, which breaks the convention stated verbatim at git.go:130-133; both rev-parse calls above have already succeeded by here, so this is not "no repository". Fixing it changes getStatusCLI's contract on an endpoint hit every page visit, so it is tracked as agent-os-ufj7 rather than changed here
 		trimmed := strings.TrimSpace(output)
 		dirty = trimmed != ""
 		if dirty {
