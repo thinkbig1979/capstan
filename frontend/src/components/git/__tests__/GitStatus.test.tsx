@@ -27,6 +27,10 @@ import { directoriesApi } from '@/lib/api'
 import { GitStatus } from '../GitStatus'
 
 const mockStack = {
+  envFile: '',
+  gitBranch: '',
+  gitCommit: '',
+  containers: [],
   id: 'myapp:default',
   directory: '/opt/stacks/myapp',
   composeFile: 'docker-compose.yaml',

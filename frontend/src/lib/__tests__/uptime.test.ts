@@ -4,6 +4,7 @@ import type { Container } from '@/types'
 
 function container(overrides: Partial<Container>): Container {
   return {
+    health: '',
     id: 'c1',
     name: 'web',
     image: 'nginx:1',

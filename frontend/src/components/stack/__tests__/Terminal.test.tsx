@@ -74,6 +74,7 @@ beforeAll(() => {
 
 function makeContainer(overrides: Partial<Container> = {}): Container {
   return {
+    health: '',
     id: 'c1',
     name: 'web',
     image: 'nginx',
@@ -86,6 +87,9 @@ function makeContainer(overrides: Partial<Container> = {}): Container {
 
 function makeStack(containers: Container[] = [makeContainer()]): Stack {
   return {
+    envFile: '',
+    gitBranch: '',
+    gitCommit: '',
     id: 'stack1',
     directory: '/srv/stack1',
     composeFile: 'docker-compose.yml',

@@ -141,6 +141,9 @@ import { DashboardPage } from '../DashboardPage'
 
 function makeStack(overrides: Partial<Stack>): Stack {
   return {
+    envFile: '',
+    gitBranch: '',
+    gitCommit: '',
     id: 's1',
     directory: '/stacks/s1',
     composeFile: 'docker-compose.yml',

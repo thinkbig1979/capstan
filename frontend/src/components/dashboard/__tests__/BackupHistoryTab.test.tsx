@@ -166,7 +166,7 @@ describe('BackupHistoryTab — the columns', () => {
 
   it('shows a dash for the duration of a run that has not finished', async () => {
     mockGetHistory.mockResolvedValue(
-      historyPage({ runs: [run({ status: 'running', finishedAt: null })] }),
+      historyPage({ runs: [run({ status: 'running', finishedAt: undefined })] }),
     )
     renderTab()
 
@@ -418,7 +418,7 @@ describe('BackupHistoryTab — expandable run rows', () => {
     // suite could not tell a correct staleTime from one that is simply too
     // broad.
     const user = userEvent.setup()
-    const live = run({ status: 'running', finishedAt: null })
+    const live = run({ status: 'running', finishedAt: undefined })
     mockGetHistory.mockResolvedValue(historyPage({ runs: [live] }))
     mockGetRun.mockResolvedValue({ run: live, items: [item()] })
     renderTab()

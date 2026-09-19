@@ -39,7 +39,7 @@ type Stack struct {
 	EnvFile     string      `json:"envFile"`
 	ProjectName string      `json:"projectName"`
 	Status      string      `json:"status"`
-	Containers  []Container `json:"containers"`
+	Containers  []Container `json:"containers" tstype:"Container[] | null"`
 	IsGitRepo   bool        `json:"isGitRepo"`
 	GitBranch   string      `json:"gitBranch"`
 	GitCommit   string      `json:"gitCommit"`
@@ -146,7 +146,7 @@ type LogResult struct {
 type DiffResult struct {
 	Commit *GitCommit `json:"commit"`
 	Diff   string     `json:"diff"`
-	Files  []string   `json:"files"`
+	Files  []string   `json:"files" tstype:"string[] | null"`
 }
 
 type DashboardContainerInfo struct {
@@ -197,7 +197,7 @@ type DockerNetwork struct {
 	Scope      string   `json:"scope"`
 	Internal   bool     `json:"internal"`
 	Containers int      `json:"containers"`
-	Labels     []string `json:"labels"`
+	Labels     []string `json:"labels" tstype:"string[] | null"`
 	Created    string   `json:"created"`
 	Stack      string   `json:"stack"`
 }
@@ -288,31 +288,6 @@ type UpdateHistoryEntry struct {
 	ErrorMessage  *string `json:"errorMessage,omitempty"`
 }
 
-type UpdateHistoryFilters struct {
-	Page        int
-	Limit       int
-	Status      string
-	Trigger     string
-	ContainerID string
-	StackID     string
-	From        *time.Time
-	To          *time.Time
-}
-
-// BackupHistoryFilters is the query shape for GET /backups/history, mirroring
-// UpdateHistoryFilters above. Kind replaces the update log's container/stack
-// dimensions: backup_runs has no stack column (see the CREATE TABLE in
-// database/migrations.go), so there is no per-stack filter to offer.
-type BackupHistoryFilters struct {
-	Page    int
-	Limit   int
-	Status  string
-	Kind    string
-	Trigger string
-	From    *time.Time
-	To      *time.Time
-}
-
 type UpdateResult struct {
 	OldDigest  string `json:"oldDigest"`
 	NewDigest  string `json:"newDigest"`
@@ -393,8 +368,8 @@ type BackupSnapshot struct {
 	ShortID   string   `json:"shortId"`
 	Time      string   `json:"time"`
 	Hostname  string   `json:"hostname"`
-	Tags      []string `json:"tags"`
-	Paths     []string `json:"paths"`
+	Tags      []string `json:"tags" tstype:"string[] | null"`
+	Paths     []string `json:"paths" tstype:"string[] | null"`
 	SizeBytes int64    `json:"sizeBytes,omitempty"`
 }
 

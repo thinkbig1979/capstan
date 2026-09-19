@@ -30,8 +30,14 @@ export function parseContainerUptime(status: string): ParsedUptime | null {
  * Stack-level uptime derived from container data: the uptime of the most
  * recently (re)started running container, so the chip never claims more
  * uptime than the stack as a whole has. Null when nothing running parses.
+ *
+ * The parameter admits null because Stack.containers is `Container[] | null` on
+ * the wire: /stacks answers from the database alone when the live-container
+ * snapshot fails, and the database never populates the field. The body already
+ * handled it — `!containers?.length` covers null — only the type was narrower
+ * than the data.
  */
-export function stackUptime(containers: Container[] | undefined): string | null {
+export function stackUptime(containers: Container[] | null | undefined): string | null {
   if (!containers?.length) return null
   let youngest: ParsedUptime | null = null
   for (const c of containers) {

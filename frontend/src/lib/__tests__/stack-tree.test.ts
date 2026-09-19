@@ -8,6 +8,10 @@ function countAll(nodes: TreeNode[]): number {
 
 function makeStack(overrides: Partial<Stack> & Pick<Stack, 'id' | 'directory'>): Stack {
   return {
+    envFile: '',
+    gitBranch: '',
+    gitCommit: '',
+    containers: [],
     composeFile: 'docker-compose.yml',
     projectName: overrides.id,
     status: 'running',
