@@ -137,14 +137,34 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		shortHash = shortHash[:7]
 	}
 
-	dirty := false
+	// agent-os-ufj7: the status probe's error is RETURNED, not softened to
+	// `err == nil`. Softened, any failure of this one call fell through with
+	// dirty and dirtyCount still at their zero values, and handlers/git.go
+	// emitted `"dirty": false` inside a 200 next to a valid branch and commit —
+	// a WRONG value, where the convention stated four times at the log
+	// --format sites above promises an absent one. Both rev-parse calls have
+	// already succeeded by here, so a failure at this line is not "no
+	// repository"; it is an unusual fault, and GetStatus's only caller cannot
+	// tell it from a genuinely clean worktree.
+	//
+	// MEASURED: three CONTENT faults fail `status --porcelain` with exit 128
+	// while both rev-parse calls still exit 0 — a corrupt .git/index, an index
+	// truncated below its header, and an unparseable status.showUntrackedFiles.
+	// Being content faults rather than permission faults, root does not bypass
+	// them, which matters because the server runs as root in the container.
+	//
+	// The caller renders nothing on an error, so this reaches the UI as an
+	// absent chip rather than a false "clean" one. That is the convention,
+	// restored.
+	statusOut, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read status: %w", err)
+	}
+	trimmed := strings.TrimSpace(statusOut)
+	dirty := trimmed != ""
 	dirtyCount := 0
-	if output, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain"); err == nil { //geterrors:ignore NOT a judgement that this is fine: a status-probe failure leaves dirty=false, a WRONG value rather than an absent one, which breaks the convention stated verbatim at git.go:130-133; both rev-parse calls above have already succeeded by here, so this is not "no repository". Fixing it changes getStatusCLI's contract on an endpoint hit every page visit, so it is tracked as agent-os-ufj7 rather than changed here
-		trimmed := strings.TrimSpace(output)
-		dirty = trimmed != ""
-		if dirty {
-			dirtyCount = len(strings.Split(trimmed, "\n"))
-		}
+	if dirty {
+		dirtyCount = len(strings.Split(trimmed, "\n"))
 	}
 
 	// TrackingBranch was served only by the deleted go-git path until
@@ -200,24 +220,41 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	ahead := 0
 	behind := 0
 	if trackingBranch != "" {
-		if output, err := s.gitCommandWithCreds(dirPath, user, token, //geterrors:ignore the comment below states it: with no usable upstream, trackingBranch is empty and both counts stay 0, which is the honest answer rather than an invented one
-			"rev-list", "--left-right", "--count", trackingBranch+"...HEAD"); err == nil {
-			parts := strings.Fields(output)
-			if len(parts) == 2 {
-				// Both parsed or neither: GitStatus.tsx renders each count with
-				// `{gitStatus.ahead > 0 && ...}`, so a 0 salvaged from an
-				// unparseable field is drawn as "up to date" rather than as
-				// "unknown" — the rendering that agent-os-ct4e was filed for.
-				// rev-list --left-right --count promises two integers, so a
-				// field that is not one is a real fault, not a missing upstream.
-				behind, err = strconv.Atoi(parts[0])
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse behind count %q: %w", parts[0], err)
-				}
-				ahead, err = strconv.Atoi(parts[1])
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse ahead count %q: %w", parts[1], err)
-				}
+		// agent-os-ufj7, SECOND SITE: this rev-list error is RETURNED, not softened.
+		// Its previous analyzer-suppression comment read "with no usable upstream,
+		// trackingBranch is empty and both counts stay 0, which is the honest
+		// answer" — which describes the OUTER guard, not this call. Inside
+		// `if trackingBranch != ""` a usable tracking ref exists BY CONSTRUCTION,
+		// named either by @{upstream} above or by the origin/<branch> fallback, so
+		// "no usable upstream" is the one condition that cannot reach here. What
+		// does reach here is a rev-list that failed WITH a valid tracking ref — a
+		// blob-valued ref, a corrupt object store, an unreadable pack — and that
+		// left ahead=0/behind=0, which GitStatus.tsx gates with `{ahead > 0 && ...}`
+		// and therefore draws as "up to date". A wrong value, not an absent one.
+		//
+		// The block was already inconsistent with itself: an UNPARSEABLE count
+		// hard-fails the request a few lines below, so a weaker fault refused the
+		// request while this one was swallowed.
+		output, err := s.gitCommandWithCreds(dirPath, user, token,
+			"rev-list", "--left-right", "--count", trackingBranch+"...HEAD")
+		if err != nil {
+			return nil, fmt.Errorf("failed to count ahead/behind against %s: %w", trackingBranch, err)
+		}
+		parts := strings.Fields(output)
+		if len(parts) == 2 {
+			// Both parsed or neither: GitStatus.tsx renders each count with
+			// `{gitStatus.ahead > 0 && ...}`, so a 0 salvaged from an
+			// unparseable field is drawn as "up to date" rather than as
+			// "unknown" — the rendering that agent-os-ct4e was filed for.
+			// rev-list --left-right --count promises two integers, so a
+			// field that is not one is a real fault, not a missing upstream.
+			behind, err = strconv.Atoi(parts[0])
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse behind count %q: %w", parts[0], err)
+			}
+			ahead, err = strconv.Atoi(parts[1])
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse ahead count %q: %w", parts[1], err)
 			}
 		}
 	}
