@@ -6,8 +6,10 @@ import (
 )
 
 // useScan walks a REGION and classifies every use of one variable. It is
-// ported verbatim from scripts/getter-errors/main.go, which this analyzer
-// replaces, with one change: the nil test is typed rather than spelled.
+// ported from scripts/getter-errors/main.go, which this analyzer replaces,
+// with two changes: the nil test is typed rather than spelled, and expr
+// unwraps parentheses before matching (see unparen -- without it `(err) == nil`
+// is silently counted as a hard use and the site disappears).
 //
 // THE REGION IS THE POINT. A prototype of this detector classified a candidate
 // by walking the entire enclosing function body and calling any later ident of
@@ -248,8 +250,14 @@ func (u *useScan) expr(n ast.Node) {
 			if e.Op != token.EQL && e.Op != token.NEQ {
 				return true
 			}
-			lhsIsName := isIdent(e.X, u.name) && u.isNil(e.Y)
-			rhsIsName := isIdent(e.Y, u.name) && u.isNil(e.X)
+			// unparen, or `(err) == nil` misses: isIdent sees a ParenExpr,
+			// the match falls through, ast.Inspect descends to the bare Ident
+			// and counts it HARD -- so the site goes silent with no directive
+			// and no reason. OBSERVED silent on the pre-fix binary, and the
+			// form is gofmt-stable.
+			x, y := unparen(e.X), unparen(e.Y)
+			lhsIsName := isIdent(x, u.name) && u.isNil(y)
+			rhsIsName := isIdent(y, u.name) && u.isNil(x)
 			if !lhsIsName && !rhsIsName {
 				return true
 			}

@@ -22,11 +22,15 @@ import (
 //	suppress/ where //geterrors:ignore applies, where it does not, and the two
 //	          forms that read as suppression while suppressing nothing
 //	skiptest/ the _test.go skip, with a production-file control
+//	parens/   parentheses are not a silent suppression channel
+//	lineforge/ a //line directive cannot forge a _test.go name into a skip
+//	linewiden/ a //line directive cannot break the read that distinguishes a
+//	          trailing directive from a standalone one
 //
 // analysistest fails on a diagnostic with no want AND on a want with no
 // diagnostic, so each package is checked in both directions without a separate
 // negative arm having to be written.
 func TestAnalyzer(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), geterrors.Analyzer,
-		"fire", "clean", "typed", "suppress", "skiptest")
+		"fire", "clean", "typed", "suppress", "skiptest", "parens", "lineforge", "linewiden")
 }

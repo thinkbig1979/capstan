@@ -137,7 +137,13 @@ func run(pass *analysis.Pass) (any, error) {
 	for _, f := range pass.Files {
 		// THE TEST-FILE SKIP. go vet hands us _test.go files and offers no
 		// flag to stop it, so the filter is here. See the package doc.
-		if strings.HasSuffix(pass.Fset.Position(f.Pos()).Filename, "_test.go") {
+		//
+		// posOf, not Fset.Position: the latter APPLIES //line directives, so a
+		// file whose first line is `//line fake_test.go:1` reported itself as
+		// a test file and was skipped entirely. OBSERVED with the pre-fix
+		// binary on a throwaway module -- that file silent at rc 0, and firing
+		// the moment the single directive line was deleted. See posOf.
+		if strings.HasSuffix(posOf(pass, f.Pos()).Filename, "_test.go") {
 			continue
 		}
 		s := &scanner{pass: pass}
@@ -167,7 +173,7 @@ func (s *scanner) collectDirectives(f *ast.File) {
 	src, srcErr := s.readFile(f)
 	for _, grp := range f.Comments {
 		for _, c := range grp.List {
-			pos := s.pass.Fset.Position(c.Pos())
+			pos := posOf(s.pass, c.Pos())
 			text := c.Text
 			switch {
 			case text == directive:
@@ -194,7 +200,7 @@ func (s *scanner) collectDirectives(f *ast.File) {
 }
 
 func (s *scanner) readFile(f *ast.File) ([]byte, error) {
-	name := s.pass.Fset.Position(f.Pos()).Filename
+	name := posOf(s.pass, f.Pos()).Filename
 	if s.pass.ReadFile != nil {
 		return s.pass.ReadFile(name)
 	}
@@ -213,7 +219,7 @@ func onlyBlankBefore(src []byte, start, end int) bool {
 }
 
 func (s *scanner) report(pos token.Pos, format string, args ...any) {
-	if s.suppressed[s.pass.Fset.Position(pos).Line] {
+	if s.suppressed[posOf(s.pass, pos).Line] {
 		return
 	}
 	s.pass.Reportf(pos, format, args...)
@@ -227,6 +233,65 @@ func (s *scanner) isError(e ast.Expr) bool {
 		return false
 	}
 	return types.Implements(t, errorIface)
+}
+
+// posOf resolves a position for DECISION-MAKING, ignoring //line directives.
+//
+// WHY IT EXISTS. token.FileSet.Position applies //line directives, which are
+// under the control of the file being analysed. Every decision this analyzer
+// keys on a position -- is this a test file, which line does a directive
+// cover, where does a line start -- was therefore forgeable by the source it
+// was judging. Two consequences, BOTH OBSERVED on a throwaway module with the
+// pre-fix binary rather than reasoned about:
+//
+//   - `//line fake_test.go:1` on line 1 made the whole file report itself as a
+//     test file, so it was skipped and every site in it went silent. Deleting
+//     only that one line made them fire.
+//   - `//line generated.go:1`, a name that is NOT skipped, made readFile fail
+//     (it looked for "generated.go", which does not exist), and the srcErr
+//     fallback in collectDirectives then widened EVERY trailing directive in
+//     the file to cover the following line. A second, unrelated, undirectived
+//     site on the next line was silently suppressed. Removing the directive
+//     line made it fire.
+//
+// PositionFor(p, false) is the documented way to get the unadjusted position,
+// so decisions use the file's real name, line and column.
+//
+// Diagnostics are NOT routed through this: pass.Reportf keeps the adjusted
+// position, because what a reader should be shown is what their editor shows.
+// Decisions ignore //line; reporting does not.
+func posOf(pass *analysis.Pass, p token.Pos) token.Position {
+	return pass.Fset.PositionFor(p, false)
+}
+
+// unparen strips redundant parentheses. The MERGE arm matches on STRUCTURE --
+// a top-level `||` chain, an operand that is `<error> != nil` -- and an
+// *ast.ParenExpr is a node between the matcher and the thing it matches, so
+// without this a single pair of parentheses is a REASON-FREE SUPPRESSION
+// CHANNEL: it silences a finding with no directive, no reason and no record,
+// in a design whose whole point is that a suppression states why. Three forms
+// were OBSERVED silent on the pre-fix binary, all of them gofmt-STABLE so they
+// do not self-heal:
+//
+//	if (err != nil) || v == "" {            MERGE, operand parenthesised
+//	if (err != nil || v == "") || v == "z"  MERGE, sub-chain parenthesised
+//	if (err) == nil {                       SOFT, variable parenthesised
+//
+// Two neighbouring forms were NOT holes and are kept as fixtures so a later
+// change cannot quietly turn them into holes: `err != (nil) || v == ""` fires
+// (go/types records a type for the ParenExpr, so the nil test sees through
+// it), and `(err == nil) && v != ""` fires (the SOFT scan uses ast.Inspect,
+// which descends into ParenExpr on its own). A fully parenthesised condition,
+// `if (err != nil || v == "")`, is silent but gofmt REWRITES it, so it cannot
+// survive a formatted tree.
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
 }
 
 // isNil reports whether e is the predeclared nil. Typed rather than spelled,
@@ -298,15 +363,27 @@ func (s *scanner) classify(a *ast.AssignStmt, region func(*useScan)) {
 // Both orders are checked because `nil != err` is legal Go and because
 // checking only one is the same category of blindness as anchoring the whole
 // sweep on the left of the `||` (agent-os-koy9 was blind that way).
+//
+// THE unparen CALLS HERE ARE A SECOND LINE OF DEFENCE, and the mutation
+// evidence says so exactly. orOperands already unwraps each operand before
+// handing it over, so removing the unwrapping HERE alone changes no verdict --
+// that mutant SURVIVES the whole fixture suite. Removing it from orOperands
+// alone also changes no verdict for `(err != nil) || v == ""`, because these
+// calls catch it. Only removing BOTH makes that form go silent, which is what
+// testdata/src/parens pins. Keep both: they are redundant with each other by
+// construction, not by accident, and whichever one a future change breaks, the
+// other still refuses to let a pair of parentheses become a reason-free
+// suppression.
 func (s *scanner) isErrNotNil(e ast.Expr) bool {
-	b, ok := e.(*ast.BinaryExpr)
+	b, ok := unparen(e).(*ast.BinaryExpr)
 	if !ok || b.Op != token.NEQ {
 		return false
 	}
-	if s.isNil(b.Y) && s.isError(b.X) {
+	x, y := unparen(b.X), unparen(b.Y)
+	if s.isNil(y) && s.isError(x) {
 		return true
 	}
-	return s.isNil(b.X) && s.isError(b.Y)
+	return s.isNil(x) && s.isError(y)
 }
 
 // orOperands flattens a top-level `||` chain. `a || b || c` parses as
@@ -314,6 +391,7 @@ func (s *scanner) isErrNotNil(e ast.Expr) bool {
 // the first operand of any three-way condition -- and three-way conditions are
 // real here (handlers/settings.go, middleware/ratelimit.go).
 func orOperands(e ast.Expr, out *[]ast.Expr) {
+	e = unparen(e)
 	if b, ok := e.(*ast.BinaryExpr); ok && b.Op == token.LOR {
 		orOperands(b.X, out)
 		orOperands(b.Y, out)
