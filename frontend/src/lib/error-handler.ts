@@ -12,6 +12,8 @@
  * When a mutation both has an inline surface AND navigates/runs in the background,
  * prefer inline for the validation phase and a toast only for the async result.
  */
+import { toast } from 'sonner'
+import { isActionResult } from './action-result'
 import { messageOrNull } from './narrow'
 
 type ErrorType = 'network' | 'auth' | 'validation' | 'server' | 'timeout' | 'unknown'
@@ -124,10 +126,10 @@ export function classifyError(error: unknown): AppError {
   // need to tell "the backend said nothing" from "the backend said something",
   // and `message` cannot express that — it is never empty, so the `message || ...`
   // idiom in the 409 and 428 arms below can never actually reach its fallback.
-  const backendMessage =
-    messageOrNull(err.response?.data?.error) ??
-    messageOrNull(err.response?.data?.message) ??
-    messageOrNull(err.message)
+  //
+  // Extracted to backendCauseOf (agent-os-5g8a) so the presenters below run the
+  // SAME chain rather than a second copy of it.
+  const backendMessage = backendCauseOf(error)
   const message = backendMessage ?? 'An error occurred'
   const details = err.details ?? err.response?.data?.details
   // Nested FIRST, unlike `status` and `details` above, and deliberately so:
@@ -343,4 +345,99 @@ export function classifyError(error: unknown): AppError {
     originalError: error,
     action: 'Contact Support',
   }
+}
+
+/**
+ * The cause the rejection itself carried, or null when it carried none.
+ *
+ * Exactly the chain classifyError builds its `backendMessage` local from —
+ * extracted (agent-os-5g8a) so there is ONE implementation of "did the backend
+ * say anything at all?". `null` is the load-bearing value: every classifyError
+ * arm ends in a sentence, so `AppError.message` can never express silence.
+ */
+export function backendCauseOf(error: unknown): string | null {
+  if (!error) return null
+  const err = error as {
+    response?: { data?: { error?: unknown; message?: unknown } }
+    message?: unknown
+  }
+  return (
+    messageOrNull(err.response?.data?.error) ??
+    messageOrNull(err.response?.data?.message) ??
+    messageOrNull(err.message)
+  )
+}
+
+/**
+ * What to tell the operator went wrong, or null when nothing is known.
+ *
+ * An ActionResult's own `reason` wins: it is the backend's considered diagnosis
+ * of a multi-step write and names which step failed. Otherwise classifyError's
+ * sentence, plus its `context` when it computed one (the 404/409/428 resource
+ * and directory names, which are otherwise silently dropped by every consumer
+ * that reads only `.message`).
+ *
+ * The `type === 'unknown'` key, and NOT string-matching on the message text:
+ * classifyError has 14 arms and exactly TWO yield `type: 'unknown'` — the
+ * `!error` guard at the top and the terminal fallthrough at the bottom. Those
+ * two are precisely the arms that carry no diagnosis of their own, so they say
+ * 'An error occurred' when the backend said nothing. Every other arm produces a
+ * sentence that is informative even then ('Check your connection and try
+ * again'), and must still reach the user. So keying on the two no-diagnosis
+ * arms suppresses only the genuinely empty case.
+ */
+export function causeOf(error: unknown): string | null {
+  if (isActionResult(error) && error.reason) return error.reason
+  const app = classifyError(error)
+  if (app.type === 'unknown' && backendCauseOf(error) === null) return null
+  return app.context ? `${app.message} (${app.context})` : app.message
+}
+
+/**
+ * Render a failed action: the action context as the toast TITLE, the backend's
+ * cause as the DESCRIPTION.
+ *
+ * Both, never one instead of the other. The fixed sentence a call site passes
+ * is the only place the ACTION lives ("Failed to extract variable to .env"),
+ * and the cause is the only place the diagnosis lives ("failed to write compose
+ * file; env rolled back"). Collapsing to a single line deletes one of them,
+ * which is the defect class this helper exists to end.
+ *
+ * `cause !== title` guards the degenerate case where they are the same string.
+ * `fallback` is required and non-empty by type, so this never renders an empty
+ * toast.
+ */
+export function presentError(err: unknown, opts: { fallback: string; title?: string }): void {
+  const title = opts.title ?? opts.fallback
+  const cause = causeOf(err)
+  if (cause && cause !== title) {
+    toast.error(title, { description: cause })
+    return
+  }
+  toast.error(title)
+}
+
+/**
+ * Render a rejection that has NO action context of its own: the cause IS the
+ * message.
+ *
+ * For generic wrappers (useActionMutation) that do not know which action
+ * failed, so there is no title to carry and a fixed one would be a lie.
+ */
+export function presentCause(err: unknown): void {
+  toast.error(causeOf(err) ?? 'An unexpected error occurred')
+}
+
+/**
+ * Render a CLIENT-SIDE refusal: a validation guard or a local-state notice
+ * where no rejection exists anywhere in scope and the fixed sentence is the
+ * whole truth.
+ *
+ * Named rather than inlined so the distinction is visible at the call site and
+ * greppable later: the INLINE-vs-TOAST convention at the top of this file says
+ * most of these belong next to the field the user is looking at, not in a
+ * toast. Converting them is a separate job; this marks the set.
+ */
+export function toastInvalid(message: string): void {
+  toast.error(message)
 }
