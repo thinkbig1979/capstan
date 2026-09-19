@@ -156,6 +156,16 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// The caller renders nothing on an error, so this reaches the UI as an
 	// absent chip rather than a false "clean" one. That is the convention,
 	// restored.
+	//
+	// LIMITATION, and it is deliberate rather than an oversight: this covers the
+	// NON-ZERO EXIT arm only. gitCommandWithCreds reads its child with
+	// CombinedOutput, which merges stderr into stdout, so a git command that
+	// EXITS 0 while writing a diagnostic hands that diagnostic to the parser as
+	// DATA and this guard never fires. MEASURED: a clean worktree with
+	// core.fsmonitor pointing at a nonexistent hook exits 0 and emits two
+	// `fatal: cannot exec` lines, which this function then counts as two
+	// uncommitted changes. Tracked as agent-os-vwi7; the fix there is to the
+	// stream contract of the shared helper, not to this site.
 	statusOut, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read status: %w", err)
@@ -235,6 +245,14 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		// The block was already inconsistent with itself: an UNPARSEABLE count
 		// hard-fails the request a few lines below, so a weaker fault refused the
 		// request while this one was swallowed.
+		//
+		// SAME LIMITATION as the status probe above: this covers the non-zero
+		// exit arm only. An ambiguous tracking-ref name makes rev-list warn on
+		// stderr and EXIT 0; CombinedOutput merges that warning into the output,
+		// strings.Fields then counts seven fields instead of two, the len==2
+		// guard below is false, and ahead/behind keep their zero values with no
+		// error. MEASURED on a repository that was genuinely ahead by one.
+		// Tracked as agent-os-vwi7.
 		output, err := s.gitCommandWithCreds(dirPath, user, token,
 			"rev-list", "--left-right", "--count", trackingBranch+"...HEAD")
 		if err != nil {
