@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -26,12 +27,48 @@ type updateScanner interface {
 	IsScanning() bool
 }
 
+// dockerCleanupService is the slice of *services.DockerCleanupService the
+// cleanup routes need. Declared here on the consumer side so the preview and
+// run handlers are testable without a Docker daemon.
+type dockerCleanupService interface {
+	Preview(ctx context.Context, minAgeHours int) (*services.DockerCleanupPreview, error)
+	Execute(ctx context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error)
+}
+
+// dockerCleanupArmer is the slice of *services.DockerCleanupSchedulerService the
+// policy PUT needs: re-arm the tick from the freshly stored policy, so an
+// operator who opts in does not have to restart the process.
+type dockerCleanupArmer interface {
+	StartFromPolicy()
+}
+
 type ResourcesHandler struct {
 	docker     *services.DockerService
 	db         *database.DB
 	scheduler  updateScanner
 	jobManager *services.UpdateJobManager
 	actionLog  *services.ActionLogger
+	// cleanup and cleanupArmer are injected by setters rather than through a
+	// constructor parameter: both are nil on a Docker-less host (see
+	// cmd/server/main.go), every cleanup handler nil-checks them, and adding
+	// parameters to the two constructors would churn every existing caller for
+	// no gain.
+	cleanup      dockerCleanupService
+	cleanupArmer dockerCleanupArmer
+}
+
+// SetCleanupService installs the Docker cleanup service. Nil-checked on the
+// concrete pointer by the caller, for the typed-nil reason NewResourcesHandler's
+// doc comment gives: boxing a nil *DockerCleanupService into this interface would
+// produce a NON-nil interface value and the handlers' nil checks would pass.
+func (h *ResourcesHandler) SetCleanupService(svc dockerCleanupService) {
+	h.cleanup = svc
+}
+
+// SetCleanupScheduler installs the cleanup scheduler, so a policy PUT can re-arm
+// the tick. Same typed-nil discipline as SetCleanupService.
+func (h *ResourcesHandler) SetCleanupScheduler(s dockerCleanupArmer) {
+	h.cleanupArmer = s
 }
 
 // NewResourcesHandler delegates to NewResourcesHandlerWithJobManager (nil
@@ -96,6 +133,13 @@ func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
 
 	r.GET("/resources/build-cache", h.listBuildCache)
 	r.POST("/resources/build-cache/prune", h.pruneBuildCache)
+
+	// Scheduled Docker cleanup (agent-os-fn7x.3). Handlers in docker_cleanup.go.
+	r.GET("/resources/cleanup/policy", h.getCleanupPolicy)
+	r.PUT("/resources/cleanup/policy", h.updateCleanupPolicy)
+	r.POST("/resources/cleanup/preview", h.previewCleanup)
+	r.POST("/resources/cleanup/run", h.runCleanup)
+	r.GET("/resources/cleanup/history", h.getCleanupHistory)
 }
 
 func (h *ResourcesHandler) listImages(c *gin.Context) {

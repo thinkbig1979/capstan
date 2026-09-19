@@ -597,6 +597,34 @@ func main() {
 	updateJobManager := services.NewUpdateJobManager(15 * time.Minute)
 
 	resourcesHandler := handlers.NewResourcesHandlerWithJobManager(dockerService, db, schedulerService, updateJobManager)
+
+	// ── Scheduled Docker cleanup (agent-os-fn7x.3) ─────────────────────────────
+	//
+	// Constructed and armed ONLY when dockerService is non-nil, mirroring
+	// schedulerService above. This is deliberate, not incidental: all three
+	// pruner methods nil-guard and return ErrDockerUnavailable rather than
+	// panicking (docker_resources.go), but DockerCleanupService.Execute turns
+	// that error into a RECORDED FAILED RUN ROW — so an enabled schedule on a
+	// host where Docker was unreachable at startup would write one failure row
+	// per interval, forever, burying the real history. Not arming it at all is
+	// the honest outcome: the operator already has the "Docker service
+	// unavailable" WARN from startup, and the cleanup routes refuse with 503
+	// because the handler's seams stay nil.
+	//
+	// The nil check is on the CONCRETE pointer, before it ever reaches the
+	// handler's interface-typed fields: boxing a typed nil produces a NON-nil
+	// interface value and the handlers' nil checks would then pass. Same trap
+	// NewResourcesHandler documents for schedulerService.
+	if dockerService != nil {
+		cleanupSvc := services.NewDockerCleanupService(dockerService, db)
+		cleanupSched := services.NewDockerCleanupScheduler(cleanupSvc, db, slog.Default())
+		resourcesHandler.SetCleanupService(cleanupSvc)
+		resourcesHandler.SetCleanupScheduler(cleanupSched)
+		// Arms only if an operator opted in; logs at ERROR and arms nothing if
+		// the policy cannot be read. Disabled is the default and stays silent.
+		cleanupSched.StartFromPolicy()
+	}
+
 	resourcesHandler.RegisterRoutes(protected)
 
 	if schedulerService != nil {

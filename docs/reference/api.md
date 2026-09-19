@@ -221,6 +221,18 @@ Direct Docker resource management, independent of any stack.
 - `POST /api/v1/resources/networks/prune` — prune unused networks
 - `GET /api/v1/resources/build-cache` — inspect Docker build cache usage
 - `POST /api/v1/resources/build-cache/prune` — prune the build cache
+- `GET /api/v1/resources/cleanup/policy` — the scheduled Docker cleanup policy,
+  plus the server-enforced minimum image age the API will accept
+- `PUT /api/v1/resources/cleanup/policy` — enable or disable scheduled cleanup
+  and set its interval and minimum image age. A minimum age below the server
+  floor is rejected, not clamped: a prune is irreversible, so an operator who
+  asked for 0 must not be told 1 was stored
+- `POST /api/v1/resources/cleanup/preview` — what a cleanup would remove.
+  Removes nothing
+- `POST /api/v1/resources/cleanup/run` — run a cleanup now, independently of
+  the schedule and whether the schedule is enabled
+- `GET /api/v1/resources/cleanup/history` — recent cleanup runs. `limit`
+  defaults to 50 and is capped at 100
 
 ## Terminal
 
