@@ -3,9 +3,8 @@ import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { Lock, CheckCircle2, XCircle, CircleDashed } from 'lucide-react'
-import { toast } from 'sonner'
 import { useToggleBackup, useBackupPolicies, useBackupStatus } from '@/hooks/useBackup'
-import { classifyError } from '@/lib/error-handler'
+import { presentError } from '@/lib/error-handler'
 import type { BackupPolicy } from '@/types'
 
 interface BackupToggleProps {
@@ -64,7 +63,7 @@ export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggle
       {
         onError: (err) => {
           setOptimisticEnabled(!checked)
-          toast.error(classifyError(err).message || 'Failed to toggle backup')
+          presentError(err, { fallback: 'Failed to toggle backup' })
         },
       },
     )
@@ -77,7 +76,7 @@ export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggle
       {
         onError: (err) => {
           setOptimisticStopPolicy(optimisticStopPolicy)
-          toast.error(classifyError(err).message || 'Failed to update stop policy')
+          presentError(err, { fallback: 'Failed to update stop policy' })
         },
       },
     )

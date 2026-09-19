@@ -5,7 +5,7 @@ import { resourcesApi, settingsApi, autoUpdateApi, type PruneOptions } from '@/l
 import { useUpdateScanStore } from '@/stores/updateScanStore'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
 import { isActionResult, toastForResult, type ActionResult } from '@/lib/action-result'
-import { classifyError } from '@/lib/error-handler'
+import { presentError, presentFault } from '@/lib/error-handler'
 import type { UpdateHistoryFilters } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
 import { messageOrNull, stringOr } from '@/lib/narrow'
@@ -45,7 +45,8 @@ export function resolveUpdateScanSuccess() {
  * update-settings query instead (agent-os-xhn6).
  *
  * Keys on the CODE and renders only `message`. Deliberately NOT routed through
- * classifyError(), which is the idiom everywhere else in this file. The
+ * classifyError() -- which is what presentError, the idiom everywhere else in
+ * this file, resolves its cause with. The
  * original reason no longer holds: that arm discarded `message` and answered
  * "503: Something went wrong on the server", and agent-os-mc4i made it render
  * the cause. What remains is narrower but still decides it — this returns the
@@ -86,9 +87,10 @@ export function resolveUpdateScanError(error?: unknown) {
   const store = useUpdateScanStore.getState()
   if (!store.isScanning) return
   store.finishScan()
-  const cause = updateScanFault(error)
-  const options = { id: UPDATE_SCAN_TOAST_ID, duration: 4000 }
-  toast.error('Update check failed', cause ? { ...options, description: cause } : options)
+  presentFault('Update check failed', updateScanFault(error), {
+    id: UPDATE_SCAN_TOAST_ID,
+    duration: 4000,
+  })
 }
 
 export function useImages() {
@@ -148,7 +150,7 @@ export function useDeleteImage() {
       if (isActionResult(err)) {
         toastForResult(err)
       } else {
-        toast.error(classifyError(err).message || 'Failed to remove image')
+        presentError(err, { fallback: 'Failed to remove image' })
       }
     },
   })
@@ -169,7 +171,7 @@ export function useDeleteVolume() {
       if (isActionResult(err)) {
         toastForResult(err)
       } else {
-        toast.error(classifyError(err).message || 'Failed to remove volume')
+        presentError(err, { fallback: 'Failed to remove volume' })
       }
     },
   })
@@ -189,7 +191,7 @@ export function useDeleteNetwork() {
       if (isActionResult(err)) {
         toastForResult(err)
       } else {
-        toast.error(classifyError(err).message || 'Failed to remove network')
+        presentError(err, { fallback: 'Failed to remove network' })
       }
     },
   })
@@ -214,7 +216,7 @@ export function useCreateNetwork() {
       if (isActionResult(err)) {
         toastForResult(err)
       } else {
-        toast.error(classifyError(err).message || 'Failed to create network')
+        presentError(err, { fallback: 'Failed to create network' })
       }
     },
   })
@@ -282,7 +284,7 @@ export function usePruneImages() {
       if (isActionResult(err)) {
         toastForResult(err)
       } else {
-        toast.error(classifyError(err).message || 'Failed to prune images')
+        presentError(err, { fallback: 'Failed to prune images' })
       }
     },
   })
@@ -307,7 +309,7 @@ export function usePruneVolumes() {
       if (isActionResult(err)) {
         toastForResult(err)
       } else {
-        toast.error(classifyError(err).message || 'Failed to prune volumes')
+        presentError(err, { fallback: 'Failed to prune volumes' })
       }
     },
   })
@@ -333,7 +335,7 @@ export function usePruneNetworks() {
       if (isActionResult(err)) {
         toastForResult(err)
       } else {
-        toast.error(classifyError(err).message || 'Failed to prune networks')
+        presentError(err, { fallback: 'Failed to prune networks' })
       }
     },
   })
@@ -359,7 +361,7 @@ export function usePruneBuildCache() {
       if (isActionResult(err)) {
         toastForResult(err)
       } else {
-        toast.error(classifyError(err).message || 'Failed to prune build cache')
+        presentError(err, { fallback: 'Failed to prune build cache' })
       }
     },
   })

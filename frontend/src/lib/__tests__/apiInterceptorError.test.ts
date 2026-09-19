@@ -204,3 +204,138 @@ describe('api response interceptor error handling (agent-os-yj0)', () => {
     expect('status' in originalData).toBe(false)
   })
 })
+
+// ─── agent-os-ohkw: a non-JSON error body must not be spread ─────────────────
+//
+// The interceptor built its rejection with `{ ...error.response.data }`. That
+// is right for a JSON body, which is what this backend sends on every handled
+// error. It is wrong for a body that is a STRING — an upstream proxy's 502 HTML
+// page, a gateway timeout page, anything not produced by our own handlers.
+// Spreading a string enumerates its character indices, so the rejection became
+// a character-indexed object and the real body was destroyed.
+//
+// Asserted on the KEYS of the rejected value, never on a rendered sentence:
+// classifyError finds its named fields absent either way and answers the same
+// generic sentence, so a message-level assertion cannot see this defect at all.
+describe('api response interceptor non-object bodies (agent-os-ohkw)', () => {
+  const PROXY_PAGE = '<html>oops</html>'
+
+  it('does not enumerate a string body into character indices', async () => {
+    const onRejected = getRegisteredRejectedHandler()
+
+    const fakeAxiosError = {
+      response: { status: 502, data: PROXY_PAGE },
+      config: { url: '/stacks' },
+      message: 'Request failed with status code 502',
+      isAxiosError: true,
+    }
+
+    let rejected: unknown
+    await onRejected(fakeAxiosError).catch((e) => {
+      rejected = e
+    })
+
+    const keys = Object.keys(rejected as object)
+    expect(keys.some((k) => /^\d+$/.test(k))).toBe(false)
+    expect(keys).toEqual(['error', 'status'])
+  })
+
+  it('preserves the string body verbatim under `error`', async () => {
+    const onRejected = getRegisteredRejectedHandler()
+
+    let rejected: unknown
+    await onRejected({
+      response: { status: 502, data: PROXY_PAGE },
+      config: { url: '/stacks' },
+      message: 'Request failed with status code 502',
+      isAxiosError: true,
+    }).catch((e) => {
+      rejected = e
+    })
+
+    expect((rejected as { error?: unknown }).error).toBe(PROXY_PAGE)
+  })
+
+  it('keeps the status injection for a string body', async () => {
+    const onRejected = getRegisteredRejectedHandler()
+
+    let rejected: unknown
+    await onRejected({
+      response: { status: 502, data: PROXY_PAGE },
+      config: { url: '/stacks' },
+      message: 'Request failed with status code 502',
+      isAxiosError: true,
+    }).catch((e) => {
+      rejected = e
+    })
+
+    // agent-os-yj0: dropping this makes every status branch in classifyError
+    // dead code, so a guard that loses it trades one defect for a worse one.
+    expect((rejected as { status?: number }).status).toBe(502)
+    expect(classifyError(rejected).status).toBe(502)
+    expect(classifyError(rejected).type).toBe('server')
+  })
+
+  it('does not put the raw body where classifyError would render it', async () => {
+    const onRejected = getRegisteredRejectedHandler()
+
+    let rejected: unknown
+    await onRejected({
+      response: { status: 502, data: PROXY_PAGE },
+      config: { url: '/stacks' },
+      message: 'Request failed with status code 502',
+      isAxiosError: true,
+    }).catch((e) => {
+      rejected = e
+    })
+
+    // The disposition is PRESERVE, not RENDER. classifyError reads `message`
+    // flat and `error` only nested under `.response.data`, so a proxy's HTML
+    // page stays out of the toast and the generic 5xx sentence still shows.
+    expect(classifyError(rejected).message).toBe('502: Something went wrong on the server')
+  })
+
+  it('does not enumerate an array body either', async () => {
+    const onRejected = getRegisteredRejectedHandler()
+
+    let rejected: unknown
+    await onRejected({
+      response: { status: 500, data: ['a', 'b'] },
+      config: { url: '/stacks' },
+      message: 'Request failed with status code 500',
+      isAxiosError: true,
+    }).catch((e) => {
+      rejected = e
+    })
+
+    expect(Object.keys(rejected as object)).toEqual(['error', 'status'])
+    expect((rejected as { error?: unknown }).error).toEqual(['a', 'b'])
+  })
+
+  // TWO-SIDED on the same instrument: the JSON path must be untouched. Without
+  // this arm a guard that discarded every body would pass all five above.
+  it('leaves a JSON body alone: named fields plus the injected status', async () => {
+    const onRejected = getRegisteredRejectedHandler()
+
+    let rejected: unknown
+    await onRejected({
+      response: {
+        status: 409,
+        data: { error: 'Conflict', code: 'DUPLICATE_STACK', message: 'already exists' },
+      },
+      config: { url: '/stacks' },
+      message: 'Request failed with status code 409',
+      isAxiosError: true,
+    }).catch((e) => {
+      rejected = e
+    })
+
+    expect(Object.keys(rejected as object)).toEqual(['error', 'code', 'message', 'status'])
+    expect(rejected).toEqual({
+      error: 'Conflict',
+      code: 'DUPLICATE_STACK',
+      message: 'already exists',
+      status: 409,
+    })
+  })
+})

@@ -6,7 +6,7 @@ import { Play, Square, AlertCircle, RefreshCw, ScrollText, SquareTerminal, Rotat
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { resourcesApi } from '@/lib/api'
-import { classifyError } from '@/lib/error-handler'
+import { presentError } from '@/lib/error-handler'
 import { queryKeys } from '@/lib/query-keys'
 import { formatBytes } from '@/lib/format'
 import type { Container } from '@/types'
@@ -164,7 +164,7 @@ export function ContainerList({
       queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
     onError: (err) => {
-      toast.error(classifyError(err).message || 'Failed to restart container')
+      presentError(err, { fallback: 'Failed to restart container' })
     },
   })
 

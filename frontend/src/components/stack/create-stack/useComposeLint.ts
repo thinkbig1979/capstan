@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { toast } from 'sonner'
+import { presentError, toastInvalid } from '@/lib/error-handler'
 import { stacksApi } from '@/lib/api'
 import type { LintResult } from '@/types'
 
@@ -17,14 +18,14 @@ export function useComposeLint({ composeContent, lintResults, setLintResults }: 
       setLintResults(data.lintResults || [])
 
       if (data.lintResults?.some((r: LintResult) => r.level === 'error')) {
-        toast.error('Lint errors detected')
+        toastInvalid('Lint errors detected')
       } else if (data.lintResults?.some((r: LintResult) => r.level === 'warning')) {
         toast.warning('Lint warnings detected')
       } else {
         toast.success('No lint issues found')
       }
-    } catch {
-      toast.error('Failed to lint compose file')
+    } catch (err) {
+      presentError(err, { fallback: 'Failed to lint compose file' })
     }
   }, [composeContent, setLintResults])
 

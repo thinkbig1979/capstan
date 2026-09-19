@@ -99,6 +99,37 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
+/**
+ * A response body in a shape the interceptor can safely spread (agent-os-ohkw).
+ *
+ * DISPOSITION for a non-object body: PRESERVED VERBATIM under `error`, the same
+ * field name the no-response branch below already uses, and deliberately NOT
+ * under `message`.
+ *
+ *  - PRESERVED rather than discarded, because the string is the only diagnostic
+ *    a proxy failure carries, and discarding it would leave a log or bug-report
+ *    consumer with nothing at all. That is the half of the defect a typeof check
+ *    on its own does not fix.
+ *  - NOT under `message`, and not truncated into one, because classifyError
+ *    reads `err.message` FLAT: a body placed there becomes the rendered toast.
+ *    An unbounded, untrusted HTML page is not a toast description. The generic
+ *    5xx sentence still renders, exactly as it does today, so this fix changes
+ *    nothing the operator sees — it stops the body being destroyed. Rendering a
+ *    sanitised form of it is a separate decision for a separate bead.
+ *
+ * Arrays are treated as non-object bodies for the same reason strings are:
+ * spreading one enumerates its indices.
+ *
+ * `status` is attached by the caller on BOTH paths. agent-os-yj0 established
+ * that dropping it makes every status branch in classifyError dead code, so a
+ * guard that loses it trades one defect for a worse one.
+ */
+function spreadableBody(data: unknown): Record<string, unknown> {
+  if (data === null || data === undefined) return {}
+  if (typeof data === 'object' && !Array.isArray(data)) return data as Record<string, unknown>
+  return { error: data }
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ApiError>) => {
@@ -130,8 +161,14 @@ apiClient.interceptors.response.use(
     // When there's no response at all (network/timeout failure), preserve
     // axios's own `code`/`message` instead of discarding them — they're the
     // only signal classifyError has for the network/timeout branches.
+    //
+    // agent-os-ohkw: the spread is GUARDED. `error.response.data` is TYPED
+    // ApiError, but nothing validates it and an upstream proxy's 502 HTML page
+    // arrives as a STRING. Spreading a string enumerates its character indices,
+    // so the rejection became {"0":"<","1":"h",...} — 18 keys of garbage — and
+    // the body itself was destroyed.
     const safeError = error.response
-      ? { ...error.response.data, status: error.response.status }
+      ? { ...spreadableBody(error.response.data), status: error.response.status }
       : { error: 'Unknown error', code: error.code || 'UNKNOWN', message: error.message }
     return Promise.reject(safeError)
   },

@@ -14,6 +14,7 @@ import {
 import { KeyRound, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react'
 import { directoriesApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { presentFault } from '@/lib/error-handler'
 import { queryKeys } from '@/lib/query-keys'
 import type { DirectoryCredentialStatusValue } from '@/types'
 import { messageOrNull } from '@/lib/narrow'
@@ -181,8 +182,7 @@ export function GitSettingsSection({
     // arrives as the description, so a code outside the allow-list renders
     // exactly what it rendered before.
     onError: (error) => {
-      const cause = credentialSaveFault(error)
-      toast.error('Failed to save credentials', cause ? { description: cause } : undefined)
+      presentFault('Failed to save credentials', credentialSaveFault(error))
     },
   })
 

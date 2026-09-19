@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { authApi } from '@/lib/api'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
-import { classifyError } from '@/lib/error-handler'
+import { presentError } from '@/lib/error-handler'
 import { toast } from 'sonner'
 import { useAuth } from '@/hooks/useAuth'
 import { invalidateEnvUnlockQueries } from '@/lib/env-unlock-queries'
@@ -49,7 +49,7 @@ export function EnvUnlockDialog({ open, onOpenChange, onUnlocked }: EnvUnlockDia
       onOpenChange(false)
       reset()
     } catch (err) {
-      toast.error(classifyError(err).message || 'Invalid password')
+      presentError(err, { fallback: 'Invalid password' })
       setPassword('')
     } finally {
       setSubmitting(false)

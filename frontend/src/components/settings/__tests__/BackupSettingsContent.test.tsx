@@ -657,7 +657,7 @@ describe('BackupSettingsContent — error handling', () => {
     fireEvent.click(await screen.findByText('Clear saved password'))
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('Failed to clear password')
+      expect(toast.error).toHaveBeenCalledWith('Failed to clear password', { description: 'fail' })
     })
   })
 

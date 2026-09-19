@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { AlertCircle, RefreshCw, Copy } from 'lucide-react'
 import { toast } from 'sonner'
+import { toastInvalid } from '@/lib/error-handler'
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -62,7 +63,7 @@ function copyToClipboard(text: string) {
   navigator.clipboard.writeText(text).then(() => {
     toast.success('Error details copied to clipboard')
   }).catch(() => {
-    toast.error('Failed to copy error details')
+    toastInvalid('Failed to copy error details')
   })
 }
 

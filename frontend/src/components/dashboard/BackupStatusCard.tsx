@@ -14,6 +14,7 @@ import {
   CircleDashed,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { presentError } from '@/lib/error-handler'
 import { useBackupStatus, useRunBackup, useBackupStreaming } from '@/hooks/useBackup'
 import { queryKeys } from '@/lib/query-keys'
 import { useQueryClient } from '@tanstack/react-query'
@@ -172,8 +173,12 @@ export function BackupStatusCard() {
         }
       },
       onError: (err) => {
-        const message = err instanceof Error ? err.message : 'Failed to start backup'
-        toast.error(message)
+        // agent-os-5g8a, found by hand: the eslint ratchet cannot see this one
+        // because the fixed sentence hides behind a variable. `err instanceof
+        // Error` is FALSE for the flat object the api.ts interceptor rejects
+        // with, so the backend's cause was discarded for every real API
+        // failure and only a thrown Error ever got its message through.
+        presentError(err, { fallback: 'Failed to start backup' })
       },
     })
   }

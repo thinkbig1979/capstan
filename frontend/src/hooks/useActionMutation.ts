@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient, type UseMutationResult, type QueryKey } from '@tanstack/react-query'
-import { toast } from 'sonner'
 import { isActionResult, toastForResult, type ActionResult } from '@/lib/action-result'
-import { classifyError } from '@/lib/error-handler'
+import { presentCause } from '@/lib/error-handler'
 
 export interface UseActionMutationOptions<TVars, TData extends ActionResult> {
   mutationFn: (vars: TVars) => Promise<TData>
@@ -19,7 +18,8 @@ export interface UseActionMutationOptions<TVars, TData extends ActionResult> {
  *  - onSuccess: fires toastForResult (derives toast level from outcome), then
  *    invalidates all provided query keys, then calls onResult.
  *  - onError: renders the ActionResult's own reason when the rejection carries
- *    one, and otherwise classifies the error via classifyError.
+ *    one (through toastForResult, so the toast LEVEL still follows the
+ *    outcome), and otherwise hands the rejection to presentCause.
  *
  * Replaces ad-hoc `onSuccess: toast.success(...)` (audit finding P-6).
  */
@@ -52,7 +52,15 @@ export function useActionMutation<TVars, TData extends ActionResult = ActionResu
         toastForResult(err)
         return
       }
-      toast.error(classifyError(err).message)
+      // presentCause, NOT presentError (agent-os-5g8a). This wrapper does not
+      // know WHICH action failed, so it has no action context to put in a
+      // title and a fixed one would be a lie -- the cause IS the message here.
+      // The ActionResult branch above stays where it is for the same reason it
+      // was written: toastForResult maps OUTCOME to toast LEVEL, so routing it
+      // through any presenter would turn every `partial` into an error toast
+      // and every `no_change` into an error toast. truth.Partial is real and
+      // reachable (handlers/compose.go, handlers/env.go).
+      presentCause(err)
     },
   })
 }

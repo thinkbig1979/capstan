@@ -179,7 +179,13 @@ describe('DirectoriesSettingsContent — scan depth', () => {
     await user.click(await screen.findByRole('option', { name: '2 levels deep' }))
     await user.click(screen.getByRole('button', { name: 'Save Scan Depth' }))
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to update scan depth'))
+    // agent-os-5g8a: the zero-arity onError now takes the rejection, so the
+    // cause reaches the operator as a description instead of being discarded.
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Failed to update scan depth', {
+        description: 'boom',
+      }),
+    )
   })
 })
 
@@ -233,7 +239,9 @@ describe('DirectoriesSettingsContent — default directory', () => {
     await user.click(screen.getByRole('button', { name: 'Save Default Directory' }))
 
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('Failed to update default directory'),
+      expect(toast.error).toHaveBeenCalledWith('Failed to update default directory', {
+        description: 'boom',
+      }),
     )
   })
 })

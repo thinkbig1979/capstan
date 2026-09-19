@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { presentError, toastInvalid } from '@/lib/error-handler'
 import { isActionResult } from '@/lib/action-result'
 import type { LintResult, Stack } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
@@ -86,7 +87,7 @@ export function useCreateStack() {
           // Preserve lint-result toast differentiation.
           const lintResults = extractLintResults(data)
           if (lintResults?.some((r) => r.level === 'error')) {
-            toast.error('Stack created but has lint errors')
+            toastInvalid('Stack created but has lint errors')
           } else if (lintResults?.some((r) => r.level === 'warning')) {
             toast.warning('Stack created but has lint warnings')
           } else {
@@ -95,7 +96,7 @@ export function useCreateStack() {
         } else {
           // no_change/failed are unexpected from create (a real failure rejects
           // and lands in onError), but never leave a 2xx body silent.
-          toast.error(data.reason || 'Stack create failed')
+          toastInvalid(data.reason || 'Stack create failed')
         }
       }
     },
@@ -126,11 +127,11 @@ export function useCreateStack() {
       const lintResults = err.details?.lintResults
 
       if (lintResults && lintResults.length > 0) {
-        toast.error('Lint errors detected')
+        toastInvalid('Lint errors detected')
       } else if (err.code === 'DUPLICATE_STACK') {
-        toast.error('A stack with this name already exists')
+        presentError(error, { fallback: 'A stack with this name already exists' })
       } else {
-        toast.error(err.message || 'Failed to create stack')
+        presentError(error, { fallback: 'Failed to create stack' })
       }
     },
   })

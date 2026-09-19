@@ -12,6 +12,8 @@
  * When a mutation both has an inline surface AND navigates/runs in the background,
  * prefer inline for the validation phase and a toast only for the async result.
  */
+import { toast } from 'sonner'
+import { isActionResult } from './action-result'
 import { messageOrNull } from './narrow'
 
 type ErrorType = 'network' | 'auth' | 'validation' | 'server' | 'timeout' | 'unknown'
@@ -86,6 +88,13 @@ export function isAutoRetryable(error: unknown): boolean {
   return status === 408 || status === 429
 }
 
+/**
+ * The sentence classifyError substitutes when the rejection carried no message
+ * of its own. ONE constant, referenced by both the substitution below and
+ * causeOf's suppression rule, so the two cannot drift apart into two literals.
+ */
+const NO_BACKEND_MESSAGE = 'An error occurred'
+
 export function classifyError(error: unknown): AppError {
   if (!error) {
     return {
@@ -124,11 +133,11 @@ export function classifyError(error: unknown): AppError {
   // need to tell "the backend said nothing" from "the backend said something",
   // and `message` cannot express that — it is never empty, so the `message || ...`
   // idiom in the 409 and 428 arms below can never actually reach its fallback.
-  const backendMessage =
-    messageOrNull(err.response?.data?.error) ??
-    messageOrNull(err.response?.data?.message) ??
-    messageOrNull(err.message)
-  const message = backendMessage ?? 'An error occurred'
+  //
+  // Extracted to backendCauseOf (agent-os-5g8a) so the presenters below run the
+  // SAME chain rather than a second copy of it.
+  const backendMessage = backendCauseOf(error)
+  const message = backendMessage ?? NO_BACKEND_MESSAGE
   const details = err.details ?? err.response?.data?.details
   // Nested FIRST, unlike `status` and `details` above, and deliberately so:
   // axios stamps its OWN code at the top level on a 4xx — settle.js:21 rejects
@@ -343,4 +352,191 @@ export function classifyError(error: unknown): AppError {
     originalError: error,
     action: 'Contact Support',
   }
+}
+
+/**
+ * The cause the rejection itself carried, or null when it carried none.
+ *
+ * Exactly the chain classifyError builds its `backendMessage` local from —
+ * extracted (agent-os-5g8a) so there is ONE implementation of "did the backend
+ * say anything at all?". `null` is the load-bearing value: every classifyError
+ * arm ends in a sentence, so `AppError.message` can never express silence.
+ */
+export function backendCauseOf(error: unknown): string | null {
+  if (!error) return null
+  const err = error as {
+    response?: { data?: { error?: unknown; message?: unknown } }
+    message?: unknown
+  }
+  return (
+    messageOrNull(err.response?.data?.error) ??
+    messageOrNull(err.response?.data?.message) ??
+    messageOrNull(err.message)
+  )
+}
+
+/**
+ * What to tell the operator went wrong, or null when nothing is known.
+ *
+ * An ActionResult's own `reason` wins: it is the backend's considered diagnosis
+ * of a multi-step write and names which step failed. Otherwise classifyError's
+ * sentence, plus its `context` when it computed one (the 404/409/428 resource
+ * and directory names, which are otherwise silently dropped by every consumer
+ * that reads only `.message`).
+ *
+ * SUPPRESSION applies only when the backend said NOTHING, and then only to the
+ * arms that have no diagnosis of their own. Two kinds of arm qualify:
+ *
+ *  - `type: 'unknown'` — exactly two of classifyError's 14 arms, the `!error`
+ *    guard at the top and the terminal fallthrough at the bottom.
+ *  - Arms whose message IS the no-backend-message sentinel. classifyError's
+ *    400/422, 409 and 428 arms all spell `message || '<their own fallback>'`,
+ *    and `message` is never falsy, so that fallback is dead code — the file's
+ *    own comment says it "can never actually reach its fallback". A bodyless
+ *    4xx (a proxy 4xx, the shape agent-os-ohkw exists to handle) therefore
+ *    returns the literal 'An error occurred' under `type: 'server'` or
+ *    `'validation'`, which the type key alone does not catch. Rendering that as
+ *    a cause is a fixed sentence dressed as a diagnosis — the exact defect
+ *    these presenters exist to end (found in review of agent-os-5g8a).
+ *
+ * Everything else survives, and must: 401 says 'Log in again to continue', 404
+ * names the resource, 429 says to wait, the 5xx arm keeps the status because
+ * the status is itself diagnostic (agent-os-mc4i). Those are informative even
+ * when the body was empty.
+ *
+ * Keyed on a shared CONSTANT rather than on sentence text, so the rule and the
+ * sentence it keys on cannot drift into two literals.
+ */
+export function causeOf(error: unknown): string | null {
+  if (isActionResult(error) && error.reason) return error.reason
+  const app = classifyError(error)
+  if (backendCauseOf(error) === null && !hasOwnDiagnosis(app)) return null
+  return app.context ? `${app.message} (${app.context})` : app.message
+}
+
+/** Whether this arm authored a sentence of its own, rather than falling back. */
+function hasOwnDiagnosis(app: AppError): boolean {
+  return app.type !== 'unknown' && app.message !== NO_BACKEND_MESSAGE
+}
+
+/** The sonner options these presenters pass through. Deliberately tiny. */
+type ToastOptions = { id?: string | number; duration?: number }
+
+/**
+ * Render a failed action from an ALREADY-COMPUTED cause: the action context as
+ * the toast TITLE, the cause as the DESCRIPTION.
+ *
+ * Both, never one instead of the other. The fixed sentence a call site passes
+ * is the only place the ACTION lives ("Failed to extract variable to .env"),
+ * and the cause is the only place the diagnosis lives ("failed to write compose
+ * file; env rolled back"). Collapsing to a single line deletes one of them,
+ * which is the defect class these helpers exist to end.
+ *
+ * SEPARATE from presentError because several forms read their cause with a
+ * CODE-KEYED reader (settingsSaveFault, credentialSaveFault, updateScanFault,
+ * repoFaultFrom) rather than with causeOf. Each of those exists precisely so as
+ * NOT to be classifyError, and each says so in its own docblock (agent-os-zlw0).
+ * Those call sites hand their already-read answer here. Three reasons, and the
+ * first is the one that decides it:
+ *
+ *  1. Switching a reader's KEY is a decision this change is not entitled to
+ *     take. The code-keying was chosen deliberately, is documented, and is
+ *     pinned by tests.
+ *  2. There IS a leak, but a narrower one than "axios's own message reaches the
+ *     operator". MEASURED, not assumed: classifyError's first two arms are
+ *     themselves code-keyed (ECONNABORTED/ETIMEDOUT, ERR_NETWORK) and the
+ *     interceptor preserves `error.code`, and a later arm matches the substring
+ *     'network' — so a genuine axios network error or timeout classifies
+ *     correctly and does NOT leak. What leaks is the tail where axios's code is
+ *     neither of those and its message matches none of the substring arms:
+ *     `{code:'UNKNOWN', message:'timeout of 30000ms exceeded'}`,
+ *     `{code:'UNKNOWN', message:'Request aborted'}` and
+ *     `{code:'ERR_CANCELED', message:'canceled'}` all come back from causeOf
+ *     verbatim. The code-keyed readers decline every one of them.
+ *  3. COVERAGE, which cuts the other way and is the half that is easy to miss:
+ *     code-keying PICKS UP faults a status-keyed reader drops. The backup
+ *     endpoint mints VALIDATION_ERROR at 422, not 400, so its two most
+ *     operator-actionable sentences would never render behind a status key.
+ *
+ * (An earlier revision of this comment claimed the leak was "Network Error"
+ * itself. That was false and shipped in six copies; the repo's own
+ * apiInterceptorError tests disprove it. Corrected in review.)
+ *
+ * `cause !== title` guards the degenerate case where they are the same string.
+ * The one- vs two-argument split is load-bearing: sonner renders
+ * `toast.error(t)` and `toast.error(t, undefined)` identically but a vitest spy
+ * does not, and several tests pin the single-argument shape.
+ *
+ * An EMPTY title is substituted rather than rendered. `string` does not exclude
+ * `''`, so "non-empty by type" was a false claim (found in review) -- the
+ * promise is kept here, at runtime, or it is not kept at all. If only the cause
+ * is known it becomes the title, which is better than a blank toast.
+ */
+export function presentFault(rawTitle: string, cause: string | null, extra?: ToastOptions): void {
+  const title = rawTitle || cause || 'An unexpected error occurred'
+  const description = cause && cause !== title ? cause : undefined
+  if (description !== undefined) {
+    toast.error(title, extra ? { ...extra, description } : { description })
+    return
+  }
+  if (extra) {
+    toast.error(title, extra)
+    return
+  }
+  toast.error(title)
+}
+
+/**
+ * Render a failed action whose cause has to be dug out of the rejection.
+ *
+ * The common case, and the one the eslint rule points every fixed-sentence
+ * `toast.error` at. `fallback` is the toast TITLE and is always rendered.
+ *
+ * There is deliberately no separate `title` option. It would mean the same
+ * thing as `fallback`, so passing both left one of them dead at the call site
+ * -- which is what happened at the one site that used it (found in review).
+ */
+export function presentError(
+  err: unknown,
+  opts: { fallback: string; extra?: ToastOptions },
+): void {
+  presentFault(opts.fallback, causeOf(err), opts.extra)
+}
+
+/**
+ * Render a rejection that has NO action context of its own: the cause IS the
+ * message.
+ *
+ * For generic wrappers (useActionMutation) that do not know which action
+ * failed, so there is no title to carry and a fixed one would be a lie.
+ */
+export function presentCause(err: unknown): void {
+  toast.error(causeOf(err) ?? 'An unexpected error occurred')
+}
+
+/**
+ * Render a message that is ALREADY FINAL — nothing further is to be looked up.
+ *
+ * Three kinds of site land here, and they share the property that asking
+ * causeOf would be wrong rather than merely redundant:
+ *
+ *  - CLIENT-SIDE refusals and local-state notices, where no rejection exists
+ *    anywhere in scope ("Passwords do not match", a clipboard write that
+ *    failed, an inactivity disconnect). Routing these through classifyError is
+ *    actively harmful: its `!navigator.onLine` arm rewrites ANY error to "Check
+ *    your connection and try again", so an offline operator would be told their
+ *    clipboard failure was a network problem.
+ *  - Sites where a CODE-KEYED reader has already looked and declined, so the
+ *    fixed sentence is a deliberate refusal to claim a cause.
+ *  - The `cause || 'Generic sentence'` shape, where the cause is already
+ *    resolved and belongs in the TITLE — the same call toastForResult's `failed`
+ *    arm makes.
+ *
+ * Named rather than inlined so the distinction is visible at the call site and
+ * greppable later: the INLINE-vs-TOAST convention at the top of this file says
+ * many of these belong next to the field the user is looking at, not in a
+ * toast. Converting them is a separate job; this marks the set.
+ */
+export function toastInvalid(message: string, extra?: ToastOptions): void {
+  presentFault(message, null, extra)
 }
