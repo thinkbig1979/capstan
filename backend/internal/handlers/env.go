@@ -3,7 +3,9 @@ package handlers
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -329,8 +331,31 @@ func (h *EnvHandler) Create(c *gin.Context) {
 		Content string `json:"content"`
 		Raw     string `json:"raw"`
 	}
-	// Ignore bind error — an empty body is fine (creates an empty file).
-	_ = c.ShouldBindJSON(&req) //nolint:errcheck // An absent/empty body is intentional here and creates an empty file; see the comment above.
+	// agent-os-40bp: an ABSENT body is intentional and creates an empty file; a
+	// MALFORMED one is a client error and must write nothing. Discarding the bind
+	// error conflated them, so `{"content": 123}` and `{not json` both bound to the
+	// zero value and this handler created an EMPTY file and answered success — the
+	// operator's intended initial content silently dropped. (It could never
+	// overwrite anything: the os.Stat guard above answers 409 when the file already
+	// exists, which is why this is a dropped-input bug and not a data-loss one.)
+	//
+	// io.EOF is the discriminator, and it has to be, because the two cases are
+	// indistinguishable by their RESULT — both leave req at its zero value.
+	// MEASURED, and two of these are easy to get wrong:
+	//   - an absent body, an empty body and a WHITESPACE-ONLY body all yield EOF,
+	//     so all three still create an empty file;
+	//   - `{}` and `null` are VALID JSON that bind cleanly with content "", so they
+	//     must also still create an empty file. Do not "tighten" this to a check on
+	//     whether content is empty: that would reject valid JSON while still
+	//     accepting every malformed body this guard exists to catch.
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid request body",
+		))
+		return
+	}
 
 	content := req.Content
 	if content == "" {
