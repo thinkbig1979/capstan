@@ -140,6 +140,9 @@ export function useDeleteImage() {
       }
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.images() })
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
+      // The Images tab readout counts the dangling images this may have just
+      // removed, so it goes stale on exactly the same events as the list.
+      queryClient.invalidateQueries({ queryKey: queryKeys.resources.cleanupPreview() })
     },
     onError: (err) => {
       if (isActionResult(err)) {
@@ -637,14 +640,49 @@ export function useUpdateDockerCleanupPolicy() {
 }
 
 /**
- * A mutation rather than a query: the preview takes a floor the operator is
- * trying out, removes nothing, and must re-run on demand rather than be served
- * from cache — a stale candidate list is a list of images that may already be
- * gone. It invalidates nothing, because it changes nothing.
+ * The settings card's try-a-floor preview is a mutation rather than a query
+ * because it takes a floor the OPERATOR is trying out: it runs when they press
+ * Preview, at a number that is not the stored one, and must re-run on demand
+ * rather than be served from cache — a stale candidate list is a list of images
+ * that may already be gone. It invalidates nothing, because it changes nothing.
+ *
+ * The read at the STORED floor is a different thing and is a query. See
+ * useScheduledCleanupPreview below.
  */
 export function usePreviewDockerCleanup() {
   return useMutation({
     mutationFn: (minAgeHours?: number) => resourcesApi.previewCleanup(minAgeHours),
+  })
+}
+
+/**
+ * What the next SCHEDULED run would reclaim, at the floor already stored in the
+ * policy. A query, not a mutation, because nobody asks for it: the whole point
+ * of the Images-tab readout is to be on screen before anyone thinks to look.
+ *
+ * Sending no minAgeHours means "use the stored policy" (cleanupMinAgeFromRequest,
+ * docker_cleanup.go). It is invalidated by every image removal on that tab —
+ * useDeleteImage above and the tab's PruneButton — and a 30s staleTime is
+ * acceptable because the image list it sits above is served the same way.
+ */
+export function useScheduledCleanupPreview() {
+  return useQuery({
+    queryKey: queryKeys.resources.cleanupPreview(),
+    queryFn: () => resourcesApi.previewCleanup(),
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * Recorded cleanup runs for the settings card, newest first. The limit is fixed
+ * at the call site and is NOT part of the query key, which is correct while
+ * there is one reader; a second reader at another limit would silently read
+ * this one's cached page.
+ */
+export function useDockerCleanupHistory(limit = 20) {
+  return useQuery({
+    queryKey: queryKeys.settings.dockerCleanupHistory(),
+    queryFn: () => resourcesApi.getCleanupHistory(limit),
   })
 }
 

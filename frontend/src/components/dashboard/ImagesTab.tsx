@@ -1,5 +1,11 @@
 import { useState, useMemo } from 'react'
-import { useImages, useDeleteImage } from '@/hooks/useResources'
+import { Link } from 'react-router'
+import {
+  useImages,
+  useDeleteImage,
+  useScheduledCleanupPreview,
+  useDockerCleanupPolicy,
+} from '@/hooks/useResources'
 import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -36,6 +42,8 @@ export function ImagesTab() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   const deleteMutation = useDeleteImage()
+  const cleanupPreview = useScheduledCleanupPreview()
+  const cleanupPolicy = useDockerCleanupPolicy()
 
   const handleDelete = async (image: DockerImage) => {
     const tag = image.repoTags[0] || image.id.substring(0, 19)
@@ -126,7 +134,11 @@ export function ImagesTab() {
             options={{ all: { label: 'Remove all unused images, not just dangling' }, until: true }}
             confirmMessage="Prune Unused Images?"
             confirmDescription="By default only dangling (untagged) images are removed. Enable 'all unused' to remove every image not used by a container."
-            invalidateKeys={[queryKeys.resources.images(), queryKeys.dashboardStats()]}
+            invalidateKeys={[
+              queryKeys.resources.images(),
+              queryKeys.dashboardStats(),
+              queryKeys.resources.cleanupPreview(),
+            ]}
           />
         }
         countDisplay={
@@ -135,6 +147,37 @@ export function ImagesTab() {
             : `${images.length} images, ${formatBytes(images.reduce((sum, img) => sum + img.size, 0))} total`
         }
       />
+
+      {/* One block, gated wholly on the preview having data. On a preview error
+          nothing here renders — not the schedule sentence, not the link — even
+          when the policy query succeeded: a schedule line with no figure beside
+          it reads as "nothing to reclaim", and a fabricated "0 B" reads as a
+          measurement. Both name the floor the SERVER echoed, never a local one.
+          "created more than", not "unused for": the filter keys on creation
+          time. */}
+      {cleanupPreview.data && (
+        <p data-testid="cleanup-reclaimable" className="text-sm text-muted-foreground">
+          {cleanupPreview.data.candidates.length === 0
+            ? `Nothing for scheduled cleanup to reclaim: no dangling image was created more than ${cleanupPreview.data.minAgeHours} hours ago.`
+            : `Scheduled cleanup would reclaim ${formatBytes(cleanupPreview.data.reclaimableBytes)} from ${cleanupPreview.data.candidates.length} dangling image${
+                cleanupPreview.data.candidates.length === 1 ? '' : 's'
+              } created more than ${cleanupPreview.data.minAgeHours} hours ago.`}
+          {cleanupPolicy.data && (
+            <>
+              {' '}
+              {cleanupPolicy.data.enabled
+                ? 'Scheduled cleanup is on.'
+                : 'Scheduled cleanup is off.'}{' '}
+              <Link
+                to="/settings/docker-cleanup"
+                className="text-primary hover:underline"
+              >
+                Cleanup settings
+              </Link>
+            </>
+          )}
+        </p>
+      )}
 
       <div className="rounded-md border">
         <Table>

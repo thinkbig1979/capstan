@@ -38,6 +38,7 @@ import type {
   VersionInfo,
   DockerCleanupPolicy,
   DockerCleanupPreview,
+  DockerCleanupHistory,
 } from '@/types'
 
 /**
@@ -777,6 +778,18 @@ export const resourcesApi = {
       '/resources/cleanup/preview',
       minAgeHours === undefined ? {} : { minAgeHours },
     )
+    return response.data
+  },
+
+  /**
+   * Recorded cleanup runs, newest first. The limit sent here is a request, not a
+   * guarantee: the handler clamps it to [1,100] and defaults to 50
+   * (docker_cleanup.go:341-358), and the response echoes the limit it applied.
+   */
+  getCleanupHistory: async (limit: number) => {
+    const response = await apiClient.get<DockerCleanupHistory>('/resources/cleanup/history', {
+      params: { limit },
+    })
     return response.data
   },
 }

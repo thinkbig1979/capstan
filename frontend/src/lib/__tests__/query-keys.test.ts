@@ -115,6 +115,7 @@ describe('queryKeys prefix relationships', () => {
       queryKeys.resources.buildCache(),
       queryKeys.resources.updates(),
       queryKeys.resources.updateJobs(),
+      queryKeys.resources.cleanupPreview(),
     ]) {
       expect(isPrefixOf(queryKeys.resources.all(), key)).toBe(true)
     }
@@ -127,6 +128,7 @@ describe('queryKeys prefix relationships', () => {
       queryKeys.settings.globalEnv(),
       queryKeys.settings.retention(),
       queryKeys.settings.dockerCleanup(),
+      queryKeys.settings.dockerCleanupHistory(),
     ]) {
       expect(isPrefixOf(queryKeys.settings.all(), key)).toBe(true)
     }

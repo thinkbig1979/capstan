@@ -7,13 +7,18 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { HelpHint } from '@/components/ui/help-hint'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
-import { formatBytes } from '@/lib/format'
+import { Badge } from '@/components/ui/badge'
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table'
+import { formatBytes, formatRelativeTime, formatDateFull } from '@/lib/format'
 import {
   useDockerCleanupPolicy,
   useUpdateDockerCleanupPolicy,
   usePreviewDockerCleanup,
+  useDockerCleanupHistory,
 } from '@/hooks/useResources'
-import type { DockerCleanupCandidate } from '@/types'
+import type { DockerCleanupCandidate, DockerCleanupRun } from '@/types'
 
 /** What to show for one preview row.
  *
@@ -26,6 +31,13 @@ import type { DockerCleanupCandidate } from '@/types'
  *  mostly prefix and does not distinguish two images. */
 function candidateLabel(candidate: DockerCleanupCandidate): string {
   return candidate.repository ?? candidate.id.replace('sha256:', '').substring(0, 19)
+}
+
+/** What one run actually freed. Image bytes and build-cache bytes are recorded
+ *  separately, and a run that only cleared cache has bytesReclaimed 0 — reading
+ *  that field alone reports "0 B" for work that did happen. */
+function runReclaimed(run: DockerCleanupRun): string {
+  return formatBytes(run.bytesReclaimed + run.cacheBytesReclaimed)
 }
 
 interface PolicyDraft {
@@ -41,6 +53,7 @@ export function DockerCleanupCard() {
   const { data, isLoading, isError } = useDockerCleanupPolicy()
   const updatePolicy = useUpdateDockerCleanupPolicy()
   const preview = usePreviewDockerCleanup()
+  const history = useDockerCleanupHistory()
   const [draft, setDraft] = useState<PolicyDraft>({})
 
   if (isLoading) {
@@ -248,6 +261,69 @@ export function DockerCleanupCard() {
               </ul>
             </div>
           ))}
+      </div>
+
+      <div className="space-y-3 pt-4 border-t">
+        <div>
+          <h4 className="text-sm font-medium">Recent runs</h4>
+          <p className="text-xs text-muted-foreground">
+            What the cleanup has actually removed, newest first.
+          </p>
+        </div>
+
+        {/* Three states, three sentences, none reusable for another: an
+            unreadable history is not an empty one, and an operator's next move
+            differs. Neither sentence may contain "could not be read" — that
+            belongs to the policy-read failure above and the card must not say
+            it twice. */}
+        {history.isLoading ? (
+          <LoadingSpinner />
+        ) : history.isError || !history.data ? (
+          <p className="text-sm text-destructive">Run history is unavailable.</p>
+        ) : history.data.runs.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No cleanup runs yet.</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              {/* No Finished and no Duration column, deliberately. finishedAt is
+                  recorded but answers nothing an operator acts on, and it is the
+                  one optional field left that a date formatter would turn into
+                  "Invalid Date" when the wire omits it. */}
+              <TableRow>
+                <TableHead>Started</TableHead>
+                <TableHead>Trigger</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Images removed</TableHead>
+                <TableHead>Reclaimed</TableHead>
+                <TableHead>Age floor</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {history.data.runs.map((run) => (
+                <TableRow key={run.id}>
+                  <TableCell title={formatDateFull(run.startedAt)}>
+                    {formatRelativeTime(run.startedAt)}
+                  </TableCell>
+                  <TableCell>{run.trigger}</TableCell>
+                  <TableCell>
+                    <Badge variant={run.status === 'failed' ? 'destructive' : 'secondary'}>
+                      {run.status}
+                    </Badge>
+                    {/* Guarded, never interpolated: errorMessage is omitted from
+                        every successful run, and `Failed: ${run.errorMessage}`
+                        would print "undefined" on each of them. */}
+                    {run.errorMessage && (
+                      <p className="mt-1 text-xs text-destructive">{run.errorMessage}</p>
+                    )}
+                  </TableCell>
+                  <TableCell>{run.imagesDeleted}</TableCell>
+                  <TableCell>{runReclaimed(run)}</TableCell>
+                  <TableCell>{run.minAgeHours} h</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </div>
     </div>
   )
