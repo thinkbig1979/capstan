@@ -8,6 +8,7 @@ import {
 import { UpdatesTable } from './UpdatesTable'
 import type { useUpdatesData } from './useUpdatesData'
 import { classifyError } from '@/lib/error-handler'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 type UpdatesData = ReturnType<typeof useUpdatesData>
 
@@ -21,7 +22,7 @@ interface AvailableUpdatesPanelProps {
  */
 export function AvailableUpdatesPanel({ data }: AvailableUpdatesPanelProps) {
   const {
-    isRefreshing, isLoading, isError, error, fromCache, neverScanned, hasData,
+    isRefreshing, isLoading, isError, error, updateData, neverScanned, hasData,
     handleCheck, sortBy, setSortBy, query, setQuery, scannedAt, sortedUpdates,
     updates, policies, jobForContainer, expandedIds, toggleExpand, handleUpdate,
     updatePending,
@@ -35,7 +36,7 @@ export function AvailableUpdatesPanel({ data }: AvailableUpdatesPanelProps) {
     return <LoadingSkeletons />
   }
 
-  if (isError && !fromCache) {
+  if (isError && !updateData) {
     // agent-os-rtn8: useCheckUpdates calls checkUpdates(FALSE), so the refusals
     // that reach here are the non-refresh branch's three 500s, carrying two
     // distinct sentences -- "Failed to get cached updates" (the cache read) and
@@ -50,6 +51,17 @@ export function AvailableUpdatesPanel({ data }: AvailableUpdatesPanelProps) {
     // cause the backend never sent is the worse defect. `isError` and `error`
     // are separate fields, so the guard is not redundant with the branch above
     // it. A test pins the no-error case.
+    //
+    // agent-os-4gve: the OPERAND was `!fromCache` and is now `!updateData`.
+    // `fromCache` is a payload FIELD read off data TanStack retains across a
+    // failed refetch, so it answered "did the payload claim to be cached",
+    // never "is there anything to show". A populated list carrying
+    // fromCache:false reaches the cache through useResources'
+    // checkUpdatesRefresh mutation (setQueryData on the no-scheduler branch),
+    // and from there one focus refetch that 500s replaced a populated table
+    // with this card. `!hasData` is NOT the fix either -- it is
+    // `updates.length > 0`, list non-emptiness, payload-derived in the same
+    // way. Only the presence of the payload itself answers the question.
     return (
       <UpdateCheckErrorCard
         onCheck={handleCheck}
@@ -62,27 +74,42 @@ export function AvailableUpdatesPanel({ data }: AvailableUpdatesPanelProps) {
     return <NeverScannedCard onCheck={handleCheck} />
   }
 
+  // agent-os-4gve, the other half: past the guard above, `isError` here means a
+  // REFRESH failed while TanStack still holds the last payload the server really
+  // sent. Without this the panel renders that payload with no sign the check
+  // failed -- "no updates" reads as "you are up to date". No onRetry: both tail
+  // states already carry their own check control.
+  const refreshFailed = isError && Boolean(updateData)
+
   if (!hasData) {
-    return <NoUpdatesCard onCheck={handleCheck} isRefreshing={isRefreshing} />
+    return (
+      <>
+        {refreshFailed && <RefreshFailedNotice what="the available updates" />}
+        <NoUpdatesCard onCheck={handleCheck} isRefreshing={isRefreshing} />
+      </>
+    )
   }
 
   return (
-    <UpdatesTable
-      sortedUpdates={sortedUpdates}
-      totalCount={updates.length}
-      sortBy={sortBy}
-      onSortChange={setSortBy}
-      query={query}
-      onQueryChange={setQuery}
-      scannedAt={scannedAt}
-      isRefreshing={isRefreshing}
-      onCheck={handleCheck}
-      policies={policies}
-      jobForContainer={jobForContainer}
-      expandedIds={expandedIds}
-      onToggleExpand={toggleExpand}
-      onUpdate={handleUpdate}
-      updatePending={updatePending}
-    />
+    <>
+      {refreshFailed && <RefreshFailedNotice what="the available updates" />}
+      <UpdatesTable
+        sortedUpdates={sortedUpdates}
+        totalCount={updates.length}
+        sortBy={sortBy}
+        onSortChange={setSortBy}
+        query={query}
+        onQueryChange={setQuery}
+        scannedAt={scannedAt}
+        isRefreshing={isRefreshing}
+        onCheck={handleCheck}
+        policies={policies}
+        jobForContainer={jobForContainer}
+        expandedIds={expandedIds}
+        onToggleExpand={toggleExpand}
+        onUpdate={handleUpdate}
+        updatePending={updatePending}
+      />
+    </>
   )
 }

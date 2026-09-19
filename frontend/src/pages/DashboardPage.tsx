@@ -25,6 +25,7 @@ import { HostStrip, type HostView } from '@/components/dashboard/HostStrip'
 import { StacksTab } from '@/components/dashboard/StacksTab'
 import { DirectoriesTab } from '@/components/dashboard/DirectoriesTab'
 import { classifyError, presentError } from '@/lib/error-handler'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { useStackActions } from '@/hooks/useStackActions'
 import { toast } from 'sonner'
 import { useConfirm } from '@/hooks/useConfirm'
@@ -249,7 +250,21 @@ export function DashboardPage() {
   }
 
   const error = directoriesError || stacksError
-  if (error) {
+
+  // agent-os-lurn: the guard was `if (error)`, which is true for a failed
+  // REFETCH as well as a failed first load — and TanStack retains `data` in
+  // both cases — so one focus refetch that 500s blanked the ENTIRE dashboard
+  // (staleTime 30s, refetchOnWindowFocus on, a 500 is not auto-retryable).
+  //
+  // Keyed PER QUERY on error-without-data, not on the merged `error` against
+  // the merged data. `!directories && !stacks` would be wrong: both queries
+  // resolve to ARRAYS, and an empty array is truthy, so that predicate demands
+  // both be absent and would stop the error page appearing when exactly one
+  // query fails its first load — the case the two arms in DashboardPage.test's
+  // "error path" pin. `error` itself stays: it is what classifyError reads, and
+  // what the notice below keys on.
+  const firstLoadFailed = (directoriesError && !directories) || (stacksError && !stacks)
+  if (firstLoadFailed) {
     const appError = classifyError(error)
 
     return (
@@ -282,6 +297,9 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {/* agent-os-lurn: past the guard, an error means a REFRESH failed over
+          data we still hold. Report it without blanking the dashboard. */}
+      {error && <RefreshFailedNotice what="the dashboard" onRetry={handleRefresh} />}
       <DashboardHeader
         onRefresh={handleRefresh}
         onCreateStack={() => setCreateDialogOpen(true)}

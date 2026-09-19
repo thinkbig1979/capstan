@@ -351,6 +351,40 @@ describe('StackPage', () => {
       await waitFor(() => expect(getStack).toHaveBeenCalledTimes(1))
     })
 
+    /**
+     * agent-os-lurn. `if (error || !stack)` was true for a failed REFETCH as
+     * well as a failed first load, and TanStack retains `stack` in both cases,
+     * so one focus refetch that 500s rendered "Stack Not Found" over a stack
+     * already on screen (staleTime 30s, refetchOnWindowFocus on, 500 is not
+     * auto-retryable). RESOLVES first, then rejects a REFETCH; a
+     * first-fetch-rejects fixture is blind to this class.
+     *
+     * The two preservation controls are the arms either side of this one:
+     * "shows a failure card with Retry when the fetch rejects" (error, no data)
+     * and "shows a plain not-found message ... no :id param" (no error, no
+     * data). Neither can fail first; both are pinned by mutation evidence.
+     */
+    it('keeps the stack on screen when a REFETCH fails (agent-os-lurn)', async () => {
+      const { queryClient } = renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByTestId('stack-detail')).toBeInTheDocument())
+
+      getStack.mockRejectedValue(new Error('boom'))
+      await queryClient.refetchQueries()
+      await waitFor(() =>
+        expect(queryClient.getQueryCache().getAll().some((q) => q.state.status === 'error')).toBe(true),
+      )
+
+      // The stack the server already sent is still on screen...
+      expect(screen.getByTestId('stack-detail')).toBeInTheDocument()
+      // ...and "Stack Not Found" has NOT replaced it.
+      expect(screen.queryByText('Stack Not Found')).not.toBeInTheDocument()
+      // ...and the refresh failure is reported rather than swallowed.
+      expect(
+        screen.getByText(/Could not refresh this stack\. The values shown are the last ones the server sent\./),
+      ).toBeInTheDocument()
+    })
+
     it('shows a plain not-found message (no error card) when there is no :id param', async () => {
       // The query is `enabled: !!id` (StackPage.tsx:49), so with no id it never
       // runs: isLoading is false, error is null, and stack is undefined — the

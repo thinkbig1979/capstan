@@ -497,3 +497,70 @@ describe('UpdatesTab — tab switching', () => {
     expect(screen.getByTestId('update-log-tab')).toBeInTheDocument()
   })
 })
+
+// ─── agent-os-4gve: the error guard must key on DATA PRESENCE ────────────────
+
+/**
+ * agent-os-4gve, the 13th site of the agent-os-wczm class.
+ *
+ * The guard read `isError && !fromCache`. `fromCache` is a PAYLOAD FIELD
+ * (`updateData?.fromCache ?? false` in useUpdatesData), read off data TanStack
+ * RETAINS across a failed refetch — so it answers "did the payload say it came
+ * from cache", not "is there anything to show". The cache reaches a populated
+ * list carrying `fromCache:false` through a different writer than this panel's
+ * own query: useResources' checkUpdatesRefresh mutation calls
+ * `queryClient.setQueryData(queryKeys.resources.updates(), data)` with the
+ * response from checkUpdates(TRUE) on its no-scheduler branch. From that state
+ * one focus refetch that 500s replaced a populated table with the error card.
+ *
+ * `!hasData` is NOT the fix and was rejected: `hasData` is `updates.length > 0`,
+ * list non-emptiness, which is the same category error in a new spelling and
+ * turns the `updates: []` + `fromCache: true` arm above red.
+ */
+describe('UpdatesTab — a failed REFETCH must not discard a populated table (agent-os-4gve)', () => {
+  it('keeps the populated updates table when the query errors with data already held', () => {
+    const containers = [makeContainer({ containerId: 'a', containerName: 'zeta' })]
+    // Exactly the writer's shape: a full list with fromCache:false.
+    setCheckUpdates({ isError: true, data: { updates: containers, fromCache: false } })
+    render(<UpdatesTab />)
+
+    // The row the server already sent is still on screen...
+    expect(screen.getByText('zeta')).toBeInTheDocument()
+    // ...and the error card has NOT replaced it.
+    expect(screen.queryByText('Failed to Check for Updates')).not.toBeInTheDocument()
+    // ...and the failure is reported rather than swallowed.
+    expect(
+      screen.getByText(/Could not refresh the available updates\. The values shown are the last ones the server sent\./),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/check them before saving/)).not.toBeInTheDocument()
+  })
+
+  /**
+   * PRESERVATION CONTROL. Cannot fail first — it passes against the old guard
+   * too — so it is pinned by mutation evidence against the FIXED code instead
+   * (the agent-os-erfc lesson). A first-load failure has no data to protect and
+   * must still surrender the whole panel to the error card.
+   */
+  it('still shows the error card on a first-load failure with no data', () => {
+    setCheckUpdates({ isError: true })
+    render(<UpdatesTab />)
+
+    expect(screen.getByText('Failed to Check for Updates')).toBeInTheDocument()
+    expect(screen.queryByText(/Could not refresh the available updates/)).not.toBeInTheDocument()
+  })
+
+  /**
+   * The other half of UpdatesTab.test.tsx:231. That arm pins that an errored
+   * query serving a cached EMPTY list does not show the error card; it was
+   * green before this change and stays green. What it never pinned is that the
+   * operator is told the refresh failed at all — without this the panel says
+   * "no updates" while the check actually errored.
+   */
+  it('reports the refresh failure when errored while serving a cached empty list', () => {
+    setCheckUpdates({ isError: true, data: { updates: [], fromCache: true } })
+    render(<UpdatesTab />)
+
+    expect(screen.queryByText('Failed to Check for Updates')).not.toBeInTheDocument()
+    expect(screen.getByText(/Could not refresh the available updates/)).toBeInTheDocument()
+  })
+})
