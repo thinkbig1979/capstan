@@ -80,7 +80,7 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 	go func() {
 		<-ctx.Done()
 		// Negative PID signals the process group.
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		_ = syscall.Kill(-pgid, syscall.SIGKILL) //nolint:errcheck // Best-effort teardown: the process is already gone or unkillable, and neither outcome is actionable here.
 	}()
 
 	scanDone := make(chan struct{}, 2)
@@ -115,7 +115,7 @@ func (r *execRunner) Output(ctx context.Context, name string, args []string, env
 	go func() {
 		<-ctx.Done()
 		if pgid > 0 {
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			_ = syscall.Kill(-pgid, syscall.SIGKILL) //nolint:errcheck // Best-effort teardown: the process is already gone or unkillable, and neither outcome is actionable here.
 		}
 	}()
 

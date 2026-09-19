@@ -53,7 +53,7 @@ func (d *DB) SetCachedUpdates(updates []models.CachedUpdate) error {
 	if _, err := tx.Exec("DELETE FROM cached_updates"); err != nil {
 		// Rollback error is secondary to the exec error already being
 		// returned; the tx is abandoned either way.
-		_ = tx.Rollback()
+		_ = tx.Rollback() //nolint:errcheck // The exec error above is already being returned and the tx is abandoned either way; after a successful Commit this is sql.ErrTxDone by design.
 		return fmt.Errorf("clear cached updates: %w", err)
 	}
 
@@ -67,7 +67,7 @@ func (d *DB) SetCachedUpdates(updates []models.CachedUpdate) error {
 		if err != nil {
 			// Rollback error is secondary to the exec error already being
 			// returned; the tx is abandoned either way.
-			_ = tx.Rollback()
+			_ = tx.Rollback() //nolint:errcheck // The exec error above is already being returned and the tx is abandoned either way; after a successful Commit this is sql.ErrTxDone by design.
 			return fmt.Errorf("insert cached update: %w", err)
 		}
 	}

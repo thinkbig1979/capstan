@@ -260,7 +260,7 @@ func TestResolveBackupConfig_HostnameFromOS(t *testing.T) {
 	cfg := baseCfg("/data")
 	// No cfg.BackupHostname set.
 
-	sysHostname, _ := os.Hostname()
+	sysHostname, _ := os.Hostname() //nolint:errcheck // Mirrors the production site under test: the empty string is a valid outcome there, so the test must accept it here too.
 	bc, err := resolveBackupConfig(db, cfg)
 	if err != nil {
 		t.Fatalf("resolveBackupConfig: %v", err)

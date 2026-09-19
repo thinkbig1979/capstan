@@ -353,7 +353,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 		Raw     string `json:"raw"`
 	}
 	// Ignore bind error — an empty body is fine (creates an empty file).
-	_ = c.ShouldBindJSON(&req)
+	_ = c.ShouldBindJSON(&req) //nolint:errcheck // An absent/empty body is intentional here and creates an empty file; see the comment above.
 
 	content := req.Content
 	if content == "" {

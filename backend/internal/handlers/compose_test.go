@@ -121,7 +121,7 @@ func TestComposeHandler_Put_Success(t *testing.T) {
 
 	newContent := "services:\n  web:\n    image: nginx:1.22"
 	reqBody := map[string]string{"content": newContent}
-	reqBytes, _ := json.Marshal(reqBody)
+	reqBytes := mustMarshal(t, reqBody)
 
 	router := gin.New()
 	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), handler.Put)
@@ -176,7 +176,7 @@ func TestComposeHandler_Put_ValidationError(t *testing.T) {
 
 	invalidContent := "services:\n  web:\n    invalid: ["
 	reqBody := map[string]string{"content": invalidContent}
-	reqBytes, _ := json.Marshal(reqBody)
+	reqBytes := mustMarshal(t, reqBody)
 
 	router := gin.New()
 	router.PUT("/stacks/:id/compose", authContextMiddleware("test-user-id"), handler.Put)
@@ -204,7 +204,7 @@ func TestComposeHandler_Lint_Valid(t *testing.T) {
 
 	content := "services:\n  web:\n    image: nginx:1.21\n    restart: unless-stopped"
 	reqBody := map[string]string{"content": content}
-	reqBytes, _ := json.Marshal(reqBody)
+	reqBytes := mustMarshal(t, reqBody)
 
 	router := gin.New()
 	router.POST("/stacks/:id/compose/lint", handler.Lint)
@@ -338,7 +338,7 @@ func TestComposeHandler_Lint_Invalid(t *testing.T) {
 
 	content := "services:\n  web:\n    restart: unless-stopped"
 	reqBody := map[string]string{"content": content}
-	reqBytes, _ := json.Marshal(reqBody)
+	reqBytes := mustMarshal(t, reqBody)
 
 	router := gin.New()
 	router.POST("/stacks/:id/compose/lint", handler.Lint)

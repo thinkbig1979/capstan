@@ -18,6 +18,12 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
+// Hoisted out of the handler: the pattern is a literal, so compiling it per
+// request bought nothing and left an error return nobody could act on
+// (agent-os-qyg7.1). MustCompile fails at init if the pattern is ever broken,
+// which is the only way it could fail.
+var stackNameRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
 type CreateStackRequest struct {
 	Name           string `json:"name" binding:"required"`
 	Directory      string `json:"directory"`
@@ -46,8 +52,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	matched, _ := regexp.MatchString(`^[a-zA-Z0-9._-]+$`, req.Name)
-	if !matched {
+	if !stackNameRe.MatchString(req.Name) {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
 			models.ErrValidation,

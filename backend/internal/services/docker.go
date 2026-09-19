@@ -21,6 +21,12 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
+// Hoisted out of ValidateName: the pattern is a literal, so compiling it per
+// call bought nothing and left an error return nobody could act on
+// (agent-os-qyg7.1). MustCompile fails at init if the pattern is ever broken,
+// which is the only way it could fail.
+var dockerNameRe = regexp.MustCompile(`^[a-zA-Z0-9._:-]+$`)
+
 // ErrDockerUnavailable is returned by every DockerService method when the
 // service itself is nil — main leaves dockerService nil when the daemon was
 // unreachable at startup (see cmd/server/main.go).
@@ -294,8 +300,7 @@ func (s *DockerService) buildComposeArgs(stack models.Stack, subcommand string, 
 // deliberately so: it validates a string and never touches the receiver, so
 // reporting a Docker outage from it would be a lie.
 func (s *DockerService) ValidateName(name string) error {
-	matched, _ := regexp.MatchString(`^[a-zA-Z0-9._:-]+$`, name)
-	if !matched {
+	if !dockerNameRe.MatchString(name) {
 		return models.NewAppError(400, models.ErrValidation, "Invalid name format")
 	}
 	return nil

@@ -42,6 +42,26 @@ version: "2"
 # dropped.
 linters:
   default: none
+  settings:
+    errcheck:
+      # check-blank makes `x, _ := f()` and `_ = f()` gate, not just a bare
+      # unchecked call (agent-os-qyg7.1). That shape is this repo's most
+      # repeated defect class — a fault discarded into the blank identifier
+      # reads downstream as a real answer: `affected, _ := RowsAffected()`
+      # returns 0 with a nil error, "I could not find out" rendered as
+      # "nothing matched" (the same failure rowserrcheck above exists for).
+      # Seven bugs were filed for individual instances (1gqn, l42o, obgr,
+      # r1by, xzoe, 2ucq, uacg), each found by hand after the last one was
+      # already fixed. With this on, the linter is the class sweep.
+      #
+      # Turning it on flagged 83 sites, of which 23 were repaired and 60 are
+      # deliberate discards that now carry a `//nolint:errcheck // <why>` at
+      # the call site. That ratio is the point rather than a disappointment:
+      # the class had already been hand-swept repeatedly, so what survived is
+      # mostly considered — and was invisible to the linter either way. The
+      # gain is that the judgement is now recorded per site and a NEW
+      # careless discard cannot join them silently.
+      check-blank: true
   enable:
     - errcheck
     - govet

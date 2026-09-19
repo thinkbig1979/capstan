@@ -257,8 +257,8 @@ cleanup:
 		// Best-effort teardown: Kill fails harmlessly if the process already
 		// exited, and Wait's error (an expected non-zero exit from the kill
 		// signal) isn't actionable here.
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		_ = cmd.Process.Kill() //nolint:errcheck // Best-effort teardown: the process is already gone or unkillable, and neither outcome is actionable here.
+		_ = cmd.Wait()         //nolint:errcheck // An expected non-zero exit from the kill signal on the line above; not a fault to report.
 	}
 
 	slog.Debug("Log streaming connection closed", "stackID", id, "userID", wsConn.UserID)

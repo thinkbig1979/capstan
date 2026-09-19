@@ -69,8 +69,8 @@ func TestResolveDashboardStackAssociation_UnreadableTableIsFlagged(t *testing.T)
 // NOT share a LookupFailed. Written as a comparison rather than two literals so
 // it cannot be satisfied by a constant.
 func TestResolveDashboardStackAssociation_EmptyStackIDArmsDisagree(t *testing.T) {
-	absent, _ := resolveDashboardStackAssociation(g482HealthyDB(t), g482ProjectUnknown)
-	unreadable, _ := resolveDashboardStackAssociation(g482ClosedDB(t), g482ProjectKnown)
+	absent, _ := resolveDashboardStackAssociation(g482HealthyDB(t), g482ProjectUnknown)  //nolint:errcheck // agent-os-g482: this test compares the two ARMS' values; the error channel is deliberately not the subject here.
+	unreadable, _ := resolveDashboardStackAssociation(g482ClosedDB(t), g482ProjectKnown) //nolint:errcheck // agent-os-g482: this test compares the two ARMS' values; the error channel is deliberately not the subject here.
 
 	if absent.StackID != "" || unreadable.StackID != "" {
 		t.Fatalf("premise broken: both arms must yield an empty StackID, got %q and %q", absent.StackID, unreadable.StackID)

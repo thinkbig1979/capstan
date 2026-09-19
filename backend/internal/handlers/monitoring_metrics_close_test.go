@@ -90,7 +90,7 @@ func newFakeDockerMetricsServerHoldingList(t *testing.T, listStatus int, listBod
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(listStatus)
-			_, _ = w.Write([]byte(listBody))
+			_, _ = w.Write([]byte(listBody)) //nolint:errcheck // Write to a httptest stub's ResponseWriter; a failure there is not the behaviour under test.
 		case strings.Contains(r.URL.Path, "/stats"):
 			if statsHandler != nil {
 				statsHandler(w, r)

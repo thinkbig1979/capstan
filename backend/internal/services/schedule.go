@@ -53,8 +53,8 @@ func ParseScheduleTime(hhmm string) (hour int, minute int, err error) {
 
 	// The pattern already constrains both halves to their ranges, so neither
 	// Atoi can fail and neither result needs a second bounds check.
-	hour, _ = strconv.Atoi(hhmm[:2])
-	minute, _ = strconv.Atoi(hhmm[3:])
+	hour, _ = strconv.Atoi(hhmm[:2])   //nolint:errcheck // The pattern above already constrains both halves to their ranges, so neither Atoi can fail; see the comment.
+	minute, _ = strconv.Atoi(hhmm[3:]) //nolint:errcheck // The pattern above already constrains both halves to their ranges, so neither Atoi can fail; see the comment.
 	return hour, minute, nil
 }
 

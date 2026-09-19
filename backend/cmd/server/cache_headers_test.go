@@ -35,7 +35,7 @@ func withTempFrontend(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = os.Chdir(origWd)
+		_ = os.Chdir(origWd) //nolint:errcheck // Best-effort cleanup in t.Cleanup/defer; a failure cannot change the test's verdict.
 	})
 }
 

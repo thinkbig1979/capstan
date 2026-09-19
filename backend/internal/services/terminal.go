@@ -168,7 +168,7 @@ func (s *TerminalService) terminateSession(ctx context.Context, sessionID string
 		// only ever kills the LOCAL `docker exec` CLI — it does not reach the
 		// shell running inside the container, which is why
 		// reapContainerShell below exists.
-		_ = session.Cmd.Process.Kill()
+		_ = session.Cmd.Process.Kill() //nolint:errcheck // Best-effort teardown: the process is already gone or unkillable, and neither outcome is actionable here.
 	}
 	if session.Pty != nil {
 		session.Pty.Close()

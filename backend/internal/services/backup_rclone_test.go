@@ -475,7 +475,7 @@ func TestRcloneManager_Sync_StatsFlag(t *testing.T) {
 		for range out {
 		}
 	}()
-	_ = m.Sync(context.Background(), "/r", "remote", "path", 4, 1, out)
+	_ = m.Sync(context.Background(), "/r", "remote", "path", 4, 1, out) //nolint:errcheck // Called for its side-effect; the assertion for this case is below, not on this return value.
 	close(out)
 
 	call := runner.lastCall()
