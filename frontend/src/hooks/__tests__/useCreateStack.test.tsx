@@ -124,7 +124,15 @@ describe('useCreateStack — create call, lint differentiation, failure paths', 
 
     result.current.mutate(SAMPLE_INPUT)
 
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('A stack with this name already exists'))
+    // agent-os-5g8a: the friendly sentence is now the TITLE and the backend's
+    // own message arrives as the description, so both reach the operator. The
+    // assertion still pins that the backend message is READ -- it just reads it
+    // out of the second argument now.
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith('A stack with this name already exists', {
+        description: "Stack directory 'test-stack' already exists",
+      }),
+    )
   })
 
   it('detects lint errors nested under details, not a bare top-level lintResults', async () => {

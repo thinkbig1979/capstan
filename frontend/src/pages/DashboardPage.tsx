@@ -24,7 +24,7 @@ import { AttentionStrip } from '@/components/dashboard/AttentionStrip'
 import { HostStrip, type HostView } from '@/components/dashboard/HostStrip'
 import { StacksTab } from '@/components/dashboard/StacksTab'
 import { DirectoriesTab } from '@/components/dashboard/DirectoriesTab'
-import { classifyError } from '@/lib/error-handler'
+import { classifyError, presentError } from '@/lib/error-handler'
 import { useStackActions } from '@/hooks/useStackActions'
 import { toast } from 'sonner'
 import { useConfirm } from '@/hooks/useConfirm'
@@ -193,8 +193,7 @@ export function DashboardPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       toast.success('Dashboard refreshed')
     } catch (error) {
-      const appError = classifyError(error)
-      toast.error(`Failed to refresh: ${appError.message}`)
+      presentError(error, { fallback: 'Failed to refresh' })
     } finally {
       setIsRefreshing(false)
     }

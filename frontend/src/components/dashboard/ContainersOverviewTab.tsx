@@ -20,8 +20,7 @@ import {
   Info,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { classifyError } from '@/lib/error-handler'
-import { isActionResult } from '@/lib/action-result'
+import { presentError } from '@/lib/error-handler'
 import { DialogLoadingFallback } from '@/components/LoadingSkeleton'
 import type { DashboardStats, DashboardContainerInfo, CommandResult } from '@/types'
 import type { DashboardContainerMetric } from '@/hooks/useDashboardMetrics'
@@ -158,29 +157,22 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       if (actedOnStack) queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
-    // Branch on the guard (agent-os-mc4i): in stack mode start/stop/restart/pull
-    // hit stack_lifecycle.go's renderDockerResult, which answers a
-    // truth.ActionResult carrying `reason` and neither `error` nor `message` -- a
-    // body classifyError structurally cannot read, so the Docker-outage recovery
-    // paragraph reached the operator as "503: Something went wrong on the server".
-    // The container-mode route answers an AppError and still takes the else arm.
+    // presentError owns the branch this used to hand-roll (agent-os-5g8a).
+    // What it preserves, and why each half mattered (agent-os-mc4i): in stack
+    // mode start/stop/restart/pull hit stack_lifecycle.go's renderDockerResult,
+    // which answers a truth.ActionResult carrying `reason` and neither `error`
+    // nor `message` -- a body classifyError structurally cannot read, so the
+    // Docker-outage recovery paragraph reached the operator as "503: Something
+    // went wrong on the server". causeOf reads the ActionResult reason FIRST,
+    // exactly as the old guard did. The container-mode route answers an AppError
+    // and still lands on the classifyError arm.
     //
-    // Two branches rather than toast.error(TITLE, reason ? { description } :
-    // undefined): sonner renders those identically but a vitest spy does not, so
-    // the conditional form makes every call two-argument and silently breaks
-    // one-argument assertions. The full argument, including the four legacy
-    // assertions it protects, is at UpdateScheduleContent.tsx:116-137.
-    //
-    // `&& err.reason` is load-bearing: a failed ActionResult may carry an empty
-    // reason, and an empty description renders worse than the generic sentence.
-    // if/else rather than an early return so the two toasts are mutually
-    // exclusive by syntax -- see useActionMutation.ts:51 for the same conjunct.
+    // The empty-reason case is still handled: causeOf requires a TRUTHY reason
+    // before preferring it, and presentFault drops an empty description rather
+    // than rendering one. The one- vs two-argument split a vitest spy can see is
+    // now decided inside presentFault, in one place, rather than at each site.
     onError: (err) => {
-      if (isActionResult(err) && err.reason) {
-        toast.error(`Failed to start ${actioned}`, { description: err.reason })
-      } else {
-        toast.error(classifyError(err).message || `Failed to start ${actioned}`)
-      }
+      presentError(err, { fallback: `Failed to start ${actioned}` })
     },
   })
 
@@ -195,13 +187,9 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       if (actedOnStack) queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
-    // Same ActionResult guard as startMutation above.
+    // Same presenter as startMutation above.
     onError: (err) => {
-      if (isActionResult(err) && err.reason) {
-        toast.error(`Failed to stop ${actioned}`, { description: err.reason })
-      } else {
-        toast.error(classifyError(err).message || `Failed to stop ${actioned}`)
-      }
+      presentError(err, { fallback: `Failed to stop ${actioned}` })
     },
   })
 
@@ -216,13 +204,9 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       if (actedOnStack) queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
-    // Same ActionResult guard as startMutation above.
+    // Same presenter as startMutation above.
     onError: (err) => {
-      if (isActionResult(err) && err.reason) {
-        toast.error(`Failed to restart ${actioned}`, { description: err.reason })
-      } else {
-        toast.error(classifyError(err).message || `Failed to restart ${actioned}`)
-      }
+      presentError(err, { fallback: `Failed to restart ${actioned}` })
     },
   })
 
@@ -243,14 +227,10 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
         queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       }
     },
-    // Same ActionResult guard as startMutation above.
+    // Same presenter as startMutation above.
     onError: (err) => {
       if (mode !== 'stack') return
-      if (isActionResult(err) && err.reason) {
-        toast.error('Failed to pull images', { description: err.reason })
-      } else {
-        toast.error(classifyError(err).message || 'Failed to pull images')
-      }
+      presentError(err, { fallback: 'Failed to pull images' })
     },
   })
 
@@ -543,15 +523,11 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
     },
-    // Same ActionResult guard as startMutation above, but via a different route:
+    // Same presenter as startMutation above, but via a different route:
     // deleteContainer answers renderDockerResult at resource_mutations.go:172 in
     // both modes, so this site was never covered by the AppError repair.
     onError: (err) => {
-      if (isActionResult(err) && err.reason) {
-        toast.error('Failed to remove container', { description: err.reason })
-      } else {
-        toast.error(classifyError(err).message || 'Failed to remove container')
-      }
+      presentError(err, { fallback: 'Failed to remove container' })
     },
   })
 

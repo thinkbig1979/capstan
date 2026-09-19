@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { toast } from 'sonner'
+import { toastInvalid } from '@/lib/error-handler'
 import { convertDockerRun, isDockerRunCommand } from '@/lib/docker-run-parser'
 
 interface UseDockerRunConversionArgs {
@@ -19,19 +20,19 @@ export function useDockerRunConversion({
   const handleConvertDockerRun = useCallback(() => {
     const trimmed = dockerRunInput.trim()
     if (!trimmed) {
-      toast.error('Please paste a docker run command')
+      toastInvalid('Please paste a docker run command')
       return
     }
 
     if (!isDockerRunCommand(trimmed)) {
-      toast.error('Input does not appear to be a docker run command')
+      toastInvalid('Input does not appear to be a docker run command')
       return
     }
 
     try {
       const compose = convertDockerRun(trimmed)
       if (!compose) {
-        toast.error('Could not parse the docker run command')
+        toastInvalid('Could not parse the docker run command')
         return
       }
 
@@ -41,7 +42,7 @@ export function useDockerRunConversion({
       setComposeTab('editor')
     } catch {
       setConversionError('Failed to parse the docker run command. Check the syntax and try again.')
-      toast.error('Failed to parse the docker run command')
+      toastInvalid('Failed to parse the docker run command')
     }
   }, [dockerRunInput, setConversionError, setPendingCompose, setComposeTab])
 

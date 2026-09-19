@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { useUpdateSettings, useUpdateUpdateSettings } from '@/hooks/useResources'
 import { HelpHint } from '@/components/ui/help-hint'
@@ -10,6 +11,7 @@ import { ScheduleModeFields } from '@/components/settings/ScheduleModeFields'
 import { AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
+import { causeOf, presentFault, toastInvalid } from '@/lib/error-handler'
 import {
   Select,
   SelectContent,
@@ -26,7 +28,7 @@ const DEFAULT_APPLY_TIME = '03:00'
 const DEFAULT_APPLY_DAYS = [0, 1, 2, 3, 4, 5, 6]
 
 export function UpdateScheduleContent() {
-  const { data: settings, isLoading } = useUpdateSettings()
+  const { data: settings, isLoading, isError, error, refetch } = useUpdateSettings()
   const updateSettingsMutation = useUpdateUpdateSettings()
 
   const [initialized, setInitialized] = useState(false)
@@ -78,6 +80,62 @@ export function UpdateScheduleContent() {
     )
   }
 
+  // agent-os-fxhl. A FAILED query used to fall straight through to the form,
+  // where `settings?.globalAutoUpdate ?? false` turned "not known" into
+  // "deliberately off" and the master switch rendered as though an operator had
+  // turned it off.
+  //
+  // WHY AN EARLY RETURN rather than a banner over a live form, or a disabled
+  // one: this surface SUBMITS. save() builds its payload from
+  // effectiveAutoUpdate, effectiveScanMinutes, effectiveApplyMode,
+  // effectiveApplyTime AND effectiveApplyDays -- every one of them a
+  // `?? <default>` over `settings` -- so a failed GET does not merely mis-render
+  // one switch: any toggle the operator touches writes back FIVE fields that
+  // were never read, silently replacing the stored schedule with this screen's
+  // defaults. A banner is the bug with a warning sticker (the switch still
+  // reads `?? false` and is still clickable); disabling shows the same false
+  // values greyed, which says "not editable now" rather than "this was never
+  // read". agent-os-bueb's lock-and-explain is a precedent, not a default: its
+  // surface is READ-ONLY, so leaving the value visible costs nothing there.
+  // Here the value is an input, so leaving it visible IS the defect.
+  //
+  // The component already answers "state not known yet" by returning early
+  // instead of rendering the form against placeholders. "State not known at
+  // all" gets the same answer for a stronger reason.
+  //
+  // `!settings`, NOT bare `isError`. TanStack sets status 'error' when a
+  // REFETCH fails on a query that already has data -- which is why it ships
+  // isLoadingError (error, no data) beside isRefetchError (error, data
+  // present), with isError true for both. That path is routine here, not
+  // theoretical: query-client.ts sets staleTime 30_000 and
+  // refetchOnWindowFocus true, and gates retries on isAutoRetryable, which is
+  // false for a 500. So tabbing away for half a minute and back can 500 on the
+  // focus refetch, and a bare isError guard would throw away a fully populated,
+  // CORRECT form. The stale values are real values the server did send; keeping
+  // them is the right degradation, and it is what this screen did before
+  // agent-os-fxhl. Spelled `!settings` rather than `isLoadingError` because it
+  // states the invariant the branch actually depends on -- there is nothing to
+  // render -- and cannot be transposed with its sibling flag by a reader.
+  if (isError && !settings) {
+    const cause = causeOf(error)
+    return (
+      <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3">
+        <AlertCircle className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
+        <div className="space-y-2">
+          <p className="text-sm font-medium">Could not load update settings.</p>
+          {cause && <p className="text-sm text-muted-foreground">{cause}</p>}
+          <p className="text-sm text-muted-foreground">
+            Nothing is known about the current schedule, so the form is not shown rather than
+            shown with defaults it would submit.
+          </p>
+          <Button variant="outline" size="sm" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   type ApplyUpdates = {
     applyMode?: 'immediate' | 'scheduled'
     applyTime?: string
@@ -88,7 +146,7 @@ export function UpdateScheduleContent() {
     const minutes = updates.scanIntervalMinutes ?? (effectivePreset === 'custom' ? effectiveCustom : parseInt(effectivePreset, 10))
     const autoUpdate = updates.globalAutoUpdate ?? effectiveAutoUpdate
     if (minutes > 0 && minutes < 15) {
-      toast.error('Custom interval must be at least 15 minutes')
+      toastInvalid('Custom interval must be at least 15 minutes')
       return
     }
     const payload: { scanIntervalMinutes: number; globalAutoUpdate: boolean } & ApplyUpdates = {
@@ -113,32 +171,31 @@ export function UpdateScheduleContent() {
       // stays as the TITLE, so a failure with no usable cause renders exactly
       // what it rendered before.
       //
-      // THE BRANCH IS DELIBERATE, and the one place in this change it is
-      // explained — the other three sites repeat the shape, not the reason.
-      // The obvious spelling is the sibling's,
+      // THE ARITY IS DELIBERATE, and this is the one place it is explained —
+      // the sibling sites repeat the shape, not the reason. The obvious
+      // spelling is
       //     toast.error(TITLE, cause ? { description: cause } : undefined)
-      // which is what credentialSaveFault's caller uses
-      // (components/git/GitSettingsSection.tsx:183). Sonner renders the two
-      // identically, so no operator can tell them apart. A vitest spy can: the
-      // unconditional form makes EVERY call two-argument, which breaks four
-      // pre-existing assertions of the form
+      // which makes EVERY call two-argument. Sonner renders that identically,
+      // so no operator can tell the two apart; a vitest spy can, and the
+      // unconditional form breaks four pre-existing assertions of the form
       //     expect(toast.error).toHaveBeenCalledWith('<generic title>')
-      // at UpdateScheduleContent.test.tsx:173, HistoryRetentionSection.test.tsx:148,
-      // GitSettingsContent.test.tsx:168 and BackupSettingsContent.test.tsx:647.
+      // at UpdateScheduleContent.test.tsx, HistoryRetentionSection.test.tsx,
+      // GitSettingsContent.test.tsx and BackupSettingsContent.test.tsx.
       // Each rejects with a bare `new Error('boom')`, which carries no `code`,
       // so settingsSaveFault returns null — meaning those four ALREADY assert
       // the thing this change most needs pinned: a failure with no usable cause
       // still shows the generic sentence and nothing else. They were written
-      // before this change by someone with no stake in it. Left untouched and
-      // green they are independent witnesses; rewritten to expect a trailing
-      // `undefined` they would become four assertions this change's own author
-      // edited to match it, and would stop being evidence. Keeping the branch
-      // costs one line and consistency with one sibling's call shape. That is
-      // the cheaper of the two.
+      // before this change by someone with no stake in it, so left untouched
+      // and green they are independent witnesses.
+      //
+      // agent-os-5g8a moved the branch into presentFault rather than deleting
+      // it: the helper still emits a ONE-argument call when the cause is null,
+      // so all four witnesses stay green and stay untouched.
       onError: (error) => {
-        const cause = settingsSaveFault(error)
-        if (cause) toast.error('Failed to save settings', { description: cause })
-        else toast.error('Failed to save settings')
+        // presentFault, NOT presentError: the cause is read by settingsSaveFault,
+        // which is CODE-keyed and deliberately not classifyError. The full
+        // argument, measured, is in presentFault's docblock.
+        presentFault('Failed to save settings', settingsSaveFault(error))
       },
     })
   }

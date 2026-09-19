@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { apiClient, stacksApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { isActionResult } from '@/lib/action-result'
+import { presentError, toastInvalid } from '@/lib/error-handler'
 import type { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
 import { inferVarName } from './inferVarName'
 import { queryKeys } from '@/lib/query-keys'
@@ -99,7 +100,10 @@ export function useExtractToEnv({
           if (result.outcome === 'success' || result.outcome === 'no_change') {
             atomicSuccess = true
           } else {
-            toast.error(result.reason || 'Failed to extract variable to .env')
+            // Behaviour unchanged (agent-os-5g8a): this site already rendered
+            // the reason and keeps it as the TITLE, the same call
+            // toastForResult's `failed` arm makes for an ActionResult.
+            toastInvalid(result.reason || 'Failed to extract variable to .env')
             return
           }
         } else {
@@ -113,7 +117,12 @@ export function useExtractToEnv({
           // Backend not yet migrated; use env-first sequential fallback.
           atomicSuccess = false
         } else {
-          toast.error('Failed to extract variable to .env')
+          // agent-os-yre8. Not in the bead's own SPEC, which quotes only the
+          // outer catch, but this is the site a rejected atomic write lands
+          // on: PutComposeAndEnv answers truth.Failed/truth.Partial at 5xx,
+          // so axios rejects and the ActionResult reason -- which names WHICH
+          // write failed and whether a rollback happened -- arrives HERE.
+          presentError(e, { fallback: 'Failed to extract variable to .env' })
           return
         }
       }
@@ -136,8 +145,14 @@ export function useExtractToEnv({
       toast.success(`Extracted ${varName} to .env`)
       setShowExtractDialog(false)
       setSelectedText('')
-    } catch {
-      toast.error('Failed to extract variable to .env')
+    } catch (err) {
+      // agent-os-yre8. This catch used to take no binding, so the cause was
+      // not merely discarded -- it was never observed. The SEQUENTIAL
+      // fallback lands here: two bare apiClient.put calls, /env then
+      // /compose. If env succeeds and compose then fails, the variable now
+      // exists in .env while the compose file still holds the literal, and
+      // the reason is the only thing that says so.
+      presentError(err, { fallback: 'Failed to extract variable to .env' })
     } finally {
       setIsExtracting(false)
     }

@@ -17,6 +17,7 @@ import {
 import { queryKeys } from '@/lib/query-keys'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { presentError, toastInvalid } from '@/lib/error-handler'
 import {
   Archive,
   RotateCcw,
@@ -396,13 +397,12 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
               // Refused stream, not a failed run (agent-os-mjrl).
               toast.info('Restore is still running; live output is unavailable')
             } else {
-              toast.error('Restore failed — check the log for details')
+              toastInvalid('Restore failed — check the log for details')
             }
           })
         },
         onError: (err) => {
-          const message = err instanceof Error ? err.message : 'Failed to start restore'
-          toast.error(`Restore failed: ${message}`)
+          presentError(err, { fallback: 'Restore failed' })
         },
       },
     )

@@ -8,6 +8,7 @@ import { settingsApi, directoryConfigApi } from '@/lib/api'
 import { TableSearch } from '@/components/ui/table-search'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { toast } from 'sonner'
+import { presentError } from '@/lib/error-handler'
 import {
   Select,
   SelectContent,
@@ -44,7 +45,7 @@ export function DirectoriesSettingsContent() {
       toast.success('Scan depth updated. Rescan directories to discover nested stacks.')
       queryClient.invalidateQueries({ queryKey: queryKeys.scanDepth() })
     },
-    onError: () => toast.error('Failed to update scan depth'),
+    onError: (error) => presentError(error, { fallback: 'Failed to update scan depth' }),
   })
 
   // Hydrate local editable state from the query results once they load.
@@ -74,8 +75,8 @@ export function DirectoriesSettingsContent() {
     directoryConfigApi.update({ defaultDir: effectiveDefault }).then(() => {
       toast.success('Default directory updated')
       queryClient.invalidateQueries({ queryKey: queryKeys.config() })
-    }).catch(() => {
-      toast.error('Failed to update default directory')
+    }).catch((error: unknown) => {
+      presentError(error, { fallback: 'Failed to update default directory' })
     })
   }
 

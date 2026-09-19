@@ -7,7 +7,7 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import { Scissors, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { classifyError } from '@/lib/error-handler'
+import { presentError } from '@/lib/error-handler'
 import { formatBytes } from '@/lib/format'
 import { isActionResult, toastForResult } from '@/lib/action-result'
 import type { PruneOptions } from '@/lib/api'
@@ -178,7 +178,7 @@ export function PruneButton({
       if (isActionResult(err)) {
         toastForResult(err)
       } else {
-        toast.error(classifyError(err).message || `Failed to prune ${resourceType}`)
+        presentError(err, { fallback: `Failed to prune ${resourceType}` })
       }
       timerRef.current = setTimeout(() => setPhase('idle'), 4000)
     },

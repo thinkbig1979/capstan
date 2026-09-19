@@ -5,6 +5,7 @@ import type { SearchAddon } from '@xterm/addon-search'
 import { useWebSocketBinary } from '@/hooks/useWebSocket'
 import { WS_CLOSE_AUTH_FAILURE, WS_CLOSE_RATE_LIMIT, WS_CLOSE_NOT_FOUND } from '@/lib/ws'
 import { toast } from 'sonner'
+import { toastInvalid } from '@/lib/error-handler'
 import type { Stack } from '@/types'
 import { useXtermLifecycle } from './useXtermLifecycle'
 import { useInactivityTimer } from './useInactivityTimer'
@@ -77,12 +78,12 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
         // is surfaced, and a mystery disconnect generates bug reports
         // (agent-os-a0y / agent-os-7u5).
         if (event?.code === WS_CLOSE_RATE_LIMIT) {
-          toast.error('Too many open terminal sessions. Close one and try again.')
+          toastInvalid('Too many open terminal sessions. Close one and try again.')
           terminal?.writeln(
             '\r\n\x1b[31mToo many open terminal sessions. Close another terminal and press Reconnect.\x1b[0m\r\n',
           )
         } else if (event?.code === WS_CLOSE_AUTH_FAILURE) {
-          toast.error(event.reason || 'Terminal session refused')
+          toastInvalid(event.reason || 'Terminal session refused')
           terminal?.writeln(
             `\r\n\x1b[31m${event.reason || 'Terminal session refused.'}\x1b[0m\r\n`,
           )
@@ -90,7 +91,7 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
           // A permanent condition (agent-os-vi0o): the stack is gone, so
           // "Press Reconnect" below would be misleading — reconnecting can't
           // fix an absent stack.
-          toast.error(event.reason || 'Stack not found')
+          toastInvalid(event.reason || 'Stack not found')
           terminal?.writeln(
             `\r\n\x1b[31m${event.reason || 'Stack not found.'}\x1b[0m\r\n`,
           )
@@ -103,7 +104,7 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
       onError: () => {
         setIsConnected(false)
         setIsConnecting(false)
-        toast.error('Terminal connection error')
+        toastInvalid('Terminal connection error')
       },
     },
   )
@@ -143,7 +144,7 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
         await navigator.clipboard.writeText(selection)
         toast.success('Copied to clipboard')
       } catch {
-        toast.error('Failed to copy to clipboard')
+        toastInvalid('Failed to copy to clipboard')
       }
     }
   }, [])
@@ -156,7 +157,7 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
         resetInactivityTimer()
       }
     } catch {
-      toast.error('Failed to paste from clipboard')
+      toastInvalid('Failed to paste from clipboard')
     }
   }, [isConnected, send, resetInactivityTimer])
 

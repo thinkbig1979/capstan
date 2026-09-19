@@ -3,12 +3,11 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Download, GitBranch, ArrowUp, ArrowDown, FileWarning } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
-import { toast } from 'sonner'
 import { useGitStatus, useGitPull } from '@/hooks/useGit'
 import { useState } from 'react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { directoriesApi } from '@/lib/api'
-import { classifyError } from '@/lib/error-handler'
+import { presentError } from '@/lib/error-handler'
 import { queryKeys } from '@/lib/query-keys'
 import type { Stack } from '@/types'
 import { GitSettingsSection } from '@/components/git/GitSettingsSection'
@@ -80,7 +79,7 @@ export function GitStatus({ stack }: GitStatusProps) {
         queryClient.invalidateQueries({ queryKey: queryKeys.directories() }),
       ])
     } catch (err) {
-      toast.error(`Rescan failed: ${classifyError(err).message}`)
+      presentError(err, { fallback: 'Rescan failed' })
     } finally {
       setIsRescanning(false)
     }

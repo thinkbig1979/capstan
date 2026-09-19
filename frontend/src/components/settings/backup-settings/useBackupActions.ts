@@ -1,4 +1,5 @@
 import { toast } from 'sonner'
+import { presentFault, toastInvalid } from '@/lib/error-handler'
 import { useInitRepo, useTestCloud } from '@/hooks/useBackup'
 import { repoFaultFrom } from '@/lib/backup-repo-fault'
 import { messageOrNull } from '@/lib/narrow'
@@ -64,10 +65,12 @@ export function useBackupActions() {
       onError: (error) => {
         const fault = repoFaultFrom(error)
         if (!fault) {
-          toast.error('Failed to initialize repository')
+          // The code-keyed reader declined this rejection, so nothing is
+          // claimed about the cause. toastInvalid, not presentError.
+          toastInvalid('Failed to initialize repository')
           return
         }
-        toast.error(fault.title, fault.detail ? { description: fault.detail } : undefined)
+        presentFault(fault.title, fault.detail ?? null)
       },
     })
   }
@@ -116,7 +119,7 @@ export function useBackupActions() {
       onError: (error) => {
         const fault = repoFaultFrom(error)
         if (fault) {
-          toast.error(fault.title, fault.detail ? { description: fault.detail } : undefined)
+          presentFault(fault.title, fault.detail ?? null)
           return
         }
 
@@ -139,7 +142,7 @@ export function useBackupActions() {
         // Keying the VALIDATION_ERROR read on the CODE rather than on "does it
         // have a message" is what keeps this arm reachable at all — that
         // interceptor branch does set `message`, to axios's own text.
-        toast.error('Cloud connectivity test failed')
+        toastInvalid('Cloud connectivity test failed')
       },
     })
   }

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
+import { presentFault } from '@/lib/error-handler'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -107,11 +108,14 @@ export function DockerCleanupCard() {
       // must be at least N", "intervalHours must be at least N"), and a
       // zero-arity callback would render one sentence for both. The generic
       // sentence stays as the title when the server said nothing usable —
-      // same branch shape as HistoryRetentionSection's onError.
+      // same presenter as HistoryRetentionSection's onError.
       onError: (error) => {
-        const cause = settingsSaveFault(error)
-        if (cause) toast.error('Failed to update the cleanup schedule', { description: cause })
-        else toast.error('Failed to update the cleanup schedule')
+        // presentFault, NOT presentError (agent-os-5g8a): the cause is read by
+        // settingsSaveFault, which is CODE-keyed and deliberately not
+        // classifyError. The full argument, measured, is in presentFault's
+        // docblock; the short form is that swapping the key is not this
+        // change's decision to take.
+        presentFault('Failed to update the cleanup schedule', settingsSaveFault(error))
       },
     })
   }
@@ -121,9 +125,12 @@ export function DockerCleanupCard() {
       // The preview validates the age floor through the same code path as the
       // PUT, so it can carry the same server sentence.
       onError: (error) => {
-        const cause = settingsSaveFault(error)
-        if (cause) toast.error('Failed to preview the cleanup', { description: cause })
-        else toast.error('Failed to preview the cleanup')
+        // presentFault, NOT presentError (agent-os-5g8a): the cause is read by
+        // settingsSaveFault, which is CODE-keyed and deliberately not
+        // classifyError. The full argument, measured, is in presentFault's
+        // docblock; the short form is that swapping the key is not this
+        // change's decision to take.
+        presentFault('Failed to preview the cleanup', settingsSaveFault(error))
       },
     })
   }

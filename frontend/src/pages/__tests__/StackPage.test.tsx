@@ -415,10 +415,12 @@ describe('StackPage', () => {
     })
 
     it('leaves the generic sentence alone when the failure carries no reason', async () => {
-      // The other side of the same instrument: a cause-less rejection must stay
-      // a SINGLE-argument call. Sonner renders toast.error(t) and
-      // toast.error(t, undefined) identically but a spy does not, so this is
-      // what stops the fix above turning every delete toast two-argument.
+      // agent-os-5g8a: the generic sentence is still the TITLE and is never
+      // replaced. `new Error('boom')` DOES carry a message, so causeOf finds
+      // one and it lands in the description -- the operator now sees both.
+      // The single-argument shape is pinned instead by the presenter's own
+      // unit tests (src/lib/__tests__/error-presenter.test.ts), which drive the
+      // genuinely cause-less case that no component fixture produces.
       deleteStack.mockRejectedValue(new Error('boom'))
       renderPage()
       await screen.findByTestId('stack-detail')
@@ -426,7 +428,9 @@ describe('StackPage', () => {
       await requestDelete(userEvent.setup())
 
       const { toast } = await import('sonner')
-      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to delete stack'))
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith('Failed to delete stack', { description: 'boom' }),
+      )
       expect(toast.error).toHaveBeenCalledTimes(1)
     })
 
@@ -443,10 +447,15 @@ describe('StackPage', () => {
       await requestDelete(userEvent.setup())
 
       const { toast } = await import('sonner')
-      // Single-argument, asserted the same way the cause-less control is:
-      // toHaveBeenCalledWith(msg, undefined) would NOT match a one-argument
-      // call, so it would go red for a reason no operator can see.
-      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to delete stack'))
+      // The discriminator survives agent-os-5g8a: the description must be the
+      // CLASSIFIER's sentence, never the ActionResult's empty reason. Asserting
+      // the exact string is what keeps this arm able to see the `&& err.reason`
+      // token being dropped -- an empty description would not match.
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith('Failed to delete stack', {
+          description: '503: Something went wrong on the server',
+        }),
+      )
       // Not this arm's own mutant — an empty reason fails the guard, so the
       // `else`-deletion mutant still fires exactly one toast here. Kept so all
       // three positive arms state the same thing and a reader is not left

@@ -9,7 +9,7 @@ import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { useAuth } from '@/hooks/useAuth'
 import { useUIStore } from '@/stores/uiStore'
 import { toast } from 'sonner'
-import { classifyError } from '@/lib/error-handler'
+import { classifyError, toastInvalid } from '@/lib/error-handler'
 import { formatDateFull } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
@@ -167,12 +167,12 @@ export function SettingsPage() {
     e.preventDefault()
 
     if (newPassword.length < 8) {
-      toast.error('Password must be at least 8 characters')
+      toastInvalid('Password must be at least 8 characters')
       return
     }
 
     if (newPassword !== confirmPassword) {
-      toast.error('Passwords do not match')
+      toastInvalid('Passwords do not match')
       return
     }
 

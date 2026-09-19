@@ -256,6 +256,56 @@ describe('useActionMutation — rejected ActionResult', () => {
     await waitFor(() => expect(hook.current.isError).toBe(true))
     expect(toast.error).toHaveBeenCalledWith('500: Something went wrong on the server')
   })
+
+  // agent-os-5g8a. The single most likely regression from unifying the error
+  // presenters, and nothing asserted it before: toastForResult maps OUTCOME to
+  // toast LEVEL, so routing this branch through any presenter — all three of
+  // which call toast.error — silently turns a partial into a flat failure. For
+  // a `partial` that is a FALSE statement about what happened to the operator's
+  // system: truth.Partial is minted at handlers/compose.go ("compose write
+  // verification failed; rollback also failed") and handlers/env.go ("env file
+  // created but DB not updated"), so a rollback that also failed would read as
+  // "nothing happened".
+  it('keeps the WARNING level for a rejected partial outcome', async () => {
+    const queryClient = makeClient()
+    const partial = {
+      outcome: 'partial',
+      reason: 'compose write verification failed; rollback also failed',
+      status: 500,
+    }
+
+    const { result: hook } = renderHook(
+      () => useActionMutation({ mutationFn: vi.fn().mockRejectedValue(partial) }),
+      { wrapper: wrapper(queryClient) },
+    )
+
+    await act(async () => {
+      hook.current.mutate(undefined as unknown as never)
+    })
+
+    await waitFor(() => expect(hook.current.isError).toBe(true))
+    expect(toast.warning).toHaveBeenCalledWith(partial.reason)
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  // The same guard one outcome over: `no_change` must stay an INFO toast.
+  it('keeps the INFO level for a rejected no_change outcome', async () => {
+    const queryClient = makeClient()
+    const noChange = { outcome: 'no_change', reason: 'Already up to date', status: 500 }
+
+    const { result: hook } = renderHook(
+      () => useActionMutation({ mutationFn: vi.fn().mockRejectedValue(noChange) }),
+      { wrapper: wrapper(queryClient) },
+    )
+
+    await act(async () => {
+      hook.current.mutate(undefined as unknown as never)
+    })
+
+    await waitFor(() => expect(hook.current.isError).toBe(true))
+    expect(toast.info).toHaveBeenCalledWith('Already up to date')
+    expect(toast.error).not.toHaveBeenCalled()
+  })
 })
 
 // ─── network/throw error ──────────────────────────────────────────────────────

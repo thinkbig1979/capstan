@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { toastInvalid } from '@/lib/error-handler'
 import { stacksApi } from '@/lib/api'
 import type { Stack } from '@/types'
 import { BULK_LABELS, type BulkAction } from './constants'
@@ -49,7 +50,7 @@ export function useSidebarSelection(filteredStacks: Stack[]) {
         if (failed === 0) {
           toast.success(`${verb} ${ok} stack${ok === 1 ? '' : 's'}`)
         } else if (ok === 0) {
-          toast.error(`Failed to ${action} ${failed} stack${failed === 1 ? '' : 's'}`)
+          toastInvalid(`Failed to ${action} ${failed} stack${failed === 1 ? '' : 's'}`)
         } else {
           toast.warning(`${verb} ${ok}, ${failed} failed`)
         }

@@ -241,7 +241,11 @@ describe('CreateStackDialog', () => {
 
     await user.click(screen.getByText('Lint'))
     await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith('Failed to lint compose file'),
+      // agent-os-5g8a: the action sentence is the title; classifyError's
+      // network arm (the message contains 'network') is the description.
+      expect(mockToastError).toHaveBeenCalledWith('Failed to lint compose file', {
+        description: 'Check your connection and try again',
+      }),
     )
   })
 
@@ -468,7 +472,9 @@ describe('CreateStackDialog', () => {
     await user.click(screen.getByRole('button', { name: /Create Stack/ }))
 
     await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith('A stack with this name already exists'),
+      expect(mockToastError).toHaveBeenCalledWith('A stack with this name already exists', {
+        description: "Stack directory 'my-stack' already exists",
+      }),
     )
     expect(mockNavigate).not.toHaveBeenCalled()
   })
