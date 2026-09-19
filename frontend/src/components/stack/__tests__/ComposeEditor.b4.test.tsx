@@ -248,8 +248,14 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /^Extract$/ })).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /^Extract$/ }))
 
+    // agent-os-yre8: the fixed sentence stays as the TITLE and is never
+    // replaced; the classified cause now arrives as the description instead of
+    // being discarded. A bare `{ status: 500 }` carries no backend message, so
+    // classifyError's 5xx arm supplies the sentence.
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('Failed to extract variable to .env'),
+      expect(toast.error).toHaveBeenCalledWith('Failed to extract variable to .env', {
+        description: '500: Something went wrong on the server',
+      }),
     )
 
     expect(mockApiPut).not.toHaveBeenCalled()

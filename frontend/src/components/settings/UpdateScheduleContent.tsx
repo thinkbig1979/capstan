@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { useUpdateSettings, useUpdateUpdateSettings } from '@/hooks/useResources'
 import { HelpHint } from '@/components/ui/help-hint'
@@ -10,7 +11,7 @@ import { ScheduleModeFields } from '@/components/settings/ScheduleModeFields'
 import { AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
-import { presentFault, toastInvalid } from '@/lib/error-handler'
+import { causeOf, presentFault, toastInvalid } from '@/lib/error-handler'
 import {
   Select,
   SelectContent,
@@ -27,7 +28,7 @@ const DEFAULT_APPLY_TIME = '03:00'
 const DEFAULT_APPLY_DAYS = [0, 1, 2, 3, 4, 5, 6]
 
 export function UpdateScheduleContent() {
-  const { data: settings, isLoading } = useUpdateSettings()
+  const { data: settings, isLoading, isError, error, refetch } = useUpdateSettings()
   const updateSettingsMutation = useUpdateUpdateSettings()
 
   const [initialized, setInitialized] = useState(false)
@@ -75,6 +76,48 @@ export function UpdateScheduleContent() {
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <LoadingSpinner size="small" />
         Loading update settings...
+      </div>
+    )
+  }
+
+  // agent-os-fxhl. A FAILED query used to fall straight through to the form,
+  // where `settings?.globalAutoUpdate ?? false` turned "not known" into
+  // "deliberately off" and the master switch rendered as though an operator had
+  // turned it off.
+  //
+  // WHY AN EARLY RETURN rather than a banner over a live form, or a disabled
+  // one: this surface SUBMITS. save() builds its payload from
+  // effectiveAutoUpdate, effectiveScanMinutes, effectiveApplyMode,
+  // effectiveApplyTime AND effectiveApplyDays -- every one of them a
+  // `?? <default>` over `settings` -- so a failed GET does not merely mis-render
+  // one switch: any toggle the operator touches writes back FIVE fields that
+  // were never read, silently replacing the stored schedule with this screen's
+  // defaults. A banner is the bug with a warning sticker (the switch still
+  // reads `?? false` and is still clickable); disabling shows the same false
+  // values greyed, which says "not editable now" rather than "this was never
+  // read". agent-os-bueb's lock-and-explain is a precedent, not a default: its
+  // surface is READ-ONLY, so leaving the value visible costs nothing there.
+  // Here the value is an input, so leaving it visible IS the defect.
+  //
+  // The component already answers "state not known yet" by returning early
+  // instead of rendering the form against placeholders. "State not known at
+  // all" gets the same answer for a stronger reason.
+  if (isError) {
+    const cause = causeOf(error)
+    return (
+      <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3">
+        <AlertCircle className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
+        <div className="space-y-2">
+          <p className="text-sm font-medium">Could not load update settings.</p>
+          {cause && <p className="text-sm text-muted-foreground">{cause}</p>}
+          <p className="text-sm text-muted-foreground">
+            Nothing is known about the current schedule, so the form is not shown rather than
+            shown with defaults it would submit.
+          </p>
+          <Button variant="outline" size="sm" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
       </div>
     )
   }

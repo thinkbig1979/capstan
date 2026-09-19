@@ -491,3 +491,110 @@ describe('UpdateScheduleContent — why the save failed', () => {
     expect(call?.[1]).toBeUndefined()
   })
 })
+
+// ─── agent-os-fxhl: a FAILED update-settings query ──────────────────────────
+//
+// The component destructured `data` and `isLoading` but never `isError`, and
+// the only early return was the loading one. So a failed GET fell through to
+//   effectiveAutoUpdate = initialized ? globalAutoUpdate : (settings?.globalAutoUpdate ?? false)
+// where `?? false` turned "not known" into "deliberately off".
+//
+// That is not only a mis-render. save() builds its payload from
+// effectiveAutoUpdate, effectiveScanMinutes, effectiveApplyMode,
+// effectiveApplyTime AND effectiveApplyDays — every one of them a `?? <default>`
+// over `settings` — so any toggle the operator touched would write back FIVE
+// fields that were never read, silently replacing the stored schedule with this
+// screen's defaults.
+//
+// DECISION (recorded on the bead before implementing): an ERROR EARLY RETURN
+// that REPLACES the form, carrying the cause and a Retry wired to refetch. Not
+// a banner over a live form (the switch would still read `?? false` and still
+// submit) and not a disabled form (same false values, greyed — "not editable
+// now" is a different statement from "this was never read").
+describe('UpdateScheduleContent — a failed settings query', () => {
+  it('does not present the master switch as deliberately off', async () => {
+    mockGetUpdates.mockRejectedValue({ status: 503, message: 'Docker is not running' })
+    renderPanel()
+
+    await screen.findByText(/Could not load update settings/i)
+    // The switch is not rendered at all, so there is no position to misread.
+    expect(screen.queryByLabelText('Enable Auto-Update')).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+  })
+
+  it('carries the backend cause and offers a Retry', async () => {
+    mockGetUpdates.mockRejectedValue({ status: 503, message: 'Docker is not running' })
+    renderPanel()
+
+    await screen.findByText(/Could not load update settings/i)
+    // classifyError's 5xx arm keeps the status, which is itself diagnostic.
+    expect(screen.getByText('503: Docker is not running')).toBeInTheDocument()
+
+    // Retry must actually re-run the query, not merely exist.
+    expect(mockGetUpdates).toHaveBeenCalledTimes(1)
+    mockGetUpdates.mockResolvedValue(makeSettings({ globalAutoUpdate: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(mockGetUpdates).toHaveBeenCalledTimes(2))
+    expect(await screen.findByLabelText('Enable Auto-Update')).toBeInTheDocument()
+  })
+
+  // AC4. Three consumers read effectiveAutoUpdate on the RENDER path and they
+  // render OPPOSITE content off the same value, so a test that asserts only the
+  // switch leaves both branches unpinned.
+  it('renders NEITHER dependent branch in the failed state', async () => {
+    mockGetUpdates.mockRejectedValue({ status: 503, message: 'Docker is not running' })
+    renderPanel()
+
+    await screen.findByText(/Could not load update settings/i)
+    // The `!effectiveAutoUpdate` branch — the one a `?? false` used to select.
+    expect(screen.queryByText(/Auto-update is off\./)).not.toBeInTheDocument()
+    // The `effectiveAutoUpdate` branch — the schedule fields. Absent in the
+    // RED state too (because `?? false` selected the other branch), so the
+    // arm that gives this assertion meaning is the RESOLVED-true control
+    // below, which requires the same text to be PRESENT.
+    expect(screen.queryByText('Schedule')).not.toBeInTheDocument()
+    // And the form itself: the scan-interval select IS rendered in the RED
+    // state, so this half discriminates on its own.
+    expect(screen.queryByRole('combobox', { name: 'Scan Interval' })).not.toBeInTheDocument()
+  })
+
+  // AC4, the FOURTH consumer, on the WRITE path: `const autoUpdate =
+  // updates.globalAutoUpdate ?? effectiveAutoUpdate` inside save(). The bead's
+  // own AC pins only the two render branches; this is the one that submits.
+  it('makes the five-field write unreachable in the failed state', async () => {
+    mockGetUpdates.mockRejectedValue({ status: 503, message: 'Docker is not running' })
+    renderPanel()
+
+    await screen.findByText(/Could not load update settings/i)
+    // Nothing that calls save() is on screen, so no payload built from five
+    // never-read defaults can leave this component.
+    expect(screen.queryByRole('combobox', { name: 'Scan Interval' })).not.toBeInTheDocument()
+    expect(mockUpdateUpdates).not.toHaveBeenCalled()
+  })
+
+  // TWO-SIDED on the same instrument. A fix that turns every falsy value into
+  // an error state is worse than the bug, so the genuinely-off case must still
+  // present as off.
+  it('still presents a RESOLVED globalAutoUpdate:false as off', async () => {
+    mockGetUpdates.mockResolvedValue(makeSettings({ globalAutoUpdate: false }))
+    renderPanel()
+
+    const toggle = await screen.findByLabelText('Enable Auto-Update')
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByText(/Auto-update is off\./)).toBeInTheDocument()
+    expect(screen.queryByText(/Could not load update settings/i)).not.toBeInTheDocument()
+  })
+
+  it('still presents a RESOLVED globalAutoUpdate:true as on', async () => {
+    mockGetUpdates.mockResolvedValue(makeSettings({ globalAutoUpdate: true }))
+    renderPanel()
+
+    const toggle = await screen.findByLabelText('Enable Auto-Update')
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByText(/Auto-update is off\./)).not.toBeInTheDocument()
+    // The positive branch's own text, which the failed-state arm requires to
+    // be absent. Without this the two would agree for the wrong reason.
+    expect(screen.getByText('Schedule')).toBeInTheDocument()
+  })
+})
