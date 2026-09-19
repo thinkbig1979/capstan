@@ -350,6 +350,7 @@ export function BackupHistoryTab() {
             <SelectItem value="restore">Restore</SelectItem>
             <SelectItem value="dr_restore">DR Restore</SelectItem>
             <SelectItem value="prune">Prune</SelectItem>
+            <SelectItem value="verify">Verify</SelectItem>
           </SelectContent>
         </Select>
 

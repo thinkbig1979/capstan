@@ -481,7 +481,7 @@ export interface BackupPolicy {
 
 export interface BackupRun {
   id: string
-  kind: 'backup' | 'sync' | 'restore' | 'dr_restore' | 'prune'
+  kind: 'backup' | 'sync' | 'restore' | 'dr_restore' | 'prune' | 'verify'
   trigger: 'manual' | 'scheduled'
   // 'interrupted' (agent-os-pid): a run left 'running' by a crash or a
   // restore from a mid-run snapshot. Distinct from 'failed' -- it never
@@ -629,6 +629,16 @@ export interface BackupStatus {
   repoStateMessage: string
   enabledStackCount: number
   lastRun: BackupRun | null
+  /**
+   * The newest `verify` run, reported SEPARATELY from `lastRun` on purpose
+   * (agent-os-j1jw): `lastRun` is the newest run of ANY kind, so the next
+   * backup that succeeds would hide a failed verification behind it. A failed
+   * verification does not block backups, which makes this the only channel by
+   * which an operator learns the repository may not be restorable. Required,
+   * not optional: the handler always ships the key and sends null when no
+   * verify has ever run (TestGetStatus_LastVerifyNullWhenNeverRun).
+   */
+  lastVerify: BackupRun | null
   nextRunAt: string | null
   repoSizeBytes: number | null
   schedulerRunning: boolean

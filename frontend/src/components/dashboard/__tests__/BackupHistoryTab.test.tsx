@@ -152,6 +152,18 @@ describe('BackupHistoryTab — the columns', () => {
     expect(screen.getByText('30.0s')).toBeInTheDocument()
   })
 
+  // MUST-STAY-GREEN guard, not a fail-first test: the Kind cell renders
+  // {run.kind} raw, so a verify run already reads "verify" there the moment the
+  // type admits the kind, exactly as a dr_restore run reads "dr_restore". This
+  // pins that no label map is introduced for verify alone (agent-os-5lpz A2).
+  it('renders a verify run under its own kind label', async () => {
+    mockGetHistory.mockResolvedValue(historyPage({ runs: [run({ kind: 'verify' })] }))
+    renderTab()
+
+    await screen.findByText('run-1')
+    expect(screen.getByText('verify')).toBeInTheDocument()
+  })
+
   it('shows a dash for the duration of a run that has not finished', async () => {
     mockGetHistory.mockResolvedValue(
       historyPage({ runs: [run({ status: 'running', finishedAt: null })] }),
@@ -243,6 +255,37 @@ describe('BackupHistoryTab — the filters', () => {
     await waitFor(() =>
       expect(mockGetHistory).toHaveBeenLastCalledWith(
         expect.objectContaining({ kind: 'restore', page: 1 }),
+      ),
+    )
+  })
+
+  // agent-os-5lpz A4, the client half. Only the OUTBOUND side is testable here:
+  // that picking Verify sends kind: 'verify'. The other half -- that the other
+  // five kinds are then hidden -- is the SERVER's, done by GetBackupRunsFiltered
+  // and pinned by the {"kind", models.BackupHistoryFilters{Kind: "backup"}, ...}
+  // table case in backend/internal/database/backup_test.go and by
+  // TestGetStatus_LastVerifySurfacesFailure. There is deliberately no
+  // client-side kind filter to test.
+  it('sends the verify kind filter and resets to page 1', async () => {
+    const user = userEvent.setup()
+    mockGetHistory.mockResolvedValue(historyPage({ total: 60, totalPages: 3 }))
+    renderTab()
+
+    await screen.findByText('run-1')
+    fireEvent.click(screen.getByRole('button', { name: /Next/ }))
+    await waitFor(() =>
+      expect(mockGetHistory).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 })),
+    )
+    // Page 2 is its own query key, so the toolbar is replaced by skeletons
+    // until it resolves; wait for it back before touching a select.
+    await screen.findByText('Page 2 of 3')
+
+    await user.click(kindSelect())
+    await user.click(await screen.findByRole('option', { name: 'Verify' }))
+
+    await waitFor(() =>
+      expect(mockGetHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: 'verify', page: 1 }),
       ),
     )
   })

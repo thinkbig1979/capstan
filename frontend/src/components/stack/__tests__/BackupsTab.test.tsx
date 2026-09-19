@@ -81,7 +81,7 @@ function makeSnapshot(overrides: Partial<{
 function makeRun(overrides: Partial<{
   id: string
   status: 'success' | 'failed' | 'partial' | 'running' | 'interrupted'
-  kind: 'backup' | 'sync' | 'restore' | 'dr_restore' | 'prune'
+  kind: 'backup' | 'sync' | 'restore' | 'dr_restore' | 'prune' | 'verify'
 }> = {}) {
   return {
     id: 'run-1',
