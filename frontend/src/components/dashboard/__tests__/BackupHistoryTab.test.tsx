@@ -564,7 +564,16 @@ describe('BackupHistoryTab — a failed REFETCH must not discard data', () => {
     // …and the rows the server already sent are still on screen.
     expect(screen.getByText('run-1')).toBeInTheDocument()
     expect(screen.queryByText('Failed to Load Backup History')).not.toBeInTheDocument()
-    expect(screen.getByText(/Could not refresh the backup history/)).toBeInTheDocument()
+    // Both halves of RefreshFailedNotice's `beforeSave` contract are pinned, one
+    // per arm, because all twelve arms pass through the same component: asserting
+    // only the shared "Could not refresh …" prefix would stay green if the
+    // beforeSave branch were deleted outright. This is the READ-ONLY variant — a
+    // table nobody writes back, so no save warning. The write-back variant is
+    // pinned in HistoryRetentionSection.test.tsx.
+    expect(
+      screen.getByText(/Could not refresh the backup history\. The values shown are the last ones the server sent\./),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/check them before saving/)).not.toBeInTheDocument()
   })
 
   it('keeps the populated run-detail rows when a REFETCH fails', async () => {

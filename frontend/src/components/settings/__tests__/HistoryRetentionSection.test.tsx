@@ -241,6 +241,12 @@ describe('HistoryRetentionSection — a failed REFETCH must not discard the form
     expect(
       screen.queryByText(/The configured retention could not be read/),
     ).not.toBeInTheDocument()
-    expect(screen.getByText(/Could not refresh the retention settings/)).toBeInTheDocument()
+    // The WRITE-BACK variant of RefreshFailedNotice: `beforeSave` adds the save
+    // warning, and this arm pins the whole sentence rather than the shared
+    // prefix — dropping the beforeSave branch would leave "…the server sent."
+    // and fail here. The read-only variant is pinned in BackupHistoryTab.test.tsx.
+    expect(
+      screen.getByText(/Could not refresh the retention settings\. The values shown are the last ones the server sent, so check them before saving\./),
+    ).toBeInTheDocument()
   })
 })
