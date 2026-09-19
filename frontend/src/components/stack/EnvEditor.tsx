@@ -125,12 +125,21 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // opens — saving would persist the blanks, and the backend 403s the write.
   const locked = envData?.hasEnvFile === true && envData.locked === true
 
-  // Both guards take `&& !envData` (agent-os-wczm). This component hydrates
-  // `entries`, `rawContent` and `hasUnsavedChanges` from the payload during
-  // render, so replacing the editor on a bare `isError` threw away UNSAVED USER
-  // EDITS on a single 500 from a focus refetch. `!envData` still routes a real
-  // first-load failure — an unknown stack, or an env file missing from disk —
-  // to the error state, which is what the comment above this query is about.
+  // agent-os-wczm. The ISERROR guard is the one that was broken: this component
+  // hydrates `entries`, `rawContent` and `hasUnsavedChanges` from the payload
+  // during render, so replacing the editor on a bare `isError` threw away
+  // UNSAVED USER EDITS on a single 500 from a focus refetch. `&& !envData` still
+  // routes a real first-load failure — an unknown stack, or an env file missing
+  // from disk — to the error state, which is what the comment above this query
+  // is about.
+  //
+  // The `&& !envData` on the LOADING guard is belt-and-braces and cannot change
+  // the result today: query-core sets status "pending" only while `data` is
+  // undefined, and `isLoading = isPending && isFetching`, so `isLoading` already
+  // implies `!envData` for this query — it declares no placeholderData,
+  // initialData or select. It is written out so the two guards read as a pair,
+  // and so the day someone adds placeholderData here the loading branch does not
+  // quietly start hiding a populated editor.
   if (isLoading && !envData) {
     return <EnvLoadingState />
   }

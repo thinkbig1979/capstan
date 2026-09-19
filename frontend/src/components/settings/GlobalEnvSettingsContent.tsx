@@ -32,6 +32,7 @@ export function GlobalEnvSettingsContent() {
     isLoading,
     isLoadingError,
     isRefetchError,
+    refetch,
     locked,
     vars,
     dirty,
@@ -129,7 +130,11 @@ export function GlobalEnvSettingsContent() {
       {/* Directly above the save control: the operator is about to write these
           variables back and has to know the table may be stale (agent-os-wczm). */}
       {isRefetchError && (
-        <RefreshFailedNotice what="the global environment variables" beforeSave />
+        <RefreshFailedNotice
+          what="the global environment variables"
+          beforeSave
+          onRetry={() => refetch()}
+        />
       )}
 
       <div className="flex justify-between">

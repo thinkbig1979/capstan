@@ -52,7 +52,7 @@ interface PolicyDraft {
  *  remove. The schedule is off until an operator turns it on: a prune is
  *  irreversible, so nothing here is opt-out. */
 export function DockerCleanupCard() {
-  const { data, isLoading, isError } = useDockerCleanupPolicy()
+  const { data, isLoading, isError, refetch } = useDockerCleanupPolicy()
   const updatePolicy = useUpdateDockerCleanupPolicy()
   const preview = usePreviewDockerCleanup()
   const history = useDockerCleanupHistory()
@@ -218,7 +218,13 @@ export function DockerCleanupCard() {
           </p>
         )}
 
-        {isError && <RefreshFailedNotice what="the cleanup schedule" beforeSave />}
+        {isError && (
+          <RefreshFailedNotice
+            what="the cleanup schedule"
+            beforeSave
+            onRetry={() => refetch()}
+          />
+        )}
 
         <Button type="submit" disabled={!dirty || belowFloor || updatePolicy.isPending}>
           {updatePolicy.isPending ? 'Saving…' : 'Save cleanup schedule'}

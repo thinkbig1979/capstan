@@ -334,13 +334,35 @@ describe('GlobalEnvSettingsContent — a failed REFETCH must not discard the tab
     await waitFor(() =>
       expect(client.getQueryState(['settings', 'global-env'])?.status).toBe('error'),
     )
-    expect(screen.getAllByDisplayValue('baz').length).toBeGreaterThan(0)
-    expect(screen.getAllByDisplayValue('FOO').length).toBeGreaterThan(0)
+    // toHaveLength, not `.length > 0`: getAllBy* THROWS when nothing matches, so
+    // a `> 0` assertion can never fail and carries no information beyond the
+    // query. Two, not one -- this panel renders a desktop table AND a mobile card
+    // list, so every row appears twice (same count the arm at :55 pins).
+    expect(screen.getAllByDisplayValue('baz')).toHaveLength(2)
+    expect(screen.getAllByDisplayValue('FOO')).toHaveLength(2)
     expect(
       screen.queryByText('Failed to load global environment variables.'),
     ).not.toBeInTheDocument()
     expect(
       screen.getByText(/Could not refresh the global environment variables/),
     ).toBeInTheDocument()
+
+    // The notice must not merely STATE the problem. A save from this panel is a
+    // full replace of the variable list (useGlobalEnvVars sends the whole
+    // `vars` array), so saving from a stale list deletes whatever another
+    // operator added since the last good fetch -- "check them before saving"
+    // without a way to check is the worst of both. Retry re-issues the query.
+    const callsBeforeRetry = mockGetGlobalEnv.mock.calls.length
+    mockGetGlobalEnv.mockResolvedValue({ vars: [{ key: 'FOO', value: 'bar' }] })
+    fireEvent.click(screen.getByRole('button', { name: /Retry/ }))
+
+    await waitFor(() =>
+      expect(mockGetGlobalEnv.mock.calls.length).toBeGreaterThan(callsBeforeRetry),
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/Could not refresh the global environment variables/),
+      ).not.toBeInTheDocument(),
+    )
   })
 })

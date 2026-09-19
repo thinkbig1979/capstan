@@ -19,7 +19,7 @@ import { useBackupForm } from './backup-settings/useBackupForm'
 import { usePasswordReveal } from './backup-settings/usePasswordReveal'
 
 export function BackupSettingsContent() {
-  const { data: settings, isLoading, isError, error } = useBackupSettings()
+  const { data: settings, isLoading, isError, error, refetch } = useBackupSettings()
   const { authDisabled } = useAuth()
   const isUnlocked = useEnvUnlockStore((s) => s.isUnlocked)
   const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
@@ -132,7 +132,13 @@ export function BackupSettingsContent() {
       {/* Directly above the save control, not a transient toast: the operator is
           about to write these fields back and has to know the form may be stale
           (agent-os-wczm). */}
-      {isError && <RefreshFailedNotice what="the backup settings" beforeSave />}
+      {isError && (
+        <RefreshFailedNotice
+          what="the backup settings"
+          beforeSave
+          onRetry={() => refetch()}
+        />
+      )}
 
       <SaveBar isDirty={isDirty} isSaving={isSaving} onDiscard={handleDiscard} onSave={handleSave} />
     </div>

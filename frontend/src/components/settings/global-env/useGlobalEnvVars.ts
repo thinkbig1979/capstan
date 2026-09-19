@@ -18,7 +18,7 @@ const ENV_SEARCH_FIELDS = [
  * indices without owning that state themselves.
  */
 export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<number, boolean>>>) {
-  const { data, isLoading, isLoadingError, isRefetchError } = useGlobalEnv()
+  const { data, isLoading, isLoadingError, isRefetchError, refetch } = useGlobalEnv()
   const updateGlobalEnv = useUpdateGlobalEnv()
 
   const [vars, setVars] = useState<EnvVar[]>([])
@@ -92,6 +92,10 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
     // failed over variables and edits that must not be discarded).
     isLoadingError,
     isRefetchError,
+    // A save from this panel is a FULL REPLACE of the variable list, so an
+    // operator told the list may be stale needs a way to make it fresh --
+    // otherwise the notice states a problem it offers no way out of.
+    refetch,
     // The server blanked the secret-looking values because no unlock token was in
     // play. Saving from that state would persist the blanks, and the backend 403s
     // the write, so the panel disables Save until unlocked (agent-os-7o5s).

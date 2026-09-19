@@ -104,6 +104,41 @@ export default defineConfig([
           message:
             'A bare isError is also true when a REFETCH fails on a query that already has data. Drop the isError disjunct — !data already covers "failed and never loaded" — or use isLoadingError.',
         },
+        // The MIRROR of the two above. `isError || !data` was caught and
+        // `!data || isError` was not, which is a one-token evasion of a rule
+        // whose whole job is to stop this shape coming back.
+        {
+          selector:
+            "LogicalExpression[operator='||'][right.type='Identifier'][right.name='isError']",
+          message:
+            'A bare isError is also true when a REFETCH fails on a query that already has data. Drop the isError disjunct — !data already covers "failed and never loaded" — or use isLoadingError.',
+        },
+        {
+          selector:
+            "LogicalExpression[operator='||'][right.type='MemberExpression'][right.property.name='isError']",
+          message:
+            'A bare isError is also true when a REFETCH fails on a query that already has data. Drop the isError disjunct — !data already covers "failed and never loaded" — or use isLoadingError.',
+        },
+        // The TERNARY form, narrowed to one that renders. DockerCleanupCard's
+        // run-history guard was exactly this shape and was missed when the bead
+        // was filed, precisely because it is invisible to an `if (isError` read.
+        // `:has(JSXElement)` is what keeps it off `const cause = isError ? … :
+        // null` (BackupSettingsContent), which is correct code: that ternary
+        // picks a STRING inside a guard that has already fired, and has no JSX
+        // under it. A bare-test ConditionalExpression selector fires on it and
+        // must not be used.
+        {
+          selector:
+            "ConditionalExpression[test.type='Identifier'][test.name='isError']:has(JSXElement)",
+          message:
+            'A bare isError is also true when a REFETCH fails on a query that already has data. Render the error view on isLoadingError, or isError && !data, so a failed refresh does not replace a populated one.',
+        },
+        {
+          selector:
+            "ConditionalExpression[test.type='MemberExpression'][test.property.name='isError']:has(JSXElement)",
+          message:
+            'A bare isError is also true when a REFETCH fails on a query that already has data. Render the error view on isLoadingError, or isError && !data, so a failed refresh does not replace a populated one.',
+        },
       ],
     },
   },

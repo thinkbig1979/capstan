@@ -37,7 +37,7 @@ const FIELDS: { key: FieldKey; label: string; id: string; hint: string }[] = [
  *  Before this existed the retention endpoint had no caller in the UI at all,
  *  so the only way to change it was to edit the settings row by hand. */
 export function HistoryRetentionSection() {
-  const { data, isLoading, isError } = useRetentionSettings()
+  const { data, isLoading, isError, refetch } = useRetentionSettings()
   const updateRetention = useUpdateRetentionSettings()
   const [draft, setDraft] = useState<Partial<Record<FieldKey, number>>>({})
 
@@ -150,7 +150,13 @@ export function HistoryRetentionSection() {
         </p>
       )}
 
-      {isError && <RefreshFailedNotice what="the retention settings" beforeSave />}
+      {isError && (
+        <RefreshFailedNotice
+          what="the retention settings"
+          beforeSave
+          onRetry={() => refetch()}
+        />
+      )}
 
       <Button type="submit" disabled={!dirty || belowFloor || updateRetention.isPending}>
         {updateRetention.isPending ? 'Saving…' : 'Save retention'}

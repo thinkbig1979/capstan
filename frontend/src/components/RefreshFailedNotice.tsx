@@ -41,7 +41,13 @@ export function RefreshFailedNotice({
 }: RefreshFailedNoticeProps) {
   return (
     <div
-      role="status"
+      // role="alert", not "status": every call site mounts this element and its
+      // text in the SAME DOM mutation, and several screen-reader/browser pairs
+      // only announce changes INSIDE a region that already existed. A polite
+      // region born with its content can go unread; an alert is announced on
+      // insertion. The other reliable shape -- a permanently mounted empty
+      // region -- is more machinery than one notice needs.
+      role="alert"
       className={cn(
         'flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm',
         className,
