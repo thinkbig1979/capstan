@@ -64,6 +64,7 @@ function makeStatus(
     repoStateMessage: '',
     enabledStackCount: 1,
     lastRun,
+    lastVerify: null,
     nextRunAt: null,
     repoSizeBytes: null,
     schedulerRunning: false,
@@ -107,7 +108,11 @@ describe('BackupStatusCard — zero-stack backup badge', () => {
     expect(screen.queryByText('No stacks backed up')).not.toBeInTheDocument()
   })
 
-  it.each(['restore', 'sync', 'dr_restore', 'prune'] as const)(
+  // 'verify' belongs in this list for a real reason, not for symmetry: a verify
+  // run inspects the repository rather than a set of stacks, so stacksTotal is
+  // 0 by nature. The zero-stack guard must stay gated on kind === 'backup' or
+  // every successful verification would render as "No stacks backed up".
+  it.each(['restore', 'sync', 'dr_restore', 'prune', 'verify'] as const)(
     'still shows the green Success badge for a zero-stack %s run (kind gate)',
     (kind) => {
       ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -211,5 +216,98 @@ describe('BackupStatusCard — the unavailable banner names the fault the server
     })
 
     expect(text).toContain('restic is not installed.')
+  })
+})
+
+// The two timestamps mirror the backend test named below: the verify fails
+// FIRST, the backup succeeds AFTER it. T1 < T2 is the whole point.
+const T1 = '2026-02-01T00:00:00Z'
+const T2 = '2026-02-02T00:00:00Z'
+
+const failedVerify = () =>
+  makeRun({
+    id: 'run-verify-failed',
+    kind: 'verify',
+    status: 'failed',
+    startedAt: T1,
+    errorMessage: 'repository integrity check failed',
+  })
+
+/**
+ * agent-os-5lpz, mirroring TestGetStatus_LastVerifySurfacesFailure in
+ * backend/internal/handlers/backup_verify_test.go. The backend reports
+ * lastVerify separately from lastRun exactly so a later successful backup
+ * cannot hide a failed verification, and lastVerify is the only channel by
+ * which an operator learns the repository may not be restorable. The card must
+ * therefore read lastVerify and never derive this from lastRun.
+ */
+describe('BackupStatusCard — a failed verify is not masked by a later successful backup', () => {
+  function renderWith(overrides: Partial<BackupStatus>, lastRun: BackupRun | null = null) {
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeStatus(lastRun, overrides),
+      isLoading: false,
+    })
+    renderCard()
+  }
+
+  it('surfaces a failed verify although a LATER backup succeeded', () => {
+    renderWith(
+      { lastVerify: failedVerify() },
+      makeRun({ id: 'run-backup-ok', kind: 'backup', status: 'success', startedAt: T2 }),
+    )
+
+    const banner = screen.getByTestId('verify-failed-banner')
+    expect(banner).toBeInTheDocument()
+    expect(banner).toHaveTextContent('repository integrity check failed')
+  })
+
+  it('shows no banner when the last verify SUCCEEDED — control (i)', () => {
+    renderWith({ lastVerify: makeRun({ kind: 'verify', status: 'success', startedAt: T1 }) })
+
+    expect(screen.queryByTestId('verify-failed-banner')).not.toBeInTheDocument()
+  })
+
+  it('shows no banner when no verify has ever run — control (ii)', () => {
+    renderWith({ lastVerify: null })
+
+    expect(screen.queryByTestId('verify-failed-banner')).not.toBeInTheDocument()
+  })
+
+  it('still surfaces the failed verify when the engine reads as unavailable — control (iii)', () => {
+    // The un-maskable property from the other direction. The j1jw defect was a
+    // repository that answers from cache while its data is gone, so this
+    // warning must be gated on neither the reachability probe nor lastRun.
+    renderWith({
+      repoState: 'unreachable',
+      repoStateMessage: 'repository not reachable: connection refused',
+      lastVerify: failedVerify(),
+    })
+
+    expect(screen.getByTestId('verify-failed-banner')).toBeInTheDocument()
+  })
+})
+
+describe('BackupStatusCard — the "Last check" readout', () => {
+  function renderWith(overrides: Partial<BackupStatus>) {
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeStatus(null, overrides),
+      isLoading: false,
+    })
+    renderCard()
+  }
+
+  it('reports when the repository was last verified', () => {
+    renderWith({
+      lastVerify: makeRun({ kind: 'verify', status: 'success', startedAt: T1, stacksTotal: 0 }),
+    })
+
+    expect(screen.getByText('Last check')).toBeInTheDocument()
+    expect(screen.getByText('Success')).toBeInTheDocument()
+  })
+
+  it('renders no cell at all when no verify has ever run — the operator has no trigger yet, so "Never" would be noise', () => {
+    renderWith({ lastVerify: null })
+
+    expect(screen.queryByText('Last check')).not.toBeInTheDocument()
   })
 })

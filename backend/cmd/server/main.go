@@ -27,7 +27,7 @@ import (
 )
 
 // backupDrainTimeout bounds how long graceful shutdown waits for in-flight
-// durable backup/restore/sync/dr-restore/prune runs to finish after
+// durable backup/restore/sync/dr-restore/prune/verify runs to finish after
 // srv.Shutdown returns. 15s (srv.Shutdown's own bound, below) + this stays
 // well under systemd's default TimeoutStopSec of 90s. See agent-os-7a5.
 const backupDrainTimeout = 30 * time.Second
@@ -753,7 +753,7 @@ func main() {
 		slog.Error("Server forced to shutdown", "error", err)
 	}
 
-	// Drain in-flight durable backup/restore/sync/dr-restore/prune runs only
+	// Drain in-flight durable backup/restore/sync/dr-restore/prune/verify runs only
 	// AFTER srv.Shutdown has returned. LaunchX methods DO refuse a new run
 	// once this drain has begun (BackupRunnerRegistry.registerAndAdd checks
 	// reg.stopped, set by beginStop before StopWithTimeout ever waits — see

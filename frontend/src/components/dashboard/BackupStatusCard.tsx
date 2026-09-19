@@ -45,6 +45,32 @@ function EngineUnavailableBanner({
   )
 }
 
+function VerifyFailedBanner({
+  startedAt,
+  errorMessage,
+}: {
+  startedAt: string
+  errorMessage?: string
+}) {
+  return (
+    <div
+      data-testid="verify-failed-banner"
+      className="flex items-start gap-3 rounded-md border border-red-300 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/30"
+    >
+      <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+      <div className="text-sm">
+        <p className="font-medium text-red-800 dark:text-red-300">
+          Repository integrity check failed
+        </p>
+        <p className="mt-0.5 text-red-700 dark:text-red-400">
+          Last checked {formatRelativeTime(startedAt)}.{errorMessage ? ` ${errorMessage}.` : ''}{' '}
+          Backups may not be restorable until the repository is repaired.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 function LastRunBadge({
   kind,
   status,
@@ -223,6 +249,25 @@ export function BackupStatusCard() {
           />
         )}
 
+        {/* Reads lastVerify, NEVER lastRun (agent-os-j1jw, agent-os-5lpz).
+            lastRun is the newest run of ANY kind, so the next backup that
+            succeeds would hide a failed verification behind it -- which is why
+            the backend reports the two separately, pinned by
+            TestGetStatus_LastVerifySurfacesFailure in
+            backend/internal/handlers/backup_verify_test.go. Deliberately
+            OUTSIDE the !engineUnavailable grid as well: the defect this warns
+            about is a repository that answers the reachability probe while its
+            data is gone, so neither a later success nor an `ok` probe may mask
+            it. Only `failed` shows here; a verify run can also end
+            `interrupted` (crash recovery), which is not evidence the
+            repository is bad and would cry wolf after any outage. */}
+        {statusData?.lastVerify?.status === 'failed' && (
+          <VerifyFailedBanner
+            startedAt={statusData.lastVerify.startedAt}
+            errorMessage={statusData.lastVerify.errorMessage}
+          />
+        )}
+
         {/* Status grid */}
         {statusData && !engineUnavailable && (
           <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
@@ -250,6 +295,25 @@ export function BackupStatusCard() {
                 <p className="text-muted-foreground">Never</p>
               )}
             </div>
+
+            {/* Last check. Rendered only when a verify has actually run: there
+                is no trigger UI yet, so a "Never" cell would be noise the
+                operator cannot act on. */}
+            {statusData.lastVerify && (
+              <div className="space-y-0.5">
+                <p className="text-xs text-muted-foreground">Last check</p>
+                <div className="flex flex-col gap-0.5">
+                  <LastRunBadge
+                    kind={statusData.lastVerify.kind}
+                    status={statusData.lastVerify.status}
+                    stacksTotal={statusData.lastVerify.stacksTotal}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    {formatRelativeTime(statusData.lastVerify.startedAt)}
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Next scheduled run */}
             {statusData.nextRunAt && (
