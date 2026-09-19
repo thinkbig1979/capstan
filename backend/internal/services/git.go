@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -157,15 +158,18 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// absent chip rather than a false "clean" one. That is the convention,
 	// restored.
 	//
-	// LIMITATION, and it is deliberate rather than an oversight: this covers the
-	// NON-ZERO EXIT arm only. gitCommandWithCreds reads its child with
-	// CombinedOutput, which merges stderr into stdout, so a git command that
-	// EXITS 0 while writing a diagnostic hands that diagnostic to the parser as
-	// DATA and this guard never fires. MEASURED: a clean worktree with
-	// core.fsmonitor pointing at a nonexistent hook exits 0 and emits two
-	// `fatal: cannot exec` lines, which this function then counts as two
-	// uncommitted changes. Tracked as agent-os-vwi7; the fix there is to the
-	// stream contract of the shared helper, not to this site.
+	// The SIBLING ARM IS NOW CLOSED TOO (agent-os-vwi7). This guard covers the
+	// non-zero exit; the zero-exit-with-stderr route that used to survive it is
+	// gone, because gitCommandWithCreds no longer reads its child with
+	// CombinedOutput and the value below is stdout only. A clean worktree with
+	// core.fsmonitor pointing at a nonexistent hook exits 0 and writes two
+	// `fatal: cannot exec` lines to STDERR; this function used to count them as
+	// two uncommitted changes and now sees the empty stdout they leave behind.
+	// Pinned by TestGetStatus_ZeroExitStderrIsNotCountedAsChanges and
+	// TestGetStatus_PrintingHookIsNotCountedAsChanges in
+	// git_stderrsplit_vwi7_test.go, whose fourth arm also pins the COUNT on a
+	// faulted repository with one real modification — the boolean alone cannot
+	// tell that case from the bug.
 	statusOut, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read status: %w", err)
@@ -246,34 +250,62 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		// hard-fails the request a few lines below, so a weaker fault refused the
 		// request while this one was swallowed.
 		//
-		// SAME LIMITATION as the status probe above: this covers the non-zero
-		// exit arm only. An ambiguous tracking-ref name makes rev-list warn on
-		// stderr and EXIT 0; CombinedOutput merges that warning into the output,
-		// strings.Fields then counts seven fields instead of two, the len==2
-		// guard below is false, and ahead/behind keep their zero values with no
-		// error. MEASURED on a repository that was genuinely ahead by one.
-		// Tracked as agent-os-vwi7.
+		// SAME SIBLING ARM, ALSO CLOSED NOW (agent-os-vwi7). An ambiguous
+		// tracking-ref name makes rev-list warn on stderr and EXIT 0. While
+		// CombinedOutput merged that warning into the output, strings.Fields
+		// counted seven fields instead of two, the field-count guard below was
+		// false, and ahead/behind kept their zero values with no error on a
+		// repository that was genuinely ahead by one. With stdout isolated the
+		// warning no longer reaches the parser and the counts come out correct,
+		// which is why the guard below now treats a non-2 count as an error
+		// rather than as something to skip past. Pinned by
+		// TestGetStatus_AmbiguousRefnameStillCountsAheadBehind (which asserts
+		// ahead=1, not merely "an error") and
+		// TestGetStatus_UnreadableAheadBehindCountIsAnError.
 		output, err := s.gitCommandWithCreds(dirPath, user, token,
 			"rev-list", "--left-right", "--count", trackingBranch+"...HEAD")
 		if err != nil {
 			return nil, fmt.Errorf("failed to count ahead/behind against %s: %w", trackingBranch, err)
 		}
+		// A FIELD COUNT OTHER THAN TWO IS NOW AN ERROR (agent-os-vwi7), where it
+		// used to skip the block silently and leave ahead=0/behind=0 standing.
+		//
+		// That silence was only defensible while this read a merged stream, where
+		// a stray stderr line could inflate the count for a reason that was not
+		// git's answer. With stdout isolated, `rev-list --left-right --count`
+		// promises exactly two integers on success, so any other count means git
+		// answered something unreadable — and 0/0 for an unreadable answer is a
+		// count measured against nothing, which GitStatus.tsx gates with
+		// `{ahead > 0 && ...}` and draws as "up to date".
+		//
+		// It also settles an inconsistency the block had with itself: the two
+		// Atoi failures below already hard-fail the request, so an unreadable
+		// FIELD refused the request while a missing one was swallowed.
+		//
+		// This deliberately does NOT fire on the ambiguous-refname fault that
+		// motivated agent-os-vwi7. MEASURED: with the streams split that fault
+		// leaves stdout a clean "0\t1" and puts its warning on stderr, so the
+		// counts come out correct (1 ahead, 0 behind) and never reach this
+		// branch. A guard that fired there would be converting a right answer
+		// into a 500.
 		parts := strings.Fields(output)
-		if len(parts) == 2 {
-			// Both parsed or neither: GitStatus.tsx renders each count with
-			// `{gitStatus.ahead > 0 && ...}`, so a 0 salvaged from an
-			// unparseable field is drawn as "up to date" rather than as
-			// "unknown" — the rendering that agent-os-ct4e was filed for.
-			// rev-list --left-right --count promises two integers, so a
-			// field that is not one is a real fault, not a missing upstream.
-			behind, err = strconv.Atoi(parts[0])
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse behind count %q: %w", parts[0], err)
-			}
-			ahead, err = strconv.Atoi(parts[1])
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse ahead count %q: %w", parts[1], err)
-			}
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("rev-list --left-right --count against %s answered %d fields, want 2: %q",
+				trackingBranch, len(parts), output)
+		}
+		// Both parsed or neither: GitStatus.tsx renders each count with
+		// `{gitStatus.ahead > 0 && ...}`, so a 0 salvaged from an
+		// unparseable field is drawn as "up to date" rather than as
+		// "unknown" — the rendering that agent-os-ct4e was filed for.
+		// rev-list --left-right --count promises two integers, so a
+		// field that is not one is a real fault, not a missing upstream.
+		behind, err = strconv.Atoi(parts[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse behind count %q: %w", parts[0], err)
+		}
+		ahead, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse ahead count %q: %w", parts[1], err)
 		}
 	}
 
@@ -312,14 +344,90 @@ func (s *GitService) gitCommand(dirPath string, args ...string) (string, error) 
 // gitCommandWithCreds is gitCommand with credential resolution factored out,
 // mirroring gitCmdWithCreds: callers that issue several git invocations for
 // one logical operation resolve once and pass the result to every call here.
+//
+// THE RETURNED STRING IS STDOUT ONLY (agent-os-vwi7). This used to be
+// cmd.CombinedOutput(), which merges stderr into stdout, and that merge was the
+// defect: a git command that EXITS 0 while writing a diagnostic handed that
+// diagnostic to every consuming caller as DATA. TWENTY of this helper's
+// twenty-eight call sites consume the returned value — porcelain lines,
+// ahead/behind counts, commit hashes, branch names, a remote URL, log records —
+// and each of them read git's prose as its answer. The other eight discard it
+// into `_` and ask only about the exit code, so they were never affected.
+//
+// The class could not be caught by any instrument this repository runs, and not
+// by accident: the exit code is 0 and there is NO ERROR VALUE ANYWHERE on these
+// paths, so agent-os-ufj7's fix, the geterrors analyzer and errcheck are all
+// structurally blind to it. Two MEASURED consequences, git 2.47.3, both on a
+// repository with no changes at all:
+//
+//	core.fsmonitor at a nonexistent hook -> exit 0, stdout EMPTY, stderr two
+//	  `fatal: cannot exec` lines. getStatusCLI counted them as dirtyCount=2, and
+//	  pullCLI's identical guard REFUSED THE PULL with a 400 naming uncommitted
+//	  changes that do not exist — with no recovery path, since there is nothing
+//	  to commit and nothing names the underlying config.
+//	an ambiguous tracking-ref name -> exit 0, stdout a clean "0\t1", stderr a
+//	  `warning: refname ... is ambiguous.`. Merged, strings.Fields saw 7 fields
+//	  instead of 2, so ahead/behind kept their zeros on a repo ahead by one.
+//
+// The most reachable vector is neither of those: ANY HOOK THAT PRINTS. git's
+// hook machinery redirects a hook's own stdout onto git's stderr, so a linter or
+// formatter hook writing a single line was enough. That needs no
+// misconfiguration at all.
+//
+// THE ERROR PATH STILL CARRIES GIT'S STDERR, which is what makes a failure
+// diagnosable and is the reason the merge was there in the first place. Both
+// halves go through redactToken, and that is load-bearing rather than
+// belt-and-braces: MEASURED, `git rev-parse <token>` exits 128 with the token on
+// stdout AND on stderr, so a credential can leak on either stream of a FAILING
+// command.
 func (s *GitService) gitCommandWithCreds(dirPath, user, token string, args ...string) (string, error) {
 	cmd, _ := s.gitCmdWithCreds(dirPath, user, token, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("git %s: %w (%s)", args[0], err,
-			redactToken(strings.TrimSpace(string(output)), token))
+			redactToken(gitDiagnostic(stdout.String(), stderr.String()), token))
 	}
-	return redactToken(strings.TrimSpace(string(output)), token), nil
+
+	// A zero-exit diagnostic is dropped from the DATA and recorded here instead.
+	// DEBUG, not WARN: the commonest cause by far is a hook that prints, which is
+	// ordinary rather than faulty, so a louder level would turn every healthy
+	// repository with a formatter hook into a standing log line. The branch is
+	// skipped entirely when stderr is empty, so a healthy call logs nothing and
+	// pays nothing. redactToken runs here too — this string reached the log, and
+	// a credential echoed on a SUCCEEDING command's stderr would otherwise be
+	// persisted in it.
+	if diag := strings.TrimSpace(stderr.String()); diag != "" {
+		slog.Debug("git wrote to stderr but exited 0; diagnostic kept out of the parsed value",
+			"path", dirPath, "subcommand", args[0], "stderr", redactToken(diag, token))
+	}
+
+	return redactToken(strings.TrimSpace(stdout.String()), token), nil
+}
+
+// gitDiagnostic reassembles both halves of a failed git child for an error
+// message.
+//
+// STDERR FIRST, because that is where git puts its diagnosis and it is the part
+// an operator needs: MEASURED, a failing `pull --ff-only` writes all 305 bytes
+// of its explanation to stderr and nothing to stdout. Anything the command had
+// already written to stdout follows, rather than being discarded, because some
+// git commands emit data before failing and because a credential can appear
+// there (see gitCommandWithCreds). Either half alone when the other is empty, so
+// the common case reads exactly as it did before the streams were split.
+func gitDiagnostic(stdout, stderr string) string {
+	out := strings.TrimSpace(stdout)
+	errOut := strings.TrimSpace(stderr)
+	switch {
+	case errOut == "":
+		return out
+	case out == "":
+		return errOut
+	default:
+		return errOut + "\n" + out
+	}
 }
 
 func (s *GitService) Pull(dirPath string) (*models.PullResult, error) {
