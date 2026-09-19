@@ -107,6 +107,7 @@ func TestEnvHandler_Create_MalformedBodyIs400(t *testing.T) {
 	t.Run("arm3 CONTROL empty body still creates an empty file", func(t *testing.T) {
 		w, envPath := post("emptybody", "")
 		require.Less(t, w.Code, 300, "an absent body is intentional here; body=%s", w.Body.String())
+		//nolint:gosec // envPath is a test fixture under t.TempDir()
 		content, readErr := os.ReadFile(envPath)
 		require.NoError(t, readErr, "the empty-body path must still create the file")
 		assert.Empty(t, string(content))
@@ -126,6 +127,7 @@ func TestEnvHandler_Create_MalformedBodyIs400(t *testing.T) {
 			}, body), body)
 			require.Less(t, w.Code, 300,
 				"%s is valid JSON and binds cleanly; rejecting it would be a regression; body=%s", body, w.Body.String())
+			//nolint:gosec // envPath is a test fixture under t.TempDir()
 			content, readErr := os.ReadFile(envPath)
 			require.NoError(t, readErr)
 			assert.Empty(t, string(content))
@@ -147,6 +149,7 @@ func TestEnvHandler_Create_MalformedBodyIs400(t *testing.T) {
 		r.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusConflict, w.Code, "body=%s", w.Body.String())
+		//nolint:gosec // envPath is a test fixture under t.TempDir()
 		content, readErr := os.ReadFile(envPath)
 		require.NoError(t, readErr)
 		assert.Equal(t, "KEEP=me\n", string(content), "the 409 path must not touch the file")
