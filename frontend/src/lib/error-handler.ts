@@ -88,6 +88,13 @@ export function isAutoRetryable(error: unknown): boolean {
   return status === 408 || status === 429
 }
 
+/**
+ * The sentence classifyError substitutes when the rejection carried no message
+ * of its own. ONE constant, referenced by both the substitution below and
+ * causeOf's suppression rule, so the two cannot drift apart into two literals.
+ */
+const NO_BACKEND_MESSAGE = 'An error occurred'
+
 export function classifyError(error: unknown): AppError {
   if (!error) {
     return {
@@ -130,7 +137,7 @@ export function classifyError(error: unknown): AppError {
   // Extracted to backendCauseOf (agent-os-5g8a) so the presenters below run the
   // SAME chain rather than a second copy of it.
   const backendMessage = backendCauseOf(error)
-  const message = backendMessage ?? 'An error occurred'
+  const message = backendMessage ?? NO_BACKEND_MESSAGE
   const details = err.details ?? err.response?.data?.details
   // Nested FIRST, unlike `status` and `details` above, and deliberately so:
   // axios stamps its OWN code at the top level on a 4xx — settle.js:21 rejects
@@ -377,20 +384,39 @@ export function backendCauseOf(error: unknown): string | null {
  * and directory names, which are otherwise silently dropped by every consumer
  * that reads only `.message`).
  *
- * The `type === 'unknown'` key, and NOT string-matching on the message text:
- * classifyError has 14 arms and exactly TWO yield `type: 'unknown'` — the
- * `!error` guard at the top and the terminal fallthrough at the bottom. Those
- * two are precisely the arms that carry no diagnosis of their own, so they say
- * 'An error occurred' when the backend said nothing. Every other arm produces a
- * sentence that is informative even then ('Check your connection and try
- * again'), and must still reach the user. So keying on the two no-diagnosis
- * arms suppresses only the genuinely empty case.
+ * SUPPRESSION applies only when the backend said NOTHING, and then only to the
+ * arms that have no diagnosis of their own. Two kinds of arm qualify:
+ *
+ *  - `type: 'unknown'` — exactly two of classifyError's 14 arms, the `!error`
+ *    guard at the top and the terminal fallthrough at the bottom.
+ *  - Arms whose message IS the no-backend-message sentinel. classifyError's
+ *    400/422, 409 and 428 arms all spell `message || '<their own fallback>'`,
+ *    and `message` is never falsy, so that fallback is dead code — the file's
+ *    own comment says it "can never actually reach its fallback". A bodyless
+ *    4xx (a proxy 4xx, the shape agent-os-ohkw exists to handle) therefore
+ *    returns the literal 'An error occurred' under `type: 'server'` or
+ *    `'validation'`, which the type key alone does not catch. Rendering that as
+ *    a cause is a fixed sentence dressed as a diagnosis — the exact defect
+ *    these presenters exist to end (found in review of agent-os-5g8a).
+ *
+ * Everything else survives, and must: 401 says 'Log in again to continue', 404
+ * names the resource, 429 says to wait, the 5xx arm keeps the status because
+ * the status is itself diagnostic (agent-os-mc4i). Those are informative even
+ * when the body was empty.
+ *
+ * Keyed on a shared CONSTANT rather than on sentence text, so the rule and the
+ * sentence it keys on cannot drift into two literals.
  */
 export function causeOf(error: unknown): string | null {
   if (isActionResult(error) && error.reason) return error.reason
   const app = classifyError(error)
-  if (app.type === 'unknown' && backendCauseOf(error) === null) return null
+  if (backendCauseOf(error) === null && !hasOwnDiagnosis(app)) return null
   return app.context ? `${app.message} (${app.context})` : app.message
+}
+
+/** Whether this arm authored a sentence of its own, rather than falling back. */
+function hasOwnDiagnosis(app: AppError): boolean {
+  return app.type !== 'unknown' && app.message !== NO_BACKEND_MESSAGE
 }
 
 /** The sonner options these presenters pass through. Deliberately tiny. */
@@ -408,17 +434,46 @@ type ToastOptions = { id?: string | number; duration?: number }
  *
  * SEPARATE from presentError because several forms read their cause with a
  * CODE-KEYED reader (settingsSaveFault, credentialSaveFault, updateScanFault,
- * repoFaultFrom) rather than with causeOf, and those readers exist precisely to
- * NOT be classifyError: each one's docblock says so, because classifyError is
- * status-keyed and would render axios's own "Network Error" to the operator as
- * though the backend had said it. Those call sites hand their answer here.
+ * repoFaultFrom) rather than with causeOf. Each of those exists precisely so as
+ * NOT to be classifyError, and each says so in its own docblock (agent-os-zlw0).
+ * Those call sites hand their already-read answer here. Three reasons, and the
+ * first is the one that decides it:
+ *
+ *  1. Switching a reader's KEY is a decision this change is not entitled to
+ *     take. The code-keying was chosen deliberately, is documented, and is
+ *     pinned by tests.
+ *  2. There IS a leak, but a narrower one than "axios's own message reaches the
+ *     operator". MEASURED, not assumed: classifyError's first two arms are
+ *     themselves code-keyed (ECONNABORTED/ETIMEDOUT, ERR_NETWORK) and the
+ *     interceptor preserves `error.code`, and a later arm matches the substring
+ *     'network' — so a genuine axios network error or timeout classifies
+ *     correctly and does NOT leak. What leaks is the tail where axios's code is
+ *     neither of those and its message matches none of the substring arms:
+ *     `{code:'UNKNOWN', message:'timeout of 30000ms exceeded'}`,
+ *     `{code:'UNKNOWN', message:'Request aborted'}` and
+ *     `{code:'ERR_CANCELED', message:'canceled'}` all come back from causeOf
+ *     verbatim. The code-keyed readers decline every one of them.
+ *  3. COVERAGE, which cuts the other way and is the half that is easy to miss:
+ *     code-keying PICKS UP faults a status-keyed reader drops. The backup
+ *     endpoint mints VALIDATION_ERROR at 422, not 400, so its two most
+ *     operator-actionable sentences would never render behind a status key.
+ *
+ * (An earlier revision of this comment claimed the leak was "Network Error"
+ * itself. That was false and shipped in six copies; the repo's own
+ * apiInterceptorError tests disprove it. Corrected in review.)
  *
  * `cause !== title` guards the degenerate case where they are the same string.
  * The one- vs two-argument split is load-bearing: sonner renders
  * `toast.error(t)` and `toast.error(t, undefined)` identically but a vitest spy
  * does not, and several tests pin the single-argument shape.
+ *
+ * An EMPTY title is substituted rather than rendered. `string` does not exclude
+ * `''`, so "non-empty by type" was a false claim (found in review) -- the
+ * promise is kept here, at runtime, or it is not kept at all. If only the cause
+ * is known it becomes the title, which is better than a blank toast.
  */
-export function presentFault(title: string, cause: string | null, extra?: ToastOptions): void {
+export function presentFault(rawTitle: string, cause: string | null, extra?: ToastOptions): void {
+  const title = rawTitle || cause || 'An unexpected error occurred'
   const description = cause && cause !== title ? cause : undefined
   if (description !== undefined) {
     toast.error(title, extra ? { ...extra, description } : { description })
@@ -435,14 +490,17 @@ export function presentFault(title: string, cause: string | null, extra?: ToastO
  * Render a failed action whose cause has to be dug out of the rejection.
  *
  * The common case, and the one the eslint rule points every fixed-sentence
- * `toast.error` at. `fallback` is required and non-empty by type, so this never
- * renders an empty toast.
+ * `toast.error` at. `fallback` is the toast TITLE and is always rendered.
+ *
+ * There is deliberately no separate `title` option. It would mean the same
+ * thing as `fallback`, so passing both left one of them dead at the call site
+ * -- which is what happened at the one site that used it (found in review).
  */
 export function presentError(
   err: unknown,
-  opts: { fallback: string; title?: string; extra?: ToastOptions },
+  opts: { fallback: string; extra?: ToastOptions },
 ): void {
-  presentFault(opts.title ?? opts.fallback, causeOf(err), opts.extra)
+  presentFault(opts.fallback, causeOf(err), opts.extra)
 }
 
 /**

@@ -47,6 +47,21 @@ function createWrapper() {
 
 const renderPanel = () => render(<UpdateScheduleContent />, { wrapper: createWrapper() })
 
+// Same render, but hands back the QueryClient so a test can drive a REFETCH.
+// Needed because the component exposes refetch only from inside the branch
+// under test, which would make the assertion circular.
+function renderPanelWithClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+  })
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <UpdateScheduleContent />
+    </QueryClientProvider>,
+  )
+  return { ...view, queryClient }
+}
+
 function makeSettings(overrides: Record<string, unknown> = {}) {
   return {
     scanIntervalMinutes: 0,
@@ -584,6 +599,42 @@ describe('UpdateScheduleContent — a failed settings query', () => {
     expect(toggle).toHaveAttribute('aria-checked', 'false')
     expect(screen.getByText(/Auto-update is off\./)).toBeInTheDocument()
     expect(screen.queryByText(/Could not load update settings/i)).not.toBeInTheDocument()
+  })
+
+  // agent-os-5g8a, defect found in review, and the four arms above are BLIND to
+  // it: every one of them rejects the FIRST fetch, so `settings` is undefined in
+  // all four and they stay green whether the guard reads `isError` or
+  // `isError && !settings`.
+  //
+  // TanStack sets status 'error' when a REFETCH fails on a query that ALREADY
+  // HAS DATA -- that is why the library ships isLoadingError (error, no data)
+  // alongside isRefetchError (error, data present), with isError true for both.
+  // This repo makes that path routine rather than theoretical: query-client.ts
+  // sets staleTime 30_000 and refetchOnWindowFocus true, and its retry predicate
+  // is isAutoRetryable, which is FALSE for a 500. So an operator loads Settings,
+  // tabs away for half a minute, tabs back, the focus refetch 500s -- and a bare
+  // isError guard would replace a fully populated, CORRECT form with an error
+  // box. That is strictly worse than the bug fxhl was filed for, in the opposite
+  // direction: before this change that operator kept a working form.
+  it('keeps the populated form when a REFETCH fails', async () => {
+    mockGetUpdates.mockResolvedValue(makeSettings({ globalAutoUpdate: true }))
+    const { queryClient } = renderPanelWithClient()
+
+    const toggle = await screen.findByLabelText('Enable Auto-Update')
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+    mockGetUpdates.mockRejectedValue({ status: 500, message: 'boom' })
+    await waitFor(() => expect(mockGetUpdates).toHaveBeenCalledTimes(1))
+    await queryClient.refetchQueries({ queryKey: ['settings', 'updates'] })
+
+    // The query IS in the error state now -- that is the point of the arm.
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['settings', 'updates'])?.status).toBe('error'),
+    )
+    // ...and the real values it already has are still on screen.
+    expect(screen.queryByText(/Could not load update settings/i)).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Enable Auto-Update')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('combobox', { name: 'Scan Interval' })).toBeInTheDocument()
   })
 
   it('still presents a RESOLVED globalAutoUpdate:true as on', async () => {

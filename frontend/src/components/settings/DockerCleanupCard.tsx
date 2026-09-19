@@ -110,10 +110,11 @@ export function DockerCleanupCard() {
       // sentence stays as the title when the server said nothing usable —
       // same presenter as HistoryRetentionSection's onError.
       onError: (error) => {
-        // presentFault, NOT presentError (agent-os-5g8a): the cause here is read
-        // by settingsSaveFault, which is CODE-keyed and deliberately not
-        // classifyError -- see its docblock. Routing this through causeOf would
-        // render axios's own "Network Error" as though the backend had said it.
+        // presentFault, NOT presentError (agent-os-5g8a): the cause is read by
+        // settingsSaveFault, which is CODE-keyed and deliberately not
+        // classifyError. The full argument, measured, is in presentFault's
+        // docblock; the short form is that swapping the key is not this
+        // change's decision to take.
         presentFault('Failed to update the cleanup schedule', settingsSaveFault(error))
       },
     })
@@ -124,10 +125,11 @@ export function DockerCleanupCard() {
       // The preview validates the age floor through the same code path as the
       // PUT, so it can carry the same server sentence.
       onError: (error) => {
-        // presentFault, NOT presentError (agent-os-5g8a): the cause here is read
-        // by settingsSaveFault, which is CODE-keyed and deliberately not
-        // classifyError -- see its docblock. Routing this through causeOf would
-        // render axios's own "Network Error" as though the backend had said it.
+        // presentFault, NOT presentError (agent-os-5g8a): the cause is read by
+        // settingsSaveFault, which is CODE-keyed and deliberately not
+        // classifyError. The full argument, measured, is in presentFault's
+        // docblock; the short form is that swapping the key is not this
+        // change's decision to take.
         presentFault('Failed to preview the cleanup', settingsSaveFault(error))
       },
     })

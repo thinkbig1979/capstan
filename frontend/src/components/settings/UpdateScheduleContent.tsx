@@ -102,7 +102,21 @@ export function UpdateScheduleContent() {
   // The component already answers "state not known yet" by returning early
   // instead of rendering the form against placeholders. "State not known at
   // all" gets the same answer for a stronger reason.
-  if (isError) {
+  //
+  // `!settings`, NOT bare `isError`. TanStack sets status 'error' when a
+  // REFETCH fails on a query that already has data -- which is why it ships
+  // isLoadingError (error, no data) beside isRefetchError (error, data
+  // present), with isError true for both. That path is routine here, not
+  // theoretical: query-client.ts sets staleTime 30_000 and
+  // refetchOnWindowFocus true, and gates retries on isAutoRetryable, which is
+  // false for a 500. So tabbing away for half a minute and back can 500 on the
+  // focus refetch, and a bare isError guard would throw away a fully populated,
+  // CORRECT form. The stale values are real values the server did send; keeping
+  // them is the right degradation, and it is what this screen did before
+  // agent-os-fxhl. Spelled `!settings` rather than `isLoadingError` because it
+  // states the invariant the branch actually depends on -- there is nothing to
+  // render -- and cannot be transposed with its sibling flag by a reader.
+  if (isError && !settings) {
     const cause = causeOf(error)
     return (
       <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3">
@@ -178,10 +192,9 @@ export function UpdateScheduleContent() {
       // it: the helper still emits a ONE-argument call when the cause is null,
       // so all four witnesses stay green and stay untouched.
       onError: (error) => {
-        // presentFault, NOT presentError: the cause here is read by
-        // settingsSaveFault, which is CODE-keyed and deliberately not
-        // classifyError -- see its docblock. Routing this through causeOf would
-        // render axios's own "Network Error" as though the backend had said it.
+        // presentFault, NOT presentError: the cause is read by settingsSaveFault,
+        // which is CODE-keyed and deliberately not classifyError. The full
+        // argument, measured, is in presentFault's docblock.
         presentFault('Failed to save settings', settingsSaveFault(error))
       },
     })

@@ -402,7 +402,7 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
           })
         },
         onError: (err) => {
-          presentError(err, { fallback: 'Failed to start restore', title: 'Restore failed' })
+          presentError(err, { fallback: 'Restore failed' })
         },
       },
     )

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   backendCauseOf,
   causeOf,
+  classifyError,
   presentError,
   presentFault,
   presentCause,
@@ -87,6 +88,50 @@ describe('causeOf', () => {
     expect(causeOf({ message: 'something specific' })).toBe('something specific')
   })
 
+  // agent-os-5g8a, defect found in review. classifyError's 400/409/422/428 arms
+  // all spell `message || '<their own fallback>'`, and `message` is
+  // `backendMessage ?? 'An error occurred'` -- never falsy. The file's own
+  // comment says that fallback "can never actually reach its fallback", so a
+  // BODYLESS 4xx (a proxy 4xx, exactly the shape agent-os-ohkw exists to
+  // handle) returns the literal 'An error occurred' with type 'server' or
+  // 'validation'. The `type === 'unknown'` key does not catch it, so presentError
+  // rendered a description reading "An error occurred": a fixed sentence dressed
+  // as a cause, in the change whose whole purpose is to stop that.
+  it.each([400, 409, 422, 428])('returns null for a bodyless %i', (status) => {
+    expect(causeOf({ status })).toBeNull()
+  })
+
+  // DRIFT GUARD. The predicate above and classifyError share ONE module constant,
+  // so they cannot drift apart today. This arm fails loudly if a future refactor
+  // reintroduces two copies of the sentence: it pins the observable pair rather
+  // than the constant, so it goes red if either side moves alone.
+  it('pins the sentence the suppression is keyed on', () => {
+    expect(classifyError({ status: 409 }).message).toBe('An error occurred')
+    expect(classifyError({ status: 409 }).type).toBe('server')
+    expect(causeOf({ status: 409 })).toBeNull()
+  })
+
+  // TWO-SIDED, and this is the half that stops the fix over-reaching: an arm
+  // that authored a real sentence of its own must still reach the user even
+  // though the backend said nothing.
+  it.each([
+    [401, 'Log in again to continue'],
+    [403, 'You do not have permission to perform this action'],
+    [404, 'The requested resource was not found'],
+    [429, 'Too many requests. Please wait a moment and try again'],
+    [500, '500: Something went wrong on the server'],
+    [503, '503: Something went wrong on the server'],
+  ])('keeps the self-authored diagnosis for a bodyless %i', (status, expected) => {
+    expect(causeOf({ status })).toBe(expected)
+  })
+
+  // And a body always wins: suppression is keyed on the backend having said
+  // NOTHING, never on the status alone.
+  it('returns the backend message for a 409 that carried one', () => {
+    expect(causeOf({ status: 409, message: 'stack is already being modified' }))
+      .toBe('stack is already being modified')
+  })
+
   it('appends classifyError context when it computed one', () => {
     const cause = causeOf({ status: 404, details: { resource: 'stack/web' } })
     expect(cause).toBe('The requested resource was not found (stack/web)')
@@ -128,9 +173,19 @@ describe('presentError', () => {
     })
   })
 
-  it('honours an explicit title override', () => {
-    presentError({ message: 'nope' }, { fallback: 'Failed to X', title: 'Could not X' })
-    expect(toast.error).toHaveBeenCalledWith('Could not X', { description: 'nope' })
+  // agent-os-5g8a, found in review: the docblock claimed `fallback` was
+  // "non-empty by type", but `string` does not exclude `''`, so the
+  // never-an-empty-toast promise rested on nothing. It is enforced at runtime
+  // now and these two arms are what hold it there.
+  it('promotes the cause to the title when the fallback is empty', () => {
+    presentError({ message: 'disk full' }, { fallback: '' })
+    expect(toast.error).toHaveBeenCalledWith('disk full')
+    expect(toast.error).toHaveBeenCalledTimes(1)
+  })
+
+  it('never renders an empty toast when both the fallback and the cause are empty', () => {
+    presentError({}, { fallback: '' })
+    expect(toast.error).toHaveBeenCalledWith('An unexpected error occurred')
   })
 
   it('never fires a level other than error', () => {
