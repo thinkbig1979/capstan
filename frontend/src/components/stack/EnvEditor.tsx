@@ -17,6 +17,7 @@ import { EnvRawView } from './env-editor/EnvRawView'
 import type { EnvEntryRow } from './env-editor/types'
 import { queryKeys } from '@/lib/query-keys'
 import { classifyError } from '@/lib/error-handler'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 interface EnvEditorProps {
   stackId: string
@@ -124,11 +125,26 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // opens — saving would persist the blanks, and the backend 403s the write.
   const locked = envData?.hasEnvFile === true && envData.locked === true
 
-  if (isLoading) {
+  // agent-os-wczm. The ISERROR guard is the one that was broken: this component
+  // hydrates `entries`, `rawContent` and `hasUnsavedChanges` from the payload
+  // during render, so replacing the editor on a bare `isError` threw away
+  // UNSAVED USER EDITS on a single 500 from a focus refetch. `&& !envData` still
+  // routes a real first-load failure — an unknown stack, or an env file missing
+  // from disk — to the error state, which is what the comment above this query
+  // is about.
+  //
+  // The `&& !envData` on the LOADING guard is belt-and-braces and cannot change
+  // the result today: query-core sets status "pending" only while `data` is
+  // undefined, and `isLoading = isPending && isFetching`, so `isLoading` already
+  // implies `!envData` for this query — it declares no placeholderData,
+  // initialData or select. It is written out so the two guards read as a pair,
+  // and so the day someone adds placeholderData here the loading branch does not
+  // quietly start hiding a populated editor.
+  if (isLoading && !envData) {
     return <EnvLoadingState />
   }
 
-  if (isError) {
+  if (isError && !envData) {
     return (
       <EnvErrorState
         // agent-os-rtn8: the two 404s the comment above routes into isError --
@@ -175,6 +191,20 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
       />
 
       {locked && <EnvLockedNotice onUnlock={() => handleUnlockDialogOpenChange(true)} />}
+
+      {/* Above the editor, where EnvLockedNotice already puts "editing is
+          constrained" messaging — both save controls (the table's and the raw
+          view's) sit below it. A stale form the operator is about to save from
+          is exactly that kind of constraint (agent-os-wczm). */}
+      {isError && !!envData && (
+        <RefreshFailedNotice
+          what="the environment file"
+          beforeSave
+          onRetry={() =>
+            queryClient.invalidateQueries({ queryKey: queryKeys.stack.env(stackId) })
+          }
+        />
+      )}
 
       <EnvTableView
         visible={view === 'table'}

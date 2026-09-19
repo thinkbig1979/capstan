@@ -301,3 +301,68 @@ describe('GlobalEnvSettingsContent', () => {
     })
   })
 })
+
+/**
+ * agent-os-wczm. The `isError` here comes from useGlobalEnvVars, which did not
+ * export anything a call site could pair it with — so `isError && !data` was
+ * not even writable in the .tsx. The hook now exports the two TanStack flags
+ * that already draw the line: isLoadingError (error, NO data) and
+ * isRefetchError (error, WITH data).
+ *
+ * The arm resolves first, edits, then rejects a refetch. A first-fetch-rejects
+ * fixture leaves `data` undefined and stays green under either guard.
+ */
+describe('GlobalEnvSettingsContent — a failed REFETCH must not discard the table', () => {
+  it('keeps the populated variables and the unsaved edit when a REFETCH fails', async () => {
+    mockGetGlobalEnv.mockResolvedValue({ vars: [{ key: 'FOO', value: 'bar' }] })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <GlobalEnvSettingsContent />
+      </QueryClientProvider>,
+    )
+
+    const valueInputs = await screen.findAllByDisplayValue('bar')
+    fireEvent.change(valueInputs[0], { target: { value: 'baz' } })
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+
+    mockGetGlobalEnv.mockRejectedValue(new Error('boom'))
+    await client.refetchQueries({ queryKey: ['settings', 'global-env'] })
+
+    await waitFor(() =>
+      expect(client.getQueryState(['settings', 'global-env'])?.status).toBe('error'),
+    )
+    // toHaveLength, not `.length > 0`: getAllBy* THROWS when nothing matches, so
+    // a `> 0` assertion can never fail and carries no information beyond the
+    // query. Two, not one -- this panel renders a desktop table AND a mobile card
+    // list, so every row appears twice (same count the arm at :55 pins).
+    expect(screen.getAllByDisplayValue('baz')).toHaveLength(2)
+    expect(screen.getAllByDisplayValue('FOO')).toHaveLength(2)
+    expect(
+      screen.queryByText('Failed to load global environment variables.'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/Could not refresh the global environment variables/),
+    ).toBeInTheDocument()
+
+    // The notice must not merely STATE the problem. A save from this panel is a
+    // full replace of the variable list (useGlobalEnvVars sends the whole
+    // `vars` array), so saving from a stale list deletes whatever another
+    // operator added since the last good fetch -- "check them before saving"
+    // without a way to check is the worst of both. Retry re-issues the query.
+    const callsBeforeRetry = mockGetGlobalEnv.mock.calls.length
+    mockGetGlobalEnv.mockResolvedValue({ vars: [{ key: 'FOO', value: 'bar' }] })
+    fireEvent.click(screen.getByRole('button', { name: /Retry/ }))
+
+    await waitFor(() =>
+      expect(mockGetGlobalEnv.mock.calls.length).toBeGreaterThan(callsBeforeRetry),
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/Could not refresh the global environment variables/),
+      ).not.toBeInTheDocument(),
+    )
+  })
+})

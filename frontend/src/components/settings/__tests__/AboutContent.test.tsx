@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { AboutContent } from '../AboutContent'
@@ -106,5 +106,38 @@ describe('AboutContent', () => {
       await screen.findByText(/could not read the build identity/i, undefined, { timeout: 5000 }),
     ).toBeInTheDocument()
     expect(screen.queryByTestId('about-version')).toBeNull()
+  })
+})
+
+/**
+ * agent-os-wczm. `isError || !data` discards a build identity the server really
+ * sent the moment any refetch fails. A retained version beats "Could not read
+ * the build identity from the server."
+ */
+describe('AboutContent — a failed REFETCH must not discard the build identity', () => {
+  it('keeps the version on screen when a REFETCH fails', async () => {
+    mockGetVersion.mockResolvedValue({
+      version: '1.4.0',
+      commit: 'a1b2c3d4e5f6',
+      buildDate: '2026-07-31T09:00:00Z',
+    })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AboutContent />
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByTestId('about-version')).toHaveTextContent('1.4.0')
+
+    mockGetVersion.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: ['version'] })
+
+    await waitFor(() => expect(queryClient.getQueryState(['version'])?.status).toBe('error'))
+    expect(screen.getByTestId('about-version')).toHaveTextContent('1.4.0')
+    expect(
+      screen.queryByText('Could not read the build identity from the server.'),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText(/Could not refresh the build identity/)).toBeInTheDocument()
   })
 })

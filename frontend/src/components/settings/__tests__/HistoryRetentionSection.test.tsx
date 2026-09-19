@@ -204,3 +204,49 @@ describe('HistoryRetentionSection — why the save failed', () => {
     expect(call?.[1]).toBeUndefined()
   })
 })
+
+/**
+ * agent-os-wczm. `isError || !data` is true for a REFETCH failure as well as a
+ * first-load failure, so one 500 on a focus refetch blanked a populated
+ * write-back form. r1kc forbids FABRICATING a value; a value the server really
+ * sent is not fabricated, and `!data` keeps every refusal r1kc asked for.
+ *
+ * The arm resolves first, edits, then rejects a refetch — a first-fetch-rejects
+ * fixture leaves `data` undefined and is blind to the difference.
+ */
+describe('HistoryRetentionSection — a failed REFETCH must not discard the form', () => {
+  it('keeps the populated form and the unsaved edit when a REFETCH fails', async () => {
+    mockGetRetention.mockResolvedValue(SETTINGS)
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HistoryRetentionSection />
+      </QueryClientProvider>,
+    )
+
+    const auditLog = await screen.findByLabelText('Audit log')
+    fireEvent.change(auditLog, { target: { value: '120' } })
+    expect(auditLog).toHaveValue(120)
+
+    mockGetRetention.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: ['settings', 'retention'] })
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['settings', 'retention'])?.status).toBe('error'),
+    )
+    expect(screen.getByLabelText('Audit log')).toHaveValue(120)
+    expect(screen.getByLabelText('Update history')).toHaveValue(45)
+    expect(
+      screen.queryByText(/The configured retention could not be read/),
+    ).not.toBeInTheDocument()
+    // The WRITE-BACK variant of RefreshFailedNotice: `beforeSave` adds the save
+    // warning, and this arm pins the whole sentence rather than the shared
+    // prefix — dropping the beforeSave branch would leave "…the server sent."
+    // and fail here. The read-only variant is pinned in BackupHistoryTab.test.tsx.
+    expect(
+      screen.getByText(/Could not refresh the retention settings\. The values shown are the last ones the server sent, so check them before saving\./),
+    ).toBeInTheDocument()
+  })
+})

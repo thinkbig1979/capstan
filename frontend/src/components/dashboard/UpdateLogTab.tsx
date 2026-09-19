@@ -20,6 +20,7 @@ import {
 import { RefreshCw, ChevronLeft, ChevronRight, History } from 'lucide-react'
 import type { UpdateHistoryEntry } from '@/types'
 import { formatRelativeTime, formatDurationShort } from '@/lib/format'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 const UPDATE_SEARCH_FIELDS = [
   (e: UpdateHistoryEntry) => e.containerName,
@@ -116,7 +117,11 @@ export function UpdateLogTab() {
     )
   }
 
-  if (isError) {
+  // agent-os-wczm: `&& !data`, matching the loading guard above. A bare
+  // `isError` is also true when a FOCUS REFETCH fails on a query that already
+  // carries rows, and this branch then replaced the whole table with a retry
+  // card over data the server had already sent.
+  if (isError && !data) {
     return (
       <Card>
         <CardContent className="flex flex-col items-center justify-center py-12">
@@ -136,22 +141,34 @@ export function UpdateLogTab() {
   const total = data?.total ?? 0
   const totalPages = data?.totalPages ?? 1
 
+  // Error WITH data: the rows below are still the last thing the server sent,
+  // so they stay and the failed refresh is reported beside them (agent-os-wczm).
+  // The empty branch carries it too — a server-sent empty list is data, and
+  // "No Update History" with no hint that the refresh failed reads as fact.
+  const refreshNotice = isError && !!data && (
+    <RefreshFailedNotice what="the update history" onRetry={() => refetch()} />
+  )
+
   if (entries.length === 0 && !isLoading) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12">
-          <History className="h-12 w-12 text-muted-foreground mb-4" />
-          <p className="text-lg font-semibold mb-2">No Update History</p>
-          <p className="text-sm text-muted-foreground">
-            Updates will appear here after containers are updated.
-          </p>
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        {refreshNotice}
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            <History className="h-12 w-12 text-muted-foreground mb-4" />
+            <p className="text-lg font-semibold mb-2">No Update History</p>
+            <p className="text-sm text-muted-foreground">
+              Updates will appear here after containers are updated.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     )
   }
 
   return (
     <div className="space-y-4">
+      {refreshNotice}
       <div className="flex items-center gap-2 flex-wrap">
         <TableSearch
           value={query}

@@ -334,3 +334,38 @@ describe('EnvEditor', () => {
     })
   })
 })
+
+/**
+ * agent-os-wczm. This is the worst site in the class: the component hydrates
+ * `entries` / `rawContent` / `hasUnsavedChanges` from the query payload, so a
+ * bare `isError` guard replaced the whole editor — including edits the operator
+ * had typed and not yet saved — on a single 500 from a focus refetch.
+ *
+ * The arm edits BEFORE rejecting the refetch. A first-fetch-rejects fixture
+ * leaves `data` undefined and cannot distinguish `isError` from
+ * `isError && !data`.
+ */
+describe('EnvEditor — a failed REFETCH must not discard the editor', () => {
+  it('keeps the editor and the unsaved edit when a REFETCH fails', async () => {
+    mockGetEnv.mockResolvedValue(baseEnvData)
+    const user = userEvent.setup()
+    const { queryClient } = renderWithProviders(<EnvEditor stackId="test-stack" />)
+
+    const valueInput = (await screen.findAllByLabelText(/Environment variable value 1/))[0]
+    await user.clear(valueInput)
+    await user.type(valueInput, '9090')
+    expect(valueInput).toHaveValue('9090')
+
+    mockGetEnv.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: ['stack', 'test-stack', 'env'] })
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['stack', 'test-stack', 'env'])?.status).toBe('error'),
+    )
+    expect(
+      (screen.getAllByLabelText(/Environment variable value 1/))[0],
+    ).toHaveValue('9090')
+    expect(screen.queryByText('Failed to load environment file')).not.toBeInTheDocument()
+    expect(screen.getByText(/Could not refresh the environment file/)).toBeInTheDocument()
+  })
+})

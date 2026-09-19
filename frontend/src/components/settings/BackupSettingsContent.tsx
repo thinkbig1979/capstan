@@ -7,6 +7,7 @@ import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 import { useAuth } from '@/hooks/useAuth'
 import { useBackupSettings } from '@/hooks/useBackup'
 import { classifyError } from '@/lib/error-handler'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { CloudSection } from './backup-settings/CloudSection'
 import { EngineAvailabilityBanner } from './backup-settings/EngineAvailabilityBanner'
 import { RepositorySection } from './backup-settings/RepositorySection'
@@ -18,7 +19,7 @@ import { useBackupForm } from './backup-settings/useBackupForm'
 import { usePasswordReveal } from './backup-settings/usePasswordReveal'
 
 export function BackupSettingsContent() {
-  const { data: settings, isLoading, isError, error } = useBackupSettings()
+  const { data: settings, isLoading, isError, error, refetch } = useBackupSettings()
   const { authDisabled } = useAuth()
   const isUnlocked = useEnvUnlockStore((s) => s.isUnlocked)
   const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
@@ -54,7 +55,12 @@ export function BackupSettingsContent() {
     )
   }
 
-  if (isError || !settings || !draft) {
+  // agent-os-wczm: the `isError` disjunct is gone. `!settings` already covers
+  // "failed and never loaded", so this branch still fires for a first-load
+  // failure — but an error over settings we ALREADY have now falls through to
+  // the populated form instead of blanking it, and a Save here is a WRITE-BACK,
+  // so blanking it also threw away whatever the operator had typed.
+  if (!settings || !draft) {
     // agent-os-rtn8: getSettings emits ONLY a 200 and three 500s, and
     // backup.go:266-270 states the distinctness is DELIBERATE -- "all three
     // refuse the same request, and an operator reading the log needs to know
@@ -62,7 +68,7 @@ export function BackupSettingsContent() {
     // away. (It reaches us at all only because agent-os-mc4i stopped
     // classifyError's 5xx arm discarding the message.)
     //
-    // Gated on isError, NOT on the whole condition: three states route into this
+    // Gated on isError, NOT on the whole condition: two states route into this
     // branch and only the first carries an error. A resolved payload that is
     // merely empty has no cause, and manufacturing one would be the worse
     // defect. The fixed sentence stays as the headline in every case.
@@ -122,6 +128,17 @@ export function BackupSettingsContent() {
         onTestCloud={handleTestCloud}
         isTestingCloud={isTestingCloud}
       />
+
+      {/* Directly above the save control, not a transient toast: the operator is
+          about to write these fields back and has to know the form may be stale
+          (agent-os-wczm). */}
+      {isError && (
+        <RefreshFailedNotice
+          what="the backup settings"
+          beforeSave
+          onRetry={() => refetch()}
+        />
+      )}
 
       <SaveBar isDirty={isDirty} isSaving={isSaving} onDiscard={handleDiscard} onSave={handleSave} />
     </div>

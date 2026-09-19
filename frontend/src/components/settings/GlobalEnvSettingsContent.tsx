@@ -12,6 +12,7 @@ import { GlobalEnvTable } from './global-env/GlobalEnvTable'
 import { GlobalEnvCards } from './global-env/GlobalEnvCards'
 import { useGlobalEnvReveal } from './global-env/useGlobalEnvReveal'
 import { useGlobalEnvVars } from './global-env/useGlobalEnvVars'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 export function GlobalEnvSettingsContent() {
   const { authDisabled } = useAuth()
@@ -29,7 +30,9 @@ export function GlobalEnvSettingsContent() {
 
   const {
     isLoading,
-    isError,
+    isLoadingError,
+    isRefetchError,
+    refetch,
     locked,
     vars,
     dirty,
@@ -47,7 +50,10 @@ export function GlobalEnvSettingsContent() {
     return <div className="py-4"><LoadingSpinner /></div>
   }
 
-  if (isError) {
+  // agent-os-wczm: isLoadingError, not isError. A bare isError is also true
+  // when a FOCUS REFETCH fails over variables that are already on screen, and
+  // this branch then blanked the table — along with any unsaved edits in it.
+  if (isLoadingError) {
     return (
       <div className="py-4 text-sm text-destructive">
         Failed to load global environment variables.
@@ -120,6 +126,16 @@ export function GlobalEnvSettingsContent() {
         onToggleVisible={toggleVisible}
         onDelete={handleDelete}
       />
+
+      {/* Directly above the save control: the operator is about to write these
+          variables back and has to know the table may be stale (agent-os-wczm). */}
+      {isRefetchError && (
+        <RefreshFailedNotice
+          what="the global environment variables"
+          beforeSave
+          onRetry={() => refetch()}
+        />
+      )}
 
       <div className="flex justify-between">
         <Button type="button" variant="outline" onClick={handleAdd}>

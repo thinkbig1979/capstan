@@ -519,3 +519,79 @@ describe('BackupHistoryTab — expandable run rows', () => {
     ).toBeInTheDocument()
   })
 })
+
+// Same render as renderTab, but hands back the QueryClient so a test can drive
+// a REFETCH. The component exposes refetch only from inside the branch under
+// test, so asserting through it would be circular.
+function renderTabWithClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+  })
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <BackupHistoryTab />
+    </QueryClientProvider>,
+  )
+  return { ...view, queryClient }
+}
+
+/**
+ * agent-os-wczm. `staleTime` is 30s app-wide, `refetchOnWindowFocus` is on and
+ * a 500 is not auto-retryable, so "tab away, tab back, one 500" is routine. A
+ * bare `isError` guard is true for that refetch failure as well as for a first
+ * load, so it replaced rows the server had ALREADY sent with an error card.
+ *
+ * Both arms RESOLVE first and reject a REFETCH. A first-fetch-rejects fixture
+ * is structurally blind to this class: it leaves `data` undefined, so it stays
+ * green whether the guard reads `isError` or `isError && !data`.
+ */
+describe('BackupHistoryTab — a failed REFETCH must not discard data', () => {
+  it('keeps the populated history table when a REFETCH fails', async () => {
+    const { queryClient } = renderTabWithClient()
+
+    expect(await screen.findByText('run-1')).toBeInTheDocument()
+
+    mockGetHistory.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: ['backup', 'history'] })
+
+    // The query IS in the error state now — that is the point of the arm.
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryCache().find({ queryKey: ['backup', 'history'], exact: false })
+          ?.state.status,
+      ).toBe('error'),
+    )
+    // …and the rows the server already sent are still on screen.
+    expect(screen.getByText('run-1')).toBeInTheDocument()
+    expect(screen.queryByText('Failed to Load Backup History')).not.toBeInTheDocument()
+    // Both halves of RefreshFailedNotice's `beforeSave` contract are pinned, one
+    // per arm, because all twelve arms pass through the same component: asserting
+    // only the shared "Could not refresh …" prefix would stay green if the
+    // beforeSave branch were deleted outright. This is the READ-ONLY variant — a
+    // table nobody writes back, so no save warning. The write-back variant is
+    // pinned in HistoryRetentionSection.test.tsx.
+    expect(
+      screen.getByText(/Could not refresh the backup history\. The values shown are the last ones the server sent\./),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/check them before saving/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the populated run-detail rows when a REFETCH fails', async () => {
+    const user = userEvent.setup()
+    const { queryClient } = renderTabWithClient()
+
+    await screen.findByText('run-1')
+    await user.click(screen.getByRole('button', { name: /Show details for run run-1/ }))
+    expect(await screen.findByText('stack-alpha')).toBeInTheDocument()
+
+    mockGetRun.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: ['backup', 'runs', 'run-1'] })
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['backup', 'runs', 'run-1'])?.status).toBe('error'),
+    )
+    expect(screen.getByText('stack-alpha')).toBeInTheDocument()
+    expect(screen.queryByText('Failed to load run details.')).not.toBeInTheDocument()
+    expect(screen.getByText(/Could not refresh the run details/)).toBeInTheDocument()
+  })
+})

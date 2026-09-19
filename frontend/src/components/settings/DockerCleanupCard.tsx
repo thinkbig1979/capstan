@@ -20,6 +20,7 @@ import {
   useDockerCleanupHistory,
 } from '@/hooks/useResources'
 import type { DockerCleanupCandidate, DockerCleanupRun } from '@/types'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 /** What to show for one preview row.
  *
@@ -51,7 +52,7 @@ interface PolicyDraft {
  *  remove. The schedule is off until an operator turns it on: a prune is
  *  irreversible, so nothing here is opt-out. */
 export function DockerCleanupCard() {
-  const { data, isLoading, isError } = useDockerCleanupPolicy()
+  const { data, isLoading, isError, refetch } = useDockerCleanupPolicy()
   const updatePolicy = useUpdateDockerCleanupPolicy()
   const preview = usePreviewDockerCleanup()
   const history = useDockerCleanupHistory()
@@ -61,12 +62,20 @@ export function DockerCleanupCard() {
     return <div className="py-4"><LoadingSpinner /></div>
   }
 
-  // Refuse rather than render a schedule nobody configured — the same rule
-  // HistoryRetentionSection.tsx:46-66 follows for retention. A fabricated
-  // "disabled, 168 hours" is indistinguishable from an operator having chosen
-  // it, and this form is a WRITE-BACK surface: a Save from invented values
-  // would persist them over the real policy.
-  if (isError || !data) {
+  // Refuse a FABRICATED value; retain a REAL one and say the refresh failed —
+  // the same rule HistoryRetentionSection follows for retention.
+  //
+  // agent-os-r1kc is why this branch exists: a fabricated "disabled, 168 hours"
+  // is indistinguishable from an operator having chosen it, and this form is a
+  // WRITE-BACK surface, so a Save from invented values would persist them over
+  // the real policy.
+  //
+  // agent-os-wczm is why it is now keyed on `!data` alone. A policy the server
+  // really sent is not fabricated, so a FAILED REFETCH over a populated form is
+  // no reason to blank it — that discarded the operator's unsaved edits too.
+  // `!data` keeps every refusal r1kc asked for; the refresh failure is reported
+  // beside the Save button instead.
+  if (!data) {
     return (
       <div className="space-y-2">
         <h3 className="text-lg font-medium">Docker cleanup</h3>
@@ -209,6 +218,14 @@ export function DockerCleanupCard() {
           </p>
         )}
 
+        {isError && (
+          <RefreshFailedNotice
+            what="the cleanup schedule"
+            beforeSave
+            onRetry={() => refetch()}
+          />
+        )}
+
         <Button type="submit" disabled={!dirty || belowFloor || updatePolicy.isPending}>
           {updatePolicy.isPending ? 'Saving…' : 'Save cleanup schedule'}
         </Button>
@@ -283,9 +300,16 @@ export function DockerCleanupCard() {
             differs. Neither sentence may contain "could not be read" — that
             belongs to the policy-read failure above and the card must not say
             it twice. */}
+        {/* agent-os-wczm: `!history.data` alone. A member-expression guard in a
+            ternary, but the same defect — `history.isError` is true for a failed
+            REFETCH too, so one 500 replaced a table of real runs with the
+            sentence below. `!history.data` still covers the unreadable case. */}
+        {history.isError && !!history.data && (
+          <RefreshFailedNotice what="the cleanup run history" />
+        )}
         {history.isLoading ? (
           <LoadingSpinner />
-        ) : history.isError || !history.data ? (
+        ) : !history.data ? (
           <p className="text-sm text-destructive">Run history is unavailable.</p>
         ) : history.data.runs.length === 0 ? (
           <p className="text-sm text-muted-foreground">No cleanup runs yet.</p>
