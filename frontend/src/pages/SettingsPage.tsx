@@ -14,7 +14,7 @@ import { formatDateFull } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
   Sun, Moon, Monitor, Shield, Palette, Clock, KeyRound, FolderCog,
-  ScrollText, Globe, HardDrive, Search, Info, type LucideIcon,
+  ScrollText, Globe, HardDrive, Search, Info, Trash2, type LucideIcon,
 } from 'lucide-react'
 import { AboutContent } from '@/components/settings/AboutContent'
 import { BackupSettingsContent } from '@/components/settings/BackupSettingsContent'
@@ -31,6 +31,7 @@ import { GitSettingsContent } from '@/components/settings/GitSettingsContent'
 import { DirectoriesSettingsContent } from '@/components/settings/DirectoriesSettingsContent'
 import { AuditLogContent } from '@/components/settings/AuditLogContent'
 import { GlobalEnvSettingsContent } from '@/components/settings/GlobalEnvSettingsContent'
+import { DockerCleanupCard } from '@/components/settings/DockerCleanupCard'
 
 interface SettingsSection {
   id: string
@@ -85,6 +86,15 @@ const ALL_SECTIONS: SettingsSection[] = [
     Icon: HardDrive,
   },
   {
+    // The description deliberately avoids the words "backup" and "update": the
+    // sidebar search filters on title OR description, and SettingsPage.test.tsx
+    // asserts a SINGULAR link for each of those searches.
+    id: 'docker-cleanup',
+    title: 'Docker cleanup',
+    description: 'Prune dangling images and build cache on a schedule, with an age floor',
+    Icon: Trash2,
+  },
+  {
     id: 'audit-log',
     title: 'Audit Log',
     description: 'View a history of actions performed in the application',
@@ -102,7 +112,7 @@ const ALL_SECTIONS: SettingsSection[] = [
 const GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Account', ids: ['account-security', 'appearance'] },
   { label: 'Stacks', ids: ['directories', 'global-env', 'git'] },
-  { label: 'Automation', ids: ['update-schedule', 'backup'] },
+  { label: 'Automation', ids: ['update-schedule', 'backup', 'docker-cleanup'] },
   { label: 'System', ids: ['audit-log', 'about'] },
 ]
 
@@ -357,6 +367,8 @@ export function SettingsPage() {
         return <UpdateScheduleContent />
       case 'backup':
         return <BackupSettingsContent />
+      case 'docker-cleanup':
+        return <DockerCleanupCard />
       case 'audit-log':
         return <AuditLogContent />
       case 'about':

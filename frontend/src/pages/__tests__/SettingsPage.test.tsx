@@ -52,6 +52,9 @@ vi.mock('@/components/settings/AuditLogContent', () => ({
 vi.mock('@/components/settings/GlobalEnvSettingsContent', () => ({
   GlobalEnvSettingsContent: () => <div data-testid="section-global-env" />,
 }))
+vi.mock('@/components/settings/DockerCleanupCard', () => ({
+  DockerCleanupCard: () => <div data-testid="section-docker-cleanup" />,
+}))
 
 import { SettingsPage } from '../SettingsPage'
 
@@ -84,6 +87,16 @@ describe('SettingsPage', () => {
       renderPage('/settings/backup')
       expect(screen.getByTestId('section-backup')).toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Account Information' })).not.toBeInTheDocument()
+    })
+
+    it('mounts Docker cleanup and lists it in the sidebar', () => {
+      // Two independently gated halves: the rendered section comes from
+      // ALL_SECTIONS plus the render switch, the link comes from GROUPS. Either
+      // assertion alone is vacuous for the other half.
+      renderPage('/settings/docker-cleanup')
+
+      expect(screen.getByTestId('section-docker-cleanup')).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /Docker cleanup/ })).toBeInTheDocument()
     })
 
     it('falls back to Account Security for an unknown section id', () => {

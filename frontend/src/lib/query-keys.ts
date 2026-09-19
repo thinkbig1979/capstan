@@ -83,6 +83,7 @@ export const queryKeys = {
     git: () => ['settings', 'git'] as const,
     globalEnv: () => ['settings', 'global-env'] as const,
     retention: () => ['settings', 'retention'] as const,
+    dockerCleanup: () => ['settings', 'docker-cleanup'] as const,
   },
 
   /** Build identity of the running backend. Immutable for the process lifetime. */

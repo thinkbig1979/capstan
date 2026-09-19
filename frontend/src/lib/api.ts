@@ -36,6 +36,8 @@ import type {
   BackupStatus,
   BackupOperationResult,
   VersionInfo,
+  DockerCleanupPolicy,
+  DockerCleanupPreview,
 } from '@/types'
 
 /**
@@ -741,6 +743,40 @@ export const resourcesApi = {
   },
   pruneBuildCache: async (opts?: PruneOptions) => {
     const response = await apiClient.post<PruneResult>(`/resources/build-cache/prune${pruneQuery(opts)}`)
+    return response.data
+  },
+
+  getCleanupPolicy: async () => {
+    const response = await apiClient.get<DockerCleanupPolicy>('/resources/cleanup/policy')
+    return response.data
+  },
+
+  /**
+   * Unlike settingsApi.updateRetention, which returns void, the PUT here returns
+   * the full policy (docker_cleanup.go:199) — the server's authoritative
+   * read-back after its own floor checks. Returning it means the form refreshes
+   * from what was actually stored rather than from what it hoped it sent.
+   */
+  updateCleanupPolicy: async (data: {
+    enabled?: boolean
+    minAgeHours?: number
+    intervalHours?: number
+  }) => {
+    const response = await apiClient.put<DockerCleanupPolicy>('/resources/cleanup/policy', data)
+    return response.data
+  },
+
+  /**
+   * POST rather than GET even though it removes nothing: it carries a body (the
+   * age floor an operator is trying out before saving it) and it makes a Docker
+   * API call, so it is not cacheable in the way a GET implies. An omitted
+   * minAgeHours means "use the stored policy".
+   */
+  previewCleanup: async (minAgeHours?: number) => {
+    const response = await apiClient.post<DockerCleanupPreview>(
+      '/resources/cleanup/preview',
+      minAgeHours === undefined ? {} : { minAgeHours },
+    )
     return response.data
   },
 }
