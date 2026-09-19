@@ -13,6 +13,7 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { classifyError, presentError, toastInvalid } from '@/lib/error-handler'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { deleteStackWithCollateralConfirm, StackDeleteCancelledError } from '@/lib/stack-delete'
 import { useParams, useNavigate, useLocation } from 'react-router'
 import { toast } from 'sonner'
@@ -265,7 +266,18 @@ export function StackPage() {
     )
   }
 
-  if (error || !stack) {
+  // agent-os-lurn: the `error` disjunct is GONE. `error` is set for a failed
+  // REFETCH exactly as for a failed first load and TanStack retains `stack` in
+  // both cases, so this branch rendered "Stack Not Found" OVER a stack the page
+  // was already showing, after one focus refetch that 500s. `!stack` alone still
+  // covers both states this branch is for: a first load that failed, and the
+  // disabled-query no-:id case. An error arriving over a stack we still hold now
+  // routes to the notice on the main view instead.
+  //
+  // The "Stack Not Found" headline is a fixed sentence that also fronts a 5xx.
+  // That mislabelling predates this change and is NOT in this bead's class; it
+  // is left exactly as it was.
+  if (!stack) {
     const appError = error ? classifyError(error) : null
 
     return (
@@ -351,6 +363,9 @@ export function StackPage() {
 
   return (
     <>
+      {/* agent-os-lurn: past the guard, `error` means a REFRESH failed over a
+          stack we still hold. Report it without taking the page away. */}
+      {error && <RefreshFailedNotice what="this stack" className="mb-4" onRetry={() => refetch()} />}
       <div className="space-y-6">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="min-w-0 flex-1">

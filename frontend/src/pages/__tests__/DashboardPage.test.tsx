@@ -321,6 +321,40 @@ describe('DashboardPage', () => {
       await waitFor(() => expect(screen.getByText('Failed to load dashboard')).toBeInTheDocument(), { timeout: 3000 })
       expect(screen.getByText('dirs down')).toBeInTheDocument()
     })
+
+    /**
+     * agent-os-lurn. `if (error)` over the merged `directoriesError ||
+     * stacksError` was true for a failed REFETCH as well as a failed first
+     * load, and TanStack retains both `directories` and `stacks` in either
+     * case — so one focus refetch that 500s blanked the WHOLE dashboard.
+     *
+     * RESOLVES both queries first, then rejects a REFETCH of one of them. A
+     * first-fetch-rejects fixture is structurally blind to this class: it
+     * leaves the data undefined, so it stays green whichever guard is in place.
+     * The two arms above are the preservation controls (one query failing its
+     * FIRST load must still blank the page); neither can fail first, so both
+     * are pinned by mutation evidence instead.
+     */
+    it('keeps the populated dashboard when a REFETCH fails (agent-os-lurn)', async () => {
+      const { queryClient } = renderPage('/')
+
+      await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument(), { timeout: 3000 })
+
+      listStacks.mockRejectedValue(new Error('boom'))
+      await queryClient.refetchQueries()
+      await waitFor(() =>
+        expect(queryClient.getQueryCache().getAll().some((q) => q.state.status === 'error')).toBe(true),
+      )
+
+      // The dashboard the server already populated is still on screen...
+      expect(screen.getByTestId('tab-stacks')).toBeInTheDocument()
+      // ...and the error page has NOT replaced it.
+      expect(screen.queryByText('Failed to load dashboard')).not.toBeInTheDocument()
+      // ...and the refresh failure is reported rather than swallowed.
+      expect(
+        screen.getByText(/Could not refresh the dashboard\. The values shown are the last ones the server sent\./),
+      ).toBeInTheDocument()
+    })
   })
 
   describe('page-owned data plumbing', () => {

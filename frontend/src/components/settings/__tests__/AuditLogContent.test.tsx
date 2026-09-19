@@ -391,3 +391,72 @@ describe('AuditLogContent — pagination', () => {
     expect(headers).toEqual(['Timestamp', 'User', 'Action', 'Detail'])
   })
 })
+
+// ─── agent-os-lurn: a failed REFETCH must not discard the table ──────────────
+
+/**
+ * agent-os-lurn, the agent-os-wczm class written with the query's `error`
+ * OBJECT instead of the identifier `isError`. The wczm eslint ratchet keys on
+ * the NAME `isError`, so it was structurally blind to this spelling.
+ *
+ * AuditLogTable is the strongest case in the class: its useQuery already sets
+ * `placeholderData: keepPreviousData`, so retaining rows across a fetch is the
+ * deliberate intent of the query, and `if (error)` then threw them away.
+ *
+ * The arm RESOLVES first and rejects a REFETCH. A first-fetch-rejects fixture
+ * is structurally blind here — it leaves `data` undefined, so it stays green
+ * whether the guard reads `error` or `error && !data`.
+ */
+function renderPanelWithClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+  })
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <AuditLogContent />
+    </QueryClientProvider>,
+  )
+  return { ...view, queryClient }
+}
+
+describe('AuditLogContent — a failed REFETCH must not discard the table (agent-os-lurn)', () => {
+  it('keeps the populated audit table when a REFETCH fails', async () => {
+    const { queryClient } = renderPanelWithClient()
+
+    expect(await screen.findByText('stack.start')).toBeInTheDocument()
+
+    mockGetAuditLog.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries()
+
+    // The query IS in the error state now — assert that FIRST. Without this the
+    // arm is satisfied by a render that simply never saw the rejection, which
+    // passes against the defective guard and proves nothing.
+    await waitFor(() =>
+      expect(queryClient.getQueryCache().getAll().some((q) => q.state.status === 'error')).toBe(true),
+    )
+
+    // The rows the server already sent are still on screen...
+    expect(screen.getByText('stack.start')).toBeInTheDocument()
+    // ...and the error view has NOT replaced them.
+    expect(screen.queryByText('Failed to load audit log.')).not.toBeInTheDocument()
+    // ...and the failure is reported rather than swallowed.
+    expect(
+      screen.getByText(/Could not refresh the audit log\. The values shown are the last ones the server sent\./),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/check them before saving/)).not.toBeInTheDocument()
+  })
+
+  /**
+   * PRESERVATION CONTROL. Passes against the OLD guard too, so it cannot fail
+   * first; it is pinned by mutation evidence against the fixed code instead
+   * (the agent-os-erfc lesson). A first load that fails has no rows to protect
+   * and must still surrender the panel to the error view.
+   */
+  it('still shows the error view when the FIRST load fails', async () => {
+    mockGetAuditLog.mockRejectedValue(new Error('boom'))
+    renderPanelWithClient()
+
+    expect(await screen.findByText('Failed to load audit log.')).toBeInTheDocument()
+    expect(screen.queryByText(/Could not refresh the audit log/)).not.toBeInTheDocument()
+  })
+})

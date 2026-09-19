@@ -102,6 +102,11 @@ export function useUpdatesData() {
   return {
     isLoading,
     isError,
+    // agent-os-4gve: the RAW query payload, exposed so the error guard can ask
+    // "did the server ever answer" instead of reading a field OFF that answer.
+    // `fromCache` and `hasData` are both payload-derived and neither can tell a
+    // first-load failure from a refetch failure over data TanStack still holds.
+    updateData,
     // agent-os-rtn8: passed through unclassified. AvailableUpdatesPanel is the
     // site that decides what to render, so it calls classifyError itself --
     // same split as EnvEditor/EnvErrorState (#406).

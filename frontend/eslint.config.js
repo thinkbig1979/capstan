@@ -139,6 +139,37 @@ export default defineConfig([
           message:
             'A bare isError is also true when a REFETCH fails on a query that already has data. Render the error view on isLoadingError, or isError && !data, so a failed refresh does not replace a populated one.',
         },
+        // agent-os-lurn: the SAME defect written with the query's `error`
+        // OBJECT instead of the identifier `isError`. Every selector above
+        // keys on the NAME `isError`, so all eight were structurally blind to
+        // this spelling and four live sites sat under them (DashboardPage,
+        // StackPage, DiffViewer, AuditLogContent).
+        //
+        // `:has(JSXElement)` is the whole discriminator and is NOT cosmetic.
+        // `error` is also the name of validation strings in this codebase --
+        // useCreateStackSubmit's handleCreate() does `const error =
+        // validateName(name)` then `if (error)` -- and that guard's body is
+        // setNameError/toastInvalid/return, with no JSX in it. MEASURED before
+        // shipping, with a deliberately WIDE control selector carrying no
+        // `:has`: the control fired on useCreateStackSubmit and these two did
+        // not, so the miss is discrimination and not blindness. Distinguishing
+        // a query error from a validation string needs no type information,
+        // only the shape of what the guard RETURNS.
+        //
+        // No ConditionalExpression pair here, for the reason given above: a
+        // `const cause = error ? … : null` inside an already-decided guard is
+        // correct code and appears at three of the four sites.
+        {
+          selector: "IfStatement[test.type='Identifier'][test.name='error']:has(JSXElement)",
+          message:
+            'A query `error` object is set when a REFETCH fails as well as on a first load, and TanStack keeps the data in both cases. Guard on error && !data (or isLoadingError) and report the failure with RefreshFailedNotice, so a failed refresh does not discard a populated view.',
+        },
+        {
+          selector:
+            "IfStatement[test.type='LogicalExpression'][test.operator='||'][test.left.type='Identifier'][test.left.name='error']:has(JSXElement)",
+          message:
+            'Drop the `error` disjunct: !data already covers "failed and never loaded", and `error ||` also fires on a REFETCH failure over data TanStack still holds, discarding a populated view. Report the failure with RefreshFailedNotice instead.',
+        },
       ],
     },
   },
