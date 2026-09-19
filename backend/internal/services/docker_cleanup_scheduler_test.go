@@ -3,7 +3,6 @@ package services
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"strings"
@@ -16,6 +15,8 @@ import (
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // agent-os-fn7x.3 — the cleanup scheduler's behavioural arms.
@@ -101,7 +102,7 @@ func TestDockerCleanupDisabledDoesNothing(t *testing.T) {
 
 		// No setting written at all: absence IS the disabled state (FR7).
 		_, err := db.GetSetting(SettingDockerCleanupEnabled)
-		require.ErrorIs(t, err, sql.ErrNoRows,
+		require.ErrorIs(t, err, errdefs.ErrNotFound,
 			"the fixture must start with NO stored policy, or this arm is not testing the default")
 
 		s.runCycle(context.Background())
@@ -350,8 +351,8 @@ func TestResolveDockerCleanupPolicyRefusesOnAFault(t *testing.T) {
 	hide()
 	_, err = ResolveDockerCleanupPolicy(db)
 	require.Error(t, err, "an unreadable settings table resolved to a policy anyway")
-	require.False(t, errors.Is(err, sql.ErrNoRows),
-		"the fault arrived as sql.ErrNoRows, the predicate that MUST stay a default; this fixture cannot discriminate the branch under test: %v", err)
+	require.False(t, errors.Is(err, errdefs.ErrNotFound),
+		"the fault arrived as errdefs.ErrNotFound, the predicate that MUST stay a default; this fixture cannot discriminate the branch under test: %v", err)
 	require.True(t, strings.Contains(err.Error(), "no such table"), "unexpected error: %v", err)
 
 	restore()

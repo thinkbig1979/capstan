@@ -16,6 +16,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // agent-os-r1by. RunRestore read the stack's stop policy with a softened error:
@@ -59,7 +61,7 @@ const (
 // policyTableDroppedDB returns a healthy, migrated, ON-DISK database whose
 // backup_policies table has been dropped through a second connection, so
 // GetBackupPolicy's QueryRow(...).Scan returns a driver error ("no such table")
-// rather than sql.ErrNoRows, while every other read — settings, directories,
+// rather than errdefs.ErrNotFound, while every other read — settings, directories,
 // stacks — still succeeds.
 //
 // It must be on disk: newBackupTestDB uses ":memory:" with MaxOpenConns(1),
@@ -99,14 +101,14 @@ func policyTableDroppedDB(t *testing.T, seed func(*database.DB)) *database.DB {
 	// SELF-CONTROL, PERMANENT, TWO HALVES. Both are required and neither implies
 	// the other.
 	//
-	// ARMED: the policy read must fail, and must NOT fail with sql.ErrNoRows, or
+	// ARMED: the policy read must fail, and must NOT fail with errdefs.ErrNotFound, or
 	// a green test below would be one that quietly exercised today's absent-row
 	// path — the arm the fix deliberately leaves alone — while appearing to
 	// exercise the fault arm.
 	if _, pErr := db.GetBackupPolicy("myapp"); pErr == nil {
 		t.Fatal("fixture is unarmed: GetBackupPolicy returned no error after DROP TABLE")
-	} else if errors.Is(pErr, sql.ErrNoRows) {
-		t.Fatalf("fixture is wrong: GetBackupPolicy returned sql.ErrNoRows, not a fault: %v", pErr)
+	} else if errors.Is(pErr, errdefs.ErrNotFound) {
+		t.Fatalf("fixture is wrong: GetBackupPolicy returned errdefs.ErrNotFound, not a fault: %v", pErr)
 	}
 
 	// NARROW: stacks and settings must still READ. Without this the fixture
@@ -120,7 +122,7 @@ func policyTableDroppedDB(t *testing.T, seed func(*database.DB)) *database.DB {
 	}
 	// The settings half reads back a sentinel seeded above rather than probing
 	// an arbitrary key: GetSetting returns the bare Scan error
-	// (database/settings.go:14-20), so an ABSENT key is sql.ErrNoRows and a
+	// (database/settings.go:14-20), so an ABSENT key is errdefs.ErrNotFound and a
 	// "did it error" check could not tell a readable table from an unreadable
 	// one. Round-tripping a known value can.
 	got, gErr := db.GetSetting(narrowFaultSentinelKey)
@@ -242,7 +244,7 @@ func TestRunRestore_HealthyDBHotPolicyApplied(t *testing.T) {
 
 // TestRunRestore_HealthyDBNoPolicyRowKeepsStopDefault is CONTROL 2: a healthy
 // database with NO policy row keeps today's "stop" default and logs no ERROR.
-// This is the sql.ErrNoRows arm — the half the fix must leave untouched.
+// This is the errdefs.ErrNotFound arm — the half the fix must leave untouched.
 func TestRunRestore_HealthyDBNoPolicyRowKeepsStopDefault(t *testing.T) {
 	t.Parallel()
 
@@ -250,8 +252,8 @@ func TestRunRestore_HealthyDBNoPolicyRowKeepsStopDefault(t *testing.T) {
 	seedStackOnly(t, db, "myapp")
 
 	_, pErr := db.GetBackupPolicy("myapp")
-	require.ErrorIs(t, pErr, sql.ErrNoRows,
-		"this control is only meaningful if the absent row really is sql.ErrNoRows")
+	require.ErrorIs(t, pErr, errdefs.ErrNotFound,
+		"this control is only meaningful if the absent row really is errdefs.ErrNotFound")
 
 	docker := &fakeDocker{statusStr: "running"}
 	runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")}

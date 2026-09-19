@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -18,6 +17,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 const deleteSiblingCompose = "services:\n  web:\n    image: nginx:1.21\n    restart: unless-stopped\n"
@@ -261,7 +262,7 @@ func TestStacksHandler_Delete_LastStackRemovesDirectoryRow(t *testing.T) {
 
 	_, err = f.db.GetDirectory(stackDir)
 	assert.Error(t, err, "the directories row for a directory with no remaining stacks must be removed")
-	assert.True(t, errors.Is(err, sql.ErrNoRows), "expected sql.ErrNoRows, got %v", err)
+	assert.True(t, errors.Is(err, errdefs.ErrNotFound), "expected errdefs.ErrNotFound, got %v", err)
 }
 
 // TestStacksHandler_Delete_SiblingPresent_DirectoryRowSurvives guards the other

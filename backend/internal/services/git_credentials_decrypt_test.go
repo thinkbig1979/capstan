@@ -230,7 +230,7 @@ func TestHTTPSCredentials_DecryptFailure_PositiveControl_MatchingKeyWins(t *test
 
 // TestHTTPSCredentials_NoDirectoryRow_StillFallsBackToGlobal pins the behaviour
 // the fix must NOT regress: a directory with no row at all is a legitimate
-// sql.ErrNoRows and still inherits the global credential.
+// errdefs.ErrNotFound and still inherits the global credential.
 func TestHTTPSCredentials_NoDirectoryRow_StillFallsBackToGlobal(t *testing.T) {
 	db := newTestDBWithEncryptor(t)
 	if err := db.SetSetting("git_https_user", decryptTestGlobalUser); err != nil {
@@ -253,7 +253,7 @@ func TestHTTPSCredentials_NoDirectoryRow_StillFallsBackToGlobal(t *testing.T) {
 // gitServiceWithUndecryptableGlobalCredential builds a DB whose GLOBAL
 // git_https_token setting was written under one STORAGE_KEY and is then read
 // under a different one, so GetSetting("git_https_token") fails to decrypt
-// instead of returning sql.ErrNoRows. No directory row exists at all, which
+// instead of returning errdefs.ErrNotFound. No directory row exists at all, which
 // keeps the directory-credential branch (agent-os-2au) out of the picture:
 // this fixture isolates the GLOBAL read (agent-os-2tt).
 func gitServiceWithUndecryptableGlobalCredential(t *testing.T, cfg *config.Config) *GitService {
@@ -316,7 +316,7 @@ func TestHTTPSCredentials_GlobalDecryptFailure_LogsError(t *testing.T) {
 
 // TestHTTPSCredentials_NoGlobalCredential_DoesNotLogError is the negative
 // case an unconditional `slog.Error` on every GetSetting error would fail:
-// sql.ErrNoRows for "no global credential configured at all" is the default,
+// errdefs.ErrNotFound for "no global credential configured at all" is the default,
 // healthy state of a fresh install and must stay silent.
 func TestHTTPSCredentials_NoGlobalCredential_DoesNotLogError(t *testing.T) {
 	db := newTestDBWithEncryptor(t)

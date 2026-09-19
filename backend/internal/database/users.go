@@ -54,7 +54,7 @@ func (d *DB) GetUserByUsername(username string) (*models.User, error) {
 	          FROM users WHERE username = ? COLLATE NOCASE`
 	err := d.db.QueryRow(query, username).Scan(&user.ID, &user.Username, &user.Password, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err, "user", username)
 	}
 	return &user, nil
 }
@@ -65,7 +65,7 @@ func (d *DB) GetUserByID(id string) (*models.User, error) {
 	          FROM users WHERE id = ?`
 	err := d.db.QueryRow(query, id).Scan(&user.ID, &user.Username, &user.Password, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err, "user", id)
 	}
 	return &user, nil
 }
@@ -98,7 +98,10 @@ func (d *DB) GetSoleUser() (*models.User, error) {
 	if err := d.db.QueryRow(query).Scan(
 		&user.ID, &user.Username, &user.Password, &user.CreatedAt, &user.UpdatedAt,
 	); err != nil {
-		return nil, err
+		// count == 1 was true a moment ago, so sql.ErrNoRows here is a race
+		// (the row was deleted between the two queries), not the ordinary
+		// "no user configured" answer — that is ErrNoSoleUser above.
+		return nil, notFound(err, "user", "")
 	}
 	return &user, nil
 }
@@ -122,7 +125,7 @@ func (d *DB) GetSession(id string) (*models.Session, error) {
 	          FROM sessions WHERE id = ?`
 	err := d.db.QueryRow(query, id).Scan(&session.ID, &session.UserID, &session.ExpiresAt, &session.CreatedAt)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err, "session", id)
 	}
 	return &session, nil
 }

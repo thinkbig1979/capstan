@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -12,6 +11,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 type DirectoriesHandler struct {
@@ -55,7 +56,7 @@ func (h *DirectoriesHandler) List(c *gin.Context) {
 		// Refused rather than defaulted (agent-os-1gqn): ListDirectories at the
 		// top of this handler already answers a broken database with 500, so
 		// reporting StackCount:0 for every directory from the same database
-		// would be an oversight rather than a choice. No sql.ErrNoRows arm is
+		// would be an oversight rather than a choice. No errdefs.ErrNotFound arm is
 		// possible — ListStacksByDirectory is a multi-row query
 		// (database/stacks.go:56-62) returning an empty slice and a nil error
 		// for a directory with no stacks, so every error is a fault.
@@ -154,20 +155,7 @@ func (h *DirectoriesHandler) UpdateCredentials(c *gin.Context) {
 		// this replaces was dead for the same reason 7lg1 dropped `stack == nil`
 		// at 17 sites: GetDirectory returns either &dir or a non-nil err, never
 		// both zero.
-		if !errors.Is(err, sql.ErrNoRows) {
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to load directory",
-				err,
-			))
-			return
-		}
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrNotFound,
-			"Directory not found",
-		))
+		handleDBError(c, err, "Failed to load directory")
 		return
 	}
 
@@ -275,7 +263,7 @@ func (h *DirectoriesHandler) CredentialStatus(c *gin.Context) {
 	// below relies on (see the GetDirectoryCredentials switch).
 	if _, err := h.db.GetDirectory(path); err != nil {
 		// agent-os-3h9x, same class and same dead `|| directory == nil` arm as
-		// UpdateCredentials above. The errors.Is(err, sql.ErrNoRows) a few lines
+		// UpdateCredentials above. The errors.Is(err, errdefs.ErrNotFound) a few lines
 		// below is NOT a guard on this call — it discriminates the SEPARATE
 		// GetDirectoryCredentials read that follows. That adjacency is why this
 		// site survived 7lg1's close sweep: OBSERVED 2026-09-05, a
@@ -283,32 +271,19 @@ func (h *DirectoriesHandler) CredentialStatus(c *gin.Context) {
 		// line reaches the sibling's guard and reads the site as already
 		// discriminated. Any sweep for this class must stop its window at the
 		// next getter call, or it borrows the next call's guard.
-		if !errors.Is(err, sql.ErrNoRows) {
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to load directory",
-				err,
-			))
-			return
-		}
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrNotFound,
-			"Directory not found",
-		))
+		handleDBError(c, err, "Failed to load directory")
 		return
 	}
 
 	cred, err := h.db.GetDirectoryCredentials(path)
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, errdefs.ErrNotFound):
 		// NOT the ordinary "never configured" case — that is handled by the
 		// authType=="" fall-through below, since GetDirectory just above
 		// already confirmed a row exists at this path. GetDirectory and
 		// GetDirectoryCredentials query the same table by the same key
 		// (database/directories.go), so the only way THIS call can still see
-		// sql.ErrNoRows is a TOCTOU race: the row was deleted between the two
+		// errdefs.ErrNotFound is a TOCTOU race: the row was deleted between the two
 		// queries. Kept as defence rather than deleted, but deliberately
 		// untested — a test would have to win a race against this handler's
 		// own two DB calls, which costs more than the branch is worth.

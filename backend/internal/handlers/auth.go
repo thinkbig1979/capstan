@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -15,6 +14,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // jwtIssuer is set as the "iss" claim on issued tokens and required by the
@@ -135,7 +136,7 @@ func (h *AuthHandler) Status(c *gin.Context) {
 	// authDisabled back to false. A 500 therefore degrades to "the login prompt
 	// stands", which is strictly better than a confident lie.
 	//
-	// No sql.ErrNoRows arm: UserCount is a COUNT(*) (database/users.go:11-15),
+	// No errdefs.ErrNotFound arm: UserCount is a COUNT(*) (database/users.go:11-15),
 	// which always yields a row, so every error it can return is a fault.
 	userCount, err := h.db.UserCount()
 	if err != nil {
@@ -321,8 +322,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// logServerFault's (respond.go) so one grep finds both; "status" reports
 	// what the caller actually got rather than claiming a 500 that never
 	// happened. It cannot become a log-volume oracle either: a username that
-	// simply does not exist is sql.ErrNoRows and logs nothing.
-	if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+	// simply does not exist is errdefs.ErrNotFound and logs nothing.
+	if lookupErr != nil && !errors.Is(lookupErr, errdefs.ErrNotFound) {
 		slog.Error("request failed",
 			"request_id", middleware.RequestIDFrom(c),
 			"status", http.StatusUnauthorized,
@@ -501,7 +502,7 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		// sibling of agent-os-7lg1/3h9x's 404 collapse. The `|| user == nil`
 		// arm this replaces was dead — GetUserByID returns the bare Scan error
 		// and never (nil, nil) (database/users.go).
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, errdefs.ErrNotFound) {
 			c.JSON(http.StatusUnauthorized, models.NewAppError(
 				http.StatusUnauthorized,
 				models.ErrSessionExpired,
@@ -576,7 +577,7 @@ func (h *AuthHandler) VerifyPassword(c *gin.Context) {
 		// Not-found only; any other failure is a server fault carrying its
 		// cause, not an expired session (agent-os-8tqd; see Me above for the
 		// full reasoning and for why the `|| user == nil` arm was dead).
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, errdefs.ErrNotFound) {
 			c.JSON(http.StatusUnauthorized, models.NewAppError(
 				http.StatusUnauthorized,
 				models.ErrSessionExpired,

@@ -3,7 +3,6 @@ package handlers
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -19,6 +18,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 type LogLine struct {
@@ -60,22 +61,14 @@ func (h *LogsHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *LogsHandler) GetLogs(c *gin.Context) {
 	id := c.Param("id")
 
-	// agent-os-7lg1 template: a genuinely missing stack (sql.ErrNoRows) is a
+	// agent-os-7lg1 template: a genuinely missing stack (errdefs.ErrNotFound) is a
 	// client-fault 404, silent below 500; any other db.GetStack error is a
 	// server fault that used to be discarded and reported as the same 404,
 	// making a database outage indistinguishable from a missing stack (the
 	// nil arm this replaces was dead — GetStack never returns (nil, nil)).
 	stack, err := h.db.GetStack(id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.NewAppError(
-				http.StatusNotFound,
-				models.ErrStackNotFound,
-				"Stack not found",
-			))
-			return
-		}
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 
@@ -131,7 +124,7 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 	// logged 500).
 	stack, err := h.db.GetStack(id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, errdefs.ErrNotFound) {
 			writeJSONError(c, http.StatusNotFound, "STACK_NOT_FOUND", "Stack not found")
 			return
 		}

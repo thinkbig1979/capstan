@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -21,6 +20,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 type SettingsHandler struct {
@@ -150,7 +151,7 @@ func (h *SettingsHandler) ChangePassword(c *gin.Context) {
 		// Not-found only; any other failure is a server fault carrying its
 		// cause, not an expired session (agent-os-8tqd; auth.go's Me carries
 		// the full reasoning and the dead-`|| user == nil`-arm evidence).
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, errdefs.ErrNotFound) {
 			c.JSON(http.StatusUnauthorized, models.NewAppError(
 				http.StatusUnauthorized,
 				models.ErrSessionExpired,
@@ -888,7 +889,7 @@ func (h *SettingsHandler) GetGitSettings(c *gin.Context) {
 	switch {
 	case err == nil:
 		hasToken = httpsToken != "" || h.cfg.GitHTTPSToken != ""
-	case errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, errdefs.ErrNotFound):
 		// The healthy "never configured" state — GIT_HTTPS_TOKEN is still a
 		// legitimate source of a credential, so report based on that alone.
 		hasToken = h.cfg.GitHTTPSToken != ""

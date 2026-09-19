@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
@@ -114,6 +115,58 @@ var routineErrorCodes = map[string]bool{
 // production: three /api/v1/git/log 500s across 72h of logs produced zero
 // explanatory lines, and diagnosing them took ssh, docker inspect and a source
 // read that one log line would have replaced.
+// notFoundWire is the ONE place an absence reported by internal/database turns
+// into a wire code and a client-facing message (agent-os-ymyc). Before it, each
+// of ~18 handler routes re-derived this from sql.ErrNoRows by hand, which is how
+// a database that could not answer kept being reported as a resource that does
+// not exist.
+//
+// Every entry reproduces EXACTLY what its routes emitted before the collapse —
+// this change is a refactor of where the decision is made, not of what goes on
+// the wire. "stack" keeps STACK_NOT_FOUND because 15 routes minted that code and
+// docs/reference/api.md documents it.
+//
+// Four routes mint models.ErrNotFound for an absent STACK rather than
+// STACK_NOT_FOUND (updates.go, git.go, monitoring.go x2). They are deliberately
+// NOT collapsed here: they keep their own branch so their wire code is unchanged.
+// That inconsistency predates this change and is left for a follow-up.
+var notFoundWire = map[string]struct {
+	Code    string
+	Message string
+}{
+	"stack":              {models.ErrStackNotFound, "Stack not found"},
+	"directory":          {models.ErrNotFound, "Directory not found"},
+	"backup run":         {models.ErrNotFound, "Backup run not found"},
+	"backup run item":    {models.ErrNotFound, "Backup run item not found"},
+	"backup policy":      {models.ErrNotFound, "Backup policy not found"},
+	"auto-update policy": {models.ErrNotFound, "Auto-update policy not found"},
+	"setting":            {models.ErrNotFound, "Setting not found"},
+	"user":               {models.ErrNotFound, "User not found"},
+	"session":            {models.ErrNotFound, "Session not found"},
+}
+
+// handleDBError routes an error from an internal/database getter: an absence to
+// its 404 (code and message from notFoundWire, one place for all of them) and
+// anything else to a 500 carrying THIS route's own diagnostic message and the
+// cause.
+//
+// faultMsg is deliberately per-route and not centralised with the 404: the 404
+// depends only on which entity was absent, while "Failed to load stack" vs
+// "Failed to load backup run" is what tells an operator which call failed. It is
+// also the pre-existing message, so the 500 body is unchanged by the collapse.
+//
+// The split itself is why this exists (agent-os-7lg1 and its dozen siblings): a
+// getter that could not answer used to arrive at these call sites looking exactly
+// like an absent row, and roughly a dozen of them answered 404 for a database
+// fault. Now only internal/database can mint the absence.
+func handleDBError(c *gin.Context, err error, faultMsg string) {
+	if errors.Is(err, errdefs.ErrNotFound) {
+		handleError(c, err)
+		return
+	}
+	handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", faultMsg, err))
+}
+
 func handleError(c *gin.Context, err error) {
 	var appErr *models.AppError
 	if errors.As(err, &appErr) {
@@ -122,6 +175,30 @@ func handleError(c *gin.Context, err error) {
 		}
 		logServerFault(c, appErr.Status, appErr.Code, err)
 		c.JSON(appErr.Status, appErr)
+		return
+	}
+
+	// An absence from internal/database. Deliberately AFTER the AppError branch:
+	// a handler that wraps one in an explicit AppError has made a decision this
+	// must not override.
+	//
+	// No middleware.MarkRoutineOutcome here, and that is the pre-existing
+	// behaviour rather than an omission: none of the collapsed routes marked
+	// their 404 routine, and models.ErrNotFound must keep warning because the
+	// same code answers genuine client errors elsewhere (see routineErrorCodes
+	// above and env.go's per-site marker). logServerFault is likewise not called
+	// — it returns early below 500, so a 404 never logged and still never does.
+	var nf *errdefs.NotFoundError
+	if errors.As(err, &nf) {
+		wire, ok := notFoundWire[nf.Kind]
+		if !ok {
+			// A getter minted a Kind with no entry. Answer 404 rather than 500
+			// (the fact is still "absent"), but say so in the log so the missing
+			// row gets added instead of silently shipping a bare message.
+			slog.Warn("no notFoundWire entry for kind", "kind", nf.Kind, "request_id", middleware.RequestIDFrom(c))
+			wire.Code, wire.Message = models.ErrNotFound, "Not found"
+		}
+		c.JSON(http.StatusNotFound, models.NewAppError(http.StatusNotFound, wire.Code, wire.Message))
 		return
 	}
 

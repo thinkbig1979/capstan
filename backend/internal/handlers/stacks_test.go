@@ -735,7 +735,7 @@ func TestStacksHandler_Create_MkdirFailureLogsCause(t *testing.T) {
 // fix, ANY GetStack error — a genuine database fault, not just a missing row —
 // was mapped to the same silent 404, discarding the real error. faultyDB(t)
 // (faulty_db_test.go, agent-os-2mhb) fails with "sql: database is closed",
-// which is NOT sql.ErrNoRows (proven by
+// which is NOT errdefs.ErrNotFound (proven by
 // TestFaultyDB_FailsDifferentlyFromHealthyNotFound).
 func TestStacksHandler_Get_DBFaultLogsCause(t *testing.T) {
 	gin.SetMode(gin.TestMode)

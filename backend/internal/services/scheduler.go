@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"sync"
@@ -14,6 +13,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 type EventBroadcaster func(event models.StackEvent)
@@ -523,7 +524,7 @@ func (s *SchedulerService) loadApplySchedule() applySchedule {
 		// what migration 14 seeds, so that case is not worth shouting about AND
 		// is not a fault: it stays on the immediate path deliberately. Only a
 		// genuine read fault refuses.
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, errdefs.ErrNotFound) {
 			return immediate
 		}
 		s.logger.Error("Failed to read update_apply_mode; no update will be applied on this pass, "+
@@ -857,7 +858,7 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 		// pre-migration-3 database, where 'off' is what the seed would have
 		// said anyway. That case stays quiet, exactly as loadApplySchedule
 		// treats a missing update_apply_mode.
-		if !errors.Is(err, sql.ErrNoRows) {
+		if !errors.Is(err, errdefs.ErrNotFound) {
 			s.logger.Error("Failed to read auto_update_enabled; skipping this auto-update run, so no container will be patched until this read succeeds",
 				"error", err)
 		}

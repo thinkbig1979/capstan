@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -13,6 +12,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // agent-os-8tqd, the widest member of the class: AuthMiddleware's session
@@ -100,14 +101,14 @@ func closedSessionDB(t *testing.T) *database.DB {
 	if err == nil {
 		t.Fatalf("the closed connection did not induce a failure")
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("the closed DB fails with the SAME predicate as ordinary not-found (sql.ErrNoRows): %v — the two arms would not be distinguishable", err)
+	if errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("the closed DB fails with the SAME predicate as ordinary not-found (errdefs.ErrNotFound): %v — the two arms would not be distinguishable", err)
 	}
 	return db
 }
 
 // healthySessionDB is the control's DB: migrated, reachable, and holding no
-// session row, so GetSession returns sql.ErrNoRows.
+// session row, so GetSession returns errdefs.ErrNotFound.
 func healthySessionDB(t *testing.T) *database.DB {
 	t.Helper()
 	db, err := database.NewWithMigrations(":memory:")
@@ -115,8 +116,8 @@ func healthySessionDB(t *testing.T) *database.DB {
 		t.Fatalf("open migrated db: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if _, err := db.GetSession("session-id"); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("healthy GetSession for a missing row did not return sql.ErrNoRows, got %v — the control is not exercising the not-found branch", err)
+	if _, err := db.GetSession("session-id"); !errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("healthy GetSession for a missing row did not return errdefs.ErrNotFound, got %v — the control is not exercising the not-found branch", err)
 	}
 	return db
 }

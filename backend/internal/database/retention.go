@@ -1,12 +1,13 @@
 package database
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // Retention bounds, shared by every history table so one operator-facing
@@ -87,7 +88,7 @@ func RetentionDays(value string) int {
 // error for check-getter-errors.sh to see if a future caller discards one.
 func (d *DB) RetentionDays(key string) (int, error) {
 	value, err := d.GetSetting(key)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, errdefs.ErrNotFound) {
 		return DefaultRetentionDays, nil
 	}
 	if err != nil {

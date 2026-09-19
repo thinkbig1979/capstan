@@ -76,7 +76,7 @@ type DockerCleanupPolicy struct {
 //
 // That three-way split is the whole point, and it is why this goes through
 // readSetting (backup_config.go) rather than db.GetSetting directly: readSetting
-// maps sql.ErrNoRows -- and only that -- to the empty string, so an absent row
+// maps errdefs.ErrNotFound -- and only that -- to the empty string, so an absent row
 // is the disabled-by-default state (FR7) while a database that could not answer
 // becomes an error the caller must handle. agent-os-rltu and agent-os-r1kc both
 // settled that shape as "refuse rather than act at a default when the setting
@@ -330,7 +330,7 @@ func (s *DockerCleanupSchedulerService) IsRunning() bool {
 // off", is indistinguishable from having done so deliberately, and its only
 // symptom is the disk filling -- which is spec.md:10-13's original incident
 // verbatim ("nothing warned"). Absent rows do NOT reach this branch: readSetting
-// maps sql.ErrNoRows to the default, so a fresh install logs nothing.
+// maps errdefs.ErrNotFound to the default, so a fresh install logs nothing.
 //
 // It also never falls back to DefaultCleanupMinAgeHours on a fault. Pruning
 // under a floor nobody chose, on the strength of a database fault, is exactly

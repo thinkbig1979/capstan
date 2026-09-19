@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -424,19 +422,12 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
-	// always returns either &stack or a non-nil err, never (nil, nil)).
+	// nil arm dropped, dead per GetStack's return shape (GetStack() in
+	// internal/database/stacks.go always returns either &stack or a non-nil
+	// err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.NewAppError(
-				http.StatusNotFound,
-				models.ErrStackNotFound,
-				"Stack not found",
-			))
-			return
-		}
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 

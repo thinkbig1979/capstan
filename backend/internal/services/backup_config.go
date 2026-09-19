@@ -1,7 +1,6 @@
 package services
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +9,8 @@ import (
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 const (
@@ -121,7 +122,7 @@ var ErrResticPasswordUnreadable = errors.New(
 // database could not answer".
 //
 // db.GetSetting returns the bare Scan error (database/settings.go:14-19), so an
-// absent row arrives as sql.ErrNoRows. Mapping that — and only that — to
+// absent row arrives as errdefs.ErrNotFound. Mapping that — and only that — to
 // ("", nil) keeps the existing env/default fallback chain byte-for-byte, while
 // every other failure becomes an error the caller must handle. Before
 // agent-os-l42o both were discarded, which made a database fault and an
@@ -131,7 +132,7 @@ func readSetting(db *database.DB, key string) (string, error) {
 	switch {
 	case err == nil:
 		return v, nil
-	case errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, errdefs.ErrNotFound):
 		return "", nil
 	case key == resticPasswordSettingKey:
 		return "", ErrResticPasswordUnreadable

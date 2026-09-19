@@ -3,12 +3,13 @@ package services
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,7 +27,7 @@ import (
 //   - the update_apply_time / update_apply_days reads (the bead's site)
 //   - the update_apply_mode read 13 lines above it (its unnamed sibling)
 //
-// And ONE branch that must NOT change: sql.ErrNoRows on update_apply_mode is
+// And ONE branch that must NOT change: errdefs.ErrNotFound on update_apply_mode is
 // the pre-migration-14 state, where immediate is exactly what migration 14
 // seeds. That is a legitimately known value, not a fault, and it keeps
 // applying. TestApplyScheduleAbsentModeStillApplies is that arm — without it a
@@ -66,7 +67,7 @@ func rltuFixture(t *testing.T) (*database.DB, string, *bytes.Buffer, *SchedulerS
 // The settings table declares value NOT NULL, so the column is rebuilt without
 // that constraint first. GetSetting scans into a string, so a NULL value
 // returns "converting NULL to string is unsupported" — a genuine error that is
-// NOT sql.ErrNoRows, from one key only.
+// NOT errdefs.ErrNotFound, from one key only.
 func rltuNullSetting(t *testing.T, dataDir, key string) {
 	t.Helper()
 	raw := koy9Raw(t, dataDir)
@@ -91,8 +92,8 @@ func rltuRequireFault(t *testing.T, db *database.DB, key string) {
 	t.Helper()
 	if _, err := db.GetSetting(key); err == nil {
 		t.Fatalf("%s must be unreadable for this test to mean anything, but it read back cleanly", key)
-	} else if errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("%s must fail with a genuine fault, not sql.ErrNoRows — got %v", key, err)
+	} else if errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("%s must fail with a genuine fault, not errdefs.ErrNotFound — got %v", key, err)
 	}
 }
 
@@ -159,8 +160,8 @@ func TestApplyScheduleAbsentModeStillApplies(t *testing.T) {
 	db, dataDir, buf, s := rltuFixture(t)
 	koy9DeleteSetting(t, dataDir, "update_apply_mode")
 
-	if _, err := db.GetSetting("update_apply_mode"); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("after deleting the row the read must be sql.ErrNoRows, got %v", err)
+	if _, err := db.GetSetting("update_apply_mode"); !errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("after deleting the row the read must be errdefs.ErrNotFound, got %v", err)
 	}
 
 	s.runCycle(context.Background())

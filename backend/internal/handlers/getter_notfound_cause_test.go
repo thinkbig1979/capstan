@@ -17,7 +17,7 @@ import (
 
 // This file pins agent-os-3h9x: the generalisation of agent-os-7lg1's class
 // from db.GetStack to every DB getter whose error is mapped to a 404 without
-// discriminating sql.ErrNoRows. Three sites carried it — backup.go's
+// discriminating errdefs.ErrNotFound. Three sites carried it — backup.go's
 // getRunDetail (GetBackupRunByID) and directories.go's UpdateCredentials and
 // CredentialStatus (both GetDirectory).
 //
@@ -139,7 +139,7 @@ func newDirectoriesRouter(db *database.DB) *gin.Engine {
 //
 // This site is the one the 3h9x brief nominated as its POSITIVE CONTROL, on
 // the reading that it was already guarded. It was not: the
-// errors.Is(err, sql.ErrNoRows) a few lines below it discriminates the NEXT
+// errors.Is(err, errdefs.ErrNotFound) a few lines below it discriminates the NEXT
 // call, GetDirectoryCredentials, and the -A6 sweep window reached that guard
 // and mis-attributed it. The real always-guarded control is
 // GetDirectoryCredentials itself, exercised by

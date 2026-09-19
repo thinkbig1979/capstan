@@ -53,7 +53,7 @@ func (d *DB) GetStack(id string) (*models.Stack, error) {
 		&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
 		&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err, "stack", id)
 	}
 	return &stack, nil
 }
@@ -141,7 +141,7 @@ func (d *DB) GetStackByProjectName(projectName string) (*models.Stack, error) {
 		&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
 		&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err, "stack", projectName)
 	}
 	return &stack, nil
 }

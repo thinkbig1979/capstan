@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +17,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // validSnapshotIDRegex matches restic snapshot identifiers: a short or full hex
@@ -613,17 +614,13 @@ func (h *BackupHandler) upsertPolicy(c *gin.Context) {
 	stackID := c.Param("stackId")
 
 	if _, err := h.db.GetStack(stackID); err != nil {
-		// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless the
-		// non-not-found case is split out and logged with its cause.
-		if !errors.Is(err, sql.ErrNoRows) {
-			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
-			return
-		}
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+		// agent-os-7lg1: a fault here must not become a silent 404. That split
+		// is made once now, in handleDBError (respond.go), on the typed
+		// errdefs.ErrNotFound that only internal/database can mint
+		// (agent-os-ymyc). Wire shape unchanged: 404 STACK_NOT_FOUND
+		// "Stack not found" for an absent stack, 500 with this message for a
+		// fault.
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 
@@ -658,7 +655,7 @@ func (h *BackupHandler) upsertPolicy(c *gin.Context) {
 	// CreatedAt of now. An absent row is the ordinary first-save case and still
 	// takes that path.
 	existing, err := h.db.GetBackupPolicy(stackID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && !errors.Is(err, errdefs.ErrNotFound) {
 		h.internalError(c, "Failed to read the existing backup policy", err)
 		return
 	}
@@ -714,7 +711,7 @@ func (h *BackupHandler) getStatus(c *gin.Context) {
 	// Refused rather than defaulted: GetEnabledBackupPolicies above already
 	// answers this same database with 500, so reporting lastRun:null from a
 	// database that could not be read would be an oversight rather than a
-	// choice (agent-os-1gqn). No sql.ErrNoRows arm, and none is possible:
+	// choice (agent-os-1gqn). No errdefs.ErrNotFound arm, and none is possible:
 	// GetBackupRuns is a multi-row query (database/backup.go:98-104) that
 	// returns an empty slice with a nil error when there are no runs, so every
 	// error it can return is a fault.
@@ -875,19 +872,14 @@ func (h *BackupHandler) getRunDetail(c *gin.Context) {
 
 	run, err := h.db.GetBackupRunByID(runID)
 	if err != nil {
-		// agent-os-3h9x (the generalised agent-os-7lg1 class): db.GetBackupRunByID
-		// returns the bare Scan error (database/backup.go:122-135), so ANY failure
-		// — a closed connection, a corrupt file — arrives here looking exactly
-		// like an absent run and would otherwise become a silent 404.
-		if !errors.Is(err, sql.ErrNoRows) {
-			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load backup run", err))
-			return
-		}
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrNotFound,
-			"Backup run not found",
-		))
+		// agent-os-3h9x (the generalised agent-os-7lg1 class): GetBackupRunByID
+		// used to return the bare Scan error, so ANY failure — a closed
+		// connection, a corrupt file — arrived here looking exactly like an
+		// absent run and became a silent 404. That is fixed at its source now:
+		// GetBackupRunByID() in internal/database/backup.go returns
+		// errdefs.ErrNotFound for an absent row and the fault unchanged, and
+		// handleDBError makes the split once (agent-os-ymyc).
+		handleDBError(c, err, "Failed to load backup run")
 		return
 	}
 
@@ -1232,17 +1224,13 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 	}
 
 	if _, err := h.db.GetStack(req.StackID); err != nil {
-		// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless the
-		// non-not-found case is split out and logged with its cause.
-		if !errors.Is(err, sql.ErrNoRows) {
-			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
-			return
-		}
-		c.JSON(http.StatusNotFound, models.NewAppError(
-			http.StatusNotFound,
-			models.ErrStackNotFound,
-			"Stack not found",
-		))
+		// agent-os-7lg1: a fault here must not become a silent 404. That split
+		// is made once now, in handleDBError (respond.go), on the typed
+		// errdefs.ErrNotFound that only internal/database can mint
+		// (agent-os-ymyc). Wire shape unchanged: 404 STACK_NOT_FOUND
+		// "Stack not found" for an absent stack, 500 with this message for a
+		// fault.
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 
