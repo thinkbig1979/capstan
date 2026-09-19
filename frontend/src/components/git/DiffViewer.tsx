@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/select'
 import { parseDiff } from '@/lib/diff-parser'
 import { classifyError } from '@/lib/error-handler'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 type DiffView = 'unified' | 'split'
 
@@ -57,7 +58,14 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
     return <div className="flex items-center justify-center py-4">Loading diff...</div>
   }
 
-  if (error || !diffData) {
+  // agent-os-lurn: the `error` disjunct is GONE. It made this branch true for a
+  // failed REFETCH as well as a failed first load, and TanStack retains
+  // `diffData` in both cases, so a rendered diff was replaced by the headline
+  // below after one focus refetch that 500s. `!diffData` alone still covers
+  // BOTH states this branch is for: a first load that failed (no data yet) and
+  // a request that RESOLVED with nothing. An error that arrives over a diff we
+  // still hold now routes to the notice further down instead.
+  if (!diffData) {
     // agent-os-rtn8: GetDiff answers with more than one refusal and this branch
     // rendered one sentence for all of them -- a 400 "Invalid commit hash
     // format" minted in the handler (git.go:299), and the 404s that reach
@@ -85,143 +93,148 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
   }
 
   return (
-    <div className="space-y-2 rounded-lg border">
-      <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/50">
-        <span className="text-sm font-medium">Diff View</span>
-        <Select value={viewMode} onValueChange={(value) => setViewMode(value as DiffView)}>
-          <SelectTrigger className="w-[140px] h-8" aria-label="Diff view mode">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="unified">Unified</SelectItem>
-            <SelectItem value="split">Split</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+    <>
+      {/* agent-os-lurn: past the guard, `error` means a REFRESH failed over a
+          diff we still hold. Report it without taking the diff away. */}
+      {error && <RefreshFailedNotice what="the diff" className="mb-2" />}
+      <div className="space-y-2 rounded-lg border">
+        <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/50">
+          <span className="text-sm font-medium">Diff View</span>
+          <Select value={viewMode} onValueChange={(value) => setViewMode(value as DiffView)}>
+            <SelectTrigger className="w-[140px] h-8" aria-label="Diff view mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unified">Unified</SelectItem>
+              <SelectItem value="split">Split</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
 
-      {files.map((file, fileIndex) => {
-        const isCollapsed = collapsedFiles.has(file.path)
-        return (
-          <div key={fileIndex} className="border-b last:border-b-0">
-            <Button
-              variant="ghost"
-              className="w-full justify-start px-4 py-2 font-mono text-sm hover:bg-muted/50"
-              onClick={() => toggleFile(file.path)}
-            >
-              {isCollapsed ? (
-                <ChevronRight className="mr-2 h-4 w-4" />
-              ) : (
-                <ChevronDown className="mr-2 h-4 w-4" />
-              )}
-              <span className="flex-1 truncate">{file.path}</span>
-              {file.addedLines > 0 && (
-                <span className="mr-2 text-xs text-success">+{file.addedLines}</span>
-              )}
-              {file.removedLines > 0 && (
-                <span className="text-xs text-destructive">-{file.removedLines}</span>
-              )}
-            </Button>
+        {files.map((file, fileIndex) => {
+          const isCollapsed = collapsedFiles.has(file.path)
+          return (
+            <div key={fileIndex} className="border-b last:border-b-0">
+              <Button
+                variant="ghost"
+                className="w-full justify-start px-4 py-2 font-mono text-sm hover:bg-muted/50"
+                onClick={() => toggleFile(file.path)}
+              >
+                {isCollapsed ? (
+                  <ChevronRight className="mr-2 h-4 w-4" />
+                ) : (
+                  <ChevronDown className="mr-2 h-4 w-4" />
+                )}
+                <span className="flex-1 truncate">{file.path}</span>
+                {file.addedLines > 0 && (
+                  <span className="mr-2 text-xs text-success">+{file.addedLines}</span>
+                )}
+                {file.removedLines > 0 && (
+                  <span className="text-xs text-destructive">-{file.removedLines}</span>
+                )}
+              </Button>
 
-            {!isCollapsed && (
-              <div className="overflow-x-auto">
-                {viewMode === 'unified' ? (
-                  <table className="w-full text-sm font-mono">
-                    <tbody>
-                      {file.hunks.map((hunk, hunkIndex) => (
-                        <tr key={hunkIndex}>
-                          <td className="p-0">
-                            <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
-                              {hunk.header}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                      {file.hunks.flatMap((hunk, hunkIndex) =>
-                        hunk.lines.map((line, lineIndex) => (
-                          <tr
-                            key={`${hunkIndex}-${lineIndex}`}
-                            className={`${
-                              line.type === 'added'
-                                ? 'bg-success/15'
-                                : line.type === 'removed'
-                                ? 'bg-destructive/15'
-                                : ''
-                            }`}
-                          >
-                            <td className="px-4 py-0.5 whitespace-nowrap">
-                              <span
-                                className={`${
-                                  line.type === 'added'
-                                    ? 'text-success'
-                                    : line.type === 'removed'
-                                    ? 'text-destructive'
-                                    : 'text-muted-foreground'
-                                }`}
-                              >
-                                {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
-                                {line.content}
-                              </span>
+              {!isCollapsed && (
+                <div className="overflow-x-auto">
+                  {viewMode === 'unified' ? (
+                    <table className="w-full text-sm font-mono">
+                      <tbody>
+                        {file.hunks.map((hunk, hunkIndex) => (
+                          <tr key={hunkIndex}>
+                            <td className="p-0">
+                              <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
+                                {hunk.header}
+                              </div>
                             </td>
                           </tr>
-                        )),
-                      )}
-                    </tbody>
-                  </table>
-                ) : (
-                  <table className="w-full text-sm font-mono">
-                    <tbody>
-                      {file.hunks.map((hunk, hunkIndex) => (
-                        <tr key={hunkIndex}>
-                          <td colSpan={2} className="p-0">
-                            <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
-                              {hunk.header}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                      {file.hunks.flatMap((hunk, hunkIndex) =>
-                        hunk.lines.map((line, lineIndex) => (
-                          <tr
-                            key={`${hunkIndex}-${lineIndex}`}
-                            className="border-b"
-                          >
-                            {line.type === 'removed' || line.type === 'context' ? (
-                              <td
-                                className={`px-4 py-0.5 whitespace-nowrap ${
-                                  line.type === 'removed'
-                                    ? 'bg-destructive/15 text-destructive'
-                                    : 'bg-muted/50'
-                                }`}
-                              >
-                                {line.type === 'removed' ? '-' : ' '}{line.content}
+                        ))}
+                        {file.hunks.flatMap((hunk, hunkIndex) =>
+                          hunk.lines.map((line, lineIndex) => (
+                            <tr
+                              key={`${hunkIndex}-${lineIndex}`}
+                              className={`${
+                                line.type === 'added'
+                                  ? 'bg-success/15'
+                                  : line.type === 'removed'
+                                  ? 'bg-destructive/15'
+                                  : ''
+                              }`}
+                            >
+                              <td className="px-4 py-0.5 whitespace-nowrap">
+                                <span
+                                  className={`${
+                                    line.type === 'added'
+                                      ? 'text-success'
+                                      : line.type === 'removed'
+                                      ? 'text-destructive'
+                                      : 'text-muted-foreground'
+                                  }`}
+                                >
+                                  {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
+                                  {line.content}
+                                </span>
                               </td>
-                            ) : (
-                              <td className="px-4 py-0.5 whitespace-nowrap bg-muted/30"></td>
-                            )}
-                            {line.type === 'added' || line.type === 'context' ? (
-                              <td
-                                className={`px-4 py-0.5 whitespace-nowrap ${
-                                  line.type === 'added'
-                                    ? 'bg-success/15 text-success'
-                                    : 'bg-muted/50'
-                                }`}
-                              >
-                                {line.type === 'added' ? '+' : ' '}{line.content}
-                              </td>
-                            ) : (
-                              <td className="px-4 py-0.5 whitespace-nowrap bg-muted/30"></td>
-                            )}
+                            </tr>
+                          )),
+                        )}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <table className="w-full text-sm font-mono">
+                      <tbody>
+                        {file.hunks.map((hunk, hunkIndex) => (
+                          <tr key={hunkIndex}>
+                            <td colSpan={2} className="p-0">
+                              <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
+                                {hunk.header}
+                              </div>
+                            </td>
                           </tr>
-                        )),
-                      )}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
+                        ))}
+                        {file.hunks.flatMap((hunk, hunkIndex) =>
+                          hunk.lines.map((line, lineIndex) => (
+                            <tr
+                              key={`${hunkIndex}-${lineIndex}`}
+                              className="border-b"
+                            >
+                              {line.type === 'removed' || line.type === 'context' ? (
+                                <td
+                                  className={`px-4 py-0.5 whitespace-nowrap ${
+                                    line.type === 'removed'
+                                      ? 'bg-destructive/15 text-destructive'
+                                      : 'bg-muted/50'
+                                  }`}
+                                >
+                                  {line.type === 'removed' ? '-' : ' '}{line.content}
+                                </td>
+                              ) : (
+                                <td className="px-4 py-0.5 whitespace-nowrap bg-muted/30"></td>
+                              )}
+                              {line.type === 'added' || line.type === 'context' ? (
+                                <td
+                                  className={`px-4 py-0.5 whitespace-nowrap ${
+                                    line.type === 'added'
+                                      ? 'bg-success/15 text-success'
+                                      : 'bg-muted/50'
+                                  }`}
+                                >
+                                  {line.type === 'added' ? '+' : ' '}{line.content}
+                                </td>
+                              ) : (
+                                <td className="px-4 py-0.5 whitespace-nowrap bg-muted/30"></td>
+                              )}
+                            </tr>
+                          )),
+                        )}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </>
   )
 }

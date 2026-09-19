@@ -287,3 +287,50 @@ describe('DiffViewer — unified and split views', () => {
     expect(screen.getByRole('combobox')).toHaveTextContent('Unified')
   })
 })
+
+// ─── agent-os-lurn: a failed REFETCH must not discard the diff ───────────────
+
+/**
+ * agent-os-lurn, the agent-os-wczm class written with the query's `error`
+ * OBJECT rather than the identifier `isError`, which is why wczm's eslint
+ * ratchet could not see it.
+ *
+ * `error` is set for a failed REFETCH exactly as for a failed first load and
+ * TanStack retains `data` in both cases, so `if (error || !diffData)` replaced
+ * a rendered diff with "Failed to load diff" after one focus refetch that 500s
+ * (staleTime 30s, refetchOnWindowFocus on, a 500 is not auto-retryable).
+ *
+ * This arm RESOLVES first and rejects a REFETCH, and asserts the query really
+ * reached the error state before the discriminating assertions. Without that
+ * assertion the arm is satisfied by a render that never saw the rejection —
+ * which passes against the defective guard and proves nothing.
+ *
+ * The two preservation controls for this change are the PRE-EXISTING arms
+ * "reports a failure when the request rejects" (first load, no data) and
+ * "adds no cause when the request resolved with no payload" (the agent-os-rtn8
+ * case). Neither can fail first; both are pinned by mutation evidence.
+ */
+describe('DiffViewer — a failed REFETCH must not discard the diff (agent-os-lurn)', () => {
+  it('keeps the rendered diff when a REFETCH fails', async () => {
+    mockDiff.mockResolvedValue({ diff: DIFF })
+    const { queryClient } = renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)
+
+    expect(await screen.findByText('compose.yml')).toBeInTheDocument()
+
+    mockDiff.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries()
+    await waitFor(() =>
+      expect(queryClient.getQueryCache().getAll().some((q) => q.state.status === 'error')).toBe(true),
+    )
+
+    // The diff the server already sent is still rendered...
+    expect(screen.getByText('compose.yml')).toBeInTheDocument()
+    // ...and the failure headline has NOT replaced it.
+    expect(screen.queryByText('Failed to load diff')).not.toBeInTheDocument()
+    // ...and the refresh failure is reported rather than swallowed.
+    expect(
+      screen.getByText(/Could not refresh the diff\. The values shown are the last ones the server sent\./),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/check them before saving/)).not.toBeInTheDocument()
+  })
+})

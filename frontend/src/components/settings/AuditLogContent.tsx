@@ -12,6 +12,7 @@ import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { HelpHint } from '@/components/ui/help-hint'
 import { ChevronLeft, ChevronRight, ChevronDown, ScrollText, X } from 'lucide-react'
 import { queryKeys } from '@/lib/query-keys'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { HistoryRetentionSection } from './HistoryRetentionSection'
 
 const ALL_ACTIONS = '__all__'
@@ -111,7 +112,7 @@ function AuditLogTable() {
     setDateTo('')
   }
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: queryKeys.auditLog({ page, pageSize, action, search, dateFrom, dateTo }),
     queryFn: () => settingsApi.getAuditLog(page, pageSize, { action, search, dateFrom, dateTo }),
     placeholderData: keepPreviousData,
@@ -125,7 +126,18 @@ function AuditLogTable() {
     )
   }
 
-  if (error) {
+  // agent-os-lurn: keyed on error-WITHOUT-data, not on the error object alone.
+  // `error` is set for a failed REFETCH exactly as for a failed first load, and
+  // TanStack retains `data` in both cases — so `if (error)` replaced rows the
+  // server had already sent. This query sets `placeholderData: keepPreviousData`,
+  // which makes retaining rows across a fetch its declared intent; the guard was
+  // discarding what the query had gone out of its way to keep.
+  //
+  // The fixed sentence below stays for the no-data case. It still renders no
+  // cause, which is a WS2-class remainder and deliberately NOT fixed here:
+  // classifyError is not imported in this file and wiring it in is a presenter
+  // change, outside this bead's scope.
+  if (error && !data) {
     return (
       <div className="text-center py-8 text-muted-foreground">
         Failed to load audit log.
@@ -133,11 +145,15 @@ function AuditLogTable() {
     )
   }
 
+  // Past the guard, `error` means a REFRESH failed over rows we still hold.
+  const refreshFailed = Boolean(error)
+
   // Truly empty log (no entries and no filter applied) — skip the filter bar
   if (!data || (data.entries.length === 0 && !hasActiveFilters)) {
     return (
       <div className="space-y-4">
         <AuditedEventsNote />
+        {refreshFailed && <RefreshFailedNotice what="the audit log" onRetry={() => refetch()} />}
         <div className="text-center py-8 text-muted-foreground">
           <ScrollText className="h-8 w-8 mx-auto mb-2 opacity-50" />
           No audit log entries yet.
@@ -152,6 +168,7 @@ function AuditLogTable() {
   return (
     <div className="space-y-4">
       <AuditedEventsNote />
+      {refreshFailed && <RefreshFailedNotice what="the audit log" onRetry={() => refetch()} />}
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex-1 min-w-[180px] space-y-1">
           <label htmlFor="audit-search" className="text-xs text-muted-foreground">Search</label>
