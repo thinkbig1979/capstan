@@ -59,9 +59,21 @@ func NewTokenEncryptor(storageSecret, jwtSecret string) (*TokenEncryptor, error)
 	// Legacy key: SHA-256(jwtSecret), used only to read pre-HKDF ciphertext.
 	if jwtSecret != "" {
 		legacyHash := sha256.Sum256([]byte(jwtSecret))
-		if legacy, lerr := newGCM(legacyHash[:]); lerr == nil {
-			enc.legacy = legacy
+		// Propagated, not softened (agent-os-qyg7.2). A nil enc.legacy is
+		// DEFINED by that field's doc comment as "no legacy secret is
+		// available", so swallowing a construction failure here would report a
+		// fault as a configuration fact and leave every pre-HKDF ciphertext
+		// silently unreadable. The identical newGCM call for the primary key,
+		// eight lines above, already propagates. This changes no behaviour
+		// today: legacyHash[:] is always 32 bytes, aes.NewCipher errors only
+		// on a key length outside {16,24,32}, and cipher.NewGCM errors only on
+		// a block size other than AES's 16 -- so the branch is unreachable. It
+		// removes a state that could not be told apart from a legitimate one.
+		legacy, lerr := newGCM(legacyHash[:])
+		if lerr != nil {
+			return nil, lerr
 		}
+		enc.legacy = legacy
 	}
 
 	return enc, nil

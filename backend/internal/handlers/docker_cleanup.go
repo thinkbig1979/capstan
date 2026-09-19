@@ -138,7 +138,7 @@ func (h *ResourcesHandler) updateCleanupPolicy(c *gin.Context) {
 	// logged and then treated as "re-arm anyway", because failing to re-arm an
 	// operator who just opted in is the worse of the two errors -- but a fault
 	// that only ever widens a branch, with nothing said, is the softened-error
-	// shape scripts/check-getter-errors.sh exists to catch, and the same lie
+	// shape backend/tools/geterrors exists to catch, and the same lie
 	// getCleanupPolicy refuses to tell.
 	before, beforeErr := services.ResolveDockerCleanupPolicy(h.db)
 	if beforeErr != nil {
@@ -340,16 +340,17 @@ func (h *ResourcesHandler) cleanupMinAgeFromRequest(c *gin.Context) (int, bool) 
 // serve a one-row page for `limit=nonsense` instead of the documented default.
 func (h *ResourcesHandler) getCleanupHistory(c *gin.Context) {
 	limit := defaultCleanupHistoryLimit
-	// The Atoi error is deliberately not surfaced, and this site is recorded in
-	// scripts/check-getter-errors-baseline.txt for that reason. That scanner's
-	// subject is a DATABASE or DAEMON fault read as a default; this is a client
-	// query parameter, where "limit=nonsense" has no answer to report and the
-	// documented default is the honest response. Identical shape, already
-	// baselined, at getUpdateHistory (updates.go:757,762) and getHistory
-	// (backup.go:820,825) -- this is the eighth instance of one accepted pattern,
-	// not a new kind of site.
+	// The Atoi error is deliberately not surfaced, and the site carries its own
+	// //geterrors:ignore below for that reason (agent-os-qyg7.2 replaced the
+	// count baseline that used to record it). The analyzer's subject is a
+	// DATABASE or DAEMON fault read as a default; this is a client query
+	// parameter, where "limit=nonsense" has no answer to report and the
+	// documented default is the honest response. Identical shape, identically
+	// dispositioned, at getUpdateHistory (updates.go) and getHistory
+	// (backup.go) -- one accepted pattern, not a new kind of site. Line numbers
+	// are deliberately not cited: they rotted twice already.
 	if l := c.Query("limit"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 { //geterrors:ignore client-supplied ?limit: malformed and absent both take the default, and the comment above names the seven sibling sites of this one accepted pattern
 			limit = v
 		}
 	}

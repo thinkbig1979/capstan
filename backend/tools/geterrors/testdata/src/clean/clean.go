@@ -1,5 +1,7 @@
-// Package clean is the MUST-NOT-FIRE half of check-getter-errors.sh's
-// self-test. Every function here handles its error properly, and several are
+// Package clean is the MUST-NOT-FIRE half of this analyzer's two-sided test.
+// PORTED to backend/tools/geterrors (agent-os-qyg7.2) from
+// scripts/getter-errors/testdata/clean, which it replaces, unchanged: every
+// function here must stay silent, so it carries no want comments at all. Every function here handles its error properly, and several are
 // deliberately close to the fire/ shapes: same callees, same variable names,
 // same `== nil` text. A check that fires on one known instance proves it
 // matches SOMETHING; only a fixture that must stay silent shows it is not

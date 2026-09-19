@@ -131,7 +131,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	}
 	defer h.opLock.Release(stackID)
 
-	if _, err := os.Stat(stackDir); err == nil {
+	if _, err := os.Stat(stackDir); err == nil { //geterrors:ignore existence probe: a stat error that is not NotExist reads as "not there" and the directory create below is the real gate
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
 			models.ErrDuplicateStack,
@@ -153,7 +153,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	}
 
 	rel, err := filepath.Rel(absTargetDir, absStackDir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) { //geterrors:ignore fails closed on path traversal: a Rel that errored and one that escaped the target both refuse with ErrPathTraversal, which is the safe direction
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
 			models.ErrPathTraversal,

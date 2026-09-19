@@ -1,4 +1,4 @@
-// merge.go is the MUST-NOT-FIRE half of the self-test for the MERGE kind
+// merge.go is the MUST-NOT-FIRE half of the two-sided test for the MERGE kind
 // (agent-os-8f2g). Every function here uses the same callees, the same error
 // names and the same `!= nil` text as fire/merge.go, and none of them is a
 // member of the class. A control that fires on a known instance proves the
@@ -61,8 +61,9 @@ func noErrorOperand(a, b string) bool {
 }
 
 // notAnErrorName: `ptr != nil || v == ""` reads exactly like the class in
-// text, and is not it. The name anchor is the one thing this instrument cannot
-// avoid, so this pins what it must NOT sweep in.
+// text, and is not it. Under the predecessor this pinned what its unavoidable
+// NAME anchor must not sweep in; under go/types it pins the TYPE gate, and it
+// is not decoration -- defeating that gate makes this line fire.
 func notAnErrorName(v string) string {
 	thing, err := db.GetThing("k")
 	if err != nil {

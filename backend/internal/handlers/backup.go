@@ -299,7 +299,7 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	// service's schedule lookups) instead of trusting this read-back, which
 	// exists only to render the settings form.
 	scheduleDays := []int{}
-	if parsed, err := services.ParseWeekdays(bc.ScheduleDays); err == nil {
+	if parsed, err := services.ParseWeekdays(bc.ScheduleDays); err == nil { //geterrors:ignore the comment above says this read-back exists only to render the settings form; the authoritative parse is in the backup service's schedule lookups
 		for _, day := range parsed {
 			scheduleDays = append(scheduleDays, int(day))
 		}
@@ -814,12 +814,12 @@ func (h *BackupHandler) getHistory(c *gin.Context) {
 	// The genuine faults in this handler are NOT softened: GetBackupRunsFiltered
 	// below returns its error to internalError.
 	if p := c.Query("page"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 { //geterrors:ignore client-supplied ?page: malformed and absent both take the default, and the genuine faults in this handler are returned (see the comment above)
 			filters.Page = v
 		}
 	}
 	if l := c.Query("limit"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 { //geterrors:ignore client-supplied ?limit: malformed and absent both take the default, which is then clamped below
 			filters.Limit = v
 		}
 	}
@@ -827,12 +827,12 @@ func (h *BackupHandler) getHistory(c *gin.Context) {
 		filters.Limit = maxBackupHistoryLimit
 	}
 	if from := c.Query("from"); from != "" {
-		if t, err := time.Parse(time.RFC3339, from); err == nil {
+		if t, err := time.Parse(time.RFC3339, from); err == nil { //geterrors:ignore client-supplied ?from: an unparseable timestamp leaves the filter unset, the same as omitting the parameter
 			filters.From = &t
 		}
 	}
 	if to := c.Query("to"); to != "" {
-		if t, err := time.Parse(time.RFC3339, to); err == nil {
+		if t, err := time.Parse(time.RFC3339, to); err == nil { //geterrors:ignore client-supplied ?to: as for ?from above
 			filters.To = &t
 		}
 	}

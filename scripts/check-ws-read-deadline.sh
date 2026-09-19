@@ -113,9 +113,13 @@
 # Exit: 0 clean, 1 violations found OR the scan could not read anything,
 #       2 usage error.
 #
-# THERE IS NO SKIP PATH, deliberately. Unlike check-getter-errors (a go/ast
-# program that must stand down where Go is absent), this needs only bash, find,
-# grep and awk, so it can always run wherever check-docs.sh runs. A scan root
+# THERE IS NO SKIP PATH, deliberately. This needs only bash, find, grep and
+# awk, so it can always run wherever check-docs.sh runs. (It used to contrast
+# itself with check-getter-errors, a go/ast program that had to stand down
+# where Go was absent. That program is gone: agent-os-qyg7.2 replaced it with a
+# go vet analyzer enforced in the backend job, and rewrote check-docs.sh's
+# getter-errors sub-check as a Go-free wiring check -- so NO check-docs.sh
+# check has a skip path any more.) A scan root
 # that is missing or holds no *_test.go file is therefore a FAILURE, not a
 # skip: "I read nothing" and "the tree is clean" produce identical output, and
 # that indistinguishability is the exact failure this whole check exists to

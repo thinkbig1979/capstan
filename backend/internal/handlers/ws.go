@@ -588,7 +588,7 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 		// still relies on distinguishing (see its doc comment).
 		userID = "anon:" + c.ClientIP()
 	} else {
-		cookieToken, cookieErr := c.Cookie("capstan_token")
+		cookieToken, cookieErr := c.Cookie("capstan_token") //geterrors:ignore c.Cookie's only error is http.ErrNoCookie; the guard below already requires a non-empty token, and the Authorization header path was tried first
 
 		if cookieErr == nil && cookieToken != "" {
 			userID, err = authenticateToken(cookieToken, db, jwtSecret)

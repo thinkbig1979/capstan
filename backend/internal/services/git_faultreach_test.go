@@ -37,6 +37,13 @@ import (
 //	go run ../scripts/getter-errors/main.go reach all.cov $PWD/internal/services/git.go
 //	  -> CONVERTED=12 REACHED=5 MISS=7
 //
+// THAT COMMAND NO LONGER RUNS, and nothing replaces it. agent-os-qyg7.2 deleted
+// scripts/getter-errors/ along with the count ratchet it served, and the `reach`
+// subcommand went with it: it had no caller but that ratchet's --self-test and
+// no test of its own. The verdict above is kept as the RECORDED MEASUREMENT it
+// was, on 19082bb, not as an instruction -- re-deriving it today would mean
+// rebuilding reach or reading the coverage profile by hand.
+//
 // THE TRAP THAT SET THE COUNT AT NINE RATHER THAN SEVEN. That REACHED verdict
 // is per SITE, while the coverage evidence under it is per BLOCK, and two of
 // the twelve `if err != nil` bodies have several exits. git.go:71 has three

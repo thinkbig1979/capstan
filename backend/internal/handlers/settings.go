@@ -581,7 +581,7 @@ func (h *SettingsHandler) GetUpdateSettings(c *gin.Context) {
 
 	scanInterval := 0
 	if scanIntervalStr != "" {
-		if v, err := strconv.Atoi(scanIntervalStr); err == nil {
+		if v, err := strconv.Atoi(scanIntervalStr); err == nil { //geterrors:ignore a stored scan interval that is not an integer leaves the response field at 0, the same as unset
 			scanInterval = v
 		}
 	}
@@ -626,7 +626,7 @@ func (h *SettingsHandler) GetUpdateSettings(c *gin.Context) {
 	// happen: scheduled mode, auto-update on, and a scan interval that keeps the
 	// scheduler (and with it the apply timer) running.
 	if applyMode == applyModeScheduled && response.GlobalAutoUpdate && scanInterval > 0 {
-		if schedule, schedErr := services.ParseDailySchedule(applyTime, applyDaysStr); schedErr == nil {
+		if schedule, schedErr := services.ParseDailySchedule(applyTime, applyDaysStr); schedErr == nil { //geterrors:ignore nextApplyAt is rendered only when a schedule parses; an unparseable one leaves the field absent rather than wrong
 			if next, ok := schedule.NextAfter(time.Now()); ok {
 				response.NextApplyAt = next.Format(time.RFC3339)
 			}
@@ -730,7 +730,7 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 		}
 		oldInterval := 0
 		if oldIntervalStr != "" {
-			if v, err := strconv.Atoi(oldIntervalStr); err == nil {
+			if v, err := strconv.Atoi(oldIntervalStr); err == nil { //geterrors:ignore the READ above was made fault-bearing by agent-os-1gqn (settingOrFault returns its error), so this parses a value already known to be present and fault-free
 				oldInterval = v
 			}
 		}
@@ -1102,11 +1102,11 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 	pageSizeStr := c.DefaultQuery("pageSize", "50")
 
 	page, err := strconv.Atoi(pageStr)
-	if err != nil || page < 1 {
+	if err != nil || page < 1 { //geterrors:ignore client-supplied ?page: unparseable and out-of-range both take page 1, and the comment below states why the range half is load-bearing
 		page = 1
 	}
 	pageSize, err := strconv.Atoi(pageSizeStr)
-	if err != nil || pageSize < 1 || pageSize > 100 {
+	if err != nil || pageSize < 1 || pageSize > 100 { //geterrors:ignore client-supplied ?pageSize: unparseable and out-of-range both take 50
 		pageSize = 50
 	}
 
@@ -1202,7 +1202,7 @@ func (h *SettingsHandler) GetScanDepth(c *gin.Context) {
 
 	depth := 1
 	if depthStr != "" {
-		if v, parseErr := strconv.Atoi(depthStr); parseErr == nil && v >= 1 {
+		if v, parseErr := strconv.Atoi(depthStr); parseErr == nil && v >= 1 { //geterrors:ignore a stored scan depth that is not a usable integer falls back to 1, matching readScanDepth in services/scanner.go
 			depth = v
 		}
 	}

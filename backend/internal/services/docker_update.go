@@ -467,7 +467,7 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 
 	if advanced {
 		// Resolve new digest for details (best-effort).
-		newImg, imgErr := s.updateAPI().ImageInspect(ctx, newImageID)
+		newImg, imgErr := s.updateAPI().ImageInspect(ctx, newImageID) //geterrors:ignore best-effort, per the comment above: a failed ImageInspect leaves newDigestStr "" and it is attached as truth.KV("newDigest", "") to an ALREADY-VERIFIED success, so the update outcome is unaffected; what a consumer displays is deliberately not asserted here, having not been measured
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)
@@ -738,7 +738,7 @@ func (s *DockerService) UpdateContainerStreaming(
 	}
 
 	if advanced {
-		newImg, imgErr := s.updateAPI().ImageInspect(ctx, newImageID)
+		newImg, imgErr := s.updateAPI().ImageInspect(ctx, newImageID) //geterrors:ignore as at the streaming-container site above: the digest is detail on a verified success
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)
@@ -902,9 +902,20 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	filterArgs.Add("label", "com.docker.compose.project="+stack.ProjectName)
 	filterArgs.Add("label", "com.docker.compose.service="+serviceName)
 	containers, listErr := s.updateAPI().ContainerList(ctx, container.ListOptions{All: true, Filters: filterArgs})
-	if listErr != nil || len(containers) == 0 {
+	// Split rather than merged (agent-os-qyg7.2). A docker daemon that could
+	// not be reached and a service that has no container are different facts,
+	// and only one of them is about the service. The caller shows ar.Reason to
+	// the user and records ar.Err only when it is non-nil
+	// (handlers/updates.go), so under the merged branch an unreachable daemon
+	// reached the update history as "could not find container for service X".
+	if listErr != nil {
 		durationMs = time.Since(start).Milliseconds()
-		ar = truth.Failed("could not find container for service "+serviceName, listErr)
+		ar = truth.Failed("could not list containers for service "+serviceName, listErr)
+		return
+	}
+	if len(containers) == 0 {
+		durationMs = time.Since(start).Milliseconds()
+		ar = truth.Failed("could not find container for service "+serviceName, nil)
 		return
 	}
 
@@ -950,7 +961,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	}
 
 	if advanced {
-		newImg, imgErr := s.updateAPI().ImageInspect(ctx, newImgID)
+		newImg, imgErr := s.updateAPI().ImageInspect(ctx, newImgID) //geterrors:ignore as at the two sites above: the digest is detail on a verified success
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)
