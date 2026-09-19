@@ -427,14 +427,14 @@ func authenticateToken(token string, db *database.DB, jwtSecret string) (string,
 func writeJSON(conn *websocket.Conn, v interface{}) error {
 	// A failed deadline set surfaces immediately as a write error below,
 	// which the caller already handles.
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
 	return conn.WriteJSON(v)
 }
 
 func readJSON(conn *websocket.Conn, v interface{}) error {
 	// A failed deadline set surfaces immediately as a read error below,
 	// which the caller already handles.
-	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
 	return conn.ReadJSON(v)
 }
 
@@ -461,7 +461,7 @@ func safeWriteMessage(c *Connection, messageType int, data []byte) error {
 	defer c.WriteMutex.Unlock()
 	// A failed deadline set surfaces immediately as a write error below,
 	// which the caller already handles.
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
 	return c.Conn.WriteMessage(messageType, data)
 }
 
@@ -477,7 +477,7 @@ func safePingLoop(ctx context.Context, c *Connection, interval time.Duration) {
 			c.WriteMutex.Lock()
 			// A failed deadline set surfaces immediately as a write error
 			// on the next line, which is already handled.
-			_ = c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_ = c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
 			err := c.Conn.WriteMessage(websocket.PingMessage, nil)
 			c.WriteMutex.Unlock()
 			if err != nil {
@@ -491,7 +491,7 @@ func safePingLoop(ctx context.Context, c *Connection, interval time.Duration) {
 func writeCloseMessage(conn *websocket.Conn, closeCode int, reason string) {
 	// A failed deadline set surfaces immediately as a write error below,
 	// which is already handled.
-	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
 	msg := websocket.FormatCloseMessage(closeCode, reason)
 	if err := conn.WriteMessage(websocket.CloseMessage, msg); err != nil {
 		slog.Debug("Failed to send close message", "error", err)
@@ -600,7 +600,7 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 		} else {
 			// A failed deadline set surfaces immediately as a read error
 			// below, which is already handled.
-			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
 			var authMsg struct {
 				Type  string `json:"type"`
 				Token string `json:"token"`
@@ -659,9 +659,9 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 
 	// Deadlines here govern reads the caller performs after this function
 	// returns; a failed set surfaces there as a read error instead.
-	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
 	conn.SetPongHandler(func(string) error {
-		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
 		return nil
 	})
 

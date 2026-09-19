@@ -127,10 +127,10 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
-	subject, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%s")
-	author, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%an")
-	email, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%ae")
-	dateStr, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%aI")
+	subject, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%s")  //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
+	author, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%an")  //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
+	email, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%ae")   //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
+	dateStr, _ := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%aI") //nolint:errcheck // rev-parse HEAD already resolved above, so this cannot be a missing commit. An unreadable format field renders as an absent value in the UI, never as a wrong one.
 
 	shortHash := commitHash
 	if len(shortHash) > 7 {
@@ -204,13 +204,25 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 			"rev-list", "--left-right", "--count", trackingBranch+"...HEAD"); err == nil {
 			parts := strings.Fields(output)
 			if len(parts) == 2 {
-				behind, _ = strconv.Atoi(parts[0])
-				ahead, _ = strconv.Atoi(parts[1])
+				// Both parsed or neither: GitStatus.tsx renders each count with
+				// `{gitStatus.ahead > 0 && ...}`, so a 0 salvaged from an
+				// unparseable field is drawn as "up to date" rather than as
+				// "unknown" — the rendering that agent-os-ct4e was filed for.
+				// rev-list --left-right --count promises two integers, so a
+				// field that is not one is a real fault, not a missing upstream.
+				behind, err = strconv.Atoi(parts[0])
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse behind count %q: %w", parts[0], err)
+				}
+				ahead, err = strconv.Atoi(parts[1])
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse ahead count %q: %w", parts[1], err)
+				}
 			}
 		}
 	}
 
-	remoteURL, _ := s.gitCommandWithCreds(dirPath, user, token, "remote", "get-url", "origin")
+	remoteURL, _ := s.gitCommandWithCreds(dirPath, user, token, "remote", "get-url", "origin") //nolint:errcheck // `git remote get-url origin` exits non-zero precisely when there is no origin, which is how a local-only repository is detected here. The empty string IS the answer, so propagating would fail status for every repo without a remote.
 	// redactToken has already run on this value, but it only removes the token
 	// Capstan itself resolved, so a credential the operator embedded
 	// independently survives it (agent-os-57xj). RemoteURL carries a json tag,
@@ -831,7 +843,14 @@ func (s *GitService) getLogCLI(dirPath string, limit, offset int) (*models.LogRe
 		}
 		return nil, fmt.Errorf("failed to count commits: %w", err)
 	}
-	total, _ := strconv.Atoi(totalStr)
+	total, err := strconv.Atoi(totalStr)
+	if err != nil {
+		// rev-list --count succeeded above, so a non-numeric body here means
+		// git answered something we cannot read. Discarding it yields total=0
+		// — "this repository has no commits" — beside a log below that
+		// returns some (agent-os-qyg7.1).
+		return nil, fmt.Errorf("failed to parse commit count %q: %w", totalStr, err)
+	}
 
 	skip := offset
 	fetchCount := limit
@@ -906,7 +925,15 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 		return nil, fmt.Errorf("failed to get diff: %w", err)
 	}
 
-	filesOutput, _ := s.gitCommandWithCreds(dirPath, user, token, "diff-tree", "--no-commit-id", "--name-only", "-r", commitHash)
+	// `git show` above already resolved this commit, so diff-tree failing here
+	// is a fault, not "this commit touched nothing". Discarding it produces an
+	// empty Files list beside a NON-EMPTY Diff — the contradiction agent-os-x2st
+	// added PullResult.DiffError to express, and DiffResult has no such field.
+	// The list is on the wire as `files` (agent-os-2613), so it is answerable.
+	filesOutput, err := s.gitCommandWithCreds(dirPath, user, token, "diff-tree", "--no-commit-id", "--name-only", "-r", commitHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list changed files: %w", err)
+	}
 	var files []string
 	if filesOutput != "" {
 		files = strings.Split(filesOutput, "\n")

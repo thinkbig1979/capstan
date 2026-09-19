@@ -858,14 +858,14 @@ func RunMigrations(db *DB) error {
 				if err := migration.PreCheck(tx); err != nil {
 					// Rollback error is secondary to the pre-check error
 					// already being returned; the tx is abandoned either way.
-					_ = tx.Rollback()
+					_ = tx.Rollback() //nolint:errcheck // The exec error above is already being returned and the tx is abandoned either way; after a successful Commit this is sql.ErrTxDone by design.
 					return fmt.Errorf("migration %d pre-check failed: %w", migration.Version, err)
 				}
 			}
 
 			_, err = tx.Exec(migration.SQL)
 			if err != nil {
-				_ = tx.Rollback()
+				_ = tx.Rollback() //nolint:errcheck // The exec error above is already being returned and the tx is abandoned either way; after a successful Commit this is sql.ErrTxDone by design.
 				return fmt.Errorf("failed to apply migration %d: %w", migration.Version, err)
 			}
 
@@ -874,7 +874,7 @@ func RunMigrations(db *DB) error {
 				migration.Version,
 			)
 			if err != nil {
-				_ = tx.Rollback()
+				_ = tx.Rollback() //nolint:errcheck // The exec error above is already being returned and the tx is abandoned either way; after a successful Commit this is sql.ErrTxDone by design.
 				return fmt.Errorf("failed to record migration %d: %w", migration.Version, err)
 			}
 
@@ -918,7 +918,7 @@ func (d *DB) MigrateStackIDsToRootPrefixed(stacksDir string) error {
 	}
 	// No-op once Commit succeeds (sql.ErrTxDone); the safety net for the
 	// early-return error paths below is what matters.
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // The exec error above is already being returned and the tx is abandoned either way; after a successful Commit this is sql.ErrTxDone by design.
 
 	if _, err := tx.Exec("UPDATE directories SET root_dir = ? WHERE root_dir = ''", stacksDir); err != nil {
 		return fmt.Errorf("update directory root_dir: %w", err)

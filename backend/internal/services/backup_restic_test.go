@@ -238,7 +238,7 @@ func TestResticManager_Backup_Hostname(t *testing.T) {
 		for range out {
 		}
 	}()
-	_, _ = m.Backup(context.Background(), "/srv/s", []string{"s"}, out)
+	_, _ = m.Backup(context.Background(), "/srv/s", []string{"s"}, out) //nolint:errcheck // Called for its side-effect; the assertion for this case is below, not on this return value.
 	close(out)
 
 	call := runner.lastCall()
@@ -351,7 +351,8 @@ func TestResticManager_ListSnapshots_ParsesJSON(t *testing.T) {
 			Paths:   []string{"/srv/stacks/mystack"},
 		},
 	}
-	raw, _ := json.Marshal(snaps)
+	raw, err := json.Marshal(snaps)
+	require.NoError(t, err)
 
 	runner := &fakeRunner{outputData: raw}
 	m := newResticManagerWithRunner(testBackupConfig(), runner, nil)
@@ -397,7 +398,7 @@ func TestResticManager_ListSnapshots_TagAndLimitArgs(t *testing.T) {
 	runner := &fakeRunner{outputData: []byte("[]")}
 	m := newResticManagerWithRunner(testBackupConfig(), runner, nil)
 
-	_, _ = m.ListSnapshots(context.Background(), "mytag", 5)
+	_, _ = m.ListSnapshots(context.Background(), "mytag", 5) //nolint:errcheck // Called for its side-effect; the assertion for this case is below, not on this return value.
 
 	call := runner.lastCall()
 	assert.True(t, argPairContains(call.Args, "--tag", "mytag"))
@@ -410,7 +411,7 @@ func TestResticManager_ListSnapshots_NoTagNoLimit(t *testing.T) {
 	runner := &fakeRunner{outputData: []byte("[]")}
 	m := newResticManagerWithRunner(testBackupConfig(), runner, nil)
 
-	_, _ = m.ListSnapshots(context.Background(), "", 0)
+	_, _ = m.ListSnapshots(context.Background(), "", 0) //nolint:errcheck // Called for its side-effect; the assertion for this case is below, not on this return value.
 
 	call := runner.lastCall()
 	assert.False(t, argContains(call.Args, "--tag"), "--tag must not be present when tag is empty")
@@ -425,7 +426,7 @@ func TestResticManager_CheckRepository_QuietFlag(t *testing.T) {
 	runner := &fakeRunner{}
 	m := newResticManagerWithRunner(testBackupConfig(), runner, nil)
 
-	_ = m.CheckRepository(context.Background())
+	_ = m.CheckRepository(context.Background()) //nolint:errcheck // Called for its side-effect; the assertion for this case is below, not on this return value.
 
 	call := runner.lastCall()
 	assert.Equal(t, "restic", call.Binary)
@@ -440,7 +441,7 @@ func TestResticManager_CheckRepository_RepoInEnv(t *testing.T) {
 	runner := &fakeRunner{}
 	m := newResticManagerWithRunner(cfg, runner, nil)
 
-	_ = m.CheckRepository(context.Background())
+	_ = m.CheckRepository(context.Background()) //nolint:errcheck // Called for its side-effect; the assertion for this case is below, not on this return value.
 
 	call := runner.lastCall()
 	hasRepo := false

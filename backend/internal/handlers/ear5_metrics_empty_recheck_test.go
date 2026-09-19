@@ -35,9 +35,9 @@ func newFlippingFakeDockerServer(t *testing.T, emptyResponses int32) *httptest.S
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			if n <= emptyResponses {
-				_, _ = w.Write([]byte(`[]`))
+				_, _ = w.Write([]byte(`[]`)) //nolint:errcheck // Write to a httptest stub's ResponseWriter; a failure there is not the behaviour under test.
 			} else {
-				_, _ = w.Write([]byte(`[{"Id":"c1","State":"running"}]`))
+				_, _ = w.Write([]byte(`[{"Id":"c1","State":"running"}]`)) //nolint:errcheck // Write to a httptest stub's ResponseWriter; a failure there is not the behaviour under test.
 			}
 		case strings.Contains(r.URL.Path, "/stats"):
 			streamingStatsHandler()(w, r)

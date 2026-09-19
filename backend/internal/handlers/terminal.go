@@ -243,7 +243,7 @@ func (h *TerminalHandler) readFromWebSocket(conn *Connection, session *services.
 		default:
 			// A failed deadline set surfaces immediately as a read error
 			// below, which is already handled.
-			_ = conn.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			_ = conn.Conn.SetReadDeadline(time.Now().Add(60 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
 			messageType, data, err := conn.Conn.ReadMessage()
 			if err != nil {
 				if err != io.EOF {

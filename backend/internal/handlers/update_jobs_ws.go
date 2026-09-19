@@ -94,14 +94,14 @@ func (h *UpdateJobsWSHandler) streamJob(c *gin.Context) {
 
 	// If no job manager is configured, respond with an error and close.
 	if h.jobManager == nil {
-		_ = safeWriteJSON(conn, wsJobFrame{Type: "error", Error: "job not found"})
+		_ = safeWriteJSON(conn, wsJobFrame{Type: "error", Error: "job not found"}) //nolint:errcheck // Best-effort frame: a write failure surfaces on the next read/ping and the connection is torn down there.
 		return
 	}
 
 	snapshot, eventCh, unsubscribe := h.jobManager.Subscribe(jobID)
 	if snapshot == nil {
 		// Job unknown or already evicted.
-		_ = safeWriteJSON(conn, wsJobFrame{Type: "error", Error: "job not found"})
+		_ = safeWriteJSON(conn, wsJobFrame{Type: "error", Error: "job not found"}) //nolint:errcheck // Best-effort frame: a write failure surfaces on the next read/ping and the connection is torn down there.
 		return
 	}
 	defer unsubscribe()
@@ -116,7 +116,7 @@ func (h *UpdateJobsWSHandler) streamJob(c *gin.Context) {
 	// register a live subscriber (eventCh never delivers), so emit the terminal
 	// frame from the snapshot and close out instead of blocking forever.
 	if snapshot.Status == services.StatusSuccess || snapshot.Status == services.StatusError {
-		_ = safeWriteJSON(conn, wsJobFrame{
+		_ = safeWriteJSON(conn, wsJobFrame{ //nolint:errcheck // Best-effort frame: a write failure surfaces on the next read/ping and the connection is torn down there.
 			Type:    "done",
 			Status:  string(snapshot.Status),
 			Error:   snapshot.Error,

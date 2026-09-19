@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,17 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// mustMarshal builds a request body and fails the test if it cannot be
+// encoded, rather than discarding the error and POSTing a nil body
+// (agent-os-qyg7.1). A silent nil body makes the handler assert against an
+// input the test never meant to send.
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return b
+}
 
 func setupTestRouter(handler *AuthHandler) *gin.Engine {
 	router := gin.New()

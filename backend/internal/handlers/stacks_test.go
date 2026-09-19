@@ -55,7 +55,7 @@ func TestStacksHandler_Create_Success(t *testing.T) {
 		"envContent":     "PORT=8080",
 		"deploy":         false,
 	}
-	reqBytes, _ := json.Marshal(reqBody)
+	reqBytes := mustMarshal(t, reqBody)
 
 	req := httptest.NewRequest(http.MethodPost, "/stacks", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
@@ -137,7 +137,7 @@ func TestStacksHandler_Create_UnindexedDirectory_FKEnforced(t *testing.T) {
 		"envContent":     "PORT=8080",
 		"deploy":         false,
 	}
-	reqBytes, _ := json.Marshal(reqBody)
+	reqBytes := mustMarshal(t, reqBody)
 
 	req := httptest.NewRequest(http.MethodPost, "/stacks", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
@@ -185,7 +185,7 @@ func TestStacksHandler_Create_ValidationError(t *testing.T) {
 		"composeContent": "services:\n  web:\n    restart: unless-stopped",
 		"deploy":         false,
 	}
-	reqBytes, _ := json.Marshal(reqBody)
+	reqBytes := mustMarshal(t, reqBody)
 
 	req := httptest.NewRequest(http.MethodPost, "/stacks", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")
@@ -591,7 +591,7 @@ func TestStacksHandler_Create_SameBasenameRootsGetDistinctIDs(t *testing.T) {
 	}))
 
 	create := func(dir, compose string) *httptest.ResponseRecorder {
-		body, _ := json.Marshal(map[string]interface{}{
+		body := mustMarshal(t, map[string]interface{}{
 			"name": "my-stack", "directory": dir, "composeContent": compose, "deploy": false,
 		})
 		req := httptest.NewRequest(http.MethodPost, "/stacks", bytes.NewReader(body))
@@ -645,7 +645,7 @@ func TestStacksHandler_Create_SingleRootIDIsUnchanged(t *testing.T) {
 		ID: "test-user-id", Username: "testuser", CreatedAt: testTime, UpdatedAt: testTime,
 	}))
 
-	body, _ := json.Marshal(map[string]interface{}{
+	body := mustMarshal(t, map[string]interface{}{
 		"name":           "my-stack",
 		"composeContent": "services:\n  web:\n    image: nginx:1.21\n    restart: unless-stopped",
 		"deploy":         false,
@@ -710,7 +710,7 @@ func TestStacksHandler_Create_MkdirFailureLogsCause(t *testing.T) {
 		"name":           "my-stack",
 		"composeContent": "services:\n  web:\n    image: nginx:1.21\n    restart: unless-stopped",
 	}
-	reqBytes, _ := json.Marshal(reqBody)
+	reqBytes := mustMarshal(t, reqBody)
 
 	req := httptest.NewRequest(http.MethodPost, "/stacks", bytes.NewReader(reqBytes))
 	req.Header.Set("Content-Type", "application/json")

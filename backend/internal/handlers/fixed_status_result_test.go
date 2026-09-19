@@ -152,7 +152,7 @@ func TestResourcesHandler_CreateNetwork_Success(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/networks/create"):
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"Id":"net-oqca-1","Warning":""}`))
+			_, _ = w.Write([]byte(`{"Id":"net-oqca-1","Warning":""}`)) //nolint:errcheck // Write to a httptest stub's ResponseWriter; a failure there is not the behaviour under test.
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
