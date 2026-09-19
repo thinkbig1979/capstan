@@ -792,3 +792,101 @@ describe('BackupsTab — snapshots with no tags or paths (agent-os-yino.1)', () 
     expect(await screen.findByText('No snapshots match.')).toBeInTheDocument()
   })
 })
+
+
+// ─── agent-os-vlqj: the notice must describe a REFRESH, not a load ───────────
+
+/** createWrapper(), but hands back the client so a REFETCH can be driven. */
+function renderTabWithClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+  })
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <BackupsTab stackId={STACK_ID} />
+    </QueryClientProvider>,
+  )
+  return { ...view, queryClient }
+}
+
+/**
+ * agent-os-vlqj. The mirror image of the agent-os-wczm class: this site
+ * DISCARDS NOTHING — the table renders from
+ * `{snapshots && snapshots.length > 0 && (...)}`, independent of the error —
+ * but it stacked the flat sentence "Failed to load snapshots." above rows the
+ * server had already sent, so the operator could not tell whether the rows were
+ * stale, wrong, or fine.
+ *
+ * The flag reaches this guard through a DESTRUCTURING RENAME
+ * (`isError: snapshotsError`), which is why no eslint selector guards it: a
+ * rename is invisible to a rule that matches identifier names, and both the
+ * agent-os-wczm ratchet (keyed on `isError`) and the agent-os-lurn selectors
+ * (keyed on `error`) miss it. This file is the guard.
+ */
+describe('BackupsTab — a failed REFETCH is a refresh failure (agent-os-vlqj)', () => {
+  it('keeps the snapshot rows and says the REFRESH failed, not the load', async () => {
+    const { queryClient } = renderTabWithClient()
+
+    expect(await screen.findByText('abc12345')).toBeInTheDocument()
+
+    mockListSnapshots.mockRejectedValue(new Error('Network error'))
+    await queryClient.refetchQueries()
+    // The query must REALLY be in the error state before the discriminating
+    // assertions; refetchQueries() can return before React re-renders.
+    await waitFor(() =>
+      expect(queryClient.getQueryCache().getAll().some((q) => q.state.status === 'error')).toBe(true),
+    )
+
+    expect(screen.getByText('abc12345')).toBeInTheDocument()
+    expect(screen.queryByText(/failed to load snapshots/i)).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/Could not refresh the snapshots\. The values shown are the last ones the server sent\./),
+    ).toBeInTheDocument()
+  })
+
+  /** STALE-NOTICE arm. Cannot fail first; pinned by mutation evidence. */
+  it('drops the notice once a later REFETCH succeeds', async () => {
+    const { queryClient } = renderTabWithClient()
+    expect(await screen.findByText('abc12345')).toBeInTheDocument()
+
+    mockListSnapshots.mockRejectedValue(new Error('Network error'))
+    await queryClient.refetchQueries()
+    await waitFor(() =>
+      expect(screen.getByText(/Could not refresh the snapshots/)).toBeInTheDocument(),
+    )
+
+    mockListSnapshots.mockResolvedValue([makeSnapshot()])
+    await queryClient.refetchQueries()
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Could not refresh the snapshots/)).not.toBeInTheDocument(),
+    )
+    expect(screen.getByText('abc12345')).toBeInTheDocument()
+  })
+
+  /**
+   * PRESERVATION CONTROL, the agent-os-9f5c arm: a repository fault still
+   * renders RepoFaultNotice and NOT the refresh notice, even with rows already
+   * on screen. A repository fault is a different CLAIM from a failed refresh.
+   * The first-load control already exists above as "renders the 'Failed to load
+   * snapshots' error when the query fails".
+   */
+  it('still names a repository fault ahead of the refresh notice, with rows on screen', async () => {
+    const { queryClient } = renderTabWithClient()
+    expect(await screen.findByText('abc12345')).toBeInTheDocument()
+
+    mockListSnapshots.mockRejectedValue({
+      code: 'BACKUP_REPO_UNREACHABLE',
+      message: 'backup repository did not answer',
+      details: { repoState: 'unreachable' },
+      status: 503,
+    })
+    await queryClient.refetchQueries()
+
+    await waitFor(() =>
+      expect(screen.getByText('The backup repository could not be reached.')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/Could not refresh the snapshots/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/failed to load snapshots/i)).not.toBeInTheDocument()
+  })
+})

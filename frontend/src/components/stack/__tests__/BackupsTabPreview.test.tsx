@@ -242,3 +242,120 @@ describe('BackupsTab — preview panel names the repository fault', () => {
     })
   })
 })
+
+// ─── agent-os-vlqj: the notice must describe a REFRESH, not a load ───────────
+
+/** openPreview(), but hands back the client so a REFETCH can be driven. */
+async function openPreviewWithClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <BackupsTab stackId={STACK_ID} />
+    </QueryClientProvider>,
+  )
+  const previewBtn = await screen.findByRole('button', { name: /show preview/i })
+  fireEvent.click(previewBtn)
+  return { queryClient }
+}
+
+/**
+ * agent-os-vlqj. The mirror image of the agent-os-wczm class: this site
+ * DISCARDS NOTHING — the entries render from `{data && data.entries.map(...)}`,
+ * independent of the error — but it stacks the flat sentence "Failed to load
+ * preview." above entries the server already sent. The operator cannot tell
+ * whether what is on screen is stale, wrong, or fine.
+ *
+ * The RepoFaultNotice path is deliberately kept AHEAD of the new arm: a
+ * repository fault is a different CLAIM from a failed refresh, and collapsing
+ * the two would lose the distinction agent-os-9f5c established.
+ */
+describe('BackupsTab — preview: a failed REFETCH is a refresh failure (agent-os-vlqj)', () => {
+  it('keeps the entries and says the REFRESH failed, not the load', async () => {
+    mockPreviewSnapshot.mockResolvedValue({ entries: ['etc/app.conf'] })
+    const { queryClient } = await openPreviewWithClient()
+
+    expect(await screen.findByText('etc/app.conf')).toBeInTheDocument()
+
+    mockPreviewSnapshot.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries()
+    // Assert the query REALLY reached the error state before the discriminating
+    // assertions: refetchQueries() can return before React re-renders, and an
+    // arm without this passes against the defective code and proves nothing.
+    await waitFor(() =>
+      expect(queryClient.getQueryCache().getAll().some((q) => q.state.status === 'error')).toBe(true),
+    )
+
+    expect(screen.getByText('etc/app.conf')).toBeInTheDocument()
+    expect(screen.queryByText('Failed to load preview.')).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/Could not refresh the preview\. The values shown are the last ones the server sent\./),
+    ).toBeInTheDocument()
+  })
+
+  /**
+   * STALE-NOTICE arm. Cannot fail first — today's flat sentence also clears on
+   * a successful refetch — so it is pinned by mutation evidence. It exists
+   * because "the notice lives inside the isError guard so it cannot outlive the
+   * failure" is true until someone hoists the flag into local state.
+   */
+  it('drops the notice once a later REFETCH succeeds', async () => {
+    mockPreviewSnapshot.mockResolvedValue({ entries: ['etc/app.conf'] })
+    const { queryClient } = await openPreviewWithClient()
+    expect(await screen.findByText('etc/app.conf')).toBeInTheDocument()
+
+    mockPreviewSnapshot.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries()
+    await waitFor(() =>
+      expect(screen.getByText(/Could not refresh the preview/)).toBeInTheDocument(),
+    )
+
+    mockPreviewSnapshot.mockResolvedValue({ entries: ['etc/app.conf'] })
+    await queryClient.refetchQueries()
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Could not refresh the preview/)).not.toBeInTheDocument(),
+    )
+    expect(screen.getByText('etc/app.conf')).toBeInTheDocument()
+  })
+
+  /**
+   * PRESERVATION CONTROL (a): a FIRST load that fails has no entries to
+   * describe, so the flat sentence is still the right words. Mutation evidence
+   * only — it passes against the old code too.
+   */
+  it('keeps the flat sentence when the FIRST load fails and there is nothing to show', async () => {
+    mockPreviewSnapshot.mockRejectedValue(new Error('boom'))
+    await openPreview()
+
+    await waitFor(() => expect(screen.getByText('Failed to load preview.')).toBeInTheDocument())
+    expect(screen.queryByText(/Could not refresh the preview/)).not.toBeInTheDocument()
+  })
+
+  /**
+   * PRESERVATION CONTROL (b), the agent-os-9f5c arm: a repository fault still
+   * renders RepoFaultNotice and NOT the refresh notice, even with entries
+   * already on screen. This is the one most likely to rot if the three-way is
+   * later "simplified" back to two.
+   */
+  it('still names a repository fault ahead of the refresh notice, with entries on screen', async () => {
+    mockPreviewSnapshot.mockResolvedValue({ entries: ['etc/app.conf'] })
+    const { queryClient } = await openPreviewWithClient()
+    expect(await screen.findByText('etc/app.conf')).toBeInTheDocument()
+
+    mockPreviewSnapshot.mockRejectedValue({
+      code: 'BACKUP_REPO_UNREACHABLE',
+      message: 'backup repository did not answer',
+      details: { repoState: 'unreachable' },
+      status: 503,
+    })
+    await queryClient.refetchQueries()
+
+    await waitFor(() =>
+      expect(screen.getByText('The backup repository could not be reached.')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/Could not refresh the preview/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Failed to load preview.')).not.toBeInTheDocument()
+  })
+})

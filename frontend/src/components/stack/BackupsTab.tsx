@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { EmptyState } from '@/components/EmptyState'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { RunStatusBadge } from '@/components/dashboard/backup-run-status'
@@ -130,9 +131,16 @@ function PreviewPanel({ snapshotId, onClose }: { snapshotId: string; onClose: ()
             Loading preview…
           </div>
         )}
+        {/* agent-os-vlqj: three-way, and the ORDER matters. A repository fault
+            is a different CLAIM from a failed refresh (agent-os-9f5c), so it
+            stays ahead of both. Only then does data presence decide: entries
+            already on screen make "Failed to load preview." a false sentence,
+            because the load succeeded and it was the REFRESH that failed. */}
         {isError && (
           previewFault ? (
             <RepoFaultNotice fault={previewFault} />
+          ) : data ? (
+            <RefreshFailedNotice what="the preview" />
           ) : (
             <div className="flex items-center gap-2 text-destructive">
               <AlertCircle className="h-4 w-4" />
@@ -453,9 +461,18 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
           </div>
         )}
 
+        {/* agent-os-vlqj: same three-way as PreviewPanel. The data test is
+            `snapshots && snapshots.length > 0` — deliberately the SAME
+            predicate the table below renders on, so the notice and the thing
+            it describes cannot drift apart. Reached through a destructuring
+            rename (`isError: snapshotsError`), which is why no eslint selector
+            guards this site: a rename is invisible to a rule that matches
+            identifier names. */}
         {snapshotsError && (
           repoFault ? (
             <RepoFaultNotice fault={repoFault} />
+          ) : snapshots && snapshots.length > 0 ? (
+            <RefreshFailedNotice what="the snapshots" />
           ) : (
             <div className="flex items-center gap-2 text-sm text-destructive py-4">
               <AlertCircle className="h-4 w-4" />
