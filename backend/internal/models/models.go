@@ -39,7 +39,7 @@ type Stack struct {
 	EnvFile     string      `json:"envFile"`
 	ProjectName string      `json:"projectName"`
 	Status      string      `json:"status"`
-	Containers  []Container `json:"containers"`
+	Containers  []Container `json:"containers" tstype:"Container[] | null"`
 	IsGitRepo   bool        `json:"isGitRepo"`
 	GitBranch   string      `json:"gitBranch"`
 	GitCommit   string      `json:"gitCommit"`
@@ -146,7 +146,7 @@ type LogResult struct {
 type DiffResult struct {
 	Commit *GitCommit `json:"commit"`
 	Diff   string     `json:"diff"`
-	Files  []string   `json:"files"`
+	Files  []string   `json:"files" tstype:"string[] | null"`
 }
 
 type DashboardContainerInfo struct {
@@ -197,7 +197,7 @@ type DockerNetwork struct {
 	Scope      string   `json:"scope"`
 	Internal   bool     `json:"internal"`
 	Containers int      `json:"containers"`
-	Labels     []string `json:"labels"`
+	Labels     []string `json:"labels" tstype:"string[] | null"`
 	Created    string   `json:"created"`
 	Stack      string   `json:"stack"`
 }
@@ -368,7 +368,7 @@ type BackupSnapshot struct {
 	ShortID   string   `json:"shortId"`
 	Time      string   `json:"time"`
 	Hostname  string   `json:"hostname"`
-	Tags      []string `json:"tags"`
+	Tags      []string `json:"tags" tstype:"string[] | null"`
 	Paths     []string `json:"paths"`
 	SizeBytes int64    `json:"sizeBytes,omitempty"`
 }

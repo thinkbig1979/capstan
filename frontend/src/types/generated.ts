@@ -524,7 +524,7 @@ export interface Stack {
   envFile: string;
   projectName: string;
   status: string;
-  containers: Container[];
+  containers: Container[] | null;
   isGitRepo: boolean;
   gitBranch: string;
   gitCommit: string;
@@ -606,7 +606,7 @@ export interface LogResult {
 export interface DiffResult {
   commit?: GitCommit;
   diff: string;
-  files: string[];
+  files: string[] | null;
 }
 export interface DashboardContainerInfo {
   id: string;
@@ -655,7 +655,7 @@ export interface DockerNetwork {
   scope: string;
   internal: boolean;
   containers: number /* int */;
-  labels: string[];
+  labels: string[] | null;
   created: string;
   stack: string;
 }
@@ -828,7 +828,7 @@ export interface BackupSnapshot {
   shortId: string;
   time: string;
   hostname: string;
-  tags: string[];
+  tags: string[] | null;
   paths: string[];
   sizeBytes?: number /* int64 */;
 }
