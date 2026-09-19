@@ -217,10 +217,10 @@ func NewBackupService(
 
 	// Resolve binary paths once at construction. We intentionally do NOT fail
 	// if the binaries are absent — the service degrades gracefully.
-	if p, err := exec.LookPath("restic"); err == nil {
+	if p, err := exec.LookPath("restic"); err == nil { //geterrors:ignore exec.LookPath's error IS "no usable restic on PATH", and the comment above states the graceful degradation as a decision
 		svc.resticBin = p
 	}
-	if p, err := exec.LookPath("rclone"); err == nil {
+	if p, err := exec.LookPath("rclone"); err == nil { //geterrors:ignore as for restic above: LookPath's error is the answer, and an absent rclone is a supported configuration
 		svc.rcloneBin = p
 	}
 
@@ -1248,8 +1248,19 @@ func (s *BackupService) backupStack(
 	}
 
 	// Retrieve the latest snapshot ID for the run item record.
+	//
+	// The read-back is best-effort, but its FAILURE is not the same fact as an
+	// empty repository (agent-os-qyg7.2): both leave snapshotID empty and
+	// recordItem below still writes "success", so a snapshot that exists but
+	// could not be listed was indistinguishable in the run history from one
+	// that was never taken. Warned rather than returned, because the backup
+	// itself did succeed -- the same shape as the verify and retention
+	// warnings above.
 	snapshotID := ""
-	if snaps, listErr := restic.ListSnapshots(ctx, stackID, 1); listErr == nil && len(snaps) > 0 {
+	snaps, listErr := restic.ListSnapshots(ctx, stackID, 1)
+	if listErr != nil {
+		stream(out, "error", fmt.Sprintf("[%s] snapshot id unavailable: %v", stackID, listErr))
+	} else if len(snaps) > 0 {
 		snapshotID = snaps[0].ShortID
 	}
 
@@ -1426,7 +1437,7 @@ func (s *BackupService) RunRestore(
 		// Symlink-aware containment: a symlink inside the stack dir pointing
 		// elsewhere must not let `restic restore --target` write outside it (H1).
 		contained, err := pathutil.IsContained(stackDir, cleaned)
-		if err != nil || !contained {
+		if err != nil || !contained { //geterrors:ignore fails closed on path traversal: a containment check that errored and one that returned false both refuse the restore target, which is the safe direction
 			return models.NewAppError(
 				http.StatusBadRequest,
 				models.ErrPathTraversal,

@@ -426,7 +426,7 @@ func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []stri
 // Non-JSON lines return handled=false so the caller can forward them verbatim.
 func resticJSONToLine(raw string, summary *ResticBackupSummary) (line string, handled bool) {
 	var msg resticJSONMessage
-	if err := json.Unmarshal([]byte(raw), &msg); err != nil || msg.MessageType == "" {
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil || msg.MessageType == "" { //geterrors:ignore the function's own doc comment says handled=false means "forward the line verbatim"; a non-JSON line and a JSON line with no message type are the same non-answer
 		return "", false
 	}
 

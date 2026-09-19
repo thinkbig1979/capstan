@@ -256,7 +256,7 @@ func isParseableAuthority(s string) bool {
 	if s == "" || strings.Contains(s, "@") {
 		return false
 	}
-	u, err := url.Parse("http://" + s + "/")
+	u, err := url.Parse("http://" + s + "/") //geterrors:ignore the whole function is the predicate isParseableAuthority: a parse error IS the false it exists to return
 	return err == nil && u.Host == s
 }
 
@@ -631,7 +631,7 @@ func ValidateRepositoryForm(raw string) error {
 			// recursion, and restic's s3 parser never reads url.User, so an
 			// inline password is inert. Refused on save for parity with
 			// sftp://user:PW@; a username alone is accepted (starred as today).
-			if u, err := url.Parse(opaque); err == nil && u.User != nil {
+			if u, err := url.Parse(opaque); err == nil && u.User != nil { //geterrors:ignore a repository string that will not parse as a URL carries no url.User to refuse; the opaque-form checks above own that case
 				if password, _ := u.User.Password(); password != "" {
 					return errors.New(s3CredentialRefused)
 				}
@@ -645,7 +645,7 @@ func ValidateRepositoryForm(raw string) error {
 		}
 		return nil
 	}
-	if u, err := url.Parse(s); err == nil && strings.EqualFold(u.Scheme, "sftp") && u.User != nil {
+	if u, err := url.Parse(s); err == nil && strings.EqualFold(u.Scheme, "sftp") && u.User != nil { //geterrors:ignore as for the s3 form above: a string that is not a URL has no userinfo to refuse
 		if password, _ := u.User.Password(); password != "" {
 			return errors.New(sftpPasswordRefused)
 		}

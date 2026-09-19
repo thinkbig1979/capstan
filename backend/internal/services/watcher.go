@@ -120,7 +120,7 @@ func (w *WatcherService) handleEvent(event fsnotify.Event) {
 	dirPath := filepath.Dir(event.Name)
 
 	if event.Op&fsnotify.Create == fsnotify.Create {
-		info, err := os.Stat(event.Name)
+		info, err := os.Stat(event.Name) //geterrors:ignore a Create event for a path that is already gone stats with an error, and the only question here is "is this a new directory to watch"
 		if err == nil && info.IsDir() {
 			slog.Info("New subdirectory detected, adding to watcher", "path", event.Name)
 			if err := w.watcher.Add(event.Name); err != nil {

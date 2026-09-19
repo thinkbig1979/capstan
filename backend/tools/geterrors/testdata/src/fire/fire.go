@@ -1,8 +1,18 @@
-// Package fire is the MUST-FIRE half of check-getter-errors.sh's self-test.
+// Package fire is the MUST-FIRE half of this analyzer's two-sided test.
 // Every function here is a member of the discarded/softened getter family, and
 // each one is a shape that a previously-used sweep MISSED on the real tree.
 // A scanner that has silently stopped firing looks exactly like a clean tree,
 // so the self-test asserts these by name before any verdict is believed.
+// PORTED to backend/tools/geterrors (agent-os-qyg7.2) from
+// scripts/getter-errors/testdata/fire, which it replaces. Two changes, both
+// deliberate:
+//
+//   - the three DISCARD functions are KEPT and now carry NO want comment.
+//     DISCARD moved to errcheck check-blank (agent-os-qyg7.1), so their
+//     silence here is the assertion that this analyzer has stopped claiming a
+//     kind it no longer owns -- not an omission.
+//   - every remaining site is asserted BY LINE through analysistest's want
+//     comments, which is what the predecessor's --self-test did by counting.
 package fire
 
 import "errors"
@@ -45,7 +55,7 @@ func discardThreeValues() string {
 // softUnusualErrorName: the error variable is not spelled `err`, so every
 // name-anchored regex misses it (services/docker_update.go:471, sErr).
 func softUnusualErrorName() string {
-	thing, sErr := db.GetThing("k")
+	thing, sErr := db.GetThing("k") // want "is softened"
 	if sErr == nil && thing != nil {
 		return thing.ID
 	}
@@ -55,7 +65,7 @@ func softUnusualErrorName() string {
 // softListCallee: the callee is List*, not Get*, so every verb-anchored sweep
 // misses it (handlers/directories.go:55/:79/:81).
 func softListCallee() int {
-	things, e := db.ListThings()
+	things, e := db.ListThings() // want "is softened"
 	if e == nil {
 		return len(things)
 	}
@@ -65,7 +75,7 @@ func softListCallee() int {
 // softBareEqNil: `err == nil` with no `&& x != nil`, the shape both literal
 // patterns this family used were blind to (services/git_credentials.go:158).
 func softBareEqNil() string {
-	if thing, err := db.GetThing("k"); err == nil {
+	if thing, err := db.GetThing("k"); err == nil { // want "is softened"
 		return thing.ID
 	}
 	return ""
@@ -80,7 +90,7 @@ func softBareEqNil() string {
 // ends at the shadow, not at the end of the function.
 func softThenShadowed() string {
 	id := ""
-	existing, err := db.GetThing("k")
+	existing, err := db.GetThing("k") // want "is softened"
 	if err == nil && existing != nil {
 		id = existing.ID
 	}
@@ -94,7 +104,7 @@ func softThenShadowed() string {
 // site inside an `if` body is still classified (services/docker.go:452).
 func softInNestedBlock(want bool) string {
 	if want {
-		thing, err := db.GetThing("k")
+		thing, err := db.GetThing("k") // want "is softened"
 		if err == nil && thing != nil {
 			return thing.ID
 		}

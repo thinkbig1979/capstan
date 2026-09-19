@@ -1,4 +1,4 @@
-// merge.go is the MUST-FIRE half of the self-test for the MERGE kind
+// merge.go is the MUST-FIRE half of the two-sided test for the MERGE kind
 // (agent-os-8f2g): an error that IS checked, but is fused by `||` to a value
 // test, so "I could not read it" and "I read it and the answer is no" take one
 // branch.
@@ -14,7 +14,7 @@ package fire
 // every previously-used arm could see.
 func mergeLeftAnchored() string {
 	thing, err := db.GetThing("k")
-	if err != nil || thing == nil {
+	if err != nil || thing == nil { // want "merged into a value test"
 		return ""
 	}
 	return thing.ID
@@ -26,7 +26,7 @@ func mergeLeftAnchored() string {
 // operand-order blindness the kind was created to end.
 func mergeRightAnchored() string {
 	thing, cmpErr := db.GetThing("k")
-	if thing == nil || cmpErr != nil {
+	if thing == nil || cmpErr != nil { // want "merged into a value test"
 		return ""
 	}
 	return thing.ID
@@ -36,7 +36,7 @@ func mergeRightAnchored() string {
 // anchor on the real tree (agent-os-g482, obgr, r1by).
 func mergeUnusualErrorName() int {
 	n, listErr := db.UserCount()
-	if listErr != nil || n == 0 {
+	if listErr != nil || n == 0 { // want "merged into a value test"
 		return -1
 	}
 	return n
@@ -51,7 +51,7 @@ type result struct {
 }
 
 func mergeSelectorError(r result) string {
-	if r.Err != nil || r.Value == "" {
+	if r.Err != nil || r.Value == "" { // want "merged into a value test"
 		return "fallback"
 	}
 	return r.Value
@@ -63,7 +63,7 @@ func mergeSelectorError(r result) string {
 // services/backup_restic.go:351) from every sweep ever run on this class.
 // Neither had been dispositioned when this fixture was written.
 func mergeIfInit() string {
-	if thing, rerr := db.GetThing("k"); rerr != nil || thing == nil {
+	if thing, rerr := db.GetThing("k"); rerr != nil || thing == nil { // want "merged into a value test"
 		return ""
 	}
 	return "ok"
@@ -75,7 +75,7 @@ func mergeIfInit() string {
 // middleware/ratelimit.go).
 func mergeThreeOperands() int {
 	n, err := db.UserCount()
-	if err != nil || n < 0 || n > 255 {
+	if err != nil || n < 0 || n > 255 { // want "merged into a value test"
 		return 0
 	}
 	return n
@@ -86,7 +86,7 @@ func mergeThreeOperands() int {
 // one operand order of the `||`.
 func mergeNilOnTheLeft() string {
 	thing, err := db.GetThing("k")
-	if nil != err || thing == nil {
+	if nil != err || thing == nil { // want "merged into a value test"
 		return ""
 	}
 	return thing.ID
@@ -102,7 +102,7 @@ func mergeNilOnTheLeft() string {
 func mergeTaglessSwitchCase() string {
 	thing, err := db.GetThing("k")
 	switch {
-	case thing == nil || err != nil:
+	case thing == nil || err != nil: // want "merged into a value test"
 		return ""
 	default:
 		return thing.ID

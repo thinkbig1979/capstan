@@ -30,11 +30,14 @@ import (
 // entirely (no log, no return) leaves ./internal/services GREEN -- 0 `--- FAIL`
 // lines -- with `go build ./...` exit 0 in the same run, so it is a real green
 // and not a non-compiling mutant read as a kill.
-// `go run scripts/getter-errors/main.go reach` cannot answer this question
-// here: its site shape is an `if err != nil` guard, so a switch-based
-// conversion is not in its site set at all. (That limitation belongs to the
-// analyser, not to its former shell driver check-getter-fault-reach.sh, which
-// was deleted in agent-os-1hig.)
+// No instrument in this repo can answer this question here. The former
+// `go run scripts/getter-errors/main.go reach` could not: its site shape was an
+// `if err != nil` guard, so a switch-based conversion was never in its site set.
+// Its successor cannot either, for the same reason and one more -- reach was
+// deleted with scripts/getter-errors/ in agent-os-qyg7.2, and what replaced the
+// ratchet (backend/tools/geterrors) detects the softened and merged shapes, not
+// reachability. The limitation was always the site shape, never the shell driver
+// check-getter-fault-reach.sh that agent-os-1hig deleted.
 //
 // So what it DOES pin is the property that actually protects the site today:
 // the ORDERING. The token read runs first and refuses first. That is an

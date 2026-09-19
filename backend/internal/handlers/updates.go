@@ -755,22 +755,22 @@ func (h *ResourcesHandler) getUpdateHistory(c *gin.Context) {
 	}
 
 	if p := c.Query("page"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 { //geterrors:ignore client-supplied ?page: malformed and absent both take the default
 			filters.Page = v
 		}
 	}
 	if l := c.Query("limit"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 { //geterrors:ignore client-supplied ?limit: malformed and absent both take the default
 			filters.Limit = v
 		}
 	}
 	if from := c.Query("from"); from != "" {
-		if t, err := time.Parse(time.RFC3339, from); err == nil {
+		if t, err := time.Parse(time.RFC3339, from); err == nil { //geterrors:ignore client-supplied ?from: an unparseable timestamp leaves the filter unset, the same as omitting the parameter
 			filters.From = &t
 		}
 	}
 	if to := c.Query("to"); to != "" {
-		if t, err := time.Parse(time.RFC3339, to); err == nil {
+		if t, err := time.Parse(time.RFC3339, to); err == nil { //geterrors:ignore client-supplied ?to: as for ?from above
 			filters.To = &t
 		}
 	}

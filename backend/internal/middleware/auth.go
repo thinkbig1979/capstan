@@ -157,7 +157,7 @@ func extractBearerToken(c *gin.Context) string {
 	if h := c.GetHeader("Authorization"); h != "" {
 		return strings.TrimPrefix(h, "Bearer ")
 	}
-	if cookie, err := c.Cookie("capstan_token"); err == nil {
+	if cookie, err := c.Cookie("capstan_token"); err == nil { //geterrors:ignore gin's c.Cookie returns http.ErrNoCookie and nothing else, so err != nil IS "no cookie was sent"; either way the function falls through to return ""
 		return cookie
 	}
 	return ""

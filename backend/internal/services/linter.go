@@ -189,7 +189,7 @@ func (l *LinterService) sortResults(results []models.LintResult) {
 
 func extractLineNumber(errMsg string) int {
 	var line int
-	_, err := fmt.Sscanf(errMsg, "line %d", &line)
+	_, err := fmt.Sscanf(errMsg, "line %d", &line) //geterrors:ignore Sscanf failing IS "this message has no leading \"line N\"", and the manual scan below is the declared fallback
 	if err == nil && line > 0 {
 		return line
 	}

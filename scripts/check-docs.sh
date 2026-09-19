@@ -836,79 +836,69 @@ check_ws_read_deadline() {
   return 1
 }
 
-# check_getter_errors delegates to scripts/check-getter-errors.sh: no file in
-# backend/ -- which is backend/internal AND backend/cmd, widened from
-# backend/internal alone under agent-os-pcnh because cmd is a SIBLING of
-# internal and had therefore never been swept -- may hold more discarded
-# (`x, _ := f()`) or softened (`x, e := f()` used only as `e == nil`) call sites
-# than the committed baseline records (agent-os-zhe9, the ratchet for the family behind
-# agent-os-7lg1/3h9x/8tqd/1gqn/l42o/obgr/g482/r1by/xzoe). Detection is by AST
-# shape only -- not the receiver expression, not the error-variable name, not
-# the callee prefix -- because every one of those anchors has already returned
-# a false zero on this tree.
+# check_getter_errors is a WIRING check, and only that.
 #
-# Same self-test-first shape as ws-registration, and here it is the entire
-# point of the check: a scanner that has silently stopped firing looks exactly
-# like a clean tree, and a close reason will cite it.
+# Until agent-os-qyg7.2 it delegated to scripts/check-getter-errors.sh, a
+# 692-line wrapper around a 1,207-line go/ast program enforcing a per-file
+# COUNT baseline. That pair is deleted. The class -- an error softened into an
+# "absent" signal (`x, e := f()` read only as `e == nil`) or merged into a
+# value test (`if e != nil || v`) -- is now owned by the typed go/analysis
+# analyzer in backend/tools/geterrors, which reports ZERO on the tree and runs
+# as `go vet -vettool` in the "Build, vet, and unit tests" job of
+# .github/workflows/backend.yml, one of main's required checks. A baseline
+# moves; a zero does not, so a new site is now a hard failure rather than a
+# number someone can raise.
+#
+# THE SKIP PATH IS GONE, and that is a repair rather than a loss. The old
+# function had TWO branches and CI always took the one a local run does not:
+# .github/workflows/docs.yml has no setup-go, so in CI the no-Go branch ran (a
+# grep of backend.yml) while `bash scripts/check-docs.sh` on a developer
+# machine ran the scanner instead. A local exit 0 proved nothing about the
+# branch CI actually executes. There is now ONE branch, identical everywhere,
+# needing no Go -- so what is verified here is what runs here.
+#
+# WHY NOT RUN THE ANALYZER HERE. It needs Go, the module cache and the backend
+# module, all of which this workflow deliberately does not have; rebuilding it
+# would duplicate a required job. What this check CAN prove is the one thing
+# that actually failed before -- agent-os-946e: no workflow invoked the scanner
+# at all, so the ratchet ran on developer machines only and agent-os-ozt0's
+# drift reached main unseen. A reassurance that cannot be verified where it is
+# made is how that happened, and a grep needs no Go.
 check_getter_errors() {
-  local script="$SCRIPT_DIR/check-getter-errors.sh"
-  if [ ! -f "$script" ]; then
-    echo "FAIL: getter-errors - $script not found"
+  local analyzer="$REPO_ROOT/backend/tools/geterrors"
+  local enforcer="$REPO_ROOT/.github/workflows/backend.yml"
+
+  if [ ! -d "$analyzer" ]; then
+    echo "FAIL: getter-errors - $analyzer not found, so the analyzer that owns the softened/merged error class is gone"
     return 1
   fi
 
-  # The scanner is a go/ast program, and this workflow is otherwise
-  # dependency-free bash by design (.github/workflows/docs.yml). Where Go is
-  # absent the check reports SKIP and returns 3, which main() counts
-  # separately: a silent PASS on a runner that cannot run the scanner is the
-  # same false zero the check exists to prevent, wearing a third costume.
-  # The reassurance printed below used to name "the backend CI jobs", and
-  # nothing kept that promise: no workflow invoked the scanner at all, so the
-  # ratchet ran on developer machines only and agent-os-ozt0's drift reached
-  # main unseen (agent-os-946e). The clause now names one job, and the grep
-  # above the SKIP checks that the job still calls it -- a reassurance that
-  # cannot be verified where it is made is how this failed the first time, and
-  # a grep needs no Go, so it works on exactly the runner that has to skip.
-  if ! command -v go >/dev/null 2>&1; then
-    local enforcer="$REPO_ROOT/.github/workflows/backend.yml"
-    if ! grep -q "check-getter-errors.sh" "$enforcer" 2>/dev/null; then
-      echo "FAIL: getter-errors - the scanner cannot run here ('go' is not on PATH)"
-      echo "  AND $enforcer no longer invokes it, so nothing enforces the ratchet."
-      echo "  Either restore the 'Getter-errors ratchet' step in that workflow's"
-      echo "  'Build, vet, and unit tests' job, or point this check at whatever"
-      echo "  replaced it. Do not relax this into a SKIP: a skip here is only"
-      echo "  honest while some other required job is known to run the scanner."
-      return 1
-    fi
-    echo "SKIP: getter-errors - 'go' is not on PATH, so the AST scanner did not run."
-    echo "  This is NOT a pass. The ratchet is enforced wherever Go is present:"
-    echo "  every developer machine, and the 'Build, vet, and unit tests' job of"
-    echo "  .github/workflows/backend.yml, which runs it directly. That job is one"
-    echo "  of main's required checks, and the grep above confirmed it still"
-    echo "  invokes the scanner. Run it here with:"
-    echo "  bash scripts/check-getter-errors.sh"
-    return 3
-  fi
+  # `command grep`, not bare grep: a tool wrapping grep in this repo has
+  # silently swallowed a compound grep before, and a sweep that never ran
+  # looks exactly like a clean one. The old line 874 here used bare grep.
+  #
+  # Both patterns are COMMANDS, not the bare path: "tools/geterrors" also
+  # appears in that step's own comment prose, so a predicate keyed on it can
+  # never report missing while the comment stands -- a check that cannot fail
+  # is not a check. Verified two-sided: with the vet line replaced by `true`
+  # this function returns 1 and names what is gone.
+  local missing=""
+  command grep -q -- 'go vet -vettool=' "$enforcer" 2>/dev/null || missing="$missing go-vet-vettool"
+  command grep -q -- 'go build -C tools/geterrors' "$enforcer" 2>/dev/null || missing="$missing go-build-C-tools/geterrors"
+  command grep -q -- 'go test -C tools/geterrors' "$enforcer" 2>/dev/null || missing="$missing go-test-C-tools/geterrors"
 
-  local self status
-  self=$(bash "$script" --self-test 2>&1)
-  status=$?
-  if [ "$status" -ne 0 ]; then
-    echo "FAIL: getter-errors - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
-    echo "$self"
+  if [ -n "$missing" ]; then
+    echo "FAIL: getter-errors - $enforcer no longer invokes the analyzer (missing:$missing),"
+    echo '  so nothing enforces the softened (`x, e := f()` read only as `e == nil`) or'
+    echo '  merged (`if e != nil || v`) error shapes. Restore the "Getter-errors analyzer"'
+    echo "  step in that workflow's \"Build, vet, and unit tests\" job, or point this check"
+    echo "  at whatever replaced it. Do not relax this into a SKIP: the class regrew"
+    echo "  unwatched once already under a green gate."
     return 1
   fi
 
-  local out
-  out=$(bash "$script" 2>&1)
-  status=$?
-  if [ "$status" -eq 0 ]; then
-    echo "PASS: getter-errors - ${self#self-test: }; ${out#getter-errors: }"
-    return 0
-  fi
-  echo "FAIL: getter-errors - a new discarded or softened error site was added; a DB or daemon fault at one of these is silently read as a default or as 'not found':"
-  echo "$out"
-  return 1
+  echo "PASS: getter-errors - backend/tools/geterrors exists and .github/workflows/backend.yml runs it as a go vet -vettool step in a required job"
+  return 0
 }
 
 # check_close_reason runs ONLY the self-test of scripts/check-close-reason.sh.
@@ -960,7 +950,7 @@ Valid check names:
   locator-count-guard no count()-guard in testing/tests/playwright/ wraps an expect(...)
   ws-registration one WS upgrade path and no ConnectionManager registration outside serveWS
   close-reason   the bug-bead close-reason checker's self-test (the checker itself needs the tracker)
-  getter-errors  no new discarded (`x, _ := f()`) or softened (`err == nil` only) call site
+  getter-errors  backend/tools/geterrors exists and backend.yml still runs it as a vettool
   ws-read-deadline no handlers test bounds a wait with a fixed wall-clock duration instead of hangGuardDeadline(t)
 
 With no arguments, all checks run and a summary is printed.
@@ -1021,8 +1011,11 @@ main() {
     rc=$?
     case "$rc" in
       0) ;;
-      # 3 = the check could not run here and said so out loud (see
-      # check_getter_errors). Not a pass, not a failure; counted and named.
+      # 3 = the check could not run here and said so out loud. Not a pass,
+      # not a failure; counted and named. No check returns 3 today --
+      # check_getter_errors was the last one and agent-os-qyg7.2 removed its
+      # skip path -- but the accounting stays, because the alternative when
+      # the next un-runnable check appears is a silent PASS.
       3) skipped=$((skipped + 1)) ;;
       *) failed=$((failed + 1)) ;;
     esac

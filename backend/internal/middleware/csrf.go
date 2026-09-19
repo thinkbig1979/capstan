@@ -29,7 +29,7 @@ func CSRFMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.Method == "GET" || c.Request.Method == "HEAD" || c.Request.Method == "OPTIONS" {
 			existing, err := c.Cookie(csrfCookieName)
-			if err != nil || existing == "" {
+			if err != nil || existing == "" { //geterrors:ignore c.Cookie's only error is http.ErrNoCookie, so a missing cookie and an empty one are one state and both get a freshly issued token
 				token := GenerateCSRFToken()
 				if token != "" {
 					setCSRFCookie(c, token)
@@ -50,7 +50,7 @@ func CSRFMiddleware() gin.HandlerFunc {
 		}
 
 		csrfCookie, err := c.Cookie(csrfCookieName)
-		if err != nil || csrfCookie == "" {
+		if err != nil || csrfCookie == "" { //geterrors:ignore same state, same refusal: absent and empty both mean the mutating request carries no CSRF cookie, and both are answered CSRF_COOKIE_MISSING
 			slog.Warn("CSRF cookie missing on mutating request", "path", c.Request.URL.Path, "method", c.Request.Method)
 			token := GenerateCSRFToken()
 			if token != "" {
