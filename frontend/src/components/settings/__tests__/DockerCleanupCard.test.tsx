@@ -118,6 +118,10 @@ describe('DockerCleanupCard', () => {
       await clickPreview()
 
       expect(await screen.findByText(/reclaiming 3\.00 MB/)).toBeInTheDocument()
+      // The floor the server echoed, in the same sentence as the total. Without
+      // it the list sits under a header naming the input's floor, which stops
+      // being the floor it was computed at the moment the operator edits it.
+      expect(screen.getByText(/created more than 168 hours ago/)).toBeInTheDocument()
     })
   })
 
@@ -144,6 +148,19 @@ describe('DockerCleanupCard', () => {
 
       expect(screen.getByRole('button', { name: 'Save cleanup schedule' })).toBeDisabled()
     })
+  })
+
+  it('previews at the age floor even when the interval is below its floor', async () => {
+    renderCard()
+    // The preview endpoint validates minAgeHours and nothing else, so an
+    // interval the PUT would reject must not block a preview — but it must
+    // still block the save.
+    fireEvent.change(await screen.findByLabelText('Run every (hours)'), {
+      target: { value: '1' },
+    })
+
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Save cleanup schedule' })).toBeDisabled()
   })
 
   it('sends only the fields that changed', async () => {

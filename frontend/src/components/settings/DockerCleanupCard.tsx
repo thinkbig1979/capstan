@@ -206,11 +206,19 @@ export function DockerCleanupCard() {
           type="button"
           variant="outline"
           onClick={handlePreview}
-          disabled={belowFloor || preview.isPending}
+          // The age floor only. The preview endpoint validates minAgeHours and
+          // nothing else (cleanupMinAgeFromRequest, docker_cleanup.go), so an
+          // interval the PUT would reject is no reason to refuse a preview.
+          disabled={ageBelowFloor || preview.isPending}
         >
           {preview.isPending ? 'Checking…' : 'Preview'}
         </Button>
 
+        {/* Both branches name the floor the SERVER echoed, never the one in the
+            input above. The moment the operator edits that input the two
+            diverge, and the list on screen belongs to the floor it was actually
+            computed at — a stale list under a new number is a list of images
+            the operator did not ask about. */}
         {preview.data &&
           (preview.data.candidates.length === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -221,7 +229,8 @@ export function DockerCleanupCard() {
             <div className="space-y-2">
               <p className="text-sm">
                 {preview.data.candidates.length} image
-                {preview.data.candidates.length === 1 ? '' : 's'}, reclaiming{' '}
+                {preview.data.candidates.length === 1 ? '' : 's'} created more than{' '}
+                {preview.data.minAgeHours} hours ago, reclaiming{' '}
                 {formatBytes(preview.data.reclaimableBytes)}.
               </p>
               <ul className="space-y-1">
