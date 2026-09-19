@@ -2,7 +2,6 @@ package services
 
 import (
 	"bytes"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"strings"
@@ -11,6 +10,8 @@ import (
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // agent-os-g482. GetStackByProjectName returns the bare Scan error
@@ -78,7 +79,7 @@ func g482SeedStack(t *testing.T, db *database.DB) {
 }
 
 // g482ClosedDB seeds the same stack and then closes the connection, so every
-// later read fails with a driver error rather than sql.ErrNoRows. This is the
+// later read fails with a driver error rather than errdefs.ErrNotFound. This is the
 // closedDBWithSettings shape (backup_config_dbfault_test.go:57), and unlike the
 // closed-database instrument rejected in agent-os-obgr nothing self-protects
 // here: GetStackByProjectName has no nil guard and goes straight to QueryRow.
@@ -122,7 +123,7 @@ func g482CountLines(logs *bytes.Buffer, substr string) int {
 
 // TestGetStackByProjectName_PremiseFaultIsNotErrNoRows pins the premise the whole
 // fix rests on, two-sided on ONE instrument: on a healthy database an unknown
-// project name is sql.ErrNoRows, and on a faulty database the SAME query is a
+// project name is errdefs.ErrNotFound, and on a faulty database the SAME query is a
 // different, non-ErrNoRows error — while the pre-fix predicate `err == nil` is
 // false in both cases and so cannot separate them.
 func TestGetStackByProjectName_PremiseFaultIsNotErrNoRows(t *testing.T) {
@@ -130,16 +131,16 @@ func TestGetStackByProjectName_PremiseFaultIsNotErrNoRows(t *testing.T) {
 	faulty := g482ClosedDB(t)
 
 	_, absentErr := healthy.GetStackByProjectName(g482ProjectUnknown)
-	if !errors.Is(absentErr, sql.ErrNoRows) {
-		t.Fatalf("healthy db, unknown project: want sql.ErrNoRows, got %v", absentErr)
+	if !errors.Is(absentErr, errdefs.ErrNotFound) {
+		t.Fatalf("healthy db, unknown project: want errdefs.ErrNotFound, got %v", absentErr)
 	}
 
 	_, faultErr := faulty.GetStackByProjectName(g482ProjectUnknown)
 	if faultErr == nil {
 		t.Fatal("closed db: want an error, got nil — the fault instrument does not fault")
 	}
-	if errors.Is(faultErr, sql.ErrNoRows) {
-		t.Fatalf("closed db: fault must NOT be sql.ErrNoRows, got %v", faultErr)
+	if errors.Is(faultErr, errdefs.ErrNotFound) {
+		t.Fatalf("closed db: fault must NOT be errdefs.ErrNotFound, got %v", faultErr)
 	}
 
 	// The pre-fix predicate, verbatim. It answers both cases the same way, which
@@ -170,7 +171,7 @@ func TestResolveUpdateStrategy_RefusesWhenStacksTableUnreadable(t *testing.T) {
 	if err == nil {
 		t.Fatal("a refusal must carry its cause, got nil error")
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, errdefs.ErrNotFound) {
 		t.Fatalf("absence must never be reported as a fault, got %v", err)
 	}
 	if !strings.Contains(err.Error(), g482ProjectKnown) {

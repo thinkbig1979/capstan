@@ -1,10 +1,11 @@
 package database
 
 import (
-	"database/sql"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // agent-os-r1kc. (*DB).RetentionDays returned a bare int with no error channel,
@@ -30,15 +31,15 @@ func faultRetentionReads(t *testing.T, d *DB) {
 		t.Fatalf("drop settings table: %v", err)
 	}
 	// Positive control on the fixture itself: the read must now fail, and must
-	// fail with something OTHER than sql.ErrNoRows, or the fix's discriminator
+	// fail with something OTHER than errdefs.ErrNotFound, or the fix's discriminator
 	// would route it to the documented fresh-install default and this test would
 	// be measuring the wrong branch.
 	_, err := d.GetSetting(SettingLogRetentionDays)
 	if err == nil {
 		t.Fatalf("fixture did not fault: GetSetting(%q) succeeded", SettingLogRetentionDays)
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("fixture produced sql.ErrNoRows, which is the absence case, not a fault: %v", err)
+	if errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("fixture produced errdefs.ErrNotFound, which is the absence case, not a fault: %v", err)
 	}
 }
 
@@ -133,8 +134,8 @@ func TestPruneHistory_AbsentKeysStillPruneAtDefault(t *testing.T) {
 		SettingLogRetentionDays, SettingUpdateHistoryRetentionDays, SettingBackupHistoryRetentionDays); err != nil {
 		t.Fatalf("clear seeded retention settings: %v", err)
 	}
-	if _, err := db.GetSetting(SettingLogRetentionDays); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("after clearing the rows GetSetting returned %v, want sql.ErrNoRows — this arm is not exercising the absence branch", err)
+	if _, err := db.GetSetting(SettingLogRetentionDays); !errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("after clearing the rows GetSetting returned %v, want errdefs.ErrNotFound — this arm is not exercising the absence branch", err)
 	}
 
 	result := db.PruneHistory()
@@ -199,7 +200,7 @@ func TestRetentionDays_DiscriminatesFaultFromAbsence(t *testing.T) {
 	if !strings.Contains(err.Error(), SettingLogRetentionDays) {
 		t.Errorf("the refusal must name the key that could not be read, got %q", err)
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, errdefs.ErrNotFound) {
 		t.Errorf("a fault must not be reported as absence, got %v", err)
 	}
 }

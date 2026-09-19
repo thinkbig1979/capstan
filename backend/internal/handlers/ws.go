@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -18,6 +17,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 const (
@@ -389,7 +390,7 @@ func authenticateToken(token string, db *database.DB, jwtSecret string) (string,
 		// wsAuthCloseFor turns into a 1011 rather than a reconnect-suppressing
 		// 4401. The `|| session == nil` arm this replaces was dead: GetSession
 		// returns the bare Scan error and never (nil, nil) (database/users.go).
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, errdefs.ErrNotFound) {
 			return "", &models.AppError{
 				Code:    models.ErrSessionExpired,
 				Message: "Session not found or expired",

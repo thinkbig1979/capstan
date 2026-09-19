@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -14,6 +13,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 type MonitoringHandler struct {
@@ -54,7 +55,7 @@ func (h *MonitoringHandler) getStackContainers(jwtSecret string, authDisabled bo
 		if err != nil {
 			// agent-os-7lg1: db.GetStack maps ANY error to a silent 404 unless
 			// the non-not-found case is split out and logged with its cause.
-			if !errors.Is(err, sql.ErrNoRows) {
+			if !errors.Is(err, errdefs.ErrNotFound) {
 				handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 				return
 			}
@@ -85,7 +86,7 @@ func (h *MonitoringHandler) handleMetricsWebSocket(jwtSecret string, authDisable
 			// the non-not-found case is split out and logged with its cause.
 			// Plain HTTP here — this runs before serveWS's upgrade, so the
 			// writer is not yet hijacked.
-			if !errors.Is(err, sql.ErrNoRows) {
+			if !errors.Is(err, errdefs.ErrNotFound) {
 				handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
 				return
 			}

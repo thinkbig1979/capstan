@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -25,6 +24,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"gopkg.in/yaml.v3"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // StackID is the single producer of stack IDs. Both the scanner (discovering a
@@ -604,7 +605,7 @@ const defaultScanDepth = 1
 // "this database could not answer".
 //
 // db.GetSetting returns the bare Scan error (database/settings.go:14-19), so an
-// absent row arrives as sql.ErrNoRows. Mapping that — and only that — to the
+// absent row arrives as errdefs.ErrNotFound. Mapping that — and only that — to the
 // default keeps the fresh-install path byte-for-byte, while every other failure
 // becomes an error the caller must handle. Same split as
 // services/backup_config.go's readSetting (agent-os-7lg1, agent-os-l42o).
@@ -628,7 +629,7 @@ func (s *ScannerService) readScanDepth() (int, error) {
 	depthStr, err := s.db.GetSetting("scan_depth")
 	switch {
 	case err == nil:
-	case errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, errdefs.ErrNotFound):
 		return defaultScanDepth, nil
 	default:
 		return 0, fmt.Errorf("read scan_depth setting: %w", err)

@@ -1,11 +1,12 @@
 package handlers
 
 import (
-	"database/sql"
 	"errors"
 	"testing"
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // faultyDB is for the Wave 2 5xx-conversion workers (agent-os-2mhb): the
@@ -17,7 +18,7 @@ import (
 // faultyDB opens a fully migrated DB (via newMigratedDBDir, backup_test.go)
 // and immediately closes its underlying connection, so every subsequent
 // query returns a driver error ("sql: database is closed") — distinct from
-// sql.ErrNoRows, which is what the SAME queries return against a healthy
+// errdefs.ErrNotFound, which is what the SAME queries return against a healthy
 // migrated DB for a missing row. See
 // TestFaultyDB_FailsDifferentlyFromHealthyNotFound below for the two-sided
 // proof this actually holds.
@@ -40,12 +41,14 @@ func faultyDB(t *testing.T) *database.DB {
 // TestFaultyDB_FailsDifferentlyFromHealthyNotFound is the two-sided control
 // the faultyDB doc comment promises: a query against faultyDB must fail with
 // something that is NOT the not-found predicate the handlers use
-// (errors.Is(err, sql.ErrNoRows) — see database/stacks.go:42-54's GetStack,
-// which returns the raw Scan error unwrapped, and handlers/directories.go:227
-// which checks the same predicate against that same shape of error), while
+// (errors.Is(err, errdefs.ErrNotFound) — see GetStack() in
+// internal/database/stacks.go, which since agent-os-ymyc wraps an absent row as
+// errdefs.ErrNotFound and returns every other error unchanged, and
+// CredentialStatus() in handlers/directories.go which checks the same
+// predicate), while
 // the identical query against a healthy migrated DB for a missing row DOES
 // satisfy that predicate. Without both sides, a faultyDB that always failed
-// (even with sql.ErrNoRows) would look identical to a working one in any
+// (even with errdefs.ErrNotFound) would look identical to a working one in any
 // single-sided check.
 func TestFaultyDB_FailsDifferentlyFromHealthyNotFound(t *testing.T) {
 	broken := faultyDB(t)
@@ -53,8 +56,8 @@ func TestFaultyDB_FailsDifferentlyFromHealthyNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatalf("faultyDB.GetStack returned no error; the closed connection did not induce a failure")
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("faultyDB.GetStack failed with the SAME predicate as ordinary not-found (sql.ErrNoRows): %v — this DB is not exercising the non-not-found failure path Wave 2 needs", err)
+	if errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("faultyDB.GetStack failed with the SAME predicate as ordinary not-found (errdefs.ErrNotFound): %v — this DB is not exercising the non-not-found failure path Wave 2 needs", err)
 	}
 
 	healthy, err := database.New(newMigratedDBDir(t))
@@ -67,7 +70,7 @@ func TestFaultyDB_FailsDifferentlyFromHealthyNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatalf("healthy.GetStack(\"nope\") returned no error; the positive control never fired")
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("healthy.GetStack(\"nope\") did not fail with sql.ErrNoRows, got: %v — the not-found predicate assumption is wrong", err)
+	if !errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("healthy.GetStack(\"nope\") did not fail with errdefs.ErrNotFound, got: %v — the not-found predicate assumption is wrong", err)
 	}
 }

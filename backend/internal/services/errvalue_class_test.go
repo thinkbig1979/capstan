@@ -15,6 +15,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // One defect class, two sites: "a read that could not answer is merged into a
@@ -81,7 +83,7 @@ func koy9HealthyDB(t *testing.T) (*database.DB, string) {
 }
 
 // koy9ClosedDB is the fault instrument: a fully migrated database that is then
-// closed, so every read returns a real error that is NOT sql.ErrNoRows.
+// closed, so every read returns a real error that is NOT errdefs.ErrNotFound.
 func koy9ClosedDB(t *testing.T) *database.DB {
 	t.Helper()
 	db, err := database.NewWithMigrations(t.TempDir())
@@ -96,13 +98,13 @@ func koy9ClosedDB(t *testing.T) *database.DB {
 
 // TestKoy9PremiseFaultIsNotErrNoRows pins what the discrimination rests on,
 // two-sided on one instrument: on a healthy database an absent settings row is
-// sql.ErrNoRows, and on a faulted database the same read is a different error.
+// errdefs.ErrNotFound, and on a faulted database the same read is a different error.
 // Without this, the fix is tested against an assumption about the database
 // layer rather than against the database layer.
 func TestKoy9PremiseFaultIsNotErrNoRows(t *testing.T) {
 	healthy, _ := koy9HealthyDB(t)
-	if _, err := healthy.GetSetting("koy9-key-that-was-never-seeded"); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("healthy db, absent key: want sql.ErrNoRows, got %v", err)
+	if _, err := healthy.GetSetting("koy9-key-that-was-never-seeded"); !errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("healthy db, absent key: want errdefs.ErrNotFound, got %v", err)
 	}
 
 	faulty := koy9ClosedDB(t)
@@ -113,8 +115,8 @@ func TestKoy9PremiseFaultIsNotErrNoRows(t *testing.T) {
 	if faultErr == nil {
 		t.Fatal("closed db: want an error, got nil — the fault instrument does not fault")
 	}
-	if errors.Is(faultErr, sql.ErrNoRows) {
-		t.Fatalf("closed db: the fault must NOT be sql.ErrNoRows, got %v", faultErr)
+	if errors.Is(faultErr, errdefs.ErrNotFound) {
+		t.Fatalf("closed db: the fault must NOT be errdefs.ErrNotFound, got %v", faultErr)
 	}
 }
 
@@ -172,8 +174,8 @@ func TestRunAutoUpdatesStaysSilentWhenTheRowIsAbsent(t *testing.T) {
 	koy9DeleteSetting(t, dataDir, "auto_update_enabled")
 
 	// Pin the premise rather than assuming the delete worked.
-	if _, err := db.GetSetting("auto_update_enabled"); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("after deleting the row the read must be sql.ErrNoRows, got %v", err)
+	if _, err := db.GetSetting("auto_update_enabled"); !errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("after deleting the row the read must be errdefs.ErrNotFound, got %v", err)
 	}
 
 	var buf bytes.Buffer
@@ -317,12 +319,12 @@ func u2CaptureLogs(t *testing.T) *bytes.Buffer {
 var u2AllActions = []string{"start", "stop", "die", "kill", "destroy", "restart", "pause", "unpause", "create", "rename"}
 
 // TestStackEventForEmitsWhenTheProjectHasNoStackRow is the failing-first arm for
-// agent-os-91u2. Pre-fix, GetStackByProjectName returning sql.ErrNoRows — a
+// agent-os-91u2. Pre-fix, GetStackByProjectName returning errdefs.ErrNotFound — a
 // compose project started outside Capstan, or one not yet scanned — dropped the
 // event and left a DEBUG line, which is off in production.
 func TestStackEventForEmitsWhenTheProjectHasNoStackRow(t *testing.T) {
 	_ = u2CaptureLogs(t)
-	s := &MonitorService{db: u2StubDB{err: sql.ErrNoRows}}
+	s := &MonitorService{db: u2StubDB{err: errdefs.ErrNotFound}}
 
 	ts := time.Unix(1700000000, 0)
 	for _, action := range []string{"start", "stop", "die", "destroy"} {
@@ -351,7 +353,7 @@ func TestStackEventForDiscriminatesAbsentRowFromReadFault(t *testing.T) {
 
 	// Side A: absent row. Not an error, so nothing at ERROR.
 	absentBuf := u2CaptureLogs(t)
-	absent := &MonitorService{db: u2StubDB{err: sql.ErrNoRows}}
+	absent := &MonitorService{db: u2StubDB{err: errdefs.ErrNotFound}}
 	evAbsent, okAbsent := absent.stackEventFor("start", u2Ctr, u2Project, ts)
 	absentLog := absentBuf.String()
 

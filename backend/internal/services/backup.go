@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +20,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // ErrBackupBusy is returned by RunBackup/RunSync/RunRestore when another
@@ -1453,7 +1454,7 @@ func (s *BackupService) RunRestore(
 	// ever OVERWRITES it. That made a DB fault indistinguishable from an absent
 	// row and silently discarded a configured "hot" policy: the stack the
 	// operator deliberately asked to keep running went down anyway, with
-	// nothing logged. sql.ErrNoRows keeps the "stop" default unchanged; any
+	// nothing logged. errdefs.ErrNotFound keeps the "stop" default unchanged; any
 	// other error means the stored policy is UNREADABLE, and we refuse rather
 	// than act on a policy we could not read. Refusing costs nothing in the
 	// whole-DB-fault case — resolveOrRefuse (:1108) and GetStack (:1121) both
@@ -1462,7 +1463,7 @@ func (s *BackupService) RunRestore(
 	// call rather than ours to pre-empt with an unconsented outage.
 	stopPolicy := "stop"
 	policy, pErr := s.db.GetBackupPolicy(stackID)
-	if pErr != nil && !errors.Is(pErr, sql.ErrNoRows) {
+	if pErr != nil && !errors.Is(pErr, errdefs.ErrNotFound) {
 		s.logger.Error("refusing restore: stack backup policy is unreadable",
 			"stack", stackID, "cause", pErr)
 		return fmt.Errorf("get backup policy %s: %w", stackID, pErr)

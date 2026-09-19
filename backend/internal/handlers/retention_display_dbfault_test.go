@@ -21,7 +21,7 @@ import (
 // The fixture is hiddenTableDB (discarded_getter_dbfault_test.go:54), whose own
 // two-sided control is TestHiddenTableDB_FaultsOneTableAndNotTheOthers: it
 // renames ONE table through a side connection, so the fault arrives as
-// "no such table: settings" — not sql.ErrNoRows, which is exactly the branch
+// "no such table: settings" — not errdefs.ErrNotFound, which is exactly the branch
 // this fix has to discriminate.
 
 // newRetentionFaultRouter registers the retention route only. newSettingsRouter next

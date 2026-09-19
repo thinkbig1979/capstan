@@ -13,7 +13,7 @@ import (
 // TestTerminalWS_MissingStackClosesWithNotFoundNotRetryableCode is the
 // PERMANENT half of agent-os-vi0o's terminal.go:86 split. Before the fix,
 // `if err != nil || stack == nil` collapsed "stack genuinely does not exist"
-// (sql.ErrNoRows) with "the database itself faulted" into one
+// (errdefs.ErrNotFound) with "the database itself faulted" into one
 // writeCloseMessage(websocket.CloseNormalClosure, ...) — a code frontend/src/
 // lib/ws.ts's shouldReconnectAfter does NOT suppress, so a deleted stack
 // redials forever at ~1/second (agent-os-jj8u's mechanism: serveWS upgrades
@@ -49,7 +49,7 @@ func TestTerminalWS_MissingStackClosesWithNotFoundNotRetryableCode(t *testing.T)
 //
 // faultyDB (faulty_db_test.go) is a *database.DB whose underlying connection
 // is already closed: every query fails with "sql: database is closed",
-// proven NOT to be sql.ErrNoRows by
+// proven NOT to be errdefs.ErrNotFound by
 // TestFaultyDB_FailsDifferentlyFromHealthyNotFound in that file.
 //
 // Asserts the POSITIVE shape the transient branch writes (1000 + "Failed to
@@ -78,7 +78,7 @@ func TestTerminalWS_DatabaseFaultClosesWithRetryableCode(t *testing.T) {
 
 // newTerminalFaultyDBFixture is the transient-arm counterpart to
 // newTerminalFixture (terminal_scope_test.go): identical wiring, but db is a
-// faultyDB so h.db.GetStack fails with something other than sql.ErrNoRows.
+// faultyDB so h.db.GetStack fails with something other than errdefs.ErrNotFound.
 //
 // authDisabled=true means upgradeConnection never reads db during
 // authentication (ws.go: userID = "anon:"+c.ClientIP() on that path), so the

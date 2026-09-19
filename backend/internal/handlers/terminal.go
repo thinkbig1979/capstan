@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +13,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // CloseCodeNotFound marks a permanent WS failure the frontend must not
@@ -103,7 +104,7 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 		// nil-arm was dead — dropped here, not just at the HTTP sites.
 		stack, err := h.db.GetStack(stackID)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+			if errors.Is(err, errdefs.ErrNotFound) {
 				// PERMANENT: the stack does not exist and retrying cannot
 				// change that. CloseCodeNotFound (ws.go) is in
 				// shouldReconnectAfter's suppression list (frontend/src/lib/

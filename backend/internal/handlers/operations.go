@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -11,6 +10,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // OperationStreamer is the operations handler's view of DockerService: stream a
@@ -71,11 +72,12 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			return
 		}
 
-		// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
-		// always returns either &stack or a non-nil err, never (nil, nil)).
+		// nil arm dropped, dead per GetStack's return shape (GetStack() in
+		// internal/database/stacks.go always returns either &stack or a non-nil
+		// err, never (nil, nil)).
 		stack, err := h.db.GetStack(stackID)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+			if errors.Is(err, errdefs.ErrNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Stack not found"})
 				return
 			}

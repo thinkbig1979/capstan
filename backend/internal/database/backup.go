@@ -41,7 +41,7 @@ func (d *DB) GetBackupPolicy(targetID string) (*models.BackupPolicy, error) {
 	          FROM backup_policies WHERE target_id = ?`
 	err := d.db.QueryRow(query, targetID).Scan(&p.ID, &p.TargetType, &p.TargetID, &p.Enabled, &p.StopPolicy, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err, "backup policy", targetID)
 	}
 	return &p, nil
 }
@@ -233,7 +233,9 @@ func (d *DB) GetBackupRunsFiltered(filters models.BackupHistoryFilters) ([]model
 }
 
 // GetBackupRunByID fetches a single BackupRun by its primary key.
-// Returns sql.ErrNoRows (wrapped) when the row does not exist.
+// Returns an error matching errdefs.ErrNotFound when the row does not exist
+// (agent-os-ymyc). It used to return the driver's sql.ErrNoRows, and this
+// comment used to claim that error was wrapped; it was returned bare.
 func (d *DB) GetBackupRunByID(id string) (*models.BackupRun, error) {
 	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message
 	          FROM backup_runs WHERE id = ?`
@@ -243,7 +245,7 @@ func (d *DB) GetBackupRunByID(id string) (*models.BackupRun, error) {
 		&r.StacksTotal, &r.StacksOK, &r.StacksFailed, &r.BytesAdded, &r.ErrorMessage,
 	)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err, "backup run", id)
 	}
 	return &r, nil
 }
@@ -337,7 +339,7 @@ func (d *DB) GetLatestRunItemForStack(stackID string) (*models.BackupRunItem, er
 	err := d.db.QueryRow(query, stackID).Scan(&item.ID, &item.RunID, &item.StackID, &item.Status,
 		&item.SnapshotID, &item.StopApplied, &item.DurationMs, &item.ErrorMessage)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err, "backup run item", stackID)
 	}
 	return &item, nil
 }

@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,6 +15,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 type ComposeHandler struct {
@@ -65,19 +66,12 @@ func (h *ComposeHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *ComposeHandler) Get(c *gin.Context) {
 	id := c.Param("id")
 
-	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
-	// always returns either &stack or a non-nil err, never (nil, nil)).
+	// nil arm dropped, dead per GetStack's return shape (GetStack() in
+	// internal/database/stacks.go always returns either &stack or a non-nil
+	// err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.NewAppError(
-				http.StatusNotFound,
-				models.ErrStackNotFound,
-				"Stack not found",
-			))
-			return
-		}
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 
@@ -124,19 +118,12 @@ func (h *ComposeHandler) Get(c *gin.Context) {
 func (h *ComposeHandler) Put(c *gin.Context) {
 	id := c.Param("id")
 
-	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
-	// always returns either &stack or a non-nil err, never (nil, nil)).
+	// nil arm dropped, dead per GetStack's return shape (GetStack() in
+	// internal/database/stacks.go always returns either &stack or a non-nil
+	// err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.NewAppError(
-				http.StatusNotFound,
-				models.ErrStackNotFound,
-				"Stack not found",
-			))
-			return
-		}
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 
@@ -205,7 +192,7 @@ func (h *ComposeHandler) Lint(c *gin.Context) {
 	id := c.Param("id")
 
 	stack, err := h.db.GetStack(id)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && !errors.Is(err, errdefs.ErrNotFound) {
 		// agent-os-7lg1 judgement call: Lint works standalone — a genuine DB
 		// fault here only degrades the working directory used for linting
 		// (falls back to /tmp below), so it is worth an operator-visible log
@@ -302,19 +289,12 @@ type ComposeEnvRequest struct {
 func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	id := c.Param("id")
 
-	// nil arm dropped, dead per GetStack's return shape (database/stacks.go:42-53
-	// always returns either &stack or a non-nil err, never (nil, nil)).
+	// nil arm dropped, dead per GetStack's return shape (GetStack() in
+	// internal/database/stacks.go always returns either &stack or a non-nil
+	// err, never (nil, nil)).
 	stack, err := h.db.GetStack(id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			c.JSON(http.StatusNotFound, models.NewAppError(
-				http.StatusNotFound,
-				models.ErrStackNotFound,
-				"Stack not found",
-			))
-			return
-		}
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 

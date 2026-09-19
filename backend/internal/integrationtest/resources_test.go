@@ -21,7 +21,6 @@ package integrationtest
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -39,6 +38,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // ---- helpers ----
@@ -324,10 +325,10 @@ func Test_Resource_StackDelete_RemovesDirAndDBRow(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr),
 		"stack directory must not exist after delete (finding #6)")
 
-	// Verify DB row is gone. GetStack returns sql.ErrNoRows when not found,
+	// Verify DB row is gone. GetStack returns errdefs.ErrNotFound when not found,
 	// which is the expected "not found" signal (not a real error).
 	missing, dbErr := db.GetStack(stackID)
-	if dbErr != nil && !errors.Is(dbErr, sql.ErrNoRows) {
+	if dbErr != nil && !errors.Is(dbErr, errdefs.ErrNotFound) {
 		t.Fatalf("GetStack after delete: unexpected error: %v", dbErr)
 	}
 	assert.Nil(t, missing, "stack DB row must be gone after delete (finding #6)")

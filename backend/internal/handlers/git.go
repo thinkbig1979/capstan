@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,6 +16,8 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 type GitHandler struct {
@@ -55,7 +56,7 @@ func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error
 			// straight to handleError(c, err) with no errors.Is/As in
 			// between — safe to attach the cause here (models/errors.go's
 			// NewAppErrorWithCause hazard note).
-			if !errors.Is(err, sql.ErrNoRows) {
+			if !errors.Is(err, errdefs.ErrNotFound) {
 				return "", "", models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err)
 			}
 			return "", "", models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found")

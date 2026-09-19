@@ -3,7 +3,6 @@ package services
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"path/filepath"
@@ -12,6 +11,8 @@ import (
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // agent-os-l42o. resolveBackupConfig discarded the error from all ten of its DB
@@ -48,7 +49,7 @@ const (
 
 // closedDBWithSettings seeds settings into a fully migrated on-disk database and
 // then closes its connection, so every later read fails with a driver error
-// rather than sql.ErrNoRows. This is the faultyDB(t) shape of agent-os-2mhb
+// rather than errdefs.ErrNotFound. This is the faultyDB(t) shape of agent-os-2mhb
 // (handlers/faulty_db_test.go:28), reproduced here because that helper lives in
 // package handlers.
 //
@@ -227,7 +228,7 @@ func assertNoPlaintextLeak(t *testing.T, logs *bytes.Buffer, what string) {
 
 // TestClosedDBFailsDifferentlyFromHealthyNotFound is the two-sided proof that
 // closedDBWithSettings exercises a NON-not-found failure. Without both arms a
-// database that always failed with sql.ErrNoRows would be indistinguishable
+// database that always failed with errdefs.ErrNotFound would be indistinguishable
 // from a working one, and every refusal test below would pass for the wrong
 // reason.
 func TestClosedDBFailsDifferentlyFromHealthyNotFound(t *testing.T) {
@@ -236,8 +237,8 @@ func TestClosedDBFailsDifferentlyFromHealthyNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("closed db returned no error; the fixture did not induce a failure")
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("closed db failed with sql.ErrNoRows (%v) — indistinguishable from an absent row", err)
+	if errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("closed db failed with errdefs.ErrNotFound (%v) — indistinguishable from an absent row", err)
 	}
 
 	healthy := newTestDB(t)
@@ -245,8 +246,8 @@ func TestClosedDBFailsDifferentlyFromHealthyNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("healthy db returned no error for a missing row; the positive control never fired")
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("healthy db missing row did not yield sql.ErrNoRows, got %v", err)
+	if !errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("healthy db missing row did not yield errdefs.ErrNotFound, got %v", err)
 	}
 }
 
@@ -269,8 +270,8 @@ func TestRotatedKeyDBIsHealthyButPasswordUnreadable(t *testing.T) {
 	if err == nil {
 		t.Fatalf("restic_password still decrypted under the rotated key (got %q); the fixture is not discriminating", pw)
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("restic_password failed with sql.ErrNoRows (%v) — that is absence, not a decrypt failure", err)
+	if errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("restic_password failed with errdefs.ErrNotFound (%v) — that is absence, not a decrypt failure", err)
 	}
 }
 

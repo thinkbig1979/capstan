@@ -1,11 +1,12 @@
 package handlers
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // Shared settings-read helpers for agent-os-1gqn's conversion of the
@@ -22,10 +23,10 @@ import (
 // it invented (agent-os-1gqn).
 //
 // GetSetting returns the bare Scan error (database/settings.go:14-19), so
-// absence really is sql.ErrNoRows here and never ("", nil).
+// absence really is errdefs.ErrNotFound here and never ("", nil).
 func settingOrFault(db *database.DB, key string) (string, error) {
 	v, err := db.GetSetting(key)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, errdefs.ErrNotFound) {
 		return "", nil
 	}
 	if err != nil {

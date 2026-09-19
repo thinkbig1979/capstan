@@ -23,7 +23,7 @@ import "testing"
 // Fixtures are reused verbatim from docker_update_dbfault_test.go (same package):
 // g482HealthyDB holds exactly one stack under g482ProjectKnown, and g482ClosedDB
 // seeds the same stack then closes the connection, so every read fails with a
-// driver error rather than sql.ErrNoRows.
+// driver error rather than errdefs.ErrNotFound.
 
 func TestResolveDashboardStackAssociation_KnownProjectResolvesToItsStack(t *testing.T) {
 	assoc, err := resolveDashboardStackAssociation(g482HealthyDB(t), g482ProjectKnown)
@@ -41,7 +41,7 @@ func TestResolveDashboardStackAssociation_KnownProjectResolvesToItsStack(t *test
 func TestResolveDashboardStackAssociation_GenuinelyAbsentIsNotAFailure(t *testing.T) {
 	assoc, err := resolveDashboardStackAssociation(g482HealthyDB(t), g482ProjectUnknown)
 	if err != nil {
-		t.Fatalf("err: got %v, want nil — an absent stack row is sql.ErrNoRows, an ordinary not-found", err)
+		t.Fatalf("err: got %v, want nil — an absent stack row is errdefs.ErrNotFound, an ordinary not-found", err)
 	}
 	if assoc.StackID != "" {
 		t.Errorf("StackID: got %q, want empty", assoc.StackID)

@@ -38,7 +38,7 @@ func (d *DB) GetAutoUpdatePolicy(targetType, targetID string) (*models.AutoUpdat
 	err := d.db.QueryRow(query, targetType, targetID).Scan(&p.ID, &p.TargetType, &p.TargetID,
 		&p.Enabled, &p.ConsecutiveFailures, &p.Paused, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err, "auto-update policy", targetID)
 	}
 	return &p, nil
 }

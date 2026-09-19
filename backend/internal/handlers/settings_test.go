@@ -556,7 +556,7 @@ func TestSettingsHandler_UpdateUpdateSettings_ScheduleEditDoesNotStopTheSchedule
 // test for agent-os-ua4y: GetScanDepth wrote its 500 directly with c.JSON,
 // bypassing handleError, so a GetSetting failure left no record beyond the
 // middleware access line. faultyDB (faulty_db_test.go) forces GetSetting to
-// fail with "sql: database is closed" (never sql.ErrNoRows), which is exactly
+// fail with "sql: database is closed" (never errdefs.ErrNotFound), which is exactly
 // the failure this handler's err != nil branch exists for.
 //
 // Two-sided per the brief: the log assertion is the one that flips from

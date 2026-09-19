@@ -62,6 +62,27 @@ linters:
       # gain is that the judgement is now recorded per site and a NEW
       # careless discard cannot join them silently.
       check-blank: true
+    forbidigo:
+      # agent-os-ymyc: only internal/database may name the driver's absence
+      # signal. Every single-row getter there wraps it as errdefs.ErrNotFound,
+      # so a consumer discriminating on sql.ErrNoRows is either re-deriving a
+      # decision the boundary already made or — the failure this class is made
+      # of — reading "the database could not answer" as "the row is not there".
+      # Thirteen bugs were filed for individual instances of that (7lg1, 3h9x,
+      # 1gqn, 8tqd, g482, r1by, xzoe, obgr, l42o, uacg, koy9, 89ut, rltu), each
+      # found by hand after the previous one was already fixed.
+      #
+      # analyze-types resolves the identifier through the type checker rather
+      # than matching source text, so an aliased import cannot slip past it.
+      # It sees EXPRESSIONS only: sql.ErrNoRows inside a comment or a string
+      # literal is invisible to this rule, and so is any file behind an
+      # unsatisfied build tag (internal/integrationtest is behind
+      # //go:build integration). Those were swept by hand for agent-os-ymyc and
+      # are not covered going forward.
+      forbid:
+        - pattern: 'sql\.ErrNoRows'
+          msg: 'discriminate on errdefs.ErrNotFound; only internal/database may see sql.ErrNoRows (agent-os-ymyc)'
+      analyze-types: true
   enable:
     - errcheck
     - govet
@@ -73,6 +94,7 @@ linters:
     - contextcheck
     - gosec
     - rowserrcheck
+    - forbidigo
   exclusions:
     generated: lax
     # Deliberately NOT using the common-false-positives/legacy presets.
@@ -96,6 +118,12 @@ linters:
       - comments
       - std-error-handling
     rules:
+      # forbidigo's sql.ErrNoRows rule is the whole point of internal/database:
+      # that package is where the driver's absence signal is discriminated, so
+      # it is the one place allowed to name it. Scoped by path rather than
+      # disabled in-file so a NEW site anywhere else still gates.
+      - path: 'internal/database/'
+        linters: [forbidigo]
       # SA1019 (deprecated Docker SDK types) had a blanket per-file exclusion
       # here; agent-os-9zi migrated every site instead of excluding them, so
       # this rule is gone. Two things worth recording for whoever reads this

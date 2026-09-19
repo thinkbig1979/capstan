@@ -104,7 +104,7 @@ func (d *DB) GetDirectory(path string) (*models.Directory, error) {
 	err := d.db.QueryRow(query, path).Scan(&dir.Path, &dir.Name, &dir.RootDir, &dir.IsGitRepo, &dir.GitRemote, &dir.GitBranch,
 		&dir.GitAuthType, &dir.GitSSHKeyPath, &dir.GitHTTPSUser, &dir.GitHTTPSToken, &dir.ScannedAt)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err, "directory", path)
 	}
 	dir.HasHTTPSToken = dir.GitHTTPSToken != ""
 	dir.GitHTTPSToken = ""
@@ -120,7 +120,7 @@ func (d *DB) GetDirectoryCredentials(path string) (*models.Directory, error) {
 	          FROM directories WHERE path = ?`
 	err := d.db.QueryRow(query, path).Scan(&dir.Path, &dir.GitAuthType, &dir.GitSSHKeyPath, &dir.GitHTTPSUser, &dir.GitHTTPSToken)
 	if err != nil {
-		return nil, err
+		return nil, notFound(err, "directory", path)
 	}
 	if d.encryptor != nil && dir.GitHTTPSToken != "" {
 		decrypted, err := d.encryptor.Decrypt(dir.GitHTTPSToken)
