@@ -85,7 +85,9 @@ func RetentionDays(value string) int {
 // The int returned beside a non-nil error is the Go zero, deliberately not
 // DefaultRetentionDays. Both in-tree callers refuse before issuing a DELETE, so
 // nothing reaches a deleter with it; and unlike the old shape there is now an
-// error for check-getter-errors.sh to see if a future caller discards one.
+// error at all, so a future caller that DISCARDS it (`x, _ :=`) is caught --
+// by errcheck with check-blank (agent-os-qyg7.1), which owns the discard shape;
+// backend/tools/geterrors owns the softened and merged ones.
 func (d *DB) RetentionDays(key string) (int, error) {
 	value, err := d.GetSetting(key)
 	if errors.Is(err, errdefs.ErrNotFound) {

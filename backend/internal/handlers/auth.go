@@ -344,7 +344,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 	cmpErr := bcrypt.CompareHashAndPassword(hashToCompare, []byte(req.Password))
 
-	if !userExists || cmpErr != nil { //geterrors:ignore deliberate: a wrong password and an unknown user must be indistinguishable to the client (user enumeration), and the reason variable below already discriminates them for the audit log
+	if !userExists || cmpErr != nil { //geterrors:ignore deliberate AND bounded, not simply fine: a wrong password and an unknown user must be indistinguishable to the CLIENT (enumeration), and `reason` at :348-351 discriminates those two for the audit log -- but there is a THIRD state. A DB fault is logged at :326-334 and deliberately NOT returned on (agent-os-8tqd, so the timing oracle stays closed), so userExists at :341 is false and the audit line labels the fault "user_not_found": a WRONG value, not an absent one. Bounded because :326-334 records the real cause with request_id, so the signal is mislabelled in one place rather than lost
 		reason := "invalid_password"
 		if !userExists {
 			reason = "user_not_found"

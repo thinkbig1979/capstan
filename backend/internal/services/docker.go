@@ -497,7 +497,7 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 			inspect, err := s.client.ContainerInspect(ctx, c.ID) //geterrors:ignore best-effort enrichment of one row of a container list: a failed inspect leaves the optional fields zero rather than failing the whole list
 			if err == nil {
 				if inspect.State != nil && inspect.State.StartedAt != "" {
-					if t, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt); err == nil { //geterrors:ignore a StartedAt the daemon reports in an unexpected layout leaves StartedAt zero, which the UI renders as absent rather than as a wrong time
+					if t, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt); err == nil { //geterrors:ignore a daemon-reported StartedAt in an unexpected layout leaves info.StartedAt at Go's ZERO TIME, and DashboardContainerInfo.StartedAt (models/models.go:169) carries no omitempty -- so it serialises as "0001-01-01T00:00:00Z", a zero timestamp on the wire and NOT an absent field. Kept because failing an entire container list over one unparseable field is worse; what a consumer displays is deliberately not asserted here, having not been measured
 						info.StartedAt = t
 					}
 				}

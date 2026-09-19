@@ -467,7 +467,7 @@ func (s *DockerService) UpdateContainer(ctx context.Context, containerID string,
 
 	if advanced {
 		// Resolve new digest for details (best-effort).
-		newImg, imgErr := s.updateAPI().ImageInspect(ctx, newImageID) //geterrors:ignore best-effort, per the comment above: the digest is detail attached to an already-verified success, and an absent one renders as absent
+		newImg, imgErr := s.updateAPI().ImageInspect(ctx, newImageID) //geterrors:ignore best-effort, per the comment above: a failed ImageInspect leaves newDigestStr "" and it is attached as truth.KV("newDigest", "") to an ALREADY-VERIFIED success, so the update outcome is unaffected; what a consumer displays is deliberately not asserted here, having not been measured
 		newDigestStr := ""
 		if imgErr == nil {
 			newDigestStr, _ = truth.LocalRepoDigest(imageRef, newImg.RepoDigests)

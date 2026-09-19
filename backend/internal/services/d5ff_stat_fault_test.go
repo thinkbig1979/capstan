@@ -193,7 +193,7 @@ func TestDockerService_buildComposeArgs_GlobalEnvPresent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestStackDotEnv_StatFault is the RED arm for the third shape, the one the
-// standing scanner (scripts/check-getter-errors.sh) cannot see: it is
+// standing analyzer (backend/tools/geterrors) cannot see: it is
 // `err != nil { return }`, not `err == nil` softening, so it is out of that
 // instrument's class by construction rather than missed by it.
 //
