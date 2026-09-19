@@ -71,23 +71,26 @@ export function useExtractToEnv({
       const after = currentCompose.slice(sel.to)
       const updatedCompose = before + `\${${varName}}` + after
 
-      // Build the updated .env content
-      let currentEnv = ''
-      try {
-        const envData = await stacksApi.getEnv(stackId)
-        // `hasEnvFile: false` is the no-file answer and arrives as a 200
-        // (agent-os-bt5y) — the endpoint will create the file.
-        if (envData.hasEnvFile && envData.raw) {
-          currentEnv = envData.raw
-        }
-      } catch {
-        // Swallows EVERY read failure, not an enumerated set: a 500 on an
-        // existing .env (e.g. EACCES) lands here too, leaving currentEnv '' so
-        // the atomic write below replaces a file we could not read with a
-        // single line. Pre-existing and deliberately left alone by
-        // agent-os-bt5y; noted so the next reader does not mistake this for a
-        // checked-safe catch.
-      }
+      // Build the updated .env content.
+      //
+      // A REJECTION here is deliberately NOT caught (agent-os-erfc). It used to
+      // be, by an unbound `catch {}` that distinguished nothing, so a 500 on an
+      // existing .env left currentEnv '' and the next statement built the new
+      // file content out of that — replacing a file we could not read with a
+      // single line, while reporting the extraction as successful. There is
+      // nothing safe to write when the current contents are unknown, so the
+      // rejection travels to the outer catch: that aborts before either write
+      // path and presents the cause.
+      //
+      // The 200 answers still proceed, and only they do. `hasEnvFile: false` is
+      // the sole no-file answer (env.go:105, agent-os-bt5y) and the write below
+      // creates the file. Both rejections this newly aborts on are genuine
+      // faults by the backend's own reading: a 404 "Env file not found on disk"
+      // is the DB and the filesystem disagreeing, which env.go:98-100 states
+      // must NOT be fused with the no-file state, and a 400 rejects an env path
+      // that failed validation (env.go:111-118).
+      const envData = await stacksApi.getEnv(stackId)
+      const currentEnv = envData.hasEnvFile && envData.raw ? envData.raw : ''
 
       const newEnvLine = `${varName}=${selectedText}`
       const updatedEnv = currentEnv ? `${currentEnv.trimEnd()}\n${newEnvLine}` : newEnvLine
@@ -147,11 +150,16 @@ export function useExtractToEnv({
       setSelectedText('')
     } catch (err) {
       // agent-os-yre8. This catch used to take no binding, so the cause was
-      // not merely discarded -- it was never observed. The SEQUENTIAL
-      // fallback lands here: two bare apiClient.put calls, /env then
+      // not merely discarded -- it was never observed. TWO paths land here.
+      //
+      // The SEQUENTIAL fallback: two bare apiClient.put calls, /env then
       // /compose. If env succeeds and compose then fails, the variable now
       // exists in .env while the compose file still holds the literal, and
       // the reason is the only thing that says so.
+      //
+      // The .env READ above (agent-os-erfc). Reaching this catch from there IS
+      // the abort -- no write call has been made at that point -- which is why
+      // a file we could not read is no longer overwritten with one line.
       presentError(err, { fallback: 'Failed to extract variable to .env' })
     } finally {
       setIsExtracting(false)

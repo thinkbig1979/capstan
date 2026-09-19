@@ -204,3 +204,156 @@ describe('useExtractToEnv — the success control', () => {
     expect(toast.success).toHaveBeenCalledWith('Extracted WEB_IMAGE to .env')
   })
 })
+
+// agent-os-erfc. A failed READ of an existing .env left currentEnv as '' and
+// the very next statement built the new file content from it — so a 500 on a
+// file we could not read replaced that file with a single line, and the
+// operator was told the extraction succeeded.
+//
+// The discrimination that was missing: `hasEnvFile: false` is the legitimate
+// no-file answer and arrives as a 200 (agent-os-bt5y, env.go:105), while a read
+// fault is a REJECTION (env.go:131). The first must still write; the second
+// must not write at all.
+//
+// The two rejection fixtures are what the api.ts interceptor actually produces,
+// not bare Errors. It rejects with a FLAT OBJECT: the response body spread, with
+// the status injected (api.ts:170-171). For a read fault the body is the
+// serialised AppError, `{code, message}` (models/errors.go:98-99, emitted via
+// handleError at respond.go:177).
+
+/** GET /stacks/:id/env answering 500 with the backend's own sanitised message. */
+const READ_FAULT_WITH_BODY = {
+  code: 'READ_ERROR',
+  message: 'Failed to read env file',
+  status: 500,
+}
+
+/**
+ * The same fault with an EMPTY response body — a proxy 500, where
+ * spreadableBody() contributes nothing and only the status survives. Kept as a
+ * separate arm because it proves the abort is keyed on the REJECTION, not on a
+ * cause being readable: classifyError's 5xx arm substitutes its own sentence
+ * here, so a guard that only fired when a message existed would pass the arm
+ * above and fail this one.
+ */
+const READ_FAULT_BODYLESS = { status: 500 }
+
+/**
+ * The DB says this stack HAS an env file and the file is not on disk
+ * (env.go:122-130). This is the arm a future reader is most likely to doubt,
+ * because a missing file LOOKS like the no-file case — and it is not: env.go:98-100
+ * states that the DB and the filesystem disagreeing is something that went
+ * wrong and must not be fused with the no-file state, which has its own 200
+ * answer at env.go:105. So it aborts like any other rejection.
+ */
+const READ_FAULT_DISK_MISSING = {
+  code: 'NOT_FOUND',
+  message: 'Env file not found on disk',
+  status: 404,
+}
+
+describe('useExtractToEnv — a failed .env READ must not reach the write', () => {
+  it('makes NO write call and presents the backend cause when the env GET is rejected', async () => {
+    stacksApi.getEnv.mockRejectedValue(READ_FAULT_WITH_BODY)
+    // Both write paths are armed to SUCCEED, so "no error toast from a write"
+    // is not an alternative explanation for anything asserted below.
+    stacksApi.updateComposeAndEnv.mockResolvedValue({ outcome: 'success', reason: 'written' })
+    apiClient.put.mockResolvedValue({ data: {} })
+
+    const { result, view } = setup()
+    await act(async () => {
+      await result.current.confirmExtract()
+    })
+
+    // BOTH write routes, because the sequential fallback is a second way to
+    // reach the same file.
+    expect(stacksApi.updateComposeAndEnv).toHaveBeenCalledTimes(0)
+    expect(apiClient.put).toHaveBeenCalledTimes(0)
+    expect(view.dispatch).not.toHaveBeenCalled()
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith('Failed to extract variable to .env', {
+      description: '500: Failed to read env file',
+    })
+  })
+
+  it('makes NO write call when the rejection carries no body at all', async () => {
+    stacksApi.getEnv.mockRejectedValue(READ_FAULT_BODYLESS)
+    stacksApi.updateComposeAndEnv.mockResolvedValue({ outcome: 'success', reason: 'written' })
+    apiClient.put.mockResolvedValue({ data: {} })
+
+    const { result, view } = setup()
+    await act(async () => {
+      await result.current.confirmExtract()
+    })
+
+    expect(stacksApi.updateComposeAndEnv).toHaveBeenCalledTimes(0)
+    expect(apiClient.put).toHaveBeenCalledTimes(0)
+    expect(view.dispatch).not.toHaveBeenCalled()
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith('Failed to extract variable to .env', {
+      description: '500: Something went wrong on the server',
+    })
+  })
+
+  // The other side, and the reason this is not simply "abort on anything that
+  // is not a populated file". These two arms pass BEFORE the fix and must keep
+  // passing after it: they are the controls that stop the abort from eating the
+  // legitimate paths, so their evidence is a mutation of the FIXED hook, not a
+  // failure against the broken one.
+  it('still writes the single new line when the stack has no env file (a 200)', async () => {
+    stacksApi.getEnv.mockResolvedValue({ hasEnvFile: false })
+    stacksApi.updateComposeAndEnv.mockResolvedValue({ outcome: 'success', reason: 'written' })
+
+    const { result } = setup()
+    await act(async () => {
+      await result.current.confirmExtract()
+    })
+
+    expect(stacksApi.updateComposeAndEnv).toHaveBeenCalledTimes(1)
+    expect(stacksApi.updateComposeAndEnv).toHaveBeenCalledWith(
+      'stack-1',
+      expect.any(String),
+      'WEB_IMAGE=nginx:1.2.3',
+    )
+    expect(toast.error).not.toHaveBeenCalled()
+    expect(toast.success).toHaveBeenCalledWith('Extracted WEB_IMAGE to .env')
+  })
+
+  it('makes NO write call when the env file is recorded but missing from disk (404)', async () => {
+    stacksApi.getEnv.mockRejectedValue(READ_FAULT_DISK_MISSING)
+    stacksApi.updateComposeAndEnv.mockResolvedValue({ outcome: 'success', reason: 'written' })
+    apiClient.put.mockResolvedValue({ data: {} })
+
+    const { result, view } = setup()
+    await act(async () => {
+      await result.current.confirmExtract()
+    })
+
+    expect(stacksApi.updateComposeAndEnv).toHaveBeenCalledTimes(0)
+    expect(apiClient.put).toHaveBeenCalledTimes(0)
+    expect(view.dispatch).not.toHaveBeenCalled()
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith('Failed to extract variable to .env', {
+      description: 'Env file not found on disk',
+    })
+  })
+
+  it('appends to the existing file when the env file was read successfully', async () => {
+    // The happy-path regression control: the whole point of reading the file
+    // first is that its contents survive the write.
+    stacksApi.getEnv.mockResolvedValue({ hasEnvFile: true, raw: 'FOO=bar\nBAZ=qux\n' })
+    stacksApi.updateComposeAndEnv.mockResolvedValue({ outcome: 'success', reason: 'written' })
+
+    const { result } = setup()
+    await act(async () => {
+      await result.current.confirmExtract()
+    })
+
+    expect(stacksApi.updateComposeAndEnv).toHaveBeenCalledWith(
+      'stack-1',
+      expect.any(String),
+      'FOO=bar\nBAZ=qux\nWEB_IMAGE=nginx:1.2.3',
+    )
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+})
