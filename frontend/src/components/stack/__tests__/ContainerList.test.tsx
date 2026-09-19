@@ -18,6 +18,7 @@ vi.mock('sonner', () => ({
 }))
 
 const baseContainer: Container = {
+  health: '',
   id: 'container-1',
   name: 'my-container',
   image: 'nginx:latest',

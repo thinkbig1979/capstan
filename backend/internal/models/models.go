@@ -369,7 +369,7 @@ type BackupSnapshot struct {
 	Time      string   `json:"time"`
 	Hostname  string   `json:"hostname"`
 	Tags      []string `json:"tags" tstype:"string[] | null"`
-	Paths     []string `json:"paths"`
+	Paths     []string `json:"paths" tstype:"string[] | null"`
 	SizeBytes int64    `json:"sizeBytes,omitempty"`
 }
 

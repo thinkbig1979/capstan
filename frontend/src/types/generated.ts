@@ -829,7 +829,7 @@ export interface BackupSnapshot {
   time: string;
   hostname: string;
   tags: string[] | null;
-  paths: string[];
+  paths: string[] | null;
   sizeBytes?: number /* int64 */;
 }
 /**

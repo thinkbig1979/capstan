@@ -40,7 +40,9 @@ describe('authStore initial state', () => {
 
 describe('authStore login', () => {
   it('sets token, user, and isAuthenticated on success', async () => {
-    const mockUser = { id: '1', username: 'admin' }
+    const mockUser = {
+      createdAt: '',
+      updatedAt: '', id: '1', username: 'admin' }
     mockLogin.mockResolvedValue({ token: 'jwt-token-123', user: mockUser })
 
     await useAuthStore.getState().login('admin', 'password')
@@ -63,7 +65,9 @@ describe('authStore login', () => {
 
 describe('authStore setup', () => {
   it('sets token, user, and clears needsSetup', async () => {
-    const mockUser = { id: '1', username: 'newadmin' }
+    const mockUser = {
+      createdAt: '',
+      updatedAt: '', id: '1', username: 'newadmin' }
     mockSetup.mockResolvedValue({ token: 'setup-token', user: mockUser })
 
     useAuthStore.setState({ needsSetup: true })
@@ -81,7 +85,9 @@ describe('authStore logout', () => {
   it('clears token, user, and isAuthenticated', async () => {
     useAuthStore.setState({
       token: 'existing-token',
-      user: { id: '1', username: 'admin' },
+      user: {
+        createdAt: '',
+        updatedAt: '', id: '1', username: 'admin' },
       isAuthenticated: true,
     })
 
@@ -97,7 +103,9 @@ describe('authStore logout', () => {
   it('clears state even when logout API call fails', async () => {
     useAuthStore.setState({
       token: 'existing-token',
-      user: { id: '1', username: 'admin' },
+      user: {
+        createdAt: '',
+        updatedAt: '', id: '1', username: 'admin' },
       isAuthenticated: true,
     })
 
@@ -113,7 +121,9 @@ describe('authStore logout', () => {
 
 describe('authStore checkAuth', () => {
   it('sets authenticated state on success', async () => {
-    const mockUser = { id: '1', username: 'admin' }
+    const mockUser = {
+      createdAt: '',
+      updatedAt: '', id: '1', username: 'admin' }
     mockMe.mockResolvedValue(mockUser)
 
     await useAuthStore.getState().checkAuth()
@@ -127,7 +137,9 @@ describe('authStore checkAuth', () => {
   it('clears auth state on failure', async () => {
     useAuthStore.setState({
       token: 'old-token',
-      user: { id: '1', username: 'admin' },
+      user: {
+        createdAt: '',
+        updatedAt: '', id: '1', username: 'admin' },
       isAuthenticated: true,
     })
 

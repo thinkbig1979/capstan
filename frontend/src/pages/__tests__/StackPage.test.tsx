@@ -73,6 +73,9 @@ import { StackPage } from '../StackPage'
 
 function makeStack(overrides: Partial<Stack> = {}): Stack {
   return {
+    envFile: '',
+    gitBranch: '',
+    gitCommit: '',
     id: 's1',
     directory: '/stacks/s1',
     composeFile: 'docker-compose.yml',
@@ -172,8 +175,10 @@ describe('StackPage', () => {
         makeStack({
           status: 'running',
           containers: [
-            { id: 'c1', name: 'web', image: 'nginx:1', state: 'running', status: 'Up 2 hours', ports: [] },
-            { id: 'c2', name: 'db', image: 'pg:16', state: 'running', status: 'Up 6 days', ports: [] },
+            {
+              health: '', id: 'c1', name: 'web', image: 'nginx:1', state: 'running', status: 'Up 2 hours', ports: [] },
+            {
+              health: '', id: 'c2', name: 'db', image: 'pg:16', state: 'running', status: 'Up 6 days', ports: [] },
           ],
         }),
       )
@@ -191,8 +196,10 @@ describe('StackPage', () => {
         makeStack({
           status: 'partial',
           containers: [
-            { id: 'c1', name: 'web', image: 'nginx:1', state: 'running', status: 'Up 1 hour', ports: [] },
-            { id: 'c2', name: 'db', image: 'pg:16', state: 'exited', status: 'Exited (0)', ports: [] },
+            {
+              health: '', id: 'c1', name: 'web', image: 'nginx:1', state: 'running', status: 'Up 1 hour', ports: [] },
+            {
+              health: '', id: 'c2', name: 'db', image: 'pg:16', state: 'exited', status: 'Exited (0)', ports: [] },
           ],
         }),
       )
