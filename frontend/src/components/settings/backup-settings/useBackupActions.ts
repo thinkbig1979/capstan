@@ -1,5 +1,5 @@
 import { toast } from 'sonner'
-import { toastInvalid } from '@/lib/error-handler'
+import { presentFault, toastInvalid } from '@/lib/error-handler'
 import { useInitRepo, useTestCloud } from '@/hooks/useBackup'
 import { repoFaultFrom } from '@/lib/backup-repo-fault'
 import { messageOrNull } from '@/lib/narrow'
@@ -70,7 +70,7 @@ export function useBackupActions() {
           toastInvalid('Failed to initialize repository')
           return
         }
-        toast.error(fault.title, fault.detail ? { description: fault.detail } : undefined)
+        presentFault(fault.title, fault.detail ?? null)
       },
     })
   }
@@ -119,7 +119,7 @@ export function useBackupActions() {
       onError: (error) => {
         const fault = repoFaultFrom(error)
         if (fault) {
-          toast.error(fault.title, fault.detail ? { description: fault.detail } : undefined)
+          presentFault(fault.title, fault.detail ?? null)
           return
         }
 
