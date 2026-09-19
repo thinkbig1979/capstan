@@ -12,8 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
-import { classifyError } from '@/lib/error-handler'
-import { isActionResult } from '@/lib/action-result'
+import { classifyError, presentError, toastInvalid } from '@/lib/error-handler'
 import { deleteStackWithCollateralConfirm, StackDeleteCancelledError } from '@/lib/stack-delete'
 import { useParams, useNavigate, useLocation } from 'react-router'
 import { toast } from 'sonner'
@@ -131,11 +130,7 @@ export function StackPage() {
         // full argument is at UpdateScheduleContent.tsx:116-137 — the sibling
         // sites, HistoryRetentionSection.tsx among them, repeat the shape but
         // not the reason, so that is the one worth reading.
-        if (isActionResult(err) && err.reason) {
-          toast.error('Failed to delete stack', { description: err.reason })
-        } else {
-          toast.error('Failed to delete stack')
-        }
+        presentError(err, { fallback: 'Failed to delete stack' })
       }
       setIsDeleting(false)
     },
@@ -236,7 +231,9 @@ export function StackPage() {
       toast.info(reason || 'Stack already up to date')
     } else {
       // outcome='failed', an unknown/missing outcome, or status='error'.
-      toast.error(reason || error || 'Stack update failed', { duration: 12000 })
+      // The cause is already resolved and belongs in the TITLE here, the same
+      // call toastForResult's `failed` arm makes for an ActionResult.
+      toastInvalid(reason || error || 'Stack update failed', { duration: 12000 })
     }
   }, [latestStackJob])
 
@@ -249,7 +246,7 @@ export function StackPage() {
         }
       },
       onError: (err) => {
-        toast.error(classifyError(err).message || 'Failed to start stack update')
+        presentError(err, { fallback: 'Failed to start stack update' })
       },
     })
   }

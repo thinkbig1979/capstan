@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { toastInvalid } from '@/lib/error-handler'
 import { useCreateStack, extractStack } from '@/hooks/useCreateStack'
 import type { LintResult } from '@/types'
 import { validateName } from './nameValidation'
@@ -103,7 +104,7 @@ export function useCreateStackSubmit({
     }
 
     if (!composeContent.trim()) {
-      toast.error('Compose content cannot be empty')
+      toastInvalid('Compose content cannot be empty')
       return
     }
 

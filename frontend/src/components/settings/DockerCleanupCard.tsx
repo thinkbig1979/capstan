@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
+import { presentFault } from '@/lib/error-handler'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -107,11 +108,13 @@ export function DockerCleanupCard() {
       // must be at least N", "intervalHours must be at least N"), and a
       // zero-arity callback would render one sentence for both. The generic
       // sentence stays as the title when the server said nothing usable —
-      // same branch shape as HistoryRetentionSection's onError.
+      // same presenter as HistoryRetentionSection's onError.
       onError: (error) => {
-        const cause = settingsSaveFault(error)
-        if (cause) toast.error('Failed to update the cleanup schedule', { description: cause })
-        else toast.error('Failed to update the cleanup schedule')
+        // presentFault, NOT presentError (agent-os-5g8a): the cause here is read
+        // by settingsSaveFault, which is CODE-keyed and deliberately not
+        // classifyError -- see its docblock. Routing this through causeOf would
+        // render axios's own "Network Error" as though the backend had said it.
+        presentFault('Failed to update the cleanup schedule', settingsSaveFault(error))
       },
     })
   }
@@ -121,9 +124,11 @@ export function DockerCleanupCard() {
       // The preview validates the age floor through the same code path as the
       // PUT, so it can carry the same server sentence.
       onError: (error) => {
-        const cause = settingsSaveFault(error)
-        if (cause) toast.error('Failed to preview the cleanup', { description: cause })
-        else toast.error('Failed to preview the cleanup')
+        // presentFault, NOT presentError (agent-os-5g8a): the cause here is read
+        // by settingsSaveFault, which is CODE-keyed and deliberately not
+        // classifyError -- see its docblock. Routing this through causeOf would
+        // render axios's own "Network Error" as though the backend had said it.
+        presentFault('Failed to preview the cleanup', settingsSaveFault(error))
       },
     })
   }

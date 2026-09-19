@@ -4,6 +4,7 @@ import { useUpdateBackupSettings } from '@/hooks/useBackup'
 import type { BackupSettings } from '@/types'
 import { buildPayload, toDraft } from './backup-payload'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
+import { presentError, presentFault } from '@/lib/error-handler'
 import type { Draft } from './types'
 
 /**
@@ -56,13 +57,15 @@ export function useBackupForm(settings: BackupSettings | undefined) {
       // still carrying the *** redaction marker, and an inline credential, with
       // a 422 VALIDATION_ERROR whose sentence is the only way to tell the two
       // apart — plus 422 ENCRYPTION_KEY_MISSING on the password write.
-      // Branch rather than a conditional second argument: see the WHY at
-      // UpdateScheduleContent.tsx's onError. The no-cause path stays a
-      // single-argument call that a pre-existing test still pins.
+      // presentFault keeps the no-cause path a SINGLE-argument call, which a
+      // pre-existing test still pins: see the WHY at UpdateScheduleContent's
+      // onError.
       onError: (error) => {
-        const cause = settingsSaveFault(error)
-        if (cause) toast.error('Failed to save backup settings', { description: cause })
-        else toast.error('Failed to save backup settings')
+        // presentFault, NOT presentError (agent-os-5g8a): the cause here is read
+        // by settingsSaveFault, which is CODE-keyed and deliberately not
+        // classifyError -- see its docblock. Routing this through causeOf would
+        // render axios's own "Network Error" as though the backend had said it.
+        presentFault('Failed to save backup settings', settingsSaveFault(error))
       },
     })
   }
@@ -79,7 +82,7 @@ export function useBackupForm(settings: BackupSettings | undefined) {
       { password: '' },
       {
         onSuccess: () => toast.success('Password cleared — reverted to environment fallback'),
-        onError: () => toast.error('Failed to clear password'),
+        onError: (error) => presentError(error, { fallback: 'Failed to clear password' }),
       },
     )
   }

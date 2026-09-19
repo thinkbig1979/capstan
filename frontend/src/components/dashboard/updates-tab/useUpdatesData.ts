@@ -3,7 +3,7 @@ import { useCheckUpdates, useCheckUpdatesRefresh, useUpdateContainer, useAutoUpd
 import { useUpdateScanStore } from '@/stores/updateScanStore'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
 import { toast } from 'sonner'
-import { classifyError } from '@/lib/error-handler'
+import { presentError } from '@/lib/error-handler'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import type { AutoUpdatePolicy } from '@/types'
 import { UPDATE_SEARCH_FIELDS, type SortKey, type UpdateItem } from './types'
@@ -61,7 +61,7 @@ export function useUpdatesData() {
         toast.info(`${container.containerName} ${action}`)
       },
       onError: (err) => {
-        toast.error(classifyError(err).message || `Failed to update ${container.containerName}`)
+        presentError(err, { fallback: `Failed to update ${container.containerName}` })
       },
     })
   }

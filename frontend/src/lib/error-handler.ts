@@ -393,28 +393,56 @@ export function causeOf(error: unknown): string | null {
   return app.context ? `${app.message} (${app.context})` : app.message
 }
 
+/** The sonner options these presenters pass through. Deliberately tiny. */
+type ToastOptions = { id?: string | number; duration?: number }
+
 /**
- * Render a failed action: the action context as the toast TITLE, the backend's
- * cause as the DESCRIPTION.
+ * Render a failed action from an ALREADY-COMPUTED cause: the action context as
+ * the toast TITLE, the cause as the DESCRIPTION.
  *
  * Both, never one instead of the other. The fixed sentence a call site passes
  * is the only place the ACTION lives ("Failed to extract variable to .env"),
  * and the cause is the only place the diagnosis lives ("failed to write compose
  * file; env rolled back"). Collapsing to a single line deletes one of them,
- * which is the defect class this helper exists to end.
+ * which is the defect class these helpers exist to end.
+ *
+ * SEPARATE from presentError because several forms read their cause with a
+ * CODE-KEYED reader (settingsSaveFault, credentialSaveFault, updateScanFault,
+ * repoFaultFrom) rather than with causeOf, and those readers exist precisely to
+ * NOT be classifyError: each one's docblock says so, because classifyError is
+ * status-keyed and would render axios's own "Network Error" to the operator as
+ * though the backend had said it. Those call sites hand their answer here.
  *
  * `cause !== title` guards the degenerate case where they are the same string.
- * `fallback` is required and non-empty by type, so this never renders an empty
- * toast.
+ * The one- vs two-argument split is load-bearing: sonner renders
+ * `toast.error(t)` and `toast.error(t, undefined)` identically but a vitest spy
+ * does not, and several tests pin the single-argument shape.
  */
-export function presentError(err: unknown, opts: { fallback: string; title?: string }): void {
-  const title = opts.title ?? opts.fallback
-  const cause = causeOf(err)
-  if (cause && cause !== title) {
-    toast.error(title, { description: cause })
+export function presentFault(title: string, cause: string | null, extra?: ToastOptions): void {
+  const description = cause && cause !== title ? cause : undefined
+  if (description !== undefined) {
+    toast.error(title, extra ? { ...extra, description } : { description })
+    return
+  }
+  if (extra) {
+    toast.error(title, extra)
     return
   }
   toast.error(title)
+}
+
+/**
+ * Render a failed action whose cause has to be dug out of the rejection.
+ *
+ * The common case, and the one the eslint rule points every fixed-sentence
+ * `toast.error` at. `fallback` is required and non-empty by type, so this never
+ * renders an empty toast.
+ */
+export function presentError(
+  err: unknown,
+  opts: { fallback: string; title?: string; extra?: ToastOptions },
+): void {
+  presentFault(opts.title ?? opts.fallback, causeOf(err), opts.extra)
 }
 
 /**
@@ -429,15 +457,28 @@ export function presentCause(err: unknown): void {
 }
 
 /**
- * Render a CLIENT-SIDE refusal: a validation guard or a local-state notice
- * where no rejection exists anywhere in scope and the fixed sentence is the
- * whole truth.
+ * Render a message that is ALREADY FINAL — nothing further is to be looked up.
+ *
+ * Three kinds of site land here, and they share the property that asking
+ * causeOf would be wrong rather than merely redundant:
+ *
+ *  - CLIENT-SIDE refusals and local-state notices, where no rejection exists
+ *    anywhere in scope ("Passwords do not match", a clipboard write that
+ *    failed, an inactivity disconnect). Routing these through classifyError is
+ *    actively harmful: its `!navigator.onLine` arm rewrites ANY error to "Check
+ *    your connection and try again", so an offline operator would be told their
+ *    clipboard failure was a network problem.
+ *  - Sites where a CODE-KEYED reader has already looked and declined, so the
+ *    fixed sentence is a deliberate refusal to claim a cause.
+ *  - The `cause || 'Generic sentence'` shape, where the cause is already
+ *    resolved and belongs in the TITLE — the same call toastForResult's `failed`
+ *    arm makes.
  *
  * Named rather than inlined so the distinction is visible at the call site and
  * greppable later: the INLINE-vs-TOAST convention at the top of this file says
- * most of these belong next to the field the user is looking at, not in a
+ * many of these belong next to the field the user is looking at, not in a
  * toast. Converting them is a separate job; this marks the set.
  */
-export function toastInvalid(message: string): void {
-  toast.error(message)
+export function toastInvalid(message: string, extra?: ToastOptions): void {
+  presentFault(message, null, extra)
 }

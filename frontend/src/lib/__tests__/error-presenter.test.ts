@@ -3,6 +3,7 @@ import {
   backendCauseOf,
   causeOf,
   presentError,
+  presentFault,
   presentCause,
   toastInvalid,
 } from '../error-handler'
@@ -137,6 +138,50 @@ describe('presentError', () => {
     expect(toast.success).not.toHaveBeenCalled()
     expect(toast.info).not.toHaveBeenCalled()
     expect(toast.warning).not.toHaveBeenCalled()
+  })
+})
+
+// ─── presentFault ────────────────────────────────────────────────────────────
+
+describe('presentFault', () => {
+  it('renders a single-argument toast when the cause is null', () => {
+    presentFault('Failed to save settings', null)
+    expect(toast.error).toHaveBeenCalledWith('Failed to save settings')
+    expect(toast.error).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the cause as a description when there is one', () => {
+    presentFault('Failed to save settings', 'scanIntervalMinutes must be at least 15')
+    expect(toast.error).toHaveBeenCalledWith('Failed to save settings', {
+      description: 'scanIntervalMinutes must be at least 15',
+    })
+  })
+
+  it('merges extra options with the description', () => {
+    presentFault('Update check failed', 'Docker is not running', { id: 'update-scan', duration: 4000 })
+    expect(toast.error).toHaveBeenCalledWith('Update check failed', {
+      id: 'update-scan',
+      duration: 4000,
+      description: 'Docker is not running',
+    })
+  })
+
+  it('passes extra options through on the no-cause path, still without a description', () => {
+    presentFault('Update check failed', null, { id: 'update-scan', duration: 4000 })
+    expect(toast.error).toHaveBeenCalledWith('Update check failed', {
+      id: 'update-scan',
+      duration: 4000,
+    })
+  })
+
+  it('does not repeat itself when the cause equals the title', () => {
+    presentFault('Failed to save settings', 'Failed to save settings')
+    expect(toast.error).toHaveBeenCalledWith('Failed to save settings')
+  })
+
+  it('treats an empty cause as no cause', () => {
+    presentFault('Failed to save settings', '')
+    expect(toast.error).toHaveBeenCalledWith('Failed to save settings')
   })
 })
 

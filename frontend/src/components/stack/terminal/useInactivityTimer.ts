@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { toastInvalid } from '@/lib/error-handler'
 import { SESSION_WARNING_MINUTES } from './constants'
 
 export interface UseInactivityTimerResult {
@@ -45,7 +46,7 @@ export function useInactivityTimer(disconnect: () => void): UseInactivityTimerRe
           if (remaining <= 0) {
             clearInterval(countdownInterval)
             setDisconnectCountdown(null)
-            toast.error('Session disconnected due to inactivity (30 minutes)')
+            toastInvalid('Session disconnected due to inactivity (30 minutes)')
             disconnect()
             return
           }

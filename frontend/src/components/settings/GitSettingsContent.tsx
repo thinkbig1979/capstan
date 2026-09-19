@@ -7,6 +7,7 @@ import { useGitSettings, useUpdateGitSettings } from '@/hooks/useResources'
 import { Eye, EyeOff } from 'lucide-react'
 import { toast } from 'sonner'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
+import { presentFault } from '@/lib/error-handler'
 
 export function GitSettingsContent() {
   const { data: gitSettings, isLoading } = useGitSettings()
@@ -38,13 +39,15 @@ export function GitSettingsContent() {
       // material with a 400 naming the mistake, and answers 422
       // ENCRYPTION_KEY_MISSING on the token write with the recovery in it — both
       // were discarded by the zero-arity callback.
-      // Branch rather than a conditional second argument: see the WHY at
-      // UpdateScheduleContent.tsx's onError. The no-cause path stays a
-      // single-argument call that a pre-existing test still pins.
+      // presentFault keeps the no-cause path a SINGLE-argument call, which a
+      // pre-existing test still pins: see the WHY at UpdateScheduleContent's
+      // onError.
       onError: (error) => {
-        const cause = settingsSaveFault(error)
-        if (cause) toast.error('Failed to save git settings', { description: cause })
-        else toast.error('Failed to save git settings')
+        // presentFault, NOT presentError (agent-os-5g8a): the cause here is read
+        // by settingsSaveFault, which is CODE-keyed and deliberately not
+        // classifyError -- see its docblock. Routing this through causeOf would
+        // render axios's own "Network Error" as though the backend had said it.
+        presentFault('Failed to save git settings', settingsSaveFault(error))
       },
     })
   }

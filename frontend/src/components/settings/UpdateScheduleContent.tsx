@@ -10,6 +10,7 @@ import { ScheduleModeFields } from '@/components/settings/ScheduleModeFields'
 import { AlertCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
+import { presentFault, toastInvalid } from '@/lib/error-handler'
 import {
   Select,
   SelectContent,
@@ -88,7 +89,7 @@ export function UpdateScheduleContent() {
     const minutes = updates.scanIntervalMinutes ?? (effectivePreset === 'custom' ? effectiveCustom : parseInt(effectivePreset, 10))
     const autoUpdate = updates.globalAutoUpdate ?? effectiveAutoUpdate
     if (minutes > 0 && minutes < 15) {
-      toast.error('Custom interval must be at least 15 minutes')
+      toastInvalid('Custom interval must be at least 15 minutes')
       return
     }
     const payload: { scanIntervalMinutes: number; globalAutoUpdate: boolean } & ApplyUpdates = {
@@ -113,32 +114,32 @@ export function UpdateScheduleContent() {
       // stays as the TITLE, so a failure with no usable cause renders exactly
       // what it rendered before.
       //
-      // THE BRANCH IS DELIBERATE, and the one place in this change it is
-      // explained — the other three sites repeat the shape, not the reason.
-      // The obvious spelling is the sibling's,
+      // THE ARITY IS DELIBERATE, and this is the one place it is explained —
+      // the sibling sites repeat the shape, not the reason. The obvious
+      // spelling is
       //     toast.error(TITLE, cause ? { description: cause } : undefined)
-      // which is what credentialSaveFault's caller uses
-      // (components/git/GitSettingsSection.tsx:183). Sonner renders the two
-      // identically, so no operator can tell them apart. A vitest spy can: the
-      // unconditional form makes EVERY call two-argument, which breaks four
-      // pre-existing assertions of the form
+      // which makes EVERY call two-argument. Sonner renders that identically,
+      // so no operator can tell the two apart; a vitest spy can, and the
+      // unconditional form breaks four pre-existing assertions of the form
       //     expect(toast.error).toHaveBeenCalledWith('<generic title>')
-      // at UpdateScheduleContent.test.tsx:173, HistoryRetentionSection.test.tsx:148,
-      // GitSettingsContent.test.tsx:168 and BackupSettingsContent.test.tsx:647.
+      // at UpdateScheduleContent.test.tsx, HistoryRetentionSection.test.tsx,
+      // GitSettingsContent.test.tsx and BackupSettingsContent.test.tsx.
       // Each rejects with a bare `new Error('boom')`, which carries no `code`,
       // so settingsSaveFault returns null — meaning those four ALREADY assert
       // the thing this change most needs pinned: a failure with no usable cause
       // still shows the generic sentence and nothing else. They were written
-      // before this change by someone with no stake in it. Left untouched and
-      // green they are independent witnesses; rewritten to expect a trailing
-      // `undefined` they would become four assertions this change's own author
-      // edited to match it, and would stop being evidence. Keeping the branch
-      // costs one line and consistency with one sibling's call shape. That is
-      // the cheaper of the two.
+      // before this change by someone with no stake in it, so left untouched
+      // and green they are independent witnesses.
+      //
+      // agent-os-5g8a moved the branch into presentFault rather than deleting
+      // it: the helper still emits a ONE-argument call when the cause is null,
+      // so all four witnesses stay green and stay untouched.
       onError: (error) => {
-        const cause = settingsSaveFault(error)
-        if (cause) toast.error('Failed to save settings', { description: cause })
-        else toast.error('Failed to save settings')
+        // presentFault, NOT presentError: the cause here is read by
+        // settingsSaveFault, which is CODE-keyed and deliberately not
+        // classifyError -- see its docblock. Routing this through causeOf would
+        // render axios's own "Network Error" as though the backend had said it.
+        presentFault('Failed to save settings', settingsSaveFault(error))
       },
     })
   }

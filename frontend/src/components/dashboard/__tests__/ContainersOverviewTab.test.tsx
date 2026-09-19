@@ -228,10 +228,12 @@ describe('ContainersOverviewTab — ActionResult reasons reach the operator', ()
 })
 
 describe('ContainersOverviewTab — non-ActionResult errors keep the classifier sentence', () => {
-  // The other side of the same instrument: an AppError body must NOT take the
-  // new branch, and must stay a single-argument call (sonner renders
-  // toast.error(t, undefined) and toast.error(t) alike; a spy does not).
-  it('start keeps the single-argument classifier toast for an AppError body', async () => {
+  // The other side of the same instrument: an AppError body must NOT be read as
+  // an ActionResult reason. agent-os-5g8a moved the branch into presentError,
+  // so the classifier sentence is now the DESCRIPTION under the action title
+  // rather than the title itself -- these arms assert the position as well as
+  // the text, which is strictly more than they pinned before.
+  it('keeps the classifier sentence for an AppError body on start', async () => {
     stacksMock.start.mockRejectedValue(appErrorFailure())
     renderTab(makeContainer({ state: 'exited' }))
 
@@ -239,14 +241,15 @@ describe('ContainersOverviewTab — non-ActionResult errors keep the classifier 
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
     expect(toast.error).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(toast.error).mock.calls[0]).toHaveLength(1)
-    expect(vi.mocked(toast.error).mock.calls[0][0]).toContain(DOCKER_REASON)
+    const [title, options] = vi.mocked(toast.error).mock.calls[0] as [string, { description?: string }]
+    expect(title).toBe('Failed to start stack')
+    expect(options.description).toContain(DOCKER_REASON)
   })
 
   // Pins the `&& err.reason` conjunct. A failed ActionResult may carry an empty
   // reason; without the conjunct this renders an empty toast description, which
   // is worse than the generic sentence it replaced.
-  it('start falls through to the classifier when the ActionResult reason is empty', async () => {
+  it('falls through to the classifier when the ActionResult reason is empty', async () => {
     stacksMock.start.mockRejectedValue({ outcome: 'failed', reason: '', details: {}, status: 503 })
     renderTab(makeContainer({ state: 'exited' }))
 
@@ -254,11 +257,15 @@ describe('ContainersOverviewTab — non-ActionResult errors keep the classifier 
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
     expect(toast.error).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(toast.error).mock.calls[0]).toHaveLength(1)
-    expect(vi.mocked(toast.error).mock.calls[0][0]).toBe('503: Something went wrong on the server')
+    // The empty reason must NOT become the description: an empty second line
+    // is worse than the classifier's sentence. Asserting the exact string is
+    // what lets this arm see the `&& err.reason` conjunct being dropped.
+    expect(toast.error).toHaveBeenCalledWith('Failed to start stack', {
+      description: '503: Something went wrong on the server',
+    })
   })
 
-  it('delete keeps the single-argument classifier toast for an AppError body', async () => {
+  it('keeps the classifier sentence for an AppError body on delete', async () => {
     resourcesMock.deleteContainer.mockRejectedValue(appErrorFailure())
     renderTab()
 
@@ -266,8 +273,9 @@ describe('ContainersOverviewTab — non-ActionResult errors keep the classifier 
     fireEvent.click(await screen.findByRole('button', { name: 'Remove' }))
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
-    expect(vi.mocked(toast.error).mock.calls[0]).toHaveLength(1)
-    expect(vi.mocked(toast.error).mock.calls[0][0]).toContain(DOCKER_REASON)
+    const [title, options] = vi.mocked(toast.error).mock.calls[0] as [string, { description?: string }]
+    expect(title).toBe('Failed to remove container')
+    expect(options.description).toContain(DOCKER_REASON)
   })
 })
 
@@ -305,12 +313,12 @@ describe('ContainersOverviewTab — a stack-mode row with no stackId', () => {
     fireEvent.click(screen.getByLabelText('Pull images for stack'))
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
-    // Single-argument, matching the classifier arm: an Error carries no
-    // ActionResult reason, so onError takes its else branch. Asserted by arity
-    // rather than toHaveBeenCalledWith(msg, undefined), which does not match a
-    // one-argument call.
-    expect(vi.mocked(toast.error).mock.calls[0]).toHaveLength(1)
-    expect(vi.mocked(toast.error).mock.calls[0][0]).toBe(NO_STACK_FOR_PULL)
+    // The thrown Error carries no ActionResult reason, so causeOf falls through
+    // to classifyError's terminal arm and the sentence lands in the
+    // description under the action title.
+    expect(toast.error).toHaveBeenCalledWith('Failed to pull images', {
+      description: NO_STACK_FOR_PULL,
+    })
     expect(toast.success).not.toHaveBeenCalled()
     expect(stacksMock.pull).not.toHaveBeenCalled()
   })

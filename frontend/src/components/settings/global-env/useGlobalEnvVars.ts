@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from
 import { toast } from 'sonner'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { useGlobalEnv, useUpdateGlobalEnv } from '@/hooks/useResources'
-import { classifyError } from '@/lib/error-handler'
+import { presentError } from '@/lib/error-handler'
 import type { EnvVar, IndexedEnvVar } from './types'
 
 const ENV_SEARCH_FIELDS = [
@@ -76,7 +76,7 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
         setDirty(false)
       },
       onError: (err) => {
-        toast.error(classifyError(err).message || 'Failed to save global environment variables')
+        presentError(err, { fallback: 'Failed to save global environment variables' })
       },
     })
   }

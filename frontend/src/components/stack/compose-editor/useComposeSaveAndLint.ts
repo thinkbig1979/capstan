@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { RefObject } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '@/lib/api'
-import { classifyError } from '@/lib/error-handler'
+import { classifyError, presentError, toastInvalid } from '@/lib/error-handler'
 import { toast } from 'sonner'
 import type { LintResult } from '@/types'
 import type { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
@@ -43,7 +43,7 @@ export function useComposeSaveAndLint({
       setLintResults(data.lintResults || [])
       toast.success('Compose file saved successfully')
       if (data.lintResults?.some((r: LintResult) => r.level === 'error')) {
-        toast.error('Lint errors detected')
+        toastInvalid('Lint errors detected')
       } else if (data.lintResults?.some((r: LintResult) => r.level === 'warning')) {
         toast.warning('Lint warnings detected')
       }
@@ -59,7 +59,7 @@ export function useComposeSaveAndLint({
       const details = (error as { details?: { lintResults?: LintResult[] } } | null | undefined)?.details
       if (details?.lintResults && details.lintResults.length > 0) {
         setLintResults(details.lintResults)
-        toast.error('Lint errors detected')
+        toastInvalid('Lint errors detected')
       } else {
         toast.error(appError.message)
       }
@@ -108,7 +108,7 @@ export function useComposeSaveAndLint({
     onSuccess: (data) => {
       setLintResults(data.lintResults || [])
       if (data.lintResults?.some((r: LintResult) => r.level === 'error')) {
-        toast.error('Lint errors detected')
+        toastInvalid('Lint errors detected')
       } else if (data.lintResults?.some((r: LintResult) => r.level === 'warning')) {
         toast.warning('Lint warnings detected')
       } else {
@@ -116,8 +116,8 @@ export function useComposeSaveAndLint({
       }
       queryClient.invalidateQueries({ queryKey: queryKeys.stack.compose(stackId) })
     },
-    onError: () => {
-      toast.error('Failed to lint compose file')
+    onError: (err) => {
+      presentError(err, { fallback: 'Failed to lint compose file' })
     },
   })
 
