@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -11,7 +12,6 @@ import (
 	dockernet "github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"io"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
