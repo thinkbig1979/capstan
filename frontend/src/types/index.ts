@@ -689,3 +689,35 @@ export interface DockerCleanupPreview {
   reclaimableBytes: number
   minAgeHours: number
 }
+
+/** One recorded execution of the Docker cleanup job, from
+ *  GET /resources/cleanup/history.
+ *
+ *  `finishedAt` and `errorMessage` are OMITTED, never null: models.go:411 makes
+ *  finishedAt a *string with omitempty and :416 gives errorMessage a plain Go
+ *  string with omitempty. A reader that interpolates either into a template
+ *  literal prints "undefined" on the majority of rows.
+ *
+ *  `minAgeHours` is the floor THAT run applied, stored per row, so a run stays
+ *  interpretable after the policy changes. */
+export interface DockerCleanupRun {
+  id: string
+  trigger: 'scheduled' | 'manual'
+  status: 'success' | 'failed'
+  /** RFC3339. */
+  startedAt: string
+  finishedAt?: string
+  imagesDeleted: number
+  bytesReclaimed: number
+  cacheBytesReclaimed: number
+  minAgeHours: number
+  errorMessage?: string
+}
+
+/** GET /resources/cleanup/history. `runs` is never null — the handler coerces a
+ *  nil slice to [] (docker_cleanup.go:367-369). `limit` is the limit the server
+ *  actually applied after clamping to [1,100], not the one that was asked for. */
+export interface DockerCleanupHistory {
+  runs: DockerCleanupRun[]
+  limit: number
+}

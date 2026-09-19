@@ -65,6 +65,12 @@ export const queryKeys = {
     buildCache: () => ['resources', 'build-cache'] as const,
     updates: () => ['resources', 'updates'] as const,
     updateJobs: () => ['resources', 'update-jobs'] as const,
+    /**
+     * What a scheduled cleanup would reclaim right now, at the STORED policy
+     * floor. A resource rather than a settings pane: it is read on the Images
+     * tab and invalidated by every image removal there, not by a policy edit.
+     */
+    cleanupPreview: () => ['resources', 'cleanup-preview'] as const,
   },
 
   /** Applied-update history. `all` prefix-matches every filtered list. */
@@ -84,6 +90,12 @@ export const queryKeys = {
     globalEnv: () => ['settings', 'global-env'] as const,
     retention: () => ['settings', 'retention'] as const,
     dockerCleanup: () => ['settings', 'docker-cleanup'] as const,
+    /**
+     * Recorded cleanup runs. Deliberately carries no `limit` segment: there is
+     * one reader at one limit. A second reader at a different limit would read
+     * this one's cached page, so it would need the limit in the key.
+     */
+    dockerCleanupHistory: () => ['settings', 'docker-cleanup-history'] as const,
   },
 
   /** Build identity of the running backend. Immutable for the process lifetime. */

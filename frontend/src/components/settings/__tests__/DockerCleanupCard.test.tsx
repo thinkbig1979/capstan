@@ -13,12 +13,14 @@ import { DockerCleanupCard } from '../DockerCleanupCard'
 const mockGetCleanupPolicy = vi.fn()
 const mockUpdateCleanupPolicy = vi.fn()
 const mockPreviewCleanup = vi.fn()
+const mockGetCleanupHistory = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   resourcesApi: {
     getCleanupPolicy: (...args: unknown[]) => mockGetCleanupPolicy(...args),
     updateCleanupPolicy: (...args: unknown[]) => mockUpdateCleanupPolicy(...args),
     previewCleanup: (...args: unknown[]) => mockPreviewCleanup(...args),
+    getCleanupHistory: (...args: unknown[]) => mockGetCleanupHistory(...args),
   },
 }))
 
@@ -63,6 +65,34 @@ const ID_CANDIDATE = {
 }
 const ID_CANDIDATE_TRUNCATED_ID = 'fedcba9876543210fed'
 
+// finishedAt and errorMessage are the only optional fields on the wire, and the
+// backend OMITS them rather than sending null (models.go:411, :416). The
+// fixtures below omit the KEYS for that reason: `finishedAt: undefined` would
+// test a shape the server never sends.
+const SUCCESS_RUN = {
+  id: 'run-1',
+  trigger: 'scheduled',
+  status: 'success',
+  startedAt: '2026-09-18T10:00:00Z',
+  finishedAt: '2026-09-18T10:00:30Z',
+  imagesDeleted: 3,
+  bytesReclaimed: 5 * 1024 * 1024,
+  cacheBytesReclaimed: 2 * 1024 * 1024,
+  minAgeHours: 168,
+}
+
+const FAILED_RUN = {
+  id: 'run-2',
+  trigger: 'manual',
+  status: 'failed',
+  startedAt: '2026-09-18T09:00:00Z',
+  imagesDeleted: 0,
+  bytesReclaimed: 0,
+  cacheBytesReclaimed: 0,
+  minAgeHours: 168,
+  errorMessage: 'Cannot connect to the Docker daemon',
+}
+
 function previewOf(candidates: Array<Record<string, unknown>>) {
   return {
     candidates,
@@ -85,6 +115,74 @@ describe('DockerCleanupCard', () => {
     mockGetCleanupPolicy.mockResolvedValue(POLICY)
     mockUpdateCleanupPolicy.mockResolvedValue(POLICY)
     mockPreviewCleanup.mockResolvedValue(previewOf([]))
+    // Mandatory, not cosmetic: without it the ten tests below stay green while
+    // the card renders the history error sentence.
+    mockGetCleanupHistory.mockResolvedValue({ runs: [], limit: 20 })
+  })
+
+  describe('run history', () => {
+    it('renders a recorded run with its trigger, status and total reclaimed', async () => {
+      mockGetCleanupHistory.mockResolvedValue({ runs: [SUCCESS_RUN], limit: 20 })
+      renderCard()
+
+      expect(await screen.findByText('scheduled')).toBeInTheDocument()
+      expect(screen.getByText('success')).toBeInTheDocument()
+      // Image bytes plus build-cache bytes: 5 MB + 2 MB. Reporting only
+      // bytesReclaimed would under-report every run that cleared cache.
+      expect(screen.getByText('7.00 MB')).toBeInTheDocument()
+      expect(screen.getByText('3')).toBeInTheDocument()
+      // The floor the run actually applied, stored per row, not the live policy.
+      expect(screen.getByText('168 h')).toBeInTheDocument()
+    })
+
+    it('shows why a failed run failed', async () => {
+      mockGetCleanupHistory.mockResolvedValue({ runs: [FAILED_RUN], limit: 20 })
+      renderCard()
+
+      expect(await screen.findByText('failed')).toBeInTheDocument()
+      expect(screen.getByText('Cannot connect to the Docker daemon')).toBeInTheDocument()
+    })
+
+    it('prints no "undefined" for a run whose optional fields are absent', async () => {
+      // Both keys OMITTED, exactly as the wire sends a successful run: Go's
+      // omitempty drops finishedAt (a nil *string) and errorMessage (an empty
+      // string) rather than sending null.
+      const runWithoutOptionals = {
+        id: SUCCESS_RUN.id,
+        trigger: SUCCESS_RUN.trigger,
+        status: SUCCESS_RUN.status,
+        startedAt: SUCCESS_RUN.startedAt,
+        imagesDeleted: SUCCESS_RUN.imagesDeleted,
+        bytesReclaimed: SUCCESS_RUN.bytesReclaimed,
+        cacheBytesReclaimed: SUCCESS_RUN.cacheBytesReclaimed,
+        minAgeHours: SUCCESS_RUN.minAgeHours,
+      }
+      expect('finishedAt' in runWithoutOptionals).toBe(false)
+      expect('errorMessage' in runWithoutOptionals).toBe(false)
+      mockGetCleanupHistory.mockResolvedValue({ runs: [runWithoutOptionals], limit: 20 })
+      const { container } = renderCard()
+
+      expect(await screen.findByText('success')).toBeInTheDocument()
+      expect(screen.queryByText(/undefined/)).toBeNull()
+      expect(container.textContent).not.toContain('undefined')
+    })
+
+    it('says the history is empty when there are no runs', async () => {
+      renderCard()
+
+      expect(await screen.findByText('No cleanup runs yet.')).toBeInTheDocument()
+      // An empty table is not an unreadable one, and the two must not share a
+      // sentence: the operator's next action differs.
+      expect(screen.queryByText('Run history is unavailable.')).toBeNull()
+    })
+
+    it('says the history is unreadable when the request fails', async () => {
+      mockGetCleanupHistory.mockRejectedValue(new Error('boom'))
+      renderCard()
+
+      expect(await screen.findByText('Run history is unavailable.')).toBeInTheDocument()
+      expect(screen.queryByText('No cleanup runs yet.')).toBeNull()
+    })
   })
 
   describe('preview candidate labels', () => {
