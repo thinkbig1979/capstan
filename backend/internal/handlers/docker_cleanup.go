@@ -132,10 +132,19 @@ func (h *ResourcesHandler) updateCleanupPolicy(c *gin.Context) {
 
 	// Capture the pre-write policy so the re-arm below fires only on a change that
 	// actually moves the ticker. handlers/settings.go:749-754 is the precedent: it
-	// restarts the scan scheduler only when the interval really changed. On a read
-	// fault we re-arm anyway -- failing to re-arm an operator who just opted in is
-	// the worse of the two errors.
+	// restarts the scan scheduler only when the interval really changed.
+	//
+	// A read fault here is NOT folded silently into the re-arm decision. It is
+	// logged and then treated as "re-arm anyway", because failing to re-arm an
+	// operator who just opted in is the worse of the two errors -- but a fault
+	// that only ever widens a branch, with nothing said, is the softened-error
+	// shape scripts/check-getter-errors.sh exists to catch, and the same lie
+	// getCleanupPolicy refuses to tell.
 	before, beforeErr := services.ResolveDockerCleanupPolicy(h.db)
+	if beforeErr != nil {
+		slog.Error("Could not read the previous Docker cleanup policy; re-arming the cleanup tick unconditionally, which discards any interval already counting down",
+			"error", beforeErr)
+	}
 
 	applied := gin.H{}
 	if req.Enabled != nil {
@@ -331,6 +340,14 @@ func (h *ResourcesHandler) cleanupMinAgeFromRequest(c *gin.Context) (int, bool) 
 // serve a one-row page for `limit=nonsense` instead of the documented default.
 func (h *ResourcesHandler) getCleanupHistory(c *gin.Context) {
 	limit := defaultCleanupHistoryLimit
+	// The Atoi error is deliberately not surfaced, and this site is recorded in
+	// scripts/check-getter-errors-baseline.txt for that reason. That scanner's
+	// subject is a DATABASE or DAEMON fault read as a default; this is a client
+	// query parameter, where "limit=nonsense" has no answer to report and the
+	// documented default is the honest response. Identical shape, already
+	// baselined, at getUpdateHistory (updates.go:757,762) and getHistory
+	// (backup.go:820,825) -- this is the eighth instance of one accepted pattern,
+	// not a new kind of site.
 	if l := c.Query("limit"); l != "" {
 		if v, err := strconv.Atoi(l); err == nil && v > 0 {
 			limit = v
