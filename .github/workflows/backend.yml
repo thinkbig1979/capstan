@@ -127,34 +127,44 @@ jobs:
         working-directory: backend
         run: go test ./... -count=1
 
-      # The getter-errors ratchet (agent-os-8f2g) is a go/ast program, so until
-      # agent-os-946e it had NO CI route at all. Its only one was through
-      # scripts/check-docs.sh, which runs in the "Docs structure and coverage
-      # gates" job -- deliberately dependency-free bash, hence no Go, hence the
-      # scanner skipped there and that required check went green without it
-      # having run. agent-os-ozt0 is the drift that reached main through the
-      # gap: two files past their baseline, neither visible to any PR.
+      # The getter-errors ANALYZER (agent-os-qyg7.2), replacing the count
+      # ratchet that stood here. The ratchet enforced a per-file baseline, so
+      # deleting one site and adding another in the same file netted zero and
+      # passed; the analyzer reports ZERO on the tree, so any new site is a
+      # hard failure in this required job.
       #
-      # It is wired HERE rather than by adding actions/setup-go to the docs job
-      # because check-docs.sh:860-864 states the dependency-free property of
-      # that workflow as a design decision, and this job already has Go, the
-      # module cache, and a place in main's required checks -- so enforcement
-      # arrives with no branch-protection change.
+      # It detects an error softened into an "absent" signal (`x, e := f()`
+      # read only as `e == nil`) and one merged into a value test
+      # (`if e != nil || v`), by SHAPE and by TYPE -- never by the error's
+      # name, the callee's verb or the receiver expression, every one of which
+      # has already returned a false zero on this tree. DISCARD
+      # (`x, _ := f()`) is not here: errcheck with check-blank owns it as of
+      # agent-os-qyg7.1, in the required "Lint (golangci-lint)" job.
       #
-      # AFTER the unit tests, not before: the ratchet is a policy gate and a
-      # step that fails stops the job, so running it first would hide a genuine
-      # test failure behind a baseline one. Runner time is not the constraint
-      # (self-hosted); information per run is.
+      # WHY -C, and it is not cosmetic: backend/tools/geterrors has its OWN
+      # go.mod, which is what keeps golang.org/x/tools out of backend's
+      # dependency graph. Without -C this exits 1 with "main module does not
+      # contain package". That nesting also means the step above's
+      # `go build ./...` and `go vet ./...` never see the analyzer, so it gets
+      # its own build and its own test run here.
       #
-      # --self-test FIRST, mirroring check-docs.sh:873-880. A scanner that has
-      # silently stopped firing looks exactly like a clean tree, and this step
-      # is the thing whose green will be cited. The self-test runs the scanner
-      # against fixtures it MUST report, so a broken instrument turns this red
-      # instead of passing every PR.
-      - name: Getter-errors ratchet
+      # THE TEST RUN IS NOT OPTIONAL and it runs FIRST, mirroring the
+      # --self-test the deleted script ran before every verdict. A detector
+      # that has silently stopped firing looks exactly like a clean tree, and
+      # this step's green is what a close reason will cite. The analysistest
+      # suite is two-sided: a fixture that must report every planted site by
+      # line, and fixtures that must stay silent.
+      #
+      # AFTER the unit tests, not before: a step that fails stops the job, so
+      # running a policy gate first would hide a genuine test failure behind
+      # it. Runner time is not the constraint here (self-hosted); information
+      # per run is.
+      - name: Getter-errors analyzer
+        working-directory: backend
         run: |
-          bash scripts/check-getter-errors.sh --self-test
-          bash scripts/check-getter-errors.sh
+          go test -C tools/geterrors ./... -count=1
+          go build -C tools/geterrors -o "$RUNNER_TEMP/geterrors" ./cmd/geterrors
+          go vet -vettool="$RUNNER_TEMP/geterrors" ./...
 
   # This codebase is the profile the race detector is built for:
   # goroutine-per-connection WebSocket handlers, background tickers, a session

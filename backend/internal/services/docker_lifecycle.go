@@ -414,7 +414,7 @@ waitLoop:
 		}
 		// Use Status so a real docker error breaks the loop (same as "stopped").
 		status, _, sErr := s.Status(stack)
-		if sErr != nil || status == "stopped" {
+		if sErr != nil || status == "stopped" { //geterrors:ignore the comment above states it: this is a bounded wait, and StartVerified below produces the returned outcome independently, so a Status error can only shorten the wait and never becomes the reported result
 			break waitLoop
 		}
 		time.Sleep(backoff)

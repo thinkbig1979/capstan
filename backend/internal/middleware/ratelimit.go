@@ -114,7 +114,7 @@ func validateIPKey(key string) bool {
 		parts := strings.Split(key, ".")
 		for _, part := range parts {
 			num, err := strconv.Atoi(part)
-			if err != nil || num < 0 || num > 255 {
+			if err != nil || num < 0 || num > 255 { //geterrors:ignore fails closed: a non-numeric octet and an out-of-range one both mean "this is not a valid IPv4 key", and both reject
 				return false
 			}
 		}

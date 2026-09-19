@@ -84,7 +84,7 @@ func (h *GitHandler) resolvePathFromStack(c *gin.Context) (string, string, error
 	} else {
 		for _, stacksDir := range h.config.GetAllStacksDirs() {
 			candidate := filepath.Join(stacksDir, decodedPath)
-			if _, err := os.Stat(candidate); err == nil {
+			if _, err := os.Stat(candidate); err == nil { //geterrors:ignore existence probe across the configured stacks dirs: a candidate that will not stat is simply not the one, and the fallback below is unconditional
 				absPath = candidate
 				break
 			}
@@ -253,14 +253,14 @@ func (h *GitHandler) GetLog(c *gin.Context) {
 
 	limit := 50
 	if l := c.Query("limit"); l != "" {
-		if parsed, err := parseQueryParamInt(l, 50, 200); err == nil {
+		if parsed, err := parseQueryParamInt(l, 50, 200); err == nil { //geterrors:ignore client-supplied ?limit: parseQueryParamInt failing means "use the default 50"
 			limit = parsed
 		}
 	}
 
 	offset := 0
 	if o := c.Query("offset"); o != "" {
-		if parsed, err := parseQueryParamInt(o, 0, 10000); err == nil {
+		if parsed, err := parseQueryParamInt(o, 0, 10000); err == nil { //geterrors:ignore client-supplied ?offset: as for ?limit above, default 0
 			offset = parsed
 		}
 	}

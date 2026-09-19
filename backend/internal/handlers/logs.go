@@ -74,7 +74,7 @@ func (h *LogsHandler) GetLogs(c *gin.Context) {
 
 	tailStr := c.DefaultQuery("tail", "100")
 	tail, err := strconv.Atoi(tailStr)
-	if err != nil || tail < 1 {
+	if err != nil || tail < 1 { //geterrors:ignore client-supplied ?tail: unparseable and out-of-range both take the default of 100, which is then clamped below
 		tail = 100
 	}
 	if tail > 5000 {
@@ -375,7 +375,7 @@ func parseLogLine(line string) *LogLine {
 	for _, format := range timeFormats {
 		if len(rest) >= len(format) {
 			potentialTime := rest[:len(format)]
-			if _, err := time.Parse(format, potentialTime); err == nil {
+			if _, err := time.Parse(format, potentialTime); err == nil { //geterrors:ignore format probing: time.Parse failing IS "this prefix is not a timestamp in this layout", which is the loop's question
 				timestamp = potentialTime
 				message = strings.TrimSpace(rest[len(format):])
 				break
@@ -386,7 +386,7 @@ func parseLogLine(line string) *LogLine {
 	for _, format := range timeFormats {
 		if len(message) >= len(format) {
 			potentialTime := message[:len(format)]
-			if _, err := time.Parse(format, potentialTime); err == nil {
+			if _, err := time.Parse(format, potentialTime); err == nil { //geterrors:ignore as for the timestamp prefix above, applied to the message body
 				message = strings.TrimSpace(message[len(format):])
 				break
 			}

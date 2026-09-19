@@ -429,7 +429,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 
 	// ── Verify compose was written ─────────────────────────────────────────
 	//nolint:gosec // composePath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
-	if writtenCompose, rerr := os.ReadFile(composePath); rerr != nil || string(writtenCompose) != req.ComposeContent {
+	if writtenCompose, rerr := os.ReadFile(composePath); rerr != nil || string(writtenCompose) != req.ComposeContent { //geterrors:ignore read-back verification: "could not read it back" and "it differs from what we sent" both mean the write is unverified, and both take the same rollback
 		// Compose verification failed — roll back both files.
 		rollbackErr := ""
 		if originalCompose != nil {

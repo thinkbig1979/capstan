@@ -344,7 +344,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 	cmpErr := bcrypt.CompareHashAndPassword(hashToCompare, []byte(req.Password))
 
-	if !userExists || cmpErr != nil {
+	if !userExists || cmpErr != nil { //geterrors:ignore deliberate: a wrong password and an unknown user must be indistinguishable to the client (user enumeration), and the reason variable below already discriminates them for the audit log
 		reason := "invalid_password"
 		if !userExists {
 			reason = "user_not_found"

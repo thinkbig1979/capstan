@@ -474,7 +474,7 @@ func rootFingerprint(canonicalRoot string) string {
 // configured root it is not spelled the same as, and the callers' own
 // validation (handlers.isValidStacksDir) matches on Abs too.
 func canonicalRoot(root string) string {
-	if abs, err := filepath.Abs(root); err == nil {
+	if abs, err := filepath.Abs(root); err == nil { //geterrors:ignore filepath.Abs errors only when os.Getwd does, and the documented fallback to filepath.Clean is the answer for that case
 		return abs
 	}
 	return filepath.Clean(root)
@@ -637,7 +637,7 @@ func (s *ScannerService) readScanDepth() (int, error) {
 	// An empty, non-numeric or out-of-range stored value is a value this code
 	// cannot use, not a database fault: keep the pre-existing silent fallback
 	// rather than turning a bad setting into a refusal to scan.
-	if v, parseErr := strconv.Atoi(depthStr); parseErr == nil && v >= 1 {
+	if v, parseErr := strconv.Atoi(depthStr); parseErr == nil && v >= 1 { //geterrors:ignore the comment directly above states it: an empty, non-numeric or out-of-range stored depth is not a database fault and must not turn into a refusal to scan
 		return v, nil
 	}
 	return defaultScanDepth, nil
@@ -836,7 +836,7 @@ func (s *ScannerService) pruneStaleIDStacks(directories []models.Directory, acti
 func (s *ScannerService) expectedStackID(dirPath, effectiveRoot, composeFile string) string {
 	relPath := ""
 	if effectiveRoot != "" {
-		if rel, err := filepath.Rel(effectiveRoot, dirPath); err == nil {
+		if rel, err := filepath.Rel(effectiveRoot, dirPath); err == nil { //geterrors:ignore a Rel that fails means dirPath is not under effectiveRoot; the base name below is the documented fallback for exactly that
 			relPath = rel
 		}
 	}
@@ -1516,7 +1516,7 @@ func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) erro
 
 	relPath := ""
 	if effectiveRoot != "" {
-		rel, err := filepath.Rel(effectiveRoot, path)
+		rel, err := filepath.Rel(effectiveRoot, path) //geterrors:ignore as in expectedStackID above: a Rel that fails falls back to dirName
 		if err == nil {
 			relPath = rel
 		}

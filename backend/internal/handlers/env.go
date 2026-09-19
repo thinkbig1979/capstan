@@ -317,7 +317,7 @@ func (h *EnvHandler) Create(c *gin.Context) {
 	}
 
 	// Refuse if the file already exists.
-	if _, statErr := os.Stat(envPath); statErr == nil {
+	if _, statErr := os.Stat(envPath); statErr == nil { //geterrors:ignore existence probe: a stat error that is not NotExist reads as "not there" and the create below is the real gate, which fails loudly
 		renderResultWithStatus(c, http.StatusConflict, truth.NoChange("env file already exists",
 			truth.KV("filename", envFileName),
 		))

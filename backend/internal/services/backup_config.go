@@ -379,12 +379,12 @@ func resolveIntSetting(db *database.DB, key, envVal string, defaultVal int) (int
 		return 0, err
 	}
 	if dbVal != "" {
-		if v, atoiErr := strconv.Atoi(dbVal); atoiErr == nil {
+		if v, atoiErr := strconv.Atoi(dbVal); atoiErr == nil { //geterrors:ignore a stored setting that is not an integer is a value this code cannot use, not a database fault; the read above already returned its error, and resolution falls through to env then default
 			return v, nil
 		}
 	}
 	if envVal != "" {
-		if v, atoiErr := strconv.Atoi(envVal); atoiErr == nil {
+		if v, atoiErr := strconv.Atoi(envVal); atoiErr == nil { //geterrors:ignore as for the db value above: an unusable env value falls through to defaultVal
 			return v, nil
 		}
 	}

@@ -28,7 +28,7 @@ func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := ""
 		if inbound := c.GetHeader(RequestIDHeader); inbound != "" {
-			if parsed, err := uuid.Parse(inbound); err == nil {
+			if parsed, err := uuid.Parse(inbound); err == nil { //geterrors:ignore an inbound X-Request-ID that will not parse is not a request id; a fresh uuid is minted below in both cases
 				id = parsed.String()
 			}
 		}

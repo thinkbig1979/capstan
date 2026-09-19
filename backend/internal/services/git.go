@@ -139,7 +139,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 
 	dirty := false
 	dirtyCount := 0
-	if output, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain"); err == nil {
+	if output, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain"); err == nil { //geterrors:ignore arguably in class and left as-is deliberately (agent-os-qyg7.2): rev-parse has already succeeded above, so a failure here reads as "clean" rather than "unknown" -- but changing getStatusCLI's contract is outside this bead, and it is recorded rather than blessed
 		trimmed := strings.TrimSpace(output)
 		dirty = trimmed != ""
 		if dirty {
@@ -165,10 +165,10 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	// report the nonsense "origin/HEAD" for every detached checkout — a state
 	// where go-git reported "".
 	if branch != "HEAD" {
-		if output, err := s.gitCommandWithCreds(dirPath, user, token,
+		if output, err := s.gitCommandWithCreds(dirPath, user, token, //geterrors:ignore a non-zero exit from rev-parse --abbrev-ref @{upstream} IS "no upstream configured", which is the question; the else branch below handles it
 			"rev-parse", "--abbrev-ref", "@{upstream}"); err == nil {
 			trackingBranch = strings.TrimSpace(output)
-		} else if _, refErr := s.gitCommandWithCreds(dirPath, user, token,
+		} else if _, refErr := s.gitCommandWithCreds(dirPath, user, token, //geterrors:ignore a non-zero exit from rev-parse --verify refs/remotes/origin/<branch> IS "no such remote-tracking ref", which is the question
 			"rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch); refErr == nil {
 			// No upstream configured, but a remote-tracking ref of the
 			// conventional name exists — the state left by a bare `git fetch`
@@ -200,7 +200,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	ahead := 0
 	behind := 0
 	if trackingBranch != "" {
-		if output, err := s.gitCommandWithCreds(dirPath, user, token,
+		if output, err := s.gitCommandWithCreds(dirPath, user, token, //geterrors:ignore the comment below states it: with no usable upstream, trackingBranch is empty and both counts stay 0, which is the honest answer rather than an invented one
 			"rev-list", "--left-right", "--count", trackingBranch+"...HEAD"); err == nil {
 			parts := strings.Fields(output)
 			if len(parts) == 2 {
@@ -824,10 +824,10 @@ func (s *GitService) gitFailure(dirPath string, err error) error {
 // Credentials are not resolved: neither probe contacts a remote, and this runs
 // only after a command has already failed.
 func (s *GitService) hasUnbornHead(dirPath string) bool {
-	if _, err := s.gitCommandWithCreds(dirPath, "", "", "rev-parse", "--verify", "HEAD"); err == nil {
+	if _, err := s.gitCommandWithCreds(dirPath, "", "", "rev-parse", "--verify", "HEAD"); err == nil { //geterrors:ignore a non-zero exit from rev-parse --verify HEAD IS "HEAD does not resolve", which is exactly what hasUnbornHead asks
 		return false
 	}
-	_, err := s.gitCommandWithCreds(dirPath, "", "", "symbolic-ref", "--quiet", "HEAD")
+	_, err := s.gitCommandWithCreds(dirPath, "", "", "symbolic-ref", "--quiet", "HEAD") //geterrors:ignore a non-zero exit from symbolic-ref --quiet HEAD IS "HEAD is not a symbolic ref", and the predicate returns precisely that
 	return err == nil
 }
 
