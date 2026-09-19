@@ -267,7 +267,7 @@ func snapshotJSON(id, shortID, stackID string) []byte {
 			"paths":    []string{"/opt/stacks/" + stackID},
 		},
 	}
-	b, _ := json.Marshal(snaps)
+	b, _ := json.Marshal(snaps) //nolint:errcheck // A literal fixture of marshalable types; a failure would be a Go runtime bug, not a test condition. snapshotJSON has no *testing.T and giving it one is a refactor out of scope here.
 	return b
 }
 
@@ -409,7 +409,7 @@ func TestRunBackup_RejectsConcurrentRun(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_, _ = svc.RunBackup(context.Background(), nil, false, "manual", out1)
+		_, _ = svc.RunBackup(context.Background(), nil, false, "manual", out1) //nolint:errcheck // Called for its side-effect; the assertion for this case is below, not on this return value.
 	}()
 
 	// Give the goroutine time to acquire the lock.

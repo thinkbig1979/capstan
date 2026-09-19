@@ -78,7 +78,7 @@ holding a login cookie is signed out. The server does not need restarting.
 // changed what the operator was TOLD about state they cannot otherwise see.
 func runAdminCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = io.WriteString(stderr, adminUsage)
+		_, _ = io.WriteString(stderr, adminUsage) //nolint:errcheck // Usage text to a console writer: nothing to recover and no caller to tell.
 		return 2
 	}
 
@@ -86,7 +86,7 @@ func runAdminCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	case "reset-password":
 		return runResetPassword(args[1:], stdin, stdout, stderr)
 	case "-h", "--help", "help":
-		_, _ = io.WriteString(stdout, adminUsage)
+		_, _ = io.WriteString(stdout, adminUsage) //nolint:errcheck // Usage text to a console writer: nothing to recover and no caller to tell.
 		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown admin command %q\n\n%s", args[0], adminUsage)
@@ -97,7 +97,7 @@ func runAdminCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 func runResetPassword(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("reset-password", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() { _, _ = io.WriteString(stderr, adminUsage) }
+	fs.Usage = func() { _, _ = io.WriteString(stderr, adminUsage) } //nolint:errcheck // flag.FlagSet.Usage returns nothing, so there is nowhere to report a write failure.
 	username := fs.String("username", "", "account to reset (optional when only one exists)")
 	dataDir := fs.String("data-dir", "", "directory holding capstan.db")
 	if err := fs.Parse(args); err != nil {

@@ -487,7 +487,7 @@ func TestResolveGitState_AncestorWithUnreadableGitDirIsNotARepository(t *testing
 	}
 	// t.TempDir's cleanup cannot descend into a 000 directory.
 	//nolint:gosec // G302: 0755 is REQUIRED here, not lax. This restores the directory's own traversal bits so t.TempDir's RemoveAll can descend into it; 0600 clears the execute bit on a DIRECTORY, which leaves it unlistable and leaks the fixture
-	t.Cleanup(func() { _ = os.Chmod(gitPath, 0o755) })
+	t.Cleanup(func() { _ = os.Chmod(gitPath, 0o755) }) //nolint:errcheck // Best-effort cleanup in t.Cleanup/defer; a failure cannot change the test's verdict.
 
 	//nolint:gosec // gitPath is a t.TempDir()-rooted fixture this test created; the read decides whether chmod 000 actually denies for this uid, and without it the arm would pass vacuously wherever the suite runs as root
 	if _, err := os.ReadFile(filepath.Join(gitPath, "HEAD")); err == nil {

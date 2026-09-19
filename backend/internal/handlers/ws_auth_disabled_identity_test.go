@@ -84,7 +84,7 @@ func waitForDistinctIdentityOrRefusal(t *testing.T, cm *ConnectionManager, first
 	// connections shared firstUserID, so cm.Add refused the second at cap 1).
 	go func() {
 		defer watchers.Done()
-		_ = conn2.SetReadDeadline(guard)
+		_ = conn2.SetReadDeadline(guard) //nolint:errcheck // A failed deadline set surfaces as the very next read below, which the loop already handles.
 		for {
 			if _, _, err := conn2.ReadMessage(); err != nil {
 				if ce, ok := err.(*websocket.CloseError); ok {

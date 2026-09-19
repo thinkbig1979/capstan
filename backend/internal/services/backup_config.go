@@ -279,7 +279,7 @@ func resolveBackupConfig(db *database.DB, cfg *config.Config) (BackupConfig, err
 		// os.Hostname's error stays discarded: it is not a database fault, and
 		// the empty string it leaves behind means "let restic pick the host",
 		// which is the historical behaviour.
-		hostname, _ = os.Hostname()
+		hostname, _ = os.Hostname() //nolint:errcheck // The empty string it leaves behind means "let restic pick the host", which is the historical behaviour; see the comment above.
 	}
 	bc.BackupHostname = hostname
 

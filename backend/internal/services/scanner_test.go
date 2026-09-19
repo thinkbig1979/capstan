@@ -1000,7 +1000,7 @@ func newLabelFilteringDockerAPI(t *testing.T, containers map[string]string) *Doc
 			return
 		}
 		var f map[string]map[string]bool
-		_ = json.Unmarshal([]byte(r.URL.Query().Get("filters")), &f)
+		_ = json.Unmarshal([]byte(r.URL.Query().Get("filters")), &f) //nolint:errcheck // Stub server parsing a query param: an unparseable value leaves f nil, which the comparison below already treats as "no filters".
 		want := ""
 		for k := range f["label"] {
 			want = strings.TrimPrefix(k, "com.docker.compose.project=")
@@ -1016,7 +1016,7 @@ func newLabelFilteringDockerAPI(t *testing.T, containers map[string]string) *Doc
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(out) //nolint:errcheck // Write to a httptest stub's ResponseWriter; a failure there is not the behaviour under test.
 	}))
 	t.Cleanup(srv.Close)
 

@@ -42,7 +42,7 @@ func TestForeignKeysEnforced_PoolWide(t *testing.T) {
 			tx, err := db.db.Begin()
 			require.NoError(t, err)
 			// No-op once Commit succeeds; safety net for early returns only.
-			defer func() { _ = tx.Rollback() }()
+			defer func() { _ = tx.Rollback() }() //nolint:errcheck // No-op once Commit succeeds (sql.ErrTxDone); a safety net for early returns only.
 
 			ready <- struct{}{}
 			<-release

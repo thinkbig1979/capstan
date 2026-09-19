@@ -136,7 +136,7 @@ func TestEnvHandler_Put_Success(t *testing.T) {
 
 	newContent := "DATABASE_URL=postgres://localhost:5432/mydb\nPORT=9090"
 	reqBody := map[string]string{"raw": newContent}
-	reqBytes, _ := json.Marshal(reqBody)
+	reqBytes := mustMarshal(t, reqBody)
 
 	router := gin.New()
 	router.PUT("/stacks/:id/env", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Put)
@@ -197,7 +197,7 @@ func TestEnvHandler_Put_WithEntries(t *testing.T) {
 		{"key": "PORT", "value": "9090", "line": 2, "comment": false},
 	}
 	reqBody := map[string]interface{}{"entries": entries}
-	reqBytes, _ := json.Marshal(reqBody)
+	reqBytes := mustMarshal(t, reqBody)
 
 	router := gin.New()
 	router.PUT("/stacks/:id/env", authContextMiddleware("test-user-id"), envUnlockedMiddleware(), handler.Put)

@@ -332,7 +332,13 @@ func (d *DB) DeleteUpdateHistoryOlderThan(before time.Time) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	affected, _ := result.RowsAffected()
+	affected, err := result.RowsAffected()
+	if err != nil {
+		// Discarding this returns 0 with a nil error — "I could not find out"
+		// rendered as "nothing matched", which is the same fault rowserrcheck
+		// guards against on the read path (agent-os-qyg7.1).
+		return 0, fmt.Errorf("count update history rows deleted: %w", err)
+	}
 	return int(affected), nil
 }
 

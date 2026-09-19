@@ -1623,7 +1623,7 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 
 		// Best-effort notification; a write failure here surfaces on the
 		// next read/ping and the connection is torn down there.
-		_ = safeWriteJSON(conn, gin.H{"type": "start", "action": action})
+		_ = safeWriteJSON(conn, gin.H{"type": "start", "action": action}) //nolint:errcheck // Best-effort frame: a write failure surfaces on the next read/ping and the connection is torn down there.
 
 		// Real attach: pass wsCtx.Done() so forwardLive exits promptly on
 		// client disconnect instead of blocking on a full buffer (Fix #2).
@@ -1654,7 +1654,7 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 		// stream select below would block on that nil channel until the
 		// client left: the surplus viewer must not fall through to it.
 		if attached.Refused {
-			_ = safeWriteJSON(conn, gin.H{"type": "refused", "reason": attached.Reason})
+			_ = safeWriteJSON(conn, gin.H{"type": "refused", "reason": attached.Reason}) //nolint:errcheck // Best-effort frame: a write failure surfaces on the next read/ping and the connection is torn down there.
 			h.logger.Info("Backup WS attach refused at the per-run attacher bound",
 				"run_id", runID, "action", action)
 			return
