@@ -36,12 +36,20 @@ import type { BackupSnapshot, BackupRun } from '@/types'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { TableSearch } from '@/components/ui/table-search'
 
+// tags and paths are `string[] | null` on the wire, not `string[]`: restic
+// omits the key for a snapshot that has none and ListSnapshots copies the field
+// straight through, so a nil reaches the browser as JSON null.
+//
+// Unguarded, these two threw on an untagged snapshot — but only for a query
+// that MISSES shortId, id and time, because useTextFilter matches with
+// accessors.some() and short-circuits on the first hit. The badge cell below
+// had no such reprieve: it dereferences .tags on every render of the row.
 const SNAPSHOT_SEARCH_FIELDS = [
   (s: BackupSnapshot) => s.shortId,
   (s: BackupSnapshot) => s.id,
   (s: BackupSnapshot) => s.time,
-  (s: BackupSnapshot) => s.tags.join(' '),
-  (s: BackupSnapshot) => s.paths.join(' '),
+  (s: BackupSnapshot) => (s.tags ?? []).join(' '),
+  (s: BackupSnapshot) => (s.paths ?? []).join(' '),
 ]
 
 const RUN_SEARCH_FIELDS = [
@@ -268,7 +276,7 @@ function SnapshotRow({
         </td>
         <td className="py-3 px-4">
           <div className="flex flex-wrap gap-1">
-            {snapshot.tags.length > 0
+            {snapshot.tags && snapshot.tags.length > 0
               ? snapshot.tags.map((tag) => (
                   <Badge key={tag} variant="secondary" className="text-xs font-normal">
                     {tag}
