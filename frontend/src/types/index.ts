@@ -646,3 +646,36 @@ export interface VersionInfo {
   commit: string
   buildDate: string
 }
+
+/** Scheduled Docker cleanup policy, from GET/PUT /resources/cleanup/policy.
+ *  `minAllowedAgeHours` and `minAllowedIntervalHours` are the server-enforced
+ *  floors, sent so the form can refuse a value before submitting it rather than
+ *  discovering the 400 on save. A prune is irreversible, so the API rejects
+ *  anything below them instead of quietly clamping. */
+export interface DockerCleanupPolicy {
+  enabled: boolean
+  minAgeHours: number
+  intervalHours: number
+  minAllowedAgeHours: number
+  minAllowedIntervalHours: number
+}
+
+/** One dangling image a cleanup run would remove. `repository` is OMITTED (not
+ *  empty) for the fully-untagged `<none>:<none>` form — the common case for
+ *  locally built superseded images — so every reader needs an id fallback or it
+ *  renders a blank row. */
+export interface DockerCleanupCandidate {
+  id: string
+  repository?: string
+  size: number
+  /** Unix seconds. */
+  created: number
+}
+
+/** What a cleanup run WOULD remove, from POST /resources/cleanup/preview.
+ *  Producing it removes nothing. */
+export interface DockerCleanupPreview {
+  candidates: DockerCleanupCandidate[]
+  reclaimableBytes: number
+  minAgeHours: number
+}

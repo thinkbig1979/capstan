@@ -618,6 +618,36 @@ export function useUpdateRetentionSettings() {
   })
 }
 
+export function useDockerCleanupPolicy() {
+  return useQuery({
+    queryKey: queryKeys.settings.dockerCleanup(),
+    queryFn: () => resourcesApi.getCleanupPolicy(),
+  })
+}
+
+export function useUpdateDockerCleanupPolicy() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (data: { enabled?: boolean; minAgeHours?: number; intervalHours?: number }) =>
+      resourcesApi.updateCleanupPolicy(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.settings.dockerCleanup() })
+    },
+  })
+}
+
+/**
+ * A mutation rather than a query: the preview takes a floor the operator is
+ * trying out, removes nothing, and must re-run on demand rather than be served
+ * from cache — a stale candidate list is a list of images that may already be
+ * gone. It invalidates nothing, because it changes nothing.
+ */
+export function usePreviewDockerCleanup() {
+  return useMutation({
+    mutationFn: (minAgeHours?: number) => resourcesApi.previewCleanup(minAgeHours),
+  })
+}
+
 export function useUpdateGitSettings() {
   const queryClient = useQueryClient()
   return useMutation({

@@ -1,0 +1,189 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+import { DockerCleanupCard } from '../DockerCleanupCard'
+
+// A dangling image has a repository name only sometimes. `<none>:<none>` is the
+// fully-untagged form every locally built superseded image takes — the common
+// case — and `repo:<none>` is what a registry-pulled one leaves behind. The
+// backend omits `repository` for the first, so a card that assumes the field is
+// always there renders a blank row for the majority of real candidates.
+
+const mockGetCleanupPolicy = vi.fn()
+const mockUpdateCleanupPolicy = vi.fn()
+const mockPreviewCleanup = vi.fn()
+
+vi.mock('@/lib/api', () => ({
+  resourcesApi: {
+    getCleanupPolicy: (...args: unknown[]) => mockGetCleanupPolicy(...args),
+    updateCleanupPolicy: (...args: unknown[]) => mockUpdateCleanupPolicy(...args),
+    previewCleanup: (...args: unknown[]) => mockPreviewCleanup(...args),
+  },
+}))
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
+}))
+
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  return ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  )
+}
+
+// The floors are deliberately NOT the server's current 1/1: they come off the
+// wire, so a card that hardcoded the real floor would still pass against 1 and
+// tell us nothing.
+const POLICY = {
+  enabled: false,
+  minAgeHours: 168,
+  intervalHours: 24,
+  minAllowedAgeHours: 6,
+  minAllowedIntervalHours: 2,
+}
+
+// Registry-pulled and superseded: Docker keeps the repository, drops the tag.
+const REPO_CANDIDATE = {
+  id: 'sha256:0123456789abcdef0123456789abcdef',
+  repository: 'ghcr.io/paperless-ngx/paperless-ngx',
+  size: 1024 * 1024,
+  created: 1750000000,
+}
+const REPO_CANDIDATE_TRUNCATED_ID = '0123456789abcdef012'
+
+// Locally built and superseded: `<none>:<none>`, so `repository` is absent.
+const ID_CANDIDATE = {
+  id: 'sha256:fedcba9876543210fedcba9876543210',
+  size: 2 * 1024 * 1024,
+  created: 1750000001,
+}
+const ID_CANDIDATE_TRUNCATED_ID = 'fedcba9876543210fed'
+
+function previewOf(candidates: Array<Record<string, unknown>>) {
+  return {
+    candidates,
+    reclaimableBytes: candidates.reduce((sum, c) => sum + (c.size as number), 0),
+    minAgeHours: POLICY.minAgeHours,
+  }
+}
+
+function renderCard() {
+  return render(<DockerCleanupCard />, { wrapper: createWrapper() })
+}
+
+async function clickPreview() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Preview' }))
+}
+
+describe('DockerCleanupCard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetCleanupPolicy.mockResolvedValue(POLICY)
+    mockUpdateCleanupPolicy.mockResolvedValue(POLICY)
+    mockPreviewCleanup.mockResolvedValue(previewOf([]))
+  })
+
+  describe('preview candidate labels', () => {
+    it('renders the repository name, and not the image id, when the image has one', async () => {
+      mockPreviewCleanup.mockResolvedValue(previewOf([REPO_CANDIDATE]))
+      renderCard()
+      await clickPreview()
+
+      expect(await screen.findByText(REPO_CANDIDATE.repository)).toBeInTheDocument()
+      // Negative arm: without it, a card that printed both would pass.
+      expect(screen.queryByText(REPO_CANDIDATE_TRUNCATED_ID)).not.toBeInTheDocument()
+      expect(screen.queryByText(REPO_CANDIDATE.id)).not.toBeInTheDocument()
+    })
+
+    it('renders the image id, prefix stripped and truncated, when the image has none', async () => {
+      mockPreviewCleanup.mockResolvedValue(previewOf([ID_CANDIDATE]))
+      renderCard()
+      await clickPreview()
+
+      expect(await screen.findByText(ID_CANDIDATE_TRUNCATED_ID)).toBeInTheDocument()
+      // Negative arm: the id must be stripped of its algorithm prefix and
+      // truncated, not printed whole. A raw slice(0, 12) would leave
+      // `sha256:fedcb`, which is mostly prefix.
+      expect(screen.queryByText(ID_CANDIDATE.id)).not.toBeInTheDocument()
+      expect(screen.queryByText(/^sha256:/)).not.toBeInTheDocument()
+    })
+
+    it('reports how much the run would reclaim', async () => {
+      mockPreviewCleanup.mockResolvedValue(previewOf([REPO_CANDIDATE, ID_CANDIDATE]))
+      renderCard()
+      await clickPreview()
+
+      expect(await screen.findByText(/reclaiming 3\.00 MB/)).toBeInTheDocument()
+    })
+  })
+
+  describe('the age floor', () => {
+    it('disables Save below the floor and enables it at the floor', async () => {
+      renderCard()
+      const age = await screen.findByLabelText('Age floor (hours)')
+      const save = screen.getByRole('button', { name: 'Save cleanup schedule' })
+
+      // Below the floor the server would 400, so the form refuses first.
+      fireEvent.change(age, { target: { value: '3' } })
+      expect(save).toBeDisabled()
+      expect(screen.getByText('The age floor must be at least 6 hours.')).toBeInTheDocument()
+
+      // Same instrument, other side: exactly at the floor is a legal change.
+      fireEvent.change(age, { target: { value: '6' } })
+      expect(save).toBeEnabled()
+      expect(screen.queryByText('The age floor must be at least 6 hours.')).not.toBeInTheDocument()
+    })
+
+    it('keeps Save disabled while nothing has changed', async () => {
+      renderCard()
+      await screen.findByLabelText('Age floor (hours)')
+
+      expect(screen.getByRole('button', { name: 'Save cleanup schedule' })).toBeDisabled()
+    })
+  })
+
+  it('sends only the fields that changed', async () => {
+    renderCard()
+    fireEvent.change(await screen.findByLabelText('Run every (hours)'), {
+      target: { value: '12' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save cleanup schedule' }))
+
+    await waitFor(() => expect(mockUpdateCleanupPolicy).toHaveBeenCalledTimes(1))
+    expect(mockUpdateCleanupPolicy).toHaveBeenCalledWith({ intervalHours: 12 })
+  })
+
+  it('sends the enabled switch when it is the only change', async () => {
+    renderCard()
+    fireEvent.click(await screen.findByRole('switch'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save cleanup schedule' }))
+
+    await waitFor(() => expect(mockUpdateCleanupPolicy).toHaveBeenCalledTimes(1))
+    expect(mockUpdateCleanupPolicy).toHaveBeenCalledWith({ enabled: true })
+  })
+
+  it('previews without saving the policy', async () => {
+    mockPreviewCleanup.mockResolvedValue(previewOf([ID_CANDIDATE]))
+    renderCard()
+    await clickPreview()
+
+    await waitFor(() => expect(mockPreviewCleanup).toHaveBeenCalledWith(POLICY.minAgeHours))
+    expect(mockUpdateCleanupPolicy).not.toHaveBeenCalled()
+  })
+
+  it('refuses to render the form when the policy cannot be read', async () => {
+    mockGetCleanupPolicy.mockRejectedValue(new Error('unreadable'))
+    renderCard()
+
+    expect(await screen.findByText(/could not be read/)).toBeInTheDocument()
+    // No invented values, and no Save to persist them over the real policy.
+    expect(screen.queryByLabelText('Age floor (hours)')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Save cleanup schedule' }),
+    ).not.toBeInTheDocument()
+  })
+})

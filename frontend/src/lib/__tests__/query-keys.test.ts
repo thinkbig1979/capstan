@@ -125,6 +125,8 @@ describe('queryKeys prefix relationships', () => {
       queryKeys.settings.updates(),
       queryKeys.settings.git(),
       queryKeys.settings.globalEnv(),
+      queryKeys.settings.retention(),
+      queryKeys.settings.dockerCleanup(),
     ]) {
       expect(isPrefixOf(queryKeys.settings.all(), key)).toBe(true)
     }
