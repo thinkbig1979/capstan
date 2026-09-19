@@ -25,6 +25,7 @@ import type { BackupHistoryFilters, BackupRun } from '@/types'
 import { formatRelativeTime, formatDurationShort, formatBytes } from '@/lib/format'
 import { RunStatusBadge } from './backup-run-status'
 import { classifyError } from '@/lib/error-handler'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 const RUN_SEARCH_FIELDS = [
   (r: BackupRun) => r.id,
@@ -100,7 +101,12 @@ function RunDetail({ runId, status }: { runId: string; status: BackupRun['status
     )
   }
 
-  if (isError) {
+  // agent-os-wczm: `isError && !data`, not a bare `isError`. A NON-terminal run
+  // gets staleTime 0 (useBackupRunDetail above), which makes this the most
+  // refetch-prone query in the set: one 500 on a re-expand used to replace items
+  // the server had already sent with the error box below. `!data` still covers
+  // "failed and never loaded", which is the state this box is for.
+  if (isError && !data) {
     // agent-os-rtn8: getRunDetail answers with THREE distinct refusals and this
     // branch rendered one sentence for all of them -- a 404 "Backup run not
     // found", and two 500s the handler deliberately keeps apart, "Failed to
@@ -126,17 +132,22 @@ function RunDetail({ runId, status }: { runId: string; status: BackupRun['status
   }
 
   const items = data?.items ?? []
+  // The query kept the payload it had and a refetch failed on top of it. Say so
+  // rather than discarding rows the server really sent (agent-os-wczm).
+  const refreshFailed = isError && !!data
 
   if (items.length === 0) {
     return (
-      <div className="px-4 py-3 text-sm text-muted-foreground">
-        No per-stack records for this run.
+      <div className="space-y-2 px-4 py-3">
+        {refreshFailed && <RefreshFailedNotice what="the run details" />}
+        <p className="text-sm text-muted-foreground">No per-stack records for this run.</p>
       </div>
     )
   }
 
   return (
-    <div className="px-4 py-3">
+    <div className="space-y-2 px-4 py-3">
+      {refreshFailed && <RefreshFailedNotice what="the run details" />}
       <ul className="space-y-1.5">
         {items.map((it) => (
           <li key={it.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -278,7 +289,11 @@ export function BackupHistoryTab() {
     )
   }
 
-  if (isError) {
+  // agent-os-wczm: `&& !data`, matching the loading guard above. A bare
+  // `isError` is also true when a FOCUS REFETCH fails on a query that already
+  // carries rows, and this branch then replaced the whole table with a retry
+  // card over data the server had already sent.
+  if (isError && !data) {
     return (
       <Card>
         <CardContent className="flex flex-col items-center justify-center py-12">
@@ -300,23 +315,36 @@ export function BackupHistoryTab() {
   // first in that case, so the pager condition only ever sees 1 or more.
   const totalPages = data?.totalPages ?? 1
 
+  // Error WITH data: what is on screen is still the last thing the server sent,
+  // so it stays and the failed refresh is reported beside it (agent-os-wczm).
+  // The empty branch carries it too — a server-sent empty list is data, and
+  // "No backup history" with no hint that the refresh failed reads as fact.
+  const refreshFailed = isError && !!data
+  const refreshNotice = refreshFailed && (
+    <RefreshFailedNotice what="the backup history" onRetry={() => refetch()} />
+  )
+
   if (runs.length === 0 && !isLoading) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12">
-          <Archive className="h-12 w-12 text-muted-foreground mb-4" />
-          <p className="text-lg font-semibold mb-2">No backup history</p>
-          <p className="text-sm text-muted-foreground">
-            Backup runs will appear here once backups have run. Enable and schedule them
-            under Settings → Backup.
-          </p>
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        {refreshNotice}
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            <Archive className="h-12 w-12 text-muted-foreground mb-4" />
+            <p className="text-lg font-semibold mb-2">No backup history</p>
+            <p className="text-sm text-muted-foreground">
+              Backup runs will appear here once backups have run. Enable and schedule them
+              under Settings → Backup.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     )
   }
 
   return (
     <div className="space-y-4">
+      {refreshNotice}
       <div className="flex items-center gap-2 flex-wrap">
         <TableSearch
           value={query}

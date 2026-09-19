@@ -16,6 +16,7 @@ import { useTextFilter } from '@/hooks/useTextFilter'
 import { RefreshCw, ChevronLeft, ChevronRight, History } from 'lucide-react'
 import type { UpdateHistoryEntry } from '@/types'
 import { formatRelativeTime, formatDurationShort } from '@/lib/format'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 // A stack rarely has more than a screenful of update events; a high limit keeps
 // the whole history on one page so the client-side text filter matches all of it.
@@ -100,7 +101,11 @@ export function StackUpdatesTab({ stackId }: { stackId: string }) {
     )
   }
 
-  if (isError) {
+  // agent-os-wczm: `&& !data`, matching the loading guard above. A bare
+  // `isError` is also true when a FOCUS REFETCH fails on a query that already
+  // carries rows, and this branch then replaced the whole table with a retry
+  // card over data the server had already sent.
+  if (isError && !data) {
     return (
       <Card>
         <CardContent className="flex flex-col items-center justify-center py-12">
@@ -117,22 +122,34 @@ export function StackUpdatesTab({ stackId }: { stackId: string }) {
     )
   }
 
+  // Error WITH data: the rows below are still the last thing the server sent,
+  // so they stay and the failed refresh is reported beside them (agent-os-wczm).
+  // The empty branch carries it too — a server-sent empty list is data, and
+  // "No Update History" with no hint that the refresh failed reads as fact.
+  const refreshNotice = isError && !!data && (
+    <RefreshFailedNotice what="the update history" onRetry={() => refetch()} />
+  )
+
   if (entries.length === 0) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12">
-          <History className="mb-4 h-12 w-12 text-muted-foreground" />
-          <p className="mb-2 text-lg font-semibold">No Update History</p>
-          <p className="text-sm text-muted-foreground">
-            Update events for this stack will appear here after its containers are updated.
-          </p>
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        {refreshNotice}
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            <History className="mb-4 h-12 w-12 text-muted-foreground" />
+            <p className="mb-2 text-lg font-semibold">No Update History</p>
+            <p className="text-sm text-muted-foreground">
+              Update events for this stack will appear here after its containers are updated.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     )
   }
 
   return (
     <div className="space-y-4">
+      {refreshNotice}
       <div className="flex flex-wrap items-center gap-2">
         <TableSearch
           value={query}

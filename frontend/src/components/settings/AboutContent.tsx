@@ -2,6 +2,7 @@ import { ExternalLink } from 'lucide-react'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { formatDateFull } from '@/lib/format'
 import { useVersion } from '@/hooks/useVersion'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 const RELEASES_BASE = 'https://github.com/thinkbig1979/capstan/releases/tag'
 
@@ -30,7 +31,13 @@ export function AboutContent() {
     )
   }
 
-  if (isError || !data) {
+  // agent-os-wczm: the `isError` disjunct is gone. `!data` already covers
+  // "failed and never loaded" AND "settled but empty", and dropping it lets an
+  // error over a payload we already have fall through to the populated view — a
+  // retained version beats this sentence. (staleTime is Infinity here, so the
+  // only way to get there is an explicit refetch, but the mechanism is the same
+  // one that destroys the other eleven sites.)
+  if (!data) {
     return (
       <p className="text-sm text-muted-foreground">
         Could not read the build identity from the server.
@@ -42,6 +49,7 @@ export function AboutContent() {
 
   return (
     <div className="space-y-4">
+      {isError && <RefreshFailedNotice what="the build identity" />}
       <dl className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-3 text-sm">
         <dt className="text-muted-foreground">Version</dt>
         <dd className="font-mono break-all" data-testid="about-version">

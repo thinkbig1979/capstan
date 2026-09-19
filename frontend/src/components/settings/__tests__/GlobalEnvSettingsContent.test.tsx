@@ -301,3 +301,46 @@ describe('GlobalEnvSettingsContent', () => {
     })
   })
 })
+
+/**
+ * agent-os-wczm. The `isError` here comes from useGlobalEnvVars, which did not
+ * export anything a call site could pair it with — so `isError && !data` was
+ * not even writable in the .tsx. The hook now exports the two TanStack flags
+ * that already draw the line: isLoadingError (error, NO data) and
+ * isRefetchError (error, WITH data).
+ *
+ * The arm resolves first, edits, then rejects a refetch. A first-fetch-rejects
+ * fixture leaves `data` undefined and stays green under either guard.
+ */
+describe('GlobalEnvSettingsContent — a failed REFETCH must not discard the table', () => {
+  it('keeps the populated variables and the unsaved edit when a REFETCH fails', async () => {
+    mockGetGlobalEnv.mockResolvedValue({ vars: [{ key: 'FOO', value: 'bar' }] })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <GlobalEnvSettingsContent />
+      </QueryClientProvider>,
+    )
+
+    const valueInputs = await screen.findAllByDisplayValue('bar')
+    fireEvent.change(valueInputs[0], { target: { value: 'baz' } })
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+
+    mockGetGlobalEnv.mockRejectedValue(new Error('boom'))
+    await client.refetchQueries({ queryKey: ['settings', 'global-env'] })
+
+    await waitFor(() =>
+      expect(client.getQueryState(['settings', 'global-env'])?.status).toBe('error'),
+    )
+    expect(screen.getAllByDisplayValue('baz').length).toBeGreaterThan(0)
+    expect(screen.getAllByDisplayValue('FOO').length).toBeGreaterThan(0)
+    expect(
+      screen.queryByText('Failed to load global environment variables.'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/Could not refresh the global environment variables/),
+    ).toBeInTheDocument()
+  })
+})

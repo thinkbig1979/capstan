@@ -213,10 +213,13 @@ describe('BackupSettingsContent — loading / error states', () => {
       expect(screen.queryByText(/Failed to read/)).not.toBeInTheDocument()
     })
 
-    // THE TRAP AT THIS CALL SITE: `isError || !settings || !draft` routes THREE
-    // conditions into one branch, and only the first has an error to read.
-    // A resolved-but-empty payload must not be given a cause -- there is none,
-    // and inventing one is the worse defect.
+    // THE TRAP AT THIS CALL SITE: `!settings || !draft` routes TWO conditions
+    // into one branch, and only a genuine first-load FAILURE has an error to
+    // read. A resolved-but-empty payload must not be given a cause -- there is
+    // none, and inventing one is the worse defect. (The guard lost its
+    // `isError ||` disjunct in agent-os-wczm so that an error over settings we
+    // already have falls through to the populated form; `isError` still gates
+    // the cause INSIDE the branch, which is what this arm pins.)
     it('does not claim a cause when the query succeeded but carried no settings', async () => {
       mockGetSettings.mockResolvedValue(undefined)
       render(<BackupSettingsContent />, { wrapper: createWrapper() })
@@ -1111,5 +1114,43 @@ describe('BackupSettingsContent — why the save failed', () => {
       .mock.calls.find((c) => c[0] === 'Failed to save backup settings')
     expect(call).toBeDefined()
     expect(call?.[1]).toBeUndefined()
+  })
+})
+
+/**
+ * agent-os-wczm. `isError || !settings || !draft` is true for a REFETCH failure
+ * as well as a first load, and a Save here is a WRITE-BACK — so one 500 on a
+ * focus refetch discarded a populated form AND whatever the operator had typed
+ * into it. Dropping the `isError` disjunct lets error-WITH-data fall through:
+ * `!settings` still covers "error and never loaded".
+ *
+ * The arm resolves first, edits, then rejects a refetch. A first-fetch-rejects
+ * fixture leaves `settings` undefined and cannot tell the two guards apart.
+ */
+describe('BackupSettingsContent — a failed REFETCH must not discard the form', () => {
+  it('keeps the populated form and the unsaved edit when a REFETCH fails', async () => {
+    mockGetSettings.mockResolvedValue(makeSettings({ repository: '/mnt/backups/restic' }))
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <BackupSettingsContent />
+      </QueryClientProvider>,
+    )
+
+    const repoInput = await screen.findByLabelText('Repository path')
+    fireEvent.change(repoInput, { target: { value: '/mnt/backups/edited' } })
+    expect(repoInput).toHaveValue('/mnt/backups/edited')
+
+    mockGetSettings.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: ['backup', 'settings'] })
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['backup', 'settings'])?.status).toBe('error'),
+    )
+    expect(screen.getByLabelText('Repository path')).toHaveValue('/mnt/backups/edited')
+    expect(screen.queryByText(/failed to load backup settings/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/Could not refresh the backup settings/)).toBeInTheDocument()
   })
 })

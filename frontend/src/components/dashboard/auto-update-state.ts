@@ -21,7 +21,11 @@ export function toGlobalAutoUpdateState(query: {
   isPending: boolean
   isError: boolean
 }): GlobalAutoUpdateState {
-  if (query.isError) return 'unavailable'
+  // `&& !query.data` (agent-os-wczm): TanStack keeps the previous data and only
+  // flips status on a FAILED REFETCH, so a bare isError reported 'unavailable'
+  // — and blanked the toggle on three pages — over a value the server had
+  // already sent. Only an error with nothing to fall back on is unavailable.
+  if (query.isError && !query.data) return 'unavailable'
   // `!query.data` is not redundant with isPending: a settled query with no data
   // would otherwise read `globalEnabled` off nothing and report a deliberate
   // "off" that nobody set.

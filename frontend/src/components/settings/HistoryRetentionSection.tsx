@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { HelpHint } from '@/components/ui/help-hint'
 import { useRetentionSettings, useUpdateRetentionSettings } from '@/hooks/useResources'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 type FieldKey = 'retentionDays' | 'updateHistoryRetentionDays' | 'backupHistoryRetentionDays'
 
@@ -44,16 +45,23 @@ export function HistoryRetentionSection() {
     return <div className="py-4"><LoadingSpinner /></div>
   }
 
-  // Refuse rather than fill in a number nobody configured (agent-os-r1kc).
-  // The endpoint now 500s when the retention settings cannot be READ, but the
-  // fallback below it used to be a hardcoded `?? 90` — so the page went on
-  // displaying 90 as the configured retention even when the server had just
-  // refused to say. That is the same fabricated number the daily prune would
-  // have deleted at, from a second independent source, and it left the operator
-  // with no way to tell a real 90-day setting from an unreadable one. The form
-  // is also a WRITE-BACK surface: a Save from a fabricated form would persist
-  // the invented value over the real one.
-  if (isError || !data) {
+  // Refuse a FABRICATED value; retain a REAL one and say the refresh failed.
+  //
+  // agent-os-r1kc is why this branch exists: the fallback below it used to be a
+  // hardcoded `?? 90`, so the page displayed 90 as the configured retention even
+  // when the server had just refused to say. That is the same fabricated number
+  // the daily prune would have deleted at, from a second independent source, and
+  // it left the operator with no way to tell a real 90-day setting from an
+  // unreadable one. The form is also a WRITE-BACK surface: a Save from a
+  // fabricated form would persist the invented value over the real one.
+  //
+  // agent-os-wczm is why it is now keyed on `!data` alone. A value the server
+  // really sent is not fabricated, so a FAILED REFETCH over a populated form is
+  // no reason to blank it — that discarded the operator's unsaved edits as well.
+  // `!data` keeps every refusal r1kc asked for: it still covers "the read failed
+  // and we have nothing" and "the read succeeded but carried nothing". The
+  // refresh failure is reported beside the Save button instead.
+  if (!data) {
     return (
       <div className="space-y-2 pt-4 border-t">
         <h3 className="text-lg font-medium">History retention</h3>
@@ -141,6 +149,8 @@ export function HistoryRetentionSection() {
           Retention must be at least {min} days.
         </p>
       )}
+
+      {isError && <RefreshFailedNotice what="the retention settings" beforeSave />}
 
       <Button type="submit" disabled={!dirty || belowFloor || updateRetention.isPending}>
         {updateRetention.isPending ? 'Saving…' : 'Save retention'}

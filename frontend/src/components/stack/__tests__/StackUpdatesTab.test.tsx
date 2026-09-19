@@ -302,3 +302,32 @@ describe('StackUpdatesTab — pagination', () => {
     )
   })
 })
+
+/**
+ * agent-os-wczm. The guard was a bare `isError`, true for a REFETCH failure as
+ * well as a first load, so a single 500 on a focus refetch replaced this
+ * stack's populated event table with the error card. The arm resolves first and
+ * rejects a refetch — a first-fetch-rejects fixture leaves `data` undefined and
+ * is blind to the difference.
+ */
+describe('StackUpdatesTab — a failed REFETCH must not discard data', () => {
+  it('keeps the populated events table when a REFETCH fails', async () => {
+    mockGetUpdateHistory.mockResolvedValue(page([entry()]))
+    const { queryClient } = renderWithProviders(<StackUpdatesTab stackId="stack-1" />)
+
+    expect(await screen.findByText('web')).toBeInTheDocument()
+
+    mockGetUpdateHistory.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: ['update-history'] })
+
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryCache().find({ queryKey: ['update-history'], exact: false })
+          ?.state.status,
+      ).toBe('error'),
+    )
+    expect(screen.getByText('web')).toBeInTheDocument()
+    expect(screen.queryByText('Failed to Load Update History')).not.toBeInTheDocument()
+    expect(screen.getByText(/Could not refresh the update history/)).toBeInTheDocument()
+  })
+})

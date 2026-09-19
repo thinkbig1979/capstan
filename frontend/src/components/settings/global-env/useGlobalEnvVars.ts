@@ -18,7 +18,7 @@ const ENV_SEARCH_FIELDS = [
  * indices without owning that state themselves.
  */
 export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<number, boolean>>>) {
-  const { data, isLoading, isError } = useGlobalEnv()
+  const { data, isLoading, isLoadingError, isRefetchError } = useGlobalEnv()
   const updateGlobalEnv = useUpdateGlobalEnv()
 
   const [vars, setVars] = useState<EnvVar[]>([])
@@ -83,7 +83,15 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
 
   return {
     isLoading,
-    isError,
+    // agent-os-wczm: the two halves of `isError`, not `isError` itself. The
+    // call site has no `data` to pair a bare isError with — `data` is not on
+    // this hook's return surface and putting it there would widen it for one
+    // boolean — so the hook exports the distinction TanStack already draws:
+    // isLoadingError is `isError && data === undefined` (nothing to show, so
+    // refuse), isRefetchError is `isError && data !== undefined` (a refresh
+    // failed over variables and edits that must not be discarded).
+    isLoadingError,
+    isRefetchError,
     // The server blanked the secret-looking values because no unlock token was in
     // play. Saving from that state would persist the blanks, and the backend 403s
     // the write, so the panel disables Save until unlocked (agent-os-7o5s).

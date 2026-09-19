@@ -177,4 +177,20 @@ describe('toGlobalAutoUpdateState', () => {
       toGlobalAutoUpdateState({ data: { globalEnabled: true }, isPending: false, isError: false }),
     ).toBe('enabled')
   })
+
+  // agent-os-wczm. A FAILED REFETCH over a payload the query already resolved
+  // flips isError to true while `data` is still there -- TanStack keeps the
+  // previous data and only changes status. Reading a bare isError reported
+  // 'unavailable' and blanked the global toggle on DashboardPage,
+  // ContainersOverviewTab and StackDetail over a value the server had already
+  // told us. The two arms below pin BOTH resolved values, so a fix that simply
+  // hardcoded one of them would fail the other.
+  it('reports a REFETCH failure over a resolved payload as the value it already has', () => {
+    expect(
+      toGlobalAutoUpdateState({ data: { globalEnabled: true }, isPending: false, isError: true }),
+    ).toBe('enabled')
+    expect(
+      toGlobalAutoUpdateState({ data: { globalEnabled: false }, isPending: false, isError: true }),
+    ).toBe('disabled')
+  })
 })

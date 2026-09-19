@@ -326,3 +326,45 @@ describe('UpdateLogTab — pagination', () => {
     )
   })
 })
+
+// Hands back the QueryClient so a test can drive a REFETCH; the component
+// exposes refetch only from inside the branch under test.
+function renderTabWithClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+  })
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <UpdateLogTab />
+    </QueryClientProvider>,
+  )
+  return { ...view, queryClient }
+}
+
+/**
+ * agent-os-wczm. The guard was a bare `isError`, which is true for a REFETCH
+ * failure as well as a first load — so one 500 on a focus refetch replaced a
+ * populated table with the error card. The arm resolves first and rejects a
+ * refetch; a first-fetch-rejects fixture leaves `data` undefined and cannot
+ * tell the two guards apart.
+ */
+describe('UpdateLogTab — a failed REFETCH must not discard data', () => {
+  it('keeps the populated table when a REFETCH fails', async () => {
+    const { queryClient } = renderTabWithClient()
+
+    expect(await screen.findByText('web-1')).toBeInTheDocument()
+
+    mockGetUpdateHistory.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: ['update-history'] })
+
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryCache().find({ queryKey: ['update-history'], exact: false })
+          ?.state.status,
+      ).toBe('error'),
+    )
+    expect(screen.getByText('web-1')).toBeInTheDocument()
+    expect(screen.queryByText('Failed to Load Update History')).not.toBeInTheDocument()
+    expect(screen.getByText(/Could not refresh the update history/)).toBeInTheDocument()
+  })
+})

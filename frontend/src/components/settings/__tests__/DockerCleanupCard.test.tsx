@@ -307,3 +307,72 @@ describe('DockerCleanupCard', () => {
     ).not.toBeInTheDocument()
   })
 })
+
+/**
+ * agent-os-wczm. Two sites in this one card. The policy guard was
+ * `isError || !data` on a WRITE-BACK form, and the run-history guard was
+ * `history.isError || !history.data` in a ternary — invisible to any
+ * `if (isError` sweep, which is why it was missed when the bead was filed.
+ *
+ * Both arms resolve first and reject a REFETCH. A first-fetch-rejects fixture
+ * leaves `data` undefined and stays green under either guard.
+ */
+describe('DockerCleanupCard — a failed REFETCH must not discard data', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetCleanupPolicy.mockResolvedValue(POLICY)
+    mockUpdateCleanupPolicy.mockResolvedValue(POLICY)
+    mockPreviewCleanup.mockResolvedValue(previewOf([]))
+    mockGetCleanupHistory.mockResolvedValue({ runs: [SUCCESS_RUN], limit: 20 })
+  })
+
+  function renderCardWithClient() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <DockerCleanupCard />
+      </QueryClientProvider>,
+    )
+    return { ...view, queryClient }
+  }
+
+  it('keeps the populated schedule form and the unsaved edit when a REFETCH fails', async () => {
+    const { queryClient } = renderCardWithClient()
+
+    const ageFloor = await screen.findByLabelText('Age floor (hours)')
+    fireEvent.change(ageFloor, { target: { value: '240' } })
+    expect(ageFloor).toHaveValue(240)
+
+    mockGetCleanupPolicy.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: ['settings', 'docker-cleanup'] })
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['settings', 'docker-cleanup'])?.status).toBe('error'),
+    )
+    expect(screen.getByLabelText('Age floor (hours)')).toHaveValue(240)
+    expect(screen.getByLabelText('Run every (hours)')).toHaveValue(24)
+    expect(screen.queryByText(/The cleanup schedule could not be read/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Could not refresh the cleanup schedule/)).toBeInTheDocument()
+  })
+
+  it('keeps the populated run-history table when a REFETCH fails', async () => {
+    const { queryClient } = renderCardWithClient()
+
+    expect(await screen.findByText('scheduled')).toBeInTheDocument()
+
+    mockGetCleanupHistory.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: ['settings', 'docker-cleanup-history'] })
+
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryState(['settings', 'docker-cleanup-history'])?.status,
+      ).toBe('error'),
+    )
+    expect(screen.getByText('scheduled')).toBeInTheDocument()
+    expect(screen.getByText('7.00 MB')).toBeInTheDocument()
+    expect(screen.queryByText('Run history is unavailable.')).not.toBeInTheDocument()
+    expect(screen.getByText(/Could not refresh the cleanup run history/)).toBeInTheDocument()
+  })
+})
