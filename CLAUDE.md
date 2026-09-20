@@ -157,7 +157,7 @@ own verdict, or whose membership rule has never been shown to stop where it
 claims, is not a sweep. It is an assumption with a command line attached.
 
 <!-- BEGIN AGENT OS — managed by install-agent-os.sh, do not hand-edit -->
-## Agent OS (7.10.0) — the six commands, and which one to use
+## Agent OS (7.11.0) — the six commands, and which one to use
 
 **There is no auto-discovery. This table is the routing.**
 
@@ -181,4 +181,9 @@ and the re-execution gate. Full procedure: `.agent-os/instructions/core/run.md`.
 These six are the whole set. Any other Agent OS command you have seen named — `create-tasks`,
 `execute-tasks`, `upgrade-spec`, `enhance-existing`, `validate-browser`, `validate-quality`,
 `validate-system`, `orchestrate` — was removed in v7.0.0 and is deleted on every rollout.
+This block lives in the repo's root `CLAUDE.md`, and that is deliberate: this file is
+**tracked**, so it is the only place Agent OS can put text that reaches an agent working in a
+git worktree. A worktree contains tracked files only, so anything under a gitignored
+`.agent-os/` is absent wherever dispatched workers run. Doctrine a worker must obey belongs
+here; doctrine the orchestrator applies can live under `.agent-os/`.
 <!-- END AGENT OS -->
