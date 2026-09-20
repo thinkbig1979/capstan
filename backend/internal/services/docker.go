@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -122,12 +123,59 @@ func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
 	cmd.Dir = stack.Directory
 	cmd.Env = dockerEnv()
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	// STDOUT AND STDERR ARE READ SEPARATELY, and only stdout is returned
+	// (agent-os-pc4o). This was cmd.CombinedOutput(), which points the child's
+	// stdout and stderr at ONE pipe, so anything written to stderr by a command
+	// that EXITS 0 arrived inside the body below. Same class as agent-os-vwi7
+	// (git.go) and agent-os-sl9z (docker_lifecycle.go's `compose ps`).
+	//
+	// The body is NOT free text for a human to read, which is why
+	// agent-os-vwi7's sweep dispositioned this site as a weaker sibling and was
+	// wrong to. handlers/logs.go hands it straight to parseLogLines, which
+	// splits on newlines and builds a LogLine{Container,Timestamp,Message} per
+	// line via strings.SplitN(line, "|", 2) — returned as JSON and filtered on
+	// Container. Three outcomes, all with exit code 0 throughout and no error
+	// value anywhere on the path for any gate in this repository to catch:
+	//
+	//	a stderr line CONTAINING A PIPE becomes a log entry ATTRIBUTED TO A
+	//	  CONTAINER THAT DOES NOT EXIST — logfmt and shell-pipeline advice
+	//	  produce pipes routinely (msg="use compose ps | jq").
+	//	a stderr write with NO TRAILING NEWLINE is glued onto the front of the
+	//	  next real row. The joined line still holds that row's pipe, so it is
+	//	  not skipped: an entry the container really printed is RE-KEYED under a
+	//	  fabricated name and vanishes from its own ?container= filter.
+	//	a stderr line with NO PIPE hits parseLogLine's `len(parts) < 2` guard
+	//	  and is discarded, so merging it means it is neither shown nor logged.
+	//
+	// parseLogLine is deliberately left alone: its nil return on a pipe-less
+	// line is pinned by handlers/logs_test.go's "line without pipe" case, the
+	// same intentional skip-a-bad-line behaviour parseComposePSOutput has. The
+	// STREAMING path for this feature never had the defect — handlers/logs.go's
+	// buildLogsCmd is read with StdoutPipe() and leaves cmd.Stderr nil — which
+	// is exactly what made the non-streaming half easy to clear by mistake.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Unwrapped, as before: handlers/logs.go logs this error and maps it through
+	// respondDockerErr, so wrapping it here would change an operator-visible
+	// string for no gain. cmd.Stderr is assigned either way, so the
+	// *exec.ExitError's own .Stderr stays nil exactly as it did.
+	if err := cmd.Run(); err != nil {
 		return "", err
 	}
 
-	return string(output), nil
+	// A zero-exit diagnostic is kept out of the parsed body and recorded here
+	// instead. DEBUG rather than WARN, for the same reason as gitCommandWithCreds
+	// and Status: the commonest cause is an ordinary plugin or wrapper that
+	// prints, so a louder level would turn every healthy install into a standing
+	// log line. The branch is skipped entirely when stderr is empty.
+	if diag := strings.TrimSpace(stderr.String()); diag != "" {
+		slog.Debug("docker compose logs wrote to stderr but exited 0; diagnostic kept out of the returned log body",
+			"project", stack.ProjectName, "directory", stack.Directory, "stderr", trimOutput(diag))
+	}
+
+	return stdout.String(), nil
 }
 
 func (s *DockerService) GetContainerList(projectName string) ([]models.Container, error) {
