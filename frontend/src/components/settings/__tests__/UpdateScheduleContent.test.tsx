@@ -273,12 +273,27 @@ describe('UpdateScheduleContent — statistics', () => {
     ).toBeInTheDocument()
   })
 
-  it('omits the statistics block when the server sends none', async () => {
+  /**
+   * CONTRACT EDIT, agent-os-xppj — deliberate, not a passing change.
+   *
+   * The contract this test protects is, and always was, NEVER RENDER COUNTERS
+   * THE SERVER DID NOT SEND. It used to spell that as "render nothing", which
+   * was adequate while an absent block could only mean a server predating the
+   * field. It cannot mean only that any more: the backend now OMITS the block
+   * when GetUpdateStats faults rather than emitting 0/0/0, so silence here
+   * would report "nothing to report" for a server that could not count.
+   *
+   * So the assertion moved from absence to disclosure. The counters must still
+   * not be invented — that half is asserted below and is the original
+   * contract, unchanged.
+   */
+  it('discloses that the counts are unavailable when the server sends none', async () => {
     mockGetUpdates.mockResolvedValue(makeSettings({ autoUpdateStats: undefined }))
     renderPanel()
 
-    await screen.findByText('Auto-Update')
-    expect(screen.queryByText('Statistics')).not.toBeInTheDocument()
+    expect(await screen.findByText('Update statistics are unavailable.')).toBeInTheDocument()
+    expect(screen.queryByText(/with auto-update enabled/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/in the last 7 days/)).not.toBeInTheDocument()
   })
 })
 

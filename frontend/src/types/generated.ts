@@ -785,11 +785,34 @@ export interface UpdateSettingsResponse {
    */
   serverTimezone: string;
   serverTimeOffset: string;
-  autoUpdateStats: {
-    enabledContainers: number /* int */;
-    updatesLast7Days: number /* int */;
-    updatesLast30Days: number /* int */;
-  };
+  /**
+   * AutoUpdateStats is ABSENT when the counts could not be read, never zeroed
+   * (agent-os-xppj). A zeroed block renders as "0 containers with auto-update
+   * enabled, 0 updates in the last 7 days, 0 in the last 30" — a wrong
+   * factual answer where the convention agent-os-ufj7 restored promises an
+   * absent one.
+   * The rest of this response is still served when the counters fault: the
+   * form above is the primary payload and refusing the whole request over an
+   * ancillary block would delete a correct, populated write-back form from
+   * the operator's screen. That split is this handler's existing policy, not
+   * a new one — a failure of the settings read itself DOES 500.
+   * KNOWN AND ACCEPTED: absence has two readings at the client — this server
+   * could not count, or the server predates the field — and they are not
+   * distinguished. Distinguishing them means a flag beside the numbers, which
+   * leaves untrue zeros on the wire for any consumer that ignores it. The
+   * frontend copy is chosen to be true under both readings.
+   */
+  autoUpdateStats?: UpdateStats;
+}
+/**
+ * UpdateStats carries the auto-update counters. Named rather than inlined into
+ * UpdateSettingsResponse so the response can omit the block wholesale when the
+ * counts are unknown; an inline struct cannot be absent.
+ */
+export interface UpdateStats {
+  enabledContainers: number /* int */;
+  updatesLast7Days: number /* int */;
+  updatesLast30Days: number /* int */;
 }
 export interface BackupPolicy {
   id: string;

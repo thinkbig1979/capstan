@@ -4,6 +4,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { useUpdateSettings, useUpdateUpdateSettings } from '@/hooks/useResources'
 import { HelpHint } from '@/components/ui/help-hint'
 import { formatDateFull } from '@/lib/format'
@@ -245,6 +246,27 @@ export function UpdateScheduleContent() {
 
   return (
     <div className="space-y-6">
+      {/*
+        * agent-os-ptiq. Past the `isError && !settings` guard above, `isError`
+        * can still be true: TanStack reports status 'error' when a REFETCH
+        * fails on a query that already has data. Retaining the form there is
+        * correct and deliberate — the values are real values the server sent —
+        * but nothing said so, and this surface SUBMITS.
+        *
+        * AT THE TOP, not beside a save control, because there is no save
+        * control: every field auto-saves, and save() builds its payload from
+        * five `effective*` values at once. So touching any one control writes
+        * back four others that may no longer match the server, which is why
+        * `beforeSave` is set. A notice pinned to one field would describe less
+        * than the operator is about to overwrite.
+        */}
+      {isError && (
+        <RefreshFailedNotice
+          what="the update settings"
+          beforeSave
+          onRetry={() => void refetch()}
+        />
+      )}
       <div className="space-y-4">
         <div className="flex items-center gap-1.5">
           <h3 className="text-lg font-medium">Scan for Image Updates</h3>
@@ -381,18 +403,41 @@ export function UpdateScheduleContent() {
         )}
       </div>
 
-      {stats && (
-        <div className="space-y-2 pt-4 border-t">
-          <h3 className="text-sm font-medium text-muted-foreground">Statistics</h3>
-          <p className="text-sm">
-            {stats.enabledContainers} container{stats.enabledContainers !== 1 ? 's' : ''} with auto-update enabled
-          </p>
-          <p className="text-sm text-muted-foreground">
-            {stats.updatesLast7Days} update{stats.updatesLast7Days !== 1 ? 's' : ''} in the last 7 days,{' '}
-            {stats.updatesLast30Days} in the last 30 days
-          </p>
-        </div>
-      )}
+      {/*
+        * agent-os-xppj. The counters are OPTIONAL on the wire: the server omits
+        * the block rather than sending counts it could not read, because a
+        * zeroed block rendered here as "0 containers with auto-update enabled"
+        * — a wrong answer dressed as a measured one.
+        *
+        * Absence is DISCLOSED rather than silent. Dropping the section is the
+        * same lie one layer up: a vanished heading reads as "nothing to
+        * report". This is deliberately NOT a RefreshFailedNotice — that copy
+        * says "the values shown are the last ones the server sent", and here
+        * there are no values and the server never sent any.
+        *
+        * The wording is "unavailable", not "could not be read", because
+        * absence has two readings and they cannot be told apart from the
+        * payload: this server faulted, or the server predates the field.
+        * "Unavailable" is true under both. Distinguishing them would take a
+        * flag beside the numbers, which puts untrue zeros back on the wire for
+        * anything that ignores it.
+        */}
+      <div className="space-y-2 pt-4 border-t">
+        <h3 className="text-sm font-medium text-muted-foreground">Statistics</h3>
+        {stats ? (
+          <>
+            <p className="text-sm">
+              {stats.enabledContainers} container{stats.enabledContainers !== 1 ? 's' : ''} with auto-update enabled
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {stats.updatesLast7Days} update{stats.updatesLast7Days !== 1 ? 's' : ''} in the last 7 days,{' '}
+              {stats.updatesLast30Days} in the last 30 days
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">Update statistics are unavailable.</p>
+        )}
+      </div>
     </div>
   )
 }
