@@ -2,9 +2,11 @@ package services
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -489,12 +491,51 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 	cmd.Dir = stack.Directory
 	cmd.Env = dockerEnv()
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	// STDOUT AND STDERR ARE READ SEPARATELY, and only stdout is parsed
+	// (agent-os-sl9z). This was cmd.CombinedOutput(), which points the child's
+	// stdout and stderr at ONE pipe, so anything written to stderr by a
+	// command that EXITS 0 arrived inside the NDJSON below as data. Same class
+	// as agent-os-vwi7 (git.go), and this is the only one of this file's five
+	// CombinedOutput call sites whose bytes reach a parser rather than a
+	// human-readable diagnostic blob.
+	//
+	// Two MEASURED consequences, both on a stack whose containers are all
+	// running. parseComposePSOutput splits on newlines and json.Unmarshals each
+	// line into an anonymous struct, silently skipping what fails:
+	//
+	//	a stderr line that is ITSELF JSON does not fail — Unmarshal ignores
+	//	  unknown fields, so a structured log line unmarshals cleanly into an
+	//	  all-empty record. That appends a PHANTOM container with no ID or
+	//	  Name, and its empty State is not "running", so the aggregate status
+	//	  flips from "running" to "partial".
+	//	a stderr write with NO TRAILING NEWLINE is concatenated onto the front
+	//	  of the next stdout line, which then fails Unmarshal and is dropped. A
+	//	  running container DISAPPEARS from the list.
+	//
+	// Neither needs a misconfiguration: one JSON log line on stderr from a
+	// credential helper, a compose/BuildKit plugin or a site `docker` wrapper
+	// is enough, with exit code 0 throughout. Nothing this repository runs
+	// could catch it — there is no error value anywhere on the path.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
 		return "", nil, fmt.Errorf("docker compose ps failed: %w", err)
 	}
 
-	return parseComposePSOutput(output)
+	// A zero-exit diagnostic is kept out of the DATA and recorded here instead.
+	// DEBUG rather than WARN, for the same reason as gitCommandWithCreds: the
+	// commonest cause is an ordinary plugin or wrapper that prints, so a louder
+	// level would turn every healthy install into a standing log line. The
+	// branch is skipped entirely when stderr is empty, so a healthy call logs
+	// nothing.
+	if diag := strings.TrimSpace(stderr.String()); diag != "" {
+		slog.Debug("docker compose ps wrote to stderr but exited 0; diagnostic kept out of the parsed output",
+			"project", stack.ProjectName, "directory", stack.Directory, "stderr", trimOutput(diag))
+	}
+
+	return parseComposePSOutput(stdout.Bytes())
 }
 
 // parseComposePSOutput parses NDJSON lines from `docker compose ps --format json`
