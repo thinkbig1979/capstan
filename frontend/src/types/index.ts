@@ -264,6 +264,25 @@ export interface GitEmptyRepoStatus {
 
 export type GitStatus = GitRepoStatus | GitEmptyRepoStatus | GitNotRepoStatus
 
+/**
+ * One line of a stack's env file. Hand-written counterpart of Go's
+ * handlers.EnvEntry (backend/internal/handlers/env.go) — handlers is not a
+ * tygo package, so the two declarations are kept in agreement by hand and by
+ * backend/internal/handlers/env_wire_contract_test.go.
+ *
+ * `sensitive` is required and the Go tag carries no omitempty, so the server
+ * always sends it (agent-os-6wrb). Before that fix the key was omitted on
+ * false and every consumer here was correct only because `undefined` is
+ * falsy.
+ *
+ * `line` is optional while Go always sends it. That is a ROLE difference,
+ * not an oversight: this type is both the response shape, where `line` is
+ * always present and 1-based, and the request/draft shape, where a row added
+ * via "Add Entry" legitimately has none until the server parses the saved
+ * file (env-editor/types.ts, EnvEntryRow). Optional is therefore the correct
+ * declaration for the union of both roles. Requiring it fails `npx tsc -b`
+ * at env-editor/useEnvEntryActions.ts (OBSERVED 2026-09-20, agent-os-6wrb).
+ */
 export interface EnvEntry {
   key: string
   value: string
