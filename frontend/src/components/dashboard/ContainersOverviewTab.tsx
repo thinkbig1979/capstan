@@ -22,6 +22,7 @@ import {
 import { toast } from 'sonner'
 import { presentError } from '@/lib/error-handler'
 import { DialogLoadingFallback } from '@/components/LoadingSkeleton'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import type { DashboardStats, DashboardContainerInfo, CommandResult } from '@/types'
 import type { DashboardContainerMetric } from '@/hooks/useDashboardMetrics'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
@@ -505,6 +506,19 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
   const [activeTab, setActiveTab] = useState<string>('stack')
   const [inspectTarget, setInspectTarget] = useState<DashboardContainerInfo | null>(null)
 
+  // agent-os-6iui: read here purely to DISCLOSE a failed refresh. The data
+  // still comes from ContainerTable's own copy; this call only drives the
+  // notice below, and React Query dedupes by key so it is not a second request.
+  //
+  // Lifted rather than placed where the data is read because ContainerTable is
+  // rendered once per tab panel and the SAME payload feeds the toggles in BOTH.
+  // A notice inside it would therefore describe more than it sits beside, and
+  // would unmount and re-mount as the operator switches tabs. (Not, as first
+  // supposed, because it would render twice: Radix unmounts the inactive
+  // TabsContent, so only one ContainerTable is mounted at a time — unless
+  // forceMount is ever added, which this placement also survives.)
+  const autoUpdatePoliciesQuery = useAutoUpdatePolicies()
+
   const { data: stacks = [] } = useQuery({
     queryKey: queryKeys.stacks(),
     queryFn: () => stacksApi.list(),
@@ -601,6 +615,17 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
             : `${totalCount} container${totalCount !== 1 ? 's' : ''}`
         }
       />
+
+      {/* agent-os-6iui: one notice per rendered LIST, not per control. The same
+          payload drives the global switch and every per-container toggle in
+          both tabs, so a notice beside one control would leave the rest silent
+          and teach the operator that silence means fresh. */}
+      {autoUpdatePoliciesQuery.isError && !!autoUpdatePoliciesQuery.data && (
+        <RefreshFailedNotice
+          what="the auto-update settings"
+          onRetry={() => autoUpdatePoliciesQuery.refetch()}
+        />
+      )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>

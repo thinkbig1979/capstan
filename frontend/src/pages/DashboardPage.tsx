@@ -358,6 +358,16 @@ export function DashboardPage() {
               onFilterStopped={() => setStatusFilter('stopped')}
               onFilterError={() => setStatusFilter('error')}
             />
+            {/* agent-os-6iui: agent-os-wczm kept the last-known policy state
+                through a failed refetch and removed the lock that used to
+                disclose it. One notice per rendered LIST, so it covers the
+                per-stack toggles this table renders, not just one control. */}
+            {autoUpdatePoliciesQuery.isError && !!autoUpdatePoliciesQuery.data && (
+              <RefreshFailedNotice
+                what="the auto-update settings"
+                onRetry={() => autoUpdatePoliciesQuery.refetch()}
+              />
+            )}
             <StacksTab
               stacks={stacks || []}
               filteredStacks={filteredStacks}

@@ -305,7 +305,13 @@ export function DockerCleanupCard() {
             REFETCH too, so one 500 replaced a table of real runs with the
             sentence below. `!history.data` still covers the unreadable case. */}
         {history.isError && !!history.data && (
-          <RefreshFailedNotice what="the cleanup run history" />
+          <RefreshFailedNotice
+            what="the cleanup run history"
+            // agent-os-6iui: the one run-history table without a way out of a
+            // stale view; every other one (backup history, update log, stack
+            // updates, audit log, git history) offers a Retry.
+            onRetry={() => history.refetch()}
+          />
         )}
         {history.isLoading ? (
           <LoadingSpinner />
