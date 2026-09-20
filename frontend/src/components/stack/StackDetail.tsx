@@ -12,6 +12,7 @@ import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { toGlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { TabErrorBoundary } from '@/components/TabErrorBoundary'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { Info } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 import { useAutoUpdatePolicies } from '@/hooks/useResources'
@@ -81,6 +82,16 @@ function OverviewTabContent({
       </div>
 
       <div className="flex flex-col gap-4">
+        {/* agent-os-6iui: one notice per rendered LIST. Sits above the card
+            holding the Auto-update toggle — the only CONTROL this payload
+            drives on this panel, though it also drives the container-override
+            hint beside it. */}
+        {policiesQuery.isError && !!policiesQuery.data && (
+          <RefreshFailedNotice
+            what="the auto-update settings"
+            onRetry={() => policiesQuery.refetch()}
+          />
+        )}
         <div className="overflow-hidden rounded-lg border bg-card">
           <div className="border-b px-4 py-2.5 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
             Stack

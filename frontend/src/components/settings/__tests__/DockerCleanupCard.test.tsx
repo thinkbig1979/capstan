@@ -375,4 +375,38 @@ describe('DockerCleanupCard — a failed REFETCH must not discard data', () => {
     expect(screen.queryByText('Run history is unavailable.')).not.toBeInTheDocument()
     expect(screen.getByText(/Could not refresh the cleanup run history/)).toBeInTheDocument()
   })
+
+  /**
+   * agent-os-6iui. The run-history notice was the ONE run-history table without
+   * a Retry: BackupHistoryTab, UpdateLogTab, StackUpdatesTab, AuditLogContent
+   * and GitHistory all offer one. Without it the only way out of a stale table
+   * is a full page reload, and `history.refetch` was already in scope.
+   *
+   * The click assertion is the load-bearing half. `getByRole('button')` alone
+   * would pass for a Retry wired to the WRONG query, so the arm counts the
+   * calls on the history endpoint specifically.
+   */
+  it('offers a Retry on the run-history notice that refetches the history', async () => {
+    const { queryClient } = renderCardWithClient()
+
+    expect(await screen.findByText('scheduled')).toBeInTheDocument()
+
+    mockGetCleanupHistory.mockRejectedValue(new Error('boom'))
+    await queryClient.refetchQueries({ queryKey: ['settings', 'docker-cleanup-history'] })
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryState(['settings', 'docker-cleanup-history'])?.status,
+      ).toBe('error'),
+    )
+
+    // Only the history query failed, so exactly one notice — and one Retry — is
+    // on screen; the schedule notice (which has always had one) is absent.
+    expect(screen.queryByText(/Could not refresh the cleanup schedule/)).not.toBeInTheDocument()
+
+    const before = mockGetCleanupHistory.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() =>
+      expect(mockGetCleanupHistory.mock.calls.length).toBeGreaterThan(before),
+    )
+  })
 })
