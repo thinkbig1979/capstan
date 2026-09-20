@@ -7,6 +7,7 @@ import { DiffViewer } from './DiffViewer'
 import { Search, X } from 'lucide-react'
 import { formatRelativeTime } from '@/lib/format'
 import { classifyError } from '@/lib/error-handler'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 interface GitHistoryProps {
   stackId: string
@@ -26,7 +27,7 @@ export function GitHistory({ stackId }: GitHistoryProps) {
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null)
   const limit = 50
 
-  const { data: logData, isLoading, error } = useGitLog(stackId, limit, offset)
+  const { data: logData, isLoading, error, refetch } = useGitLog(stackId, limit, offset)
 
   const filteredCommits = useMemo(() => {
     if (!logData?.commits) return []
@@ -52,11 +53,33 @@ export function GitHistory({ stackId }: GitHistoryProps) {
     setOffset((prev) => prev + limit)
   }
 
-  if (isLoading && offset === 0) {
+  // agent-os-o5ud: `!logData`, not `offset === 0`. The cursor answered a
+  // question about the DATA, and past the first page it answered it wrongly.
+  // useGitLog is a plain useQuery keyed on the offset with no placeholderData
+  // (useGit.ts:28-34), so Load More starts a FRESH query whose data is
+  // undefined while it is in flight. The old guard did not fire, and the
+  // component rendered the count line below -- which is ungated -- as
+  // "Showing 0 commits" for a repository whose commits were still on the wire.
+  // MEASURED, not assumed: the empty-state sentence further down is NOT
+  // reachable in that window, because it is gated on `!isLoading` and
+  // `isLoading` is true for exactly that window. The count line was the one
+  // that lied.
+  if (isLoading && !logData) {
     return <div className="flex items-center justify-center py-8">Loading git history...</div>
   }
 
-  if (error && offset === 0) {
+  // agent-os-o5ud: `!logData`, not `offset === 0`. This is the agent-os-wczm /
+  // agent-os-4gve class -- a second operand that is not a data-presence test --
+  // and here it was a PAGINATION CURSOR. `logData` survives a failed refetch and
+  // is still read at :33, :34, :38 and :50, so at offset 0 one focus-refetch
+  // that 500s threw a rendered commit list away for this error view (staleTime
+  // 30s, refetchOnWindowFocus on, a 500 not auto-retryable: query-client.ts:7,
+  // 13, 14). Past the first page the branch was unreachable, so the same
+  // failure showed stale commits with no disclosure at all. Both halves now get
+  // the same answer: the error view is for an error with NOTHING to show; a
+  // failure with data on screen is a refresh failure, reported by
+  // RefreshFailedNotice below without taking anything away.
+  if (error && !logData) {
     // agent-os-rtn8: GetLog routes three DISTINCT 404s into this one branch --
     // GIT_NOT_REPO "Not a git repository", GIT_NO_COMMITS "Repository has no
     // commits yet" and STACK_DIR_MISSING "Stack directory does not exist on
@@ -66,9 +89,9 @@ export function GitHistory({ stackId }: GitHistoryProps) {
     // The cause reaches us at all only because agent-os-mc4i stopped
     // classifyError's 404 arm replacing the backend's message.
     //
-    // Single-condition branch, so `error` is the only state here and reading it
-    // needs no further gate. The fixed sentence stays as the HEADLINE, so a
-    // failure the backend said nothing about renders what it rendered before.
+    // Nothing was ever rendered here, so "Failed to load git history" is still
+    // true and the fixed sentence stays as the HEADLINE: a failure the backend
+    // said nothing about renders what it rendered before.
     return (
       <div className="flex flex-col items-center justify-center gap-1 py-8 text-center text-muted-foreground">
         <p>Failed to load git history</p>
@@ -79,6 +102,18 @@ export function GitHistory({ stackId }: GitHistoryProps) {
 
   return (
     <div className="space-y-4">
+      {/*
+        agent-os-o5ud. Reached only with `logData` present, since an error
+        without it returned above. The commits stay on screen -- they are the
+        last ones the server really sent -- and this says so rather than
+        pretending the view is current. Keyed on `error` alone so it cannot
+        outlive the failure it describes, and placed here so it covers every
+        page, not just the first.
+      */}
+      {error && (
+        <RefreshFailedNotice what="the git history" onRetry={() => refetch()} />
+      )}
+
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
