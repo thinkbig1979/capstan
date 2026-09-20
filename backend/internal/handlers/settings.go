@@ -586,9 +586,12 @@ func (h *SettingsHandler) GetUpdateSettings(c *gin.Context) {
 		}
 	}
 
-	enabledContainers, last7Days, last30Days, err := h.db.GetUpdateStats()
-	if err != nil {
-		slog.Error("Failed to get update stats", "error", err)
+	// Held in its own variable, not the shared `err`, because the decision it
+	// feeds is made ~50 lines below, after `err` has been reassigned by the
+	// weekday parse.
+	enabledContainers, last7Days, last30Days, statsErr := h.db.GetUpdateStats()
+	if statsErr != nil {
+		slog.Error("Failed to get update stats", "error", statsErr)
 	}
 
 	var lastScanAtPtr *string
@@ -638,9 +641,30 @@ func (h *SettingsHandler) GetUpdateSettings(c *gin.Context) {
 	if lastScanErrorPtr != nil {
 		response.LastScanError = *lastScanErrorPtr
 	}
-	response.AutoUpdateStats.EnabledContainers = enabledContainers
-	response.AutoUpdateStats.UpdatesLast7Days = last7Days
-	response.AutoUpdateStats.UpdatesLast30Days = last30Days
+	// agent-os-xppj. OMITTED on a fault, never zeroed: the error above was
+	// checked and logged but not acted on, so all three counters fell through at
+	// their zero value and were emitted inside this 200 as a factual answer —
+	// "0 containers with auto-update enabled" is what the operator read when the
+	// database could not count. Same failure mode as agent-os-ufj7, reached by
+	// the third syntactic route (checked-then-logged), which is the one neither
+	// the geterrors analyzer nor errcheck can see.
+	//
+	// NOT ufj7's remedy. ufj7 returned the error because the probe WAS the
+	// answer; here the counters are an ancillary block and the form above read
+	// cleanly. Refusing the whole request would take a correct, populated
+	// write-back form off the operator's screen, which is the fault
+	// agent-os-ptiq fixes one layer up in this same component. Degrading one
+	// field inside a 200 is this function's own house rule, stated at the
+	// weekday parse above: report it as empty rather than inventing a default,
+	// because an operator can see an empty answer is wrong where a substituted
+	// one hides it.
+	if statsErr == nil {
+		response.AutoUpdateStats = &models.UpdateStats{
+			EnabledContainers: enabledContainers,
+			UpdatesLast7Days:  last7Days,
+			UpdatesLast30Days: last30Days,
+		}
+	}
 
 	c.JSON(http.StatusOK, response)
 }
