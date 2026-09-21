@@ -91,7 +91,17 @@ backend/frontend/assets/
 # ── Private dev tooling & internal docs (kept local, not tracked in this public repo) ──
 # These remain on disk and keep working locally; they're just not published.
 .agent-os/
-.claude/
+# .claude/ is ignored except for rules/, which is the ONE carve-out and is
+# deliberate: a git worktree contains tracked files only, and dispatched workers
+# run in worktrees. A rule left untracked here reaches whoever sits in the main
+# tree and nobody who does the work. Excluding the directory wholesale would make
+# `!.claude/rules/` a no-op, because git cannot re-include a file inside an
+# excluded directory — hence `.claude/*` plus the re-include below.
+# Keep this narrow. settings.local.json, state/ and worktrees/ are machine-local
+# and must stay unpublished; add a new exception only for doctrine a WORKER must
+# read.
+.claude/*
+!.claude/rules/
 .drift/
 .opencode/
 .beads/

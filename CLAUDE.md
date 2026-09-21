@@ -66,8 +66,12 @@ Every bug bead's close reason states four fields:
 
 1. **Class statement** — one sentence naming the defect class, not this instance
    ("a WebSocket handler that upgrades but doesn't guarantee close on every exit
-   path", not "dashboard.go leaks a connection").
+   path", not "dashboard.go leaks a connection"). **It names BOTH ends: what
+   PRODUCES the bad value and what CONSUMES it** — see below, this is the field
+   most often written with only one end.
 2. **Sweep command** — the exact command run, receiver-agnostic (see below).
+   **Every producer-keyed sweep carries a consumer-keyed arm beside it.** ADD the
+   arm; never swap it for the producer arm.
 3. **Verbatim output** — trimmed to the relevant lines, not paraphrased.
 4. **Verdict** — either "0 further sites" or the list of follow-up bead IDs filed
    for the sites the sweep found.
@@ -76,6 +80,39 @@ A count in any of these four fields is pinned to the SHA it was measured on.
 Re-measure at close time and name the SHA: `agent-os-nho7`'s brief carried
 "10 lines, 5 in class" from `3dbaef2`, and the same command returned 14 and 8 on
 `25f192c` three commits later.
+
+### Name both ends, and sweep from both
+
+**Every sweep in this repo that later proved wrong was keyed on how the bad value
+is PRODUCED. The arms that actually fired were keyed on what CONSUMES it.** So the
+class statement names a concrete consumer — a function, a call site, a declaration
+— not a category. If nothing consumes the value yet, say so explicitly and give
+the command that would surface one, because "nothing consumes it" is a claim like
+any other.
+
+A producer-keyed sweep can return a **true zero that is nearly useless**, and it
+looks identical to a clean tree. That is the whole problem: the sites that matter
+most are often the ones that never name the thing you keyed on.
+
+- `agent-os-ptiq`'s verdict instrument keyed on `isError` — the producer shape —
+  and returned an honest, correct zero over `frontend/src/**/*.tsx`. The two real
+  sites were found only by a second arm keyed on **write-back shape**
+  (`GitSettingsContent.tsx`, a credentials form, and
+  `DirectoriesSettingsContent.tsx`). **Neither file spells `isError` anywhere**, so
+  the verdict instrument was blind to both by construction, and still is: the same
+  grep returns 0 for both files today.
+- `agent-os-xppj` found the opposite failure in the same family — the fix's own
+  rename from `err` to `statsErr` made the site vanish from its own sweep, 56
+  blocks silently becoming 55.
+- Working example, `agent-os-6wrb`: *"a Go handler field carrying `omitempty`
+  (PRODUCES a response omitting the key on a zero value), read through a
+  hand-written TypeScript declaration marking it required (CONSUMED as a value the
+  type promised)."* Naming the consumer is what bounded the scope — tygo emits
+  `?:` for every `omitempty`, so generated types cannot carry the defect, which
+  cut the corpus to one package and made all 11 members dispositionable.
+
+**ADD the consumer arm; do not swap out the producer arm.** Both, or the sweep is
+one-eyed in whichever direction you dropped.
 
 ### The one principle behind it
 
