@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useAuthStore } from '@/stores/authStore'
 import { WSClient } from '@/lib/ws'
-import { useWebSocket } from '../useWebSocket'
+import { frameValidator, num, record } from '@/lib/wsFrames'
+import { useWebSocket, useWebSocketJSON } from '../useWebSocket'
 
 class MockWebSocket {
   url: string
@@ -540,5 +541,54 @@ describe('useWebSocket auth-disabled behavior', () => {
 
       expect(closeSpy).toHaveBeenCalled()
     })
+  })
+})
+
+// agent-os-r4kf: the frame reaches the consumer only through its validator.
+describe('useWebSocketJSON frame validation', () => {
+  const parse = frameValidator((raw) => ({ n: num(record(raw).n) }))
+  const options = { parse }
+
+  const connect = async (onMessage: (d: { n: number }) => void) => {
+    useAuthStore.setState({ authDisabled: true, isAuthenticated: false, token: null })
+    const hook = renderHook(() => useWebSocketJSON('/ws/test', onMessage, options))
+    await waitFor(() => expect(MockWebSocket.instance).not.toBeNull())
+    const deliver = (data: string) => act(() => MockWebSocket.instance!.onmessage!({ data }))
+    return { ...hook, deliver }
+  }
+
+  it('delivers a frame the validator accepts, as the validator returned it', async () => {
+    const onMessage = vi.fn()
+    const { result, deliver } = await connect(onMessage)
+
+    deliver(JSON.stringify({ n: 1, extra: 'dropped' }))
+
+    expect(onMessage).toHaveBeenCalledTimes(1)
+    expect(onMessage).toHaveBeenCalledWith({ n: 1 })
+    expect(result.current.lastMessage).toEqual({ n: 1 })
+  })
+
+  it('drops a frame the validator rejects, without calling the consumer', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const onMessage = vi.fn()
+    const { result, deliver } = await connect(onMessage)
+
+    deliver(JSON.stringify({ n: 'one' }))
+
+    expect(onMessage).not.toHaveBeenCalled()
+    expect(result.current.lastMessage).toBeNull()
+    expect(warn).toHaveBeenCalledWith('Dropped a WebSocket frame that failed validation:', { n: 'one' })
+    warn.mockRestore()
+  })
+
+  it('still drops malformed JSON before the validator sees it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const onMessage = vi.fn()
+    const { deliver } = await connect(onMessage)
+
+    deliver('not json')
+
+    expect(onMessage).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 })

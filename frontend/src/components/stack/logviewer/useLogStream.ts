@@ -1,10 +1,17 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useWebSocketJSON } from '@/hooks/useWebSocket'
 import { stripAnsi, hasAnsi } from '@/lib/ansi'
+import { frameValidator, record, str } from '@/lib/wsFrames'
 import { useUIStore, type LogTimeRange } from '@/stores/uiStore'
 import { getLogLevel, isEditableTarget } from './log-utils'
 import { MAX_LOG_BUFFER, CONTAINER_COLORS, TIME_RANGE_OPTIONS } from './constants'
 import type { LogMessage, DisplayLogMessage } from './types'
+
+// Mirrors handlers.LogLine: three plain strings, none omitempty (agent-os-r4kf).
+export const parseLogMessage = frameValidator((raw): LogMessage => {
+  const f = record(raw)
+  return { container: str(f.container), timestamp: str(f.timestamp), message: str(f.message) }
+})
 
 interface UseLogStreamParams {
   stackId: string
@@ -116,10 +123,11 @@ export function useLogStream({ stackId, initialContainer, hasRunningContainers }
     }
   }, [])
 
-  const { status, send, reconnect, reconnectAttempts } = useWebSocketJSON<LogMessage>(
+  const { status, send, reconnect, reconnectAttempts } = useWebSocketJSON(
     `/ws/logs/${stackId}`,
     handleLogMessage,
     {
+      parse: parseLogMessage,
       skip: !hasRunningContainers,
     }
   )

@@ -154,7 +154,14 @@ export function useWebSocket(
 }
 
 export interface UseWebSocketJSONOptions<T> extends Omit<UseWebSocketOptions, 'binary'> {
-  parse?: (data: string) => T
+  /**
+   * Validates one decoded frame, returning null to reject it. Required
+   * (agent-os-r4kf): it used to be optional with `JSON.parse(data) as T` as the
+   * fallback, so T was a claim nothing checked and every consumer read socket
+   * fields as whatever type it had declared. Build validators from
+   * lib/wsFrames. A rejected frame is logged and dropped, never delivered.
+   */
+  parse: (raw: unknown) => T | null
 }
 
 export interface UseWebSocketJSONReturn<T> extends Omit<UseWebSocketReturn, 'lastMessage'> {
@@ -164,7 +171,7 @@ export interface UseWebSocketJSONReturn<T> extends Omit<UseWebSocketReturn, 'las
 export function useWebSocketJSON<T>(
   path: string,
   onMessage: (data: T) => void,
-  options: UseWebSocketJSONOptions<T> = {}
+  options: UseWebSocketJSONOptions<T>
 ): UseWebSocketJSONReturn<T> {
   const [lastMessage, setLastMessage] = useState<T | null>(null)
   const onMessageRef = useRef(onMessage)
@@ -185,7 +192,12 @@ export function useWebSocketJSON<T>(
     }
 
     try {
-      const parsed = parseRef.current ? parseRef.current(data) : JSON.parse(data) as T
+      const raw: unknown = JSON.parse(data)
+      const parsed = parseRef.current(raw)
+      if (parsed === null) {
+        console.warn('Dropped a WebSocket frame that failed validation:', raw)
+        return
+      }
       setLastMessage(parsed)
       onMessageRef.current(parsed)
     } catch (error) {
