@@ -226,15 +226,17 @@ export interface DirectoryCredentialStatus {
   status: DirectoryCredentialStatusValue
 }
 
+// agent-os-p9e1: every key but totalStacks is omitted when the Docker read
+// behind it failed (backend/internal/handlers/dashboard.go getDashboardStats).
 export interface DashboardStats {
   totalStacks: number
-  runningStacks: number
-  stoppedStacks: number
-  totalContainers: number
-  runningContainers: number
-  imageDiskUsage: number
-  diskUsage: DiskUsageBreakdown
-  containers: DashboardContainerInfo[]
+  runningStacks?: number
+  stoppedStacks?: number
+  totalContainers?: number
+  runningContainers?: number
+  imageDiskUsage?: number
+  diskUsage?: DiskUsageBreakdown
+  containers?: DashboardContainerInfo[]
 }
 
 export interface GitRepoStatus {

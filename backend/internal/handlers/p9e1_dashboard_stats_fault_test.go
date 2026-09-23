@@ -40,14 +40,14 @@ func newFakeDashboardEngine(t *testing.T, listStatus int, listBody string, dfSta
 			w.WriteHeader(http.StatusOK)
 		case strings.HasSuffix(r.URL.Path, "/containers/json"):
 			w.WriteHeader(listStatus)
-			_, _ = w.Write([]byte(listBody))
+			_, _ = w.Write([]byte(listBody)) //nolint:errcheck // Write to a httptest stub's ResponseWriter; a failure there is not the behaviour under test.
 		case strings.HasSuffix(r.URL.Path, "/containers/c1/json"):
 			// The per-container inspect GetAllContainersWithDetails enriches a
 			// running row with; its contents are not what these tests measure.
-			_, _ = w.Write([]byte(`{"Id":"c1","Name":"/web-1","State":{"Status":"running","Running":true}}`))
+			_, _ = w.Write([]byte(`{"Id":"c1","Name":"/web-1","State":{"Status":"running","Running":true}}`)) //nolint:errcheck // Write to a httptest stub's ResponseWriter; a failure there is not the behaviour under test.
 		case strings.HasSuffix(r.URL.Path, "/system/df"):
 			w.WriteHeader(dfStatus)
-			_, _ = w.Write([]byte(dfBody))
+			_, _ = w.Write([]byte(dfBody)) //nolint:errcheck // Write to a httptest stub's ResponseWriter; a failure there is not the behaviour under test.
 		default:
 			t.Errorf("unexpected Docker Engine request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
