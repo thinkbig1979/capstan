@@ -27,7 +27,8 @@
 #   check-close-reason.sh --hook
 #       PreToolUse hook. Reads Claude Code's hook JSON on stdin
 #       (tool_input.command, cwd); Claude Code sets no per-parameter env vars.
-#       Gates every `bd close|done` in command position: after ; && || |
+#       Gates every `bd close|done` (and `bd todo done`, whose --reason is
+#       checked the same way) in command position: after ; && || |
 #       newline or a paren, behind VAR=, env, rtk, command, time, a reserved
 #       word (! { if then elif else while until do), and inside the script
 #       text of eval or bash|sh -c "..." (also -lc, -ec, -c --). Unquoted
@@ -50,7 +51,12 @@
 #       --status closed`, `bd batch` with a close line in its -f file or in
 #       any heredoc of the command (other stdin is refused: a | before it,
 #       a < or <<< anywhere, a heredoc body that expands; --dry-run passes),
-#       and
+#       `bd duplicate`/`supersede` on a bug, `bd delete --force` and
+#       `bd mol burn` (alias protomolecule; flags may precede burn, and
+#       todo's before done) on a bug (it vanishes with no reason; a
+#       --dry-run=F/false/0 is no dry run), `bd duplicates
+#       --auto-merge`, `bd orphans --fix` and delete --from-file/--cascade
+#       (they pick the beads themselves), a `bd sql` write, and
 #       `bd import` unless its file is readable with no closed row, keys
 #       matched case-insensitively as Go does (no file reads the export, and
 #       - reads stdin; --dry-run passes).
@@ -241,8 +247,8 @@ SHELL_C = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")  # -c, -lc, -ec, -xc
 RUNNERS = {"ssh", "watch", "script", "su", "runuser", "flock", "parallel", "tmux",
            "screen", "chroot", "sg"}
 BD_WORD = re.compile(r"(^|[^A-Za-z0-9_.-])bd($|[^A-Za-z0-9_-])")
-CLOSE_TEXT = re.compile(r"(^|[^A-Za-z0-9_.-])bd\s(.*\s)?(close|done|batch|import|--status=closed|closed)($|[\s'\")`;&|])")
-HIDDEN = ("close-reason hook: this command runs a bd close in a form the hook cannot follow "
+CLOSE_TEXT = re.compile(r"(^|[^A-Za-z0-9_.-])bd\s(.*\s)?(close|done|batch|import|duplicates?|supersede|delete|burn|orphans|sql|--status=closed|closed)($|[\s'\")`;&|])")
+HIDDEN = ("close-reason hook: this command runs a bd close (or a delete) in a form the hook cannot follow "
           "(behind a wrapper such as timeout/nice/sudo -u/xargs/ssh/watch, inside $(...), "
           "backticks or <(...), or fed to a shell on stdin), so it cannot check the reason. "
           "Run it as a plain bd close <id> --reason-file <path>.")
@@ -332,11 +338,11 @@ HEREDOC_OP = re.compile(r"<<(-?)[ \t]*((?:[^\s;&|<>()'\"\\]|\\.|'[^'\n]*'|\"[^\"
 # its start, or after ; or & ("run bd close X", "(bd close X)" and a
 # markdown "| bd close |" cell in prose do not match).
 BODY_CLOSE = re.compile(r"(?m)(?:^|[;&])[ \t]*(?:[A-Za-z_]\w*=\S*[ \t]+)*"
-                        r"bd[ \t]+(?:--?\S+[ \t]+)*(?:\S+[ \t]+)?(close|done|batch|import)\b")
+                        r"bd[ \t]+(?:--?\S+[ \t]+)*(?:\S+[ \t]+)?(close|done|batch|import|duplicates?|supersede|delete|burn|orphans)\b")
 
 # a bd close/done/batch/import invocation anywhere (not the loop word done,
 # not --status closed)
-BD_CLOSE_CMD = re.compile(r"(?:^|[^\w.-])bd\s+(?:--?\S+\s+)*(?:\S+\s+)?(close|done|batch|import)\b")
+BD_CLOSE_CMD = re.compile(r"(?:^|[^\w.-])bd\s+(?:--?\S+\s+)*(?:\S+\s+)?(close|done|batch|import|duplicates?|supersede|delete|burn|orphans|sql)\b")
 
 def strip_heredocs(s):
     """Drop here-document bodies: they are data, not shell words, and an
@@ -495,6 +501,12 @@ def emits(s, cur, depth):
 def bd_closes(rest):
     """The words after a bd word ask for a close: close/done/batch/import, or an
     update to status closed."""
+    j = 0  # the subcommand word, past flags and their values
+    while j < len(rest) and rest[j].startswith("-"):
+        j += 2 if rest[j] in GLOBAL_VAL | {"-C", "--directory"} else 1
+    sub = rest[j] if j < len(rest) else ""
+    if sub in NO_REASON or sub in ("mol", "protomolecule") and "burn" in rest:
+        return True
     return any(t in ("close", "done", "batch", "import") for t in rest) or (
         "update" in rest and any(t.endswith("closed") for t in rest))
 
@@ -787,6 +799,74 @@ def stdin_fed(s, pipes):
         i += 1
     return False
 
+# Subcommands that close or delete a bead and take no reason (agent-os-yplt,
+# OBSERVED on bd 1.1.2 against a throwaway embedded database): each gated
+# bead of a bug type is refused; those that pick their own ids are refused
+# outright. bd sql, doctor --fix and human respond cannot run on an embedded
+# tracker (this repo's); sql writes are refused anyway.
+NO_REASON = ("duplicate", "supersede", "delete", "mol burn", "duplicates", "orphans", "sql")
+SQL_WRITE = re.compile(r"(?i)\b(update|insert|delete|replace|drop|alter|truncate|merge|call)\b")
+
+def bd_no_reason(sub, d, args):
+    """duplicate <id> --of X and supersede <id> --with X close <id>; delete
+    <id> --force (no --force is a preview) and mol burn <id> delete it with
+    no record. A bug bead there is refused after a type lookup, like
+    bd update --status closed. duplicates --auto-merge and orphans --fix close
+    beads they choose, and delete --from-file/--cascade deletes beads the
+    command does not name: refused outright. --dry-run passes."""
+    ids, flags, j = [], set(), 0
+    while j < len(args):
+        a = args[j]
+        r = take_dir(args, j, d)
+        if r:
+            j, d = r
+            continue
+        if a in ("-h", "--help"):
+            return
+        if a in ("--of", "--with", "--from-file", "-l", "--label", "--label-any") or a in GLOBAL_VAL:
+            flags.add(a); j += 2; continue
+        if a.startswith("--"):
+            # --x=false, =0, =F, =False switch x off, as pflag's strconv.ParseBool does
+            name, _, val = a.partition("=")
+            if val.lower() not in ("0", "f", "false"):
+                flags.add(name)
+            j += 1; continue
+        if a.startswith("-") and len(a) > 1:
+            # short cluster: -f is --force (delete) or --fix (orphans); -l takes
+            # a value, glued (-lx) or as the next word when it ends the cluster
+            cl = a[1:]
+            k = cl.find("l")
+            if "f" in (cl if k < 0 else cl[:k]):
+                flags.add("-f")
+            j += 2 if k == len(cl) - 1 else 1
+            continue
+        if not a.startswith("<<"):
+            ids.append(a)
+        j += 1
+    if "--dry-run" in flags:
+        return
+    label = "bd " + sub
+    if sub == "sql":
+        q = " ".join(args)
+        if SQL_WRITE.search(q) or re.search(r"[$`]", q):  # a query built by the shell is unread
+            refuse("close-reason hook: 'bd sql' with a write statement (or a query the shell "
+                   "builds, which the hook cannot read) can close or delete beads with no reason "
+                   "the hook can check; refusing. Use bd close <id> --reason-file <path>.")
+        return
+    force = bool(flags & {"--force", "-f"})
+    if sub == "duplicates" and "--auto-merge" not in flags or sub == "orphans" and not (flags & {"--fix", "-f"}) \
+            or sub == "delete" and not force:
+        return  # a listing or a preview
+    if sub in ("duplicates", "orphans") or flags & {"--from-file", "--cascade"}:
+        refuse("close-reason hook: '%s %s' closes or deletes beads it picks itself, so the hook "
+               "cannot check any reason; refusing. Close each bead with bd close <id> --reason-file "
+               "<path> (run it with --dry-run to see which)." % (label, " ".join(sorted(flags - {""}))))
+        return
+    if not ids:
+        refuse("close-reason hook: '%s' with no id; name the id so its type can be checked" % label)
+    for i in ids:
+        out("CHECK", "noreason", d or "", i, label)
+
 def bd_batch(sh, args, raw, piped, nested):
     """bd batch runs `close <id>` and `update <id> status=closed` lines with no
     reason the hook can check. It reads -f's file, else stdin; stdin can be
@@ -927,14 +1007,14 @@ def walk(s, cur, depth=0):
     # ${x:-<<EOF} put a real command there); a script is written with a file
     # tool instead. And shlex cannot read $'...' at all.
     if any(BODY_CLOSE.search(b) for b in bodies):
-        refuse("close-reason hook: a heredoc body has a line that runs bd close/done/batch/import, "
+        refuse("close-reason hook: a heredoc body has a line that runs bd close/done/batch/import (or delete, duplicate, supersede, orphans, mol burn), "
                "and the hook cannot be sure it is data (nested quotes can make bash run it). "
                "If it is text (a bead description, markdown, a script), write it to a file "
                "with a file tool in an earlier call and pass the path (--body-file, "
                "--reason-file, bd batch -f); or run the close on its own.")
         return cur
     if ansi_c(text) and BD_CLOSE_CMD.search(s):
-        refuse("close-reason hook: $'...' quoting next to a bd close; the hook cannot parse it. "
+        refuse("close-reason hook: $'...' quoting next to a bd close (or delete); the hook cannot parse it. "
                "Run the close on its own with plain quotes.")
         return cur
     flat = strip_redirs(text)
@@ -1009,10 +1089,22 @@ def walk(s, cur, depth=0):
             sub = a; j += 1
             break
         rest = args[j:]
-        if xargs and sub in ("close", "done", "update", "import"):
+        # todo done / mol burn: a subcommand of a subcommand, with flags (and
+        # their values) allowed before it; those flags still reach the gate
+        sub = "mol" if sub == "protomolecule" else sub  # bd's alias for mol
+        if sub in ("todo", "mol"):
+            pre, j2 = [], 0
+            while j2 < len(rest) and rest[j2].startswith("-"):
+                takes = rest[j2] in GLOBAL_VAL | {"-C", "--directory", "--reason"}
+                pre += rest[j2:j2 + 1 + takes]; j2 += 1 + takes
+            if j2 < len(rest):
+                sub, rest = sub + " " + rest[j2], pre + rest[j2 + 1:]
+        if xargs and sub in ("close", "done", "update", "import", "todo done") + NO_REASON:
             refuse("close-reason hook: 'xargs bd %s' hides the ids from the hook; name each id" % sub)
-        elif sub in ("close", "done"):
-            bd_close(cur, d, rest)
+        elif sub in ("close", "done", "todo done"):
+            bd_close(cur, d, rest)  # todo done takes --reason, as close does
+        elif sub in NO_REASON:
+            bd_no_reason(sub, d, rest)
         elif sub == "update":
             bd_update(d, rest)
         elif sub == "batch":
@@ -1051,6 +1143,15 @@ hook_mode() {
           echo "close-reason hook: can't tell which directory 'bd ${kind} ${id}' runs in, so its type cannot be looked up: the command changes directory in a way the hook does not follow, or -C names a path the shell would expand. Use bd -C <absolute dir>, or run the close in its own command." >&2; rc=2; continue
         fi
         if ! type=$(bead_type "$id" "$dir"); then rc=2; continue; fi
+        if [ "$kind" = noreason ]; then  # $reason carries the command, e.g. "bd duplicate"
+          if [ "$type" = bug ]; then
+            echo "close-reason hook: refusing '${reason} ${id}': it closes or deletes a bug bead with no reason. Use: bd close ${id} --reason-file <path>" >&2
+            rc=2
+          else
+            echo "close-reason: not a bug bead (type: ${type}); '${reason}' allowed"
+          fi
+          continue
+        fi
         if [ "$kind" = update ]; then
           if [ "$type" = bug ]; then
             echo "close-reason hook: refusing 'bd update ${id} --status closed': a bug bead needs a close reason, and bd update has none. Use: bd close ${id} --reason-file <path>" >&2
@@ -1342,6 +1443,62 @@ EOF"
   hook_case update-closed-task        0 "bd update t-task-1 --status closed"              'status change allowed'
   hook_case update-inprogress-bug     0 "bd update t-bug-1 --status in_progress --title 'x'"
   hook_case update-closed-wrapped     2 "timeout 5 bd update t-bug-1 --status closed"     "$H"
+  # --- more bd subcommands that close or delete a bead with no reason
+  # (agent-os-yplt, each OBSERVED closing/deleting an open bug on bd 1.1.2)
+  local NR='closes or deletes a bug bead' PK='picks itself'
+  hook_case duplicate-bug             2 "bd duplicate t-bug-1 --of t-task-1"              "$NR"
+  hook_case duplicate-task            0 "bd duplicate t-task-1 --of t-bug-1"              'bd duplicate. allowed'
+  hook_case supersede-bug             2 "bd supersede t-bug-1 --with t-task-2"            "$NR"
+  hook_case supersede-task            0 "bd supersede t-task-1 --with t-bug-2"            'bd supersede. allowed'
+  hook_case delete-bug-force          2 "bd delete t-bug-1 --force"                       "$NR"
+  hook_case delete-bug-short-f        2 "bd delete -f t-bug-1"                            "$NR"
+  hook_case delete-bug-preview        0 "bd delete t-bug-1"
+  hook_case delete-task-force         0 "bd delete t-task-1 --force"                      'bd delete. allowed'
+  hook_case delete-dry-run            0 "bd delete t-bug-1 --force --dry-run"
+  hook_case delete-from-file          2 "bd delete --from-file ids.txt --force"           "$PK"
+  hook_case delete-cascade            2 "bd delete t-task-1 --force --cascade"            "$PK"
+  hook_case burn-bug                  2 "bd mol burn t-bug-1 --force"                     "$NR"
+  hook_case burn-task                 0 "bd mol burn t-task-1 --force"                    'bd mol burn. allowed'
+  hook_case burn-dry-run              0 "bd mol burn t-bug-1 --dry-run"
+  hook_case squash-not-gated          0 "bd mol squash t-bug-1"
+  hook_case auto-merge                2 "bd duplicates --auto-merge"                      "$PK"
+  hook_case auto-merge-dry-run        0 "bd duplicates --auto-merge --dry-run"
+  hook_case duplicates-list           0 "bd duplicates"
+  hook_case orphans-fix               2 "bd orphans --fix"                                "$PK"
+  hook_case orphans-f-cluster         2 "bd orphans --details -f"                         "$PK"
+  hook_case orphans-list              0 "bd orphans --details"
+  hook_case orphans-label-f           0 "bd orphans -l f"
+  hook_case orphans-label-glued-f     0 "bd orphans -lf"
+  hook_case sql-write                 2 "bd sql \"UPDATE issues SET status='closed' WHERE id='t-bug-1'\"" 'write statement'
+  hook_case sql-read                  0 "bd sql 'SELECT id FROM issues'"
+  hook_case todo-done-bare            2 "bd todo done t-bug-1"                            'missing: Class statement'
+  hook_case todo-done-complete        0 "bd todo done t-bug-1 --reason \"$ok\""
+  hook_case todo-done-task            0 "bd todo done t-task-1"                           'not a bug bead'
+  hook_case todo-add-not-gated        0 "bd todo add 'write docs'"
+  hook_case duplicate-wrapped         2 "timeout 5 bd duplicate t-bug-1 --of t-task-1"    "$H"
+  hook_case delete-xargs              2 "echo t-bug-1 | xargs bd delete --force"          'xargs bd delete'
+  # review of f3a5061, each OBSERVED closing/deleting a bug on real bd 1.1.2:
+  # the protomolecule alias, flags before the sub-subcommand, bool spellings
+  hook_case protomolecule-burn        2 "bd protomolecule burn t-bug-1 --force"           "$NR"
+  hook_case burn-after-dir-flag       2 "bd mol -C $ST_DIR burn t-bug-1 --force"          "$NR"
+  hook_case burn-after-actor-flag     2 "bd mol --actor x burn t-bug-1 --force"           "$NR"
+  hook_case todo-reason-before-done   2 "bd todo --reason Completed done t-bug-1"         'missing: Class statement'
+  hook_case todo-good-reason-before   0 "bd todo --reason \"$ok\" done t-bug-1"
+  hook_case todo-dir-before-done      2 "bd todo -C $ST_DIR done t-bug-1"                 'missing: Class statement'
+  hook_case delete-dry-run-F          2 "bd delete t-bug-1 --force --dry-run=F"           "$NR"
+  hook_case delete-dry-run-undone     2 "bd delete t-bug-1 --force --dry-run=false"       "$NR"
+  hook_case burn-dry-run-False        2 "bd mol burn t-bug-1 --force --dry-run=False"     "$NR"
+  hook_case sql-built-query           2 "bd sql \"\$(cat q.sql)\""                        'write statement'
+  hook_case todo-done-xargs           2 "echo t-bug-1 | xargs bd todo done"               'xargs bd todo done'
+  hook_case delete-piped-to-sh        2 "echo 'bd delete t-bug-1 --force' | sh"           "$H"
+  hook_case delete-heredoc-body       2 "cat > /dev/null <<'EOF'
+bd delete t-bug-1 --force
+EOF"                                                                                         'heredoc body'
+  # ... and what must not be refused: a grep naming delete, a doc with bd sql
+  hook_case grep-delete-word-ok       0 "grep -rn bd scripts/ --include=*.sh -e delete"
+  hook_case heredoc-sql-doc-ok        0 "cat > /dev/null <<'EOF'
+bd sql 'SELECT count(*) FROM issues'
+EOF"
   hook_case batch-close               2 "bd batch <<'EOF'
 close t-bug-1
 EOF"                                                                                         'bd batch closes'
