@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react'
 import { useWebSocketJSON } from './useWebSocket'
+import { arrayOf, frameValidator, num, record, str } from '@/lib/wsFrames'
 
 export interface ContainerMetric {
   cpuPercent: number
@@ -44,6 +45,34 @@ export interface MetricsMessage {
   // is what let an unguarded `.forEach` past the compiler in the first place.
   containers: MetricsContainerFrame[] | null
 }
+
+const parseContainerFrame = (raw: unknown): MetricsContainerFrame => {
+  const f = record(raw)
+  return {
+    containerId: str(f.containerId),
+    name: str(f.name),
+    cpuPercent: num(f.cpuPercent),
+    memUsage: num(f.memUsage),
+    memLimit: num(f.memLimit),
+    memPercent: num(f.memPercent),
+    netRx: num(f.netRx),
+    netTx: num(f.netTx),
+    blockRead: num(f.blockRead),
+    blockWrite: num(f.blockWrite),
+    memSwap: num(f.memSwap),
+    pids: num(f.pids),
+  }
+}
+
+// Mirrors handlers.MetricsFrame and models.ContainerMetrics (agent-os-r4kf).
+// `containers` keeps its null: see the MetricsMessage comment above.
+export const parseMetricsMessage = frameValidator((raw): MetricsMessage => {
+  const f = record(raw)
+  return {
+    timestamp: str(f.timestamp),
+    containers: f.containers === null ? null : arrayOf(f.containers, parseContainerFrame),
+  }
+})
 
 export interface MetricsBaseOptions {
   historySize?: number
@@ -110,7 +139,8 @@ export function useMetricsBase(path: string, options: MetricsBaseOptions = {}) {
     })
   }, [historySize])
 
-  const ws = useWebSocketJSON<MetricsMessage>(path, handleMessage, {
+  const ws = useWebSocketJSON(path, handleMessage, {
+    parse: parseMetricsMessage,
     onOpen: () => setIsConnected(true),
     onClose: () => setIsConnected(false),
   })

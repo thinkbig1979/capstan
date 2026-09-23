@@ -7,11 +7,16 @@ import { useUpdateJobStore } from '@/stores/updateJobStore'
 import type { Stack } from '@/types'
 import type { UpdateJobProgressEvent, UpdateJobCompleteEvent, UpdateJobOutcome } from '@/stores/updateJobStore'
 import { queryKeys } from '@/lib/query-keys'
+import { frameValidator, omitemptyStr, oneOf, optOneOf, optStr, record, str } from '@/lib/wsFrames'
+import { JOB_OUTCOMES, JOB_STATUSES, JOB_TARGET_TYPES } from './useUpdateJobStream'
+import type { StackStatus } from '@/types'
 
 export interface StackStatusEvent {
   type: 'stack_status'
   stackId: string
-  status: 'running' | 'stopped' | 'partial' | 'unknown' | 'error'
+  // 'paused' is not a StackStatus, but MonitorService.stackEventFor emits it
+  // for a Docker "pause" action (agent-os-r4kf).
+  status: StackStatus | 'paused'
   timestamp: string
 }
 
@@ -92,6 +97,66 @@ export type StackEvent =
   | UpdateJobCompleteStackEvent
   | UpdatesChangedEvent
 
+// ── Frame validation (agent-os-r4kf) ─────────────────────────────────────────
+// Mirrors models.StackEvent, where every field but type and timestamp is a Go
+// string tagged omitempty. A field the union above declares required is read
+// with omitemptyStr, because Go really does omit some of them: stackId is
+// absent on a container_event for a container in no known stack
+// (unassociatedStackEvent) and on an update_job_* event for a standalone
+// container. Reading it back as "" is the value Go held.
+
+const STACK_EVENT_STATUSES = ['running', 'stopped', 'partial', 'unknown', 'error', 'paused'] as const satisfies readonly StackStatusEvent['status'][]
+
+const readJobEvent = (f: Record<string, unknown>) => ({
+  jobId: omitemptyStr(f.jobId),
+  targetType: oneOf(f.targetType, JOB_TARGET_TYPES),
+  targetId: omitemptyStr(f.targetId),
+  stackId: omitemptyStr(f.stackId),
+  name: omitemptyStr(f.name),
+  status: oneOf(f.status, JOB_STATUSES),
+})
+
+// A type this union does not know (backup_policy_changed, for one) returns
+// null, so it is dropped with a warning, exactly as the switch below used to
+// ignore it.
+export const parseStackEvent = frameValidator((raw): StackEvent | null => {
+  const f = record(raw)
+  const timestamp = str(f.timestamp)
+  switch (f.type) {
+    case 'stack_status':
+      return { type: 'stack_status', stackId: omitemptyStr(f.stackId), status: oneOf(f.status, STACK_EVENT_STATUSES), timestamp }
+    case 'container_event':
+      return {
+        type: 'container_event',
+        stackId: omitemptyStr(f.stackId),
+        containerId: omitemptyStr(f.containerId),
+        event: omitemptyStr(f.event),
+        timestamp,
+      }
+    case 'resource_changed':
+      return { type: 'resource_changed', event: optStr(f.event), containerId: optStr(f.containerId), timestamp }
+    case 'update_completed':
+      return { type: 'update_completed', containerId: optStr(f.containerId), timestamp }
+    case 'update_scan_complete':
+    case 'update_scan_failed':
+    case 'update_policy_changed':
+    case 'updates_changed':
+      return { type: f.type, timestamp }
+    case 'update_job_progress':
+      return { type: 'update_job_progress', ...readJobEvent(f) }
+    case 'update_job_complete':
+      return {
+        type: 'update_job_complete',
+        ...readJobEvent(f),
+        error: optStr(f.error),
+        outcome: optOneOf(f.outcome, JOB_OUTCOMES),
+        reason: optStr(f.reason),
+      }
+    default:
+      return null
+  }
+})
+
 export function useStackEvents() {
   const pendingRef = useRef<Set<string>>(new Set())
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -126,7 +191,11 @@ export function useStackEvents() {
     queryClient.setQueryData(queryKeys.stacks(), (old: Stack[] | undefined) => {
       if (!old) return old
       return old.map((stack) =>
-        stack.id === event.stackId ? { ...stack, status: event.status } : stack
+        // The one unchecked assertion left on this socket, and deliberate:
+        // 'paused' is written into the cache exactly as it was before
+        // agent-os-r4kf, because StackStatus (types/index.ts) does not list
+        // it and dropping the frame would lose the optimistic update.
+        stack.id === event.stackId ? { ...stack, status: event.status as StackStatus } : stack
       )
     })
     scheduleInvalidations([
@@ -303,5 +372,5 @@ export function useStackEvents() {
     handleUpdatesChangedEvent,
   ])
 
-  useWebSocketJSON<StackEvent>('/ws/events', handleMessage)
+  useWebSocketJSON('/ws/events', handleMessage, { parse: parseStackEvent })
 }
