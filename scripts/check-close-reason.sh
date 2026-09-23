@@ -32,12 +32,28 @@
 #       word (! { if then elif else while until do), and inside the script
 #       text of eval or bash|sh -c "..." (also -lc, -ec, -c --). Unquoted
 #       redirections, backslash-newlines and # comments are dropped first;
-#       none of them reach bd as arguments. The type lookup and --reason-file
-#       follow the JSON cwd, any cd/pushd in the chain, and bd -C. A missing
-#       field, an unreadable input or an unparseable line exits 2 (Claude
-#       Code's "block, feed stderr back" status).
+#       none of them reach bd as arguments. A quoted, commented, escaped or
+#       arithmetic << starts no heredoc; a heredoc body line that runs a bd
+#       close/done/batch/import is refused anyway (nested quoting can make
+#       bash run it), and so is $'...' next to a close.
+#       Files (--reason-file, batch -f, import) are read from the JSON cwd,
+#       as moved by each `cd /absolute/dir` that starts a top-level list
+#       (not in ( ), $( ), a body or an & list). A command that changes
+#       directory any other way (cd elsewhere, pushd, popd, eval, source, .,
+#       trap, a $VAR command word) needs absolute paths and an absolute
+#       bd -C, or is refused: the hook does not track where bash keeps such
+#       a cd. bd -C picks only the database, so it moves the type lookup,
+#       never the files (bd 1.1.2).
+#       A missing field, an unreadable input or an unparseable line exits 2
+#       (Claude Code's "block, feed stderr back" status).
 #       Also refused, because bd takes no reason there: `bd update <bug>
-#       --status closed`, and `bd batch` with a close line (stdin or -f).
+#       --status closed`, `bd batch` with a close line in its -f file or in
+#       any heredoc of the command (other stdin is refused: a | before it,
+#       a < or <<< anywhere, a heredoc body that expands; --dry-run passes),
+#       and
+#       `bd import` unless its file is readable with no closed row, keys
+#       matched case-insensitively as Go does (no file reads the export, and
+#       - reads stdin; --dry-run passes).
 #       Refused rather than waved through, because the hook cannot read the
 #       reason: `--reason-file -`, `xargs bd close`, and a close the walk
 #       cannot follow: behind a wrapper it does not know (timeout, nice,
@@ -48,15 +64,12 @@
 #       so a read-only `$(bd list)` passes and single-quoted text is literal.
 #       -m/--message/--resolution/--comment count as --reason (bd aliases).
 #       Anything else passes untouched.
-#       A --reason-file or bd batch -f path must be literal: one with $VAR,
-#       ${VAR} or a leading ~ is refused, because the hook runs before the
-#       shell expands it (so is a cd or -C to such a path). The hook also
-#       runs before the command, so a reason file the same command writes
-#       does not exist yet.
-#       Known gaps: a quoted "<<EOF" is read as a heredoc and can hide the
-#       next line's close, a `cd` inside a subshell or behind a failing && is
-#       still applied, and `-C` after --reason-file is applied too late
-#       (agent-os-jox1).
+#       A --reason-file, batch -f or import path must be literal: one with
+#       $VAR, ${VAR} or a leading ~ is refused, because the hook runs before
+#       the shell expands it (so is a cd or -C to such a path). The hook also
+#       runs before the command, so any other mention of such a file's name
+#       in the same command (a write, cp or mv, but also a cat or rm; bd's
+#       own reads of it do not count) is refused, as is a /dev or /proc path.
 #   check-close-reason.sh --self-test
 #       Runs the fixtures below (files in a temp dir, no tracker needed) and
 #       exits 0 with a tally, 1 naming the control that misbehaved.
@@ -185,6 +198,11 @@ base = ev.get("cwd") or os.getcwd()
 # command's. Tracking assignments was tried (agent-os-9oo5) and two review
 # rounds found 31 ways for the hook to read a complete reason file while bash
 # hands bd an incomplete one, so such a path is refused instead of guessed.
+MOVED = ("close-reason hook: this command changes directory (cd, pushd, popd, eval, "
+         "source, ., trap, or a $VAR command word; only a cd to an absolute path that "
+         "starts a top-level list is followed), "
+         "so the hook cannot tell where bd will read %s '%s'. Pass an absolute path, and "
+         "bd -C <absolute dir>, or run the close in its own command.")
 LITERAL = ("close-reason hook: %s '%s' uses a shell variable or ~, which the hook "
            "cannot expand (it runs before the shell does). Pass the literal path.")
 
@@ -194,13 +212,17 @@ def expands(t):
 def resolve(cur, target):
     """A literal path joined to the directory, or None when the directory is
     unknown or the path is one the shell would expand."""
-    if cur is None or expands(target):
+    if expands(target):
+        return None
+    if os.path.isabs(target):
+        return os.path.normpath(target)
+    if cur is None:
         return None
     return os.path.normpath(os.path.join(cur, target))
 
 if tool != "Bash":
     sys.exit(0)
-cmd = ti.get("command")
+cmd = CMD = ti.get("command")
 if not isinstance(cmd, str):
     sys.exit(0)
 
@@ -219,7 +241,7 @@ SHELL_C = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")  # -c, -lc, -ec, -xc
 RUNNERS = {"ssh", "watch", "script", "su", "runuser", "flock", "parallel", "tmux",
            "screen", "chroot", "sg"}
 BD_WORD = re.compile(r"(^|[^A-Za-z0-9_.-])bd($|[^A-Za-z0-9_-])")
-CLOSE_TEXT = re.compile(r"(^|[^A-Za-z0-9_.-])bd\s(.*\s)?(close|done|batch|--status=closed|closed)($|[\s'\")`;&|])")
+CLOSE_TEXT = re.compile(r"(^|[^A-Za-z0-9_.-])bd\s(.*\s)?(close|done|batch|import|--status=closed|closed)($|[\s'\")`;&|])")
 HIDDEN = ("close-reason hook: this command runs a bd close in a form the hook cannot follow "
           "(behind a wrapper such as timeout/nice/sudo -u/xargs/ssh/watch, inside $(...), "
           "backticks or <(...), or fed to a shell on stdin), so it cannot check the reason. "
@@ -283,8 +305,11 @@ def strip_redirs(s):
         if c == "#" and len(out) == wstart:
             k = s.find("\n", i)
             i = n if k < 0 else k; continue
-        if c in "<>" and s[i + 1:i + 2] == "(" or s.startswith("<<", i) and not s.startswith("<<<", i):
+        if c in "<>" and s[i + 1:i + 2] == "(":
             out.append(s[i:i + 2]); wplain = False; i += 2; continue
+        if s.startswith("<<", i) and not s.startswith("<<<", i):
+            # its own word: bash splits bd batch<<'EOF' into batch and a heredoc
+            out.append(" <<"); wplain = False; i += 2; continue
         if c in "<>" or c == "&" and s[i + 1:i + 2] == ">" and not (out and out[-1] == "&"):
             op = REDIR_OP.match(s, i).group(0)
             w = "".join(out[wstart:])
@@ -299,17 +324,37 @@ def strip_redirs(s):
             wstart, wplain = len(out), True
     return "".join(out)
 
+# The delimiter is one shell word; any quoting in it (<<'X', <<"X", <<E"OF",
+# <<\X) makes it quoted, and the quotes are removed to get the word.
+HEREDOC_OP = re.compile(r"<<(-?)[ \t]*((?:[^\s;&|<>()'\"\\]|\\.|'[^'\n]*'|\"[^\"\n]*\")+)")
+
+# bd close/done/batch/import in command position on a heredoc body line: at
+# its start, or after ; or & ("run bd close X", "(bd close X)" and a
+# markdown "| bd close |" cell in prose do not match).
+BODY_CLOSE = re.compile(r"(?m)(?:^|[;&])[ \t]*(?:[A-Za-z_]\w*=\S*[ \t]+)*"
+                        r"bd[ \t]+(?:--?\S+[ \t]+)*(?:\S+[ \t]+)?(close|done|batch|import)\b")
+
+# a bd close/done/batch/import invocation anywhere (not the loop word done,
+# not --status closed)
+BD_CLOSE_CMD = re.compile(r"(?:^|[^\w.-])bd\s+(?:--?\S+\s+)*(?:\S+\s+)?(close|done|batch|import)\b")
+
 def strip_heredocs(s):
     """Drop here-document bodies: they are data, not shell words, and an
     apostrophe in one would make shlex fail. Unterminated -> unchanged.
     Returns (text, live): live holds the bodies of unquoted-delimiter heredocs,
     where the shell still expands $(...) and backticks."""
-    lines, kept, pending, live, body = s.split("\n"), [], [], [], []
+    # Only an unquoted, uncommented << starts a heredoc (agent-os-jox1:
+    # echo "<<EOF" does not, and swallowing the next line hid a close). The
+    # quote state spans lines; $( inside double quotes is unquoted again, so
+    # "$(cat <<'EOF' ...)" still strips.
+    lines, kept, pending, live, body, bodies = s.split("\n"), [], [], [], [], []
+    stack = []  # "'" / '"' quotes, "(" a $( or ( that is unquoted inside
     for line in lines:
         if pending:
-            delim, quoted = pending[0]
-            if line.lstrip("\t") == delim:
+            delim, quoted, dash = pending[0]
+            if (line.lstrip("\t") if dash else line) == delim:
                 pending.pop(0)
+                bodies.append("\n".join(body))
                 if not quoted:
                     live.append("\n".join(body))
                 body = []
@@ -317,8 +362,71 @@ def strip_heredocs(s):
                 body.append(line)
             continue
         kept.append(line)
-        pending += [(m.group(3), bool(m.group(2))) for m in re.finditer(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2", line)]
-    return (s, []) if pending else ("\n".join(kept), live)
+        i, n, esc = 0, len(line), -1  # esc: where the last \x pair ended
+        while i < n:
+            c, top = line[i], stack[-1] if stack else ""
+            if top in ("A", "a"):  # inside $(( )) or (( )): << is a shift
+                if c == "(":
+                    stack.append("a")
+                elif c == ")" and top == "a":
+                    stack.pop()
+                elif line.startswith("))", i):
+                    stack.pop(); i += 1
+                i += 1; continue
+            if top == "'":
+                if c == "'":
+                    stack.pop()
+                i += 1; continue
+            if c == "\\":
+                i += 2; esc = i; continue
+            if top == '"':
+                if c == '"':
+                    stack.pop()
+                elif line.startswith("$((", i):
+                    stack.append("A"); i += 2
+                elif line.startswith("$(", i):
+                    stack.append("("); i += 1
+                i += 1; continue
+            if c in "'\"":
+                stack.append(c)
+            elif line.startswith("((", i):
+                stack.append("A"); i += 2; continue
+            elif c == "(":
+                stack.append("(")
+            elif c == ")" and top == "(":
+                stack.pop()
+            elif c == "#" and (i == 0 or line[i - 1] in " \t;&|()" and esc != i):  # x\ # is one word
+                break
+            elif line.startswith("<<", i):
+                m = HEREDOC_OP.match(line, i)
+                if m:
+                    word = m.group(2)
+                    quoted = any(q in word for q in "'\"\\")
+                    word = re.sub(r"\\(.)|'([^']*)'|\"([^\"]*)\"", lambda x: "".join(g or "" for g in x.groups()), word)
+                    pending.append((word, quoted, bool(m.group(1))))
+                    i = m.end(); continue
+                i += 2; continue
+            i += 1
+    return (s, [], []) if pending else ("\n".join(kept), live, bodies)
+
+def ansi_c(s):
+    """Does s use $'...' quoting (a $' outside single and double quotes)?
+    shlex reads it as $ plus a plain '...', so the words it sees are not
+    bash's ('^[0-9]+$' in a grep pattern is not one)."""
+    i, n, dq = 0, len(s), False
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            i += 2; continue
+        if c == "'" and not dq:
+            k = s.find("'", i + 1)
+            i = n if k < 0 else k + 1; continue
+        if c == '"':
+            dq = not dq
+        elif c == "$" and not dq and s[i + 1:i + 2] == "'":
+            return True
+        i += 1
+    return False
 
 def close_paren(s, j):
     """Index of the ')' that closes a '(' opened just before s[j], or len(s).
@@ -385,9 +493,9 @@ def emits(s, cur, depth):
     return bool(recs)
 
 def bd_closes(rest):
-    """The words after a bd word ask for a close: close/done/batch, or an
+    """The words after a bd word ask for a close: close/done/batch/import, or an
     update to status closed."""
-    return any(t in ("close", "done", "batch") for t in rest) or (
+    return any(t in ("close", "done", "batch", "import") for t in rest) or (
         "update" in rest and any(t.endswith("closed") for t in rest))
 
 def hidden(seg, cur, depth):
@@ -415,17 +523,90 @@ def hidden(seg, cur, depth):
         return any(emits(w, cur, depth + 1) for w in seg[1:])
     return False
 
-def segments(toks):
+OP_SPLIT = re.compile(r"\(|\)|&&|\|\||\|&|\||;;|;|&|\n")
+
+def items(toks):
+    """Simple commands and the operators between them, in order. shlex glues
+    adjacent punctuation (");", "&&("), so operator tokens are split here."""
     seg = []
     for t in toks:
         if t and all(c in OPS for c in t):
             if seg:
-                yield seg
+                yield "seg", seg
             seg = []
+            for op in OP_SPLIT.findall(t):
+                yield "op", op
         else:
             seg.append(t)
     if seg:
-        yield seg
+        yield "seg", seg
+
+OPENS = {"if", "while", "until", "for", "case", "select", "{"}
+CLOSES = {"fi", "done", "esac", "}"}
+
+def shell_dirs(its, cur):
+    """The directory each item of the command runs in, as a list parallel to
+    its (None where unknown). Only one kind of directory change is followed:
+    `cd /absolute/dir` (literal, existing) as a whole simple command that
+    starts a list outside any ( ), $( ) or body (if/for/while/case/{ }),
+    followed by &&, ; or a newline, in a list that is not run with &. Any
+    other change anywhere (cd elsewhere or to a relative path, pushd, popd,
+    eval that moves, source, ., trap, a $VAR command word) makes every item
+    None, and so does a followed cd in a command whose nesting counters are
+    `odd` (below: a case, `function f {`, a stray closer). Tracking
+    where bash keeps a cd was tried (agent-os-jox1): a review found 27 ways
+    for the hook to read one file while bd reads another."""
+    unknown = [None] * len(its)
+    # odd: the counters cannot be trusted (a case pattern's ")" closes no
+    # subshell, `function f {` opens its body on the same line, a quoted
+    # "fi" is not a keyword but shlex drops the quotes), so a followed cd
+    # would be a guess
+    depth, body, dirs, followed, odd = 0, 0, [], False, False
+    for k, (kind, seg) in enumerate(its):
+        if kind == "op":
+            depth += {"(": 1, ")": -1}.get(seg, 0)
+            odd = odd or depth < 0
+            dirs.append(cur)
+            continue
+        i = 0
+        while i < len(seg) and (seg[i] in WRAP or seg[i] in OPENS | CLOSES
+                                or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", seg[i])):
+            body += (seg[i] in OPENS) - (seg[i] in CLOSES)
+            odd = odd or body < 0 or seg[i] == "case"
+            i += 1
+        word = seg[i] if i < len(seg) else ""
+        odd = odd or word == "function"
+        before = its[k - 1][1] if k > 0 else None
+        after = its[k + 1][1] if k + 1 < len(its) else None
+        if seg == ["cd", seg[-1]] and depth == 0 and body == 0 and before in (None, ";", "\n") \
+                and after in (None, "&&", ";", "\n") and os.path.isabs(seg[1]) \
+                and not expands(seg[1]) and os.path.isdir(seg[1]):
+            for kind2, x in its[k + 1:]:  # the rest of this list: run with &?
+                if kind2 == "op" and x in (";", "\n"):
+                    break
+                if kind2 == "op" and x == "&":
+                    return unknown
+            cur, followed = os.path.normpath(seg[1]), True
+            dirs.append(cur)
+            continue
+        # cd/pushd/popd anywhere else (env cd, nohup cd, timeout 5 cd);
+        # source and . only as the command word (git add . is not a move).
+        # A cd in a function body is never followed: f() { is a { } body,
+        # and `function f {` makes the counters odd.
+        # A command word from a variable ($C sub with C=cd) or a trap
+        # (trap 'cd x' DEBUG) can change directory where no cd word shows.
+        if any(t in ("cd", "pushd", "popd") for t in seg) or word in ("source", ".", "trap") \
+                or word.startswith("$"):
+            return unknown
+        if word == "eval":
+            try:
+                inner = list(items(tokenize(strip_redirs(" ".join(seg[i + 1:])))))
+            except ValueError:
+                return unknown
+            if any(d != cur for d in shell_dirs(inner, cur)):
+                return unknown
+        dirs.append(cur)
+    return unknown if followed and odd else dirs
 
 def take_dir(args, j, d):
     """-C/--directory handling; returns (new_j, new_d) or None."""
@@ -438,7 +619,59 @@ def take_dir(args, j, d):
         return j + 1, resolve(d, a[2:].lstrip("="))
     return None
 
-def bd_close(d, args):
+# (basename, what, path) of each file bd reads (file_arg's successes), for
+# named_elsewhere().
+READS = []
+
+def file_arg(sh, p, what):
+    """The file bd will read for `what` (a --reason-file, batch -f or import
+    path), or None after refusing. It must be a literal path the hook can
+    place, and not a device or process file (/dev/stdin reads the hook's own,
+    already empty, stdin). named_elsewhere() checks the rest of the command."""
+    if expands(p):
+        refuse(LITERAL % (what, p))
+        return None
+    fp = resolve(sh, p)
+    if fp is None:
+        refuse(MOVED % (what, p))
+        return None
+    if re.match(r"/(dev|proc)(/|$)", os.path.realpath(fp)):
+        refuse("close-reason hook: %s '%s' is a device or process file, which the hook "
+               "cannot read the way bd will; write the content to a regular file." % (what, p))
+        return None
+    if not CAPTURE:  # a captured walk is refused as a whole anyway
+        READS.append((os.path.basename(fp), what, p))
+    return fp
+
+def named_elsewhere():
+    """The hook reads each file BEFORE the command runs, so a write, copy or
+    move of it in the same call hands bd other text than the hook checked
+    (agent-os-jox1). Any mention of the file's name, in any directory, that is
+    not one of bd's own reads is refused: counting is by basename because the
+    hook cannot place every mention (a cd inside sh -c, a symlink). bd's reads
+    only read, so two closes sharing one reason file, or a/r.txt and b/r.txt,
+    pass; a read-only cat or a later rm of it is refused too (accepted cost).
+    A mention is the name at the END of a word, whatever precedes it, so a
+    glued bd batch -fr.txt counts (and so does xr.txt: a refusal, never a
+    pass), and so does a bead id that equals an extensionless file name.
+    Quotes and backslashes are also dropped before counting ('r'.txt,
+    r\\.txt). Not seen: a glob, brace or $ spelling of the name, and a move
+    of a parent directory (mv sub old && mv sub2 sub)."""
+    bare = re.sub(r"[\\'\"]", "", CMD)
+    for name, what, p in READS:
+        pat = r"%s(?![\w.-])" % re.escape(name)
+        mentions = max(len(re.findall(pat, CMD)), len(re.findall(pat, bare)))
+        if mentions > sum(r[0] == name for r in READS):
+            refuse("close-reason hook: %s '%s' is also named elsewhere in this command. The hook "
+                   "runs BEFORE the command and reads the file as it is now, so it refuses any "
+                   "other mention of that name in the same call (a write, copy or move would "
+                   "change what bd reads): write, read or remove the file in a separate call."
+                   % (what, p))
+            return
+
+def bd_close(sh, d, args):
+    """sh is the shell's directory, where bd reads --reason-file; d is the
+    -C directory, which only picks the database (bd 1.1.2, agent-os-jox1)."""
     ids, reasons = [], []
     j = 0
     while j < len(args):
@@ -463,15 +696,9 @@ def bd_close(d, args):
             if p == "-":
                 refuse("close-reason hook: --reason-file - (stdin) cannot be read by a hook; write the reason to a file and pass its path")
                 return
-            if expands(p):
-                refuse(LITERAL % ("--reason-file", p))
+            fp = file_arg(sh, p, "--reason-file")
+            if fp is None:
                 return
-            if d is None:
-                refuse("close-reason hook: can't tell which directory this bd close runs in "
-                       "(cd -, or cd/-C to a path the shell would expand), so --reason-file '%s' "
-                       "cannot be found. Use a literal directory or an absolute reason-file path." % p)
-                return
-            fp = resolve(d, p)
             try:
                 with open(fp) as fh:
                     reasons.append(fh.read())
@@ -484,7 +711,7 @@ def bd_close(d, args):
             continue
         if a in CLOSE_VAL:
             j += 2; continue
-        if a.startswith("-"):
+        if a.startswith(("-", "<<")):  # <<EOF is a heredoc, not an id
             j += 1; continue
         ids.append(a); j += 1
     if not ids:
@@ -513,7 +740,7 @@ def bd_update(d, args):
             j += 1; continue
         if a in UPDATE_VAL:
             j += 2; continue
-        if a.startswith("-"):
+        if a.startswith(("-", "<<")):
             j += 1; continue
         ids.append(a); j += 1
     if status.lower() != "closed":
@@ -523,24 +750,193 @@ def bd_update(d, args):
     for i in ids:
         out("CHECK", "update", d or "", i, "")
 
-def bd_batch(d, args, raw):
-    text = raw
-    for j, a in enumerate(args):
-        if a in ("-f", "--file") and j + 1 < len(args):
-            if expands(args[j + 1]):
-                refuse(LITERAL % ("bd batch -f", args[j + 1]))
-                return
-            try:
-                with open(resolve(d, args[j + 1])) as fh:
-                    text = fh.read()
-            except Exception:
-                refuse("close-reason hook: bd batch file '%s' is not readable; refusing" % args[j + 1])
-                return
-    if re.search(r"(?m)^\s*close\s+\S", text) or re.search(r"status\s*=\s*closed", text):
-        refuse("close-reason hook: bd batch closes beads without a reason the hook can check; close each with 'bd close <id> --reason-file <path>'")
+BATCH_CLOSE = re.compile(r'(?im)^\s*"?close"?(\s|$)|status"?\s*=\s*"?closed')
+
+def stdin_fed(s, pipes):
+    """Does s hold an unquoted, uncommented < redirection (<, <&, <>, <<<;
+    not <<, not <( ), or, with pipes, an unquoted | (not ||)? The text is
+    scanned whole, so [[ a < b ]] counts too (a refusal, never a pass). A #
+    starts a comment only at the start of a word (x\\ # is one word)."""
+    i, n, start = 0, len(s), True
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            i += 2; start = False; continue
+        if c == "#" and start:
+            k = s.find("\n", i)
+            i = n if k < 0 else k; continue
+        start = c in " \t\n;&|()"
+        if c == "'":
+            k = s.find("'", i + 1)
+            i = n if k < 0 else k + 1; continue
+        if c == '"':
+            i += 1
+            while i < n and s[i] != '"':
+                i += 2 if s[i] == "\\" else 1
+            i += 1; continue
+        if c == "|":
+            if s[i + 1:i + 2] == "|":
+                i += 2; continue
+            if pipes:
+                return True
+        if c == "<":
+            if s.startswith("<<", i) and not s.startswith("<<<", i):
+                i += 2; continue
+            if s[i + 1:i + 2] != "(":
+                return True
+        i += 1
+    return False
+
+def bd_batch(sh, args, raw, piped, nested):
+    """bd batch runs `close <id>` and `update <id> status=closed` lines with no
+    reason the hook can check. It reads -f's file, else stdin; stdin can be
+    read here only as a heredoc in this command text. Refused: a | anywhere
+    before it (piped: it may feed a loop or group around it; nested: a
+    bash -c string may sit inside any pipe of CMD), a < redirection or <<<
+    anywhere (bash lets the last one win), and a heredoc body that expands
+    ($, backticks, a backslash). Every heredoc body in the command is
+    scanned, not only bd batch's own (a refusal, never a pass).
+    The words here are dequoted, so a quoted '<<E' argument reads as a
+    heredoc, and a | after this item (into a function defined before it)
+    is not seen. Both need bd batch to take an argument, and bd 1.1.2
+    rejects any (OBSERVED: `bd batch '<<E' --dry-run` exits 1, unknown
+    command "<<E", before reading stdin)."""
+    files, dry, j = [], False, 0
+    while j < len(args):
+        a = args[j]
+        nxt = args[j + 1] if j + 1 < len(args) else ""
+        if a == "--":
+            break
+        if a in ("-h", "--help"):
+            return
+        if a == "--dry-run":
+            dry = True
+        elif a.startswith("--dry-run="):
+            dry = a.split("=", 1)[1].lower() in ("1", "t", "true")
+        elif a == "--file":
+            files.append(nxt); j += 1
+        elif a.startswith("--file="):
+            files.append(a.split("=", 1)[1])
+        elif a in GLOBAL_VAL or a in ("--message", "--directory"):
+            j += 1
+        elif a.startswith("-") and not a.startswith("--"):
+            # a pflag shorthand cluster: -qf x, -fx, -f=x; -m and -C take a value too
+            for n, c in enumerate(a[1:], 1):
+                if c in "fmC":
+                    v = a[n + 1:]
+                    if not v:
+                        v = nxt; j += 1
+                    if c == "f":
+                        files.append(v[1:] if v.startswith("=") else v)
+                    break
+        j += 1
+    if dry:
+        return
+    stop = ("close-reason hook: bd batch closes beads without a reason the hook can check; "
+            "close each with 'bd close <id> --reason-file <path>'")
+    texts = []
+    for p in files:
+        fp = file_arg(sh, p, "bd batch -f")
+        if fp is None:
+            return
+        try:
+            with open(fp) as fh:
+                texts.append(fh.read())
+        except Exception:
+            refuse("close-reason hook: bd batch file '%s' is not readable; refusing" % p)
+            return
+    if not files:
+        text, live, bodies = strip_heredocs(raw)
+        if not any(a.startswith("<<") for a in args) or not bodies \
+                or any(re.search(r"[$`\\]", b) for b in live) or piped \
+                or stdin_fed(text, False) or stdin_fed(strip_heredocs(CMD)[0], nested):
+            refuse("close-reason hook: bd batch reads stdin here, and the hook can only read it "
+                   "as a heredoc in the command (bd batch <<'EOF'): not with a | before it, a < "
+                   "or <<< anywhere in the command, or a body that expands $, ` or \\. "
+                   "Use bd batch -f <file written in an earlier call>.")
+            return
+        texts = bodies
+    if any(BATCH_CLOSE.search(t) for t in texts):
+        refuse(stop)
+
+def bd_import(sh, args):
+    """bd import upserts rows, and a row with "status": "closed" closes that
+    bead with no reason (agent-os-vi6d). Every row must be readable here and
+    none closed. With no file bd reads the export (.beads/issues.jsonl, which
+    holds closed rows), and - reads stdin, which the hook cannot see. Like
+    --reason-file, the file is read from the shell's directory, not -C's."""
+    paths, dry, flags, j = [], False, True, 0
+    while j < len(args):
+        a = args[j]
+        if flags and a == "--":
+            flags = False  # everything after is a file, even --dry-run
+        elif flags and a in ("-h", "--help"):
+            return
+        elif flags and a == "--dry-run":
+            dry = True
+        elif flags and a.startswith("--dry-run="):  # the last one wins, as in pflag
+            dry = a.split("=", 1)[1].lower() in ("1", "t", "true")
+        elif flags and a in ("-i", "--input"):
+            paths.append(args[j + 1] if j + 1 < len(args) else ""); j += 1
+        elif flags and a.startswith("--input="):
+            paths.append(a.split("=", 1)[1])
+        elif flags and a in GLOBAL_VAL:
+            j += 1
+        elif a.startswith("<<"):
+            pass  # a heredoc feeds stdin; it is not a file
+        elif not flags or a == "-" or not a.startswith("-"):
+            paths.append(a)
+        j += 1
+    if dry:
+        return
+    stop = ("close-reason hook: bd import can close beads without a reason the hook can check "
+            "(a row with \"status\": \"closed\"); %s. Close each with 'bd close <id> --reason-file <path>'.")
+    if not paths or "-" in paths:
+        refuse(stop % ("it reads %s, which the hook cannot check"
+                       % ("stdin" if paths else "the export (.beads/issues.jsonl) when given no file")))
+        return
+    for path in paths:
+        if not import_file_ok(sh, path, stop):
+            return
+
+def import_file_ok(sh, path, stop):
+    fp = file_arg(sh, path, "bd import")
+    if fp is None:
+        return False
+    try:
+        with open(fp) as fh:
+            rows = [json.loads(l) for l in fh if l.strip()]
+        if not all(isinstance(r, dict) for r in rows):
+            raise ValueError
+    except Exception:
+        refuse("close-reason hook: bd import file '%s' is not readable as JSONL; refusing" % path)
+        return False
+    # bd (Go) matches JSON keys case-insensitively, so "Status" and "ſtatus"
+    # set the status too (a later key wins, as a later duplicate does here).
+    if any(k.casefold() == "status" and str(v).casefold().strip() == "closed"
+           for r in rows for k, v in r.items()):
+        refuse(stop % ("'%s' has a closed row" % path))
+        return False
+    return True
 
 def walk(s, cur, depth=0):
-    text, live = strip_heredocs(s)
+    text, live, bodies = strip_heredocs(s)
+    # Safety nets for quoting the hook reads differently from bash. A body
+    # line that starts a bd close is more likely a line the stripper
+    # swallowed than data (nested quotes such as "`echo "<<EOF"`" or
+    # ${x:-<<EOF} put a real command there); a script is written with a file
+    # tool instead. And shlex cannot read $'...' at all.
+    if any(BODY_CLOSE.search(b) for b in bodies):
+        refuse("close-reason hook: a heredoc body has a line that runs bd close/done/batch/import, "
+               "and the hook cannot be sure it is data (nested quotes can make bash run it). "
+               "If it is text (a bead description, markdown, a script), write it to a file "
+               "with a file tool in an earlier call and pass the path (--body-file, "
+               "--reason-file, bd batch -f); or run the close on its own.")
+        return cur
+    if ansi_c(text) and BD_CLOSE_CMD.search(s):
+        refuse("close-reason hook: $'...' quoting next to a bd close; the hook cannot parse it. "
+               "Run the close on its own with plain quotes.")
+        return cur
     flat = strip_redirs(text)
     # A close inside $(...), backticks or <(...) runs, but not where the walk
     # can gate it: refuse it. Each span is walked into a capture, so
@@ -554,7 +950,12 @@ def walk(s, cur, depth=0):
     except ValueError:
         refuse("close-reason hook: could not parse the command line (unbalanced quotes?); refusing rather than guessing")
         return cur
-    for seg in segments(toks):
+    its = list(items(toks))
+    dirs = shell_dirs(its, cur)
+    for k, (kind, seg) in enumerate(its):
+        if kind == "op":
+            continue
+        cur = dirs[k]
         i, xargs = 0, False
         while i < len(seg):
             w = seg[i]
@@ -569,10 +970,8 @@ def walk(s, cur, depth=0):
         if i >= len(seg):
             continue
         b, args = os.path.basename(seg[i]), seg[i + 1:]
-        if b in ("cd", "pushd"):
-            tgt = args[0] if args else "~"
-            cur = None if tgt == "-" else resolve(cur, tgt)
-            continue
+        if b in ("cd", "pushd", "popd", "source", "."):
+            continue  # shell_dirs() has already accounted for it
         if b == "eval":
             # eval joins its words and parses the result as a command line.
             if depth < 3:
@@ -581,9 +980,9 @@ def walk(s, cur, depth=0):
                 refuse("close-reason hook: eval nested too deep to follow; refusing rather than guessing")
             continue
         if b in SHELLS:
-            k = next((n for n, a in enumerate(args) if SHELL_C.match(a)), None)
-            if k is not None:
-                rest = [a for a in args[k + 1:] if a != "--"]
+            m = next((n for n, a in enumerate(args) if SHELL_C.match(a)), None)
+            if m is not None:
+                rest = [a for a in args[m + 1:] if a != "--"]
                 if rest and depth < 3:
                     walk(rest[0], cur, depth + 1)
                 elif rest and BD_WORD.search(rest[0]):
@@ -610,18 +1009,21 @@ def walk(s, cur, depth=0):
             sub = a; j += 1
             break
         rest = args[j:]
-        if xargs and sub in ("close", "done", "update"):
+        if xargs and sub in ("close", "done", "update", "import"):
             refuse("close-reason hook: 'xargs bd %s' hides the ids from the hook; name each id" % sub)
         elif sub in ("close", "done"):
-            bd_close(d, rest)
+            bd_close(cur, d, rest)
         elif sub == "update":
             bd_update(d, rest)
         elif sub == "batch":
-            bd_batch(d, rest, s)
-    return cur
+            piped = any(kind2 == "op" and x in ("|", "|&") for kind2, x in its[:k])
+            bd_batch(cur, rest, s, piped, depth > 0)
+        elif sub == "import":
+            bd_import(cur, rest)
 
 if re.search(r"(^|[^A-Za-z0-9_.-])bd($|[^A-Za-z0-9_-])", cmd):
     walk(cmd, base)
+    named_elsewhere()
 PY_
 )
 
@@ -646,7 +1048,7 @@ hook_mode() {
         kind=${recs[$((i+1))]}; dir=${recs[$((i+2))]}; id=${recs[$((i+3))]}; reason=${recs[$((i+4))]:-}
         i=$((i+5))
         if [ -z "$dir" ]; then
-          echo "close-reason hook: can't tell which directory 'bd ${kind} ${id}' runs in (cd -?); refusing" >&2; rc=2; continue
+          echo "close-reason hook: can't tell which directory 'bd ${kind} ${id}' runs in, so its type cannot be looked up: the command changes directory in a way the hook does not follow, or -C names a path the shell would expand. Use bd -C <absolute dir>, or run the close in its own command." >&2; rc=2; continue
         fi
         if ! type=$(bead_type "$id" "$dir"); then rc=2; continue; fi
         if [ "$kind" = update ]; then
@@ -788,8 +1190,8 @@ printf '[{"id":"%s","issue_type":"%s"}]\n' "$id" "$t"
 STUB
   command chmod +x "$ST_DIR/bin/bd"
   # The reason is passed the way an agent types it: double-quoted, newlines
-  # inside. (bash's %q form, $'...', is not POSIX and the splitter rejects it;
-  # that rejection is itself covered by close-unparseable below.)
+  # inside. (bash's %q form, $'...', is not something shlex can read: next to
+  # a close the hook refuses it, see ansi_c() and the ansi-c-* controls.)
   local ok; ok=$(command cat "$ST_DIR/complete.txt")
   local G="--reason-file complete.txt" ALL='missing: Class statement, Sweep command, Verbatim output, Verdict'
   hook_case not-a-close               0 "bd show t-bug-1 --json"
@@ -851,12 +1253,13 @@ bd close t-bug-1 -r fixed"                                                      
   command mkdir -p "$ST_DIR/sub"
   command cp "$ST_DIR/no-verdict.txt" "$ST_DIR/r.txt"; command cp "$ST_DIR/complete.txt" "$ST_DIR/sub/r.txt"
   hook_case cwd-reason-file-here      2 "bd close t-bug-1 --reason-file r.txt"            'missing: Verdict'
-  hook_case cd-reason-file-sub        0 "cd sub && bd close t-bug-1 --reason-file r.txt"
-  hook_case dash-C-reason-file-sub    0 "bd -C sub close t-bug-1 --reason-file r.txt"
+  hook_case cd-reason-file-sub        0 "cd $ST_DIR/sub && bd close t-bug-1 --reason-file r.txt"
+  # -C does not move the reason file: bd reads it from the shell's directory.
+  hook_case dash-C-reason-file-sub    2 "bd -C sub close t-bug-1 --reason-file r.txt"     'missing: Verdict'
   hook_case dash-C-bad                2 "bd -C sub close t-bug-1 -r fixed"                "$ALL"
-  hook_case close-dash-C-sub          0 "bd close -C sub t-bug-1 --reason-file r.txt"
+  hook_case close-dash-C-sub          2 "bd close -C sub t-bug-1 --reason-file r.txt"     'missing: Verdict'
   : > "$ST_DIR/bin/lookups.log"
-  hook_case cd-type-lookup            0 "cd sub && bd close t-task-7 -r 'Done.'"          'not a bug bead'
+  hook_case cd-type-lookup            0 "cd $ST_DIR/sub && bd close t-task-7 -r 'Done.'"  'not a bug bead'
   ST_RUN=$((ST_RUN + 1))
   if ! command grep -qx "$ST_DIR/sub t-task-7" "$ST_DIR/bin/lookups.log"; then
     echo "FAIL: close-reason self-test - control 'cd-type-lookup-dir': the type lookup did not run in $ST_DIR/sub; lookups:"; command sed 's/^/    /' "$ST_DIR/bin/lookups.log"
@@ -920,7 +1323,14 @@ EOF"
   hook_case pipe-to-sh-no-close       0 "echo 'bd show t-bug-1' | sh"
   hook_case heredoc-to-bash           2 "bash <<'EOF'
 bd close t-bug-1 -r fixed
-EOF"                                                                                         "$H"
+EOF"                                                                                         'heredoc body'
+  hook_case heredoc-to-bash-mid-line  2 "bash <<'EOF'
+echo go; bd close t-bug-1 -r fixed
+EOF"                                                                                         'heredoc body'
+  hook_case heredoc-prose-mention-ok  0 "cat <<'EOF'
+Then run bd close on it, as usual (bd close X).
+| bd close | the command |
+EOF"
   hook_case heredoc-to-bash-show      0 "bash <<'EOF'
 bd show t-bug-1
 EOF"
@@ -942,6 +1352,113 @@ EOF"
   command printf 'create --title x\n' > "$ST_DIR/batch-create.txt"
   hook_case batch-file-close          2 "bd batch -f batch-close.txt"                     'bd batch closes'
   hook_case batch-file-create         0 "bd batch -f batch-create.txt"
+  # bd batch reads stdin with no -f: only a heredoc is text the hook can
+  # read; a pipe, < or <<< is refused even when what it feeds is harmless
+  # (qc-v3 finding 7: each of these passed a close line before)
+  local BS='heredoc in the command'
+  hook_case batch-pipe-close          2 "cat batch-close.txt | bd batch"                  "$BS"
+  hook_case batch-pipe-create         2 "cat batch-create.txt | bd batch"                 "$BS"
+  hook_case batch-printf-pipe         2 "printf 'close t-bug-1\\n' | bd batch"            "$BS"
+  hook_case batch-redirect            2 "bd batch < batch-close.txt"                      "$BS"
+  hook_case batch-herestring          2 "bd batch <<< 'close t-bug-1'"                    "$BS"
+  hook_case batch-quoted-pipe-ok      0 "bd batch -m 'a | b < c' <<'EOF'
+create --title x
+EOF"
+  hook_case batch-quoted-arg-only    2 "bd batch '<<EOF'"                                "$BS"
+  hook_case batch-heredoc-not-its-own 2 "true <<'EOF'
+create --title x
+EOF
+bd batch"                                                                                    "$BS"
+  # a quoted '<<EOF' is an argument, not a heredoc; stdin is the pipe
+  hook_case batch-fake-heredoc-arg    2 "cat batch-close.txt | bd batch '<<EOF'; true <<'EOF'
+create --title x
+EOF"                                                                                         "$BS"
+  # bash applies redirections left to right: < after the heredoc wins
+  hook_case batch-heredoc-then-redir  2 "bd batch <<'EOF' < batch-close.txt
+create --title x
+EOF"                                                                                         "$BS"
+  hook_case batch-outer-pipe          2 "cat batch-close.txt | bash -c \"bd batch '<<E'; true <<'E'
+create --title x
+E\""                                                                                         "$BS"
+  hook_case batch-unquoted-heredoc    2 "bd batch <<EOF
+create --title \$(echo x)
+EOF"                                                                                         "$BS"
+  hook_case batch-unquoted-backslash  2 "bd batch <<EOF
+clo\\
+se t-bug-1
+EOF"                                                                                         "$BS"
+  hook_case batch-unquoted-literal-ok 0 "bd batch <<EOF
+create --title x
+EOF"
+  # review of a3382ce: bash splits batch<<'EOF' into batch and a heredoc
+  hook_case batch-glued-heredoc       2 "bd batch<<'EOF'
+close t-bug-1
+EOF"                                                                                         'bd batch closes'
+  hook_case close-glued-heredoc       2 "bd close<<'EOF'
+x
+EOF"                                                                                         'no id'
+  # ... a | after bd batch carries its stdout, a comment is not a pipe, an
+  # unrelated literal heredoc is not an expansion
+  hook_case batch-stdout-pipe-ok      0 "bd batch <<'EOF' 2>&1 | tail -5
+create --title x
+EOF"
+  hook_case batch-later-pipe-ok       0 "bd batch <<'EOF'
+create --title x
+EOF
+bd list --json | head -3"
+  hook_case batch-comment-pipe-ok     0 "bd batch <<'EOF' # a | b < c
+create --title x
+EOF"
+  hook_case batch-other-heredoc-ok    0 "cat > /dev/null <<EOF
+notes
+EOF
+bd batch <<'EOF'
+create --title x
+EOF"
+  # ... and what still refuses: a pipe into bd batch after --, a < or a pipe
+  # visible only inside a bash -c string
+  hook_case batch-dashdash-piped      2 "cat batch-close.txt | bd batch -- -f batch-create.txt" "$BS"
+  hook_case batch-nested-redirect     2 "bash -c \"bd batch <<'E' < batch-close.txt
+create --title x
+E\""                                                                                         "$BS"
+  hook_case batch-nested-pipe         2 "bash -c \"cat batch-close.txt | bd batch '<<E'; true <<'E'
+create --title x
+E\""                                                                                         "$BS"
+  hook_case batch-glued-f-rewritten   2 "printf 'close t-bug-1\\n' > batch-create.txt; bd batch -fbatch-create.txt" 'named elsewhere'
+  # review of 2e3e7f4: |& is a pipe too; x\ # is one word, not a comment
+  # (bash: -m gets "x #", and the < after it still feeds stdin)
+  hook_case batch-pipe-amp            2 "cat batch-close.txt |& { bd batch '<<E'; }; true <<'E'
+create --title x
+E"                                                                                           "$BS"
+  hook_case batch-escaped-hash-redir  2 "bd batch <<'E' -m x\\ # < batch-close.txt
+create --title x
+E"                                                                                           "$BS"
+  hook_case batch-escaped-hash-body   2 "bd batch -m x\\ # <<'E'
+close t-bug-1
+E
+true <<'F'
+create --title x
+F"                                                                                           'bd batch closes'
+  hook_case update-glued-heredoc-task 0 "bd update t-task-1 --status closed<<'EOF'
+x
+EOF"                                                                                         'status change allowed'
+  hook_case update-glued-heredoc-bug  2 "bd update t-bug-1 --status closed<<'EOF'
+x
+EOF"                                                                                         'bd update has none'
+  hook_case batch-quoted-close-word   2 "bd batch <<'EOF'
+\"close\" t-bug-1
+EOF"                                                                                         'bd batch closes'
+  hook_case batch-status-quoted       2 "bd batch <<'EOF'
+update t-bug-1 status=\"closed\"
+EOF"                                                                                         'bd batch closes'
+  hook_case batch-file-eq-close       2 "bd batch --file=batch-close.txt"                 'bd batch closes'
+  hook_case batch-file-eq-create      0 "bd batch --file=batch-create.txt"
+  hook_case batch-f-glued-close       2 "bd batch -fbatch-close.txt"                      'bd batch closes'
+  hook_case batch-f-glued-create      0 "bd batch -fbatch-create.txt"
+  hook_case batch-f-cluster-close     2 "bd batch -qf batch-close.txt"                    'bd batch closes'
+  hook_case batch-f-cluster-create    0 "bd batch -qf=batch-create.txt"
+  hook_case batch-dry-run             0 "bd batch -f batch-close.txt --dry-run"
+  hook_case batch-dry-run-undone      2 "bd batch -f batch-close.txt --dry-run --dry-run=false" 'bd batch closes'
   # --- a path the shell would expand is refused, not guessed (agent-os-9oo5).
   # The hook runs before the shell, so it cannot know what $SP or ~ will be.
   # Two review rounds of tracking assignments found 31 ways for the hook to
@@ -954,9 +1471,9 @@ EOF"
   hook_case tilde-refused             2 "bd close t-bug-1 --reason-file ~/complete.txt"                 'literal path'
   hook_case var-batch-file-refused    2 "SP=$ST_DIR; bd batch -f \$SP/batch-create.txt"                'literal path'
   hook_case var-dash-C-refused        2 "SP=$ST_DIR; bd -C \$SP close t-bug-1 --reason-file complete.txt" 'which directory'
-  hook_case var-cd-refused            2 "cd \$ST_ENV_9OO5 && bd close t-bug-1 --reason-file complete.txt" 'which directory'
+  hook_case var-cd-refused            2 "cd \$ST_ENV_9OO5 && bd close t-bug-1 --reason-file complete.txt" 'changes directory'
   hook_case literal-abs-path-good     0 "bd close t-bug-1 --reason-file $ST_DIR/complete.txt"
-  hook_case same-call-file-refused    2 "printf x > new-9oo5.txt && bd close t-bug-1 --reason-file new-9oo5.txt" 'runs BEFORE the command'
+  hook_case same-call-file-refused    2 "printf x > new-9oo5.txt && bd close t-bug-1 --reason-file new-9oo5.txt" 'named elsewhere'
   # --- an unparseable line that mentions bd is refused: shlex cannot read
   # $'...' quoting, and a spelling like bd clos"e" hides the close from any
   # text pattern (review of agent-os-9oo5, OBSERVED fail-open when gated)
@@ -966,6 +1483,184 @@ EOF"
   hook_case wrapper-no-close          0 "timeout 5 bd show t-bug-1"
   hook_case echo-mention              0 "echo 'bd close t-bug-1 -r fixed'"
   hook_case commit-msg-mention        0 "git commit -m \"bd close t-bug-1 -r fixed\""
+  # --- a quoted or commented << is not a heredoc (agent-os-jox1): it must
+  # not swallow the next line, and a real heredoc after it must still strip.
+  hook_case heredoc-dq-mention-bad    2 "echo \"<<EOF\"
+bd close t-bug-1 -r fixed
+EOF"                                                                                         "$ALL"
+  hook_case heredoc-sq-mention-bad    2 "echo '<<EOF'
+bd close t-bug-1 -r fixed
+EOF"                                                                                         "$ALL"
+  hook_case heredoc-comment-bad       2 "echo x # <<EOF
+bd close t-bug-1 -r fixed
+EOF"                                                                                         "$ALL"
+  hook_case heredoc-after-mention-ok  0 "cat <<'X' # see \"<<EOF\"
+use \`bd close t-bug-1 -r fixed\`
+X"
+  hook_case heredoc-arith-shift-bad   2 "echo \$((1<<N))
+bd close t-bug-1 -r fixed
+N"                                                                                           "$ALL"
+  hook_case heredoc-escaped-lt-bad    2 "echo x\\<<EOF
+bd close t-bug-1 -r fixed
+EOF"                                                                                         "$ALL"
+  # a plain << ends only at the bare delimiter; <<- strips leading tabs
+  hook_case heredoc-tab-delim-ok      0 "cat <<EOF
+	EOF
+it's data
+EOF
+bd close t-bug-1 --reason-file sub/r.txt"
+  hook_case heredoc-dash-tab-delim-bad 2 "cat <<-EOF
+	EOF
+bd close t-bug-1 -r fixed
+EOF"                                                                    "$ALL"
+  hook_case heredoc-partial-quote-ok  0 "cat <<E\"OF\"
+it's data
+E
+EOF
+bd close t-bug-1 --reason-file sub/r.txt"
+  hook_case heredoc-nested-bq-bad     2 "echo \"\`echo \"<<EOF\"\`\"
+bd close t-bug-1 -r fixed
+EOF"                                                                                         'heredoc body|missing'
+  hook_case heredoc-param-default-bad 2 "echo \${x:-<<EOF}
+bd close t-bug-1 -r fixed
+EOF"                                                                                         'heredoc body|missing'
+  hook_case dollar-quote-in-pattern-ok 0 "command grep -E '^[0-9]+\$' x; bd close t-bug-1 --reason-file sub/r.txt"
+  hook_case ansi-c-loop-done-ok       0 "IFS=\$'\\n'; for id in \$(bd ready --json); do bd show \$id; done"
+  hook_case ansi-c-status-closed-ok   0 "bd list --status closed | cut -d\$'\\t' -f1"
+  hook_case ansi-c-quote-refused      2 "echo \$'\\'' ; bd close t-bug-1 -r fixed ; echo \$'\\''\\'" 'plain quotes'
+  hook_case heredoc-in-dq-subst-ok    0 "git commit -m \"\$(cat <<'EOF'
+it's \`bd close\` text
+EOF
+)\""
+  hook_case heredoc-in-dq-subst-live  2 "x=\"\$(cat <<EOF
+\$(bd close t-bug-1 -r fixed)
+EOF
+)\""                                                                                         "$H"
+  # --- a command that changes directory (agent-os-jox1): the hook does not
+  # track where bash keeps a cd, so a relative reason file is refused and
+  # the type lookup needs an absolute bd -C. ./r.txt is incomplete and
+  # sub/r.txt complete, so a hook that guessed "sub" would exit 0.
+  local MV='changes directory'
+  hook_case cd-subshell-refused       2 "(cd sub) && bd close t-bug-1 --reason-file r.txt"   "$MV"
+  hook_case cd-background-refused     2 "cd sub & bd close t-bug-1 --reason-file r.txt"      "$MV"
+  hook_case cd-pipeline-refused       2 "cd sub | cat; bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case cd-cmd-subst-refused      2 "x=\$(cd sub); bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case cd-if-body-refused        2 "if false; then cd sub; fi; bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case cd-brace-pipe-refused     2 "{ cd sub; } | cat; bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case env-cd-refused            2 "env cd sub; bd close t-bug-1 --reason-file r.txt"   "$MV"
+  hook_case popd-refused              2 "pushd sub; popd -n; bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case func-def-refused          2 "f() {
+cd $ST_DIR/sub
+}; bd close t-bug-1 --reason-file r.txt"                                                      "$MV"
+  hook_case eval-cd-refused           2 "eval 'cd sub'; bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case var-command-word-refused  2 "C=cd; \$C sub; bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case trap-refused              2 "trap 'cd sub' DEBUG; bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case source-refused            2 ". ./x.sh; bd close t-bug-1 --reason-file r.txt"     "$MV"
+  # the type lookup cannot run either: bd resolves the database from its cwd
+  hook_case cd-then-close-inline      2 "cd sub && bd close t-task-1 -r 'Done.'"              'which directory'
+  # what still works: an absolute reason file with an absolute -C, a
+  # leading cd to an absolute directory, and moves that are not moves
+  hook_case cd-abs-paths-good         0 "cd sub && bd -C $ST_DIR close t-bug-1 --reason-file $ST_DIR/sub/r.txt"
+  hook_case cd-abs-paths-bad          2 "cd sub && bd -C $ST_DIR close t-bug-1 --reason-file $ST_DIR/r.txt" 'missing: Verdict'
+  hook_case leading-abs-cd-good       0 "cd $ST_DIR/sub && bd close t-bug-1 --reason-file r.txt"
+  hook_case leading-abs-cd-semi-good  0 "cd $ST_DIR/sub
+bd close t-bug-1 --reason-file r.txt"
+  hook_case leading-abs-cd-then-cd    2 "cd $ST_DIR && cd sub && bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case leading-missing-dir       2 "cd $ST_DIR/nope; bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case abs-cd-after-preamble     0 "x=1; echo hi >/dev/null
+cd $ST_DIR/sub && bd close t-bug-1 --reason-file r.txt"
+  hook_case abs-cd-after-and          2 "false && cd $ST_DIR/sub; bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case abs-cd-in-body            2 "if false; then
+cd $ST_DIR/sub
+fi
+bd close t-bug-1 --reason-file r.txt"                                                         "$MV"
+  hook_case abs-cd-with-background    2 "cd $ST_DIR/sub && sleep 1 & bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case abs-cd-in-subst           2 "x=\$(true; cd $ST_DIR/sub; true); bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case body-without-cd-good      0 "if true; then echo; fi; bd close t-bug-1 --reason-file sub/r.txt"
+  hook_case function-kw-body-cd       2 "function f {
+cd $ST_DIR/sub
+}
+bd close t-bug-1 --reason-file r.txt"                                                         "$MV"
+  hook_case function-kw-no-cd-good    0 "function f {
+echo
+}
+bd close t-bug-1 --reason-file sub/r.txt"
+  hook_case case-paren-then-cd       2 "( case x in a) ;; esac; cd $ST_DIR/sub; ); bd close t-bug-1 --reason-file r.txt" "$MV"
+  hook_case quoted-fi-then-cd         2 "\"fi\"; if false; then
+cd $ST_DIR/sub
+fi
+bd close t-bug-1 --reason-file r.txt"                                                         "$MV"
+  hook_case case-without-cd-good      0 "case x in a) ;; esac; bd close t-bug-1 --reason-file sub/r.txt"
+  hook_case dot-argument-not-a-move   0 "git add . && bd close t-bug-1 --reason-file sub/r.txt"
+  hook_case eval-no-cd-good           0 "eval bd close t-bug-1 --reason-file sub/r.txt"
+  # --- bd reads --reason-file, batch -f and import files from the SHELL's
+  # directory; -C only picks the database (OBSERVED, bd 1.1.2, agent-os-jox1).
+  hook_case dash-C-late-reason-file   2 "bd close t-bug-1 --reason-file r.txt -C sub"        'missing: Verdict'
+  hook_case dash-C-path-good          0 "bd -C sub close t-bug-1 --reason-file sub/r.txt"
+  command printf 'create --title x\n' > "$ST_DIR/sub/batch-close.txt"
+  hook_case dash-C-batch-file         2 "bd -C sub batch -f batch-close.txt"                 'bd batch closes'
+  : > "$ST_DIR/bin/lookups.log"
+  hook_case dash-C-type-lookup        0 "bd -C sub close t-task-7 -r 'Done.'"                'not a bug bead'
+  ST_RUN=$((ST_RUN + 1))
+  if ! command grep -qx "$ST_DIR/sub t-task-7" "$ST_DIR/bin/lookups.log"; then
+    echo "FAIL: close-reason self-test - control 'dash-C-type-lookup-dir': the type lookup did not run in $ST_DIR/sub; lookups:"; command sed 's/^/    /' "$ST_DIR/bin/lookups.log"
+    ST_FAILS=$((ST_FAILS + 1))
+  fi
+  # --- bd import upserts rows, and a "closed" row closes the bead with no
+  # reason (agent-os-vi6d). With no file it reads the export, which holds
+  # closed rows; - reads stdin, which the hook cannot see.
+  command printf '{"id":"t-bug-1","title":"x","status":"open"}\n{"_type":"memory","key":"k","value":"v"}\n' > "$ST_DIR/import-open.jsonl"
+  command printf '{"id":"t-task-1","title":"y","status":"open"}\n{"id":"t-bug-1","title":"x","status":"closed"}\n' > "$ST_DIR/import-closed.jsonl"
+  command cp "$ST_DIR/import-open.jsonl" "$ST_DIR/sub/import-closed.jsonl"
+  local I='bd import'
+  hook_case import-file-closed        2 "bd import -i import-closed.jsonl"                   "$I"
+  hook_case import-file-open          0 "bd import -i import-open.jsonl"
+  hook_case import-positional-closed  2 "bd import import-closed.jsonl"                      "$I"
+  hook_case import-positional-open    0 "bd import import-open.jsonl"
+  hook_case import-eq-closed          2 "bd import --input=import-closed.jsonl"              "$I"
+  hook_case import-default-refused    2 "bd import"                                          'the export'
+  hook_case import-stdin-refused      2 "cat import-open.jsonl | bd import -"                'reads stdin'
+  command printf '[1]\n' > "$ST_DIR/import-array.jsonl"
+  hook_case import-not-object         2 "bd import -i import-array.jsonl"                    'not readable'
+  hook_case import-xargs              2 "ls import-open.jsonl | xargs bd import"             'xargs bd import'
+  hook_case import-pipe-to-sh         2 "echo 'bd import -i import-open.jsonl' | sh"         "$H"
+  hook_case import-unreadable         2 "bd import -i nope.jsonl"                            'not readable'
+  hook_case import-var-refused        2 "bd import -i \$SP/import-open.jsonl"               'literal path'
+  hook_case import-dash-C-cwd         2 "bd -C sub import -i import-closed.jsonl"            "$I"
+  hook_case import-dry-run            0 "bd import -i import-closed.jsonl --dry-run"
+  hook_case import-dry-run-undone     2 "bd import -i import-closed.jsonl --dry-run --dry-run=false" "$I"
+  hook_case import-glued-heredoc-open 0 "bd import -i import-open.jsonl<<'EOF'
+x
+EOF"
+  hook_case import-glued-heredoc-closed 2 "bd import -i import-closed.jsonl<<'EOF'
+x
+EOF"                                                                                         "$I"
+  hook_case import-dashdash-not-flag  2 "bd import -i import-open.jsonl -- --dry-run"         'not readable'
+  hook_case import-second-file        2 "bd import import-open.jsonl -i import-closed.jsonl"  "$I"
+  hook_case import-wrapped            2 "timeout 5 bd import -i import-open.jsonl"           "$H"
+  command printf '{"id":"t-bug-1","title":"x","Status":"closed"}\n' > "$ST_DIR/import-key-case.jsonl"
+  command printf '{"id":"t-bug-1","title":"x","\xc5\xbftatus":"closed"}\n' > "$ST_DIR/import-key-fold.jsonl"
+  command printf '{"id":"t-bug-1","title":"x","status":"open","status":"closed"}\n' > "$ST_DIR/import-key-dup.jsonl"
+  hook_case import-key-case           2 "bd import -i import-key-case.jsonl"                 "$I"
+  hook_case import-key-fold           2 "bd import -i import-key-fold.jsonl"                 "$I"
+  hook_case import-key-dup            2 "bd import -i import-key-dup.jsonl"                  "$I"
+  hook_case import-dev-stdin          2 "bd import -i /dev/stdin < import-closed.jsonl"      'device or process'
+  hook_case import-same-call-copy     2 "cp import-closed.jsonl import-open.jsonl && bd import -i import-open.jsonl" 'named elsewhere'
+  command cp "$ST_DIR/complete.txt" "$ST_DIR/reuse.txt"
+  hook_case reason-rewritten-same-call 2 "printf 'Fixed.' > reuse.txt; bd close t-bug-1 --reason-file reuse.txt" 'named elsewhere'
+  hook_case reason-dev-stdin          2 "bd close t-bug-1 --reason-file /dev/stdin < complete.txt" 'device or process'
+  # bd's own reads are not "elsewhere" (qc-v3 finding 6): two closes may share
+  # a file, and a/r.txt next to b/r.txt passes; any other mention of the name
+  # still refuses, in any directory and any quoting.
+  command mkdir -p "$ST_DIR/sub2"; command cp "$ST_DIR/complete.txt" "$ST_DIR/sub2/r.txt"
+  local NE='named elsewhere'
+  hook_case shared-reason-file        0 "bd close t-bug-1 --reason-file reuse.txt && bd close t-bug-2 --reason-file reuse.txt"
+  hook_case shared-reason-file-write  2 "bd close t-bug-1 --reason-file reuse.txt && printf x > reuse.txt && bd close t-bug-2 --reason-file reuse.txt" "$NE"
+  hook_case same-basename-two-dirs    0 "bd close t-bug-1 --reason-file sub/r.txt && bd close t-bug-2 --reason-file sub2/r.txt"
+  hook_case same-basename-other-write 2 "cp complete.txt sub2/r.txt && bd close t-bug-1 --reason-file sub/r.txt" "$NE"
+  hook_case reason-quoted-name-write  2 "printf x > 'reuse'.txt; bd close t-bug-1 --reason-file reuse.txt"  "$NE"
+  hook_case reason-escaped-name-write 2 "printf x > reuse\\.txt; bd close t-bug-1 --reason-file reuse.txt"  "$NE"
+  hook_case reason-rm-after-refused   2 "bd close t-bug-1 --reason-file reuse.txt && rm reuse.txt"       "$NE"
 
   if [ "$ST_FAILS" -gt 0 ]; then
     echo "FAIL: close-reason self-test - $ST_FAILS of $ST_RUN control(s) failed; the close-reason check does not behave as documented"
