@@ -1,30 +1,59 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Download, GitBranch, ArrowUp, ArrowDown, FileWarning } from 'lucide-react'
+import { Download, GitBranch, ArrowUp, ArrowDown, FileWarning, AlertTriangle } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useGitStatus, useGitPull } from '@/hooks/useGit'
 import { useState } from 'react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { directoriesApi } from '@/lib/api'
-import { presentError } from '@/lib/error-handler'
+import { causeOf, presentError } from '@/lib/error-handler'
 import { queryKeys } from '@/lib/query-keys'
 import type { Stack } from '@/types'
 import { GitSettingsSection } from '@/components/git/GitSettingsSection'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+
+// Why Pull is off whenever the status could not be read (agent-os-528x). A pull
+// on a dirty tree is the dangerous operation, and a failed probe cannot say the
+// tree is clean.
+const PULL_BLOCKED_REASON =
+  "Pull is disabled: the working tree's state could not be read, so uncommitted changes can't be ruled out."
 
 interface GitStatusProps {
   stack: Stack
 }
 
+interface GitPullActionsProps {
+  canPull: boolean
+  onPull: (redeploy: boolean) => void
+}
+
+/** The two pull buttons, disabled with a stated reason whenever `canPull` is false. */
+function GitPullActions({ canPull, onPull }: GitPullActionsProps) {
+  return (
+    <div className="flex gap-2">
+      <Button variant="outline" size="sm" onClick={() => onPull(false)} disabled={!canPull}>
+        <Download className="mr-2 h-4 w-4" />
+        Git Pull
+      </Button>
+      <Button variant="outline" size="sm" onClick={() => onPull(true)} disabled={!canPull}>
+        <Download className="mr-2 h-4 w-4" />
+        Pull & Redeploy
+      </Button>
+    </div>
+  )
+}
+
 /**
  * Compact git chip for the stack header. Renders nothing while the status is
- * loading, when the request failed and when no data arrived. A directory that
+ * loading and when no data arrived. A failed request renders an explicit
+ * "status unknown" chip with Pull disabled (agent-os-528x). A directory that
  * is not a repository gets a quiet chip that says so and offers Rescan
  * (agent-os-omvy); a repository with no commits yet gets an inert chip that
  * says so. Details and pull actions live in a popover behind the full chip.
  */
 export function GitStatus({ stack }: GitStatusProps) {
-  const { data: gitStatus, isLoading, error } = useGitStatus(stack.id)
+  const { data: gitStatus, error, refetch } = useGitStatus(stack.id)
   const pullMutation = useGitPull()
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [confirmDialogProps, setConfirmDialogProps] = useState<{
@@ -85,12 +114,36 @@ export function GitStatus({ stack }: GitStatusProps) {
     }
   }
 
-  // The three genuinely blank states, and only these three: still loading, a
-  // failed request, no data. `!gitStatus.isRepo` used to be a fourth arm here
-  // and is now its own branch below — folding it in rendered nothing for a
-  // non-git directory, and keeping it here would make a still-loading stack
-  // flash that chip (agent-os-omvy).
-  if (isLoading || error || !gitStatus) {
+  // THE PULL GATE (agent-os-528x), and the only place Pull is enabled. Every
+  // term is required. `!error` matters even with data in hand: react-query
+  // keeps the last good payload when a refetch fails, so a stale "clean" would
+  // otherwise enable a pull on a tree nobody can currently read.
+  const canPull =
+    !error &&
+    !!gitStatus &&
+    gitStatus.isRepo &&
+    gitStatus.hasCommits &&
+    !pullMutation.isPending
+
+  // A failed request with nothing we can still show (agent-os-528x). It used to
+  // render nothing, folded together with "still loading", so a probe fault took
+  // the branch, the commit and the Pull button away with no reason given. The
+  // fields a stale non-repo or no-commits payload carries are not status, so
+  // they fall here too rather than being shown as if current.
+  //
+  // No field is borrowed from the cached `stack.gitBranch` / `stack.gitDirty`.
+  // Those come from the scanner, a different predicate from this live probe
+  // (agent-os-a786), and a cached `gitDirty: false` is exactly the fabricated
+  // "clean" this state exists to refuse.
+  if (error && !(gitStatus?.isRepo && gitStatus.hasCommits)) {
+    return <GitStatusUnknown error={error} canPull={canPull} onRetry={() => void refetch()} />
+  }
+
+  // Still loading, or no data. Blank on purpose: a loading chip would flash on
+  // every stack header. `!gitStatus.isRepo` used to be an arm here and is now
+  // its own branch below — folding it in rendered nothing for a non-git
+  // directory (agent-os-omvy).
+  if (!gitStatus) {
     return null
   }
 
@@ -162,7 +215,14 @@ export function GitStatus({ stack }: GitStatusProps) {
     )
   }
 
+  // From here on `gitStatus` is a repository with commits. `error` can still be
+  // set: that is a refetch that failed after an earlier success, and the chip
+  // keeps the branch and commit the server last sent but no longer claims
+  // clean or dirty, ahead or behind (agent-os-528x).
+  const statusKnown = !error
+
   const handlePull = (redeploy = false) => {
+    if (!canPull) return
     const dirtyWarning = gitStatus.dirty
       ? `\n\nWarning: Your working directory has ${gitStatus.dirtyCount} uncommitted change${gitStatus.dirtyCount !== 1 ? 's' : ''}. Pulling may cause conflicts or overwrite your changes.`
       : ''
@@ -196,20 +256,24 @@ export function GitStatus({ stack }: GitStatusProps) {
           <button
             type="button"
             className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-0.5 text-xs font-mono text-info hover:bg-accent transition-colors"
-            aria-label={`Git status: ${gitStatus.branch}, ${gitStatus.dirty ? `${gitStatus.dirtyCount} uncommitted changes` : 'clean'}`}
+            aria-label={`Git status: ${gitStatus.branch}, ${!statusKnown ? 'status unknown' : gitStatus.dirty ? `${gitStatus.dirtyCount} uncommitted changes` : 'clean'}`}
           >
             <GitBranch className="h-3 w-3" aria-hidden="true" />
             {gitStatus.branch}
-            <span className={gitStatus.dirty ? 'text-warning' : 'text-muted-foreground'}>
-              · {gitStatus.dirty ? `${gitStatus.dirtyCount} dirty` : 'clean'}
-            </span>
-            {gitStatus.ahead > 0 && (
+            {!statusKnown ? (
+              <span className="text-warning">· status unknown</span>
+            ) : (
+              <span className={gitStatus.dirty ? 'text-warning' : 'text-muted-foreground'}>
+                · {gitStatus.dirty ? `${gitStatus.dirtyCount} dirty` : 'clean'}
+              </span>
+            )}
+            {statusKnown && gitStatus.ahead > 0 && (
               <span className="inline-flex items-center text-success">
                 <ArrowUp className="h-3 w-3" aria-hidden="true" />
                 {gitStatus.ahead}
               </span>
             )}
-            {gitStatus.behind > 0 && (
+            {statusKnown && gitStatus.behind > 0 && (
               <span className="inline-flex items-center text-warning">
                 <ArrowDown className="h-3 w-3" aria-hidden="true" />
                 {gitStatus.behind}
@@ -218,26 +282,29 @@ export function GitStatus({ stack }: GitStatusProps) {
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-96 space-y-3">
+          {!statusKnown && (
+            <RefreshFailedNotice what="the git status" onRetry={() => void refetch()} />
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="font-mono text-xs gap-1.5">
               <GitBranch className="h-3 w-3" />
               {gitStatus.branch}
             </Badge>
 
-            {gitStatus.ahead > 0 && (
+            {statusKnown && gitStatus.ahead > 0 && (
               <Badge variant="secondary" className="text-xs gap-1 text-success">
                 <ArrowUp className="h-3 w-3" />
                 {gitStatus.ahead} ahead
               </Badge>
             )}
-            {gitStatus.behind > 0 && (
+            {statusKnown && gitStatus.behind > 0 && (
               <Badge variant="secondary" className="text-xs gap-1 text-warning">
                 <ArrowDown className="h-3 w-3" />
                 {gitStatus.behind} behind
               </Badge>
             )}
 
-            {gitStatus.dirty && (
+            {statusKnown && gitStatus.dirty && (
               <Badge variant="destructive" className="text-xs gap-1">
                 <FileWarning className="h-3 w-3" />
                 {gitStatus.dirtyCount} uncommitted change{gitStatus.dirtyCount !== 1 ? 's' : ''}
@@ -251,26 +318,10 @@ export function GitStatus({ stack }: GitStatusProps) {
             )}
           </div>
 
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handlePull(false)}
-              disabled={pullMutation.isPending}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Git Pull
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handlePull(true)}
-              disabled={pullMutation.isPending}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Pull & Redeploy
-            </Button>
-          </div>
+          <GitPullActions canPull={canPull} onPull={handlePull} />
+          {!statusKnown && (
+            <p className="text-xs text-muted-foreground">{PULL_BLOCKED_REASON}</p>
+          )}
 
           <GitSettingsSection
             directoryPath={stack.directory}
@@ -293,5 +344,47 @@ export function GitStatus({ stack }: GitStatusProps) {
         />
       )}
     </>
+  )
+}
+
+interface GitStatusUnknownProps {
+  error: unknown
+  /** The component's one Pull gate, false in every state that reaches here. */
+  canPull: boolean
+  onRetry: () => void
+}
+
+/**
+ * The git status could not be read and nothing from it can be shown
+ * (agent-os-528x). Never "clean" and never nothing: the chip says the status
+ * is unknown, the popover says why, and Pull is present but disabled with the
+ * reason, so the operator can see the action exists and why it is off.
+ */
+function GitStatusUnknown({ error, canPull, onRetry }: GitStatusUnknownProps) {
+  const cause = causeOf(error)
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-0.5 text-xs text-warning hover:bg-accent transition-colors"
+          aria-label="Git status: unknown"
+        >
+          <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+          git status unknown
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-96 space-y-3">
+        <div className="space-y-1 text-sm">
+          <p>Could not read the git status.</p>
+          {cause && <p className="text-muted-foreground">{cause}</p>}
+        </div>
+        <GitPullActions canPull={canPull} onPull={() => {}} />
+        <p className="text-xs text-muted-foreground">{PULL_BLOCKED_REASON}</p>
+        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+      </PopoverContent>
+    </Popover>
   )
 }

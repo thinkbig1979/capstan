@@ -78,15 +78,15 @@ describe('GitStatus', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  // Renamed in agent-os-x40a. It never tested a non-git directory — it drives an
-  // ERROR, and a non-git directory now arrives as DATA (200 `{isRepo: false}`,
-  // see below). What it does test is still worth keeping: a genuinely failed
-  // request renders nothing rather than a broken chip. The old name would have
-  // sent the next reader looking for non-repo coverage and finding this.
-  it('renders nothing when the status request fails', () => {
-    mockUseGitStatus.mockReturnValue({ isLoading: false, error: new Error('fail'), data: null })
-    const { container } = renderWithProviders(<GitStatus stack={mockStack} />)
-    expect(container).toBeEmptyDOMElement()
+  // Renamed in agent-os-x40a, then inverted by agent-os-528x. A failed request
+  // used to render nothing, which hid the branch and the Pull button with no
+  // reason given. It now renders an explicit unknown state, never a broken
+  // chip and never "clean". The full coverage is 528x-GitStatusUnknown.test.tsx.
+  it('renders an unknown-status chip when the status request fails', () => {
+    mockUseGitStatus.mockReturnValue({ isLoading: false, error: new Error('fail'), data: undefined })
+    renderWithProviders(<GitStatus stack={mockStack} />)
+    expect(screen.getByRole('button', { name: 'Git status: unknown' })).toBeInTheDocument()
+    expect(screen.queryByText(/clean/)).not.toBeInTheDocument()
   })
 
   // agent-os-omvy. This REPLACES an assertion that the same payload renders
