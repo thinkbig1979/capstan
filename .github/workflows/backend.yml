@@ -184,7 +184,7 @@ jobs:
       #
       # `add --intent-to-add` is load-bearing for a different reason, and it was
       # found by running this step against a tree that did not have the
-      # generated files: `git diff` does not see UNTRACKED files, so if the two
+      # generated files: `git diff` does not see UNTRACKED files, so if the
       # outputs are missing from the repo entirely, tygo recreates them and the
       # diff is empty — the step exits 0 and reports green over a contract that
       # is not committed at all. --intent-to-add registers them so a

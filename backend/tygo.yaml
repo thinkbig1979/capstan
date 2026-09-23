@@ -7,7 +7,7 @@
 # the result, so a Go wire struct that changes without its TypeScript is a
 # failing required check rather than a runtime surprise in the browser.
 #
-# TWO OUTPUT FILES, ON PURPOSE. tygo writes one file per package and does not
+# ONE OUTPUT FILE PER PACKAGE, ON PURPOSE. tygo writes one file per package and does not
 # merge: give two packages the same output_path and the second silently
 # CLOBBERS the first — exit 0, no warning, 33 interfaces reduced to 1. So
 # every package below gets its own file.
