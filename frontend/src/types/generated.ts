@@ -604,7 +604,12 @@ export interface LogResult {
   hasMore: boolean;
 }
 export interface DiffResult {
-  commit?: GitCommit;
+  /**
+   * A value, not a pointer: getDiffCLI fills it on every success path, so
+   * the wire always carries an object and the generated type says so
+   * (agent-os-apmw).
+   */
+  commit: GitCommit;
   diff: string;
   files: string[] | null;
 }

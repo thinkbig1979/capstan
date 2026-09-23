@@ -1074,7 +1074,7 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 	if len(lines) < 6 {
 		return nil, fmt.Errorf("unexpected log format")
 	}
-	commit := &models.GitCommit{
+	commit := models.GitCommit{
 		Hash:    strings.TrimSpace(lines[0]),
 		Short:   strings.TrimSpace(lines[1]),
 		Author:  strings.TrimSpace(lines[2]),

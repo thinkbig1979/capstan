@@ -144,9 +144,12 @@ type LogResult struct {
 }
 
 type DiffResult struct {
-	Commit *GitCommit `json:"commit"`
-	Diff   string     `json:"diff"`
-	Files  []string   `json:"files" tstype:"string[] | null"`
+	// A value, not a pointer: getDiffCLI fills it on every success path, so
+	// the wire always carries an object and the generated type says so
+	// (agent-os-apmw).
+	Commit GitCommit `json:"commit"`
+	Diff   string    `json:"diff"`
+	Files  []string  `json:"files" tstype:"string[] | null"`
 }
 
 type DashboardContainerInfo struct {
