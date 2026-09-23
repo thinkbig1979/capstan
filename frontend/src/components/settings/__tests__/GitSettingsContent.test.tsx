@@ -250,3 +250,81 @@ describe('GitSettingsContent — why the save failed', () => {
     expect(call?.[1]).toBeUndefined()
   })
 })
+
+describe('GitSettingsContent — a failed refresh is disclosed before Save (agent-os-vs6c)', () => {
+  const serverFault = { status: 500, code: 'INTERNAL_ERROR', message: 'read failed' }
+
+  function renderWithClient() {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 0 },
+        mutations: { retry: false },
+      },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <GitSettingsContent />
+      </QueryClientProvider>,
+    )
+    return queryClient
+  }
+
+  const notice = /Could not refresh the git settings\. The values shown are the last ones the server sent, so check them before saving\./
+
+  /**
+   * Resolve FIRST, then reject (the ptiq shape): a first-fetch-rejects fixture
+   * never puts populated credentials on screen for the refetch to strand.
+   */
+  it('keeps the populated credentials AND says the refresh failed', async () => {
+    mockGetGit.mockResolvedValue({ sshKey: '/keys/id_ed25519', httpsUser: 'deploy-bot', hasHttpsToken: true })
+    const queryClient = renderWithClient()
+
+    expect(await screen.findByLabelText('SSH Private Key Path')).toHaveValue('/keys/id_ed25519')
+
+    mockGetGit.mockRejectedValue(serverFault)
+    await queryClient.refetchQueries()
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryCache().getAll().some((q) => q.state.status === 'error'),
+      ).toBe(true),
+    )
+
+    // Retention first, so the red below means RETAINED AND UNDISCLOSED rather
+    // than "the form went away".
+    expect(screen.getByLabelText('SSH Private Key Path')).toHaveValue('/keys/id_ed25519')
+    expect(screen.getByLabelText('Username')).toHaveValue('deploy-bot')
+
+    expect(screen.getByText(notice)).toBeInTheDocument()
+
+    // Placement: directly above the control that submits the stale values.
+    const alert = screen.getByRole('alert')
+    expect(alert.nextElementSibling).toContainElement(
+      screen.getByRole('button', { name: 'Save Git Settings' }),
+    )
+
+    // Persistence: an edit does not dismiss it, because the untouched field
+    // is still written back from the stale data.
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'other-bot' } })
+    expect(screen.getByText(notice)).toBeInTheDocument()
+  })
+
+  it('shows no notice while the settings are fresh', async () => {
+    mockGetGit.mockResolvedValue({ sshKey: '/keys/id_ed25519', httpsUser: 'deploy-bot', hasHttpsToken: true })
+    renderWithClient()
+
+    expect(await screen.findByLabelText('SSH Private Key Path')).toHaveValue('/keys/id_ed25519')
+    expect(screen.queryByText(notice)).not.toBeInTheDocument()
+  })
+
+  it('does not claim "the last ones the server sent" when the first load failed', async () => {
+    mockGetGit.mockRejectedValue(serverFault)
+    const queryClient = renderWithClient()
+
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryCache().getAll().some((q) => q.state.status === 'error'),
+      ).toBe(true),
+    )
+    expect(screen.queryByText(notice)).not.toBeInTheDocument()
+  })
+})
