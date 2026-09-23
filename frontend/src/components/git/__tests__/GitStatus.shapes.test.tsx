@@ -21,6 +21,7 @@
  *   subdirectory      -> 200 with the parent repo's real branch
  *   bare repo         -> 500 INTERNAL_ERROR ("this operation must be run in a
  *                        work tree"): a backend defect filed separately
+ * Both error rows render the "status unknown" chip (agent-os-528x).
  *
  * WHY EVERY ROW RUNS WITH BOTH VALUES OF `isGitRepo`. agent-os-ygqe was filed
  * saying the scanner reports isGitRepo=false for the nested and bare shapes.
@@ -89,7 +90,7 @@ type Shape = {
   /** What resolveGitState returns for this shape today. */
   scannerIsGitRepo: boolean
   answer: () => Promise<unknown>
-  expectRender: (container: HTMLElement) => void
+  expectRender: () => void
 }
 
 const SHAPES: Shape[] = [
@@ -104,8 +105,8 @@ const SHAPES: Shape[] = [
     scannerIsGitRepo: false,
     answer: () =>
       Promise.reject(apiError(404, 'STACK_DIR_MISSING', 'Stack directory does not exist on disk')),
-    // agent-os-528x: a failed request renders nothing today.
-    expectRender: (container) => expect(container).toBeEmptyDOMElement(),
+    // agent-os-528x: a failed request renders the unknown state, not nothing.
+    expectRender: () => expect(screen.getByRole('button', { name: 'Git status: unknown' })).toBeInTheDocument(),
   },
   {
     name: 'subdirectory of a repo',
@@ -132,8 +133,8 @@ const SHAPES: Shape[] = [
     scannerIsGitRepo: true,
     answer: () =>
       Promise.reject(apiError(500, 'INTERNAL_ERROR', 'An internal error occurred')),
-    // agent-os-528x: a failed request renders nothing today.
-    expectRender: (container) => expect(container).toBeEmptyDOMElement(),
+    // agent-os-528x: a failed request renders the unknown state, not nothing.
+    expectRender: () => expect(screen.getByRole('button', { name: 'Git status: unknown' })).toBeInTheDocument(),
   },
 ]
 
@@ -155,7 +156,7 @@ describe('GitStatus against the backend directory shapes (agent-os-ygqe)', () =>
     async ({ shape, isGitRepo }) => {
       mockStatus.mockImplementation(shape.answer)
       const stack = stackFor(isGitRepo)
-      const { container, queryClient } = renderWithProviders(<GitStatus stack={stack} />)
+      const { queryClient } = renderWithProviders(<GitStatus stack={stack} />)
 
       await waitFor(() => expect(mockStatus).toHaveBeenCalledWith(stack.id))
 
@@ -165,7 +166,7 @@ describe('GitStatus against the backend directory shapes (agent-os-ygqe)', () =>
         const status = queryClient.getQueryState(queryKeys.git.all(stack.id))?.status
         expect(status === 'success' || status === 'error').toBe(true)
       })
-      shape.expectRender(container)
+      shape.expectRender()
     }
   )
 })
