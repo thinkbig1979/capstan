@@ -50,48 +50,51 @@ func (h *DashboardHandler) getDashboardStats() gin.HandlerFunc {
 			return
 		}
 
+		response := gin.H{"totalStacks": len(stacks)}
+
+		// agent-os-p9e1. Each Docker read below that fails leaves its keys
+		// OMITTED, never zeroed. Zeroing sent "0 containers, every stack
+		// stopped, 0 B on disk" in a 200 when Docker could not be asked, which
+		// an operator cannot tell apart from a host that genuinely has none.
+		// The stack count above read cleanly, so refusing the whole request
+		// would hide a correct answer (the agent-os-xppj precedent: an
+		// ancillary block degrades inside the 200, absent rather than wrong).
+		// An omitted containers key also cannot be the null agent-os-5scv
+		// fixed: GetAllContainersWithDetails returns a non-nil slice on success.
 		containers, err := h.docker.GetAllContainersWithDetails(ctx, h.db)
 		if err != nil {
 			slog.Error("Failed to get containers for dashboard", "error", err)
-			// Empty slice, NOT nil: this still serialises under "containers" in
-			// a 200 OK below, and encoding/json renders a nil slice as `null`
-			// while DashboardStats.containers is declared a non-nullable array
-			// on the frontend. Same defect class as the metrics WS empty-host
-			// frame fixed in handleDashboardMetricsWebSocket (agent-os-5scv);
-			// this path survives only because its two current consumers happen
-			// to use `??`/`?.`, which is not a property the type guarantees.
-			containers = []models.DashboardContainerInfo{}
-		}
+		} else {
+			// Derive live stack status from the container snapshot we already
+			// fetched, matched by compose project, instead of a per-stack
+			// `docker compose ps`. This is the same liveness the Stacks view
+			// shows, at zero extra cost. Without the snapshot every stack would
+			// count as stopped, so these are omitted with it.
+			runningStacks, stoppedStacks := countLiveStackStatuses(stacks, containers)
 
-		// Derive live stack status from the container snapshot we already fetched,
-		// matched by compose project, instead of a per-stack `docker compose ps`.
-		// This is the same liveness the Stacks view shows, at zero extra cost.
-		runningStacks, stoppedStacks := countLiveStackStatuses(stacks, containers)
-
-		runningContainers := 0
-		for _, ctr := range containers {
-			if ctr.State == "running" {
-				runningContainers++
+			runningContainers := 0
+			for _, ctr := range containers {
+				if ctr.State == "running" {
+					runningContainers++
+				}
 			}
+
+			response["runningStacks"] = runningStacks
+			response["stoppedStacks"] = stoppedStacks
+			response["totalContainers"] = len(containers)
+			response["runningContainers"] = runningContainers
+			response["containers"] = containers
 		}
 
-		var diskUsage *services.DiskUsageBreakdown
-		diskUsage, err = h.docker.GetDiskUsage(ctx)
+		diskUsage, err := h.docker.GetDiskUsage(ctx)
 		if err != nil {
 			slog.Error("Failed to get disk usage", "error", err)
-			diskUsage = &services.DiskUsageBreakdown{}
+		} else {
+			response["imageDiskUsage"] = diskUsage.Images
+			response["diskUsage"] = diskUsage
 		}
 
-		c.JSON(http.StatusOK, gin.H{
-			"totalStacks":       len(stacks),
-			"runningStacks":     runningStacks,
-			"stoppedStacks":     stoppedStacks,
-			"totalContainers":   len(containers),
-			"runningContainers": runningContainers,
-			"imageDiskUsage":    diskUsage.Images,
-			"diskUsage":         diskUsage,
-			"containers":        containers,
-		})
+		c.JSON(http.StatusOK, response)
 	}
 }
 
