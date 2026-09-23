@@ -8,7 +8,6 @@ import {
   Folder,
   FolderOpen,
   GitBranch,
-  GitPullRequest,
 } from 'lucide-react'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { TableSearch } from '@/components/ui/table-search'
@@ -348,12 +347,6 @@ export function DirectoriesTab({ directories, stacks, configuredDirs }: Director
             <Badge variant="outline" className="flex items-center gap-1 text-xs w-fit">
               <GitBranch className="h-3 w-3" />
               {node.dir.gitBranch || '—'}
-            </Badge>
-          )}
-          {node.dir?.isGitRepo && (node.dir.gitBehind ?? 0) > 0 && (
-            <Badge variant="secondary" className="flex items-center gap-1 text-xs text-warning">
-              <GitPullRequest className="h-3 w-3" />
-              {node.dir.gitBehind}
             </Badge>
           )}
         </div>

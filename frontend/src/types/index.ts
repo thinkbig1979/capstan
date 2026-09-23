@@ -205,7 +205,6 @@ export interface ConfiguredDir {
   stackCount?: number
   isGitRepo?: boolean
   gitBranch?: string
-  gitBehind?: number
   gitAuthType?: string
   gitSshKeyPath?: string
   gitHttpsUser?: string
