@@ -11,10 +11,11 @@ import (
 // present and the two shapes are distinguishable on the wire — and a generated
 // TypeScript `T[]` is a lie about any field that can arrive as null.
 //
-// This test PINS what the production construction paths actually produce. It is
-// deliberately not a statement about what they SHOULD produce: four of the
-// eleven fields are pinned as null because that is the observed wire, and each
-// of those is a defect recorded for follow-up rather than repaired here.
+// This test PINS what the production construction paths actually produce. Every
+// one of the eleven fields now reaches the wire as an array: the five that used
+// to emit null (and carried a tstype "| null" tag saying so) are normalised at
+// their construction site (agent-os-e5pr), and the services and database
+// wire_slice_nullability tests drive those sites for real.
 //
 // Each row names the construction site it mirrors. The site is the evidence;
 // this table is the assertion that the site's initialisation expression yields
@@ -33,7 +34,16 @@ func TestWireSliceNullability(t *testing.T) {
 	}{
 		{
 			name:     "Stack.containers on the Docker-outage path",
-			site:     "handlers/stacks.go List/Get leave applyLiveStatus uncalled when GetStackStatuses errors; database/stacks.go ListStacks/GetStack never scan a Containers column, so the field keeps its nil zero value",
+			site:     "handlers/stacks.go List/Get leave applyLiveStatus uncalled when GetStackStatuses errors; every database/stacks.go reader scans into emptyStack(), which opens Containers as []models.Container{}",
+			value:    Stack{Containers: []Container{}},
+			key:      "containers",
+			wantNull: false,
+		},
+		{
+			// Not a production path: with every real row expecting an array,
+			// this row shows the instrument can still report null.
+			name:     "instrument control: a nil slice marshals null",
+			site:     "none; the plain zero value every normalised site now avoids",
 			value:    Stack{},
 			key:      "containers",
 			wantNull: true,
@@ -68,10 +78,10 @@ func TestWireSliceNullability(t *testing.T) {
 		},
 		{
 			name:     "DiffResult.files on a commit that touched nothing",
-			site:     "services/git.go getDiffCLI declares var files []string and only assigns when diff-tree printed something; an empty commit leaves it nil",
-			value:    DiffResult{},
+			site:     "services/git.go getDiffCLI opens files := []string{} and only reassigns when diff-tree printed something",
+			value:    DiffResult{Files: []string{}},
 			key:      "files",
-			wantNull: true,
+			wantNull: false,
 		},
 		{
 			name:     "DashboardContainerInfo.ports",
@@ -89,10 +99,10 @@ func TestWireSliceNullability(t *testing.T) {
 		},
 		{
 			name:     "DockerNetwork.labels on a network with no labels",
-			site:     "services/docker_resources.go ListNetworks declares var labelStrs []string and appends only inside `if net.Labels != nil`; the default bridge/host/none networks carry no compose labels, so this fires on every Docker host",
-			value:    DockerNetwork{},
+			site:     "services/docker_resources.go ListNetworks opens labelStrs := []string{} and appends only inside `if net.Labels != nil`; the default bridge/host/none networks carry no labels",
+			value:    DockerNetwork{Labels: []string{}},
 			key:      "labels",
-			wantNull: true,
+			wantNull: false,
 		},
 		{
 			name:     "UpdateSettingsResponse.applyDays",
@@ -103,17 +113,17 @@ func TestWireSliceNullability(t *testing.T) {
 		},
 		{
 			name:     "BackupSnapshot.tags on an untagged snapshot",
-			site:     "services/backup_restic.go ListSnapshots copies resticSnapshot.Tags straight through; restic omits the \"tags\" key for an untagged snapshot, leaving the field nil",
-			value:    BackupSnapshot{Paths: []string{"/srv"}},
+			site:     "services/backup_restic.go ListSnapshots passes resticSnapshot.Tags through emptyIfNil; restic omits the \"tags\" key for an untagged snapshot",
+			value:    BackupSnapshot{Tags: []string{}, Paths: []string{"/srv"}},
 			key:      "tags",
-			wantNull: true,
+			wantNull: false,
 		},
 		{
 			name:     "BackupSnapshot.paths when restic omits the key",
-			site:     "services/backup_restic.go ListSnapshots copies resticSnapshot.Paths straight through with no guard; restic emits the key for every snapshot it writes, so this is the unguarded shape rather than an observed one",
-			value:    BackupSnapshot{},
+			site:     "services/backup_restic.go ListSnapshots passes resticSnapshot.Paths through emptyIfNil; restic emits the key for every snapshot it writes, so the guard covers the unobserved omission",
+			value:    BackupSnapshot{Tags: []string{}, Paths: []string{}},
 			key:      "paths",
-			wantNull: true,
+			wantNull: false,
 		},
 	}
 

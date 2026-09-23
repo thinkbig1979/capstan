@@ -17,6 +17,14 @@ func (d *DB) UpsertStack(stack models.Stack) error {
 	return err
 }
 
+// emptyStack is what every stack reader scans into. There is no containers
+// column, so a plain zero value would leave Containers nil, and a handler that
+// skips applyLiveStatus (the Docker-outage path) would send "containers":null
+// (agent-os-e5pr).
+func emptyStack() models.Stack {
+	return models.Stack{Containers: []models.Container{}}
+}
+
 func (d *DB) ListStacks() ([]models.Stack, error) {
 	query := `SELECT id, directory, compose_file, env_file, project_name, status,
 	           is_git_repo, git_branch, git_commit, git_dirty, git_ahead, git_behind
@@ -29,7 +37,7 @@ func (d *DB) ListStacks() ([]models.Stack, error) {
 
 	stacks := make([]models.Stack, 0)
 	for rows.Next() {
-		var stack models.Stack
+		stack := emptyStack()
 		err := rows.Scan(&stack.ID, &stack.Directory, &stack.ComposeFile, &stack.EnvFile,
 			&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
 			&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind)
@@ -45,7 +53,7 @@ func (d *DB) ListStacks() ([]models.Stack, error) {
 }
 
 func (d *DB) GetStack(id string) (*models.Stack, error) {
-	var stack models.Stack
+	stack := emptyStack()
 	query := `SELECT id, directory, compose_file, env_file, project_name, status,
 	           is_git_repo, git_branch, git_commit, git_dirty, git_ahead, git_behind
 	          FROM stacks WHERE id = ?`
@@ -70,7 +78,7 @@ func (d *DB) ListStacksByDirectory(path string) ([]models.Stack, error) {
 
 	stacks := make([]models.Stack, 0)
 	for rows.Next() {
-		var stack models.Stack
+		stack := emptyStack()
 		err := rows.Scan(&stack.ID, &stack.Directory, &stack.ComposeFile, &stack.EnvFile,
 			&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
 			&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind)
@@ -133,7 +141,7 @@ func (d *DB) UpdateStackStatus(id, status string) error {
 }
 
 func (d *DB) GetStackByProjectName(projectName string) (*models.Stack, error) {
-	var stack models.Stack
+	stack := emptyStack()
 	query := `SELECT id, directory, compose_file, env_file, project_name, status,
 	           is_git_repo, git_branch, git_commit, git_dirty, git_ahead, git_behind
 	          FROM stacks WHERE project_name = ?`

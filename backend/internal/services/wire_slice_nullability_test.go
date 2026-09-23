@@ -15,34 +15,33 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
-// The three tests below drive REAL production functions and marshal what they
-// return, so the claim "this field can arrive as JSON null" is measured rather
-// than asserted about a hand-built struct. models/wire_slice_nullability_test.go
-// pins the whole eleven-field table; these pin the ones whose construction path
-// is reachable without a Docker daemon.
+// The tests below drive REAL production functions and marshal what they return,
+// so the claim "this field arrives as [] and never as JSON null" is measured
+// rather than asserted about a hand-built struct.
+// models/wire_slice_nullability_test.go pins the whole eleven-field table.
 //
-// Each carries both arms. A test that only ever sees null cannot tell a
-// genuinely nullable field from an instrument that reports null for everything.
+// Each carries both arms. A test that only ever sees [] cannot tell a
+// normalised field from an instrument that reports [] for everything.
 
 // TestWireNullability_DiffResultFiles drives getDiffCLI through GetDiff against
 // a real repository. The seed commit is `--allow-empty`, so `git diff-tree
-// --name-only` prints nothing and getDiffCLI's `var files []string` is never
-// assigned — the field reaches the wire as null. The second arm commits a file
-// so the same instrument reports a populated array on the same code path.
+// --name-only` prints nothing; getDiffCLI must still send [] (agent-os-e5pr).
+// The second arm commits a file so the same instrument reports a populated
+// array on the same code path.
 func TestWireNullability_DiffResultFiles(t *testing.T) {
 	svc := NewGitService(&config.Config{}, nil)
 
-	t.Run("empty commit yields null", func(t *testing.T) {
+	t.Run("empty commit yields an empty array", func(t *testing.T) {
 		dir := repoWithCommit(t, t.TempDir())
 		head := gitOutput(t, dir, "rev-parse", "HEAD")
 
 		res, err := svc.GetDiff(dir, head)
 		require.NoError(t, err)
-		require.Nil(t, res.Files, "getDiffCLI left Files nil for a commit that touched nothing")
+		require.NotNil(t, res.Files, "getDiffCLI left Files nil for a commit that touched nothing")
 
 		raw, err := json.Marshal(res)
 		require.NoError(t, err)
-		require.Contains(t, string(raw), `"files":null`)
+		require.Contains(t, string(raw), `"files":[]`)
 	})
 
 	t.Run("commit touching a file yields an array", func(t *testing.T) {
@@ -96,9 +95,9 @@ func (r *nullabilityResticRunner) Output(_ context.Context, _ string, args []str
 
 // TestWireNullability_BackupSnapshotTags drives ListSnapshots over restic's own
 // JSON. restic omits the "tags" key entirely for an untagged snapshot, and
-// ListSnapshots copies the field straight through with no guard, so tags
-// reaches the wire as null. The tagged arm proves the same instrument reports
-// an array when restic sends one.
+// ListSnapshots must still send [] for it, and likewise for "paths"
+// (agent-os-e5pr). The tagged arm proves the same instrument reports a
+// populated array when restic sends one.
 func TestWireNullability_BackupSnapshotTags(t *testing.T) {
 	newMgr := func(out string) *ResticManager {
 		return newResticManagerWithRunner(
@@ -108,17 +107,29 @@ func TestWireNullability_BackupSnapshotTags(t *testing.T) {
 		)
 	}
 
-	t.Run("untagged snapshot yields null tags", func(t *testing.T) {
+	t.Run("untagged snapshot yields empty tags", func(t *testing.T) {
 		m := newMgr(`[{"id":"abc","short_id":"abc","time":"2026-01-01T00:00:00Z","hostname":"h","paths":["/srv"]}]`)
 		snaps, err := m.ListSnapshots(context.Background(), "", 0)
 		require.NoError(t, err)
 		require.Len(t, snaps, 1)
-		require.Nil(t, snaps[0].Tags)
+		require.NotNil(t, snaps[0].Tags)
 
 		raw, err := json.Marshal(snaps[0])
 		require.NoError(t, err)
-		require.Contains(t, string(raw), `"tags":null`)
+		require.Contains(t, string(raw), `"tags":[]`)
 		require.Contains(t, string(raw), `"paths":["/srv"]`)
+	})
+
+	t.Run("snapshot without a paths key yields empty paths", func(t *testing.T) {
+		m := newMgr(`[{"id":"abc","short_id":"abc","time":"2026-01-01T00:00:00Z","hostname":"h","tags":["stack-a"]}]`)
+		snaps, err := m.ListSnapshots(context.Background(), "", 0)
+		require.NoError(t, err)
+		require.Len(t, snaps, 1)
+		require.NotNil(t, snaps[0].Paths)
+
+		raw, err := json.Marshal(snaps[0])
+		require.NoError(t, err)
+		require.Contains(t, string(raw), `"paths":[]`)
 	})
 
 	t.Run("tagged snapshot yields an array", func(t *testing.T) {

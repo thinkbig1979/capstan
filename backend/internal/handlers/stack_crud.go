@@ -231,6 +231,9 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		EnvFile:     envFile,
 		ProjectName: projectName,
 		Status:      "stopped",
+		// The response falls back to this literal when the re-read below
+		// fails, so it must send [] like the database readers (agent-os-e5pr).
+		Containers: []models.Container{},
 	}
 
 	// stacks.directory has an FK to directories(path) (migrations.go), enforced

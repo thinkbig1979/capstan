@@ -524,7 +524,7 @@ export interface Stack {
   envFile: string;
   projectName: string;
   status: string;
-  containers: Container[] | null;
+  containers: Container[];
   isGitRepo: boolean;
   gitBranch: string;
   gitCommit: string;
@@ -604,9 +604,14 @@ export interface LogResult {
   hasMore: boolean;
 }
 export interface DiffResult {
-  commit?: GitCommit;
+  /**
+   * A value, not a pointer: getDiffCLI fills it on every success path, so
+   * the wire always carries an object and the generated type says so
+   * (agent-os-apmw).
+   */
+  commit: GitCommit;
   diff: string;
-  files: string[] | null;
+  files: string[];
 }
 export interface DashboardContainerInfo {
   id: string;
@@ -655,7 +660,7 @@ export interface DockerNetwork {
   scope: string;
   internal: boolean;
   containers: number /* int */;
-  labels: string[] | null;
+  labels: string[];
   created: string;
   stack: string;
 }
@@ -851,8 +856,8 @@ export interface BackupSnapshot {
   shortId: string;
   time: string;
   hostname: string;
-  tags: string[] | null;
-  paths: string[] | null;
+  tags: string[];
+  paths: string[];
   sizeBytes?: number /* int64 */;
 }
 /**

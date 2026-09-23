@@ -1074,7 +1074,7 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 	if len(lines) < 6 {
 		return nil, fmt.Errorf("unexpected log format")
 	}
-	commit := &models.GitCommit{
+	commit := models.GitCommit{
 		Hash:    strings.TrimSpace(lines[0]),
 		Short:   strings.TrimSpace(lines[1]),
 		Author:  strings.TrimSpace(lines[2]),
@@ -1097,7 +1097,8 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 	if err != nil {
 		return nil, fmt.Errorf("failed to list changed files: %w", err)
 	}
-	var files []string
+	// Non-nil so a commit that touched nothing sends [] (agent-os-e5pr).
+	files := []string{}
 	if filesOutput != "" {
 		files = strings.Split(filesOutput, "\n")
 	}

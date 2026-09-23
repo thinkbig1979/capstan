@@ -177,7 +177,9 @@ func (s *DockerService) ListNetworks(ctx context.Context) ([]models.DockerNetwor
 	result := make([]models.DockerNetwork, 0, len(networks))
 	for _, net := range networks {
 		var stack string
-		var labelStrs []string
+		// Non-nil so an unlabelled network (bridge, host, none) sends []
+		// (agent-os-e5pr).
+		labelStrs := []string{}
 		if net.Labels != nil {
 			stack = net.Labels["com.docker.compose.project"]
 			for k, v := range net.Labels {
