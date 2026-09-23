@@ -1198,18 +1198,26 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 		actions = []models.ActionLog{}
 	}
 
-	availableActions, err := h.db.DistinctActionLogActions()
-	if err != nil {
-		availableActions = []string{}
+	response := gin.H{
+		"entries":  actions,
+		"total":    total,
+		"page":     page,
+		"pageSize": pageSize,
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"entries":          actions,
-		"total":            total,
-		"page":             page,
-		"pageSize":         pageSize,
-		"availableActions": availableActions,
-	})
+	// agent-os-7y0t. OMITTED on a fault, never []: an empty list here renders
+	// as "no action types exist" beside a page of entries that have them, and
+	// this branch used to leave no log line either. The entries above read
+	// cleanly, so refusing the request would drop a correct page over an
+	// ancillary filter list (the agent-os-xppj precedent).
+	availableActions, err := h.db.DistinctActionLogActions()
+	if err != nil {
+		slog.Error("Failed to list audit log action types", "error", err)
+	} else {
+		response["availableActions"] = availableActions
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *SettingsHandler) GetScanDepth(c *gin.Context) {
