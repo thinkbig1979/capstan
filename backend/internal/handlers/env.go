@@ -26,65 +26,6 @@ type EnvHandler struct {
 	actionLog *services.ActionLogger
 }
 
-// EnvEntry is the wire shape of one line of a stack's env file. It is
-// bidirectional: it is both what GET /:id/env returns (EnvResponse.Entries)
-// and what PUT /:id/env accepts (EnvRequest.Entries), and the editor reuses
-// it client-side as the draft row (frontend/src/components/stack/env-editor/
-// types.ts, EnvEntryRow). Its hand-written TypeScript counterpart is
-// frontend/src/types/index.ts — handlers is not a tygo package (backend/
-// tygo.yaml generates only internal/models and internal/truth), so the two
-// declarations are kept in agreement BY HAND and by the tests in
-// env_wire_contract_test.go.
-//
-// Sensitive carries no omitempty on purpose (agent-os-6wrb). TypeScript
-// declares `sensitive: boolean` as REQUIRED, so omitting the key on false
-// made the declared type a lie: every consumer read the absent value as
-// false and was right only because undefined is falsy. It is a
-// security-relevant masking hint, so the wire is matched to the strict
-// declaration rather than the declaration loosened to a lossy wire.
-//
-// Comment keeps omitempty because TypeScript declares it OPTIONAL
-// (`comment?: boolean`); that pair already agrees.
-//
-// Line carries no omitempty while TypeScript declares it OPTIONAL. That is
-// a ROLE difference, not an oversight: this one type serves both roles.
-// As a RESPONSE, Line is always present and never 0 — parseEnvFile
-// increments lineNum before use, so it is 1-based at every construction
-// site — which is what the non-omitempty tag states. As a REQUEST, a row
-// the editor has just added legitimately has no line yet, so the optional
-// TypeScript declaration is the one correct for the union of both roles.
-// Requiring it there fails `npx tsc -b` at env-editor/useEnvEntryActions.ts
-// (OBSERVED 2026-09-20, agent-os-6wrb: TS2345, "Property 'line' is missing
-// ... but required in type 'EnvEntryRow'"). Tightening it would mean
-// splitting the response shape from the draft shape, which is a change to
-// the editor's own types, not to this contract.
-type EnvEntry struct {
-	Key       string `json:"key"`
-	Value     string `json:"value"`
-	Line      int    `json:"line"`
-	Sensitive bool   `json:"sensitive"`
-	Comment   bool   `json:"comment,omitempty"`
-}
-
-// EnvResponse is the wire shape of GET /:id/env when the stack HAS an env file.
-//
-// HasEnvFile is always true here and is not omitempty: the no-file answer is a
-// separate 200 payload carrying `{"hasEnvFile": false}` and nothing else
-// (agent-os-bt5y), so the field has to be present on both branches for a client
-// to discriminate on it.
-//
-// Raw is omitempty and Locked is set because the response is redacted for a
-// session that has not re-entered its password: see redactEnvResponse. A caller
-// must therefore treat a missing "raw" as "not authorised to see it", not as
-// "the file is empty" — Locked tells the two apart.
-type EnvResponse struct {
-	HasEnvFile bool       `json:"hasEnvFile"`
-	Filename   string     `json:"filename"`
-	Entries    []EnvEntry `json:"entries"`
-	Raw        string     `json:"raw,omitempty"`
-	Locked     bool       `json:"locked,omitempty"`
-}
-
 type EnvRequest struct {
 	Entries []EnvEntry `json:"entries"`
 	Raw     string     `json:"raw"`

@@ -588,14 +588,6 @@ func (s *DockerService) GetImageDiskUsage(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
-type DiskUsageBreakdown struct {
-	Images     int64 `json:"images"`
-	Containers int64 `json:"containers"`
-	Volumes    int64 `json:"volumes"`
-	BuildCache int64 `json:"buildCache"`
-	Total      int64 `json:"total"`
-}
-
 func (s *DockerService) GetDiskUsage(ctx context.Context) (*DiskUsageBreakdown, error) {
 	if s == nil {
 		return nil, ErrDockerUnavailable

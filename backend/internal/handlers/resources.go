@@ -234,32 +234,6 @@ func (h *ResourcesHandler) listNetworks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"networks": networks})
 }
 
-// BuildCacheEntry is our own wire representation of a Docker build-cache
-// record.
-//
-// The endpoint used to serialize build.CacheRecord from the Docker SDK
-// straight to the wire, which made it the only PascalCase payload in the API
-// and inherited an upstream tag typo: CacheRecord declares
-// `json:" Parents,omitempty"` with a LEADING SPACE, so the field went out as
-// " Parents" and the frontend's Parents was permanently undefined
-// (agent-os-iuby). Declaring our own type closes both problems for good — a
-// tag change upstream can no longer alter our contract.
-//
-// The deprecated CacheRecord.Parent (singular, deprecated in API v1.42) is
-// deliberately not carried over; nothing consumed it.
-type BuildCacheEntry struct {
-	ID          string     `json:"id"`
-	Parents     []string   `json:"parents,omitempty"`
-	Type        string     `json:"type"`
-	Description string     `json:"description"`
-	InUse       bool       `json:"inUse"`
-	Shared      bool       `json:"shared"`
-	Size        int64      `json:"size"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	LastUsedAt  *time.Time `json:"lastUsedAt"`
-	UsageCount  int        `json:"usageCount"`
-}
-
 // toBuildCacheEntries maps the Docker SDK records onto our own response type.
 func toBuildCacheEntries(records []*build.CacheRecord) []BuildCacheEntry {
 	entries := make([]BuildCacheEntry, 0, len(records))

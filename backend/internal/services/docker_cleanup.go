@@ -53,23 +53,6 @@ func NewDockerCleanupService(docker dockerCleanupPruner, store dockerCleanupStor
 	return &DockerCleanupService{docker: docker, store: store}
 }
 
-// DockerCleanupCandidate is one image a run would remove. Repository is empty
-// for the fully-untagged form; see danglingRepository.
-type DockerCleanupCandidate struct {
-	ID         string `json:"id"`
-	Repository string `json:"repository,omitempty"`
-	Size       int64  `json:"size"`
-	Created    int64  `json:"created"`
-}
-
-// DockerCleanupPreview is what a run WOULD remove. Producing it must not remove
-// anything.
-type DockerCleanupPreview struct {
-	Candidates       []DockerCleanupCandidate `json:"candidates"`
-	ReclaimableBytes int64                    `json:"reclaimableBytes"`
-	MinAgeHours      int                      `json:"minAgeHours"`
-}
-
 // cleanupPruneOptions is the ONLY place this service builds PruneOptions, so
 // there is exactly one line that could ever set All true and one test can pin
 // it. All is the `docker image prune -a` behaviour, which deletes tagged images

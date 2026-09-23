@@ -190,14 +190,20 @@ jobs:
       # is not committed at all. --intent-to-add registers them so a
       # never-committed file reads as a difference rather than as absence.
       #
+      # The pathspec is a quoted glob, not a file list, so a package added to
+      # tygo.yaml is gated the moment its output exists; a hard-coded list
+      # would have left the three outputs added by agent-os-rbxi ungated.
+      # Quoted so git, not the shell, expands it; it matches files tygo just
+      # created.
+      #
       # go run pkg@version needs no go.mod entry and there is no backend/vendor,
       # so this pins tygo without touching the module graph.
       - name: Generated wire types are current
         working-directory: backend
         run: |
           go run github.com/gzuidhof/tygo@v0.2.21 generate
-          git -C .. add --intent-to-add frontend/src/types/generated.ts frontend/src/types/generated-truth.ts
-          git -C .. diff --exit-code -- frontend/src/types/generated.ts frontend/src/types/generated-truth.ts
+          git -C .. add --intent-to-add -- 'frontend/src/types/generated*.ts'
+          git -C .. diff --exit-code -- 'frontend/src/types/generated*.ts'
 
   # This codebase is the profile the race detector is built for:
   # goroutine-per-connection WebSocket handlers, background tickers, a session

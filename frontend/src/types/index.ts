@@ -5,7 +5,7 @@
  * that serve them — see backend/tygo.yaml — and re-exported below, so a
  * backend field that changes without its TypeScript is a failing required
  * check rather than a runtime surprise in the browser. Do not hand-edit
- * ./generated.ts or ./generated-truth.ts; regenerate them.
+ * any ./generated*.ts file; regenerate them.
  *
  * Three things still live here by hand, each for a reason that is not going
  * away:
@@ -62,6 +62,17 @@ import type {
   UpdateSettingsResponse,
   User,
 } from './generated'
+import type {
+  BuildCacheEntry,
+  EnvEntry as WireEnvEntry,
+  EnvResponse,
+} from './generated-handlers'
+import type {
+  DiskUsageBreakdown,
+  DockerCleanupCandidate,
+  DockerCleanupPreview,
+} from './generated-services'
+import type { Info as VersionInfo } from './generated-version'
 
 /* ------------------------------------------------------------------ *
  * Generated wire types, re-exported unchanged.
@@ -71,11 +82,15 @@ export type {
   ActionLog,
   AppError,
   BackupSnapshot,
+  BuildCacheEntry,
   CachedUpdate,
   ContainerMetrics,
   ContainerUpdateInfo,
   DiffResult,
   Directory,
+  DiskUsageBreakdown,
+  DockerCleanupCandidate,
+  DockerCleanupPreview,
   DockerImage,
   DockerNetwork,
   DockerVolume,
@@ -88,6 +103,7 @@ export type {
   StackEvent,
   UpdateResult,
   User,
+  VersionInfo,
   WireActionResult,
 }
 
@@ -185,14 +201,6 @@ export type UpdateSettings = Omit<UpdateSettingsResponse, 'applyMode'> & {
  * Shapes with no single Go struct behind them, and request types.
  * ------------------------------------------------------------------ */
 
-interface DiskUsageBreakdown {
-  images: number
-  containers: number
-  volumes: number
-  buildCache: number
-  total: number
-}
-
 export interface AuthResponse {
   token: string
   user: User
@@ -264,17 +272,10 @@ export interface GitEmptyRepoStatus {
 export type GitStatus = GitRepoStatus | GitEmptyRepoStatus | GitNotRepoStatus
 
 /**
- * One line of a stack's env file. Hand-written counterpart of Go's
- * handlers.EnvEntry (backend/internal/handlers/env.go) — handlers is not a
- * tygo package, so the two declarations are kept in agreement by hand and by
- * backend/internal/handlers/env_wire_contract_test.go.
+ * One line of a stack's env file: generated handlers.EnvEntry
+ * (backend/internal/handlers/wire_types.go), with `line` re-loosened.
  *
- * `sensitive` is required and the Go tag carries no omitempty, so the server
- * always sends it (agent-os-6wrb). Before that fix the key was omitted on
- * false and every consumer here was correct only because `undefined` is
- * falsy.
- *
- * `line` is optional while Go always sends it. That is a ROLE difference,
+ * `line` is optional here while Go always sends it. That is a ROLE difference,
  * not an oversight: this type is both the response shape, where `line` is
  * always present and 1-based, and the request/draft shape, where a row added
  * via "Add Entry" legitimately has none until the server parses the saved
@@ -282,20 +283,13 @@ export type GitStatus = GitRepoStatus | GitEmptyRepoStatus | GitNotRepoStatus
  * declaration for the union of both roles. Requiring it fails `npx tsc -b`
  * at env-editor/useEnvEntryActions.ts (OBSERVED 2026-09-20, agent-os-6wrb).
  */
-export interface EnvEntry {
-  key: string
-  value: string
-  line?: number
-  sensitive: boolean
-  comment?: boolean
-}
+export type EnvEntry = Omit<WireEnvEntry, 'line'> & { line?: number }
 
-export interface EnvFilePresent {
+// narrows handlers.EnvResponse.HasEnvFile, a Go bool, to the literal the
+// present branch always carries, and re-points Entries at EnvEntry above
+export type EnvFilePresent = Omit<EnvResponse, 'hasEnvFile' | 'entries'> & {
   hasEnvFile: true
-  filename: string
   entries: EnvEntry[]
-  raw?: string
-  locked?: boolean
 }
 
 export interface EnvFileAbsent {
@@ -314,19 +308,6 @@ export interface ApiError {
   code: string
   message: string
   details?: Record<string, unknown>
-}
-
-export interface BuildCacheEntry {
-  id: string
-  type: string
-  description: string
-  inUse: boolean
-  shared: boolean
-  size: number
-  createdAt: string
-  lastUsedAt: string | null
-  usageCount: number
-  parents?: string[]
 }
 
 export interface RetentionSettings {
@@ -466,32 +447,12 @@ export interface BackupOperationResult {
   wsUrl: string
 }
 
-export interface VersionInfo {
-  version: string
-  commit: string
-  buildDate: string
-}
-
 export interface DockerCleanupPolicy {
   enabled: boolean
   minAgeHours: number
   intervalHours: number
   minAllowedAgeHours: number
   minAllowedIntervalHours: number
-}
-
-export interface DockerCleanupCandidate {
-  id: string
-  repository?: string
-  size: number
-  /** Unix seconds. */
-  created: number
-}
-
-export interface DockerCleanupPreview {
-  candidates: DockerCleanupCandidate[]
-  reclaimableBytes: number
-  minAgeHours: number
 }
 
 export interface DockerCleanupHistory {
