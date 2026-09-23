@@ -245,3 +245,103 @@ describe('DirectoriesSettingsContent — default directory', () => {
     )
   })
 })
+
+describe('DirectoriesSettingsContent — a failed refresh is disclosed per query (agent-os-ngwi)', () => {
+  const serverFault = { status: 500, code: 'INTERNAL_ERROR', message: 'read failed' }
+  const configNotice = /Could not refresh the directory configuration\. The values shown are the last ones the server sent, so check them before saving\./
+  const depthNotice = /Could not refresh the scan depth\. The values shown are the last ones the server sent, so check them before saving\./
+
+  function renderWithClient() {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 0 },
+        mutations: { retry: false },
+      },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DirectoriesSettingsContent />
+      </QueryClientProvider>,
+    )
+    return queryClient
+  }
+
+  const waitForError = (queryClient: QueryClient, key: string) =>
+    waitFor(() => expect(queryClient.getQueryState([key])?.status).toBe('error'))
+
+  async function renderPopulated() {
+    mockGetScanDepth.mockResolvedValue({ scanDepth: 3 })
+    const queryClient = renderWithClient()
+    expect(await screen.findByText('3 levels deep')).toBeInTheDocument()
+    expect(screen.getByText('/mnt/extra/more-stacks')).toBeInTheDocument()
+    return queryClient
+  }
+
+  // Resolve FIRST, then reject (the ptiq shape). Covers the CONFIG query.
+  it('config refetch fails: keeps the directories AND discloses it, scan depth untouched', async () => {
+    const queryClient = await renderPopulated()
+
+    mockGetConfig.mockRejectedValue(serverFault)
+    await queryClient.refetchQueries()
+    await waitForError(queryClient, 'config')
+
+    expect(screen.getByText('/mnt/extra/more-stacks')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save Default Directory' })).toBeInTheDocument()
+
+    expect(screen.getByText(configNotice)).toBeInTheDocument()
+    expect(screen.queryByText(depthNotice)).not.toBeInTheDocument()
+
+    // Placement: at the TOP, not above one Save, because the config feeds the
+    // read-only directory list as well as the Default Directory save.
+    const alert = screen.getByRole('alert')
+    expect(alert.parentElement?.firstElementChild).toBe(alert)
+    expect(alert.nextElementSibling).toHaveTextContent('Monitored Directories')
+
+    // Persistence across a second failed refetch.
+    await queryClient.refetchQueries()
+    await waitForError(queryClient, 'config')
+    expect(screen.getByText(configNotice)).toBeInTheDocument()
+  })
+
+  // Covers the SCAN DEPTH query.
+  it('scan depth refetch fails: keeps the depth AND discloses it, config untouched', async () => {
+    const queryClient = await renderPopulated()
+
+    mockGetScanDepth.mockRejectedValue(serverFault)
+    await queryClient.refetchQueries()
+    await waitForError(queryClient, 'scan-depth')
+
+    expect(screen.getByText('3 levels deep')).toBeInTheDocument()
+
+    expect(screen.getByText(depthNotice)).toBeInTheDocument()
+    expect(screen.queryByText(configNotice)).not.toBeInTheDocument()
+
+    // Placement: directly above Save Scan Depth.
+    const alert = screen.getByRole('alert')
+    expect(alert.nextElementSibling).toContainElement(
+      screen.getByRole('button', { name: 'Save Scan Depth' }),
+    )
+
+    // Persistence across a second failed refetch.
+    await queryClient.refetchQueries()
+    await waitForError(queryClient, 'scan-depth')
+    expect(screen.getByText(depthNotice)).toBeInTheDocument()
+  })
+
+  it('shows neither notice while both queries are fresh', async () => {
+    await renderPopulated()
+
+    expect(screen.queryByText(configNotice)).not.toBeInTheDocument()
+    expect(screen.queryByText(depthNotice)).not.toBeInTheDocument()
+  })
+
+  it('does not claim "the last ones the server sent" when a first load failed', async () => {
+    mockGetConfig.mockRejectedValue(serverFault)
+    mockGetScanDepth.mockRejectedValue(serverFault)
+    const queryClient = renderWithClient()
+
+    await waitForError(queryClient, 'config')
+    await waitForError(queryClient, 'scan-depth')
+    expect(screen.queryByText(/Could not refresh/)).not.toBeInTheDocument()
+  })
+})

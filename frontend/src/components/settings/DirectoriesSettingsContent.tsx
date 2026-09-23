@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { settingsApi, directoryConfigApi } from '@/lib/api'
 import { TableSearch } from '@/components/ui/table-search'
 import { useTextFilter } from '@/hooks/useTextFilter'
@@ -25,11 +26,16 @@ const DIR_SEARCH_FIELDS = [
 ]
 
 export function DirectoriesSettingsContent() {
-  const { data: config, isLoading } = useQuery({
+  const { data: config, isLoading, isError: configError, refetch: refetchConfig } = useQuery({
     queryKey: queryKeys.config(),
     queryFn: () => settingsApi.getConfig(),
   })
-  const { data: scanDepthData, isLoading: isLoadingDepth } = useQuery({
+  const {
+    data: scanDepthData,
+    isLoading: isLoadingDepth,
+    isError: depthError,
+    refetch: refetchDepth,
+  } = useQuery({
     queryKey: queryKeys.scanDepth(),
     queryFn: () => settingsApi.getScanDepth(),
   })
@@ -80,8 +86,24 @@ export function DirectoriesSettingsContent() {
     })
   }
 
+  // agent-os-ngwi. Two queries, two independent ways to go stale: a failed
+  // REFETCH keeps the last data TanStack holds, and the one-shot hydration
+  // above never re-seeds from it anyway, so each save writes back what was on
+  // screen. Each query gets its own notice, gated on its own data so the copy
+  // ("the last ones the server sent") is never shown after a failed FIRST load.
+  const configRefreshFailed = configError && Boolean(config)
+  const depthRefreshFailed = depthError && Boolean(scanDepthData)
+
   return (
     <div className="space-y-6">
+      {configRefreshFailed && (
+        <RefreshFailedNotice
+          what="the directory configuration"
+          // Only a write-back surface when the Default Directory section renders.
+          beforeSave={allDirs.length > 1}
+          onRetry={() => void refetchConfig()}
+        />
+      )}
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           <h3 className="text-lg font-medium">Monitored Directories</h3>
@@ -145,6 +167,13 @@ export function DirectoriesSettingsContent() {
             How many levels deep to scan within each monitored directory for compose files. A value of 1 only scans immediate subdirectories. After changing this, trigger a rescan to discover newly visible stacks.
           </p>
         </div>
+        {depthRefreshFailed && (
+          <RefreshFailedNotice
+            what="the scan depth"
+            beforeSave
+            onRetry={() => void refetchDepth()}
+          />
+        )}
         <div className="flex justify-end">
           <Button
             onClick={() => scanDepthMutation.mutate(Number(effectiveDepth))}
