@@ -288,3 +288,48 @@ describe('useCreateNetwork — details.name is asserted, not validated', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Network "bridge-1" created'))
   })
 })
+
+// agent-os-oid3. On a refresh 202 whose cache read failed the server now OMITS
+// `updates`. The scanning:false path used to write that body straight into the
+// query cache, replacing a populated table with "no updates" and toasting
+// "Update check complete" over a check that produced nothing.
+describe('useCheckUpdatesRefresh — a cache-fault body (agent-os-oid3)', () => {
+  const populated = {
+    updates: [{ containerId: 'c1', containerName: 'web', image: 'nginx', imageRef: 'nginx:1', state: 'running' }],
+    fromCache: true,
+    scannedAt: '2026-09-20T10:00:00Z',
+    scanning: false,
+  }
+
+  it('does not replace the populated table and does not toast complete', async () => {
+    const { wrapper, queryClient } = createWrapper()
+    queryClient.setQueryData(queryKeys.resources.updates(), populated)
+    useUpdateScanStore.setState({ isScanning: true })
+    mockCheckUpdates.mockResolvedValue({ scannedAt: '2026-09-20T10:00:00Z', scanning: false })
+
+    const { result } = renderHook(() => useCheckUpdatesRefresh(), { wrapper })
+    act(() => result.current.mutate())
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(queryClient.getQueryData(queryKeys.resources.updates())).toEqual(populated)
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith('Update check failed', expect.objectContaining({ id: UPDATE_SCAN_TOAST_ID }))
+    expect(useUpdateScanStore.getState().isScanning).toBe(false)
+  })
+
+  // The paired arm: a healthy body, even an EMPTY one, still lands in the cache.
+  it('still writes a healthy empty body and toasts complete', async () => {
+    const { wrapper, queryClient } = createWrapper()
+    queryClient.setQueryData(queryKeys.resources.updates(), populated)
+    useUpdateScanStore.setState({ isScanning: true })
+    const empty = { updates: [], fromCache: false, scannedAt: '', scanning: false }
+    mockCheckUpdates.mockResolvedValue(empty)
+
+    const { result } = renderHook(() => useCheckUpdatesRefresh(), { wrapper })
+    act(() => result.current.mutate())
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(queryClient.getQueryData(queryKeys.resources.updates())).toEqual(empty)
+    expect(toast.success).toHaveBeenCalledWith('Update check complete', expect.objectContaining({ id: UPDATE_SCAN_TOAST_ID }))
+  })
+})

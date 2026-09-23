@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { useGitSettings, useUpdateGitSettings } from '@/hooks/useResources'
 import { Eye, EyeOff } from 'lucide-react'
 import { toast } from 'sonner'
@@ -10,7 +11,7 @@ import { settingsSaveFault } from '@/lib/settings-save-fault'
 import { presentFault } from '@/lib/error-handler'
 
 export function GitSettingsContent() {
-  const { data: gitSettings, isLoading } = useGitSettings()
+  const { data: gitSettings, isLoading, isError, refetch } = useGitSettings()
   const updateGitSettings = useUpdateGitSettings()
 
   const [sshKey, setSshKey] = useState<string | undefined>(undefined)
@@ -119,6 +120,21 @@ export function GitSettingsContent() {
         </div>
       </div>
 
+      {/*
+        * agent-os-vs6c. A failed REFETCH keeps the last gitSettings TanStack
+        * holds, and the untouched fields above fall back to it, so Save writes
+        * those values back. Kept (they are real values the server sent) but
+        * disclosed beside the control that submits them. Gated on
+        * `gitSettings` because the copy says "the last ones the server sent",
+        * which is false when the first load failed and nothing was ever sent.
+        */}
+      {isError && gitSettings && (
+        <RefreshFailedNotice
+          what="the git settings"
+          beforeSave
+          onRetry={() => void refetch()}
+        />
+      )}
       <div className="flex justify-end">
         <Button type="submit" disabled={updateGitSettings.isPending}>
           {updateGitSettings.isPending ? (

@@ -703,7 +703,8 @@ export const resourcesApi = {
   checkUpdates: async (refresh = false) => {
     const params = refresh ? { refresh: 'true' } : undefined
     const response = await apiClient.get<{
-      updates: (ContainerUpdateInfo | CachedUpdate)[]
+      // Absent on a refresh 202 whose cache read failed (agent-os-oid3).
+      updates?: (ContainerUpdateInfo | CachedUpdate)[]
       fromCache?: boolean
       scannedAt?: string
       scanning?: boolean
