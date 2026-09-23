@@ -224,3 +224,60 @@ func TestGetBackupRunsFiltered_CombinesFiltersWithAND(t *testing.T) {
 	assert.Empty(t, none, "clauses must be ANDed, not ORed")
 	assert.Equal(t, 0, total)
 }
+
+// insertNullErrorMessageRun inserts a backup_runs row whose error_message is
+// NULL. No Capstan writer produces one: CreateBackupRun, UpdateBackupRun and
+// SweepInterruptedBackupRuns all bind a Go string, and migrations 12 and 16
+// copy the column verbatim (agent-os-1m58, established by a writer sweep, not
+// tested). The column is nullable, though, so a hand-edited or externally
+// written database can hold one, and the readers must survive it.
+func insertNullErrorMessageRun(t *testing.T, db *DB, id, startedAt string) {
+	t.Helper()
+	_, err := db.db.Exec(
+		`INSERT INTO backup_runs (id, kind, trigger, status, started_at) VALUES (?, 'backup', 'manual', 'running', ?)`,
+		id, startedAt)
+	require.NoError(t, err)
+}
+
+// A single NULL error_message used to fail rows.Scan and lose the whole list
+// (agent-os-1m58). Every reader must return the NULL row, with an empty
+// message, alongside the others, and a real message must still read back.
+func TestBackupRunReaders_SurviveNullErrorMessage(t *testing.T) {
+	db := newTestDB(t)
+	seedFilterRuns(t, db)
+	withMsg := models.BackupRun{ID: "run-e", Kind: "backup", Trigger: "manual", Status: "failed",
+		StartedAt: "2026-10-01T00:00:00Z", ErrorMessage: "repository locked"}
+	require.NoError(t, db.CreateBackupRun(&withMsg))
+	insertNullErrorMessageRun(t, db, "run-null", "2026-05-01T00:00:00Z")
+
+	wantIDs := []string{"run-e", "run-d", "run-c", "run-null", "run-b", "run-a"}
+
+	runs, err := db.GetBackupRuns(10)
+	require.NoError(t, err)
+	assert.Equal(t, wantIDs, runIDs(runs))
+
+	filtered, total, err := db.GetBackupRunsFiltered(models.BackupHistoryFilters{})
+	require.NoError(t, err)
+	assert.Equal(t, wantIDs, runIDs(filtered))
+	assert.Equal(t, 6, total)
+
+	for _, list := range [][]models.BackupRun{runs, filtered} {
+		for _, r := range list {
+			switch r.ID {
+			case "run-null":
+				assert.Empty(t, r.ErrorMessage)
+			case "run-e":
+				assert.Equal(t, "repository locked", r.ErrorMessage)
+			}
+		}
+	}
+
+	byID, err := db.GetBackupRunByID("run-null")
+	require.NoError(t, err)
+	assert.Equal(t, "run-null", byID.ID)
+	assert.Empty(t, byID.ErrorMessage)
+
+	byID, err = db.GetBackupRunByID("run-e")
+	require.NoError(t, err)
+	assert.Equal(t, "repository locked", byID.ErrorMessage)
+}

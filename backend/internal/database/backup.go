@@ -104,8 +104,12 @@ func (d *DB) UpdateBackupRun(r *models.BackupRun) error {
 	return err
 }
 
+// error_message is nullable, and a NULL scanned into a plain string fails
+// rows.Scan and loses the whole list (agent-os-1m58). No Capstan writer stores
+// a NULL, so the COALESCE here and in the two other backup_runs readers guards
+// databases edited or written outside Capstan.
 func (d *DB) GetBackupRuns(limit int) ([]models.BackupRun, error) {
-	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message
+	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, COALESCE(error_message, '')
 	          FROM backup_runs ORDER BY started_at DESC LIMIT ?`
 	rows, err := d.db.Query(query, limit)
 	if err != nil {
@@ -206,7 +210,7 @@ func (d *DB) GetBackupRunsFiltered(filters models.BackupHistoryFilters) ([]model
 	// Column order must stay identical to the Scan targets below, and to
 	// GetBackupRuns' list, which this deliberately repeats rather than shares:
 	// that function keeps its existing callers and is left untouched here.
-	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message
+	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, COALESCE(error_message, '')
 	          FROM backup_runs ` + whereClause + ` ORDER BY started_at DESC LIMIT ? OFFSET ?`
 	queryArgs := append(args, limit, offset)
 
@@ -237,7 +241,7 @@ func (d *DB) GetBackupRunsFiltered(filters models.BackupHistoryFilters) ([]model
 // (agent-os-ymyc). It used to return the driver's sql.ErrNoRows, and this
 // comment used to claim that error was wrapped; it was returned bare.
 func (d *DB) GetBackupRunByID(id string) (*models.BackupRun, error) {
-	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message
+	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, COALESCE(error_message, '')
 	          FROM backup_runs WHERE id = ?`
 	var r models.BackupRun
 	err := d.db.QueryRow(query, id).Scan(
