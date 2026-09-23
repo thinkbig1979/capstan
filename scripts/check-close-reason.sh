@@ -28,23 +28,35 @@
 #       PreToolUse hook. Reads Claude Code's hook JSON on stdin
 #       (tool_input.command, cwd); Claude Code sets no per-parameter env vars.
 #       Gates every `bd close|done` in command position: after ; && || |
-#       newline or a paren, behind VAR=, env, rtk, command, time, eval, a
-#       reserved word (! { if then elif else while until do), or inside
-#       bash|sh -c "...". Unquoted redirections, backslash-newlines and #
-#       comments are dropped first; none of them reach bd as arguments. The
-#       type lookup and --reason-file follow the JSON cwd, any cd/pushd in the
-#       chain, and bd -C. Anything that is not a close passes untouched. A
-#       missing field, an unreadable input or an unparseable line exits 2
-#       (Claude Code's "block, feed stderr back" status). Refused rather than
-#       waved through, because the hook cannot read the reason: `--reason-file -`,
-#       `xargs bd close`, and any
-#       `bd ... close` the walk cannot follow (behind a wrapper it does not
-#       know, e.g. timeout/nice/sudo -u, or inside $(...), backticks or <(...)).
+#       newline or a paren, behind VAR=, env, rtk, command, time, a reserved
+#       word (! { if then elif else while until do), and inside the script
+#       text of eval or bash|sh -c "..." (also -lc, -ec, -c --). Unquoted
+#       redirections, backslash-newlines and # comments are dropped first;
+#       none of them reach bd as arguments. The type lookup and --reason-file
+#       follow the JSON cwd, any cd/pushd in the chain, and bd -C. A missing
+#       field, an unreadable input or an unparseable line exits 2 (Claude
+#       Code's "block, feed stderr back" status).
+#       Also refused, because bd takes no reason there: `bd update <bug>
+#       --status closed`, and `bd batch` with a close line (stdin or -f).
+#       Refused rather than waved through, because the hook cannot read the
+#       reason: `--reason-file -`, `xargs bd close`, and a close the walk
+#       cannot follow: behind a wrapper it does not know (timeout, nice,
+#       sudo -u, find -exec), in a string another program runs (ssh, watch,
+#       su -c, flock, ...), a shell fed on stdin (| sh, bash <<EOF), a
+#       variable command word ($B close), or inside $(...), backticks, <(...)
+#       or an unquoted heredoc body. Each substitution is walked on its own,
+#       so a read-only `$(bd list)` passes and single-quoted text is literal.
 #       -m/--message/--resolution/--comment count as --reason (bd aliases).
-#       Known gaps: a quoted "<<EOF" is read as a heredoc, a `cd` inside a
-#       subshell or behind a failing && is still applied, and `-C` after
-#       --reason-file is applied too late (agent-os-jox1); bd update --status
-#       closed and bd batch are not gated (agent-os-51ua).
+#       Anything else passes untouched.
+#       A --reason-file or bd batch -f path must be literal: one with $VAR,
+#       ${VAR} or a leading ~ is refused, because the hook runs before the
+#       shell expands it (so is a cd or -C to such a path). The hook also
+#       runs before the command, so a reason file the same command writes
+#       does not exist yet.
+#       Known gaps: a quoted "<<EOF" is read as a heredoc and can hide the
+#       next line's close, a `cd` inside a subshell or behind a failing && is
+#       still applied, and `-C` after --reason-file is applied too late
+#       (agent-os-jox1).
 #   check-close-reason.sh --self-test
 #       Runs the fixtures below (files in a temp dir, no tracker needed) and
 #       exits 0 with a tally, 1 naming the control that misbehaved.
@@ -133,16 +145,24 @@ run_check() {
 # (tool_name, tool_input.command, cwd) and sets no per-parameter env vars.
 # This hook used to read $CLAUDE_HOOK_TOOL_PARAMETERS_command, so it never saw
 # a command and passed every close (agent-os-ffy4). The parser below is
-# ported from SpecTacular's check-close-reason.sh (agent-os-fbwg, 655d2041),
-# close path only.
+# ported from SpecTacular's check-close-reason.sh (agent-os-fbwg 655d2041,
+# agent-os-3kjf a5266249), without its beads-MCP arm: no beads MCP server is
+# configured here.
 #
 # It writes NUL-separated records:
 #   REFUSE <message>
-#   CHECK <dir> <id> <reason>
+#   CHECK <close|update> <dir> <id> <reason>
 HOOK_PARSER=$(command cat <<'PY_'
 import json, os, re, shlex, sys
 
+# While a capture is open, records go to it instead of stdout: emits() uses
+# this to ask "would this text close a bead?" without gating it.
+CAPTURE = []
+
 def out(*f):
+    if CAPTURE:
+        CAPTURE[-1].append(f)
+        return
     sys.stdout.write("\0".join(f) + "\0")
 
 def refuse(msg):
@@ -156,52 +176,66 @@ except Exception:
     refuse("close-reason hook: stdin is not the hook's JSON object; refusing rather than guessing")
     sys.exit(0)
 
-if ev.get("tool_name") != "Bash":
-    sys.exit(0)
-cmd = (ev.get("tool_input") or {}).get("command")
-if not isinstance(cmd, str):
-    sys.exit(0)
+tool = str(ev.get("tool_name") or "")
+ti = ev.get("tool_input") or {}
 base = ev.get("cwd") or os.getcwd()
 
+# A path the shell would expand ($VAR, ${VAR}, ~) names a file the hook
+# cannot know: it runs before the shell, and its own environment is not the
+# command's. Tracking assignments was tried (agent-os-9oo5) and two review
+# rounds found 31 ways for the hook to read a complete reason file while bash
+# hands bd an incomplete one, so such a path is refused instead of guessed.
+LITERAL = ("close-reason hook: %s '%s' uses a shell variable or ~, which the hook "
+           "cannot expand (it runs before the shell does). Pass the literal path.")
+
+def expands(t):
+    return "$" in t or t.startswith("~")
+
 def resolve(cur, target):
-    if cur is None:
+    """A literal path joined to the directory, or None when the directory is
+    unknown or the path is one the shell would expand."""
+    if cur is None or expands(target):
         return None
-    t = os.path.expanduser(os.path.expandvars(target))
-    return os.path.normpath(os.path.join(cur, t))
+    return os.path.normpath(os.path.join(cur, target))
+
+if tool != "Bash":
+    sys.exit(0)
+cmd = ti.get("command")
+if not isinstance(cmd, str):
+    sys.exit(0)
 
 OPS = set(";&|()\n")
-# Words that leave the next word in command position.
-WRAP = {"env", "rtk", "command", "time", "nohup", "exec", "builtin", "sudo", "eval",
+WRAP = {"env", "rtk", "command", "time", "nohup", "exec", "builtin", "sudo",
+        # reserved words that put the next word in command position
         "!", "{", "if", "then", "elif", "else", "while", "until", "do"}
 GLOBAL_VAL = {"--db", "--actor", "--dolt-auto-commit"}
 CLOSE_VAL = GLOBAL_VAL | {"--session"}
+# bd 1.1.2 takes -m/--message/--resolution/--comment as hidden aliases of
+# --reason (not in `bd close --help`; an unknown flag is rejected, these are not).
 REASON_FLAGS = {"-r", "--reason", "-m", "--message", "--resolution", "--comment"}
-SHELLS = ("bash", "sh", "zsh", "dash")
-# A bd close inside a command or process substitution: the walk cannot see
-# into it, so the backstop below refuses it.
-SUBST_CLOSE = re.compile(r"(\$\(|`|<\(|>\()\s*(\S*/)?bd\s(.*\s)?(close|done)(\s|\)|`|$)", re.S)
-HIDDEN = ("close-reason hook: this command runs 'bd close' in a form the hook cannot follow "
-          "(behind a wrapper such as timeout/nice/sudo/xargs, or inside $(...), backticks or <(...)), "
-          "so it cannot check the reason. Run it as a plain 'bd close <id> --reason-file <path>'.")
-
-def hidden_close(seg):
-    """Backstop: an unquoted `bd` word followed later in the same simple
-    command by `close`/`done`. The walk found no bd in command position, so
-    something in front of it (a wrapper the WRAP set does not know, or a
-    wrapper flag that takes a value) hid it. Quoted mentions ("bd close ...")
-    are one token and never match."""
-    for k, w in enumerate(seg):
-        if os.path.basename(w) == "bd" and any(t in ("close", "done") for t in seg[k + 1:]):
-            return True
-    return False
+SHELLS = {"bash", "sh", "zsh", "dash"}
+SHELL_C = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")  # -c, -lc, -ec, -xc
+# Commands that run a string argument as a command line (locally or not).
+RUNNERS = {"ssh", "watch", "script", "su", "runuser", "flock", "parallel", "tmux",
+           "screen", "chroot", "sg"}
+BD_WORD = re.compile(r"(^|[^A-Za-z0-9_.-])bd($|[^A-Za-z0-9_-])")
+CLOSE_TEXT = re.compile(r"(^|[^A-Za-z0-9_.-])bd\s(.*\s)?(close|done|batch|--status=closed|closed)($|[\s'\")`;&|])")
+HIDDEN = ("close-reason hook: this command runs a bd close in a form the hook cannot follow "
+          "(behind a wrapper such as timeout/nice/sudo -u/xargs/ssh/watch, inside $(...), "
+          "backticks or <(...), or fed to a shell on stdin), so it cannot check the reason. "
+          "Run it as a plain bd close <id> --reason-file <path>.")
+UPDATE_VAL = GLOBAL_VAL | {
+    "--acceptance", "--add-label", "--append-notes", "-a", "--assignee", "--await-id",
+    "--body-file", "--defer", "-d", "--description", "--design", "--design-file", "--due",
+    "-e", "--estimate", "--external-ref", "--metadata", "--notes", "--parent", "-p",
+    "--priority", "--remove-label", "--session", "--set-labels", "--set-metadata",
+    "--spec-id", "--title", "-t", "--type", "--unset-metadata"}
 
 def tokenize(s):
     lex = shlex.shlex(s, posix=True, punctuation_chars=";&|()\n")
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
-    # strip_redirs drops comments; shlex's own would swallow the newline and
-    # hide the next line's command inside this one.
-    lex.commenters = ""
+    lex.commenters = ""  # strip_redirs drops comments; shlex's would eat the newline
     return list(lex)
 
 REDIR_OP = re.compile(r"&>>|&>|>>|>\||>&|<&|<>|<<<|>|<")
@@ -210,11 +244,12 @@ WORD_END = " \t\r\n;&|()<>"
 def strip_redirs(s):
     """Drop what the shell never passes to a command as an argument: unquoted
     redirections with their target (2>&1, 2>/dev/null, > out.txt, &>>log,
-    <<< word), backslash-newline, and word-start # comments. Quoted text is
-    copied as is. Heredocs and process substitution are left alone.
-    Unterminated quotes are copied, so shlex still fails on them."""
+    <<< word), backslash-newline, and # comments (up to, not including, the
+    newline). Quoted text is copied as is. Heredocs (<<, <<-) and process
+    substitution <( >( are left alone. Unterminated quotes are copied, so
+    shlex still fails on them."""
     out, i, n = [], 0, len(s)
-    wstart, wplain = 0, True
+    wstart, wplain = 0, True  # where the current word began in out; unquoted so far?
 
     def skip_quoted(j):
         q = s[j]
@@ -266,16 +301,119 @@ def strip_redirs(s):
 
 def strip_heredocs(s):
     """Drop here-document bodies: they are data, not shell words, and an
-    apostrophe in one would make shlex fail. Unterminated -> unchanged."""
-    lines, kept, pending = s.split("\n"), [], []
+    apostrophe in one would make shlex fail. Unterminated -> unchanged.
+    Returns (text, live): live holds the bodies of unquoted-delimiter heredocs,
+    where the shell still expands $(...) and backticks."""
+    lines, kept, pending, live, body = s.split("\n"), [], [], [], []
     for line in lines:
         if pending:
-            if line.lstrip("\t") == pending[0]:
+            delim, quoted = pending[0]
+            if line.lstrip("\t") == delim:
                 pending.pop(0)
+                if not quoted:
+                    live.append("\n".join(body))
+                body = []
+            else:
+                body.append(line)
             continue
         kept.append(line)
-        pending += [m.group(3) for m in re.finditer(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2", line)]
-    return s if pending else "\n".join(kept)
+        pending += [(m.group(3), bool(m.group(2))) for m in re.finditer(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2", line)]
+    return (s, []) if pending else ("\n".join(kept), live)
+
+def close_paren(s, j):
+    """Index of the ')' that closes a '(' opened just before s[j], or len(s).
+    Quotes and backslashes inside are skipped. One forward pass: linear."""
+    n, depth = len(s), 1
+    while j < n:
+        c = s[j]
+        if c == "\\":
+            j += 2; continue
+        if c == "'":
+            k = s.find("'", j + 1)
+            j = n if k < 0 else k + 1; continue
+        if c == '"':
+            j += 1
+            while j < n and s[j] != '"':
+                j += 2 if s[j] == "\\" else 1
+            j += 1; continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return n
+
+def substitutions(s, quotes=True):
+    """The text inside each outermost $(...), `...`, <(...) and >(...) of s.
+    Single-quoted text is literal to the shell and is skipped (quotes=False
+    for a heredoc body, where quotes are literal and do not protect)."""
+    res, i, n, dq = [], 0, len(s), False
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            i += 2; continue
+        if quotes and c == "'" and not dq:
+            k = s.find("'", i + 1)
+            i = n if k < 0 else k + 1; continue
+        if quotes and c == '"':
+            dq = not dq; i += 1; continue
+        if c == "`":
+            j = i + 1
+            while j < n and s[j] != "`":
+                j += 2 if s[j] == "\\" else 1
+            res.append(s[i + 1:j]); i = j + 1; continue
+        if s[i + 1:i + 2] == "(" and (c == "$" or c in "<>" and not dq):
+            j = close_paren(s, i + 2)
+            res.append(s[i + 2:j]); i = j + 1; continue
+        i += 1
+    return res
+
+def emits(s, cur, depth):
+    """Would walking s gate (or refuse) anything? Runs the walk into a capture,
+    so nothing is emitted. Text with no bd word is not walked at all."""
+    if not BD_WORD.search(s):
+        return False
+    if depth > 4:
+        return True  # nested too deep to follow: fail closed
+    CAPTURE.append([])
+    try:
+        walk(s, cur, depth)
+    finally:
+        recs = CAPTURE.pop()
+    return bool(recs)
+
+def bd_closes(rest):
+    """The words after a bd word ask for a close: close/done/batch, or an
+    update to status closed."""
+    return any(t in ("close", "done", "batch") for t in rest) or (
+        "update" in rest and any(t.endswith("closed") for t in rest))
+
+def hidden(seg, cur, depth):
+    """Backstop for a simple command whose command word is not bd: is a bd
+    close hiding in it? A bare bd word followed by close/done (the walk found
+    no bd in command position, so a wrapper it does not know, or a wrapper
+    flag's value, hid it: timeout 5, nice -n 5, sudo -u x, xargs -n 1, find
+    -exec, ssh host); a shell -c string behind such a wrapper; a string handed
+    to a command runner (watch, ssh, script -c, su -c, ...); or a close run
+    through a variable ($B close). Quoted mentions ("bd close ...") are one
+    word, so echo/git/grep mentions do not match."""
+    if seg[0].startswith("$") and bd_closes(seg[1:]):
+        return True
+    for k, w in enumerate(seg):
+        wb = os.path.basename(w)
+        if wb == "bd" and bd_closes(seg[k + 1:]):
+            return True
+        if wb in SHELLS:
+            m = next((n for n, a in enumerate(seg[k + 1:], k + 1) if SHELL_C.match(a)), None)
+            if m is not None:
+                rest = [a for a in seg[m + 1:] if a != "--"]
+                if rest and emits(rest[0], cur, depth + 1):
+                    return True
+    if os.path.basename(seg[0]) in RUNNERS:
+        return any(emits(w, cur, depth + 1) for w in seg[1:])
+    return False
 
 def segments(toks):
     seg = []
@@ -311,9 +449,6 @@ def bd_close(d, args):
             continue
         if a in ("-h", "--help"):
             return
-        # bd 1.1.2 also takes -m/--message/--resolution/--comment as hidden
-        # aliases of --reason (reviewer finding, agent-os-ffy4); an unknown
-        # one would make bd itself fail, so treating them as reasons is safe.
         if a in REASON_FLAGS:
             reasons.append(args[j + 1] if j + 1 < len(args) else ""); j += 2; continue
         if "=" in a and a.split("=", 1)[0] in REASON_FLAGS:
@@ -326,14 +461,25 @@ def bd_close(d, args):
             else:
                 p = args[j + 1] if j + 1 < len(args) else ""; j += 2
             if p == "-":
-                refuse("close-reason hook: --reason-file - (stdin) cannot be read by a hook; write the reason to a file or pass --reason")
+                refuse("close-reason hook: --reason-file - (stdin) cannot be read by a hook; write the reason to a file and pass its path")
                 return
-            fp = resolve(d, p) if d else None
+            if expands(p):
+                refuse(LITERAL % ("--reason-file", p))
+                return
+            if d is None:
+                refuse("close-reason hook: can't tell which directory this bd close runs in "
+                       "(cd -, or cd/-C to a path the shell would expand), so --reason-file '%s' "
+                       "cannot be found. Use a literal directory or an absolute reason-file path." % p)
+                return
+            fp = resolve(d, p)
             try:
                 with open(fp) as fh:
                     reasons.append(fh.read())
             except Exception:
-                refuse("close-reason hook: --reason-file '%s' is not readable (resolved to %s)" % (p, fp))
+                refuse("close-reason hook: --reason-file '%s' is not readable (resolved to %s). "
+                       "The hook runs BEFORE the command, so a file this same command creates "
+                       "(cat > f <<EOF ... bd close --reason-file f) does not exist yet: write the "
+                       "file in an earlier call." % (p, fp))
                 return
             continue
         if a in CLOSE_VAL:
@@ -344,17 +490,63 @@ def bd_close(d, args):
     if not ids:
         refuse("close-reason hook: 'bd close' with no id closes the last-touched bead; name the id so its type and reason can be checked")
         return
-    # Reasons map positionally, one-for-all when a single reason is given.
     for n, i in enumerate(ids):
         reason = reasons[n] if len(reasons) > 1 and n < len(reasons) else (reasons[0] if len(reasons) == 1 else "")
-        out("CHECK", d or "", i, reason)
+        out("CHECK", "close", d or "", i, reason)
+
+def bd_update(d, args):
+    ids, status = [], ""
+    j = 0
+    while j < len(args):
+        a = args[j]
+        r = take_dir(args, j, d)
+        if r:
+            j, d = r
+            continue
+        if a in ("-s", "--status"):
+            status = args[j + 1] if j + 1 < len(args) else ""; j += 2; continue
+        if a.startswith("--status="):
+            status = a.split("=", 1)[1]; j += 1; continue
+        if a.startswith("-s") and not a.startswith("--") and len(a) > 2:
+            status = a[2:].lstrip("="); j += 1; continue
+        if "=" in a and a.startswith("-") and a.split("=", 1)[0] in UPDATE_VAL:
+            j += 1; continue
+        if a in UPDATE_VAL:
+            j += 2; continue
+        if a.startswith("-"):
+            j += 1; continue
+        ids.append(a); j += 1
+    if status.lower() != "closed":
+        return
+    if not ids:
+        refuse("close-reason hook: 'bd update --status closed' with no id; name the id and close it with bd close --reason-file")
+    for i in ids:
+        out("CHECK", "update", d or "", i, "")
+
+def bd_batch(d, args, raw):
+    text = raw
+    for j, a in enumerate(args):
+        if a in ("-f", "--file") and j + 1 < len(args):
+            if expands(args[j + 1]):
+                refuse(LITERAL % ("bd batch -f", args[j + 1]))
+                return
+            try:
+                with open(resolve(d, args[j + 1])) as fh:
+                    text = fh.read()
+            except Exception:
+                refuse("close-reason hook: bd batch file '%s' is not readable; refusing" % args[j + 1])
+                return
+    if re.search(r"(?m)^\s*close\s+\S", text) or re.search(r"status\s*=\s*closed", text):
+        refuse("close-reason hook: bd batch closes beads without a reason the hook can check; close each with 'bd close <id> --reason-file <path>'")
 
 def walk(s, cur, depth=0):
-    flat = strip_redirs(strip_heredocs(s))
-    # On the text, not the tokens: shlex splits `bd into its own word. A
-    # single-quoted mention of $(bd close ...) is refused too; that costs a
-    # rephrase, where missing a real one would pass a bad close.
-    if SUBST_CLOSE.search(flat):
+    text, live = strip_heredocs(s)
+    flat = strip_redirs(text)
+    # A close inside $(...), backticks or <(...) runs, but not where the walk
+    # can gate it: refuse it. Each span is walked into a capture, so
+    # `for i in $(bd list)` and `x=$(bd show X)` are not refused.
+    spans = substitutions(flat) + [x for b in live for x in substitutions(b, quotes=False)]
+    if any(emits(x, cur, depth + 1) for x in spans):
         refuse(HIDDEN)
         return cur
     try:
@@ -381,18 +573,27 @@ def walk(s, cur, depth=0):
             tgt = args[0] if args else "~"
             cur = None if tgt == "-" else resolve(cur, tgt)
             continue
+        if b == "eval":
+            # eval joins its words and parses the result as a command line.
+            if depth < 3:
+                walk(" ".join(args), cur, depth + 1)
+            elif BD_WORD.search(" ".join(args)):
+                refuse("close-reason hook: eval nested too deep to follow; refusing rather than guessing")
+            continue
         if b in SHELLS:
-            # -c, and combined short flags carrying it (-lc, -ec, -xc).
-            k = next((n for n, a in enumerate(args) if re.match(r"^-[A-Za-z]*c[A-Za-z]*$", a)), None)
+            k = next((n for n, a in enumerate(args) if SHELL_C.match(a)), None)
             if k is not None:
                 rest = [a for a in args[k + 1:] if a != "--"]
                 if rest and depth < 3:
                     walk(rest[0], cur, depth + 1)
-                elif rest:
+                elif rest and BD_WORD.search(rest[0]):
                     refuse("close-reason hook: shell -c nested too deep to follow; refusing rather than guessing")
-                continue
+            elif not [a for a in args if not a.startswith(("-", "<<"))] and CLOSE_TEXT.search(s):
+                # No -c and no script: the shell runs its stdin (| sh, bash <<EOF).
+                refuse(HIDDEN)
+            continue
         if b != "bd":
-            if hidden_close(seg):
+            if hidden(seg[i:], cur, depth):
                 refuse(HIDDEN)
             continue
         d, j, sub = cur, 0, None
@@ -408,12 +609,15 @@ def walk(s, cur, depth=0):
                 j += 1; continue
             sub = a; j += 1
             break
-        if sub not in ("close", "done"):
-            continue
-        if xargs:
+        rest = args[j:]
+        if xargs and sub in ("close", "done", "update"):
             refuse("close-reason hook: 'xargs bd %s' hides the ids from the hook; name each id" % sub)
-        else:
-            bd_close(d, args[j:])
+        elif sub in ("close", "done"):
+            bd_close(d, rest)
+        elif sub == "update":
+            bd_update(d, rest)
+        elif sub == "batch":
+            bd_batch(d, rest, s)
     return cur
 
 if re.search(r"(^|[^A-Za-z0-9_.-])bd($|[^A-Za-z0-9_-])", cmd):
@@ -422,7 +626,7 @@ PY_
 )
 
 hook_mode() {
-  local rc=0 dir id reason type
+  local rc=0 kind dir id reason type
   local -a recs=()
   # Globals on purpose: an EXIT trap runs after this function's locals are gone.
   local input; input=$(command cat)
@@ -439,12 +643,21 @@ hook_mode() {
     case "${recs[$i]}" in
       REFUSE) echo "${recs[$((i+1))]}" >&2; rc=2; i=$((i+2)) ;;
       CHECK)
-        dir=${recs[$((i+1))]}; id=${recs[$((i+2))]}; reason=${recs[$((i+3))]:-}
-        i=$((i+4))
+        kind=${recs[$((i+1))]}; dir=${recs[$((i+2))]}; id=${recs[$((i+3))]}; reason=${recs[$((i+4))]:-}
+        i=$((i+5))
         if [ -z "$dir" ]; then
-          echo "close-reason hook: can't tell which directory 'bd close ${id}' runs in (cd -?); refusing" >&2; rc=2; continue
+          echo "close-reason hook: can't tell which directory 'bd ${kind} ${id}' runs in (cd -?); refusing" >&2; rc=2; continue
         fi
         if ! type=$(bead_type "$id" "$dir"); then rc=2; continue; fi
+        if [ "$kind" = update ]; then
+          if [ "$type" = bug ]; then
+            echo "close-reason hook: refusing 'bd update ${id} --status closed': a bug bead needs a close reason, and bd update has none. Use: bd close ${id} --reason-file <path>" >&2
+            rc=2
+          else
+            echo "close-reason: not a bug bead (type: ${type}); status change allowed"
+          fi
+          continue
+        fi
         command printf '%s' "$reason" > "$REASON_TMP"
         if ! check_reason "$type" "$REASON_TMP"; then
           echo "close-reason hook: refusing 'bd close ${id}'" >&2; rc=2
@@ -492,7 +705,7 @@ hook_case() {
 # hook_raw <name> <want> <stdin> [want_msg] : for input that is not a Bash call.
 hook_raw() {
   local name=$1 want=$2 input=$3 want_msg=${4:-} out rc
-  out=$(command printf '%s' "$input" | PATH="$ST_DIR/bin:$PATH" bash "$0" --hook 2>&1) && rc=0 || rc=$?
+  out=$(command printf '%s' "$input" | ST_ENV_9OO5="$ST_DIR" HOME="$ST_DIR" PATH="$ST_DIR/bin:$PATH" bash "$0" --hook 2>&1) && rc=0 || rc=$?
   ST_RUN=$((ST_RUN + 1))
   if [ "$rc" = "$want" ]; then
     if [ -z "$want_msg" ] || command printf '%s\n' "$out" | command grep -qE "$want_msg"; then return 0; fi
@@ -677,6 +890,77 @@ bd close t-bug-1 -r fixed"                                                      
   hook_case shell-lc-bad              2 "bash -lc 'bd close t-bug-1 -r fixed'"            "$ALL"
   hook_case shell-lc-good             0 "bash -lc 'bd close t-bug-1 $G'"
   hook_case shell-c-dashdash-bad      2 "sh -c -- 'bd close t-bug-1 -r fixed'"            "$ALL"
+  # --- substitutions (agent-os-9oo5): a bd close INSIDE one is refused; a
+  # read-only bd inside one, or a single-quoted mention, is not.
+  hook_case subst-for-bd-list         0 "for i in \$(bd list --json); do echo \$i; done"
+  hook_case subst-bd-show-done        0 "x=\$(bd show t-bug-1); echo done"
+  hook_case subst-sq-mention          0 "echo '\$(bd close t-bug-1 -r fixed)'"
+  hook_case subst-sq-commit-msg       0 "git commit -m 'teach \`bd close\` to refuse'"
+  hook_case subst-dq-commit-msg       2 "git commit -m \"teach \`bd close\` to refuse\""    "$H"
+  hook_case subst-nested              2 "echo \"\$(echo \$(bd close t-bug-1 -r fixed))\""   "$H"
+  hook_case subst-procsub             2 "cat <(bd close t-bug-1 -r fixed)"                 "$H"
+  hook_case subst-heredoc-live        2 "cat <<EOF
+\$(bd close t-bug-1 -r fixed)
+EOF"                                                                                         "$H"
+  hook_case subst-heredoc-quoted      0 "cat <<'EOF'
+\$(bd close t-bug-1 -r fixed)
+EOF"
+  # --- a close in script text another program runs (agent-os-vmhm)
+  hook_case wrap-timeout-bash-c       2 "timeout 5 bash -c 'bd close t-bug-1 -r fixed'"   "$H"
+  hook_case wrap-timeout-bash-show    0 "timeout 5 bash -c 'bd show t-bug-1'"
+  hook_case eval-quoted-bad           2 "eval 'bd close t-bug-1 -r fixed'"                "$ALL"
+  hook_case eval-quoted-good          0 "eval 'bd close t-bug-1 $G'"
+  hook_case wrap-ssh-quoted           2 "ssh host 'bd close t-bug-1 -r fixed'"            "$H"
+  hook_case wrap-watch-list           0 "watch -n 5 'bd list'"
+  hook_case wrap-su-c                 2 "su -c 'bd close t-bug-1 -r fixed' someone"       "$H"
+  hook_case wrap-find-exec            2 "find . -exec bd close t-bug-1 -r fixed \\;"      "$H"
+  hook_case var-cmd-word-close        2 "B=bd; \$B close t-bug-1 -r fixed"                "$H"
+  hook_case var-cmd-word-show         0 "B=bd; \$B show t-bug-1"
+  hook_case pipe-to-sh                2 "echo 'bd close t-bug-1 -r fixed' | sh"           "$H"
+  hook_case pipe-to-sh-no-close       0 "echo 'bd show t-bug-1' | sh"
+  hook_case heredoc-to-bash           2 "bash <<'EOF'
+bd close t-bug-1 -r fixed
+EOF"                                                                                         "$H"
+  hook_case heredoc-to-bash-show      0 "bash <<'EOF'
+bd show t-bug-1
+EOF"
+  # --- bd update --status closed and bd batch (agent-os-51ua): bd has no
+  # reason on either path, so a bug bead is refused there.
+  hook_case update-closed-bug         2 "bd update t-bug-1 --status closed"               'bd update has none'
+  hook_case update-eq-closed-bug      2 "bd update t-bug-1 --status=closed"               'bd update has none'
+  hook_case update-s-closed-bug       2 "bd update t-bug-1 -s closed --notes x"           'bd update has none'
+  hook_case update-closed-task        0 "bd update t-task-1 --status closed"              'status change allowed'
+  hook_case update-inprogress-bug     0 "bd update t-bug-1 --status in_progress --title 'x'"
+  hook_case update-closed-wrapped     2 "timeout 5 bd update t-bug-1 --status closed"     "$H"
+  hook_case batch-close               2 "bd batch <<'EOF'
+close t-bug-1
+EOF"                                                                                         'bd batch closes'
+  hook_case batch-create-only         0 "bd batch <<'EOF'
+create --title x
+EOF"
+  command printf 'close t-bug-1\n' > "$ST_DIR/batch-close.txt"
+  command printf 'create --title x\n' > "$ST_DIR/batch-create.txt"
+  hook_case batch-file-close          2 "bd batch -f batch-close.txt"                     'bd batch closes'
+  hook_case batch-file-create         0 "bd batch -f batch-create.txt"
+  # --- a path the shell would expand is refused, not guessed (agent-os-9oo5).
+  # The hook runs before the shell, so it cannot know what $SP or ~ will be.
+  # Two review rounds of tracking assignments found 31 ways for the hook to
+  # read a complete file while bash hands bd an incomplete one. Each control
+  # names a COMPLETE file, so a hook that expands the path exits 0.
+  hook_case var-path-refused          2 "SP=$ST_DIR; bd close t-bug-1 --reason-file \$SP/complete.txt"   'literal path'
+  hook_case var-braces-refused        2 "export SP=$ST_DIR && bd close t-bug-1 --reason-file \${SP}/complete.txt" 'literal path'
+  hook_case var-hook-env-refused      2 "bd close t-bug-1 --reason-file \$ST_ENV_9OO5/complete.txt"      'literal path'
+  hook_case var-reason-file-eq        2 "SP=$ST_DIR; bd close t-bug-1 --reason-file=\$SP/complete.txt"   'literal path'
+  hook_case tilde-refused             2 "bd close t-bug-1 --reason-file ~/complete.txt"                 'literal path'
+  hook_case var-batch-file-refused    2 "SP=$ST_DIR; bd batch -f \$SP/batch-create.txt"                'literal path'
+  hook_case var-dash-C-refused        2 "SP=$ST_DIR; bd -C \$SP close t-bug-1 --reason-file complete.txt" 'which directory'
+  hook_case var-cd-refused            2 "cd \$ST_ENV_9OO5 && bd close t-bug-1 --reason-file complete.txt" 'which directory'
+  hook_case literal-abs-path-good     0 "bd close t-bug-1 --reason-file $ST_DIR/complete.txt"
+  hook_case same-call-file-refused    2 "printf x > new-9oo5.txt && bd close t-bug-1 --reason-file new-9oo5.txt" 'runs BEFORE the command'
+  # --- an unparseable line that mentions bd is refused: shlex cannot read
+  # $'...' quoting, and a spelling like bd clos"e" hides the close from any
+  # text pattern (review of agent-os-9oo5, OBSERVED fail-open when gated)
+  hook_case unparseable-ansi-c-close  2 "bd clos\"e\" t-bug-1 -r \$'it\\'s fixed'"      'could not parse'
   # --- a mention of bd close that is not a call stays ungated
   hook_case grep-mention              0 "command grep -rn 'bd close' scripts"
   hook_case wrapper-no-close          0 "timeout 5 bd show t-bug-1"
