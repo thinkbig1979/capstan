@@ -39,7 +39,7 @@ type Stack struct {
 	EnvFile     string      `json:"envFile"`
 	ProjectName string      `json:"projectName"`
 	Status      string      `json:"status"`
-	Containers  []Container `json:"containers" tstype:"Container[] | null"`
+	Containers  []Container `json:"containers"`
 	IsGitRepo   bool        `json:"isGitRepo"`
 	GitBranch   string      `json:"gitBranch"`
 	GitCommit   string      `json:"gitCommit"`
@@ -149,7 +149,7 @@ type DiffResult struct {
 	// (agent-os-apmw).
 	Commit GitCommit `json:"commit"`
 	Diff   string    `json:"diff"`
-	Files  []string  `json:"files" tstype:"string[] | null"`
+	Files  []string  `json:"files"`
 }
 
 type DashboardContainerInfo struct {
@@ -200,7 +200,7 @@ type DockerNetwork struct {
 	Scope      string   `json:"scope"`
 	Internal   bool     `json:"internal"`
 	Containers int      `json:"containers"`
-	Labels     []string `json:"labels" tstype:"string[] | null"`
+	Labels     []string `json:"labels"`
 	Created    string   `json:"created"`
 	Stack      string   `json:"stack"`
 }
@@ -393,8 +393,8 @@ type BackupSnapshot struct {
 	ShortID   string   `json:"shortId"`
 	Time      string   `json:"time"`
 	Hostname  string   `json:"hostname"`
-	Tags      []string `json:"tags" tstype:"string[] | null"`
-	Paths     []string `json:"paths" tstype:"string[] | null"`
+	Tags      []string `json:"tags"`
+	Paths     []string `json:"paths"`
 	SizeBytes int64    `json:"sizeBytes,omitempty"`
 }
 

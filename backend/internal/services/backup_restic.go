@@ -629,14 +629,23 @@ func (m *ResticManager) ListSnapshots(ctx context.Context, tag string, limit int
 			ShortID:  s.ShortID,
 			Time:     s.Time,
 			Hostname: s.Host,
-			Tags:     s.Tags,
-			Paths:    s.Paths,
+			Tags:     emptyIfNil(s.Tags),
+			Paths:    emptyIfNil(s.Paths),
 		}
 		if s.Summary != nil {
 			result[i].SizeBytes = s.Summary.TotalBytesProcessed
 		}
 	}
 	return result, nil
+}
+
+// emptyIfNil keeps a key restic omitted (it drops "tags" for every untagged
+// snapshot) on the wire as [] rather than null (agent-os-e5pr).
+func emptyIfNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // RestorePreview returns the file listing of a snapshot via `restic ls`.
