@@ -129,7 +129,7 @@ describe('useUpdateJobStream — connecting', () => {
 })
 
 describe('useUpdateJobStream — frames', () => {
-  // The shape handlers.wsJobFrame's snapshot carries (services.Job). This was
+  // The shape handlers.jobSnapshotFrame carries (services.Job). This was
   // {id, status: 'running', lines} before agent-os-r4kf: 'running' is not a
   // services.Status and Go never omits the other fields, so the frame
   // validator rightly rejects that fixture.
