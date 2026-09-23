@@ -12,6 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// networkListBody is the fake daemon's GET /networks answer: the unlabelled
+// default bridge, then one compose-labelled network.
+const networkListBody = `[
+	{"Id":"bridge-id","Name":"bridge","Driver":"bridge","Scope":"local"},
+	{"Id":"app-id","Name":"app_default","Driver":"bridge","Scope":"local",
+	 "Labels":{"com.docker.compose.project":"app"}}
+]`
+
 // TestWireNullability_DockerNetworkLabels drives ListNetworks against a fake
 // Docker API. The default bridge/host/none networks carry no labels, which is
 // the case that used to leave `var labelStrs []string` nil and put
@@ -22,13 +30,9 @@ func TestWireNullability_DockerNetworkLabels(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/networks"):
-			_, _ = w.Write([]byte(`[
-				{"Id":"bridge-id","Name":"bridge","Driver":"bridge","Scope":"local"},
-				{"Id":"app-id","Name":"app_default","Driver":"bridge","Scope":"local",
-				 "Labels":{"com.docker.compose.project":"app"}}
-			]`))
+			_, _ = w.Write([]byte(networkListBody)) //nolint:errcheck // Write to a httptest stub's ResponseWriter; a failure there is not the behaviour under test.
 		case strings.Contains(r.URL.Path, "/networks/"):
-			_, _ = w.Write([]byte(`{"Id":"x","Containers":{}}`))
+			_, _ = w.Write([]byte(`{"Id":"x","Containers":{}}`)) //nolint:errcheck // Write to a httptest stub's ResponseWriter; a failure there is not the behaviour under test.
 		default:
 			http.NotFound(w, r)
 		}
