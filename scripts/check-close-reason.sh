@@ -48,6 +48,12 @@
 #       so a read-only `$(bd list)` passes and single-quoted text is literal.
 #       -m/--message/--resolution/--comment count as --reason (bd aliases).
 #       Anything else passes untouched.
+#       --reason-file $SP/r.md resolves SP only from a plain `SP=...` (or
+#       `export SP=...`) that the command makes exactly once, that no
+#       builtin rewrites, and whose references are all unquoted; any other
+#       variable stays literal, so the close is refused (a loop variable,
+#       for one). The hook runs before the command, so a reason file the
+#       same command writes does not exist yet.
 #       Known gaps: a quoted "<<EOF" is read as a heredoc and can hide the
 #       next line's close, a `cd` inside a subshell or behind a failing && is
 #       still applied, and `-C` after --reason-file is applied too late
@@ -180,31 +186,80 @@ base = ev.get("cwd") or os.getcwd()
 # named through one is unreadable and a valid close is refused. OBSERVED
 # 2026-09-23: about 30 of 48 refusals when 2,758 past commands from this
 # repo's sessions were replayed through the hook (agent-os-9oo5).
+#
+# A value is used only where bash must read the same file, because a wrong
+# guess can pass a bad reason: an adversary review found 16 fail-opens in a
+# first version that ignored scope (a subshell or branch reassigning it,
+# declare/read/for, a quoted '$SP', a nested bash -c or $(...)). So a name is
+# TRUSTED only when the whole command text assigns it exactly once, no
+# builtin writes it, every reference is unquoted and unescaped, and the
+# assignment and the close are both at the top level of the walk. Anything
+# else stays literal: unreadable, so the close is refused.
 VARS = {}
+DEPTH = [0]
 VAR_REF = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+# Builtins that write a variable without NAME=, each in the form that writes
+# it, so `for f in $SP/*` or `printf '%s' "$SP"` (reads) keep SP trusted.
+WRITERS = [
+    r"(?<![A-Za-z0-9_])(?:for|select)\s+{n}(?![A-Za-z0-9_])",
+    r"(?<![A-Za-z0-9_])printf\s+(?:-\S+\s+)*-v\s*{n}(?![A-Za-z0-9_])",
+    r"(?<![A-Za-z0-9_])(?:declare|typeset|local|readonly|unset|let|read|mapfile|readarray|getopts)\b[^\n;&|]*?(?<![A-Za-z0-9_$]){n}(?![A-Za-z0-9_])",
+]
 
-def expand(t):
-    """$NAME / ${NAME} from VARS, then from the environment. A reference
-    neither knows stays literal, so the path it names is unreadable and the
-    close is refused."""
-    t = VAR_REF.sub(lambda m: VARS.get(m.group(1) or m.group(2), m.group(0)), t)
+def unquoted(t):
+    """t with single-quoted spans and backslash escapes removed (quote-aware)."""
+    out, i, n, dq = [], 0, len(t), False
+    while i < n:
+        c = t[i]
+        if c == "\\":
+            i += 2; continue
+        if c == "'" and not dq:
+            k = t.find("'", i + 1)
+            i = n if k < 0 else k + 1; continue
+        if c == '"':
+            dq = not dq
+        out.append(c); i += 1
+    return "".join(out)
+
+def trusted(name):
+    # Heredoc bodies are data: an apostrophe in one is not a quote, and a
+    # NAME= inside one assigns nothing.
+    raw = strip_heredocs(cmd)[0]
+    ref = r"\$(\{%s\}|%s(?![A-Za-z0-9_]))" % (name, name)
+    if len(re.findall(r"(?<![A-Za-z0-9_$])%s=" % name, raw)) != 1:
+        return False
+    if any(re.search(w.replace("{n}", name), raw) for w in WRITERS):
+        return False
+    return len(re.findall(ref, raw)) == len(re.findall(ref, unquoted(raw)))
+
+def expand(t, top=False):
+    """$NAME / ${NAME} from VARS when trusted and at the top level, then from
+    the environment. A reference neither knows stays literal, so the path it
+    names is unreadable and the close is refused."""
+    if top:
+        t = VAR_REF.sub(lambda m: VARS.get(m.group(1) or m.group(2), m.group(0))
+                        if (m.group(1) or m.group(2)) in VARS and trusted(m.group(1) or m.group(2))
+                        else m.group(0), t)
     return os.path.expandvars(t)
 
 def resolve(cur, target):
+    # Expanding at any depth is safe: inside an eval or a double-quoted
+    # bash -c the outer shell has already expanded an unquoted $SP to the
+    # same value, and a single-quoted one is untrusted.
     if cur is None:
         return None
-    return os.path.normpath(os.path.join(cur, os.path.expanduser(expand(target))))
+    return os.path.normpath(os.path.join(cur, os.path.expanduser(expand(target, True))))
 
 def assigns(seg):
     """Record a simple command made only of NAME=value words (optionally
-    behind export). A value built by $(...) stays literal text, which names
-    no readable file."""
+    behind export), at the top level of the walk only."""
     words = seg[1:] if seg and seg[0] == "export" else seg
     if not words or not all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w) for w in words):
         return False
-    for w in words:
-        k, v = w.split("=", 1)
-        VARS[k] = expand(v)
+    if DEPTH[-1] == 0 and not CAPTURE:
+        for w in words:
+            k, v = w.split("=", 1)
+            VARS[k] = expand(v, True)
     return True
 
 if tool != "Bash":
@@ -538,6 +593,13 @@ def bd_batch(d, args, raw):
         refuse("close-reason hook: bd batch closes beads without a reason the hook can check; close each with 'bd close <id> --reason-file <path>'")
 
 def walk(s, cur, depth=0):
+    DEPTH.append(depth)
+    try:
+        return walk_at(s, cur, depth)
+    finally:
+        DEPTH.pop()
+
+def walk_at(s, cur, depth):
     text, live = strip_heredocs(s)
     flat = strip_redirs(text)
     # A close inside $(...), backticks or <(...) runs, but not where the walk
@@ -550,11 +612,7 @@ def walk(s, cur, depth=0):
     try:
         toks = tokenize(flat)
     except ValueError:
-        # Only when the text could be a close: bash rejects an unbalanced
-        # line anyway, and refusing a `bd create` over it hides bash's own
-        # error behind this hook's (2 of 48 replay refusals, agent-os-9oo5).
-        if CLOSE_TEXT.search(s):
-            refuse("close-reason hook: could not parse the command line (unbalanced quotes?); refusing rather than guessing")
+        refuse("close-reason hook: could not parse the command line (unbalanced quotes?); refusing rather than guessing")
         return cur
     for seg in segments(toks):
         if assigns(seg):
@@ -954,8 +1012,32 @@ EOF"
   hook_case var-unset-refused         2 "bd close t-bug-1 --reason-file \$NOPE_UNSET_9OO5/complete.txt"     'not readable'
   hook_case var-subst-value-refused   2 "SP=\$(pwd); bd close t-bug-1 --reason-file \$SP/complete.txt"      'not readable'
   hook_case same-call-file-refused    2 "printf x > new-9oo5.txt && bd close t-bug-1 --reason-file new-9oo5.txt" 'runs BEFORE the command'
-  # --- an unparseable line is refused only when it could be a close
-  hook_case unparseable-no-close      0 "bd create --title \"unterminated"
+  # --- an unparseable line that mentions bd is refused: shlex cannot read
+  # $'...' quoting, and a spelling like bd clos"e" hides the close from any
+  # text pattern (review of agent-os-9oo5, OBSERVED fail-open when gated)
+  hook_case unparseable-ansi-c-close  2 "bd clos\"e\" t-bug-1 -r \$'it\\'s fixed'"      'could not parse'
+  # --- a variable is trusted only when bash must read the same file the hook
+  # does: one plain top-level assignment, unquoted references, and not inside
+  # a nested shell or substitution. ./r.txt is incomplete, sub/r.txt complete,
+  # so a hook that believes the wrong value exits 0 (review of agent-os-9oo5).
+  command cp "$ST_DIR/complete.txt" "$ST_DIR/rX.txt"
+  hook_case var-plain-good            0 "SP=sub; bd close t-bug-1 --reason-file \$SP/r.txt"
+  hook_case var-subshell-leak         2 "SP=.; (SP=sub); bd close t-bug-1 --reason-file \$SP/r.txt"        'not readable'
+  hook_case var-branch-leak           2 "SP=.; false && SP=sub; bd close t-bug-1 --reason-file \$SP/r.txt" 'not readable'
+  hook_case var-declare-reassign      2 "SP=sub; declare SP=.; bd close t-bug-1 --reason-file \$SP/r.txt"  'not readable'
+  hook_case var-read-reassign         2 "SP=sub; read SP <<< .; bd close t-bug-1 --reason-file \$SP/r.txt" 'not readable'
+  hook_case var-for-reassign          2 "SP=sub; for SP in .; do :; done; bd close t-bug-1 --reason-file \$SP/r.txt" 'not readable'
+  hook_case var-single-quoted         2 "SP=sub; bd close t-bug-1 --reason-file '\$SP'/r.txt"             'not readable'
+  hook_case var-escaped               2 "SP=sub; bd close t-bug-1 --reason-file \\\$SP/r.txt"             'not readable'
+  hook_case var-into-bash-c           2 "SP=X; bash -c 'bd close t-bug-1 --reason-file r\$SP.txt'"        'not readable'
+  hook_case var-backwards-from-subst  2 "bd close t-bug-1 --reason-file r\$SP.txt; x=\$(SP=X; bd list)"   'not readable'
+  hook_case var-printf-v-reassign     2 "SP=sub; printf -v SP .; bd close t-bug-1 --reason-file \$SP/r.txt" 'not readable'
+  hook_case var-read-only-uses-good   0 "SP=sub; for f in \$SP/*; do :; done; printf '%s' \"\$SP\"; bd close t-bug-1 --reason-file \$SP/r.txt"
+  hook_case var-heredoc-apostrophe-good 0 "SP=sub; cat > /dev/null <<'EOF'
+it's data, and SP=. here assigns nothing
+EOF
+bd close t-bug-1 --reason-file \$SP/r.txt"
+  hook_case var-unknown-stays-literal 2 "bd close t-bug-1 --reason-file complete\$NOPE_9OO5.txt"          'not readable'
   # --- a mention of bd close that is not a call stays ungated
   hook_case grep-mention              0 "command grep -rn 'bd close' scripts"
   hook_case wrapper-no-close          0 "timeout 5 bd show t-bug-1"
