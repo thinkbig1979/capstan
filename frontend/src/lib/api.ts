@@ -26,6 +26,7 @@ import type {
   EnvFileResponse,
   GitStatus,
   GitCommit,
+  DiffResult,
   BackupPolicy,
   BackupRun,
   BackupHistoryFilters,
@@ -397,7 +398,7 @@ export const gitApi = {
   },
 
   diff: async (stackId: string, hash: string) => {
-    const response = await apiClient.get<{ commit: string; diff: string }>(`/git/diff/${encodeURIComponent(hash)}?stackId=${encodeURIComponent(stackId)}`)
+    const response = await apiClient.get<DiffResult>(`/git/diff/${encodeURIComponent(hash)}?stackId=${encodeURIComponent(stackId)}`)
     return response.data
   },
 }
