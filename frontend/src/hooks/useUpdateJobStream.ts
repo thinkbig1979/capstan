@@ -41,10 +41,10 @@ interface ErrorFrame {
 type JobStreamFrame = SnapshotFrame | LineFrame | StatusFrame | DoneFrame | ErrorFrame
 
 // ── Frame validation (agent-os-r4kf) ─────────────────────────────────────────
-// Mirrors handlers.wsJobFrame and services.Job / services.LogLine. Every
-// omitempty field the frame union declares required (job, line, status, error)
-// is always populated by the Go writers in update_jobs_ws.go, so requiring it
-// rejects no frame the server sends.
+// Mirrors the per-type frame structs in handlers/update_jobs_ws.go and
+// services.Job / services.LogLine. Every payload the frame union declares
+// required (job, line, status, error) is declared there without omitempty, so
+// requiring it rejects no frame the server sends (agent-os-onmw).
 
 export const JOB_STATUSES = ['queued', 'pulling', 'recreating', 'success', 'error'] as const satisfies readonly UpdateJobStatus[]
 export const JOB_OUTCOMES = ['success', 'no_change', 'failed'] as const satisfies readonly UpdateJobOutcome[]
