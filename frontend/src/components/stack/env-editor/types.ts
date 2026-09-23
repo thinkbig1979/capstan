@@ -1,4 +1,4 @@
-import type { EnvEntry } from '@/types'
+import type { EnvEntryDraft } from '@/types'
 
 /**
  * Entries tagged with a stable synthetic row id, assigned once when a row
@@ -9,7 +9,7 @@ import type { EnvEntry } from '@/types'
  * (logviewer/useLogStream.ts). Never sent to the API — useEnvMutations
  * strips it before the entries array reaches stacksApi.updateEnv().
  */
-export interface EnvEntryRow extends EnvEntry {
+export interface EnvEntryRow extends EnvEntryDraft {
   _rowId: number
 }
 

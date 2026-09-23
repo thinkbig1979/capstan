@@ -64,7 +64,7 @@ import type {
 } from './generated'
 import type {
   BuildCacheEntry,
-  EnvEntry as WireEnvEntry,
+  EnvEntry,
   EnvResponse,
 } from './generated-handlers'
 import type {
@@ -94,6 +94,7 @@ export type {
   DockerImage,
   DockerNetwork,
   DockerVolume,
+  EnvEntry,
   GitCommit,
   GitStatusResult,
   LogResult,
@@ -271,26 +272,23 @@ export interface GitEmptyRepoStatus {
 
 export type GitStatus = GitRepoStatus | GitEmptyRepoStatus | GitNotRepoStatus
 
-/**
- * One line of a stack's env file: generated handlers.EnvEntry
- * (backend/internal/handlers/wire_types.go), with `line` re-loosened.
- *
- * `line` is optional here while Go always sends it. That is a ROLE difference,
- * not an oversight: this type is both the response shape, where `line` is
- * always present and 1-based, and the request/draft shape, where a row added
- * via "Add Entry" legitimately has none until the server parses the saved
- * file (env-editor/types.ts, EnvEntryRow). Optional is therefore the correct
- * declaration for the union of both roles. Requiring it fails `npx tsc -b`
- * at env-editor/useEnvEntryActions.ts (OBSERVED 2026-09-20, agent-os-6wrb).
- */
-export type EnvEntry = Omit<WireEnvEntry, 'line'> & { line?: number }
-
 // narrows handlers.EnvResponse.HasEnvFile, a Go bool, to the literal the
-// present branch always carries, and re-points Entries at EnvEntry above
-export type EnvFilePresent = Omit<EnvResponse, 'hasEnvFile' | 'entries'> & {
-  hasEnvFile: true
-  entries: EnvEntry[]
-}
+// present branch always carries. Entries stays the generated EnvEntry, whose
+// `line` is required: every row on this path comes from parseEnvFile and is
+// 1-based.
+export type EnvFilePresent = Omit<EnvResponse, 'hasEnvFile'> & { hasEnvFile: true }
+
+/**
+ * A REQUEST row for PUT /:id/env, and the editor's draft row
+ * (env-editor/types.ts, EnvEntryRow). Hand-written because it is the caller's
+ * contract, not the server's: a row added via "Add Entry" has no line until
+ * the server parses the saved file. An absent `line` decodes to 0 in Go, and
+ * no server code reads EnvEntry.Line from a request. Derived from the generated EnvEntry so
+ * the field set still follows Go; only `line` is loosened, and only here, so
+ * the response shape above keeps stating that `line` is always present
+ * (agent-os-tuxp).
+ */
+export type EnvEntryDraft = Omit<EnvEntry, 'line'> & { line?: number }
 
 export interface EnvFileAbsent {
   hasEnvFile: false

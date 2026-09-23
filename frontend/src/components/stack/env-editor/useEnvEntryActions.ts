@@ -1,5 +1,5 @@
 import { useState, type Dispatch, type SetStateAction } from 'react'
-import type { EnvEntry } from '@/types'
+import type { EnvEntryDraft } from '@/types'
 import { isSensitiveKey } from './sensitiveKey'
 import type { EnvEntryRow } from './types'
 
@@ -50,7 +50,7 @@ export function useEnvEntryActions({
     setHasUnsavedChanges(true)
   }
 
-  const handleEntryChange = (index: number, field: keyof EnvEntry, value: string | boolean) => {
+  const handleEntryChange = (index: number, field: keyof EnvEntryDraft, value: string | boolean) => {
     const newEntries = [...entries]
     newEntries[index] = { ...newEntries[index], [field]: value }
 

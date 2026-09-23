@@ -3,7 +3,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Eye, EyeOff, Plus, Trash2, Save } from 'lucide-react'
-import type { EnvEntry } from '@/types'
+import type { EnvEntryDraft } from '@/types'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { TableSearch } from '@/components/ui/table-search'
 import { isSensitiveKey } from './sensitiveKey'
@@ -22,7 +22,7 @@ interface EnvTableViewProps {
    */
   visible: boolean
   entries: EnvEntryRow[]
-  onEntryChange: (index: number, field: keyof EnvEntry, value: string | boolean) => void
+  onEntryChange: (index: number, field: keyof EnvEntryDraft, value: string | boolean) => void
   onDeleteEntry: (index: number) => void
   onAddEntry: () => void
   onToggleVisibility: (index: number) => void

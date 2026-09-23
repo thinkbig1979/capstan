@@ -12,9 +12,9 @@ import "time"
 
 // EnvEntry is the wire shape of one line of a stack's env file. It is
 // bidirectional: it is both what GET /:id/env returns (EnvResponse.Entries)
-// and what PUT /:id/env accepts (EnvRequest.Entries), and the editor reuses
-// it client-side as the draft row (frontend/src/components/stack/env-editor/
-// types.ts, EnvEntryRow). Its TypeScript counterpart is generated from this
+// and what PUT /:id/env accepts (EnvRequest.Entries); the editor's draft row
+// is derived from it (EnvEntryDraft in frontend/src/types/index.ts, extended
+// by EnvEntryRow in frontend/src/components/stack/env-editor/types.ts). Its TypeScript counterpart is generated from this
 // file into frontend/src/types/generated-handlers.ts (backend/tygo.yaml) and
 // re-exported by frontend/src/types/index.ts; env_wire_contract_test.go pins
 // the tag choices below on the real encoder.
@@ -29,18 +29,14 @@ import "time"
 // Comment keeps omitempty because TypeScript declares it OPTIONAL
 // (`comment?: boolean`); that pair already agrees.
 //
-// Line carries no omitempty while TypeScript declares it OPTIONAL. That is
-// a ROLE difference, not an oversight: this one type serves both roles.
-// As a RESPONSE, Line is always present and never 0 — parseEnvFile
-// increments lineNum before use, so it is 1-based at every construction
-// site — which is what the non-omitempty tag states. As a REQUEST, a row
-// the editor has just added legitimately has no line yet, so the optional
-// TypeScript declaration is the one correct for the union of both roles.
-// Requiring it there fails `npx tsc -b` at env-editor/useEnvEntryActions.ts
-// (OBSERVED 2026-09-20, agent-os-6wrb: TS2345, "Property 'line' is missing
-// ... but required in type 'EnvEntryRow'"). Tightening it would mean
-// splitting the response shape from the draft shape, which is a change to
-// the editor's own types, not to this contract.
+// Line carries no omitempty because every RESPONSE carries it and it is
+// never 0 there: parseEnvFile increments lineNum before use, so it is 1-based
+// at every construction site on the response path. The generated TypeScript therefore declares
+// `line: number` as required, and that is the response contract. The REQUEST
+// role is stated separately on the frontend, by the hand-written EnvEntryDraft
+// in frontend/src/types/index.ts (the editor's draft row, which has no line
+// until the file is saved and re-parsed); an absent line decodes here as 0
+// and nothing on the request path reads it (agent-os-tuxp).
 type EnvEntry struct {
 	Key       string `json:"key"`
 	Value     string `json:"value"`
