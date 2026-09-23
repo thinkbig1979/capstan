@@ -296,7 +296,8 @@ export const settingsApi = {
       total: number
       page: number
       pageSize: number
-      availableActions: string[]
+      // Omitted when the server could not read them (agent-os-7y0t).
+      availableActions?: string[]
     }>('/settings/audit-log', { params })
     return response.data
   },

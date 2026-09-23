@@ -256,6 +256,31 @@ describe('AuditLogContent — filters', () => {
     )
   })
 
+  // agent-os-7y0t. The server OMITS availableActions when it could not read
+  // them, and sends [] only when there genuinely are none. The filter must not
+  // present the omission as "no action types exist" beside rows that have one.
+  it('says the action types are unavailable when the server could not read them', async () => {
+    mockGetAuditLog.mockResolvedValue(page({ availableActions: undefined }))
+    renderPanel()
+
+    // Precondition: the page itself rendered, so the disclosure below is about
+    // the filter list and not a wholly failed load.
+    expect(await screen.findByText('abcdef12')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Action' })).toBeInTheDocument()
+
+    expect(screen.getByText('Action types are unavailable.')).toBeInTheDocument()
+  })
+
+  it('does not claim the action types are unavailable when the server sent an empty list', async () => {
+    mockGetAuditLog.mockResolvedValue(page({ availableActions: [] }))
+    renderPanel()
+
+    expect(await screen.findByText('abcdef12')).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Action' })).toBeInTheDocument()
+
+    expect(screen.queryByText('Action types are unavailable.')).not.toBeInTheDocument()
+  })
+
   it('maps the "All actions" sentinel back to an empty filter', async () => {
     const user = userEvent.setup()
     renderPanel()

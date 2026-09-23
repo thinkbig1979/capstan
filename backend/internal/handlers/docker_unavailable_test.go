@@ -179,7 +179,12 @@ func TestDashboardHandler_NoDocker_StatsDegradeAndMetricsRefuse(t *testing.T) {
 		var body map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 		assert.Equal(t, float64(1), body["totalStacks"])
-		assert.Equal(t, float64(0), body["runningContainers"])
+		// agent-os-p9e1: with no daemon the Docker-derived keys are omitted,
+		// not reported as 0. This arm used to assert runningContainers == 0,
+		// which pinned the fabricated zero the bead removes.
+		for _, key := range []string{"runningContainers", "totalContainers", "containers", "runningStacks", "stoppedStacks", "diskUsage", "imageDiskUsage"} {
+			assert.NotContains(t, body, key)
+		}
 	})
 
 	t.Run("metrics ws", func(t *testing.T) {

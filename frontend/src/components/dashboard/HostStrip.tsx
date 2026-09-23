@@ -1,6 +1,8 @@
 import { formatBytes } from '@/lib/format'
 import type { DashboardStats } from '@/types'
 
+const UNAVAILABLE = 'unavailable'
+
 export type HostView = 'containers' | 'images' | 'volumes' | 'networks' | 'build-cache'
 
 interface HostStripProps {
@@ -14,27 +16,32 @@ interface HostStripProps {
  * networks, build cache), demoted out of the top tab row per the redesign.
  */
 export function HostStrip({ stats, activeView, onNavigate }: HostStripProps) {
+  // agent-os-p9e1: the server omits the container and disk keys when Docker
+  // could not answer, so an absent value reads "unavailable", never 0.
+  const disk = stats?.diskUsage
+  const diskDetail = (bytes: number | undefined) =>
+    bytes === undefined ? UNAVAILABLE : formatBytes(bytes)
   const links: { view: HostView; label: string; detail?: string }[] = [
     {
       view: 'containers',
       label: 'Containers',
-      detail: stats ? String(stats.totalContainers) : undefined,
+      detail: stats ? (stats.totalContainers === undefined ? UNAVAILABLE : String(stats.totalContainers)) : undefined,
     },
     {
       view: 'images',
       label: 'Images',
-      detail: stats ? formatBytes(stats.diskUsage?.images ?? 0) : undefined,
+      detail: stats ? diskDetail(disk?.images) : undefined,
     },
     {
       view: 'volumes',
       label: 'Volumes',
-      detail: stats ? formatBytes(stats.diskUsage?.volumes ?? 0) : undefined,
+      detail: stats ? diskDetail(disk?.volumes) : undefined,
     },
     { view: 'networks', label: 'Networks' },
     {
       view: 'build-cache',
       label: 'Build cache',
-      detail: stats ? formatBytes(stats.diskUsage?.buildCache ?? 0) : undefined,
+      detail: stats ? diskDetail(disk?.buildCache) : undefined,
     },
   ]
 

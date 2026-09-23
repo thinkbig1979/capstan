@@ -582,6 +582,18 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
     )
   }
 
+  // agent-os-p9e1: the server omits the list when Docker could not answer.
+  // Rendering it as [] would say "0 containers" on a host that has some.
+  if (stats.containers === undefined) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center justify-center py-12">
+          <p className="text-sm text-muted-foreground">The container list is unavailable.</p>
+        </CardContent>
+      </Card>
+    )
+  }
+
   const totalCount = stats.containers?.length || 0
   const filteredCount = filtered.length
 

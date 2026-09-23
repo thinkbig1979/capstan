@@ -163,6 +163,10 @@ function AuditLogTable() {
   }
 
   const totalPages = Math.ceil(data.total / pageSize)
+  // agent-os-7y0t: the server omits availableActions when it could not read
+  // them and sends [] only when there are none, so absence is disclosed rather
+  // than rendered as an empty list.
+  const actionTypesUnavailable = data.availableActions === undefined
   const availableActions = data.availableActions ?? []
 
   return (
@@ -196,6 +200,9 @@ function AuditLogTable() {
               ))}
             </SelectContent>
           </Select>
+          {actionTypesUnavailable && (
+            <p className="text-xs text-muted-foreground">Action types are unavailable.</p>
+          )}
         </div>
         <div className="space-y-1">
           <label htmlFor="audit-from" className="text-xs text-muted-foreground">From</label>

@@ -208,6 +208,12 @@ export function DashboardMetricsTab({
     )
   }
 
+  // agent-os-p9e1: the server omits these keys when Docker could not answer.
+  // runningContainers arrives as a prop already defaulted to 0 by the page, so
+  // the absence is read from stats itself.
+  const hostCountUnavailable = stats.runningContainers === undefined
+  const disk = stats.diskUsage
+
   const cpuColor = getColorForThreshold(aggregates.totalCpuPercent)
   const memColor = getColorForThreshold(aggregates.totalMemPercent)
 
@@ -291,7 +297,7 @@ export function DashboardMetricsTab({
             <CardAction>
               <Badge variant="outline">
                 <Server className="size-3" />
-                {runningContainers} on host
+                {hostCountUnavailable ? 'Host count unavailable' : `${runningContainers} on host`}
               </Badge>
             </CardAction>
           </CardHeader>
@@ -339,7 +345,11 @@ export function DashboardMetricsTab({
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground flex items-center gap-1"><Hash className="h-3 w-3" />Processes</span>
-                <span className="font-medium">{aggregates.totalPids} across {stats.runningContainers} containers</span>
+                <span className="font-medium">
+                  {hostCountUnavailable
+                    ? aggregates.totalPids
+                    : `${aggregates.totalPids} across ${stats.runningContainers} containers`}
+                </span>
               </div>
             </div>
           </CardContent>
@@ -352,26 +362,32 @@ export function DashboardMetricsTab({
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              <div className="text-2xl font-bold">
-                {formatBytes(stats.diskUsage?.total ?? 0)}
-              </div>
+              {disk ? (
+                <div className="text-2xl font-bold">{formatBytes(disk.total)}</div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Disk usage is unavailable.</p>
+              )}
               <div className="text-sm space-y-1.5">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground flex items-center gap-1"><Layers className="h-3 w-3" />Images</span>
-                  <span className="font-medium">{formatBytes(stats.diskUsage?.images ?? 0)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground flex items-center gap-1"><Box className="h-3 w-3" />Containers</span>
-                  <span className="font-medium">{formatBytes(stats.diskUsage?.containers ?? 0)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground flex items-center gap-1"><Database className="h-3 w-3" />Volumes</span>
-                  <span className="font-medium">{formatBytes(stats.diskUsage?.volumes ?? 0)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground flex items-center gap-1"><Archive className="h-3 w-3" />Build Cache</span>
-                  <span className="font-medium">{formatBytes(stats.diskUsage?.buildCache ?? 0)}</span>
-                </div>
+                {disk && (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground flex items-center gap-1"><Layers className="h-3 w-3" />Images</span>
+                      <span className="font-medium">{formatBytes(disk.images)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground flex items-center gap-1"><Box className="h-3 w-3" />Containers</span>
+                      <span className="font-medium">{formatBytes(disk.containers)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground flex items-center gap-1"><Database className="h-3 w-3" />Volumes</span>
+                      <span className="font-medium">{formatBytes(disk.volumes)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground flex items-center gap-1"><Archive className="h-3 w-3" />Build Cache</span>
+                      <span className="font-medium">{formatBytes(disk.buildCache)}</span>
+                    </div>
+                  </>
+                )}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground flex items-center gap-1"><Activity className="h-3 w-3" />Swap</span>
                   <span className="font-medium">{formatBytes(aggregates.totalSwap)}</span>

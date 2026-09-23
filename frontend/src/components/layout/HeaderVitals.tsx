@@ -58,7 +58,10 @@ export function HeaderVitals() {
           />
         </>
       )}
-      {stats && <Vital label="disk" value={formatBytes(stats.diskUsage?.total ?? 0)} />}
+      {/* agent-os-p9e1: diskUsage is omitted when Docker could not report it. */}
+      {stats && (
+        <Vital label="disk" value={stats.diskUsage ? formatBytes(stats.diskUsage.total) : 'unavailable'} />
+      )}
     </div>
   )
 }
