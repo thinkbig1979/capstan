@@ -461,6 +461,15 @@ export function useCheckUpdatesRefresh() {
       // watcher poll / WS event resolves it. scanning:false only happens on the
       // synchronous no-scheduler path, where the scan is already done.
       if (!data.scanning) {
+        // agent-os-oid3: no `updates` key means the server could not read its
+        // cache. Writing this body would replace a populated table with "no
+        // updates" and call the check complete, so re-read instead: a still
+        // broken database answers the GET with a 500, which the tab discloses.
+        if (data.updates === undefined) {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.resources.updates() })
+          resolveUpdateScanError()
+          return
+        }
         queryClient.setQueryData(queryKeys.resources.updates(), data)
         resolveUpdateScanSuccess()
       }

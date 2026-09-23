@@ -48,7 +48,8 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 			logActionFromContext(h.actionLog, c, nil, services.ActionScan, gin.H{"trigger": "manual"})
 
 			cachedUpdates, err := h.db.GetCachedUpdates()
-			if err != nil {
+			cacheReadFailed := err != nil
+			if cacheReadFailed {
 				slog.Error("Failed to get cached updates for refresh response", "error", err)
 				cachedUpdates = nil
 			}
@@ -69,26 +70,39 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 			if updates == nil {
 				updates = []models.ContainerUpdateInfo{}
 			}
-			// Logged and defaulted, NOT refused, unlike the two sibling reads
+			// Logged and degraded, NOT refused, unlike the two sibling reads
 			// further down this function: a background scan has already been
-			// started at :41 and the action already logged, so a 500 here would
+			// started above and the action already logged, so a 500 here would
 			// deny a request whose side effect has happened. This is the same
 			// trade-off GetCachedUpdates makes twenty lines above, for the same
 			// reason. The fault is made diagnosable instead (agent-os-1gqn).
+			//
+			// Degraded means omitted, not zeroed (agent-os-oid3). A failed read
+			// OMITS the keys it would have filled rather than sending their
+			// zero values, so "could not read the cache" never reaches the client as `updates: [], fromCache: false` ("the cache
+			// is empty") and "could not read the last scan time" never reaches
+			// it as `scannedAt: ""` ("never scanned"). Absent, never wrong: the
+			// same convention GetUpdateSettings uses for its stats block
+			// (agent-os-xppj).
 			lastScanAt, err := settingOrFault(h.db, "update_scan_last_run")
-			if err != nil {
+			scannedAtReadFailed := err != nil
+			if scannedAtReadFailed {
 				slog.Error("Failed to read the last scan time for the refresh response", "error", err)
-				lastScanAt = ""
 			}
-			c.JSON(http.StatusAccepted, gin.H{
-				"updates":   updates,
-				"fromCache": len(cachedUpdates) > 0,
-				"scannedAt": lastScanAt,
+			body := gin.H{
 				// Not hardcoded true: on the ErrSchedulerStopping path no scan
 				// was started, and telling the client one is running would have
 				// it poll for a result that is never coming.
 				"scanning": h.scheduler.IsScanning(),
-			})
+			}
+			if !cacheReadFailed {
+				body["updates"] = updates
+				body["fromCache"] = len(cachedUpdates) > 0
+			}
+			if !scannedAtReadFailed {
+				body["scannedAt"] = lastScanAt
+			}
+			c.JSON(http.StatusAccepted, body)
 			return
 		}
 
