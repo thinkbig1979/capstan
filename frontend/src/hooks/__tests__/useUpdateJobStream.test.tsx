@@ -251,6 +251,29 @@ describe('useUpdateJobStream — frame validation (agent-os-r4kf)', () => {
     expect(useUpdateJobStore.getState().jobs['job-1'].lines).toHaveLength(0)
   })
 
+  it('drops the pre-r4kf snapshot fixture, which no Go producer can send', async () => {
+    renderStream('job-1')
+    await openSocket()
+
+    // The `frames` suite's job fixture before agent-os-r4kf: 'running' is not a
+    // services.Status and the other services.Job fields are missing.
+    frame({ type: 'snapshot', job: { id: 'job-1', status: 'running', lines: [] } })
+
+    expect(useUpdateJobStore.getState().jobs['job-1']).toBeUndefined()
+  })
+
+  it("drops the pre-r4kf done fixture, whose outcome 'updated' Go never emits", async () => {
+    renderStream('job-1')
+    await openSocket()
+
+    frame({ type: 'snapshot', job: wireJob })
+    frame({ type: 'done', status: 'success', outcome: 'updated', reason: 'new digest' })
+
+    const stored = useUpdateJobStore.getState().jobs['job-1']
+    expect(stored.status).toBe('pulling')
+    expect(stored.outcome).toBeUndefined()
+  })
+
   it('still stores a well-formed line frame', async () => {
     renderStream('job-1')
     await openSocket()
