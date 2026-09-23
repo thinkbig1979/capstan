@@ -248,20 +248,19 @@ describe('DirectoriesTab — git badges', () => {
     expect(seen.size).toBe(cases.length)
   })
 
-  it('shows the behind-count only when there is something to pull', () => {
-    const { unmount } = renderTab({
-      directories: [dir('/srv/stacks/web', { isGitRepo: true, gitBehind: 0 })],
-      configuredDirs: ['/srv/stacks'],
-    })
-    expect(screen.queryByText('3')).not.toBeInTheDocument()
-    unmount()
-    localStorage.clear()
-
+  // There used to be a behind-count badge beside this one, gated on
+  // dir.gitBehind. No Go shape behind GET /directories or GET
+  // /settings/directories emits gitBehind (only models.Stack does), so it could
+  // not render on any real payload and was removed (agent-os-gbm2). This pins
+  // that the removal took only that badge: a git-backed directory still shows
+  // its branch.
+  it('renders the branch badge for a git-backed directory', () => {
     renderTab({
-      directories: [dir('/srv/stacks/web', { isGitRepo: true, gitBehind: 3 })],
+      directories: [dir('/srv/stacks/web', { isGitRepo: true, gitBranch: 'release' })],
       configuredDirs: ['/srv/stacks'],
     })
-    expect(screen.getByText('3')).toBeInTheDocument()
+
+    expect(screen.getByText('release')).toBeInTheDocument()
   })
 
   it('shows no git badge for a plain directory', () => {
