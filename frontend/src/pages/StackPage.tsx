@@ -359,7 +359,9 @@ export function StackPage() {
   const containerCount = stack.containers?.length ?? 0
   const runningCount = stack.containers?.filter((c) => c.state === 'running').length ?? 0
   const uptime = stackUptime(stack.containers)
-  const canStart = stack.status === 'stopped' || stack.status === 'partial'
+  // 'paused' keeps the Start it had when the API reported an all-paused stack
+  // as 'partial' (agent-os-n97z).
+  const canStart = stack.status === 'stopped' || stack.status === 'partial' || stack.status === 'paused'
   const canStop = stack.status === 'running'
 
   return (
