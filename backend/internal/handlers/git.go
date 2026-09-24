@@ -16,6 +16,7 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
+	"github.com/thinkbig1979/capstan/backend/internal/truth"
 
 	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
@@ -247,6 +248,24 @@ func (h *GitHandler) Pull(c *gin.Context) {
 
 	if pullResult != nil {
 		h.logGitAction(c, absPath, "pull", h.formatPullDetail(pullResult))
+	}
+
+	// PullVerified wraps every pullCLI error in truth.Failed, which renders as
+	// 500, so the answers pullCLI classifies (400 GIT_DIRTY, 409 GIT_BARE_REPO,
+	// 409 GIT_CONFLICT, 502 GIT_REMOTE_UNREACHABLE) all reached the client as
+	// a 500 "git pull failed" (agent-os-x0xl). A classified failure keeps its
+	// own status, message and code; anything else is still the 500 it was.
+	var appErr *models.AppError
+	if ar.Outcome == truth.OutcomeFailed && errors.As(ar.Err, &appErr) {
+		details := make(map[string]any, len(ar.Details)+1)
+		for k, v := range ar.Details {
+			details[k] = v
+		}
+		details["code"] = appErr.Code
+		ar.Reason = appErr.Message
+		ar.Details = details
+		renderResultWithStatus(c, appErr.Status, ar)
+		return
 	}
 
 	renderResult(c, ar)
