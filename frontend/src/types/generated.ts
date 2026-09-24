@@ -649,6 +649,15 @@ export interface DashboardContainerInfo {
    */
   stackLookupFailed: boolean;
   projectName: string;
+  /**
+   * ComposeWorkingDir and ComposeConfigFiles are compose's own
+   * com.docker.compose.project.working_dir and .config_files labels, read
+   * per poll so the UI can say where an unmanaged project lives
+   * (agent-os-fnch). ConfigFiles is shown verbatim: comma-separated when the
+   * project was started with several -f files, and never parsed.
+   */
+  composeWorkingDir?: string;
+  composeConfigFiles?: string;
   restartCount: number /* int */;
   created: string;
   startedAt: string;
