@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { presentError } from '@/lib/error-handler'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import type { AutoUpdatePolicy } from '@/types'
+import { toGlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
 import { UPDATE_SEARCH_FIELDS, type SortKey, type UpdateItem } from './types'
 
 /**
@@ -20,7 +21,11 @@ export function useUpdatesData() {
   const { data: updateData, isLoading, isError, error, refetch: refetchUpdates } = useCheckUpdates()
   const refreshMutation = useCheckUpdatesRefresh()
   const updateMutation = useUpdateContainer()
-  const { data: policiesData } = useAutoUpdatePolicies()
+  const policiesQuery = useAutoUpdatePolicies()
+  const policiesData = policiesQuery.data
+  // agent-os-2f08: the same tri-state every other auto-update surface locks on,
+  // so this tab locks when the global master switch is off.
+  const globalAutoUpdateState = toGlobalAutoUpdateState(policiesQuery)
   const { isScanning } = useUpdateScanStore()
   const [sortBy, setSortBy] = useState<SortKey>('name')
   // Expanded log state: set of containerIds with expanded log panels
@@ -126,6 +131,7 @@ export function useUpdatesData() {
     query,
     setQuery,
     policies,
+    globalAutoUpdateState,
     jobForContainer,
     expandedIds,
     toggleExpand,

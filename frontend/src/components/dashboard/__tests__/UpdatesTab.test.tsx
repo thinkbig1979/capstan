@@ -44,11 +44,17 @@ vi.mock('sonner', () => ({
 // Stub out child components with their own hook/WS dependencies so tests stay
 // focused on UpdatesTab's own logic (mirrors DashboardPage stubbing UpdatesTab).
 vi.mock('@/components/dashboard/AutoUpdateToggle', () => ({
-  AutoUpdateToggle: (props: { targetType: string; targetId: string; enabled: boolean }) => (
+  AutoUpdateToggle: (props: {
+    targetType: string
+    targetId: string
+    enabled: boolean
+    globalState: string
+  }) => (
     <div
       data-testid={`auto-update-toggle-${props.targetId}`}
       data-target-type={props.targetType}
       data-enabled={props.enabled}
+      data-global-state={props.globalState}
     />
   ),
 }))
@@ -159,7 +165,11 @@ beforeEach(() => {
   mockIsScanning = false
   mockUpdateIsPending = false
   mockJobForContainer = () => undefined
-  mockAutoUpdatePolicies.mockReturnValue({ data: { policies: [] } })
+  mockAutoUpdatePolicies.mockReturnValue({
+    data: { policies: [], globalEnabled: true },
+    isPending: false,
+    isError: false,
+  })
   setCheckUpdates()
 })
 
@@ -365,6 +375,58 @@ describe('UpdatesTab — updates table', () => {
     render(<UpdatesTab />)
 
     expect(screen.getByText('standalone')).toBeInTheDocument()
+  })
+})
+
+// ─── Global auto-update master switch (agent-os-2f08) ──────────────────────────
+
+/**
+ * This table used to pass globalState="enabled" to both toggles regardless of
+ * the real switch, so the Updates tab stayed interactive while every other
+ * surface locked. Both render paths are exercised: a row WITH a matching policy
+ * and a row with none. Each state is asserted on the same instrument, so a
+ * toggle that is now always locked fails the 'enabled' arm.
+ */
+describe('UpdatesTab — the global auto-update master switch locks the toggles (agent-os-2f08)', () => {
+  const containers = [
+    makeContainer({ containerId: 'c1', containerName: 'with-policy', stackId: 'stack1' }),
+    makeContainer({ containerId: 'c2', containerName: 'no-policy', stackId: '' }),
+  ]
+  const policies = [makePolicy({ targetType: 'container', targetId: 'c1' })]
+
+  function renderWithGlobal(query: { data?: unknown; isPending: boolean; isError: boolean }) {
+    setCheckUpdates({ data: { updates: containers, fromCache: false } })
+    mockAutoUpdatePolicies.mockReturnValue(query)
+    render(<UpdatesTab />)
+    return [screen.getByTestId('auto-update-toggle-c1'), screen.getByTestId('auto-update-toggle-c2')]
+  }
+
+  it('locks both toggles when the global switch is OFF', () => {
+    const toggles = renderWithGlobal({
+      data: { policies, globalEnabled: false },
+      isPending: false,
+      isError: false,
+    })
+    for (const t of toggles) expect(t).toHaveAttribute('data-global-state', 'disabled')
+  })
+
+  it('leaves both toggles interactive when the global switch is ON', () => {
+    const toggles = renderWithGlobal({
+      data: { policies, globalEnabled: true },
+      isPending: false,
+      isError: false,
+    })
+    for (const t of toggles) expect(t).toHaveAttribute('data-global-state', 'enabled')
+  })
+
+  it('reports the policy state as unavailable, not "off", when the policies query failed', () => {
+    const toggles = renderWithGlobal({ data: undefined, isPending: false, isError: true })
+    for (const t of toggles) expect(t).toHaveAttribute('data-global-state', 'unavailable')
+  })
+
+  it('reports loading while the policies query is in flight', () => {
+    const toggles = renderWithGlobal({ data: undefined, isPending: true, isError: false })
+    for (const t of toggles) expect(t).toHaveAttribute('data-global-state', 'loading')
   })
 })
 

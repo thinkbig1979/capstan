@@ -24,7 +24,7 @@ export function AvailableUpdatesPanel({ data }: AvailableUpdatesPanelProps) {
   const {
     isRefreshing, isLoading, isError, error, updateData, neverScanned, hasData,
     handleCheck, sortBy, setSortBy, query, setQuery, scannedAt, sortedUpdates,
-    updates, policies, jobForContainer, expandedIds, toggleExpand, handleUpdate,
+    updates, policies, globalAutoUpdateState, jobForContainer, expandedIds, toggleExpand, handleUpdate,
     updatePending, refetchUpdates,
   } = data
 
@@ -105,6 +105,7 @@ export function AvailableUpdatesPanel({ data }: AvailableUpdatesPanelProps) {
         isRefreshing={isRefreshing}
         onCheck={handleCheck}
         policies={policies}
+        globalAutoUpdateState={globalAutoUpdateState}
         jobForContainer={jobForContainer}
         expandedIds={expandedIds}
         onToggleExpand={toggleExpand}
