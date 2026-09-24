@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { BuildCacheTab } from '../BuildCacheTab'
 import type { BuildCacheEntry } from '@/types'
 
@@ -31,12 +31,19 @@ const mockEntries: BuildCacheEntry[] = [
   },
 ]
 
-vi.mock('@/hooks/useResources', () => ({
-  useBuildCache: () => ({
-    data: mockEntries,
-    isLoading: false,
-  }),
+const { buildCache } = vi.hoisted(() => ({
+  buildCache: {
+    current: {} as { data: unknown; isLoading: boolean; isError: boolean; refetch: () => void },
+  },
 }))
+
+vi.mock('@/hooks/useResources', () => ({
+  useBuildCache: () => buildCache.current,
+}))
+
+beforeEach(() => {
+  buildCache.current = { data: mockEntries, isLoading: false, isError: false, refetch: vi.fn() }
+})
 
 vi.mock('@/lib/api', () => ({
   resourcesApi: {
@@ -78,5 +85,37 @@ describe('BuildCacheTab', () => {
   it('shows In Use badge for active entries', () => {
     render(<BuildCacheTab />)
     expect(screen.getByText('Yes')).toBeInTheDocument()
+  })
+})
+
+describe('BuildCacheTab — a failed Docker read is not an empty cache (agent-os-v824)', () => {
+  it('first load fails: an error with Retry, NOT "No Build Cache"', () => {
+    const refetch = vi.fn()
+    buildCache.current = { data: undefined, isLoading: false, isError: true, refetch }
+    render(<BuildCacheTab />)
+
+    // Pre-fix this read "No Build Cache - Build cache is empty".
+    expect(screen.queryByText('No Build Cache')).not.toBeInTheDocument()
+    expect(screen.getByText('Could not load the build cache.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(refetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refetch fails over loaded entries: keeps them AND says so', () => {
+    buildCache.current = { data: mockEntries, isLoading: false, isError: true, refetch: vi.fn() }
+    render(<BuildCacheTab />)
+
+    expect(screen.getByText('layer cache')).toBeInTheDocument()
+    expect(
+      screen.getByText('Could not refresh the build cache. The values shown are the last ones the server sent.'),
+    ).toBeInTheDocument()
+  })
+
+  it('a genuinely empty cache still shows the empty state, with no error', () => {
+    buildCache.current = { data: [], isLoading: false, isError: false, refetch: vi.fn() }
+    render(<BuildCacheTab />)
+
+    expect(screen.getByText('No Build Cache')).toBeInTheDocument()
+    expect(screen.queryByText(/Could not (load|refresh)/)).not.toBeInTheDocument()
   })
 })
