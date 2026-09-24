@@ -1098,7 +1098,11 @@ func (s *BackupService) observeRunState(stack models.Stack, stackID string) runS
 // TestRunRestore_RunStateDecidesRestart, which assert this notice is present on
 // the unknown arm and ABSENT on the known-running arm; a restart count alone
 // cannot tell those two apart.
-func (s *BackupService) announceUnprovenRestart(stackID, phase string, out chan<- StreamLine) {
+//
+// It returns the notice for the run record: the stream drops it when no
+// client is attached, and the warning matters most to whoever reads the
+// history later (agent-os-gokn).
+func (s *BackupService) announceUnprovenRestart(stackID, phase string, out chan<- StreamLine) string {
 	s.logger.Warn("restarting stack on an unproven premise: its prior run state could not be read",
 		"stack", stackID, "phase", phase)
 	stream(out, "info", fmt.Sprintf(
@@ -1106,6 +1110,8 @@ func (s *BackupService) announceUnprovenRestart(stackID, phase string, out chan<
 			"beforehand, so whether this stack was running is unknown. Restarting to restore service; "+
 			"if it was stopped deliberately, stop it again.",
 		stackID, phase))
+	return fmt.Sprintf("restarted after %s on an unproven premise: docker status could not be read beforehand, "+
+		"so whether this stack was running is unknown; if it was stopped deliberately, stop it again", phase)
 }
 
 // stackResult is what backupStack reports besides its error.
@@ -1183,7 +1189,7 @@ func (s *BackupService) backupStack(
 	defer func() {
 		if stopApplied && priorState != runStateStopped {
 			if priorState == runStateUnknown {
-				s.announceUnprovenRestart(stackID, "backup", out)
+				notes = append(notes, s.announceUnprovenRestart(stackID, "backup", out))
 			}
 			stream(out, "info", fmt.Sprintf("[%s] restarting stack (defensive)", stackID))
 			ar, _ := s.dockerSvc().StartVerified(stack)
@@ -1397,12 +1403,28 @@ func (e *RestartIncompleteError) Error() string {
 // stack's tag), applies the stop policy before restoring, and restarts the
 // stack afterwards. This is a destructive operation and is logged via
 // ActionLogger.
+//
+// RunRestore has no run record, so it discards runRestore's notes;
+// execRestore calls runRestore directly and stores them.
 func (s *BackupService) RunRestore(
 	ctx context.Context,
 	stackID string,
 	snapshotID string,
 	targetDir string,
 	out chan<- StreamLine,
+) error {
+	return s.runRestore(ctx, stackID, snapshotID, targetDir, out, nil)
+}
+
+// runRestore is RunRestore that also appends, to notes when non-nil, the
+// warnings a successful restore's run record must carry (agent-os-gokn).
+func (s *BackupService) runRestore(
+	ctx context.Context,
+	stackID string,
+	snapshotID string,
+	targetDir string,
+	out chan<- StreamLine,
+	notes *[]string,
 ) (err error) {
 	if !s.tryAcquireGlobal() {
 		return ErrBackupBusy
@@ -1525,7 +1547,10 @@ func (s *BackupService) RunRestore(
 			return
 		}
 		if priorState == runStateUnknown {
-			s.announceUnprovenRestart(stackID, "restore", out)
+			note := s.announceUnprovenRestart(stackID, "restore", out)
+			if notes != nil {
+				*notes = append(*notes, note)
+			}
 		}
 		stream(out, "info", fmt.Sprintf("[%s] restarting stack after restore", stackID))
 		ar, _ := s.dockerSvc().StartVerified(stack)

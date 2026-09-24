@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -318,4 +319,103 @@ func TestRunBackup_SyncNoteFollowsPrimaryReason(t *testing.T) {
 	assert.True(t, strings.HasPrefix(stored.ErrorMessage,
 		"no enabled backup policy for requested stack(s): no-policy; post-backup sync failed: "),
 		"got %q", stored.ErrorMessage)
+}
+
+// unprovenNote is the substring of the durable unproven-premise notice.
+const unprovenNote = "on an unproven premise"
+
+// TestRunBackup_UnprovenRestartIsDurable pins the backup half of
+// agent-os-gokn: restarting a stack whose prior state could not be read was
+// announced only in a log line and a stream line.
+func TestRunBackup_UnprovenRestartIsDurable(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		docker *fakeDocker
+		want   bool
+	}{
+		{"status unreadable", &fakeDocker{statusErr: errors.New("docker compose ps failed")}, true},
+		{"known running (control)", &fakeDocker{statusStr: "running"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newBackupTestDB(t)
+			runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc", "myapp")}
+			svc := buildSvc(t, db, tc.docker, runner, runner)
+			seedStack(t, db, "myapp", "stop")
+
+			run, err := svc.RunBackup(context.Background(), nil, false, "manual", nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, tc.docker.started())
+
+			stored, items := readRun(t, db, run.ID)
+			require.Len(t, items, 1)
+			assert.Equal(t, "success", items[0].Status)
+			assert.Equal(t, "success", stored.Status, "a warning does not change the run status")
+			if tc.want {
+				assert.Equal(t,
+					"restarted after backup on an unproven premise: docker status could not be read beforehand, "+
+						"so whether this stack was running is unknown; if it was stopped deliberately, stop it again",
+					items[0].ErrorMessage)
+			} else {
+				assert.Empty(t, items[0].ErrorMessage)
+			}
+		})
+	}
+}
+
+// TestLaunchRestore_UnprovenRestartIsInTheRunRecord pins the restore half of
+// agent-os-gokn. A restore run has no items, so the notice goes on the run.
+// No WebSocket client ever attaches here, which is the case the stream-only
+// notice was lost in.
+func TestLaunchRestore_UnprovenRestartIsInTheRunRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		docker     *fakeDocker
+		wantStatus string
+		wantPrefix string // "" = no message at all
+	}{
+		{
+			name:       "status unreadable",
+			docker:     &fakeDocker{statusErr: errors.New("docker compose ps failed")},
+			wantStatus: "success",
+			wantPrefix: "restarted after restore on an unproven premise: ",
+		},
+		{
+			// The restart outcome stays the primary reason; the notice follows it.
+			name:       "status unreadable and partial restart",
+			docker:     &fakeDocker{statusErr: errors.New("docker compose ps failed"), startPartial: "1 of 3 containers not running"},
+			wantStatus: "partial",
+			wantPrefix: "restore completed, but restarting stack myapp partially succeeded: 1 of 3 containers not running; " +
+				"restarted after restore on an unproven premise: ",
+		},
+		{
+			name:       "known running (control)",
+			docker:     &fakeDocker{statusStr: "running"},
+			wantStatus: "success",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newBackupTestDB(t)
+			runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")}
+			svc := buildSvc(t, db, tc.docker, runner, runner)
+			seedStack(t, db, "myapp", "stop")
+			reg := NewBackupRunnerRegistry(db, svc, slog.Default())
+
+			runID, err := reg.LaunchRestore("myapp", "abc123", "/opt/stacks/myapp")
+			require.NoError(t, err)
+			reg.Stop()
+
+			stored, err := db.GetBackupRunByID(runID)
+			require.NoError(t, err)
+			require.Equal(t, 1, tc.docker.started())
+			assert.Equal(t, tc.wantStatus, stored.Status)
+			if tc.wantPrefix == "" {
+				assert.Empty(t, stored.ErrorMessage)
+				return
+			}
+			assert.True(t, strings.HasPrefix(stored.ErrorMessage, tc.wantPrefix), "got %q", stored.ErrorMessage)
+			assert.Contains(t, stored.ErrorMessage, unprovenNote)
+		})
+	}
 }
