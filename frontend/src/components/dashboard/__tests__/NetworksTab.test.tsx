@@ -224,3 +224,61 @@ describe('NetworksTab — deleting', () => {
     ).toBeDisabled()
   })
 })
+
+describe('NetworksTab — a failed Docker read is not an empty host (agent-os-v824)', () => {
+  const serverFault = { status: 500, code: 'DOCKER_ERROR', message: 'docker unavailable' }
+
+  function renderWithClient() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+    })
+    render(<NetworksTab />, {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      ),
+    })
+    return queryClient
+  }
+
+  it('first load fails: an error with Retry, NOT "No Networks"', async () => {
+    mockGetNetworks.mockRejectedValue(serverFault)
+    const queryClient = renderWithClient()
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['resources', 'networks'])?.status).toBe('error'),
+    )
+
+    // Pre-fix this read "No Networks": a failed Docker read shown as fact.
+    expect(screen.queryByText('No Networks')).not.toBeInTheDocument()
+    expect(screen.getByText('Could not load the network list.')).toBeInTheDocument()
+
+    mockGetNetworks.mockResolvedValue([network()])
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('web_default')).toBeInTheDocument()
+    expect(screen.queryByText('Could not load the network list.')).not.toBeInTheDocument()
+  })
+
+  it('a refetch fails over a loaded list: keeps the list AND says so', async () => {
+    const queryClient = renderWithClient()
+    expect(await screen.findByText('web_default')).toBeInTheDocument()
+
+    mockGetNetworks.mockRejectedValue(serverFault)
+    await queryClient.refetchQueries()
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['resources', 'networks'])?.status).toBe('error'),
+    )
+
+    // Retention first, so a red below means RETAINED AND UNDISCLOSED.
+    expect(screen.getByText('web_default')).toBeInTheDocument()
+    expect(
+      screen.getByText('Could not refresh the network list. The values shown are the last ones the server sent.'),
+    ).toBeInTheDocument()
+  })
+
+  it('a host that really has none still shows the empty state, with no error', async () => {
+    mockGetNetworks.mockResolvedValue([])
+    renderWithClient()
+
+    expect(await screen.findByText('No Networks')).toBeInTheDocument()
+    expect(screen.queryByText(/Could not (load|refresh)/)).not.toBeInTheDocument()
+  })
+})

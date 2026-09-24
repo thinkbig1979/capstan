@@ -10,6 +10,8 @@ import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/EmptyState'
+import { LoadFailedNotice } from '@/components/LoadFailedNotice'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -37,7 +39,7 @@ const IMAGE_SEARCH_FIELDS = [
 
 export function ImagesTab() {
   const { confirm, ConfirmComponent } = useConfirm()
-  const { data: images, isLoading } = useImages()
+  const { data: images, isLoading, isError, refetch } = useImages()
   const [sortBy, setSortBy] = useState<SortKey>('size')
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
@@ -94,18 +96,34 @@ export function ImagesTab() {
     )
   }
 
+  // agent-os-v824: a failed Docker read with nothing loaded is not an empty
+  // host. Checked before the empty state, which would otherwise say "none".
+  if (isError && !images) {
+    return <LoadFailedNotice what="the image list" onRetry={() => void refetch()} />
+  }
+
+  // Error WITH data: a refetch failed over a list the server did send. Keep it
+  // and say so (agent-os-wczm); a retained empty list counts too.
+  const refreshNotice = isError && (
+    <RefreshFailedNotice what="the image list" onRetry={() => void refetch()} />
+  )
+
   if (!images || images.length === 0) {
     return (
-      <EmptyState
-        icon={<ImageIcon className="h-12 w-12 text-muted-foreground" />}
-        title="No Images"
-        description="No Docker images found on this host"
-      />
+      <div className="space-y-4">
+        {refreshNotice}
+        <EmptyState
+          icon={<ImageIcon className="h-12 w-12 text-muted-foreground" />}
+          title="No Images"
+          description="No Docker images found on this host"
+        />
+      </div>
     )
   }
 
   return (
     <div className="space-y-4">
+      {refreshNotice}
       <SortFilterBar
         sortOptions={[
           { key: 'name', label: 'Name' },

@@ -10,6 +10,7 @@ import { HelpHint } from '@/components/ui/help-hint'
 import { StatusBadge } from '@/components/dashboard/StatusBadge'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
+import { BackupPoliciesRefreshNotice } from '@/components/dashboard/BackupPoliciesRefreshNotice'
 import { UpdateJobStatusCell } from '@/components/dashboard/UpdateJobStatusCell'
 import { UpdateJobLog } from '@/components/updates/UpdateJobLog'
 import type { AutoUpdatePolicy } from '@/types'
@@ -108,6 +109,7 @@ export function UpdatesTable({
         }
       />
 
+      <BackupPoliciesRefreshNotice />
       <div className="rounded-md border">
         <Table>
           <TableHeader>

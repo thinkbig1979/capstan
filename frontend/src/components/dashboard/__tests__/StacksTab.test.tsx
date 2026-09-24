@@ -103,6 +103,23 @@ vi.mock('@/components/dashboard/BackupToggle', async () => {
   }
 })
 
+// BackupPoliciesRefreshNotice runs for real over this mocked hook (agent-os-r6fx),
+// so the one-notice-per-list assertions read the real RefreshFailedNotice copy.
+const { backupPolicies } = vi.hoisted(() => ({
+  backupPolicies: {
+    current: { data: { policies: [] }, isError: false, refetch: () => {} } as {
+      data: unknown
+      isError: boolean
+      refetch: () => void
+    },
+  },
+}))
+vi.mock('@/hooks/useBackup', () => ({
+  useBackupPolicies: () => backupPolicies.current,
+}))
+
+const BACKUP_REFRESH_NOTICE = /Could not refresh the backup settings\./
+
 const stack = (over: Partial<Stack> = {}): Stack => ({
   envFile: '',
   gitBranch: '',
@@ -174,6 +191,7 @@ const GROUPED = [
 beforeEach(() => {
   vi.clearAllMocks()
   backupState.engineUnavailable = false
+  backupPolicies.current = { data: { policies: [] }, isError: false, refetch: () => {} }
 })
 
 describe('StacksTab — the table', () => {
@@ -585,5 +603,31 @@ describe('StacksTab — row actions', () => {
     fireEvent.click(screen.getByRole('button', { name: /start/i }))
 
     expect(mockNavigate).not.toHaveBeenCalled()
+  })
+})
+
+describe('StacksTab — a failed backup-policies refresh (agent-os-r6fx)', () => {
+  const THREE = [
+    stack({ id: 's1', projectName: 'web', directory: '/srv/stacks/apps' }),
+    stack({ id: 's2', projectName: 'api', directory: '/srv/stacks/apps' }),
+    stack({ id: 's3', projectName: 'db', directory: '/srv/stacks/data' }),
+  ]
+
+  it('shows ONE notice for the whole table, not one per row, above the table', () => {
+    backupPolicies.current = { data: { policies: [] }, isError: true, refetch: () => {} }
+    renderTab({ stacks: THREE })
+
+    // Three rows, each with its own BackupToggle, share one query.
+    expect(screen.getAllByTestId(/^backup-toggle-s\d$/)).toHaveLength(3)
+    expect(screen.getAllByText(BACKUP_REFRESH_NOTICE)).toHaveLength(1)
+    const alert = screen.getByRole('alert')
+    expect(
+      alert.compareDocumentPosition(screen.getByRole('table')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('shows none while the policies are fresh', () => {
+    renderTab({ stacks: THREE })
+    expect(screen.queryByText(BACKUP_REFRESH_NOTICE)).toBeNull()
   })
 })

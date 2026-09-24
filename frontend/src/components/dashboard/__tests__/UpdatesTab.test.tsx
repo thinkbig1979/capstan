@@ -70,6 +70,23 @@ vi.mock('@/components/dashboard/UpdateLogTab', () => ({
 
 import { toast } from 'sonner'
 
+// BackupPoliciesRefreshNotice runs for real over this mocked hook (agent-os-r6fx),
+// so the one-notice-per-list assertions read the real RefreshFailedNotice copy.
+const { backupPolicies } = vi.hoisted(() => ({
+  backupPolicies: {
+    current: { data: { policies: [] }, isError: false, refetch: () => {} } as {
+      data: unknown
+      isError: boolean
+      refetch: () => void
+    },
+  },
+}))
+vi.mock('@/hooks/useBackup', () => ({
+  useBackupPolicies: () => backupPolicies.current,
+}))
+
+const BACKUP_REFRESH_NOTICE = /Could not refresh the backup settings\./
+
 // ─── Fixture factories ────────────────────────────────────────────────────────
 
 function makeContainer(overrides: Partial<ContainerUpdateInfo> = {}): ContainerUpdateInfo {
@@ -136,6 +153,7 @@ function setCheckUpdates(
 
 beforeEach(() => {
   vi.clearAllMocks()
+  backupPolicies.current = { data: { policies: [] }, isError: false, refetch: () => {} }
   mockIsScanning = false
   mockUpdateIsPending = false
   mockJobForContainer = () => undefined
@@ -562,5 +580,31 @@ describe('UpdatesTab — a failed REFETCH must not discard a populated table (ag
 
     expect(screen.queryByText('Failed to Check for Updates')).not.toBeInTheDocument()
     expect(screen.getByText(/Could not refresh the available updates/)).toBeInTheDocument()
+  })
+})
+
+describe('UpdatesTab — a failed backup-policies refresh (agent-os-r6fx)', () => {
+  const containers = [
+    makeContainer({ containerId: 'c1', containerName: 'web', stackId: 'stack1' }),
+    makeContainer({ containerId: 'c2', containerName: 'api', stackId: 'stack2' }),
+  ]
+
+  it('shows ONE notice for the table, not one per row, above the table', () => {
+    backupPolicies.current = { data: { policies: [] }, isError: true, refetch: () => {} }
+    setCheckUpdates({ data: { updates: containers, fromCache: false } })
+    render(<UpdatesTab />)
+
+    expect(screen.getAllByTestId(/^backup-toggle-stack\d$/)).toHaveLength(2)
+    expect(screen.getAllByText(BACKUP_REFRESH_NOTICE)).toHaveLength(1)
+    const notice = screen.getByText(BACKUP_REFRESH_NOTICE)
+    expect(
+      notice.compareDocumentPosition(screen.getByRole('table')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('shows none while the policies are fresh', () => {
+    setCheckUpdates({ data: { updates: containers, fromCache: false } })
+    render(<UpdatesTab />)
+    expect(screen.queryByText(BACKUP_REFRESH_NOTICE)).toBeNull()
   })
 })

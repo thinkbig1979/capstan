@@ -4,6 +4,8 @@ import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/EmptyState'
+import { LoadFailedNotice } from '@/components/LoadFailedNotice'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
@@ -29,7 +31,7 @@ const CACHE_SEARCH_FIELDS = [
 ]
 
 export function BuildCacheTab() {
-  const { data: entries, isLoading } = useBuildCache()
+  const { data: entries, isLoading, isError, refetch } = useBuildCache()
   const [sortBy, setSortBy] = useState<SortKey>('size')
 
   const { query, setQuery, filtered } = useTextFilter(entries ?? [], CACHE_SEARCH_FIELDS)
@@ -72,18 +74,34 @@ export function BuildCacheTab() {
     )
   }
 
+  // agent-os-v824: a failed Docker read with nothing loaded is not an empty
+  // cache. Checked before the empty state, which would otherwise say "empty".
+  if (isError && !entries) {
+    return <LoadFailedNotice what="the build cache" onRetry={() => void refetch()} />
+  }
+
+  // Error WITH data: a refetch failed over entries the server did send. Keep
+  // them and say so (agent-os-wczm); a retained empty list counts too.
+  const refreshNotice = isError && (
+    <RefreshFailedNotice what="the build cache" onRetry={() => void refetch()} />
+  )
+
   if (!entries || entries.length === 0) {
     return (
-      <EmptyState
-        icon={<Database className="h-12 w-12 text-muted-foreground" />}
-        title="No Build Cache"
-        description="Build cache is empty"
-      />
+      <div className="space-y-4">
+        {refreshNotice}
+        <EmptyState
+          icon={<Database className="h-12 w-12 text-muted-foreground" />}
+          title="No Build Cache"
+          description="Build cache is empty"
+        />
+      </div>
     )
   }
 
   return (
     <div className="space-y-4">
+      {refreshNotice}
       <SortFilterBar
         sortOptions={[
           { key: 'id', label: 'Name' },

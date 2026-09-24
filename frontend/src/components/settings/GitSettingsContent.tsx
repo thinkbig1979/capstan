@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+import { LoadFailedNotice } from '@/components/LoadFailedNotice'
 import { useGitSettings, useUpdateGitSettings } from '@/hooks/useResources'
 import { Eye, EyeOff } from 'lucide-react'
 import { toast } from 'sonner'
@@ -24,6 +25,19 @@ export function GitSettingsContent() {
 
   if (isLoading) {
     return <div className="py-4"><LoadingSpinner /></div>
+  }
+
+  // agent-os-gs2y: no form without the stored settings. An empty form here
+  // read as "nothing is configured" and its Save wrote over credentials the
+  // operator never saw.
+  if (!gitSettings && isError) {
+    return (
+      <LoadFailedNotice
+        what="the git settings"
+        consequence="Saving is disabled until they load."
+        onRetry={() => void refetch()}
+      />
+    )
   }
 
   const handleSave = () => {

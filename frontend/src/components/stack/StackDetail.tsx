@@ -11,6 +11,7 @@ import { HelpHint } from '@/components/ui/help-hint'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { toGlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
+import { BackupPoliciesRefreshNotice } from '@/components/dashboard/BackupPoliciesRefreshNotice'
 import { TabErrorBoundary } from '@/components/TabErrorBoundary'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { Info } from 'lucide-react'
@@ -92,6 +93,7 @@ function OverviewTabContent({
             onRetry={() => policiesQuery.refetch()}
           />
         )}
+        <BackupPoliciesRefreshNotice />
         <div className="overflow-hidden rounded-lg border bg-card">
           <div className="border-b px-4 py-2.5 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
             Stack

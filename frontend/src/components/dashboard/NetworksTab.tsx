@@ -3,6 +3,8 @@ import { useNetworks, useDeleteNetwork } from '@/hooks/useResources'
 import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/EmptyState'
+import { LoadFailedNotice } from '@/components/LoadFailedNotice'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import {
@@ -41,7 +43,7 @@ function networkDeleteBlock(net: DockerNetwork): string | null {
 
 export function NetworksTab() {
   const { confirm, ConfirmComponent } = useConfirm()
-  const { data: networks, isLoading } = useNetworks()
+  const { data: networks, isLoading, isError, refetch } = useNetworks()
   const [sortBy, setSortBy] = useState<SortKey>('name')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
@@ -90,9 +92,22 @@ export function NetworksTab() {
     )
   }
 
+  // agent-os-v824: a failed Docker read with nothing loaded is not an empty
+  // host. Checked before the empty state, which would otherwise say "none".
+  if (isError && !networks) {
+    return <LoadFailedNotice what="the network list" onRetry={() => void refetch()} />
+  }
+
+  // Error WITH data: a refetch failed over a list the server did send. Keep it
+  // and say so (agent-os-wczm); a retained empty list counts too.
+  const refreshNotice = isError && (
+    <RefreshFailedNotice what="the network list" onRetry={() => void refetch()} />
+  )
+
   if (!networks || networks.length === 0) {
     return (
-      <>
+      <div className="space-y-4">
+        {refreshNotice}
         <EmptyState
           icon={<Network className="h-12 w-12 text-muted-foreground" />}
           title="No Networks"
@@ -105,12 +120,13 @@ export function NetworksTab() {
           }
         />
         <CreateNetworkDialog open={createOpen} onOpenChange={setCreateOpen} />
-      </>
+      </div>
     )
   }
 
   return (
     <div className="space-y-4">
+      {refreshNotice}
       <SortFilterBar
         sortOptions={[
           { key: 'name', label: 'Name' },
