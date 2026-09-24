@@ -94,6 +94,36 @@ function isStandaloneContainer(c: DashboardContainerInfo): boolean {
   return !c.stackId
 }
 
+// agent-os-fnch. The no-row-no-error state: a compose project Capstan has no
+// stack record for, AND the lookup succeeded. A failed lookup is excluded
+// because "we could not tell" is not "unmanaged" (see isStandaloneContainer).
+function isUnmanagedCompose(c: DashboardContainerInfo): boolean {
+  return Boolean(c.projectName) && !c.stackLookupFailed && !c.stackId
+}
+
+// Shown on the row itself: the project, where compose says it lives (its own
+// labels, never a guess), and the one edit that brings it under management.
+// ScanAll picks the directory up after the restart, so there is no Adopt step.
+function UnmanagedComposeNote({ c }: { c: DashboardContainerInfo }) {
+  return (
+    <div className="mt-0.5 max-w-[320px] space-y-0.5 text-xs text-muted-foreground">
+      <p>
+        <span>{c.projectName}</span> · not managed by Capstan
+      </p>
+      {c.composeWorkingDir ? (
+        <p className="font-mono break-all">{c.composeWorkingDir}</p>
+      ) : (
+        <p>Compose did not record this project&apos;s directory.</p>
+      )}
+      {c.composeConfigFiles && <p className="font-mono break-all">{c.composeConfigFiles}</p>}
+      <p>
+        To manage it, mount {c.composeWorkingDir ? 'this path' : "the project's compose directory"} into
+        Capstan, add it to <code>EXTRA_STACKS_DIRS</code>, then restart Capstan.
+      </p>
+    </div>
+  )
+}
+
 interface ContainerActionsProps {
   mode: 'stack' | 'standalone'
   stackId?: string
@@ -406,6 +436,8 @@ function ContainerTable({
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
+                      ) : isUnmanagedCompose(container) ? (
+                        <UnmanagedComposeNote c={container} />
                       ) : container.projectName ? (
                         <span className="text-xs text-muted-foreground truncate max-w-[200px]">{container.projectName}</span>
                       ) : null}

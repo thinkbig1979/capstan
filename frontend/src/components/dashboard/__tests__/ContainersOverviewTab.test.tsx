@@ -483,3 +483,68 @@ describe('ContainersOverviewTab — the auto-update lock names the state it is i
     expect((await findToggle()).getAttribute('aria-label')).toBe('Auto-update container c1')
   })
 })
+
+/**
+ * agent-os-fnch. A compose project with no stack row gets a visible reason on
+ * its row: the project, where compose says it lives, and the remedy (mount the
+ * path, add it to EXTRA_STACKS_DIRS, restart). Asserted on visible text.
+ *
+ * The must-not arms carry the weight: a row that ALWAYS shows the explanation
+ * satisfies the positive arm perfectly. A managed row, and a row whose stack
+ * lookup FAILED ("we could not tell" is not "unmanaged"), show none of it.
+ */
+describe('ContainersOverviewTab — an unmanaged compose project explains itself', () => {
+  const WORKING_DIR = '/home/op/spec-tacular/docker'
+  const CONFIG_FILES = '/home/op/spec-tacular/docker/docker-compose.voidauth.yml,/home/op/spec-tacular/docker/docker-compose.extra.yml'
+
+  it('names the project, its host path, the compose files and EXTRA_STACKS_DIRS', async () => {
+    renderTab(makeContainer({
+      stackId: '',
+      stackLookupFailed: false,
+      projectName: 'spec-voidauth',
+      composeWorkingDir: WORKING_DIR,
+      composeConfigFiles: CONFIG_FILES,
+    }))
+    await userEvent.setup().click(screen.getByRole('tab', { name: /Other Containers/ }))
+
+    expect(await screen.findByText(/not managed by Capstan/i)).toBeVisible()
+    expect(screen.getByText('spec-voidauth')).toBeVisible()
+    expect(screen.getByText(WORKING_DIR)).toBeVisible()
+    // Verbatim, comma included: config_files is displayed, never parsed.
+    expect(screen.getByText(CONFIG_FILES)).toBeVisible()
+    expect(screen.getByText(/EXTRA_STACKS_DIRS/)).toBeVisible()
+  })
+
+  it('does not invent a path when compose recorded none', async () => {
+    renderTab(makeContainer({ stackId: '', stackLookupFailed: false, projectName: 'spec-voidauth' }))
+    await userEvent.setup().click(screen.getByRole('tab', { name: /Other Containers/ }))
+
+    expect(await screen.findByText(/not managed by Capstan/i)).toBeVisible()
+    expect(screen.getByText(/EXTRA_STACKS_DIRS/)).toBeVisible()
+    expect(screen.getByText(/did not record/i)).toBeVisible()
+    expect(screen.queryByText(/^\//)).toBeNull()
+  })
+
+  it('shows none of it on a managed row', async () => {
+    renderTab(makeContainer({ composeWorkingDir: WORKING_DIR, composeConfigFiles: CONFIG_FILES }))
+
+    expect(await screen.findByText('myproject')).toBeVisible()
+    expect(screen.queryByText(/not managed by Capstan/i)).toBeNull()
+    expect(screen.queryByText(/EXTRA_STACKS_DIRS/)).toBeNull()
+    expect(screen.queryByText(WORKING_DIR)).toBeNull()
+  })
+
+  it('shows none of it when the stack lookup failed', async () => {
+    renderTab(makeContainer({
+      stackId: '',
+      stackLookupFailed: true,
+      composeWorkingDir: WORKING_DIR,
+      composeConfigFiles: CONFIG_FILES,
+    }))
+
+    expect(await screen.findByText('myproject')).toBeVisible()
+    expect(screen.queryByText(/not managed by Capstan/i)).toBeNull()
+    expect(screen.queryByText(/EXTRA_STACKS_DIRS/)).toBeNull()
+    expect(screen.queryByText(WORKING_DIR)).toBeNull()
+  })
+})

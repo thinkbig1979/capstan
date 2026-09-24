@@ -153,7 +153,7 @@ func (h *ResourcesHandler) listImages(c *gin.Context) {
 }
 
 func (h *ResourcesHandler) listContainers(c *gin.Context) {
-	containers, err := h.docker.GetAllContainersWithDetails(c.Request.Context(), nil)
+	containers, err := h.docker.GetAllContainersWithDetails(c.Request.Context(), h.db)
 	if err != nil {
 		slog.Error("Failed to list containers", "error", err)
 		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list containers")

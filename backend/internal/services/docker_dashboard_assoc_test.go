@@ -79,3 +79,33 @@ func TestResolveDashboardStackAssociation_EmptyStackIDArmsDisagree(t *testing.T)
 		t.Errorf("both arms report LookupFailed=%v — an empty StackID is now ambiguous on the wire and the frontend cannot route on it safely", absent.LookupFailed)
 	}
 }
+
+// agent-os-oafx. A caller that supplies NO database has not looked anything up,
+// so it must not be told the project is genuinely not a stack. lookupStackByProject
+// answers a nil db with (nil, nil) -- absence -- which is right for
+// resolveUpdateStrategy (it guards nil db itself) but made GET
+// /resources/containers, which passed nil, report every compose container as
+// {StackID: "", LookupFailed: false}: the wire's "genuinely standalone" value.
+//
+// Two-sided on one instrument: the same nil db with NO compose project is still
+// not a failure, because there is nothing to look up.
+func TestResolveDashboardStackAssociation_NilDBIsNotReportedAsAbsence(t *testing.T) {
+	assoc, err := resolveDashboardStackAssociation(nil, g482ProjectKnown)
+	if err == nil {
+		t.Errorf("err: got nil, want an error naming the missing database")
+	}
+	if assoc.StackID != "" {
+		t.Errorf("StackID: got %q, want empty", assoc.StackID)
+	}
+	if !assoc.LookupFailed {
+		t.Errorf("LookupFailed: got false, want true — with no database nothing was looked up, and false tells the frontend this compose project is genuinely not a stack")
+	}
+
+	noProject, err := resolveDashboardStackAssociation(nil, "")
+	if err != nil {
+		t.Errorf("no compose project: err got %v, want nil — there is nothing to look up", err)
+	}
+	if noProject.LookupFailed || noProject.StackID != "" {
+		t.Errorf("no compose project: got %+v, want the zero association", noProject)
+	}
+}

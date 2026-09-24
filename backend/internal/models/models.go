@@ -174,13 +174,20 @@ type DashboardContainerInfo struct {
 	// compose project is genuinely not a stack, or the stacks table could not be
 	// READ. Consumers that route on StackID must not conflate them -- see
 	// resolveDashboardStackAssociation (services/docker.go) and agent-os-g482.
-	StackLookupFailed bool      `json:"stackLookupFailed"`
-	ProjectName       string    `json:"projectName"`
-	RestartCount      int       `json:"restartCount"`
-	Created           time.Time `json:"created"`
-	StartedAt         time.Time `json:"startedAt"`
-	DiskSize          int64     `json:"diskSize"`
-	ImageSize         int64     `json:"imageSize"`
+	StackLookupFailed bool   `json:"stackLookupFailed"`
+	ProjectName       string `json:"projectName"`
+	// ComposeWorkingDir and ComposeConfigFiles are compose's own
+	// com.docker.compose.project.working_dir and .config_files labels, read
+	// per poll so the UI can say where an unmanaged project lives
+	// (agent-os-fnch). ConfigFiles is shown verbatim: comma-separated when the
+	// project was started with several -f files, and never parsed.
+	ComposeWorkingDir  string    `json:"composeWorkingDir,omitempty"`
+	ComposeConfigFiles string    `json:"composeConfigFiles,omitempty"`
+	RestartCount       int       `json:"restartCount"`
+	Created            time.Time `json:"created"`
+	StartedAt          time.Time `json:"startedAt"`
+	DiskSize           int64     `json:"diskSize"`
+	ImageSize          int64     `json:"imageSize"`
 }
 
 type DockerImage struct {

@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -69,6 +71,12 @@ type DockerService struct {
 	// Production leaves it nil; unit tests inject a scripted snapshot
 	// sequence so pollUntilSettled runs against real code.
 	statusFn func(models.Stack) (string, []models.Container, error)
+	// lastUnmanaged is the unmanaged-project set GetAllContainersWithDetails
+	// last logged, so an unchanged set on the next poll logs nothing
+	// (agent-os-fnch). Guarded by unmanagedMu: the dashboard and the stacks
+	// list poll concurrently.
+	unmanagedMu   sync.Mutex
+	lastUnmanaged string
 }
 
 func NewDockerService(cfg *config.Config) (*DockerService, error) {
@@ -468,7 +476,10 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 		return nil, ErrDockerUnavailable
 	}
 
-	containers, err := s.client.ContainerList(ctx, container.ListOptions{All: true, Size: true})
+	// Through updateAPI rather than s.client so a unit test can drive this loop
+	// with a fake (agent-os-fnch); production gets the concrete client.
+	api := s.updateAPI()
+	containers, err := api.ContainerList(ctx, container.ListOptions{All: true, Size: true})
 	if err != nil {
 		return nil, err
 	}
@@ -477,6 +488,8 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 
 	// One ERROR per call, not per container — see the stackErr branch below.
 	stackLookupFailed := false
+	// Compose project -> working dir, for projects with no stack row.
+	unmanaged := map[string]string{}
 
 	for _, c := range containers {
 		projectName := c.Labels["com.docker.compose.project"]
@@ -514,6 +527,12 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 			slog.Error("Cannot resolve compose stacks for the container list; containers are reported with no stack id",
 				"project", projectName, "cause", stackErr)
 		}
+		workingDir := c.Labels["com.docker.compose.project.working_dir"]
+		// The no-row-no-error branch: a compose project Capstan does not manage.
+		// A failed lookup is not this state and stays out of it.
+		if projectName != "" && stackErr == nil && assoc.StackID == "" {
+			unmanaged[projectName] = workingDir
+		}
 
 		name := ""
 		if len(c.Names) > 0 {
@@ -525,24 +544,26 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 		health := ""
 
 		info := models.DashboardContainerInfo{
-			ID:                c.ID,
-			Name:              name,
-			Image:             c.Image,
-			State:             c.State,
-			Status:            c.Status,
-			Health:            health,
-			Ports:             ports,
-			StackID:           assoc.StackID,
-			StackLookupFailed: assoc.LookupFailed,
-			ProjectName:       projectName,
-			RestartCount:      restartCount,
-			Created:           time.Unix(c.Created, 0),
-			DiskSize:          c.SizeRw,
-			ImageSize:         c.SizeRootFs,
+			ID:                 c.ID,
+			Name:               name,
+			Image:              c.Image,
+			State:              c.State,
+			Status:             c.Status,
+			Health:             health,
+			Ports:              ports,
+			StackID:            assoc.StackID,
+			StackLookupFailed:  assoc.LookupFailed,
+			ProjectName:        projectName,
+			ComposeWorkingDir:  workingDir,
+			ComposeConfigFiles: c.Labels["com.docker.compose.project.config_files"],
+			RestartCount:       restartCount,
+			Created:            time.Unix(c.Created, 0),
+			DiskSize:           c.SizeRw,
+			ImageSize:          c.SizeRootFs,
 		}
 
 		if c.State == "running" {
-			inspect, err := s.client.ContainerInspect(ctx, c.ID) //geterrors:ignore best-effort enrichment of one row of a container list: a failed inspect leaves the optional fields zero rather than failing the whole list
+			inspect, err := api.ContainerInspect(ctx, c.ID) //geterrors:ignore best-effort enrichment of one row of a container list: a failed inspect leaves the optional fields zero rather than failing the whole list
 			if err == nil {
 				if inspect.State != nil && inspect.State.StartedAt != "" {
 					if t, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt); err == nil { //geterrors:ignore a daemon-reported StartedAt in an unexpected layout leaves info.StartedAt at Go's ZERO TIME, and DashboardContainerInfo.StartedAt (models/models.go:169) carries no omitempty -- so it serialises as "0001-01-01T00:00:00Z", a zero timestamp on the wire and NOT an absent field. Kept because failing an entire container list over one unparseable field is worse; what a consumer displays is deliberately not asserted here, having not been measured
@@ -567,7 +588,34 @@ func (s *DockerService) GetAllContainersWithDetails(ctx context.Context, db Dash
 		result = append(result, info)
 	}
 
+	s.logUnmanagedProjects(unmanaged)
 	return result, nil
+}
+
+// logUnmanagedProjects logs the compose projects running without a stack row,
+// once per change of that set rather than once per call: this runs on every
+// dashboard and stacks-list poll. An empty set is recorded but not logged, so
+// the same projects reappearing later log again.
+func (s *DockerService) logUnmanagedProjects(unmanaged map[string]string) {
+	entries := make([]string, 0, len(unmanaged))
+	for project, dir := range unmanaged {
+		if dir == "" {
+			dir = "(working dir not recorded)"
+		}
+		entries = append(entries, project+"="+dir)
+	}
+	sort.Strings(entries)
+	key := strings.Join(entries, "\n")
+
+	s.unmanagedMu.Lock()
+	changed := key != s.lastUnmanaged
+	s.lastUnmanaged = key
+	s.unmanagedMu.Unlock()
+
+	if changed && len(entries) > 0 {
+		slog.Info("Compose projects are running without a Capstan stack; to manage one, mount its directory into Capstan, add it to EXTRA_STACKS_DIRS and restart",
+			"projects", entries)
+	}
 }
 
 func (s *DockerService) GetImageDiskUsage(ctx context.Context) (int64, error) {
@@ -648,6 +696,10 @@ type DashboardDB interface {
 	GetStackByProjectName(projectName string) (*models.Stack, error)
 }
 
+// errNoDashboardDB is the cause resolveDashboardStackAssociation reports when a
+// caller supplied no database, so the once-per-call log names it.
+var errNoDashboardDB = errors.New("no database supplied for the compose stack lookup")
+
 // dashboardStackAssociation is how one container's compose project resolved
 // against the stacks table for the dashboard.
 //
@@ -674,7 +726,15 @@ type dashboardStackAssociation struct {
 //
 // It returns the error as well as the flag so the caller keeps its existing
 // once-per-call log line; the flag is what reaches the wire.
+//
+// A nil db with a compose project is a failed lookup, not an absent row
+// (agent-os-oafx): lookupStackByProject answers nil db with (nil, nil), and
+// passing that through told GET /resources/containers' consumer that every
+// compose container was genuinely not a stack when nothing had been read.
 func resolveDashboardStackAssociation(db DashboardDB, projectName string) (dashboardStackAssociation, error) {
+	if db == nil && projectName != "" {
+		return dashboardStackAssociation{LookupFailed: true}, errNoDashboardDB
+	}
 	stack, err := lookupStackByProject(db, projectName)
 	switch {
 	case err != nil:
