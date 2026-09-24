@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -77,8 +78,16 @@ func TestStreamComposeCmd_RedactsEveryLine(t *testing.T) {
 			svc, stack := fvk3Service(t, "")
 			stubComposeContextScript(t, sdbrStepScript(verb, "1"))
 
+			// streamComposeCmd calls emit from its stdout and stderr scanner
+			// goroutines at once, so the collector locks, as the production
+			// emit in UpdateJobManager does.
+			var mu sync.Mutex
 			var lines []LogLine
-			emit := func(l LogLine) { lines = append(lines, l) }
+			emit := func(l LogLine) {
+				mu.Lock()
+				defer mu.Unlock()
+				lines = append(lines, l)
+			}
 			err := svc.updateComposeContainerStreaming(context.Background(), stack, "web", true, emit, func(Status) {})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "compose "+verb+" failed")
