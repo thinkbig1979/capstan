@@ -29,9 +29,8 @@ func TestRcloneManager_TestConnectivity_Args(t *testing.T) {
 
 	call := runner.lastCall()
 	assert.Equal(t, "rclone", call.Binary)
-	assert.Equal(t, "lsd", call.Args[0])
-	assert.Equal(t, "myremote:", call.Args[1])
-	assert.True(t, argPairContains(call.Args, "--max-depth", "1"))
+	// Flags first, then "--", then the remote (agent-os-tyl6).
+	assert.Equal(t, []string{"lsd", "--max-depth", "1", "--", "myremote:"}, call.Args)
 }
 
 func TestRcloneManager_TestConnectivity_UsesConfigRemote(t *testing.T) {
@@ -45,7 +44,7 @@ func TestRcloneManager_TestConnectivity_UsesConfigRemote(t *testing.T) {
 	require.NoError(t, err)
 
 	call := runner.lastCall()
-	assert.Equal(t, "myremote:", call.Args[1])
+	assert.Equal(t, "myremote:", call.Args[len(call.Args)-1])
 }
 
 func TestRcloneManager_TestConnectivity_NoRemoteConfigured(t *testing.T) {
@@ -508,7 +507,7 @@ func TestRcloneManager_RemoteHasSnapshots_Args(t *testing.T) {
 
 	call := runner.lastCall()
 	assert.Equal(t, "rclone", call.Binary)
-	assert.Equal(t, []string{"lsf", "myremote:backups/capstan/snapshots"}, call.Args)
+	assert.Equal(t, []string{"lsf", "--", "myremote:backups/capstan/snapshots"}, call.Args)
 }
 
 func TestRcloneManager_RemoteHasSnapshots_EmptyPath(t *testing.T) {
@@ -524,7 +523,7 @@ func TestRcloneManager_RemoteHasSnapshots_EmptyPath(t *testing.T) {
 	assert.False(t, has)
 
 	call := runner.lastCall()
-	assert.Equal(t, []string{"lsf", "myremote:snapshots"}, call.Args)
+	assert.Equal(t, []string{"lsf", "--", "myremote:snapshots"}, call.Args)
 }
 
 func TestRcloneManager_RemoteHasSnapshots_TrailingSlashInPathDoesNotDoubleUp(t *testing.T) {
@@ -541,7 +540,7 @@ func TestRcloneManager_RemoteHasSnapshots_TrailingSlashInPathDoesNotDoubleUp(t *
 	assert.True(t, has)
 
 	call := runner.lastCall()
-	assert.Equal(t, []string{"lsf", "myremote:backups/capstan/snapshots"}, call.Args)
+	assert.Equal(t, []string{"lsf", "--", "myremote:backups/capstan/snapshots"}, call.Args)
 }
 
 func TestRcloneManager_RemoteHasSnapshots_EmptyOutputMeansFalse(t *testing.T) {

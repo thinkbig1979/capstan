@@ -106,7 +106,10 @@ honest answer rather than a blank.
   directory scan depth
 - `GET /api/v1/settings/audit-log` — action audit log
 - `GET /api/v1/settings/backup` / `PUT /api/v1/settings/backup` — backup
-  engine settings (repository, schedule, retention)
+  engine settings (repository, schedule, retention). On PUT, an
+  `rcloneRemote` starting with `-` answers **400 `VALIDATION_ERROR` "rclone
+  remote must not start with '-'"** and nothing in the request is saved
+  (agent-os-tyl6; rclone parsed such a value as a flag)
 
 ## Directories
 

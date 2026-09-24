@@ -3578,3 +3578,53 @@ func TestPreviewSnapshot_UnknownIDIsNotFound(t *testing.T) {
 		assert.False(t, listed, "the happy path must not pay for a second restic call")
 	})
 }
+
+// TestUpdateSettings_RcloneRemoteLeadingDash pins agent-os-tyl6: the remote is
+// rclone's first positional, and a value starting with '-' is parsed as a flag
+// (OBSERVED with rclone v1.60.1: "--log-file=/p" created the file "/p:"). It is
+// refused before ANY field of the request is written.
+func TestUpdateSettings_RcloneRemoteLeadingDash(t *testing.T) {
+	t.Parallel()
+
+	put := func(t *testing.T, body map[string]interface{}) (*httptest.ResponseRecorder, *database.DB) {
+		t.Helper()
+		db := newBackupHandlerDB(t)
+		svc := buildBackupSvc(t, db, true, false)
+		h := NewBackupHandler(svc, db, slog.Default())
+		t.Cleanup(h.Stop)
+		w := httptest.NewRecorder()
+		newBackupRouter(h).ServeHTTP(w, jsonReq(t, http.MethodPut, "/api/settings/backup", body))
+		return w, db
+	}
+
+	for _, remote := range []string{"--log-file=/tmp/x", "-x"} {
+		t.Run("rejects "+remote, func(t *testing.T) {
+			t.Parallel()
+			w, db := put(t, map[string]interface{}{"rcloneRemote": remote, "repository": "/data/other-repo"})
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			body := decodeBody(t, w)
+			assert.Equal(t, models.ErrValidation, body["code"])
+			assert.Equal(t, "rclone remote must not start with '-'", body["message"])
+			for _, key := range []string{"rclone_remote", "restic_repository"} {
+				stored, err := db.GetSetting(key)
+				assert.Empty(t, stored, "%s must not be written by a rejected request (err=%v)", key, err)
+			}
+		})
+	}
+
+	// Accepting side: ordinary names, an inner '-', and an on-the-fly
+	// connection-string remote (":s3,..."), which rclone's name rules would
+	// not cover and which works today.
+	for _, remote := range []string{"myremote", "my-remote", ":s3,provider=AWS", ""} {
+		t.Run("accepts "+remote, func(t *testing.T) {
+			t.Parallel()
+			w, db := put(t, map[string]interface{}{"rcloneRemote": remote})
+
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			stored, err := db.GetSetting("rclone_remote")
+			require.NoError(t, err)
+			assert.Equal(t, remote, stored)
+		})
+	}
+}

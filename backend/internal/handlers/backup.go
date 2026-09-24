@@ -438,6 +438,20 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 		return
 	}
 
+	// The remote is the first rclone positional ("<remote>:<path>"). rclone
+	// never names a remote with a leading '-', and one that does is parsed as
+	// a flag: OBSERVED with v1.60.1, "--log-file=/p" made rclone create "/p:"
+	// (agent-os-tyl6). The argv builders also put "--" before positionals,
+	// which covers values stored before this check existed.
+	if req.RcloneRemote != nil && strings.HasPrefix(*req.RcloneRemote, "-") {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"rclone remote must not start with '-'",
+		))
+		return
+	}
+
 	if req.Repository != nil {
 		// Refuse to persist a value still carrying the redaction marker.
 		//
