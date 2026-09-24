@@ -346,6 +346,23 @@ describe('classifyError', () => {
     expect(result.action).toBe('Fix')
   })
 
+  // agent-os-nud8: the compose 422s (compose.go Put/PutComposeAndEnv,
+  // stack_crud.go Create) send details.lintResults as an array of objects, and
+  // PUT /compose-env's rejection reaches this arm through presentError.
+  it('renders non-string 422 detail values as JSON, not [object Object]', () => {
+    const lint = { level: 'error', message: 'bad port', line: 3 }
+    const result = classifyError({
+      status: 422,
+      code: 'COMPOSE_VALIDATION_ERROR',
+      message: 'Compose file validation failed',
+      details: { saved: false, retries: 2, lintResults: [lint], meta: { a: 1 }, gone: null, name: 'is required' },
+    })
+    expect(result.message).not.toContain('[object Object]')
+    expect(result.message).toBe(
+      `saved: false, retries: 2, lintResults: ${JSON.stringify([lint])}, meta: {"a":1}, gone: null, name: is required`,
+    )
+  })
+
   it('classifies 400 as validation', () => {
     const result = classifyError({
       response: { status: 400, data: { error: 'Bad Request' } },
