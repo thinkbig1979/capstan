@@ -63,7 +63,12 @@ func (m *RcloneManager) TestConnectivity(ctx context.Context, remote string) err
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	args := []string{"lsd", remote + ":", "--max-depth", "1"}
+	// Every rclone call in this file puts "--" before its positionals, with
+	// all flags ahead of it: the remote comes from settings, and a positional
+	// starting with "-" is otherwise parsed as a flag. OBSERVED with rclone
+	// v1.60.1: remote "--log-file=/p" made `rclone lsd` create "/p:"; after
+	// "--" it did not (agent-os-tyl6).
+	args := []string{"lsd", "--max-depth", "1", "--", remote + ":"}
 
 	out := make(chan StreamLine, 32)
 	go func() {
@@ -117,7 +122,7 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 	m.logger.Info("Starting rclone sync", "source", RedactURLUserinfo(repoPath), "destination", destination, "transfers", transfers)
 
 	args := append([]string{"sync"}, syncOptions(transfers)...)
-	args = append(args, repoPath, destination)
+	args = append(args, "--", repoPath, destination)
 
 	var lastErr error
 	for attempt := 1; attempt <= retries; attempt++ {
@@ -225,7 +230,7 @@ func (m *RcloneManager) probeRestoreSource(ctx context.Context, remote, path str
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	raw, err := m.runner.Output(ctx, "rclone", []string{"lsf", target}, nil)
+	raw, err := m.runner.Output(ctx, "rclone", []string{"lsf", "--", target}, nil)
 	if err != nil {
 		return fmt.Errorf("refusing DR restore: %s does not look like a restic repository (no config object found): %w", target, err)
 	}
@@ -293,7 +298,7 @@ func (m *RcloneManager) remoteHasSnapshots(ctx context.Context, remote, path str
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	raw, err := m.runner.Output(ctx, "rclone", []string{"lsf", target}, nil)
+	raw, err := m.runner.Output(ctx, "rclone", []string{"lsf", "--", target}, nil)
 	if err != nil {
 		if isExitCode(err, 3) {
 			// "directory not found": the remote has never been synced to
@@ -388,7 +393,7 @@ func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath
 	if backupDir != "" {
 		args = append(args, "--backup-dir", backupDir)
 	}
-	args = append(args, source, localPath)
+	args = append(args, "--", source, localPath)
 
 	var lastErr error
 	for attempt := 1; attempt <= retries; attempt++ {

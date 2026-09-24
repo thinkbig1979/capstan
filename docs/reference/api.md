@@ -106,7 +106,10 @@ honest answer rather than a blank.
   directory scan depth
 - `GET /api/v1/settings/audit-log` — action audit log
 - `GET /api/v1/settings/backup` / `PUT /api/v1/settings/backup` — backup
-  engine settings (repository, schedule, retention)
+  engine settings (repository, schedule, retention). On PUT, an
+  `rcloneRemote` starting with `-` answers **400 `VALIDATION_ERROR` "rclone
+  remote must not start with '-'"** and nothing in the request is saved
+  (agent-os-tyl6; rclone parsed such a value as a flag)
 
 ## Directories
 
@@ -179,8 +182,17 @@ With a live token, all four behave exactly as they did before.
 - `GET /api/v1/git` — status; the web UI passes `?stackId=<id>`, but the
   route itself is a plain query-string GET
 - `POST /api/v1/git/pull` — pull changes
-- `GET /api/v1/git/log` — commit log
-- `GET /api/v1/git/diff/:hash` — commit diff
+- `GET /api/v1/git/log` — commit log. Optional `?file=` limits it to commits
+  touching that path. The path must be relative, stay inside the repository
+  after `..` is resolved, not start with `:` (git pathspec magic), contain no
+  NUL and be at most 4096 bytes, else **400 `VALIDATION_ERROR` "Invalid file
+  path"** (agent-os-tyl6; git refused such paths and the route answered 500)
+- `GET /api/v1/git/diff/:hash` — commit diff. `:hash` must be 7–64 lowercase
+  hex characters, else **400 `VALIDATION_ERROR` "Invalid commit hash format"**
+  (the 64 upper bound is agent-os-tyl6; longer values answered 500). A
+  well-formed hash that names no commit (unknown, or an object that is not a
+  commit) answers **404 `NOT_FOUND` "Commit not found"**; it answered 500
+  before 2026-09-24 (agent-os-tyl6). Other git failures stay 500
 
 ## Monitoring & Dashboard
 
@@ -410,6 +422,16 @@ matching snapshots, including one for a stack that has since been deleted,
 answers **200 `[]`**. That is deliberate: deleting a stack does not delete its
 snapshots, and a stack whose ID changed keeps its older snapshots under the old
 ID, so an ID with no stack behind it can still name real backups.
+
+### `POST /api/v1/backups/restore`
+
+`snapshotId` must be 8–64 hex characters or `latest` (the same rule as the
+preview route), or the endpoint answers **400 `VALIDATION_ERROR` "Invalid
+snapshot ID"** before a run starts (agent-os-tyl6). Before 2026-09-24 a
+malformed id answered 202, took the backup lock and left a failed run in the
+history. It never reached `restic restore`: the run only restores an id that
+restic lists for the stack, and still fails for a well-formed id it does not
+list.
 
 ## Keeping this page honest
 

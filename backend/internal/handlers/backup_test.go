@@ -1172,7 +1172,7 @@ func TestRunRestore_Kickoff_Returns202(t *testing.T) {
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/restore", map[string]interface{}{
 		"stackId":    "myapp",
-		"snapshotId": "abc123",
+		"snapshotId": "abc12345",
 		"target":     "/opt/stacks/myapp",
 		"confirm":    true,
 	})
@@ -1214,7 +1214,7 @@ func TestRunRestore_StackNotFound_Returns404(t *testing.T) {
 
 	req := jsonReq(t, http.MethodPost, "/api/backups/restore", map[string]interface{}{
 		"stackId":    "no-such-stack",
-		"snapshotId": "abc123",
+		"snapshotId": "abc12345",
 		"confirm":    true,
 	})
 	w := httptest.NewRecorder()
@@ -1242,7 +1242,7 @@ func TestRunRestore_NoConfirm_Returns400(t *testing.T) {
 	// confirm omitted (defaults false) — restore is destructive and must be gated.
 	req := jsonReq(t, http.MethodPost, "/api/backups/restore", map[string]interface{}{
 		"stackId":    "myapp",
-		"snapshotId": "abc123",
+		"snapshotId": "abc12345",
 	})
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -1275,6 +1275,44 @@ func TestRunRestore_MissingFields_Returns400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 	body := decodeBody(t, w)
 	assert.Equal(t, models.ErrValidation, body["code"])
+}
+
+// TestRunRestore_InvalidSnapshotID_Returns400 pins agent-os-tyl6: a malformed
+// snapshotId is refused before a run is launched. restic never saw it either
+// way (RunRestore only restores an id restic listed for the stack), but it used
+// to answer 202, take the global backup lock and persist a failed run.
+func TestRunRestore_InvalidSnapshotID_Returns400(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{"--help", "-h", "abc123", "../etc", "abc12345:/x"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+
+			db := newBackupHandlerDB(t)
+			seedHandlerStack(t, db, "myapp")
+			svc := buildBackupSvc(t, db, true, false)
+			h := NewBackupHandler(svc, db, slog.Default())
+			t.Cleanup(h.Stop)
+			r := newBackupRouter(h)
+
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, jsonReq(t, http.MethodPost, "/api/backups/restore", map[string]interface{}{
+				"stackId":    "myapp",
+				"snapshotId": id,
+				"confirm":    true,
+			}))
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			body := decodeBody(t, w)
+			assert.Equal(t, models.ErrValidation, body["code"])
+			assert.Equal(t, "Invalid snapshot ID", body["message"])
+
+			runs, err := db.GetBackupRuns(10)
+			require.NoError(t, err)
+			assert.Empty(t, runs, "a rejected snapshotId must not persist a run")
+		})
+	}
+	// The accepting side is TestRunRestore_Kickoff_Returns202 ("abc12345").
 }
 
 // ─────────────────────────────────────────────
@@ -3539,4 +3577,54 @@ func TestPreviewSnapshot_UnknownIDIsNotFound(t *testing.T) {
 		_, listed := runner.listingArgs()
 		assert.False(t, listed, "the happy path must not pay for a second restic call")
 	})
+}
+
+// TestUpdateSettings_RcloneRemoteLeadingDash pins agent-os-tyl6: the remote is
+// rclone's first positional, and a value starting with '-' is parsed as a flag
+// (OBSERVED with rclone v1.60.1: "--log-file=/p" created the file "/p:"). It is
+// refused before ANY field of the request is written.
+func TestUpdateSettings_RcloneRemoteLeadingDash(t *testing.T) {
+	t.Parallel()
+
+	put := func(t *testing.T, body map[string]interface{}) (*httptest.ResponseRecorder, *database.DB) {
+		t.Helper()
+		db := newBackupHandlerDB(t)
+		svc := buildBackupSvc(t, db, true, false)
+		h := NewBackupHandler(svc, db, slog.Default())
+		t.Cleanup(h.Stop)
+		w := httptest.NewRecorder()
+		newBackupRouter(h).ServeHTTP(w, jsonReq(t, http.MethodPut, "/api/settings/backup", body))
+		return w, db
+	}
+
+	for _, remote := range []string{"--log-file=/tmp/x", "-x"} {
+		t.Run("rejects "+remote, func(t *testing.T) {
+			t.Parallel()
+			w, db := put(t, map[string]interface{}{"rcloneRemote": remote, "repository": "/data/other-repo"})
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			body := decodeBody(t, w)
+			assert.Equal(t, models.ErrValidation, body["code"])
+			assert.Equal(t, "rclone remote must not start with '-'", body["message"])
+			for _, key := range []string{"rclone_remote", "restic_repository"} {
+				stored, err := db.GetSetting(key)
+				assert.Empty(t, stored, "%s must not be written by a rejected request (err=%v)", key, err)
+			}
+		})
+	}
+
+	// Accepting side: ordinary names, an inner '-', and an on-the-fly
+	// connection-string remote (":s3,..."), which rclone's name rules would
+	// not cover and which works today.
+	for _, remote := range []string{"myremote", "my-remote", ":s3,provider=AWS", ""} {
+		t.Run("accepts "+remote, func(t *testing.T) {
+			t.Parallel()
+			w, db := put(t, map[string]interface{}{"rcloneRemote": remote})
+
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			stored, err := db.GetSetting("rclone_remote")
+			require.NoError(t, err)
+			assert.Equal(t, remote, stored)
+		})
+	}
 }

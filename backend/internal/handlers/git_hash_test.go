@@ -69,10 +69,12 @@ func TestIsValidHash_LengthBoundary(t *testing.T) {
 	assert.True(t, isValidHash(strings.Repeat("a", 7)))
 }
 
-func TestIsValidHash_AcceptsHexLongerThan40(t *testing.T) {
-	// Documenting the actual behaviour rather than assuming: the len == 40
-	// branch is strict, but anything longer falls through to the >= 7 branch,
-	// which has no upper bound. git will reject it; this gate does not.
+func TestIsValidHash_UpperBoundIsSHA256Length(t *testing.T) {
+	// 41..64 can be a SHA-256 object id or a prefix of one, so they pass.
+	// Past 64 no object id exists; this used to pass too and answer 500
+	// (agent-os-tyl6).
 	assert.True(t, isValidHash(strings.Repeat("a", 41)))
 	assert.True(t, isValidHash(strings.Repeat("a", 64)))
+	assert.False(t, isValidHash(strings.Repeat("a", 65)))
+	assert.False(t, isValidHash(strings.Repeat("a", 200000)))
 }

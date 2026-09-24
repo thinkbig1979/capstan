@@ -1157,7 +1157,7 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 		// remoteHasSnapshots as "confirmed empty" -- and this arm would
 		// pass for the wrong reason: not because the guard is correct, but
 		// because it queried nothing meaningful and defaulted to PROCEED.
-		require.Equal(t, []string{"lsf", "myremote:backup/path/snapshots"}, lsfArgs, "arm 1: the probe must query the real remote:path/snapshots target, not an arbitrary one")
+		require.Equal(t, []string{"lsf", "--", "myremote:backup/path/snapshots"}, lsfArgs, "arm 1: the probe must query the real remote:path/snapshots target, not an arbitrary one")
 	})
 
 	t.Run("arm2_ProceedsZeroLocalAgainstEmptyRemote", func(t *testing.T) {
