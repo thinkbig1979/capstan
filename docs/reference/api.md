@@ -185,7 +185,10 @@ With a live token, all four behave exactly as they did before.
   path"** (agent-os-tyl6; git refused such paths and the route answered 500)
 - `GET /api/v1/git/diff/:hash` — commit diff. `:hash` must be 7–64 lowercase
   hex characters, else **400 `VALIDATION_ERROR` "Invalid commit hash format"**
-  (the 64 upper bound is agent-os-tyl6; longer values answered 500)
+  (the 64 upper bound is agent-os-tyl6; longer values answered 500). A
+  well-formed hash that names no commit (unknown, or an object that is not a
+  commit) answers **404 `NOT_FOUND` "Commit not found"**; it answered 500
+  before 2026-09-24 (agent-os-tyl6). Other git failures stay 500
 
 ## Monitoring & Dashboard
 

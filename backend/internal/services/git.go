@@ -1110,6 +1110,17 @@ func (s *GitService) getDiffCLI(dirPath string, commitHash string) (*models.Diff
 	// getStatusCLI for why.
 	user, token := s.httpsCredentials(dirPath)
 
+	// An unknown commit is a client mistake, but `git log` exits 128 for it
+	// exactly as it does for faults, so it answered 500 (agent-os-tyl6).
+	// `rev-parse --verify --quiet` exits 1, silently, only when the name
+	// resolves to no commit: unknown, or an object that is not a commit. A
+	// non-repository exits 128 (OBSERVED, git 2.47.3), so every other outcome
+	// falls through to the paths below unchanged. It also stops a hex name
+	// that matches no commit from being read by `git log` as a file path.
+	if _, verr := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--verify", "--quiet", commitHash+"^{commit}"); gitExitCode(verr) == 1 {
+		return nil, models.NewAppError(404, models.ErrNotFound, "Commit not found")
+	}
+
 	logOutput, err := s.gitCommandWithCreds(dirPath, user, token, "log", "-1", "--format=%H%n%h%n%an%n%ae%n%s%n%aI", commitHash)
 	if err != nil {
 		if repoErr := s.gitFailure(dirPath, err); repoErr != nil {
