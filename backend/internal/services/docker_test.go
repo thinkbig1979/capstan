@@ -463,6 +463,26 @@ func TestBuildStackStatuses_SharedProject(t *testing.T) {
 	assert.Len(t, got["docker"].Containers, 2)
 }
 
+// TestBuildStackStatuses_Paused: a project whose containers are ALL paused is
+// "paused", the status the /ws/events stack_status frame already carries for a
+// Docker pause, so a list refetch no longer overwrites it with "partial"
+// (agent-os-n97z). One paused container beside a running or exited one is
+// still "partial".
+func TestBuildStackStatuses_Paused(t *testing.T) {
+	snapshot := []models.DashboardContainerInfo{
+		{ProjectName: "frozen", ID: "p1", State: "paused"},
+		{ProjectName: "frozen", ID: "p2", State: "paused"},
+		{ProjectName: "half", ID: "h1", State: "paused"},
+		{ProjectName: "half", ID: "h2", State: "running"},
+		{ProjectName: "mixed", ID: "m1", State: "paused"},
+		{ProjectName: "mixed", ID: "m2", State: "exited"},
+	}
+	got := BuildStackStatuses(snapshot)
+	assert.Equal(t, "paused", got["frozen"].Status)
+	assert.Equal(t, "partial", got["half"].Status)
+	assert.Equal(t, "partial", got["mixed"].Status)
+}
+
 func TestBuildStackStatuses_Empty(t *testing.T) {
 	assert.Empty(t, BuildStackStatuses(nil))
 }

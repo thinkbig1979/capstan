@@ -696,7 +696,10 @@ type LiveStatus struct {
 // derives each project's live status and container list — no Docker calls and no
 // per-stack `docker compose ps`. Status mirrors Status(): "running" when every
 // container in the project is running, "partial" when the project has containers
-// but not all are running. A project with no containers is simply absent from the
+// but not all are running. One exception Status() does not share: "paused" when
+// every container is paused, matching the /ws/events stack_status frame for a
+// Docker pause (agent-os-n97z). Status() still says "partial" there, because
+// BackupService.observeRunState reads that as running. A project with no containers is simply absent from the
 // returned map; it cannot reproduce Status()'s "unknown" (which means `compose
 // ps` itself errored on an unreadable dir / invalid file — a condition container
 // labels can't reveal), so the caller decides between "stopped" and "error" for
@@ -706,6 +709,7 @@ type LiveStatus struct {
 func BuildStackStatuses(containers []models.DashboardContainerInfo) map[string]LiveStatus {
 	byProject := make(map[string][]models.Container)
 	allRunning := make(map[string]bool)
+	allPaused := make(map[string]bool)
 
 	for _, c := range containers {
 		if c.ProjectName == "" {
@@ -713,9 +717,13 @@ func BuildStackStatuses(containers []models.DashboardContainerInfo) map[string]L
 		}
 		if _, seen := allRunning[c.ProjectName]; !seen {
 			allRunning[c.ProjectName] = true
+			allPaused[c.ProjectName] = true
 		}
 		if c.State != "running" {
 			allRunning[c.ProjectName] = false
+		}
+		if c.State != "paused" {
+			allPaused[c.ProjectName] = false
 		}
 		byProject[c.ProjectName] = append(byProject[c.ProjectName], models.Container{
 			ID:     c.ID,
@@ -731,8 +739,11 @@ func BuildStackStatuses(containers []models.DashboardContainerInfo) map[string]L
 	result := make(map[string]LiveStatus, len(byProject))
 	for project, list := range byProject {
 		status := "partial"
-		if allRunning[project] {
+		switch {
+		case allRunning[project]:
 			status = "running"
+		case allPaused[project]:
+			status = "paused"
 		}
 		result[project] = LiveStatus{Status: status, Containers: list}
 	}
