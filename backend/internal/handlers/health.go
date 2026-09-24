@@ -81,9 +81,14 @@ func (h *HealthHandler) allowed(c *gin.Context) bool {
 	if middleware.IsTrustedIP(clientIP, h.allowedNetworks) {
 		return true
 	}
-	c.JSON(http.StatusForbidden, gin.H{
-		"error": "Health endpoint restricted; add this network to HEALTH_ALLOWED_NETWORKS to permit it",
-	})
+	// The AppError {code, message} shape every other refusal uses (agent-os-bjlu).
+	// No probe reads this body: the container HEALTHCHECK comes from loopback,
+	// allowed above, and discards the body with wget -O /dev/null.
+	c.JSON(http.StatusForbidden, models.NewAppError(
+		http.StatusForbidden,
+		models.ErrForbidden,
+		"Health endpoint restricted; add this network to HEALTH_ALLOWED_NETWORKS to permit it",
+	))
 	return false
 }
 

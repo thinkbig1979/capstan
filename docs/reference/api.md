@@ -48,6 +48,12 @@ its network in `HEALTH_ALLOWED_NETWORKS`:
 HEALTH_ALLOWED_NETWORKS=10.1.0.0/16,192.168.50.7
 ```
 
+A denied caller gets `403` with the same error shape as every other refusal:
+
+```json
+{"code":"FORBIDDEN","message":"Health endpoint restricted; add this network to HEALTH_ALLOWED_NETWORKS to permit it"}
+```
+
 This is deliberately **not** `TRUSTED_NETWORKS` (Gin's trusted-proxy list) or
 `AUTH_DISABLED_ALLOWED_NETWORKS` (the `AUTH_DISABLED` bypass list) — reusing
 either would mean granting an uptime monitor `X-Forwarded-For` spoofing or
