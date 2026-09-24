@@ -108,7 +108,10 @@ check_reason() {
     return 0
   fi
   text=$(command cat "$file")
-  has() { command printf '%s\n' "$text" | command grep -qiE "$1"; }
+  # A here-string, never `printf | grep -q`: under pipefail grep -q exits on
+  # its first match, the printf still writing gets SIGPIPE, and a field that
+  # is present reads as missing (agent-os-7dkt, OBSERVED on CI at this line).
+  has() { command grep -qiE "$1" <<<"$text"; }
   # A field header may sit behind a list marker ("1. ", "- ") and/or bold
   # markers, the way CLAUDE.md's own block writes them.
   local H='^[[:space:]]*([0-9]+[.)][[:space:]]*|[-*][[:space:]]+)?(\*\*)?'
@@ -1181,6 +1184,10 @@ hook_mode() {
 # (exit status alone cannot tell "missing Verdict" from "read nothing").
 
 ST_RUN=0; ST_FAILS=0
+# st_says <ere> <text> : does a control's output say what it wanted? A
+# here-string for the same reason as has() (agent-os-7dkt, OBSERVED on CI
+# here too, with ~1 KB of output: bash writes it line by line).
+st_says() { command grep -qE "$1" <<<"$2"; }
 selftest_case() {
   local name=$1 want=$2 type=$3 file=$4 want_msg=${5:-} out rc
   # `&& rc=0 || rc=$?`, not `; rc=$?`: under set -e a non-zero substitution
@@ -1189,7 +1196,7 @@ selftest_case() {
   out=$(check_reason "$type" "$file" 2>&1) && rc=0 || rc=$?
   ST_RUN=$((ST_RUN + 1))
   if [ "$rc" = "$want" ]; then
-    if [ -z "$want_msg" ] || command printf '%s\n' "$out" | command grep -qE "$want_msg"; then return 0; fi
+    if [ -z "$want_msg" ] || st_says "$want_msg" "$out"; then return 0; fi
     echo "FAIL: close-reason self-test - control '$name' exited $rc as expected but did not explain itself; wanted a message matching /$want_msg/"
   else
     echo "FAIL: close-reason self-test - control '$name' expected exit $want, got $rc"
@@ -1211,7 +1218,7 @@ hook_raw() {
   out=$(command printf '%s' "$input" | ST_ENV_9OO5="$ST_DIR" HOME="$ST_DIR" PATH="$ST_DIR/bin:$PATH" bash "$0" --hook 2>&1) && rc=0 || rc=$?
   ST_RUN=$((ST_RUN + 1))
   if [ "$rc" = "$want" ]; then
-    if [ -z "$want_msg" ] || command printf '%s\n' "$out" | command grep -qE "$want_msg"; then return 0; fi
+    if [ -z "$want_msg" ] || st_says "$want_msg" "$out"; then return 0; fi
     echo "FAIL: close-reason self-test - hook control '$name' exited $rc as expected but did not explain itself; wanted /$want_msg/"
   else
     echo "FAIL: close-reason self-test - hook control '$name' expected exit $want, got $rc"
@@ -1273,6 +1280,25 @@ R
   selftest_case markdown-shape        0 bug  "$ST_DIR/markdown.txt"   'all four class-sweep fields present'
   selftest_case bug-empty             1 bug  "$ST_DIR/empty.txt"      'missing: Class statement, Sweep command, Verbatim output, Verdict'
   selftest_case task-empty            0 task "$ST_DIR/empty.txt"      'not a bug bead'
+  # --- more text than a pipe buffer holds (64 KiB), fields on the first
+  # lines: the reader stops at its first match while the writer still has
+  # ~1 MiB to go, so a piped matcher loses these every time (agent-os-7dkt).
+  local pad i
+  command printf -v pad '%63s' ''; pad=${pad// /x}$'\n'
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do pad+=$pad; done
+  { command cat "$ST_DIR/complete.txt"; command printf '%s' "$pad"; } > "$ST_DIR/large.txt"
+  command grep -viE '^verdict' "$ST_DIR/large.txt" > "$ST_DIR/large-no-verdict.txt"
+  selftest_case large-reason          0 bug  "$ST_DIR/large.txt"      'all four class-sweep fields present'
+  selftest_case large-missing-verdict 1 bug  "$ST_DIR/large-no-verdict.txt" 'missing: Verdict$'
+  # The self-test's own matcher, both ways, on the same large text.
+  ST_RUN=$((ST_RUN + 1))
+  if ! st_says '^line-1$' "line-1"$'\n'"$pad"; then
+    echo "FAIL: close-reason self-test - control 'st-says-large-match': a match on line 1 of ~1 MiB read as no match"; ST_FAILS=$((ST_FAILS + 1))
+  fi
+  ST_RUN=$((ST_RUN + 1))
+  if st_says '^absent$' "line-1"$'\n'"$pad"; then
+    echo "FAIL: close-reason self-test - control 'st-says-large-absent': a pattern absent from ~1 MiB read as a match"; ST_FAILS=$((ST_FAILS + 1))
+  fi
   selftest_case epic-complete         0 epic "$ST_DIR/complete.txt"   'not a bug bead \(type: epic\)'
 
   # --- the hook, driven by hook JSON on stdin, the way Claude Code calls it.
