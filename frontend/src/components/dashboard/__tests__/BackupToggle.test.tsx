@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BackupToggle } from '../BackupToggle'
 import { BackupPoliciesRefreshNotice } from '../BackupPoliciesRefreshNotice'
-import type { BackupStatus } from '@/types'
+import type { BackupRun, BackupStatus } from '@/types'
 
 // Radix UI Select uses scrollIntoView internally; jsdom does not implement it.
 window.HTMLElement.prototype.scrollIntoView = vi.fn()
@@ -69,7 +69,10 @@ function makeStatus(
   }
 }
 
-function makeStatusWithLastRun(status: 'success' | 'failed' | 'interrupted') {
+function makeStatusWithLastRun(
+  status: 'success' | 'failed' | 'interrupted' | 'partial' | 'running',
+  over: Partial<BackupRun> = {},
+) {
   return {
     data: {
       resticAvailable: true,
@@ -89,6 +92,7 @@ function makeStatusWithLastRun(status: 'success' | 'failed' | 'interrupted') {
         stacksFailed: status === 'failed' ? 1 : 0,
         bytesAdded: 1024,
         errorMessage: status === 'interrupted' ? 'process stopped before this run completed' : '',
+        ...over,
       },
       nextRunAt: null,
       repoSizeBytes: null,
@@ -306,6 +310,58 @@ describe('BackupToggle — last run status indicator', () => {
 
     expect(screen.getByLabelText('Last backup was interrupted')).toBeInTheDocument()
     expect(screen.queryByLabelText('Last backup failed')).not.toBeInTheDocument()
+  })
+
+  // agent-os-4zx0: a partial run (some stacks failed) rendered no icon at all,
+  // the same as "never ran".
+  it('shows a partial icon when last run status is partial', () => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatusWithLastRun('partial'))
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    expect(screen.getByLabelText('Last backup partly failed')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Last backup succeeded')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Last backup failed')).not.toBeInTheDocument()
+  })
+
+  it('still shows no icon while the last run is running', () => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatusWithLastRun('running'))
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    expect(screen.queryByLabelText(/^Last /)).not.toBeInTheDocument()
+  })
+
+  // agent-os-4zx0: lastRun is the newest run of ANY kind, so a restore or a
+  // prune used to read "Last backup ...".
+  it.each([
+    ['restore', 'failed', 'Last restore failed'],
+    ['prune', 'success', 'Last prune succeeded'],
+    ['sync', 'partial', 'Last sync partly failed'],
+    ['dr_restore', 'interrupted', 'Last DR restore was interrupted'],
+    ['verify', 'success', 'Last repository check succeeded'],
+  ] as const)('names the kind of a %s run (%s)', (kind, status, label) => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeStatusWithLastRun(status, { kind, stacksTotal: 0, stacksOk: 0, stacksFailed: 0 }),
+    )
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    expect(screen.getByLabelText(label)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^Last backup/)).not.toBeInTheDocument()
+  })
+
+  // Same case BackupStatusCard's LastRunBadge renders as "No stacks backed up"
+  // (agent-os-a9gi): a successful backup that attempted no stacks.
+  it('does not call a backup of zero stacks a success', () => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeStatusWithLastRun('success', { stacksTotal: 0, stacksOk: 0 }),
+    )
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    expect(screen.getByLabelText('Last backup ran with no stacks')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Last backup succeeded')).not.toBeInTheDocument()
   })
 
   it('shows no status icon when lastRun is null', () => {
