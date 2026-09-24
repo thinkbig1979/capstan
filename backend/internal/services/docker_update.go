@@ -512,6 +512,9 @@ func (s *DockerService) findComposeContainer(ctx context.Context, projectName, s
 	return containers[0].ID
 }
 
+// updateComposeContainer's errors carry compose's output redacted but at full
+// length (agent-os-zrm2): a long pull prints progress first and its real error
+// last, so trimOutput's first-500-bytes cut would drop the diagnosis.
 func (s *DockerService) updateComposeContainer(ctx context.Context, stack models.Stack, serviceName string, wasRunning bool) error {
 	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
@@ -519,7 +522,7 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 	pullCmd.Dir = stack.Directory
 	pullCmd.Env = dockerEnv()
 	if output, err := pullCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("compose pull failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return fmt.Errorf("compose pull failed: %s: %w", strings.TrimSpace(s.redactComposeOutputFor(stack, string(output))), err)
 	}
 
 	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
@@ -528,7 +531,7 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 	upCmd.Dir = stack.Directory
 	upCmd.Env = dockerEnv()
 	if output, err := upCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("compose up failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return fmt.Errorf("compose up failed: %s: %w", strings.TrimSpace(s.redactComposeOutputFor(stack, string(output))), err)
 	}
 
 	if !wasRunning {
