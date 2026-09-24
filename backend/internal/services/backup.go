@@ -960,7 +960,17 @@ func (s *BackupService) executeBackupRun(
 	if !dryRun && bc.SyncAfter && s.rcloneBin != "" {
 		stream(out, "info", "Starting post-backup rclone sync")
 		if syncErr := s.runSyncInternal(ctx, bc, out); syncErr != nil {
-			stream(out, "error", fmt.Sprintf("post-backup sync failed: %v", syncErr))
+			msg := fmt.Sprintf("post-backup sync failed: %v", syncErr)
+			stream(out, "error", msg)
+			// The run row is already final, so record the sync failure with a
+			// second update. The off-site copy did not happen, so the run is not
+			// a clean success (agent-os-uwfu, same principle as dbFailed above).
+			runNotes = append(runNotes, msg)
+			run.ErrorMessage = withRunNotes(primaryReason, runNotes)
+			if run.Status == "success" {
+				run.Status = "partial"
+			}
+			s.finaliseRun(run)
 		}
 	}
 
@@ -1125,19 +1135,27 @@ func (s *BackupService) backupStack(
 	// defer below so it runs AFTER it: a restart outcome is only known once the
 	// restart has happened, and it has to reach the durable item, not just the
 	// stream, which drops lines when no client is attached (agent-os-5gou).
+	// Every return path writes one, so a stack that failed before its backup
+	// started (lock, stack lookup, stop) still says why (agent-os-uwfu).
 	var (
-		recordStatus string // "" = no item for this return path
-		snapshotID   string
-		stopApplied  bool
-		notes        []string
+		snapshotID  string
+		stopApplied bool
+		notes       []string
 	)
 	defer func() {
-		if recordStatus == "" {
-			return
+		status := "success"
+		if retErr != nil {
+			status = "failed"
+			notes = append([]string{retErr.Error()}, notes...)
 		}
-		s.recordItem(runID, stackID, recordStatus, snapshotID, stopApplied, time.Since(startedAt),
+		s.recordItem(runID, stackID, status, snapshotID, stopApplied, time.Since(startedAt),
 			strings.Join(notes, "; "))
 	}()
+	// warn reports a non-fatal problem live and keeps it for the run item.
+	warn := func(msg string) {
+		stream(out, "error", fmt.Sprintf("[%s] %s", stackID, msg))
+		notes = append(notes, msg)
+	}
 
 	// Per-stack operation lock — prevents a deploy from racing a backup.
 	lockToken, lockErr := s.opLock.Acquire(stackID)
@@ -1204,7 +1222,6 @@ func (s *BackupService) backupStack(
 
 	if dryRun {
 		stream(out, "info", fmt.Sprintf("[%s] dry-run: skipping restic backup", stackID))
-		recordStatus = "success"
 		return res, nil
 	}
 
@@ -1212,9 +1229,7 @@ func (s *BackupService) backupStack(
 	tags := []string{stackID}
 	summary, backupErr := restic.Backup(ctx, stack.Directory, tags, out)
 	if backupErr != nil {
-		retErr = fmt.Errorf("restic backup: %w", backupErr)
-		recordStatus = "failed"
-		return res, retErr
+		return res, fmt.Errorf("restic backup: %w", backupErr)
 	}
 	if summary != nil {
 		res.bytesAdded = summary.BytesAdded
@@ -1223,12 +1238,12 @@ func (s *BackupService) backupStack(
 	// Verify the snapshot we just created.
 	if verifyErr := restic.Verify(ctx, stackID, out); verifyErr != nil {
 		// Verification failure is non-fatal: log and continue.
-		stream(out, "error", fmt.Sprintf("[%s] verify warning: %v", stackID, verifyErr))
+		warn(fmt.Sprintf("verify warning: %v", verifyErr))
 	}
 
 	// Apply retention policy.
 	if retentionErr := restic.ApplyRetention(ctx, stackID, out); retentionErr != nil {
-		stream(out, "error", fmt.Sprintf("[%s] retention warning: %v", stackID, retentionErr))
+		warn(fmt.Sprintf("retention warning: %v", retentionErr))
 	}
 
 	// Retrieve the latest snapshot ID for the run item record.
@@ -1242,12 +1257,11 @@ func (s *BackupService) backupStack(
 	// warnings above.
 	snaps, listErr := restic.ListSnapshots(ctx, stackID, 1)
 	if listErr != nil {
-		stream(out, "error", fmt.Sprintf("[%s] snapshot id unavailable: %v", stackID, listErr))
+		warn(fmt.Sprintf("snapshot id unavailable: %v", listErr))
 	} else if len(snaps) > 0 {
 		snapshotID = snaps[0].ShortID
 	}
 
-	recordStatus = "success"
 	stream(out, "info", fmt.Sprintf("[%s] completed successfully", stackID))
 
 	// The deferred restart will fire here for the stop-policy path unless the
