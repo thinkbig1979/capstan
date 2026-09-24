@@ -14,6 +14,14 @@ interface RefreshFailedNoticeProps {
    * not: place the notice near the save control in that case.
    */
   beforeSave?: boolean
+  /**
+   * Pass it whenever the failed query's `refetch` is in scope at the call site
+   * (agent-os-3k31). Another control on the same surface does not count: a
+   * "Check for Updates" button starts a registry scan, it does not retry the
+   * read that failed. Omit it only where no refetch is reachable, and then say
+   * why in a one-line comment at the site, so an omission reads as a decision
+   * rather than an oversight.
+   */
   onRetry?: () => void
   className?: string
 }

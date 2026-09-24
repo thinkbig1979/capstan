@@ -31,7 +31,7 @@ const stack = (overrides: Partial<Stack> = {}): Stack => ({
   ...overrides,
 })
 
-const renderRow = (s: Stack) =>
+const renderRow = (s: Stack, pinned = false) =>
   render(
     <MemoryRouter>
       <StackRow
@@ -39,7 +39,7 @@ const renderRow = (s: Stack) =>
         selecting={false}
         selected={false}
         onToggleSelect={vi.fn()}
-        pinned={false}
+        pinned={pinned}
         onTogglePin={vi.fn()}
       />
     </MemoryRouter>,
@@ -134,5 +134,26 @@ describe('StackRow — a stale status', () => {
     const link = screen.getByRole('link', { name: 'web - running' })
     expect(link).not.toHaveAttribute('title')
     expect(dotOf(link)?.className).toContain('bg-success')
+  })
+})
+
+/**
+ * agent-os-eldv, part 1. The control's words all say "pin" (aria-label, title)
+ * and it used to draw a Star, so a screen-reader user and a sighted user got
+ * two different models of one button. The words are the decided vocabulary;
+ * the icon follows them. lucide stamps `lucide-<name>` on every icon's svg.
+ */
+describe('StackRow — the pin control draws a pin', () => {
+  it.each([
+    [false, 'Pin web', 'Pin to top'],
+    [true, 'Unpin web', 'Unpin'],
+  ])('pinned=%s: named %j, titled %j, drawn as a Pin', (pinned, name, title) => {
+    renderRow(stack(), pinned)
+
+    const button = screen.getByRole('button', { name })
+    expect(button).toHaveAttribute('title', title)
+    const svg = button.querySelector('svg')
+    expect(svg?.classList.contains('lucide-pin')).toBe(true)
+    expect(svg?.classList.contains('lucide-star')).toBe(false)
   })
 })

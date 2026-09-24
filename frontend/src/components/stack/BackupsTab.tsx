@@ -108,7 +108,7 @@ function RepoFaultNotice({ fault }: { fault: RepoFault }) {
 // ─── Preview panel ────────────────────────────────────────────────────────────
 
 function PreviewPanel({ snapshotId, onClose }: { snapshotId: string; onClose: () => void }) {
-  const { data, isLoading, isError, error } = usePreviewSnapshot(snapshotId)
+  const { data, isLoading, isError, error, refetch } = usePreviewSnapshot(snapshotId)
   // Reached only when the snapshot list ALREADY loaded — the fault panel below
   // replaces the table, and the button that opens this panel lives in a row of
   // it. So this is the repository dying under an open tab: a mount dropping, a
@@ -141,7 +141,7 @@ function PreviewPanel({ snapshotId, onClose }: { snapshotId: string; onClose: ()
           previewFault ? (
             <RepoFaultNotice fault={previewFault} />
           ) : data ? (
-            <RefreshFailedNotice what="the preview" />
+            <RefreshFailedNotice what="the preview" onRetry={() => void refetch()} />
           ) : (
             <div className="flex items-center gap-2 text-destructive">
               <AlertCircle className="h-4 w-4" />
@@ -366,6 +366,7 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
     isLoading: snapshotsLoading,
     isError: snapshotsError,
     error: snapshotsErrorCause,
+    refetch: refetchSnapshots,
   } = useBackupSnapshots(stackId)
   const repoFault = repoFaultFrom(snapshotsErrorCause)
 
@@ -493,7 +494,7 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
           repoFault ? (
             <RepoFaultNotice fault={repoFault} />
           ) : snapshots && snapshots.length > 0 ? (
-            <RefreshFailedNotice what="the snapshots" />
+            <RefreshFailedNotice what="the snapshots" onRetry={() => void refetchSnapshots()} />
           ) : (
             <div className="flex items-center gap-2 text-sm text-destructive py-4">
               <AlertCircle className="h-4 w-4" />

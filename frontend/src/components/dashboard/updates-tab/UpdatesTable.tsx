@@ -14,6 +14,7 @@ import { BackupPoliciesRefreshNotice } from '@/components/dashboard/BackupPolici
 import { UpdateJobStatusCell } from '@/components/dashboard/UpdateJobStatusCell'
 import { UpdateJobLog } from '@/components/updates/UpdateJobLog'
 import type { AutoUpdatePolicy } from '@/types'
+import type { GlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
 import type { UpdateJob } from '@/stores/updateJobStore'
 import { formatRelativeTime } from '@/lib/format'
 import { isCachedUpdate, type SortKey, type UpdateItem } from './types'
@@ -29,6 +30,7 @@ interface UpdatesTableProps {
   isRefreshing: boolean
   onCheck: () => void
   policies: Map<string, AutoUpdatePolicy>
+  globalAutoUpdateState: GlobalAutoUpdateState
   jobForContainer: (containerId: string) => UpdateJob | undefined
   expandedIds: Set<string>
   onToggleExpand: (containerId: string) => void
@@ -47,6 +49,7 @@ export function UpdatesTable({
   isRefreshing,
   onCheck,
   policies,
+  globalAutoUpdateState,
   jobForContainer,
   expandedIds,
   onToggleExpand,
@@ -171,17 +174,6 @@ export function UpdatesTable({
                     <StatusBadge status={container.state === 'running' ? 'running' : 'stopped'} />
                   </TableCell>
                   <TableCell>
-                    {/* THESE TWO TOGGLES ARE STILL WRONG -- see agent-os-2f08.
-                        This table has never honoured the global master switch:
-                        before agent-os-bueb made the prop required they passed
-                        nothing at all and the old `globalDisabled` default was
-                        false, so the tab does not lock even when auto-update is
-                        genuinely off globally. 'enabled' is pinned here only to
-                        preserve that existing behaviour under a now-required
-                        prop; it is NOT a decision that this tab should stay
-                        unlocked, and the explicit value is NOT the fix. Wiring
-                        the real state is a behaviour change and belongs to
-                        agent-os-2f08. */}
                     <div className="flex items-center gap-2">
                       {activePolicy ? (
                         <AutoUpdateToggle
@@ -190,7 +182,7 @@ export function UpdatesTable({
                           enabled={activePolicy.enabled}
                           paused={activePolicy.paused}
                           consecutiveFailures={activePolicy.consecutiveFailures}
-                          globalState="enabled"
+                          globalState={globalAutoUpdateState}
                         />
                       ) : (
                         <AutoUpdateToggle
@@ -199,7 +191,7 @@ export function UpdatesTable({
                           enabled={false}
                           paused={false}
                           consecutiveFailures={0}
-                          globalState="enabled"
+                          globalState={globalAutoUpdateState}
                         />
                       )}
                       {!containerPolicy && container.stackId && (

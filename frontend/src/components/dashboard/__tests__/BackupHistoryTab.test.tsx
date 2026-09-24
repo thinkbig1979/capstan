@@ -640,5 +640,13 @@ describe('BackupHistoryTab — a failed REFETCH must not discard data', () => {
     expect(screen.getByText('stack-alpha')).toBeInTheDocument()
     expect(screen.queryByText('Failed to load run details.')).not.toBeInTheDocument()
     expect(screen.getByText(/Could not refresh the run details/)).toBeInTheDocument()
+
+    // agent-os-3k31: the notice offers Retry, and Retry re-runs the read that failed.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    mockGetRun.mockResolvedValue({ run: run(), items: [item()] })
+    const callsBeforeRetry = mockGetRun.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(mockGetRun.mock.calls.length).toBeGreaterThan(callsBeforeRetry))
+    await waitFor(() => expect(screen.queryByText(/Could not refresh the run details/)).not.toBeInTheDocument())
   })
 })

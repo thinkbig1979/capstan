@@ -30,7 +30,7 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
     return 'unified'
   })
 
-  const { data: diffData, isLoading, error } = useGitDiff(stackId, commitHash)
+  const { data: diffData, isLoading, error, refetch } = useGitDiff(stackId, commitHash)
 
   useEffect(() => {
     localStorage.setItem('diff-view-preference', viewMode)
@@ -96,7 +96,7 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
     <>
       {/* agent-os-lurn: past the guard, `error` means a REFRESH failed over a
           diff we still hold. Report it without taking the diff away. */}
-      {error && <RefreshFailedNotice what="the diff" className="mb-2" />}
+      {error && <RefreshFailedNotice what="the diff" className="mb-2" onRetry={() => void refetch()} />}
       <div className="space-y-2 rounded-lg border">
         <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/50">
           <span className="text-sm font-medium">Diff View</span>

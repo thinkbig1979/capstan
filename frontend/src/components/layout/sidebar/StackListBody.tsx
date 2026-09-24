@@ -1,7 +1,7 @@
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { LoadFailedNotice } from '@/components/LoadFailedNotice'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
-import { ChevronDown, ChevronRight, FolderOpen, Star } from 'lucide-react'
+import { ChevronDown, ChevronRight, FolderOpen, Pin } from 'lucide-react'
 import { countTreeNodeStacks, type TreeNode } from '@/lib/stack-tree'
 import type { Stack } from '@/types'
 import { StackRow } from './StackRow'
@@ -65,7 +65,7 @@ export function StackListBody({
         {!selecting && pinnedVisible.length > 0 && (
           <div className="mb-1">
             <div className="flex items-center gap-1 px-2 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              <Star className="h-2.5 w-2.5 fill-current text-warning" />
+              <Pin className="h-2.5 w-2.5 fill-current text-warning" />
               Pinned
             </div>
             {pinnedVisible.map((stack) => (

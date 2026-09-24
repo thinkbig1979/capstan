@@ -9,6 +9,7 @@ import type { ContainerUpdateInfo, CachedUpdate, AutoUpdatePolicy } from '@/type
 // resolution without depending on react-query internals.
 
 const mockCheckUpdates = vi.fn()
+const mockCheckUpdatesRefetch = vi.fn()
 const mockRefreshMutate = vi.fn()
 const mockUpdateMutate = vi.fn()
 let mockUpdateIsPending = false
@@ -43,11 +44,17 @@ vi.mock('sonner', () => ({
 // Stub out child components with their own hook/WS dependencies so tests stay
 // focused on UpdatesTab's own logic (mirrors DashboardPage stubbing UpdatesTab).
 vi.mock('@/components/dashboard/AutoUpdateToggle', () => ({
-  AutoUpdateToggle: (props: { targetType: string; targetId: string; enabled: boolean }) => (
+  AutoUpdateToggle: (props: {
+    targetType: string
+    targetId: string
+    enabled: boolean
+    globalState: string
+  }) => (
     <div
       data-testid={`auto-update-toggle-${props.targetId}`}
       data-target-type={props.targetType}
       data-enabled={props.enabled}
+      data-global-state={props.globalState}
     />
   ),
 }))
@@ -147,6 +154,7 @@ function setCheckUpdates(
     // classifyError(error) on isError alone would print the invented sentence
     // "An unexpected error occurred" for all of them.
     error: undefined,
+    refetch: mockCheckUpdatesRefetch,
     ...overrides,
   })
 }
@@ -157,7 +165,11 @@ beforeEach(() => {
   mockIsScanning = false
   mockUpdateIsPending = false
   mockJobForContainer = () => undefined
-  mockAutoUpdatePolicies.mockReturnValue({ data: { policies: [] } })
+  mockAutoUpdatePolicies.mockReturnValue({
+    data: { policies: [], globalEnabled: true },
+    isPending: false,
+    isError: false,
+  })
   setCheckUpdates()
 })
 
@@ -366,6 +378,58 @@ describe('UpdatesTab — updates table', () => {
   })
 })
 
+// ─── Global auto-update master switch (agent-os-2f08) ──────────────────────────
+
+/**
+ * This table used to pass globalState="enabled" to both toggles regardless of
+ * the real switch, so the Updates tab stayed interactive while every other
+ * surface locked. Both render paths are exercised: a row WITH a matching policy
+ * and a row with none. Each state is asserted on the same instrument, so a
+ * toggle that is now always locked fails the 'enabled' arm.
+ */
+describe('UpdatesTab — the global auto-update master switch locks the toggles (agent-os-2f08)', () => {
+  const containers = [
+    makeContainer({ containerId: 'c1', containerName: 'with-policy', stackId: 'stack1' }),
+    makeContainer({ containerId: 'c2', containerName: 'no-policy', stackId: '' }),
+  ]
+  const policies = [makePolicy({ targetType: 'container', targetId: 'c1' })]
+
+  function renderWithGlobal(query: { data?: unknown; isPending: boolean; isError: boolean }) {
+    setCheckUpdates({ data: { updates: containers, fromCache: false } })
+    mockAutoUpdatePolicies.mockReturnValue(query)
+    render(<UpdatesTab />)
+    return [screen.getByTestId('auto-update-toggle-c1'), screen.getByTestId('auto-update-toggle-c2')]
+  }
+
+  it('locks both toggles when the global switch is OFF', () => {
+    const toggles = renderWithGlobal({
+      data: { policies, globalEnabled: false },
+      isPending: false,
+      isError: false,
+    })
+    for (const t of toggles) expect(t).toHaveAttribute('data-global-state', 'disabled')
+  })
+
+  it('leaves both toggles interactive when the global switch is ON', () => {
+    const toggles = renderWithGlobal({
+      data: { policies, globalEnabled: true },
+      isPending: false,
+      isError: false,
+    })
+    for (const t of toggles) expect(t).toHaveAttribute('data-global-state', 'enabled')
+  })
+
+  it('reports the policy state as unavailable, not "off", when the policies query failed', () => {
+    const toggles = renderWithGlobal({ data: undefined, isPending: false, isError: true })
+    for (const t of toggles) expect(t).toHaveAttribute('data-global-state', 'unavailable')
+  })
+
+  it('reports loading while the policies query is in flight', () => {
+    const toggles = renderWithGlobal({ data: undefined, isPending: true, isError: false })
+    for (const t of toggles) expect(t).toHaveAttribute('data-global-state', 'loading')
+  })
+})
+
 // ─── Auto-update / backup policy resolution ────────────────────────────────────
 
 describe('UpdatesTab — policy resolution', () => {
@@ -551,6 +615,13 @@ describe('UpdatesTab — a failed REFETCH must not discard a populated table (ag
       screen.getByText(/Could not refresh the available updates\. The values shown are the last ones the server sent\./),
     ).toBeInTheDocument()
     expect(screen.queryByText(/check them before saving/)).not.toBeInTheDocument()
+
+    // agent-os-3k31: Retry re-runs the failed READ, and does not start a
+    // registry scan (the table's "Check for Updates" button does that).
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(mockCheckUpdatesRefetch).toHaveBeenCalledTimes(1)
+    expect(mockRefreshMutate).not.toHaveBeenCalled()
   })
 
   /**
@@ -580,6 +651,12 @@ describe('UpdatesTab — a failed REFETCH must not discard a populated table (ag
 
     expect(screen.queryByText('Failed to Check for Updates')).not.toBeInTheDocument()
     expect(screen.getByText(/Could not refresh the available updates/)).toBeInTheDocument()
+
+    // agent-os-3k31: same Retry contract on the empty-list tail.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(mockCheckUpdatesRefetch).toHaveBeenCalledTimes(1)
+    expect(mockRefreshMutate).not.toHaveBeenCalled()
   })
 })
 

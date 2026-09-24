@@ -10,7 +10,7 @@
  * other.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
 
@@ -332,5 +332,13 @@ describe('DiffViewer — a failed REFETCH must not discard the diff (agent-os-lu
       screen.getByText(/Could not refresh the diff\. The values shown are the last ones the server sent\./),
     ).toBeInTheDocument()
     expect(screen.queryByText(/check them before saving/)).not.toBeInTheDocument()
+
+    // agent-os-3k31: the notice offers Retry, and Retry re-runs the read that failed.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    mockDiff.mockResolvedValue({ diff: DIFF })
+    const callsBeforeRetry = mockDiff.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(mockDiff.mock.calls.length).toBeGreaterThan(callsBeforeRetry))
+    await waitFor(() => expect(screen.queryByText(/Could not refresh the diff/)).not.toBeInTheDocument())
   })
 })

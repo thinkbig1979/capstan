@@ -115,7 +115,7 @@ function RunMessage({ run }: { run: BackupRun }) {
 
 function RunDetail({ run }: { run: BackupRun }) {
   const { id: runId, status } = run
-  const { data, isLoading, isError, error } = useBackupRunDetail(runId, status)
+  const { data, isLoading, isError, error, refetch } = useBackupRunDetail(runId, status)
 
   if (isLoading) {
     return (
@@ -165,7 +165,7 @@ function RunDetail({ run }: { run: BackupRun }) {
   if (items.length === 0) {
     return (
       <div className="space-y-2 px-4 py-3">
-        {refreshFailed && <RefreshFailedNotice what="the run details" />}
+        {refreshFailed && <RefreshFailedNotice what="the run details" onRetry={() => void refetch()} />}
         <RunMessage run={run} />
         {!run.errorMessage && (
           <p className="text-sm text-muted-foreground">No per-stack records for this run.</p>
@@ -176,7 +176,7 @@ function RunDetail({ run }: { run: BackupRun }) {
 
   return (
     <div className="space-y-2 px-4 py-3">
-      {refreshFailed && <RefreshFailedNotice what="the run details" />}
+      {refreshFailed && <RefreshFailedNotice what="the run details" onRetry={() => void refetch()} />}
       <RunMessage run={run} />
       <ul className="space-y-1.5">
         {items.map((it) => (
