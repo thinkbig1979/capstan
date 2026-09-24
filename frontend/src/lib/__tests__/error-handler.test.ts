@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { classifyError } from '../error-handler'
+import { classifyError, causeOf } from '../error-handler'
 
 describe('classifyError', () => {
   it('returns unknown for null', () => {
@@ -361,6 +361,72 @@ describe('classifyError', () => {
     expect(result.message).toBe(
       `saved: false, retries: 2, lintResults: ${JSON.stringify([lint])}, meta: {"a":1}, gone: null, name: is required`,
     )
+  })
+
+  // agent-os-rwlw: a LintResult array reads as lines, not JSON.
+  describe('422 lintResults summary', () => {
+    const lintError = (line: number, message: string, rule: string) => ({ level: 'error', line, message, rule })
+    const compose422 = (details: Record<string, unknown>) => ({
+      status: 422,
+      code: 'COMPOSE_VALIDATION_ERROR',
+      message: 'Compose file validation failed',
+      details,
+    })
+
+    it('renders one error as "Line N: message (rule)", which is what presentError shows', () => {
+      const error = compose422({ lintResults: [lintError(4, 'port "80:80" conflicts with service web', 'no-duplicate-ports')] })
+      const expected = 'Line 4: port "80:80" conflicts with service web (no-duplicate-ports)'
+      expect(classifyError(error).message).toBe(expected)
+      expect(causeOf(error)).toBe(expected)
+    })
+
+    it('puts errors before warnings, marks non-errors, and has no JSON braces', () => {
+      const message = classifyError(compose422({
+        lintResults: [
+          { level: 'warning', line: 2, message: 'W1', rule: 'rule-c' },
+          lintError(4, 'E1', 'rule-a'),
+          lintError(9, 'E2', 'rule-b'),
+        ],
+      })).message
+      expect(message).toBe('Line 4: E1 (rule-a); Line 9: E2 (rule-b); Line 2 (warning): W1 (rule-c)')
+      expect(message).not.toMatch(/[{}[\]]/)
+    })
+
+    it('caps at 3 entries and counts the rest', () => {
+      const lintResults = [1, 2, 3, 4, 5, 6].map((n) => lintError(n, `E${n}`, `r${n}`))
+      expect(classifyError(compose422({ lintResults })).message).toBe(
+        'Line 1: E1 (r1); Line 2: E2 (r2); Line 3: E3 (r3); +3 more',
+      )
+    })
+
+    it('drops saved:false from Put\'s shape when a lint summary is shown', () => {
+      expect(classifyError(compose422({ saved: false, lintResults: [lintError(4, 'E1', 'rule-a')] })).message).toBe(
+        'Line 4: E1 (rule-a)',
+      )
+    })
+
+    it('omits a missing line and an empty rule', () => {
+      expect(classifyError(compose422({
+        lintResults: [lintError(0, 'E1', ''), { level: 'warning', line: 0, message: 'W1', rule: 'r' }],
+      })).message).toBe('E1; (warning) W1 (r)')
+    })
+
+    it('keeps other keys in the nud8 form next to the summary', () => {
+      expect(classifyError(compose422({ lintResults: [lintError(4, 'E1', 'r')], retries: 2 })).message).toBe(
+        'Line 4: E1 (r), retries: 2',
+      )
+    })
+
+    it('falls back to JSON when any item is not LintResult-shaped, and keeps saved', () => {
+      const lintResults = [lintError(4, 'E1', 'r'), { level: 'error', line: '5', message: 'E2', rule: 'r' }]
+      expect(classifyError(compose422({ saved: false, lintResults })).message).toBe(
+        `saved: false, lintResults: ${JSON.stringify(lintResults)}`,
+      )
+    })
+
+    it('falls back to JSON for an empty array', () => {
+      expect(classifyError(compose422({ lintResults: [] })).message).toBe('lintResults: []')
+    })
   })
 
   it('classifies 400 as validation', () => {
