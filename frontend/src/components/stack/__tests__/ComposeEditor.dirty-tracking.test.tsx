@@ -60,17 +60,15 @@ vi.mock('@codemirror/search', () => ({ search: () => [] }))
 vi.mock('@codemirror/autocomplete', () => ({ autocompletion: () => [] }))
 vi.mock('@/stores/uiStore', () => ({ useUIStore: () => ({ theme: 'light' }) }))
 
-const mockApiGet = vi.fn()
-const mockApiPut = vi.fn()
-const mockApiPost = vi.fn()
+const mockGetCompose = vi.fn()
+const mockUpdateCompose = vi.fn()
+const mockLintCompose = vi.fn()
 
 vi.mock('@/lib/api', () => ({
-  apiClient: {
-    get: (...args: unknown[]) => mockApiGet(...args),
-    put: (...args: unknown[]) => mockApiPut(...args),
-    post: (...args: unknown[]) => mockApiPost(...args),
-  },
   stacksApi: {
+    getCompose: (...args: unknown[]) => mockGetCompose(...args),
+    updateCompose: (...args: unknown[]) => mockUpdateCompose(...args),
+    lintCompose: (...args: unknown[]) => mockLintCompose(...args),
     getEnv: vi.fn(),
     updateComposeAndEnv: vi.fn(),
     updateEnv: vi.fn(),
@@ -89,7 +87,7 @@ describe('ComposeEditor — Save button tracks editor dirtiness', () => {
     vi.clearAllMocks()
     mockDispatch.mockReset()
     capturedOnChange = undefined
-    mockApiGet.mockResolvedValue({ data: 'services:\n  web:\n    image: nginx\n' })
+    mockGetCompose.mockResolvedValue('services:\n  web:\n    image: nginx\n')
   })
 
   it('enables the Save button once the editor content diverges from last saved (typing)', async () => {
@@ -106,8 +104,8 @@ describe('ComposeEditor — Save button tracks editor dirtiness', () => {
   })
 
   it('does not re-enable the Save button immediately after a successful save', async () => {
-    mockApiPost.mockResolvedValue({ data: { lintResults: [] } })
-    mockApiPut.mockResolvedValue({ data: { lintResults: [] } })
+    mockLintCompose.mockResolvedValue({ lintResults: [] })
+    mockUpdateCompose.mockResolvedValue({ lintResults: [] })
 
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
     await waitFor(() => expect(capturedOnChange).toBeDefined())
@@ -124,7 +122,7 @@ describe('ComposeEditor — Save button tracks editor dirtiness', () => {
       screen.getByText('Save').click()
     })
 
-    await waitFor(() => expect(mockApiPut).toHaveBeenCalled())
+    await waitFor(() => expect(mockUpdateCompose).toHaveBeenCalled())
     await waitFor(() => expect(screen.getByText('Save')).toBeDisabled())
   })
 })
@@ -143,7 +141,7 @@ describe('ComposeEditor — GET /compose response body', () => {
     // string — the arm then agrees for a reason that has nothing to do with
     // the narrowing and cannot fail.
     capturedDocs.length = 0
-    mockApiGet.mockResolvedValue({ data: { content: { yaml: 'services:' } } })
+    mockGetCompose.mockResolvedValue({ content: { yaml: 'services:' } })
 
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
     await waitFor(() =>
@@ -155,7 +153,7 @@ describe('ComposeEditor — GET /compose response body', () => {
   })
 
   it('still passes a real string body straight through', async () => {
-    mockApiGet.mockResolvedValue({ data: { content: 'services:\n  web:\n    image: nginx\n' } })
+    mockGetCompose.mockResolvedValue({ content: 'services:\n  web:\n    image: nginx\n' })
 
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
     await waitFor(() => expect(capturedDoc).toBe('services:\n  web:\n    image: nginx\n'))

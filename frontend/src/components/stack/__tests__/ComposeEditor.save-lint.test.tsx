@@ -66,17 +66,15 @@ vi.mock('@codemirror/search', () => ({ search: () => [] }))
 vi.mock('@codemirror/autocomplete', () => ({ autocompletion: () => [] }))
 vi.mock('@/stores/uiStore', () => ({ useUIStore: () => ({ theme: 'light' }) }))
 
-const mockApiGet = vi.fn()
-const mockApiPut = vi.fn()
-const mockApiPost = vi.fn()
+const mockGetCompose = vi.fn()
+const mockUpdateCompose = vi.fn()
+const mockLintCompose = vi.fn()
 
 vi.mock('@/lib/api', () => ({
-  apiClient: {
-    get: (...args: unknown[]) => mockApiGet(...args),
-    put: (...args: unknown[]) => mockApiPut(...args),
-    post: (...args: unknown[]) => mockApiPost(...args),
-  },
   stacksApi: {
+    getCompose: (...args: unknown[]) => mockGetCompose(...args),
+    updateCompose: (...args: unknown[]) => mockUpdateCompose(...args),
+    lintCompose: (...args: unknown[]) => mockLintCompose(...args),
     getEnv: vi.fn(),
     updateComposeAndEnv: vi.fn(),
     updateEnv: vi.fn(),
@@ -102,12 +100,12 @@ describe('ComposeEditor — save/lint decision logic', () => {
     vi.clearAllMocks()
     mockDispatch.mockReset()
     capturedOnSave = undefined
-    mockApiGet.mockResolvedValue({ data: 'services:\n  web:\n    image: nginx\n' })
+    mockGetCompose.mockResolvedValue('services:\n  web:\n    image: nginx\n')
   })
 
   it('lints before saving and saves directly when no errors are found', async () => {
-    mockApiPost.mockResolvedValue({ data: { lintResults: [] } })
-    mockApiPut.mockResolvedValue({ data: { lintResults: [] } })
+    mockLintCompose.mockResolvedValue({ lintResults: [] })
+    mockUpdateCompose.mockResolvedValue({ lintResults: [] })
 
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
     await waitFor(() => expect(capturedOnSave).toBeDefined())
@@ -115,15 +113,15 @@ describe('ComposeEditor — save/lint decision logic', () => {
     await triggerCtrlSSave()
 
     await waitFor(() =>
-      expect(mockApiPost).toHaveBeenCalledWith(
-        '/stacks/test-stack/compose/lint',
-        { content: 'services:\n  web:\n    image: nginx\n' },
+      expect(mockLintCompose).toHaveBeenCalledWith(
+        'test-stack',
+        'services:\n  web:\n    image: nginx\n',
       ),
     )
     await waitFor(() =>
-      expect(mockApiPut).toHaveBeenCalledWith(
-        '/stacks/test-stack/compose',
-        { content: 'services:\n  web:\n    image: nginx\n' },
+      expect(mockUpdateCompose).toHaveBeenCalledWith(
+        'test-stack',
+        'services:\n  web:\n    image: nginx\n',
       ),
     )
     expect(screen.queryByText('Save with Lint Errors?')).not.toBeInTheDocument()
@@ -131,9 +129,7 @@ describe('ComposeEditor — save/lint decision logic', () => {
   })
 
   it('shows the save-confirm dialog instead of saving when lint finds errors', async () => {
-    mockApiPost.mockResolvedValue({
-      data: { lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }] },
-    })
+    mockLintCompose.mockResolvedValue({ lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }] })
 
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
     await waitFor(() => expect(capturedOnSave).toBeDefined())
@@ -144,14 +140,12 @@ describe('ComposeEditor — save/lint decision logic', () => {
     expect(
       within(screen.getByRole('dialog')).getByText('Invalid service config'),
     ).toBeInTheDocument()
-    expect(mockApiPut).not.toHaveBeenCalled()
+    expect(mockUpdateCompose).not.toHaveBeenCalled()
   })
 
   it('"Save anyway" saves despite lint errors and closes the confirm dialog', async () => {
-    mockApiPost.mockResolvedValue({
-      data: { lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }] },
-    })
-    mockApiPut.mockResolvedValue({ data: { lintResults: [] } })
+    mockLintCompose.mockResolvedValue({ lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }] })
+    mockUpdateCompose.mockResolvedValue({ lintResults: [] })
 
     const user = userEvent.setup()
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
@@ -162,9 +156,9 @@ describe('ComposeEditor — save/lint decision logic', () => {
     await user.click(screen.getByRole('button', { name: 'Save anyway' }))
 
     await waitFor(() =>
-      expect(mockApiPut).toHaveBeenCalledWith(
-        '/stacks/test-stack/compose',
-        { content: 'services:\n  web:\n    image: nginx\n' },
+      expect(mockUpdateCompose).toHaveBeenCalledWith(
+        'test-stack',
+        'services:\n  web:\n    image: nginx\n',
       ),
     )
     await waitFor(() =>
@@ -173,9 +167,7 @@ describe('ComposeEditor — save/lint decision logic', () => {
   })
 
   it('"Fix errors first" closes the confirm dialog without saving', async () => {
-    mockApiPost.mockResolvedValue({
-      data: { lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }] },
-    })
+    mockLintCompose.mockResolvedValue({ lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }] })
 
     const user = userEvent.setup()
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
@@ -188,12 +180,12 @@ describe('ComposeEditor — save/lint decision logic', () => {
     await waitFor(() =>
       expect(screen.queryByText('Save with Lint Errors?')).not.toBeInTheDocument(),
     )
-    expect(mockApiPut).not.toHaveBeenCalled()
+    expect(mockUpdateCompose).not.toHaveBeenCalled()
   })
 
   it('falls back to a direct save when the pre-save lint request itself fails', async () => {
-    mockApiPost.mockRejectedValue(new Error('network error'))
-    mockApiPut.mockResolvedValue({ data: { lintResults: [] } })
+    mockLintCompose.mockRejectedValue(new Error('network error'))
+    mockUpdateCompose.mockResolvedValue({ lintResults: [] })
 
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
     await waitFor(() => expect(capturedOnSave).toBeDefined())
@@ -201,23 +193,21 @@ describe('ComposeEditor — save/lint decision logic', () => {
     await triggerCtrlSSave()
 
     await waitFor(() =>
-      expect(mockApiPut).toHaveBeenCalledWith(
-        '/stacks/test-stack/compose',
-        { content: 'services:\n  web:\n    image: nginx\n' },
+      expect(mockUpdateCompose).toHaveBeenCalledWith(
+        'test-stack',
+        'services:\n  web:\n    image: nginx\n',
       ),
     )
     expect(screen.queryByText('Save with Lint Errors?')).not.toBeInTheDocument()
   })
 
   it('shows the inline lint panel when the save itself is rejected with details-nested lintResults', async () => {
-    mockApiPost.mockResolvedValue({
-      data: { lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }] },
-    })
+    mockLintCompose.mockResolvedValue({ lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }] })
     // Real backend body (compose.go:164-175) as the axios interceptor
     // flattens it (api.ts:116-119): lintResults live under `details`, and
     // there is no `.response` wrapper on the rejected value — not
     // `error.response.data.lintResults` (agent-os-m2x).
-    mockApiPut.mockRejectedValue({
+    mockUpdateCompose.mockRejectedValue({
       code: 'COMPOSE_VALIDATION_ERROR',
       message: 'Compose file validation failed',
       details: {
@@ -240,7 +230,7 @@ describe('ComposeEditor — save/lint decision logic', () => {
   })
 
   it('clicking Lint runs the lint mutation and toasts success when clean', async () => {
-    mockApiPost.mockResolvedValue({ data: { lintResults: [] } })
+    mockLintCompose.mockResolvedValue({ lintResults: [] })
 
     const user = userEvent.setup()
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
@@ -249,18 +239,16 @@ describe('ComposeEditor — save/lint decision logic', () => {
     await user.click(screen.getByText('Lint'))
 
     await waitFor(() =>
-      expect(mockApiPost).toHaveBeenCalledWith(
-        '/stacks/test-stack/compose/lint',
-        { content: 'services:\n  web:\n    image: nginx\n' },
+      expect(mockLintCompose).toHaveBeenCalledWith(
+        'test-stack',
+        'services:\n  web:\n    image: nginx\n',
       ),
     )
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('No lint issues found'))
   })
 
   it('clicking Lint toasts a warning when only warnings are found', async () => {
-    mockApiPost.mockResolvedValue({
-      data: { lintResults: [{ level: 'warning', message: 'Consider pinning image tag' }] },
-    })
+    mockLintCompose.mockResolvedValue({ lintResults: [{ level: 'warning', message: 'Consider pinning image tag' }] })
 
     const user = userEvent.setup()
     renderWithProviders(<ComposeEditor stackId="test-stack" />)

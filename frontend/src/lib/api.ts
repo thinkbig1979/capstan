@@ -462,7 +462,8 @@ export const stacksApi = {
   },
 
   updateCompose: async (id: string, content: string) => {
-    const response = await apiClient.put<void>(`/stacks/${encodeURIComponent(id)}/compose`, { content })
+    // compose.go Put answers 200 ComposeSaveResponse; lintResults is omitempty.
+    const response = await apiClient.put<{ saved: boolean; lintResults?: LintResult[] }>(`/stacks/${encodeURIComponent(id)}/compose`, { content })
     return response.data
   },
 

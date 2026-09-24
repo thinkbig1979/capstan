@@ -63,19 +63,17 @@ vi.mock('@/stores/uiStore', () => ({ useUIStore: () => ({ theme: 'light' }) }))
 
 // ─── API mocks ───────────────────────────────────────────────────────────────
 
-const mockApiGet = vi.fn()
-const mockApiPut = vi.fn()
-const mockApiPost = vi.fn()
+const mockGetCompose = vi.fn()
+const mockUpdateCompose = vi.fn()
+const mockLintCompose = vi.fn()
 const mockGetEnv = vi.fn()
 const mockUpdateComposeAndEnv = vi.fn()
 
 vi.mock('@/lib/api', () => ({
-  apiClient: {
-    get: (...args: unknown[]) => mockApiGet(...args),
-    put: (...args: unknown[]) => mockApiPut(...args),
-    post: (...args: unknown[]) => mockApiPost(...args),
-  },
   stacksApi: {
+    getCompose: (...args: unknown[]) => mockGetCompose(...args),
+    updateCompose: (...args: unknown[]) => mockUpdateCompose(...args),
+    lintCompose: (...args: unknown[]) => mockLintCompose(...args),
     getEnv: (...args: unknown[]) => mockGetEnv(...args),
     updateComposeAndEnv: (...args: unknown[]) => mockUpdateComposeAndEnv(...args),
     updateEnv: vi.fn(),
@@ -122,7 +120,7 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockDispatch.mockReset()
-    mockApiGet.mockResolvedValue({ data: 'services:\n  web:\n    image: nginx\n' })
+    mockGetCompose.mockResolvedValue('services:\n  web:\n    image: nginx\n')
   })
 
   // ── Baseline ─────────────────────────────────────────────────────────────
@@ -183,7 +181,7 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
     expect(callEnvRaw).toContain('EXISTING=1')
 
     // No sequential writes
-    expect(mockApiPut).not.toHaveBeenCalled()
+    expect(mockUpdateCompose).not.toHaveBeenCalled()
 
     // Success toast
     expect(toast.success).toHaveBeenCalled()
@@ -218,7 +216,7 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
       }),
     )
 
-    expect(mockApiPut).not.toHaveBeenCalled()
+    expect(mockUpdateCompose).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()
   })
 
@@ -247,7 +245,7 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
       expect(toast.error).toHaveBeenCalledWith('Compose validation failed'),
     )
 
-    expect(mockApiPut).not.toHaveBeenCalled()
+    expect(mockUpdateCompose).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()
   })
 })
