@@ -483,6 +483,12 @@ export const ErrBackupRepoUnreachable = "BACKUP_REPO_UNREACHABLE";
  * this handler file already answers for BACKUP_UNAVAILABLE.
  */
 export const ErrBackupRepoUninitialized = "BACKUP_REPO_UNINITIALIZED";
+/**
+ * ErrGitBareRepo is an operation that needs a work tree asked of a bare
+ * repository, which has none. 409: the server is fine, the repository is
+ * in a state that refuses the request (agent-os-00zg).
+ */
+export const ErrGitBareRepo = "GIT_BARE_REPO";
 export interface AppError {
   code: string;
   message: string;

@@ -474,6 +474,18 @@ func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 	// (agent-os-9ha) — see getStatusCLI for why.
 	user, token := s.httpsCredentials(dirPath)
 
+	// A bare repository has no work tree, so `status` below fails with "this
+	// operation must be run in a work tree" and the pull used to answer 500 for
+	// a request the repository simply cannot satisfy (agent-os-00zg). Same probe
+	// as getStatusCLI, and its error is returned for the same reason.
+	isBare, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--is-bare-repository")
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect a bare repository: %w", err)
+	}
+	if isBare == "true" {
+		return nil, models.NewAppError(409, models.ErrGitBareRepo, "A bare repository has no work tree to pull into")
+	}
+
 	dirtyOutput, err := s.gitCommandWithCreds(dirPath, user, token, "status", "--porcelain")
 	if err != nil {
 		return nil, fmt.Errorf("failed to check status: %w", err)
@@ -806,7 +818,10 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 	}
 
 	var failures []RedeployFailure
-	var redeployed []string
+	// An empty list, not nil: both results below send it as redeployedStacks,
+	// and a nil slice marshals as null when no stack's files changed or every
+	// redeploy failed (agent-os-io23). failures is only sent when non-empty.
+	redeployed := []string{}
 
 	for _, stack := range stacks {
 		if !stackFilesChanged(stack, pullResult.ChangedFiles) {
