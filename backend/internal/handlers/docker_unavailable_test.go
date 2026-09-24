@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -55,7 +56,11 @@ func assertUnavailable(t *testing.T, w *httptest.ResponseRecorder) {
 
 func TestResourcesHandler_NoDocker_RefusesEveryDockerRoute(t *testing.T) {
 	db := noDockerDB(t)
-	handler := NewResourcesHandler(nil, db, nil)
+	// With a job manager, as main.go builds it, so the updateContainer row
+	// exercises the production path (agent-os-nevq).
+	jm := services.NewUpdateJobManager(15 * time.Minute)
+	t.Cleanup(jm.Stop)
+	handler := NewResourcesHandlerWithJobManager(nil, db, nil, jm)
 	router := gin.New()
 	handler.RegisterRoutes(router.Group("/api"))
 

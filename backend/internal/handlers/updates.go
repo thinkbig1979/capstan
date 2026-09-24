@@ -184,13 +184,13 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 
 func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	id := c.Param("id")
-	// Audit who initiated the update; this covers both the async job path below
-	// and the synchronous fallback (updateContainerSync) it delegates to.
+	// Audit who initiated the update.
 	logActionFromContext(h.actionLog, c, nil, services.ActionUpdateContainer, gin.H{"container_id": id})
 
-	// If no job manager is wired, fall back to the synchronous path.
+	// main.go always wires a job manager; only a test-built handler lacks one.
+	// Refuse like updateStack rather than dereference nil.
 	if h.jobManager == nil {
-		h.updateContainerSync(c, id)
+		handleError(c, models.NewAppError(http.StatusServiceUnavailable, "INTERNAL_ERROR", "Job manager not available"))
 		return
 	}
 
@@ -347,133 +347,6 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{
 		"jobId": job.ID,
 		"wsUrl": "/ws/updates/jobs/" + job.ID,
-	})
-}
-
-// updateContainerSync is the legacy synchronous update path, used when no job
-// manager is configured (e.g., in tests that use NewResourcesHandler directly).
-func (h *ResourcesHandler) updateContainerSync(c *gin.Context, id string) {
-	inspect, err := h.docker.InspectContainer(c.Request.Context(), id)
-	if err != nil {
-		slog.Error("Failed to inspect container before update", "id", id, "error", err)
-		respondDockerErr(c, err, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to inspect container")
-		return
-	}
-
-	oldDigest := inspect.Image
-	imageRef := ""
-	if inspect.Config != nil {
-		imageRef = inspect.Config.Image
-	}
-	containerName := ""
-	if inspect.Name != "" {
-		containerName = inspect.Name[1:]
-	}
-	stackID := ""
-	stackName := ""
-	projectName := ""
-	if inspect.Config != nil && inspect.Config.Labels != nil {
-		projectName = inspect.Config.Labels["com.docker.compose.project"]
-	}
-	if projectName != "" {
-		// Logged and defaulted rather than refused (agent-os-1gqn): this lookup
-		// only decorates the history row written below, and the update it
-		// records has ALREADY run by this point — refusing would drop the
-		// record of an action that happened, which is worse than recording it
-		// with empty stack fields. An absent row is the ordinary case for a
-		// container whose compose project this instance does not manage, so
-		// only a non-not-found error is worth a line.
-		stack, err := h.db.GetStackByProjectName(projectName)
-		switch {
-		case err == nil:
-			stackID = stack.ID
-			stackName = stack.ProjectName
-		case errors.Is(err, errdefs.ErrNotFound):
-			// Not managed here; the history row carries empty stack fields.
-		default:
-			slog.Error("Failed to look up the stack for the update history row",
-				"projectName", projectName, "error", err)
-		}
-	}
-
-	historyID := uuid.New().String()
-	now := time.Now().Format(time.RFC3339)
-	historyEntry := &models.UpdateHistoryEntry{
-		ID:            historyID,
-		ContainerID:   id,
-		ContainerName: containerName,
-		Image:         imageRef,
-		OldDigest:     &oldDigest,
-		Status:        "pending",
-		Trigger:       "manual",
-		StartedAt:     now,
-	}
-	if stackID != "" {
-		historyEntry.StackID = &stackID
-		historyEntry.StackName = &stackName
-	}
-
-	if err := h.db.InsertUpdateHistory(historyEntry); err != nil {
-		slog.Error("Failed to insert update history", "error", err)
-	}
-
-	result, ar := h.docker.UpdateContainer(c.Request.Context(), id, h.db)
-
-	switch ar.Outcome {
-	case truth.OutcomeSuccess:
-		if histErr := h.db.UpdateUpdateHistory(historyID, map[string]interface{}{
-			"status":       "success",
-			"new_digest":   result.NewDigest,
-			"completed_at": time.Now().Format(time.RFC3339),
-			"duration_ms":  result.DurationMs,
-		}); histErr != nil {
-			slog.Warn("Failed to update update history", "historyID", historyID, "error", histErr)
-		}
-	case truth.OutcomeNoChange:
-		if histErr := h.db.UpdateUpdateHistory(historyID, map[string]interface{}{
-			"status":       "success",
-			"new_digest":   result.NewDigest,
-			"completed_at": time.Now().Format(time.RFC3339),
-			"duration_ms":  result.DurationMs,
-		}); histErr != nil {
-			slog.Warn("Failed to update update history", "historyID", historyID, "error", histErr)
-		}
-	default:
-		errMsg := ar.Reason
-		if ar.Err != nil {
-			errMsg = ar.Err.Error()
-		}
-		slog.Error("Failed to update container", "id", id, "error", errMsg)
-		if histErr := h.db.UpdateUpdateHistory(historyID, map[string]interface{}{
-			"status":        "failed",
-			"error_message": errMsg,
-			"completed_at":  time.Now().Format(time.RFC3339),
-			"duration_ms":   result.DurationMs,
-		}); histErr != nil {
-			slog.Warn("Failed to update update history", "historyID", historyID, "error", histErr)
-		}
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to update container", ar.Err))
-		return
-	}
-
-	// Convergence (finding #4): evict on success or no_change.
-	if ar.Outcome == truth.OutcomeSuccess || ar.Outcome == truth.OutcomeNoChange {
-		if evictErr := h.db.DeleteCachedUpdate(id); evictErr != nil {
-			slog.Warn("Failed to evict cached update entry", "containerID", id, "error", evictErr)
-		}
-		BroadcastEvent(models.StackEvent{Type: "updates_changed", ContainerID: id, Timestamp: time.Now()})
-	}
-
-	BroadcastEvent(models.StackEvent{Type: "update_completed", ContainerID: id, Timestamp: time.Now()})
-
-	c.JSON(http.StatusOK, gin.H{
-		"message":    "Container updated",
-		"historyId":  historyID,
-		"oldDigest":  result.OldDigest,
-		"newDigest":  result.NewDigest,
-		"durationMs": result.DurationMs,
-		"outcome":    string(ar.Outcome),
-		"reason":     ar.Reason,
 	})
 }
 
