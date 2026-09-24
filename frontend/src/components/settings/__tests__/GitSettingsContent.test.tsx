@@ -328,3 +328,23 @@ describe('GitSettingsContent — a failed refresh is disclosed before Save (agen
     expect(screen.queryByText(notice)).not.toBeInTheDocument()
   })
 })
+
+describe('GitSettingsContent — a failed FIRST load offers no form to save (agent-os-gs2y)', () => {
+  it('shows an error with Retry instead of an empty form and its Save', async () => {
+    mockGetGit.mockRejectedValue({ status: 500, code: 'INTERNAL_ERROR', message: 'read failed' })
+    renderPanel()
+
+    expect(
+      await screen.findByText('Could not load the git settings. Saving is disabled until they load.'),
+    ).toBeInTheDocument()
+    // Pre-fix: an empty form whose Save submitted whatever was typed into it,
+    // over credentials the operator never saw.
+    expect(screen.queryByLabelText('SSH Private Key Path')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save Git Settings' })).not.toBeInTheDocument()
+
+    mockGetGit.mockResolvedValue({ sshKey: '/keys/id_ed25519', httpsUser: 'deploy-bot', hasHttpsToken: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByLabelText('SSH Private Key Path')).toHaveValue('/keys/id_ed25519')
+    expect(screen.getByRole('button', { name: 'Save Git Settings' })).toBeEnabled()
+  })
+})

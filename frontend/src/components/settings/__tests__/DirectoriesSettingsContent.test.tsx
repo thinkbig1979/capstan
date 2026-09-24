@@ -345,3 +345,73 @@ describe('DirectoriesSettingsContent — a failed refresh is disclosed per query
     expect(screen.queryByText(/Could not refresh/)).not.toBeInTheDocument()
   })
 })
+
+describe('DirectoriesSettingsContent — a failed FIRST load fabricates nothing (agent-os-gs2y)', () => {
+  const serverFault = { status: 500, code: 'INTERNAL_ERROR', message: 'read failed' }
+
+  function renderWithClient() {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 0 },
+        mutations: { retry: false },
+      },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DirectoriesSettingsContent />
+      </QueryClientProvider>,
+    )
+    return queryClient
+  }
+
+  const waitForError = (queryClient: QueryClient, key: string) =>
+    waitFor(() => expect(queryClient.getQueryState([key])?.status).toBe('error'))
+
+  it('scan depth fails first: no made-up depth, no Save, an error with Retry', async () => {
+    mockGetScanDepth.mockRejectedValue(serverFault)
+    const queryClient = renderWithClient()
+    await waitForError(queryClient, 'scan-depth')
+
+    // The config loaded, so the rest of the panel is real.
+    expect(await screen.findByText('/mnt/extra/more-stacks')).toBeInTheDocument()
+
+    // Pre-fix this read "1 level deep" beside an ENABLED Save that wrote 1.
+    expect(screen.queryAllByText(/levels? deep/)).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: 'Save Scan Depth' })).not.toBeInTheDocument()
+    expect(mockUpdateScanDepth).not.toHaveBeenCalled()
+    expect(
+      screen.getByText('Could not load the scan depth. Saving is disabled until it loads.'),
+    ).toBeInTheDocument()
+
+    // Retry reaches the real value, and only then can it be saved.
+    mockGetScanDepth.mockResolvedValue({ scanDepth: 4 })
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('4 levels deep')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save Scan Depth' })).toBeDisabled()
+  })
+
+  it('config fails first: an error, not "No directories configured"', async () => {
+    mockGetConfig.mockRejectedValue(serverFault)
+    const queryClient = renderWithClient()
+    await waitForError(queryClient, 'config')
+
+    // The scan depth loaded, so its section is real.
+    expect(await screen.findByText('1 level deep')).toBeInTheDocument()
+
+    expect(screen.queryByText('No directories configured')).not.toBeInTheDocument()
+    expect(screen.getByText('Could not load the directory configuration.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save Default Directory' })).not.toBeInTheDocument()
+
+    mockGetConfig.mockResolvedValue({ stacksDir: '/srv/stacks', stacksDirectories: TWO_DIRS })
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('/mnt/extra/more-stacks')).toBeInTheDocument()
+    expect(screen.queryByText('Could not load the directory configuration.')).not.toBeInTheDocument()
+  })
+
+  it('a server that really has no directories still says so', async () => {
+    mockGetConfig.mockResolvedValue({ stacksDir: '', stacksDirectories: [] })
+    renderWithClient()
+    expect(await screen.findByText('No directories configured')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})

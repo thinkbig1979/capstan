@@ -5,6 +5,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+import { LoadFailedNotice } from '@/components/LoadFailedNotice'
 import { settingsApi, directoryConfigApi } from '@/lib/api'
 import { TableSearch } from '@/components/ui/table-search'
 import { useTextFilter } from '@/hooks/useTextFilter'
@@ -75,7 +76,9 @@ export function DirectoriesSettingsContent() {
   }
 
   const effectiveDefault = initialized ? defaultDir : (config?.stacksDir || '')
-  const effectiveDepth = depthInitialized ? scanDepth : String(scanDepthData?.scanDepth || 1)
+  // Only read once scanDepthData exists: the Scan Depth controls do not mount
+  // without it (agent-os-gs2y), so no fallback value is ever shown or saved.
+  const effectiveDepth = depthInitialized ? scanDepth : String(scanDepthData?.scanDepth)
 
   const handleSaveDefault = () => {
     directoryConfigApi.update({ defaultDir: effectiveDefault }).then(() => {
@@ -116,7 +119,11 @@ export function DirectoriesSettingsContent() {
             />
           )}
         </div>
-        {allDirs.length > 0 ? (
+        {/* agent-os-gs2y: with no config at all, "No directories configured"
+            would state a fact nobody read. */}
+        {!config && configError ? (
+          <LoadFailedNotice what="the directory configuration" onRetry={() => void refetchConfig()} />
+        ) : allDirs.length > 0 ? (
           filteredDirs.length > 0 ? (
             <div className="space-y-2">
               {filteredDirs.map((dir: string) => {
@@ -149,39 +156,51 @@ export function DirectoriesSettingsContent() {
 
       <div className="space-y-4 pt-4 border-t">
         <h3 className="text-lg font-medium">Scan Depth</h3>
-        <div className="space-y-2">
-          <Label htmlFor="scan-depth">Directory Recursion Depth</Label>
-          <Select value={effectiveDepth} onValueChange={setScanDepth}>
-            <SelectTrigger id="scan-depth" className="w-full max-w-xs" aria-label="Directory Recursion Depth">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Array.from({ length: 10 }, (_, i) => i + 1).map((d) => (
-                <SelectItem key={d} value={String(d)}>
-                  {d} level{d > 1 ? 's' : ''} deep
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted-foreground">
-            How many levels deep to scan within each monitored directory for compose files. A value of 1 only scans immediate subdirectories. After changing this, trigger a rescan to discover newly visible stacks.
-          </p>
-        </div>
-        {depthRefreshFailed && (
-          <RefreshFailedNotice
+        {!scanDepthData && depthError ? (
+          // agent-os-gs2y: no Select, no Save. The Select used to show a
+          // made-up "1" and the Save beside it was enabled and wrote it.
+          <LoadFailedNotice
             what="the scan depth"
-            beforeSave
+            consequence="Saving is disabled until it loads."
             onRetry={() => void refetchDepth()}
           />
+        ) : (
+          <>
+            <div className="space-y-2">
+              <Label htmlFor="scan-depth">Directory Recursion Depth</Label>
+              <Select value={effectiveDepth} onValueChange={setScanDepth}>
+                <SelectTrigger id="scan-depth" className="w-full max-w-xs" aria-label="Directory Recursion Depth">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: 10 }, (_, i) => i + 1).map((d) => (
+                    <SelectItem key={d} value={String(d)}>
+                      {d} level{d > 1 ? 's' : ''} deep
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                How many levels deep to scan within each monitored directory for compose files. A value of 1 only scans immediate subdirectories. After changing this, trigger a rescan to discover newly visible stacks.
+              </p>
+            </div>
+            {depthRefreshFailed && (
+              <RefreshFailedNotice
+                what="the scan depth"
+                beforeSave
+                onRetry={() => void refetchDepth()}
+              />
+            )}
+            <div className="flex justify-end">
+              <Button
+                onClick={() => scanDepthMutation.mutate(Number(effectiveDepth))}
+                disabled={effectiveDepth === String(scanDepthData?.scanDepth) || scanDepthMutation.isPending}
+              >
+                {scanDepthMutation.isPending ? <LoadingSpinner size="small" /> : 'Save Scan Depth'}
+              </Button>
+            </div>
+          </>
         )}
-        <div className="flex justify-end">
-          <Button
-            onClick={() => scanDepthMutation.mutate(Number(effectiveDepth))}
-            disabled={effectiveDepth === String(scanDepthData?.scanDepth) || scanDepthMutation.isPending}
-          >
-            {scanDepthMutation.isPending ? <LoadingSpinner size="small" /> : 'Save Scan Depth'}
-          </Button>
-        </div>
       </div>
 
       {allDirs.length > 1 && (
