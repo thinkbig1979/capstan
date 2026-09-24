@@ -81,6 +81,21 @@ func TestUpdateStack_ServiceUnavailableWithoutAJobManager(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
+// TestUpdateContainer_ServiceUnavailableWithoutAJobManager is updateContainer's
+// sibling of the test above (agent-os-nevq). The body assertion is what tells
+// this refusal apart from the 503 a nil Docker service also produces.
+func TestUpdateContainer_ServiceUnavailableWithoutAJobManager(t *testing.T) {
+	h := newTestResourcesHandler(t)
+	router := setupResourcesRouter(h)
+	req := httptest.NewRequest(http.MethodPost, "/api/resources/containers/abc/update", nil)
+	w := httptest.NewRecorder()
+
+	require.NotPanics(t, func() { router.ServeHTTP(w, req) })
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Contains(t, w.Body.String(), "Job manager not available")
+}
+
 func TestUpdateStack_NotFoundForAnUnknownStack(t *testing.T) {
 	h := newTestResourcesHandlerWithJobManager(t)
 

@@ -1,6 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { stacksApi } from '@/lib/api'
-import { isActionResult } from '@/lib/action-result'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import type { EnvEntryRow } from './types'
 import { queryKeys } from '@/lib/query-keys'
@@ -59,11 +58,7 @@ export function useEnvMutations({
   })
 
   const createEnvMutation = useActionMutation<void>({
-    mutationFn: async (_vars: void) => {
-      const raw = await stacksApi.createEnv(stackId)
-      if (isActionResult(raw)) return raw
-      return { outcome: 'success' as const, reason: 'Environment file created' }
-    },
+    mutationFn: (_vars: void) => stacksApi.createEnv(stackId),
     invalidate: [queryKeys.stack.env(stackId), queryKeys.stack.detail(stackId)],
     successTitle: 'Environment file created',
     onResult: (result) => {
