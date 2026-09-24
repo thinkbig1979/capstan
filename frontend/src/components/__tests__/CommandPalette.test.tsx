@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import { CommandPalette } from '../CommandPalette'
+import { stacksApi } from '@/lib/api'
 
 // Mock react-router's useNavigate
 const mockNavigate = vi.fn()
@@ -154,5 +155,33 @@ describe('CommandPalette', () => {
     renderPalette()
     fireEvent.keyDown(document, { key: 'k' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  // agent-os-kdqm: `data: stacks = []` dropped the error, so a failed stacks
+  // load left the palette with no stacks and a search answered only
+  // "No results found." — as if no such stack existed.
+  it('first load fails: says the stacks could not be loaded, with Retry', async () => {
+    vi.mocked(stacksApi.list).mockRejectedValueOnce(new Error('boom'))
+    renderPalette()
+    fireEvent.keyDown(document, { key: 'k', ctrlKey: true })
+
+    expect(await screen.findByText('Could not load the stack list.')).toBeInTheDocument()
+    // A search that matches nothing still carries the failure next to "No results found."
+    fireEvent.change(screen.getByPlaceholderText('Search stacks, navigate...'), {
+      target: { value: 'nginx' },
+    })
+    await waitFor(() => expect(screen.getByText('No results found.')).toBeInTheDocument())
+    expect(screen.getByText('Could not load the stack list.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('nginx-proxy')).toBeInTheDocument()
+    expect(screen.queryByText('Could not load the stack list.')).not.toBeInTheDocument()
+  })
+
+  it('a healthy load shows no load error (control)', async () => {
+    renderPalette()
+    fireEvent.keyDown(document, { key: 'k', ctrlKey: true })
+    expect(await screen.findByText('nginx-proxy')).toBeInTheDocument()
+    expect(screen.queryByText('Could not load the stack list.')).not.toBeInTheDocument()
   })
 })
