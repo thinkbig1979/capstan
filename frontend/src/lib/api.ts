@@ -12,8 +12,10 @@ import type {
   CommandResult,
   ApiError,
   LintResult,
+  ComposeResponse,
+  ComposeSaveResponse,
+  LintResponse,
   DashboardStats,
-  DashboardContainerInfo,
   DockerImage,
   DockerVolume,
   DockerNetwork,
@@ -347,16 +349,11 @@ export const autoUpdateApi = {
 }
 
 /**
- * GitPullResult — wire type for POST /git/pull.
+ * GitPullResult — wire type for POST /git/pull (git.go Pull renders
+ * services.PullVerified's ActionResult).
  *
- * Legacy shape (current backend):
- *   { success: boolean, previousCommit, currentCommit, changedFiles, redeployedStacks }
- *
- * Action Truth Contract shape (post-B4 backend migration):
  *   ActionResult with outcome 'success'|'no_change'|'partial'|'failed'
  *   details: { previousCommit, currentCommit, failedRedeploys: [{stack, reason}] }
- *
- * Use isActionResult() to branch during the migration window.
  */
 export type GitPullResult = ActionResult<{
   // no_change carries the unchanged HEAD; the partial arms carry the failure cause.
@@ -368,21 +365,13 @@ export type GitPullResult = ActionResult<{
   failedRedeploys?: Array<{ stack: string; reason: string }>
   changedFiles?: string[]
   redeployedStacks?: string[]
-}> | {
-  success: boolean
-  previousCommit: string
-  currentCommit: string
-  changedFiles: string[]
-  redeployedStacks: string[]
-}
+}>
 
 /**
- * EnvSaveResult — wire type for PUT /stacks/:id/env.
- *
- * Legacy shape: { saved: boolean, filename }
- * Action Truth Contract shape: ActionResult
+ * EnvSaveResult — wire type for PUT /stacks/:id/env (env.go Put renders an
+ * ActionResult).
  */
-export type EnvSaveResult = ActionResult | { saved: boolean; filename: string }
+export type EnvSaveResult = ActionResult
 
 /**
  * ComposeEnvResult — wire type for PUT /stacks/:id/compose-env (atomic).
@@ -471,17 +460,17 @@ export const stacksApi = {
   },
 
   getCompose: async (id: string) => {
-    const response = await apiClient.get<{ content: string; filename: string; size: number; lastModified: string }>(`/stacks/${encodeURIComponent(id)}/compose`)
+    const response = await apiClient.get<ComposeResponse>(`/stacks/${encodeURIComponent(id)}/compose`)
     return response.data
   },
 
   updateCompose: async (id: string, content: string) => {
-    const response = await apiClient.put<void>(`/stacks/${encodeURIComponent(id)}/compose`, { content })
+    const response = await apiClient.put<ComposeSaveResponse>(`/stacks/${encodeURIComponent(id)}/compose`, { content })
     return response.data
   },
 
   lintCompose: async (id: string, content: string) => {
-    const response = await apiClient.post<{ valid: boolean; lintResults: LintResult[] }>(`/stacks/${encodeURIComponent(id)}/compose/lint`, { content })
+    const response = await apiClient.post<LintResponse>(`/stacks/${encodeURIComponent(id)}/compose/lint`, { content })
     return response.data
   },
 
@@ -584,11 +573,6 @@ export const dashboardApi = {
 }
 
 export const directoryConfigApi = {
-  get: async () => {
-    const response = await apiClient.get<{ directories: Array<{ path: string; name: string; isDefault: boolean }>; defaultDir: string }>('/settings/directories')
-    return response.data
-  },
-
   update: async (data: { directories?: string[]; defaultDir?: string }) => {
     const response = await apiClient.put<void>('/settings/directories', data)
     return response.data
@@ -612,13 +596,8 @@ function pruneQuery(opts?: PruneOptions): string {
 }
 
 /**
- * DeleteResult is the wire type for resource delete responses.
- *
- * Legacy shape (current backend): { deleted: unknown[] | string }
- * Action Truth Contract shape (post-B3 backend migration):
- *   { outcome, reason, details?: { untagged?, deleted? } }
- *
- * Use isActionResult() to branch during the migration window.
+ * DeleteResult is the wire type for resource delete responses
+ * (resource_mutations.go delete*): { outcome, reason, details? }.
  */
 export type DeleteResult = ActionResult<{
   // Image delete
@@ -627,14 +606,11 @@ export type DeleteResult = ActionResult<{
   // Container and network delete carry id; volume delete carries name
   id?: string
   name?: string
-}> | { deleted: unknown[] | string }
+}>
 
 /**
- * PruneResult is the wire type for resource prune responses.
- *
- * Legacy shape (current backend): { deleted: string[]; spaceReclaimed: number }
- * Action Truth Contract shape (post-B3 backend migration):
- *   { outcome, reason, details }
+ * PruneResult is the wire type for resource prune responses
+ * (resource_mutations.go prune*): { outcome, reason, details }.
  *
  * Image prune details: { imagesDeleted, tagsRemoved, spaceReclaimed }
  * Volume/container/build-cache prune details: { deleted, spaceReclaimed }
@@ -648,7 +624,7 @@ export type PruneResult = ActionResult<{
   deleted?: string[]
   // Shared space field
   spaceReclaimed?: number
-}> | { deleted?: string[] | null; spaceReclaimed?: number | null }
+}>
 
 /**
  * CreateStackResult is the wire type for stack create responses.
@@ -696,10 +672,6 @@ export const resourcesApi = {
     return response.data
   },
 
-  containers: async () => {
-    const response = await apiClient.get<{ containers: DashboardContainerInfo[] }>('/resources/containers')
-    return response.data.containers
-  },
   deleteContainer: async (id: string, force = false) => {
     const response = await apiClient.delete<DeleteResult>(`/resources/containers/${encodeURIComponent(id)}?force=${force}`)
     return response.data
@@ -768,11 +740,6 @@ export const resourcesApi = {
     return response.data
   },
 
-  clearUpdateHistory: async (params?: { olderThan?: string; status?: string }) => {
-    const response = await apiClient.delete<{ deleted: number }>('/resources/updates/history', { params })
-    return response.data
-  },
-
   volumes: async () => {
     const response = await apiClient.get<{ volumes: DockerVolume[] }>('/resources/volumes')
     return response.data.volumes
@@ -791,7 +758,7 @@ export const resourcesApi = {
     return response.data.networks
   },
   createNetwork: async (input: { name: string; driver?: string; internal?: boolean; attachable?: boolean }) => {
-    const response = await apiClient.post<ActionResult<{ id: string; name: string }> | { id: string; name: string }>('/resources/networks', input)
+    const response = await apiClient.post<ActionResult<{ id: string; name: string }>>('/resources/networks', input)
     return response.data
   },
   deleteNetwork: async (id: string) => {

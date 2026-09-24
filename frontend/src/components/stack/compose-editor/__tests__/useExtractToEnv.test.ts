@@ -5,17 +5,10 @@ import { renderHook, act } from '@testing-library/react'
 // with ONE fixed sentence, and its outer catch took no binding at all — so the
 // cause was not merely discarded, it was never observed.
 //
-// Two write paths reach that catch and they fail DIFFERENTLY:
-//
-//   ATOMIC       PUT /stacks/:id/compose-env, handlers/compose.go
-//                PutComposeAndEnv, which answers a truth.ActionResult whose
-//                reason names WHICH write failed and whether a rollback
-//                happened: "failed to write env file; compose unchanged" vs
-//                "failed to write compose file; env rolled back".
-//   SEQUENTIAL   two bare apiClient.put calls, /env then /compose. If env
-//                succeeds and compose then fails, the variable exists in .env
-//                while the compose file still holds the literal — a real
-//                half-applied state that was behind the same one sentence.
+// The write is PUT /stacks/:id/compose-env, handlers/compose.go
+// PutComposeAndEnv, which answers a truth.ActionResult whose reason names WHICH
+// write failed and whether a rollback happened: "failed to write env file;
+// compose unchanged" vs "failed to write compose file; env rolled back".
 //
 // These arms assert the DESCRIPTION, because the fixed title is not the defect:
 // the title is the only place the ACTION lives and it is kept deliberately.
@@ -28,9 +21,7 @@ const stacksApi = vi.hoisted(() => ({
   getEnv: vi.fn(),
   updateComposeAndEnv: vi.fn(),
 }))
-const apiClient = vi.hoisted(() => ({ put: vi.fn() }))
-
-vi.mock('@/lib/api', () => ({ stacksApi, apiClient }))
+vi.mock('@/lib/api', () => ({ stacksApi }))
 
 const invalidateQueries = vi.hoisted(() => vi.fn())
 vi.mock('@tanstack/react-query', () => ({
@@ -132,58 +123,21 @@ describe('useExtractToEnv — the atomic compose-env write', () => {
     })
   })
 
-  it('keeps the 404 fall-through to the sequential path, and does not toast on it', async () => {
-    // Two-sided: the guard that routes a 404 to the fallback must NOT be
-    // reclassified as a failure by the cause-rendering change.
-    stacksApi.updateComposeAndEnv.mockRejectedValue({ status: 404 })
-    apiClient.put.mockResolvedValue({ data: {} })
+  it('presents a 404 (the stack is gone) instead of reporting success', async () => {
+    // PutComposeAndEnv's only 404 is stack-not-found (handleDBError). It used to
+    // fall through to a sequential /env + /compose write for a pre-B4 backend.
+    stacksApi.updateComposeAndEnv.mockRejectedValue({ status: 404, message: 'Stack not found' })
 
-    const { result } = setup()
-    await act(async () => {
-      await result.current.confirmExtract()
-    })
-
-    expect(toast.error).not.toHaveBeenCalled()
-    expect(apiClient.put).toHaveBeenCalledTimes(2)
-    expect(toast.success).toHaveBeenCalledWith('Extracted WEB_IMAGE to .env')
-  })
-})
-
-describe('useExtractToEnv — the sequential fallback', () => {
-  it('carries the env-write reason in the DESCRIPTION when the env PUT fails', async () => {
-    stacksApi.updateComposeAndEnv.mockRejectedValue({ status: 404 })
-    apiClient.put.mockRejectedValueOnce(
-      rejectedActionResult('env file created but DB not updated'),
-    )
-
-    const { result } = setup()
+    const { result, view } = setup()
     await act(async () => {
       await result.current.confirmExtract()
     })
 
     expect(toast.error).toHaveBeenCalledWith('Failed to extract variable to .env', {
-      description: 'env file created but DB not updated',
+      description: 'Stack not found',
     })
-    expect(toast.error).toHaveBeenCalledTimes(1)
-  })
-
-  it('names the half-applied state when env succeeds and compose then fails', async () => {
-    // The state the one fixed sentence hid: the variable is now in .env while
-    // the compose file still holds the literal.
-    stacksApi.updateComposeAndEnv.mockRejectedValue({ status: 404 })
-    apiClient.put
-      .mockResolvedValueOnce({ data: {} })
-      .mockRejectedValueOnce(rejectedActionResult('failed to write compose file'))
-
-    const { result } = setup()
-    await act(async () => {
-      await result.current.confirmExtract()
-    })
-
-    expect(apiClient.put).toHaveBeenCalledTimes(2)
-    expect(toast.error).toHaveBeenCalledWith('Failed to extract variable to .env', {
-      description: 'failed to write compose file',
-    })
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(view.dispatch).not.toHaveBeenCalled()
   })
 })
 
@@ -199,7 +153,6 @@ describe('useExtractToEnv — the success control', () => {
     })
 
     expect(toast.error).not.toHaveBeenCalled()
-    expect(apiClient.put).not.toHaveBeenCalled()
     expect(view.dispatch).toHaveBeenCalled()
     expect(toast.success).toHaveBeenCalledWith('Extracted WEB_IMAGE to .env')
   })
@@ -255,20 +208,16 @@ const READ_FAULT_DISK_MISSING = {
 describe('useExtractToEnv — a failed .env READ must not reach the write', () => {
   it('makes NO write call and presents the backend cause when the env GET is rejected', async () => {
     stacksApi.getEnv.mockRejectedValue(READ_FAULT_WITH_BODY)
-    // Both write paths are armed to SUCCEED, so "no error toast from a write"
-    // is not an alternative explanation for anything asserted below.
+    // The write is armed to SUCCEED, so "no error toast from a write" is not
+    // an alternative explanation for anything asserted below.
     stacksApi.updateComposeAndEnv.mockResolvedValue({ outcome: 'success', reason: 'written' })
-    apiClient.put.mockResolvedValue({ data: {} })
 
     const { result, view } = setup()
     await act(async () => {
       await result.current.confirmExtract()
     })
 
-    // BOTH write routes, because the sequential fallback is a second way to
-    // reach the same file.
     expect(stacksApi.updateComposeAndEnv).toHaveBeenCalledTimes(0)
-    expect(apiClient.put).toHaveBeenCalledTimes(0)
     expect(view.dispatch).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()
     expect(toast.error).toHaveBeenCalledWith('Failed to extract variable to .env', {
@@ -279,7 +228,6 @@ describe('useExtractToEnv — a failed .env READ must not reach the write', () =
   it('makes NO write call when the rejection carries no body at all', async () => {
     stacksApi.getEnv.mockRejectedValue(READ_FAULT_BODYLESS)
     stacksApi.updateComposeAndEnv.mockResolvedValue({ outcome: 'success', reason: 'written' })
-    apiClient.put.mockResolvedValue({ data: {} })
 
     const { result, view } = setup()
     await act(async () => {
@@ -287,7 +235,6 @@ describe('useExtractToEnv — a failed .env READ must not reach the write', () =
     })
 
     expect(stacksApi.updateComposeAndEnv).toHaveBeenCalledTimes(0)
-    expect(apiClient.put).toHaveBeenCalledTimes(0)
     expect(view.dispatch).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()
     expect(toast.error).toHaveBeenCalledWith('Failed to extract variable to .env', {
@@ -322,7 +269,6 @@ describe('useExtractToEnv — a failed .env READ must not reach the write', () =
   it('makes NO write call when the env file is recorded but missing from disk (404)', async () => {
     stacksApi.getEnv.mockRejectedValue(READ_FAULT_DISK_MISSING)
     stacksApi.updateComposeAndEnv.mockResolvedValue({ outcome: 'success', reason: 'written' })
-    apiClient.put.mockResolvedValue({ data: {} })
 
     const { result, view } = setup()
     await act(async () => {
@@ -330,7 +276,6 @@ describe('useExtractToEnv — a failed .env READ must not reach the write', () =
     })
 
     expect(stacksApi.updateComposeAndEnv).toHaveBeenCalledTimes(0)
-    expect(apiClient.put).toHaveBeenCalledTimes(0)
     expect(view.dispatch).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()
     expect(toast.error).toHaveBeenCalledWith('Failed to extract variable to .env', {

@@ -8,7 +8,11 @@ package handlers
 // tygo v0.2.21 filters by file, not by type (tygo/config.go, IsFileIgnored),
 // so a served struct belongs here and anything else does not.
 
-import "time"
+import (
+	"time"
+
+	"github.com/thinkbig1979/capstan/backend/internal/models"
+)
 
 // EnvEntry is the wire shape of one line of a stack's env file. It is
 // bidirectional: it is both what GET /:id/env returns (EnvResponse.Entries)
@@ -88,4 +92,26 @@ type BuildCacheEntry struct {
 	CreatedAt   time.Time  `json:"createdAt"`
 	LastUsedAt  *time.Time `json:"lastUsedAt" tstype:"string | null,required"`
 	UsageCount  int        `json:"usageCount"`
+}
+
+// ComposeResponse is the wire shape of GET /stacks/:id/compose (ComposeHandler.Get).
+type ComposeResponse struct {
+	Content      string `json:"content"`
+	Filename     string `json:"filename"`
+	Size         int64  `json:"size"`
+	LastModified string `json:"lastModified"`
+}
+
+// ComposeSaveResponse is the wire shape of PUT /stacks/:id/compose (ComposeHandler.Put).
+type ComposeSaveResponse struct {
+	Saved       bool                `json:"saved"`
+	LintResults []models.LintResult `json:"lintResults,omitempty"`
+}
+
+// LintResponse is the wire shape of POST /stacks/:id/compose/lint (ComposeHandler.Lint).
+// StacksHandler.Lint (POST /compose/lint) sends the same keys from a gin.H, not
+// this struct.
+type LintResponse struct {
+	Valid       bool                `json:"valid"`
+	LintResults []models.LintResult `json:"lintResults"`
 }

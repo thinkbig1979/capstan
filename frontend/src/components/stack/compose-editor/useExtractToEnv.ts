@@ -1,8 +1,7 @@
 import { useCallback, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { apiClient, stacksApi } from '@/lib/api'
+import { stacksApi } from '@/lib/api'
 import { toast } from 'sonner'
-import { isActionResult } from '@/lib/action-result'
 import { presentError, toastInvalid } from '@/lib/error-handler'
 import type { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
 import { inferVarName } from './inferVarName'
@@ -48,14 +47,9 @@ export function useExtractToEnv({
   }, [selectedText, viewRef])
 
   /**
-   * Atomic extract-to-env (audit finding #11).
-   *
-   * Preferred path: PUT /stacks/:id/compose-env writes compose + env in one
-   * transaction — no partial-write window where compose references a missing var.
-   *
-   * Fallback path: if the atomic endpoint returns 404 (backend not yet migrated),
-   * we fall back to the env-first sequential write. Writing env first means the
-   * compose reference is only persisted after the var exists in .env.
+   * Atomic extract-to-env (audit finding #11): PUT /stacks/:id/compose-env
+   * writes compose + env in one transaction, so there is no partial-write
+   * window where compose references a missing var.
    */
   const confirmExtract = useCallback(async () => {
     if (!viewRef.current || !selectedText || !extractVarName.trim()) return
@@ -79,8 +73,8 @@ export function useExtractToEnv({
       // file content out of that — replacing a file we could not read with a
       // single line, while reporting the extraction as successful. There is
       // nothing safe to write when the current contents are unknown, so the
-      // rejection travels to the outer catch: that aborts before either write
-      // path and presents the cause.
+      // rejection travels to the outer catch: that aborts before the write and
+      // presents the cause.
       //
       // The 200 answers still proceed, and only they do. `hasEnvFile: false` is
       // the sole no-file answer (env.go:105, agent-os-bt5y) and the write below
@@ -95,46 +89,24 @@ export function useExtractToEnv({
       const newEnvLine = `${varName}=${selectedText}`
       const updatedEnv = currentEnv ? `${currentEnv.trimEnd()}\n${newEnvLine}` : newEnvLine
 
-      // Attempt atomic write — body: { composeContent, envRaw } per ComposeEnvRequest
-      let atomicSuccess = false
+      // Atomic write — body: { composeContent, envRaw } per ComposeEnvRequest
       try {
         const result = await stacksApi.updateComposeAndEnv(stackId, updatedCompose, updatedEnv)
-        if (isActionResult(result)) {
-          if (result.outcome === 'success' || result.outcome === 'no_change') {
-            atomicSuccess = true
-          } else {
-            // Behaviour unchanged (agent-os-5g8a): this site already rendered
-            // the reason and keeps it as the TITLE, the same call
-            // toastForResult's `failed` arm makes for an ActionResult.
-            toastInvalid(result.reason || 'Failed to extract variable to .env')
-            return
-          }
-        } else {
-          // The endpoint doesn't exist yet (pre-B4 backend) — fall through to sequential.
-          atomicSuccess = false
-        }
-      } catch (e: unknown) {
-        const err = e as { status?: number; response?: { status?: number } }
-        const status = err.status ?? err.response?.status
-        if (status === 404) {
-          // Backend not yet migrated; use env-first sequential fallback.
-          atomicSuccess = false
-        } else {
-          // agent-os-yre8. Not in the bead's own SPEC, which quotes only the
-          // outer catch, but this is the site a rejected atomic write lands
-          // on: PutComposeAndEnv answers truth.Failed/truth.Partial at 5xx,
-          // so axios rejects and the ActionResult reason -- which names WHICH
-          // write failed and whether a rollback happened -- arrives HERE.
-          presentError(e, { fallback: 'Failed to extract variable to .env' })
+        if (result.outcome !== 'success' && result.outcome !== 'no_change') {
+          // Behaviour unchanged (agent-os-5g8a): this site already rendered
+          // the reason and keeps it as the TITLE, the same call
+          // toastForResult's `failed` arm makes for an ActionResult.
+          toastInvalid(result.reason || 'Failed to extract variable to .env')
           return
         }
-      }
-
-      if (!atomicSuccess) {
-        // Sequential fallback — write env FIRST so the compose reference is
-        // never persisted without the variable being available.
-        await apiClient.put(`/stacks/${stackId}/env`, { raw: updatedEnv })
-        await apiClient.put(`/stacks/${stackId}/compose`, { content: updatedCompose })
+      } catch (e: unknown) {
+        // agent-os-yre8. Not in the bead's own SPEC, which quotes only the
+        // outer catch, but this is the site a rejected atomic write lands
+        // on: PutComposeAndEnv answers truth.Failed/truth.Partial at 5xx,
+        // so axios rejects and the ActionResult reason -- which names WHICH
+        // write failed and whether a rollback happened -- arrives HERE.
+        presentError(e, { fallback: 'Failed to extract variable to .env' })
+        return
       }
 
       // Update editor state
@@ -150,16 +122,12 @@ export function useExtractToEnv({
       setSelectedText('')
     } catch (err) {
       // agent-os-yre8. This catch used to take no binding, so the cause was
-      // not merely discarded -- it was never observed. TWO paths land here.
+      // not merely discarded -- it was never observed.
       //
-      // The SEQUENTIAL fallback: two bare apiClient.put calls, /env then
-      // /compose. If env succeeds and compose then fails, the variable now
-      // exists in .env while the compose file still holds the literal, and
-      // the reason is the only thing that says so.
-      //
-      // The .env READ above (agent-os-erfc). Reaching this catch from there IS
-      // the abort -- no write call has been made at that point -- which is why
-      // a file we could not read is no longer overwritten with one line.
+      // The .env READ above (agent-os-erfc) lands here. Reaching this catch
+      // from there IS the abort -- no write call has been made at that point --
+      // which is why a file we could not read is no longer overwritten with
+      // one line.
       presentError(err, { fallback: 'Failed to extract variable to .env' })
     } finally {
       setIsExtracting(false)

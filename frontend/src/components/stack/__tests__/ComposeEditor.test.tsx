@@ -34,15 +34,15 @@ vi.mock('@codemirror/theme-one-dark', () => ({ oneDark: {} }))
 vi.mock('@codemirror/search', () => ({ search: () => [] }))
 vi.mock('@codemirror/autocomplete', () => ({ autocompletion: () => [] }))
 
-const mockGet = vi.fn()
-const mockPut = vi.fn()
-const mockPost = vi.fn()
+const mockGetCompose = vi.fn()
+const mockUpdateCompose = vi.fn()
+const mockLintCompose = vi.fn()
 
 vi.mock('@/lib/api', () => ({
-  apiClient: {
-    get: (...args: unknown[]) => mockGet(...args),
-    put: (...args: unknown[]) => mockPut(...args),
-    post: (...args: unknown[]) => mockPost(...args),
+  stacksApi: {
+    getCompose: (...args: unknown[]) => mockGetCompose(...args),
+    updateCompose: (...args: unknown[]) => mockUpdateCompose(...args),
+    lintCompose: (...args: unknown[]) => mockLintCompose(...args),
   },
 }))
 
@@ -62,15 +62,13 @@ describe('ComposeEditor', () => {
   })
 
   it('shows loading state while fetching compose file', () => {
-    mockGet.mockReturnValue(new Promise(() => {}))
+    mockGetCompose.mockReturnValue(new Promise(() => {}))
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
     expect(screen.getByText('Loading compose file...')).toBeInTheDocument()
   })
 
   it('renders save and lint buttons after loading', async () => {
-    mockGet.mockResolvedValue({
-      data: 'services:\n  web:\n    image: nginx\n',
-    })
+    mockGetCompose.mockResolvedValue('services:\n  web:\n    image: nginx\n')
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
 
     await waitFor(() => {
@@ -80,9 +78,7 @@ describe('ComposeEditor', () => {
   })
 
   it('disables save button when no unsaved changes', async () => {
-    mockGet.mockResolvedValue({
-      data: 'services:\n  web:\n    image: nginx\n',
-    })
+    mockGetCompose.mockResolvedValue('services:\n  web:\n    image: nginx\n')
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
 
     await waitFor(() => {
@@ -91,12 +87,10 @@ describe('ComposeEditor', () => {
   })
 
   it('shows lint results when present', async () => {
-    mockGet.mockResolvedValue({ data: 'services:\n  web:\n    image: nginx\n' })
-    mockPost.mockResolvedValue({
-      data: {
+    mockGetCompose.mockResolvedValue('services:\n  web:\n    image: nginx\n')
+    mockLintCompose.mockResolvedValue({
         lintResults: [{ level: 'error', message: 'Invalid service config', line: 2 }],
-      },
-    })
+      })
 
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
 
@@ -106,7 +100,7 @@ describe('ComposeEditor', () => {
   })
 
   it('shows Ctrl+S hint', async () => {
-    mockGet.mockResolvedValue({ data: 'services:\n  web:\n    image: nginx\n' })
+    mockGetCompose.mockResolvedValue('services:\n  web:\n    image: nginx\n')
     renderWithProviders(<ComposeEditor stackId="test-stack" />)
 
     await waitFor(() => {

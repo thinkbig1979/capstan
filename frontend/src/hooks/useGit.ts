@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { gitApi, type GitPullResult } from '@/lib/api'
-import { isActionResult, type ActionResult } from '@/lib/action-result'
+import { gitApi } from '@/lib/api'
+import type { ActionResult } from '@/lib/action-result'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import { queryKeys } from '@/lib/query-keys'
-import { stringArrayOr, stringOr } from '@/lib/narrow'
+import { stringOr } from '@/lib/narrow'
 
 export function useGitStatus(stackId: string) {
   return useQuery({
@@ -44,84 +44,6 @@ export function useGitDiff(stackId: string, hash: string) {
 }
 
 /**
- * Normalise a git pull response to an ActionResult.
- *
- * The backend is being migrated to the Action Truth Contract (B4). During the
- * migration window callers may receive either:
- *   - Legacy: { success: boolean, previousCommit, currentCommit, ... }
- *   - New:    { outcome, reason, details: { previousCommit, currentCommit, failedRedeploys } }
- *
- * Rules:
- *   - success==true AND previousCommit==currentCommit → no_change
- *   - success==true AND commits differ              → success
- *   - success==false                                → failed
- *   - ActionResult (new backend) → pass through
- *
- * Detail fields use `previousCommit`/`currentCommit` (matching both legacy wire
- * names and the new backend ActionResult details shape).
- */
-export function normalisePullResult(raw: GitPullResult): ActionResult<{
-  previousCommit?: string
-  currentCommit?: string
-  failedRedeploys?: Array<{ stack: string; reason: string }>
-  changedFiles?: string[]
-  redeployedStacks?: string[]
-}> {
-  if (isActionResult(raw)) {
-    return raw as ActionResult<{
-      previousCommit?: string
-      currentCommit?: string
-      failedRedeploys?: Array<{ stack: string; reason: string }>
-      changedFiles?: string[]
-      redeployedStacks?: string[]
-    }>
-  }
-
-  // Legacy shape
-  // agent-os-06c1: every field but `success` is `unknown`. The old shape
-  // declared four REQUIRED strings/arrays on a body nothing validated, and
-  // two of them were then handed to .slice(0, 7).
-  const legacy = raw as {
-    success: boolean
-    previousCommit?: unknown
-    currentCommit?: unknown
-    changedFiles?: unknown
-    redeployedStacks?: unknown
-  }
-
-  if (!legacy.success) {
-    return { outcome: 'failed', reason: 'Git pull failed', details: {} }
-  }
-
-  // agent-os-06c1: narrowed, not asserted. The cast above claims four
-  // REQUIRED fields on a body that reached us unvalidated, and unlike every
-  // other site in that class this one calls .slice(0, 7) on two of them — so
-  // a non-string here throws a TypeError rather than rendering oddly.
-  const previousCommit = stringOr(legacy.previousCommit, '')
-  const currentCommit = stringOr(legacy.currentCommit, '')
-  const details = {
-    previousCommit,
-    currentCommit,
-    changedFiles: stringArrayOr(legacy.changedFiles, []),
-    redeployedStacks: stringArrayOr(legacy.redeployedStacks, []),
-  }
-
-  if (previousCommit === currentCommit) {
-    return {
-      outcome: 'no_change',
-      reason: 'Already up to date',
-      details,
-    }
-  }
-
-  return {
-    outcome: 'success',
-    reason: `Pulled ${previousCommit.slice(0, 7)} → ${currentCommit.slice(0, 7)}`,
-    details,
-  }
-}
-
-/**
  * Hook for git pull with proper Action Truth Contract handling.
  *
  * Accepts `stackId` and optional `redeploy` at mutation call time so callers
@@ -139,10 +61,9 @@ export function useGitPull() {
 
   return useActionMutation({
     mutationFn: async ({ stackId, redeploy = false }: { stackId: string; redeploy?: boolean }) => {
-      const raw = await gitApi.pull(stackId, redeploy)
-      const normalised = normalisePullResult(raw)
+      const result = await gitApi.pull(stackId, redeploy)
       // Attach stackId so onResult can invalidate the per-stack git query
-      return { ...normalised, _stackId: stackId }
+      return { ...result, _stackId: stackId }
     },
     invalidate: [queryKeys.stacks()],
     onResult: (result) => {

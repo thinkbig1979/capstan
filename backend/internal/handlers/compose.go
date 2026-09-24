@@ -30,23 +30,6 @@ type ComposeRequest struct {
 	Content string `json:"content" binding:"required"`
 }
 
-type ComposeResponse struct {
-	Content      string `json:"content"`
-	Filename     string `json:"filename"`
-	Size         int64  `json:"size"`
-	LastModified string `json:"lastModified"`
-}
-
-type ComposeSaveResponse struct {
-	Saved       bool                `json:"saved"`
-	LintResults []models.LintResult `json:"lintResults,omitempty"`
-}
-
-type LintResponse struct {
-	Valid       bool                `json:"valid"`
-	LintResults []models.LintResult `json:"lintResults"`
-}
-
 func NewComposeHandler(linter *services.LinterService, db *database.DB, config *config.Config) *ComposeHandler {
 	return &ComposeHandler{
 		linter:    linter,

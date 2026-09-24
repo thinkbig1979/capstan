@@ -63,19 +63,17 @@ vi.mock('@/stores/uiStore', () => ({ useUIStore: () => ({ theme: 'light' }) }))
 
 // ─── API mocks ───────────────────────────────────────────────────────────────
 
-const mockApiGet = vi.fn()
-const mockApiPut = vi.fn()
-const mockApiPost = vi.fn()
+const mockGetCompose = vi.fn()
+const mockUpdateCompose = vi.fn()
+const mockLintCompose = vi.fn()
 const mockGetEnv = vi.fn()
 const mockUpdateComposeAndEnv = vi.fn()
 
 vi.mock('@/lib/api', () => ({
-  apiClient: {
-    get: (...args: unknown[]) => mockApiGet(...args),
-    put: (...args: unknown[]) => mockApiPut(...args),
-    post: (...args: unknown[]) => mockApiPost(...args),
-  },
   stacksApi: {
+    getCompose: (...args: unknown[]) => mockGetCompose(...args),
+    updateCompose: (...args: unknown[]) => mockUpdateCompose(...args),
+    lintCompose: (...args: unknown[]) => mockLintCompose(...args),
     getEnv: (...args: unknown[]) => mockGetEnv(...args),
     updateComposeAndEnv: (...args: unknown[]) => mockUpdateComposeAndEnv(...args),
     updateEnv: vi.fn(),
@@ -122,7 +120,7 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockDispatch.mockReset()
-    mockApiGet.mockResolvedValue({ data: 'services:\n  web:\n    image: nginx\n' })
+    mockGetCompose.mockResolvedValue('services:\n  web:\n    image: nginx\n')
   })
 
   // ── Baseline ─────────────────────────────────────────────────────────────
@@ -183,49 +181,9 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
     expect(callEnvRaw).toContain('EXISTING=1')
 
     // No sequential writes
-    expect(mockApiPut).not.toHaveBeenCalled()
+    expect(mockUpdateCompose).not.toHaveBeenCalled()
 
     // Success toast
-    expect(toast.success).toHaveBeenCalled()
-    expect(toast.error).not.toHaveBeenCalled()
-  })
-
-  // ── 404 fallback: env PUT before compose PUT ──────────────────────────────
-
-  it('fallback: when atomic 404s, env is written BEFORE compose (safe ordering)', async () => {
-    await withSelection('nginx')
-    mockGetEnv.mockResolvedValue({ hasEnvFile: true, filename: '.env', raw: '', entries: [] })
-    mockUpdateComposeAndEnv.mockRejectedValue({ status: 404 })
-    // Both sequential puts succeed
-    mockApiPut.mockResolvedValue({ data: { saved: true } })
-
-    const user = userEvent.setup()
-    renderWithProviders(<ComposeEditor stackId="test-stack" />)
-
-    await waitFor(() =>
-      expect(screen.getByTitle(/Extract selected value to .env file/)).not.toBeDisabled(),
-    )
-
-    await user.click(screen.getByTitle(/Extract selected value to .env file/))
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Extract$/ })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /^Extract$/ }))
-
-    await waitFor(() => expect(mockApiPut).toHaveBeenCalledTimes(2))
-
-    // Assert ordering: env URL appears BEFORE compose URL in the call list
-    const putUrls = (mockApiPut.mock.calls as Array<[string, ...unknown[]]>).map((c) => c[0])
-    const envIdx = putUrls.findIndex((url) => url.includes('/env'))
-    const composeIdx = putUrls.findIndex((url) => url.includes('/compose'))
-
-    expect(envIdx).toBeGreaterThanOrEqual(0)
-    expect(composeIdx).toBeGreaterThanOrEqual(0)
-    // env must come first — the ${VAR} reference is never persisted without its definition
-    expect(envIdx).toBeLessThan(composeIdx)
-
-    // The env PUT body must contain the extracted value
-    const envPutBody = (mockApiPut.mock.calls[envIdx] as [string, { raw?: string }])[1]
-    expect(envPutBody.raw).toContain('nginx')
-
     expect(toast.success).toHaveBeenCalled()
     expect(toast.error).not.toHaveBeenCalled()
   })
@@ -258,7 +216,7 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
       }),
     )
 
-    expect(mockApiPut).not.toHaveBeenCalled()
+    expect(mockUpdateCompose).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()
   })
 
@@ -287,7 +245,7 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
       expect(toast.error).toHaveBeenCalledWith('Compose validation failed'),
     )
 
-    expect(mockApiPut).not.toHaveBeenCalled()
+    expect(mockUpdateCompose).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()
   })
 })

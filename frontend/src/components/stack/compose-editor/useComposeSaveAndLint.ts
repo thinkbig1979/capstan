@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { RefObject } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiClient } from '@/lib/api'
+import { stacksApi } from '@/lib/api'
 import { classifyError, presentError, toastInvalid } from '@/lib/error-handler'
 import { toast } from 'sonner'
 import type { LintResult } from '@/types'
@@ -34,10 +34,7 @@ export function useComposeSaveAndLint({
   const [isLintingBeforeSave, setIsLintingBeforeSave] = useState(false)
 
   const saveMutation = useMutation({
-    mutationFn: async (content: string) => {
-      const response = await apiClient.put(`/stacks/${stackId}/compose`, { content })
-      return response.data
-    },
+    mutationFn: (content: string) => stacksApi.updateCompose(stackId, content),
     onSuccess: (data, variables) => {
       setLastSaved(variables)
       setLintResults(data.lintResults || [])
@@ -79,8 +76,8 @@ export function useComposeSaveAndLint({
 
       setIsLintingBeforeSave(true)
       try {
-        const response = await apiClient.post(`/stacks/${stackId}/compose/lint`, { content: currentContent })
-        const results = response.data.lintResults || []
+        const data = await stacksApi.lintCompose(stackId, currentContent)
+        const results = data.lintResults || []
         setLintResults(results)
 
         if (results.some((r: LintResult) => r.level === 'error')) {
@@ -101,10 +98,7 @@ export function useComposeSaveAndLint({
   }, [handleSave, handleSaveRef])
 
   const lintMutation = useMutation({
-    mutationFn: async (content: string) => {
-      const response = await apiClient.post(`/stacks/${stackId}/compose/lint`, { content })
-      return response.data
-    },
+    mutationFn: (content: string) => stacksApi.lintCompose(stackId, content),
     onSuccess: (data) => {
       setLintResults(data.lintResults || [])
       if (data.lintResults?.some((r: LintResult) => r.level === 'error')) {

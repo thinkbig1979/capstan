@@ -271,27 +271,6 @@ describe('EnvEditor', () => {
     })
   })
 
-  it('env save legacy {saved:true} → maps to success, fires toast.success', async () => {
-    mockGetEnv.mockResolvedValue(baseEnvData)
-    // Legacy backend shape
-    mockUpdateEnv.mockResolvedValue({ saved: true, filename: '.env' })
-
-    const user = userEvent.setup()
-    renderWithProviders(<EnvEditor stackId="test-stack" />)
-
-    await waitFor(() => expect(screen.getByText('Save')).toBeInTheDocument())
-
-    const keyInput = screen.getAllByLabelText(/Environment variable key/)[0]
-    await user.clear(keyInput)
-    await user.type(keyInput, 'LEGACY_KEY')
-
-    await user.click(screen.getByText('Save'))
-
-    await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith('Environment variables saved')
-    })
-  })
-
   // ── B4: Create Environment File button (finding #16) ─────────────────────
 
   it('Create Environment File button calls createEnv and reveals editor on success', async () => {

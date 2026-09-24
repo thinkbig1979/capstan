@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { useQuery } from '@tanstack/react-query'
-import { apiClient } from '@/lib/api'
+import { stacksApi } from '@/lib/api'
 import { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
 import { LintResultsPanel } from '@/components/stack/LintResultsPanel'
 import { ComposeToolbar } from './compose-editor/ComposeToolbar'
@@ -32,12 +32,12 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   const { isLoading, data } = useQuery({
     queryKey: queryKeys.stack.compose(stackId),
     queryFn: async () => {
-      const response = await apiClient.get(`/stacks/${stackId}/compose`)
+      const compose = await stacksApi.getCompose(stackId)
       // agent-os-06c1: narrowed, not asserted. This value becomes a
       // string-typed React state and the editor's initial document.
       // '' rather than undefined keeps `data || content` and `if (data)`
       // behaving exactly as they did for an absent body.
-      return stringOr((response.data as { content?: unknown } | undefined)?.content, '')
+      return stringOr((compose as { content?: unknown } | undefined)?.content, '')
     },
   })
 

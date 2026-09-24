@@ -43,17 +43,7 @@ export function useEnvMutations({
       const wireBody = body.entries
         ? { ...body, entries: body.entries.map(({ _rowId, ...rest }) => rest) }
         : body
-      const raw = await stacksApi.updateEnv(stackId, wireBody)
-      // Migration bridge: legacy backend returns {saved, filename}; new backend
-      // returns ActionResult. Map the legacy shape so toastForResult works either way.
-      if (isActionResult(raw)) {
-        return raw
-      }
-      const legacy = raw as { saved: boolean; filename?: string }
-      if (legacy.saved) {
-        return { outcome: 'success' as const, reason: 'Environment variables saved' }
-      }
-      return { outcome: 'failed' as const, reason: 'Failed to save environment variables' }
+      return stacksApi.updateEnv(stackId, wireBody)
     },
     invalidate: [queryKeys.stack.detail(stackId)],
     successTitle: 'Environment variables saved',
