@@ -1,6 +1,6 @@
 import { useState, useMemo, Suspense, lazy } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { stacksApi, resourcesApi } from '@/lib/api'
+import { stacksApi, resourcesApi, type LifecycleResult } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -148,7 +148,7 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
   const actioned = actedOnStack ? 'stack' : 'container'
 
   const startMutation = useMutation({
-    mutationFn: async (): Promise<CommandResult> => {
+    mutationFn: async (): Promise<LifecycleResult | CommandResult> => {
       if (mode === 'stack' && stackId) return stacksApi.start(stackId)
       const res = await resourcesApi.startContainer(containerId)
       return { status: 'started', output: res.message, duration: 0 }
@@ -178,7 +178,7 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
   })
 
   const stopMutation = useMutation({
-    mutationFn: async (): Promise<CommandResult> => {
+    mutationFn: async (): Promise<LifecycleResult | CommandResult> => {
       if (mode === 'stack' && stackId) return stacksApi.stop(stackId)
       const res = await resourcesApi.stopContainer(containerId)
       return { status: 'stopped', output: res.message, duration: 0 }
@@ -195,7 +195,7 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
   })
 
   const restartMutation = useMutation({
-    mutationFn: async (): Promise<CommandResult> => {
+    mutationFn: async (): Promise<LifecycleResult | CommandResult> => {
       if (mode === 'stack' && stackId) return stacksApi.restart(stackId)
       const res = await resourcesApi.restartContainer(containerId)
       return { status: 'restarted', output: res.message, duration: 0 }

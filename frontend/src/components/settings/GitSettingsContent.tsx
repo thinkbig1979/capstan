@@ -22,6 +22,11 @@ export function GitSettingsContent() {
 
   const effectiveSshKey = sshKey !== undefined ? sshKey : (gitSettings?.sshKey || '')
   const effectiveHttpsUser = httpsUser !== undefined ? httpsUser : (gitSettings?.httpsUser || '')
+  // hasHttpsToken is also true for a stored token the server could not read
+  // (GetGitSettings), so "currently set" alone would claim a usable token
+  // (agent-os-pjos).
+  const tokenUnreadable = gitSettings?.httpsTokenUnreadable === true
+  const tokenReadable = Boolean(gitSettings?.hasHttpsToken) && !tokenUnreadable
 
   if (isLoading) {
     return <div className="py-4"><LoadingSpinner /></div>
@@ -104,7 +109,7 @@ export function GitSettingsContent() {
         <div className="space-y-2">
           <Label htmlFor="git-https-token">
             Personal Access Token
-            {gitSettings?.hasHttpsToken && (
+            {tokenReadable && (
               <span className="ml-2 text-xs text-muted-foreground font-normal">(currently set)</span>
             )}
           </Label>
@@ -112,7 +117,13 @@ export function GitSettingsContent() {
             <Input
               id="git-https-token"
               type={showToken ? 'text' : 'password'}
-              placeholder={gitSettings?.hasHttpsToken ? 'Leave blank to keep current token' : 'ghp_xxxx or glpat-xxxx'}
+              placeholder={
+                tokenUnreadable
+                  ? 'Enter the token again to replace it'
+                  : tokenReadable
+                    ? 'Leave blank to keep current token'
+                    : 'ghp_xxxx or glpat-xxxx'
+              }
               value={httpsToken}
               onChange={(e) => setHttpsToken(e.target.value)}
               className="flex-1"
@@ -128,6 +139,11 @@ export function GitSettingsContent() {
               {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </Button>
           </div>
+          {tokenUnreadable && (
+            <p className="text-xs text-destructive">
+              A token is stored but could not be read. Enter it again to replace it.
+            </p>
+          )}
           <p className="text-xs text-muted-foreground">
             Used as the default token for HTTPS git remotes. Individual stack credentials override these.
           </p>

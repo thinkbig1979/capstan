@@ -88,6 +88,41 @@ describe('GitSettingsContent', () => {
     )
   })
 
+  // agent-os-pjos. GetGitSettings answers hasHttpsToken:true with
+  // httpsTokenUnreadable:true when the stored token exists but cannot be read.
+  // "(currently set)" alone told the operator a usable token was in place.
+  it('discloses a stored token that could not be read, instead of calling it set', async () => {
+    mockGetGit.mockResolvedValue({
+      sshKey: '',
+      httpsUser: '',
+      hasHttpsToken: true,
+      httpsTokenUnreadable: true,
+    })
+    renderPanel()
+
+    expect(
+      await screen.findByText('A token is stored but could not be read. Enter it again to replace it.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('(currently set)')).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/Personal Access Token/)).toHaveAttribute(
+      'placeholder',
+      'Enter the token again to replace it',
+    )
+  })
+
+  it('does not show the unreadable-token notice for a readable stored token', async () => {
+    mockGetGit.mockResolvedValue({
+      sshKey: '',
+      httpsUser: '',
+      hasHttpsToken: true,
+      httpsTokenUnreadable: false,
+    })
+    renderPanel()
+
+    expect(await screen.findByText('(currently set)')).toBeInTheDocument()
+    expect(screen.queryByText(/could not be read/)).not.toBeInTheDocument()
+  })
+
   it('offers to create a token when none is stored', async () => {
     renderPanel()
 
