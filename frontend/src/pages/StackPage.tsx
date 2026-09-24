@@ -14,6 +14,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { classifyError, presentError, toastInvalid } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+import { StatusStaleNotice } from '@/components/StatusStaleNotice'
 import { deleteStackWithCollateralConfirm, StackDeleteCancelledError } from '@/lib/stack-delete'
 import { useParams, useNavigate, useLocation } from 'react-router'
 import { toast } from 'sonner'
@@ -369,6 +370,10 @@ export function StackPage() {
       {/* agent-os-lurn: past the guard, `error` means a REFRESH failed over a
           stack we still hold. Report it without taking the page away. */}
       {error && <RefreshFailedNotice what="this stack" className="mb-4" onRetry={() => refetch()} />}
+      {/* agent-os-xjzr: the live Docker read failed, so the pill below shows the stored status. */}
+      {stack.statusStale === true && (
+        <StatusStaleNotice subject="This stack's status" className="mb-4" onRetry={() => refetch()} />
+      )}
       <div className="space-y-6">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="min-w-0 flex-1">

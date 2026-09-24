@@ -33,12 +33,17 @@ type Directory struct {
 }
 
 type Stack struct {
-	ID          string      `json:"id"`
-	Directory   string      `json:"directory"`
-	ComposeFile string      `json:"composeFile"`
-	EnvFile     string      `json:"envFile"`
-	ProjectName string      `json:"projectName"`
-	Status      string      `json:"status"`
+	ID          string `json:"id"`
+	Directory   string `json:"directory"`
+	ComposeFile string `json:"composeFile"`
+	EnvFile     string `json:"envFile"`
+	ProjectName string `json:"projectName"`
+	Status      string `json:"status"`
+	// StatusStale is set when the live Docker read failed and Status is the
+	// last one stored rather than the current one (agent-os-xjzr). omitempty
+	// on purpose: responses that never attempt a live read (Create) must not
+	// send an explicit false, which would claim a liveness nobody checked.
+	StatusStale bool        `json:"statusStale,omitempty"`
 	Containers  []Container `json:"containers"`
 	IsGitRepo   bool        `json:"isGitRepo"`
 	GitBranch   string      `json:"gitBranch"`

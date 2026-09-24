@@ -806,9 +806,13 @@ func TestStacksHandler_Get_DBFaultLogsCause(t *testing.T) {
 // map.
 type statusFakeDocker struct {
 	statuses map[string]services.LiveStatus
+	err      error
 }
 
 func (f *statusFakeDocker) GetStackStatuses(context.Context, services.DashboardDB) (map[string]services.LiveStatus, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.statuses, nil
 }
 func (f *statusFakeDocker) StartVerified(models.Stack) (truth.ActionResult, string) {
@@ -884,4 +888,56 @@ func TestStacksHandler_Get_ContainerlessStackEmitsEmptyArray(t *testing.T) {
 			t.Fatalf("response did not carry the fake container: %s", w.Body.String())
 		}
 	})
+}
+
+// TestStacksHandler_StatusStaleDisclosure is the SEEN-FAILING-FIRST test for
+// agent-os-xjzr: List and Get used to log a failed live-status read and serve
+// the stored DB status with nothing telling the client it was not live. The
+// stored status is still served (Edwin's decision), now with statusStale:true.
+// Two-sided: on a successful read the key is absent and the live status wins.
+// Asserted on raw bytes, because a decoded bool cannot tell false from absent.
+func TestStacksHandler_StatusStaleDisclosure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	stored := models.Stack{
+		ID:          "test~stack1:default",
+		Directory:   "/tmp/test/stack1",
+		ComposeFile: "compose.yaml",
+		ProjectName: "stack1-default",
+		Status:      "running",
+	}
+	live := map[string]services.LiveStatus{
+		"stack1-default": {Status: "stopped", Containers: []models.Container{}},
+	}
+
+	serve := func(t *testing.T, docker *statusFakeDocker, path string) string {
+		t.Helper()
+		db, err := database.NewWithMigrations(":memory:")
+		require.NoError(t, err)
+		createTestDirectory(t, db, stored.Directory)
+		require.NoError(t, db.UpsertStack(stored))
+
+		handler := NewStacksHandler(docker, nil, nil, db, &config.Config{StacksDir: "/tmp/test"}, nil, services.NewOperationLock())
+		router := gin.New()
+		router.GET("/stacks", handler.List)
+		router.GET("/stacks/:id", handler.Get)
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		return w.Body.String()
+	}
+
+	for _, path := range []string{"/stacks", "/stacks/test~stack1:default"} {
+		t.Run(path+": failed live read discloses statusStale and keeps the stored status", func(t *testing.T) {
+			body := serve(t, &statusFakeDocker{err: errors.New("docker unreachable")}, path)
+			assert.Contains(t, body, `"statusStale":true`)
+			assert.Contains(t, body, `"status":"running"`)
+		})
+		t.Run(path+": successful live read serves the live status and no statusStale", func(t *testing.T) {
+			body := serve(t, &statusFakeDocker{statuses: live}, path)
+			assert.NotContains(t, body, `statusStale`)
+			assert.Contains(t, body, `"status":"stopped"`)
+		})
+	}
 }

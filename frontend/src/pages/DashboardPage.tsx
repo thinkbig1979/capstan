@@ -26,6 +26,7 @@ import { StacksTab } from '@/components/dashboard/StacksTab'
 import { DirectoriesTab } from '@/components/dashboard/DirectoriesTab'
 import { classifyError, presentError } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+import { StatusStaleNotice } from '@/components/StatusStaleNotice'
 import { useStackActions } from '@/hooks/useStackActions'
 import { toast } from 'sonner'
 import { useConfirm } from '@/hooks/useConfirm'
@@ -291,6 +292,11 @@ export function DashboardPage() {
       {/* agent-os-lurn: past the guard, an error means a REFRESH failed over
           data we still hold. Report it without blanking the dashboard. */}
       {error && <RefreshFailedNotice what="the dashboard" onRetry={handleRefresh} />}
+      {/* agent-os-xjzr: page-level, not inside StacksTab, because the header's
+          running count and the AttentionStrip read the same stored statuses. */}
+      {stacks?.some((s) => s.statusStale === true) && (
+        <StatusStaleNotice subject="Stack statuses" onRetry={() => refetchStacks()} />
+      )}
       <DashboardHeader
         onRefresh={handleRefresh}
         onCreateStack={() => setCreateDialogOpen(true)}

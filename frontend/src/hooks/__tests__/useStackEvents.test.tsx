@@ -183,3 +183,28 @@ describe('useStackEvents update-completion invalidation', () => {
     ])
   })
 })
+
+// agent-os-xjzr: a stack served with statusStale (live read failed) whose status
+// a stack_status frame then overwrites with a value from Docker's event stream
+// must lose the flag, or the "may be out of date" note outlives its cause.
+// Two-sided: a stack the frame did not name keeps its flag.
+describe('useStackEvents stack_status clears statusStale', () => {
+  it('clears statusStale on the stack the frame names and only that one', () => {
+    renderHook(() => useStackEvents())
+
+    capturedOnMessage!({ type: 'stack_status', stackId: 's1', status: 'running', timestamp: '' })
+
+    const call = vi.mocked(queryClient.setQueryData).mock.calls.find(
+      ([key]) => JSON.stringify(key) === JSON.stringify(queryKeys.stacks()),
+    )
+    expect(call).toBeDefined()
+    const updater = call![1] as (old: unknown) => Array<{ id: string; status: string; statusStale?: boolean }>
+    const next = updater([
+      { id: 's1', status: 'stopped', statusStale: true },
+      { id: 's2', status: 'stopped', statusStale: true },
+    ])
+    expect(next[0]).toMatchObject({ id: 's1', status: 'running' })
+    expect(next[0].statusStale).not.toBe(true)
+    expect(next[1]).toMatchObject({ id: 's2', status: 'stopped', statusStale: true })
+  })
+})
