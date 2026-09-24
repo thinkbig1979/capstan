@@ -24,6 +24,7 @@ import {
 import type { BackupHistoryFilters, BackupRun } from '@/types'
 import { formatRelativeTime, formatDurationShort, formatBytes } from '@/lib/format'
 import { RunStatusBadge } from './backup-run-status'
+import { cn } from '@/lib/utils'
 import { classifyError } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
@@ -89,7 +90,31 @@ const ITEM_STATUS_CLASS: Record<'skipped' | 'success' | 'failed', string> = {
   skipped: 'text-muted-foreground',
 }
 
-function RunDetail({ runId, status }: { runId: string; status: BackupRun['status'] }) {
+const RUN_MESSAGE_CLASS: Partial<Record<BackupRun['status'], string>> = {
+  failed: 'text-destructive',
+  partial: 'text-yellow-700 dark:text-yellow-400',
+}
+
+/**
+ * The run's own error_message (agent-os-evtz). A restore run has no per-stack
+ * items, so this is the only durable place that says why a failed restore
+ * left the stack stopped, or that a restored stack did not fully restart.
+ * It comes from the history row, so it still shows when the detail fetch fails.
+ */
+function RunMessage({ run }: { run: BackupRun }) {
+  if (!run.errorMessage) return null
+  return (
+    <p
+      data-testid={`run-error-message-${run.id}`}
+      className={cn('text-sm', RUN_MESSAGE_CLASS[run.status] ?? 'text-muted-foreground')}
+    >
+      {run.errorMessage}
+    </p>
+  )
+}
+
+function RunDetail({ run }: { run: BackupRun }) {
+  const { id: runId, status } = run
   const { data, isLoading, isError, error } = useBackupRunDetail(runId, status)
 
   if (isLoading) {
@@ -121,7 +146,8 @@ function RunDetail({ runId, status }: { runId: string; status: BackupRun['status
     // needs no further gate. The fixed sentence stays as the HEADLINE, so a
     // failure the backend said nothing about renders what it rendered before.
     return (
-      <div className="px-4 py-3 text-sm text-destructive">
+      <div className="space-y-2 px-4 py-3 text-sm text-destructive">
+        <RunMessage run={run} />
         <div className="flex items-center gap-2">
           <AlertCircle className="h-4 w-4" />
           Failed to load run details.
@@ -140,7 +166,10 @@ function RunDetail({ runId, status }: { runId: string; status: BackupRun['status
     return (
       <div className="space-y-2 px-4 py-3">
         {refreshFailed && <RefreshFailedNotice what="the run details" />}
-        <p className="text-sm text-muted-foreground">No per-stack records for this run.</p>
+        <RunMessage run={run} />
+        {!run.errorMessage && (
+          <p className="text-sm text-muted-foreground">No per-stack records for this run.</p>
+        )}
       </div>
     )
   }
@@ -148,6 +177,7 @@ function RunDetail({ runId, status }: { runId: string; status: BackupRun['status
   return (
     <div className="space-y-2 px-4 py-3">
       {refreshFailed && <RefreshFailedNotice what="the run details" />}
+      <RunMessage run={run} />
       <ul className="space-y-1.5">
         {items.map((it) => (
           <li key={it.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -224,7 +254,7 @@ function RunRow({ run }: { run: BackupRun }) {
       {expanded && (
         <TableRow>
           <TableCell colSpan={COLUMN_COUNT} className="bg-muted/30 p-0">
-            <RunDetail runId={run.id} status={run.status} />
+            <RunDetail run={run} />
           </TableCell>
         </TableRow>
       )}

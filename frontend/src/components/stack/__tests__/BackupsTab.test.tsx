@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { BackupsTab } from '../BackupsTab'
+import { toast } from 'sonner'
 
 // ─── API mocks ───────────────────────────────────────────────────────────────
 
@@ -698,15 +699,38 @@ describe('BackupsTab — restore progress panel', () => {
     })
   })
 
-  it('renders "Restore partially completed" header when stream status is partial', async () => {
+  // agent-os-evtz: a restore run is 'partial' only when the files were restored
+  // but the stack did not fully restart. "Restore partially completed" said the
+  // restore itself was incomplete, which is the wrong thing to act on.
+  it('says the restore completed but the stack did not fully restart when stream status is partial', async () => {
     mockStreamState.status = 'partial'
-    mockStreamState.lines = ['Backup partially completed.']
+    mockStreamState.lines = ['[myapp] restart partially succeeded: 1 of 3 containers not running']
     const wrapper = createWrapper()
     render(<BackupsTab stackId={STACK_ID} />, { wrapper })
 
     await waitFor(() => {
-      expect(screen.getByText('Restore partially completed')).toBeInTheDocument()
+      expect(screen.getByTestId('restore-progress-header')).toHaveTextContent(
+        'Restore completed; stack not fully restarted',
+      )
     })
+    expect(screen.queryByText('Restore partially completed')).not.toBeInTheDocument()
+  })
+
+  it('toasts a partial restore as restored-but-not-fully-restarted', async () => {
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /restore snapshot abc12345/i }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore' }))
+    await waitFor(() => expect(mockStreamConnect).toHaveBeenCalledTimes(1))
+
+    const onDone = mockStreamConnect.mock.calls[0][1] as (status: string) => void
+    onDone('partial')
+
+    expect(toast.warning).toHaveBeenCalledTimes(1)
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Restore completed, but the stack did not fully restart. Check the log.',
+    )
   })
 
   // agent-os-mjrl: a viewer refused at the per-run attacher bound is a refused

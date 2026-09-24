@@ -186,7 +186,9 @@ function RestoreProgress({
   function headerLabel() {
     if (isRunning) return 'Restoring…'
     if (status === 'success') return 'Restore completed'
-    if (status === 'partial') return 'Restore partially completed'
+    // A restore run is 'partial' only when the files were restored but the
+    // stack did not fully restart (agent-os-evtz); the restore itself is whole.
+    if (status === 'partial') return 'Restore completed; stack not fully restarted'
     if (isUnavailable) return 'Live output unavailable'
     return 'Restore failed'
   }
@@ -421,7 +423,7 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
             if (finalStatus === 'success') {
               toast.success('Restore completed')
             } else if (finalStatus === 'partial') {
-              toast.warning('Restore partially completed — check the log')
+              toast.warning('Restore completed, but the stack did not fully restart. Check the log.')
             } else if (finalStatus === 'unavailable') {
               // Refused stream, not a failed run (agent-os-mjrl).
               toast.info('Restore is still running; live output is unavailable')

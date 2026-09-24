@@ -1377,6 +1377,24 @@ func (s *BackupService) runSyncInternal(ctx context.Context, bc BackupConfig, ou
 
 // --- RunRestore ---
 
+// RestartIncompleteError is returned by RunRestore when the restore itself
+// SUCCEEDED but the stack did not fully come back afterwards (agent-os-evtz).
+// It is an error so the caller cannot mistake the run for a clean success;
+// execRestore records it as a "partial" run rather than a failed restore.
+type RestartIncompleteError struct {
+	StackID string
+	Outcome truth.Outcome // OutcomeFailed or OutcomePartial
+	Reason  string
+}
+
+func (e *RestartIncompleteError) Error() string {
+	verb := "failed"
+	if e.Outcome == truth.OutcomePartial {
+		verb = "partially succeeded"
+	}
+	return fmt.Sprintf("restore completed, but restarting stack %s %s: %s", e.StackID, verb, e.Reason)
+}
+
 // RunRestore restores a specific snapshot to the stack's directory. It
 // validates that the snapshot belongs to the given stackID (contains the
 // stack's tag), applies the stop policy before restoring, and restarts the
@@ -1494,10 +1512,19 @@ func (s *BackupService) RunRestore(
 		// containers over it can corrupt state and destroy the ability to retry
 		// the restore cleanly. Leave the stack stopped so the operator can inspect
 		// and retry.
+		//
+		// agent-os-evtz: the explanation is also folded into the returned error,
+		// which execRestore stores as the run record's error_message. stream()
+		// drops the line when no client is attached or the buffer is full, so
+		// the stream alone could not tell a later reader why the stack is down.
 		if err != nil {
-			stream(out, "error", fmt.Sprintf(
-				"[%s] restore failed; stack left stopped deliberately so you can inspect %s and retry (not auto-restarting over a possibly partial restore)",
-				stackID, restoreTarget))
+			explanation := fmt.Sprintf(
+				"stack left stopped deliberately so you can inspect %s and retry (not auto-restarting over a possibly partial restore)",
+				restoreTarget)
+			stream(out, "error", fmt.Sprintf("[%s] restore failed; %s", stackID, explanation))
+			s.logger.Error("restore failed; stack left stopped deliberately",
+				"stack", stackID, "target", restoreTarget, "error", err)
+			err = fmt.Errorf("%w; %s", err, explanation)
 			return
 		}
 		if priorState == runStateUnknown {
@@ -1511,9 +1538,13 @@ func (s *BackupService) RunRestore(
 			if startErr == nil {
 				startErr = errors.New(ar.Reason)
 			}
+			s.logger.Error("restart after restore failed", "stack", stackID, "error", startErr)
 			stream(out, "error", fmt.Sprintf("[%s] restart failed: %v", stackID, startErr))
+			err = &RestartIncompleteError{StackID: stackID, Outcome: ar.Outcome, Reason: startErr.Error()}
 		case truth.OutcomePartial:
 			s.logger.Warn("restart after restore partially succeeded", "stack", stackID, "reason", ar.Reason)
+			stream(out, "error", fmt.Sprintf("[%s] restart partially succeeded: %s", stackID, ar.Reason))
+			err = &RestartIncompleteError{StackID: stackID, Outcome: ar.Outcome, Reason: ar.Reason}
 		}
 	}()
 

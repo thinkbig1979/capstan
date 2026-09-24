@@ -489,6 +489,17 @@ func (reg *BackupRunnerRegistry) execRestore(dr *durableRun, stackID, snapshotID
 	err := reg.svc.RunRestore(ctx, stackID, snapshotID, target, out)
 	finish()
 
+	// The restore landed but the stack did not fully restart: not a failed
+	// restore, and not a clean success either (agent-os-evtz).
+	var restartErr *RestartIncompleteError
+	if errors.As(err, &restartErr) {
+		dr.outcome = "partial"
+		dr.reason = err.Error()
+		reg.finaliseRunStatus(dr.runID, "partial", err.Error())
+		reg.logger.Warn("durable restore finished with an incomplete restart", "run_id", dr.runID, "error", err)
+		return
+	}
+
 	if err != nil {
 		dr.outcome = "failed"
 		dr.reason = err.Error()
