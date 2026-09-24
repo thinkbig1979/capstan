@@ -24,6 +24,7 @@ import {
 import type { BackupHistoryFilters, BackupRun } from '@/types'
 import { formatRelativeTime, formatDurationShort, formatBytes } from '@/lib/format'
 import { RunStatusBadge } from './backup-run-status'
+import { RUN_KIND_LABEL } from './backup-run-kind'
 import { cn } from '@/lib/utils'
 import { classifyError } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
@@ -82,6 +83,37 @@ function useBackupRunDetail(runId: string, status: BackupRun['status']) {
     queryFn: () => backupApi.getRun(runId),
     staleTime: RUN_IS_TERMINAL[status] ? 5 * 60 * 1000 : 0,
   })
+}
+
+/**
+ * Whether a run kind counts stacks at all. Only services.RunBackup and
+ * RunBackupWithRunID write stacksOk/stacksFailed; every other kind leaves the
+ * columns at their zero default, which rendered as a made-up "0 ok / 0 failed"
+ * (agent-os-4zx0). Exhaustive for the same reason as RUN_IS_TERMINAL: a new
+ * kind must be decided here, not default into showing zeros.
+ */
+const RUN_KIND_COUNTS_STACKS: Record<BackupRun['kind'], boolean> = {
+  backup: true,
+  sync: false,
+  restore: false,
+  dr_restore: false,
+  prune: false,
+  verify: false,
+}
+
+/**
+ * The Stacks cell. Even a backup run saves its counts only when it finishes, so
+ * a running one has none yet and an interrupted one never recorded them; both
+ * get a dash rather than the zero default.
+ */
+function RunStacks({ run }: { run: BackupRun }) {
+  let missing: string | null = null
+  if (!RUN_KIND_COUNTS_STACKS[run.kind]) missing = `Not applicable to ${RUN_KIND_LABEL[run.kind]} runs`
+  else if (run.status === 'running') missing = 'Counted when the run finishes'
+  else if (run.status === 'interrupted') missing = 'Not recorded'
+
+  if (missing) return <span title={missing}>-</span>
+  return <>{run.stacksOk} ok / {run.stacksFailed} failed</>
 }
 
 const ITEM_STATUS_CLASS: Record<'skipped' | 'success' | 'failed', string> = {
@@ -232,8 +264,8 @@ function RunRow({ run }: { run: BackupRun }) {
         <TableCell>
           <RunStatusBadge status={run.status} />
         </TableCell>
-        <TableCell className="text-xs text-muted-foreground">
-          {run.stacksOk} ok / {run.stacksFailed} failed
+        <TableCell data-testid={`run-stacks-${run.id}`} className="text-xs text-muted-foreground">
+          <RunStacks run={run} />
         </TableCell>
         <TableCell className="text-xs text-muted-foreground">
           {run.bytesAdded == null ? (

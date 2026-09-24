@@ -137,6 +137,74 @@ describe('BackupHistoryTab — the four render states', () => {
   })
 })
 
+// agent-os-4zx0: only a FINISHED backup run writes stacksOk/stacksFailed
+// (services.RunBackup counts them in its per-stack loop and saves them when the
+// run ends). Every other kind, and a backup that is still running or was
+// interrupted, carries the column's zero default, which rendered as a made-up
+// "0 ok / 0 failed".
+describe('BackupHistoryTab — the Stacks column per kind', () => {
+  const stacksCell = () => screen.getByTestId('run-stacks-run-1')
+
+  it.each(['success', 'partial', 'failed'] as const)(
+    'shows the counts for a finished backup run (%s)',
+    async (status) => {
+      mockGetHistory.mockResolvedValue(
+        historyPage({ runs: [run({ status, stacksOk: 2, stacksFailed: 1 })] }),
+      )
+      renderTab()
+
+      await screen.findByText('run-1')
+      expect(stacksCell()).toHaveTextContent('2 ok / 1 failed')
+    },
+  )
+
+  it('keeps a real zero for a finished backup run that attempted no stacks', async () => {
+    mockGetHistory.mockResolvedValue(
+      historyPage({ runs: [run({ status: 'failed', stacksTotal: 0, stacksOk: 0, stacksFailed: 0 })] }),
+    )
+    renderTab()
+
+    await screen.findByText('run-1')
+    expect(stacksCell()).toHaveTextContent('0 ok / 0 failed')
+  })
+
+  it.each([
+    ['restore', 'Not applicable to restore runs'],
+    ['sync', 'Not applicable to sync runs'],
+    ['prune', 'Not applicable to prune runs'],
+    ['dr_restore', 'Not applicable to DR restore runs'],
+    ['verify', 'Not applicable to repository check runs'],
+  ] as const)(
+    'shows a dash, not 0 ok / 0 failed, for a %s run',
+    async (kind, title) => {
+      mockGetHistory.mockResolvedValue(
+        historyPage({ runs: [run({ kind, stacksTotal: 0, stacksOk: 0, stacksFailed: 0 })] }),
+      )
+      renderTab()
+
+      await screen.findByText('run-1')
+      expect(stacksCell()).toHaveTextContent(/^-$/)
+      expect(stacksCell().querySelector('span')).toHaveAttribute('title', title)
+    },
+  )
+
+  it.each([
+    ['running', 'Counted when the run finishes'],
+    ['interrupted', 'Not recorded'],
+  ] as const)('shows a dash for a backup run that is %s', async (status, title) => {
+    mockGetHistory.mockResolvedValue(
+      historyPage({
+        runs: [run({ status, finishedAt: undefined, stacksOk: 0, stacksFailed: 0 })],
+      }),
+    )
+    renderTab()
+
+    await screen.findByText('run-1')
+    expect(stacksCell()).toHaveTextContent(/^-$/)
+    expect(stacksCell().querySelector('span')).toHaveAttribute('title', title)
+  })
+})
+
 describe('BackupHistoryTab — the columns', () => {
   it('renders kind, trigger, stacks ok/failed, bytes added and duration', async () => {
     mockGetHistory.mockResolvedValue(

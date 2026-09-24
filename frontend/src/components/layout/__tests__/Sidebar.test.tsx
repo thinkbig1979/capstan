@@ -22,7 +22,7 @@ vi.mock('@/lib/api', () => ({
   backupApi: {
     getStatus: vi.fn().mockResolvedValue({
       schedulerRunning: true,
-      lastRun: { finishedAt: new Date(Date.now() - 3600_000).toISOString() },
+      lastRun: { kind: 'backup', finishedAt: new Date(Date.now() - 3600_000).toISOString() },
       nextRunAt: new Date(Date.now() + 7200_000).toISOString(),
       enabledStackCount: 2,
     }),
@@ -127,7 +127,8 @@ describe('Sidebar', () => {
   it('shows the backup status footer with a next-run countdown', async () => {
     renderSidebar()
     await waitFor(() => expect(screen.getAllByText(/next in/).length).toBeGreaterThan(0))
-    expect(screen.getAllByText(/Backup .* ago/).length).toBeGreaterThan(0)
+    // The footer names the run's kind (agent-os-4zx0).
+    expect(screen.getAllByText(/Last backup .* ago/).length).toBeGreaterThan(0)
   })
 
   it('pins a stack into a Pinned section when its star is clicked', async () => {

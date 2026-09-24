@@ -7,7 +7,41 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToggleBackup, useBackupPolicies, useBackupStatus } from '@/hooks/useBackup'
 import { presentError } from '@/lib/error-handler'
-import type { BackupPolicy } from '@/types'
+import type { BackupPolicy, BackupRun } from '@/types'
+import { RUN_KIND_LABEL } from './backup-run-kind'
+
+/**
+ * The icon and sentence for the last run, or null for none. Names the run's
+ * kind because lastRun is the newest run of ANY kind (agent-os-4zx0): a failed
+ * restore used to read "Last backup failed".
+ */
+function lastRunIndicator(run: BackupRun) {
+  const kind = RUN_KIND_LABEL[run.kind]
+  switch (run.status) {
+    case 'success':
+      // Same case BackupStatusCard's LastRunBadge renders as "No stacks backed
+      // up" (agent-os-a9gi): nothing failed, but nothing was backed up either.
+      if (run.kind === 'backup' && run.stacksTotal === 0) {
+        return { Icon: CircleDashed, className: 'text-muted-foreground', text: 'Last backup ran with no stacks' }
+      }
+      return { Icon: CheckCircle2, className: 'text-green-500', text: `Last ${kind} succeeded` }
+    case 'failed':
+      return { Icon: XCircle, className: 'text-destructive', text: `Last ${kind} failed` }
+    case 'partial':
+      return {
+        Icon: AlertTriangle,
+        className: 'text-amber-600 dark:text-amber-400',
+        text: `Last ${kind} partly failed`,
+      }
+    case 'interrupted':
+      // Neutral, not destructive-red: the run never reported a real outcome
+      // (crash, or a restore from a mid-run snapshot) and may have succeeded on
+      // the original instance.
+      return { Icon: CircleDashed, className: 'text-muted-foreground', text: `Last ${kind} was interrupted` }
+    case 'running':
+      return null
+  }
+}
 
 interface BackupToggleProps {
   stackId: string
@@ -97,7 +131,8 @@ export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggle
   // which selects ORDER BY started_at DESC LIMIT ? with no kind and no stack
   // predicate, and getStatus (backend/internal/handlers/backup.go), which takes
   // runs[0]. A per-stack affordance is unimplemented; see agent-os-26pi.
-  const lastRunStatus = showLastRunStatus ? (statusData?.lastRun?.status ?? null) : null
+  const lastRun = showLastRunStatus ? (statusData?.lastRun ?? null) : null
+  const indicator = lastRun ? lastRunIndicator(lastRun) : null
 
   if (engineUnavailable) {
     return (
@@ -228,52 +263,17 @@ export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggle
         </Select>
       )}
 
-      {lastRunStatus === 'success' && (
+      {indicator && (
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              <CheckCircle2
-                className="h-3.5 w-3.5 text-green-500 cursor-help"
-                aria-label="Last backup succeeded"
+              <indicator.Icon
+                className={`h-3.5 w-3.5 cursor-help ${indicator.className}`}
+                aria-label={indicator.text}
               />
             </TooltipTrigger>
             <TooltipContent>
-              <p>Last backup succeeded</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
-
-      {lastRunStatus === 'failed' && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <XCircle
-                className="h-3.5 w-3.5 text-destructive cursor-help"
-                aria-label="Last backup failed"
-              />
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Last backup failed</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
-
-      {lastRunStatus === 'interrupted' && (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              {/* Neutral, not destructive-red: the run never reported a real
-                  outcome (crash, or a restore from a mid-run snapshot) and
-                  may have succeeded on the original instance. */}
-              <CircleDashed
-                className="h-3.5 w-3.5 text-muted-foreground cursor-help"
-                aria-label="Last backup was interrupted"
-              />
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Last backup was interrupted</p>
+              <p>{indicator.text}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>

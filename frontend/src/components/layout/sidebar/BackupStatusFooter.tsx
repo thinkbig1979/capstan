@@ -1,5 +1,6 @@
 import { Database } from 'lucide-react'
 import type { BackupStatus } from '@/types'
+import { RUN_KIND_LABEL } from '@/components/dashboard/backup-run-kind'
 import { relativeTime, untilTime } from './constants'
 
 interface BackupStatusFooterProps {
@@ -14,7 +15,8 @@ export function BackupStatusFooter({ backupStatus }: BackupStatusFooterProps) {
       <Database className="h-3 w-3 shrink-0" />
       <span className="truncate">
         {backupStatus.lastRun
-          ? `Backup ${relativeTime(backupStatus.lastRun.finishedAt || backupStatus.lastRun.startedAt)}`
+          ? // lastRun is the newest run of ANY kind, so name it (agent-os-4zx0).
+            `Last ${RUN_KIND_LABEL[backupStatus.lastRun.kind]} ${relativeTime(backupStatus.lastRun.finishedAt || backupStatus.lastRun.startedAt)}`
           : 'No backups yet'}
         {backupStatus.nextRunAt && ` · next in ${untilTime(backupStatus.nextRunAt)}`}
       </span>
