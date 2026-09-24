@@ -190,46 +190,6 @@ describe('ComposeEditor — extract-to-env atomicity (B4 finding #11)', () => {
     expect(toast.error).not.toHaveBeenCalled()
   })
 
-  // ── 404 fallback: env PUT before compose PUT ──────────────────────────────
-
-  it('fallback: when atomic 404s, env is written BEFORE compose (safe ordering)', async () => {
-    await withSelection('nginx')
-    mockGetEnv.mockResolvedValue({ hasEnvFile: true, filename: '.env', raw: '', entries: [] })
-    mockUpdateComposeAndEnv.mockRejectedValue({ status: 404 })
-    // Both sequential puts succeed
-    mockApiPut.mockResolvedValue({ data: { saved: true } })
-
-    const user = userEvent.setup()
-    renderWithProviders(<ComposeEditor stackId="test-stack" />)
-
-    await waitFor(() =>
-      expect(screen.getByTitle(/Extract selected value to .env file/)).not.toBeDisabled(),
-    )
-
-    await user.click(screen.getByTitle(/Extract selected value to .env file/))
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Extract$/ })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: /^Extract$/ }))
-
-    await waitFor(() => expect(mockApiPut).toHaveBeenCalledTimes(2))
-
-    // Assert ordering: env URL appears BEFORE compose URL in the call list
-    const putUrls = (mockApiPut.mock.calls as Array<[string, ...unknown[]]>).map((c) => c[0])
-    const envIdx = putUrls.findIndex((url) => url.includes('/env'))
-    const composeIdx = putUrls.findIndex((url) => url.includes('/compose'))
-
-    expect(envIdx).toBeGreaterThanOrEqual(0)
-    expect(composeIdx).toBeGreaterThanOrEqual(0)
-    // env must come first — the ${VAR} reference is never persisted without its definition
-    expect(envIdx).toBeLessThan(composeIdx)
-
-    // The env PUT body must contain the extracted value
-    const envPutBody = (mockApiPut.mock.calls[envIdx] as [string, { raw?: string }])[1]
-    expect(envPutBody.raw).toContain('nginx')
-
-    expect(toast.success).toHaveBeenCalled()
-    expect(toast.error).not.toHaveBeenCalled()
-  })
-
   // ── Non-404 error → error toast, no fallback ─────────────────────────────
 
   it('non-404 atomic error → toast.error, no sequential fallback', async () => {

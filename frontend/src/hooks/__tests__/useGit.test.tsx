@@ -31,7 +31,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { toast } from 'sonner'
-import { useGitStatus, useGitLog, useGitDiff, useGitPull, normalisePullResult } from '../useGit'
+import { useGitStatus, useGitLog, useGitDiff, useGitPull } from '../useGit'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -84,51 +84,6 @@ describe('useGitDiff', () => {
     const wrapper = createWrapper()
     renderHook(() => useGitDiff('stack1', 'abc123'), { wrapper })
     await waitFor(() => expect(mockGitDiff).toHaveBeenCalledWith('stack1', 'abc123'))
-  })
-})
-
-// ─── normalisePullResult unit tests ──────────────────────────────────────────
-
-describe('normalisePullResult', () => {
-  it('passes through ActionResult shape unchanged', () => {
-    const ar: ActionResult = { outcome: 'success', reason: 'HEAD advanced' }
-    expect(normalisePullResult(ar as GitPullResult)).toEqual(ar)
-  })
-
-  it('maps legacy success with different commits → success', () => {
-    const result = normalisePullResult({
-      success: true,
-      previousCommit: 'abc1234',
-      currentCommit: 'def5678',
-      changedFiles: ['docker-compose.yml'],
-      redeployedStacks: [],
-    })
-    expect(result.outcome).toBe('success')
-    expect(result.reason).toContain('abc1234')
-    expect(result.reason).toContain('def5678')
-  })
-
-  it('maps legacy success with same commit → no_change', () => {
-    const result = normalisePullResult({
-      success: true,
-      previousCommit: 'abc1234',
-      currentCommit: 'abc1234',
-      changedFiles: [],
-      redeployedStacks: [],
-    })
-    expect(result.outcome).toBe('no_change')
-    expect(result.reason).toBe('Already up to date')
-  })
-
-  it('maps legacy success:false → failed', () => {
-    const result = normalisePullResult({
-      success: false,
-      previousCommit: '',
-      currentCommit: '',
-      changedFiles: [],
-      redeployedStacks: [],
-    })
-    expect(result.outcome).toBe('failed')
   })
 })
 
@@ -226,51 +181,6 @@ describe('useGitPull — ActionResult outcomes', () => {
     expect(toast.warning).not.toHaveBeenCalled()
   })
 
-  it('legacy success with same commit → info (no_change), not green success', async () => {
-    mockGitPull.mockResolvedValue({
-      success: true,
-      previousCommit: 'abc1234',
-      currentCommit: 'abc1234',
-      changedFiles: [],
-      redeployedStacks: [],
-    })
-
-    const wrapper = createWrapper()
-    const { result } = renderHook(() => useGitPull(), { wrapper })
-
-    act(() => {
-      result.current.mutate({ stackId: 'stack1' })
-    })
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-
-    expect(toast.info).toHaveBeenCalledWith('Already up to date')
-    expect(toast.success).not.toHaveBeenCalled()
-  })
-
-  it('legacy success with advancing commit → success toast', async () => {
-    mockGitPull.mockResolvedValue({
-      success: true,
-      previousCommit: 'aaa0001',
-      currentCommit: 'bbb0002',
-      changedFiles: ['docker-compose.yml'],
-      redeployedStacks: ['myapp'],
-    })
-
-    const wrapper = createWrapper()
-    const { result } = renderHook(() => useGitPull(), { wrapper })
-
-    act(() => {
-      result.current.mutate({ stackId: 'stack1' })
-    })
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-
-    expect(toast.success).toHaveBeenCalled()
-    expect(toast.info).not.toHaveBeenCalled()
-    expect(toast.warning).not.toHaveBeenCalled()
-  })
-
   it('passes stackId and redeploy to gitApi.pull', async () => {
     mockGitPull.mockResolvedValue({ outcome: 'success', reason: 'done' })
     const wrapper = createWrapper()
@@ -285,50 +195,6 @@ describe('useGitPull — ActionResult outcomes', () => {
 })
 
 // ─── agent-os-06c1: unchecked-cast narrowing ─────────────────────────────────
-
-describe('normalisePullResult — a legacy body is asserted, not validated', () => {
-  // The legacy arm casts `raw` to a shape with four REQUIRED string/string[]
-  // fields, then calls .slice(0, 7) on two of them. Unlike every other site in
-  // this class, a non-string here does not render oddly — it THROWS.
-  it('does not throw when the legacy commit fields are not strings', () => {
-    expect(() =>
-      normalisePullResult({
-        success: true,
-        previousCommit: { sha: 'abc' },
-        currentCommit: 42,
-        changedFiles: [],
-        redeployedStacks: [],
-      } as unknown as GitPullResult),
-    ).not.toThrow()
-  })
-
-  it('does not let a non-array changedFiles escape into string[]', () => {
-    const result = normalisePullResult({
-      success: true,
-      previousCommit: 'aaaaaaa1',
-      currentCommit: 'bbbbbbb2',
-      changedFiles: 'not-an-array',
-      redeployedStacks: [{ nested: true }],
-    } as unknown as GitPullResult)
-    expect(Array.isArray(result.details?.changedFiles)).toBe(true)
-    expect(result.details?.changedFiles).toEqual([])
-    expect(result.details?.redeployedStacks).toEqual([])
-  })
-
-  it('still maps a well-formed legacy body unchanged, so nothing reachable moved', () => {
-    const result = normalisePullResult({
-      success: true,
-      previousCommit: 'aaaaaaa1111',
-      currentCommit: 'bbbbbbb2222',
-      changedFiles: ['compose.yaml'],
-      redeployedStacks: ['myapp'],
-    } as unknown as GitPullResult)
-    expect(result.outcome).toBe('success')
-    expect(result.reason).toBe('Pulled aaaaaaa \u2192 bbbbbbb')
-    expect(result.details?.changedFiles).toEqual(['compose.yaml'])
-    expect(result.details?.redeployedStacks).toEqual(['myapp'])
-  })
-})
 
 describe('useGitPull — failed-redeploy names are asserted, not validated', () => {
   it('does not render a non-string stack name into the warning toast', async () => {

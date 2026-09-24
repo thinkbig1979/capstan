@@ -35,7 +35,7 @@ beforeEach(() => vi.clearAllMocks())
 describe('PruneButton', () => {
   it('does a basic prune (no flags) when confirmed without changing options', async () => {
     const user = userEvent.setup()
-    const pruneFn = vi.fn().mockResolvedValue({ deleted: [], spaceReclaimed: 0 })
+    const pruneFn = vi.fn().mockResolvedValue({ outcome: 'no_change', reason: 'nothing to prune', details: { deleted: [], spaceReclaimed: 0 } })
     renderButton(pruneFn, { all: { label: 'Remove all unused images, not just dangling' }, until: true })
 
     await user.click(screen.getByRole('button', { name: /prune/i }))
@@ -50,7 +50,7 @@ describe('PruneButton', () => {
 
   it('passes the selected all + until flags to pruneFn', async () => {
     const user = userEvent.setup()
-    const pruneFn = vi.fn().mockResolvedValue({ deleted: ['a'], spaceReclaimed: 10 })
+    const pruneFn = vi.fn().mockResolvedValue({ outcome: 'success', reason: 'pruned', details: { deleted: ['a'], spaceReclaimed: 10 } })
     renderButton(pruneFn, { all: { label: 'Remove all unused images, not just dangling' }, until: true })
 
     await user.click(screen.getByRole('button', { name: /prune/i }))
@@ -67,7 +67,7 @@ describe('PruneButton', () => {
 
   it('only shows option controls the resource supports', async () => {
     const user = userEvent.setup()
-    const pruneFn = vi.fn().mockResolvedValue({ deleted: [] })
+    const pruneFn = vi.fn().mockResolvedValue({ outcome: 'no_change', reason: 'nothing to prune', details: { deleted: [] } })
     renderButton(pruneFn, { until: true }) // containers/networks: until only, no "all"
 
     await user.click(screen.getByRole('button', { name: /prune/i }))

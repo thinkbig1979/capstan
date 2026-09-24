@@ -346,16 +346,11 @@ export const autoUpdateApi = {
 }
 
 /**
- * GitPullResult — wire type for POST /git/pull.
+ * GitPullResult — wire type for POST /git/pull (git.go Pull renders
+ * services.PullVerified's ActionResult).
  *
- * Legacy shape (current backend):
- *   { success: boolean, previousCommit, currentCommit, changedFiles, redeployedStacks }
- *
- * Action Truth Contract shape (post-B4 backend migration):
  *   ActionResult with outcome 'success'|'no_change'|'partial'|'failed'
  *   details: { previousCommit, currentCommit, failedRedeploys: [{stack, reason}] }
- *
- * Use isActionResult() to branch during the migration window.
  */
 export type GitPullResult = ActionResult<{
   // no_change carries the unchanged HEAD; the partial arms carry the failure cause.
@@ -367,21 +362,13 @@ export type GitPullResult = ActionResult<{
   failedRedeploys?: Array<{ stack: string; reason: string }>
   changedFiles?: string[]
   redeployedStacks?: string[]
-}> | {
-  success: boolean
-  previousCommit: string
-  currentCommit: string
-  changedFiles: string[]
-  redeployedStacks: string[]
-}
+}>
 
 /**
- * EnvSaveResult — wire type for PUT /stacks/:id/env.
- *
- * Legacy shape: { saved: boolean, filename }
- * Action Truth Contract shape: ActionResult
+ * EnvSaveResult — wire type for PUT /stacks/:id/env (env.go Put renders an
+ * ActionResult).
  */
-export type EnvSaveResult = ActionResult | { saved: boolean; filename: string }
+export type EnvSaveResult = ActionResult
 
 /**
  * ComposeEnvResult — wire type for PUT /stacks/:id/compose-env (atomic).
@@ -606,13 +593,8 @@ function pruneQuery(opts?: PruneOptions): string {
 }
 
 /**
- * DeleteResult is the wire type for resource delete responses.
- *
- * Legacy shape (current backend): { deleted: unknown[] | string }
- * Action Truth Contract shape (post-B3 backend migration):
- *   { outcome, reason, details?: { untagged?, deleted? } }
- *
- * Use isActionResult() to branch during the migration window.
+ * DeleteResult is the wire type for resource delete responses
+ * (resource_mutations.go delete*): { outcome, reason, details? }.
  */
 export type DeleteResult = ActionResult<{
   // Image delete
@@ -621,14 +603,11 @@ export type DeleteResult = ActionResult<{
   // Container and network delete carry id; volume delete carries name
   id?: string
   name?: string
-}> | { deleted: unknown[] | string }
+}>
 
 /**
- * PruneResult is the wire type for resource prune responses.
- *
- * Legacy shape (current backend): { deleted: string[]; spaceReclaimed: number }
- * Action Truth Contract shape (post-B3 backend migration):
- *   { outcome, reason, details }
+ * PruneResult is the wire type for resource prune responses
+ * (resource_mutations.go prune*): { outcome, reason, details }.
  *
  * Image prune details: { imagesDeleted, tagsRemoved, spaceReclaimed }
  * Volume/container/build-cache prune details: { deleted, spaceReclaimed }
@@ -642,7 +621,7 @@ export type PruneResult = ActionResult<{
   deleted?: string[]
   // Shared space field
   spaceReclaimed?: number
-}> | { deleted?: string[] | null; spaceReclaimed?: number | null }
+}>
 
 /**
  * CreateStackResult is the wire type for stack create responses.
@@ -776,7 +755,7 @@ export const resourcesApi = {
     return response.data.networks
   },
   createNetwork: async (input: { name: string; driver?: string; internal?: boolean; attachable?: boolean }) => {
-    const response = await apiClient.post<ActionResult<{ id: string; name: string }> | { id: string; name: string }>('/resources/networks', input)
+    const response = await apiClient.post<ActionResult<{ id: string; name: string }>>('/resources/networks', input)
     return response.data
   },
   deleteNetwork: async (id: string) => {

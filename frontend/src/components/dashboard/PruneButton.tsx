@@ -10,36 +10,12 @@ import { cn } from '@/lib/utils'
 import { presentError } from '@/lib/error-handler'
 import { formatBytes } from '@/lib/format'
 import { isActionResult, toastForResult } from '@/lib/action-result'
-import type { PruneOptions } from '@/lib/api'
+import type { PruneOptions, PruneResult } from '@/lib/api'
 
 /**
- * PruneResult accepts both the legacy shape and the future ActionResult shape:
- *
- * Legacy (current backend):
- *   { deleted?: string[] | null; spaceReclaimed?: number | null }
- *
- * Action Truth Contract (post-B3 migration):
- *   { outcome, reason, details?: { deletedCount?, deleted?, spaceReclaimed? } }
- *
- * The `no_change` outcome (honest "nothing to prune") is explicitly shown as
- * info, not as a "Pruned 0" success — a no-op must not look like success.
- */
-interface PruneResult {
-  deleted?: string[] | null
-  spaceReclaimed?: number | null
-  // ActionResult fields (present after backend migration)
-  outcome?: string
-  reason?: string
-  details?: {
-    deletedCount?: number
-    deleted?: string[]
-    spaceReclaimed?: number
-    tagsRemoved?: number
-  }
-}
-
-/**
- * Extracts count and space from either a legacy or ActionResult prune response.
+ * Extracts count and space from a prune ActionResult. A `no_change` result
+ * (honest "nothing to prune") never reaches this: it is shown as info, not as
+ * a "Pruned 0" success, because a no-op must not look like success.
  *
  * Backend detail key alignment (resource_mutations.go):
  *  - Image prune: details.imagesDeleted (number)
@@ -52,23 +28,11 @@ function extractPruneMetrics(data: PruneResult): {
   spaceReclaimed: number | null
   tagsRemoved: number
 } {
-  if (isActionResult(data)) {
-    const d = data.details as {
-      imagesDeleted?: number
-      deleted?: string[]
-      spaceReclaimed?: number
-      tagsRemoved?: number
-    } | undefined
-    return {
-      count: d?.imagesDeleted ?? d?.deleted?.length ?? 0,
-      spaceReclaimed: d?.spaceReclaimed ?? null,
-      tagsRemoved: d?.tagsRemoved ?? 0,
-    }
-  }
+  const d = data.details
   return {
-    count: data.deleted?.length ?? 0,
-    spaceReclaimed: data.spaceReclaimed ?? null,
-    tagsRemoved: 0,
+    count: d?.imagesDeleted ?? d?.deleted?.length ?? 0,
+    spaceReclaimed: d?.spaceReclaimed ?? null,
+    tagsRemoved: d?.tagsRemoved ?? 0,
   }
 }
 
@@ -145,23 +109,16 @@ export function PruneButton({
     mutationFn: pruneFn,
     onSuccess: (data) => {
       setResult(data)
+      setPhase('done')
 
-      if (isActionResult(data)) {
-        if (data.outcome === 'no_change') {
-          // Honest: nothing was pruned. Show info, NOT success.
-          setPhase('done')
-          toast.info(data.reason || `No ${resourceType}s to prune`)
-        } else {
-          setPhase('done')
-          const { count, spaceReclaimed, tagsRemoved } = extractPruneMetrics(data)
-          toastForResult(data, {
-            successTitle: buildPruneSummary(resourceType, count, spaceReclaimed, tagsRemoved),
-          })
-        }
+      if (data.outcome === 'no_change') {
+        // Honest: nothing was pruned. Show info, NOT success.
+        toast.info(data.reason || `No ${resourceType}s to prune`)
       } else {
-        setPhase('done')
         const { count, spaceReclaimed, tagsRemoved } = extractPruneMetrics(data)
-        toast.success(buildPruneSummary(resourceType, count, spaceReclaimed, tagsRemoved))
+        toastForResult(data, {
+          successTitle: buildPruneSummary(resourceType, count, spaceReclaimed, tagsRemoved),
+        })
       }
 
       for (const key of invalidateKeys) {
@@ -201,7 +158,7 @@ export function PruneButton({
 
   if (phase === 'done' && result) {
     // no_change: show info indicator (not the green checkmark)
-    if (isActionResult(result) && result.outcome === 'no_change') {
+    if (result.outcome === 'no_change') {
       return (
         <div className="flex items-center gap-2 animate-in fade-in duration-150">
           <CheckCircle2 className="h-3.5 w-3.5 text-muted-foreground" />

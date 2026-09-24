@@ -17,9 +17,6 @@
  * models.AppError.Message is a Go `string`, so every producer on these routes
  * sends a string. These helpers make the declared type one tsc actually
  * enforces, so the claim stops resting on a property of the current backend.
- * The one site where the current shape would do more than render oddly is
- * normalisePullResult, which calls `.slice(0, 7)` on an asserted string and
- * would throw a TypeError rather than degrade.
  */
 
 /**
