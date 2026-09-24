@@ -217,6 +217,7 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 		if len(c.Names) > 0 {
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
+		rowLookupFailed := false
 
 		imgInspect, err := s.updateAPI().ImageInspect(ctx, c.ImageID)
 		if err != nil {
@@ -252,6 +253,9 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 		stack, stackErr := lookupStackByProject(db, projectName)
 		switch {
 		case stackErr != nil:
+			// Flagged on the row too (agent-os-zt0h), so the Updates tab does not
+			// present "could not tell" as "not managed by Capstan".
+			rowLookupFailed = true
 			// agent-os-g482. Not a write, but not a display either: this StackID
 			// is what `policy, hasPolicy = stackPolicies[update.StackID]`
 			// (scheduler.go:821-822) looks up to decide whether a stack-scoped
@@ -282,7 +286,11 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 				ProjectName:   projectName,
 				ServiceName:   serviceName,
 				IsCompose:     projectName != "",
-				LocalDigest:   localDigest,
+				// Shown verbatim, never parsed, as on DashboardContainerInfo.
+				StackLookupFailed:  rowLookupFailed,
+				ComposeWorkingDir:  c.Labels["com.docker.compose.project.working_dir"],
+				ComposeConfigFiles: c.Labels["com.docker.compose.project.config_files"],
+				LocalDigest:        localDigest,
 			},
 		})
 	}
@@ -610,13 +618,14 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect c
 }
 
 // streamComposeCmd runs a docker compose command and streams each output line
-// via emit. Both stdout and stderr are merged. Returns the combined output for
-// error messages.
+// via emit, stdout and stderr each tagged with its own stream. It returns nil on
+// success, or an error wrapping cmd.Wait's exit status; the output itself only
+// reaches the caller through emit.
 //
 // Each line passes redactComposeOutput with secrets, which the caller reads once
 // with composeSecrets for the whole update (agent-os-sdbr): the lines reach the
 // update job's log, which the API serves.
-func streamComposeCmd(ctx context.Context, args []string, dir string, stream LogLineStream, secrets []string, emit func(LogLine)) error {
+func streamComposeCmd(ctx context.Context, args []string, dir string, secrets []string, emit func(LogLine)) error {
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := execCommandContext(ctx, "docker", args...)
 	cmd.Dir = dir
@@ -780,7 +789,7 @@ func (s *DockerService) updateComposeContainerStreaming(
 
 	secrets := s.composeSecrets(stack)
 	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
-	if err := streamComposeCmd(ctx, pullArgs, stack.Directory, StreamStdout, secrets, emit); err != nil {
+	if err := streamComposeCmd(ctx, pullArgs, stack.Directory, secrets, emit); err != nil {
 		return fmt.Errorf("compose pull failed: %w", err)
 	}
 
@@ -788,7 +797,7 @@ func (s *DockerService) updateComposeContainerStreaming(
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + serviceName, Stream: StreamStatus})
 
 	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
-	if err := streamComposeCmd(ctx, upArgs, stack.Directory, StreamStdout, secrets, emit); err != nil {
+	if err := streamComposeCmd(ctx, upArgs, stack.Directory, secrets, emit); err != nil {
 		return fmt.Errorf("compose up failed: %w", err)
 	}
 
@@ -942,7 +951,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 
 	secrets := s.composeSecrets(stack)
 	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
-	if pullErr := streamComposeCmd(ctx, pullArgs, stack.Directory, StreamStdout, secrets, emit); pullErr != nil {
+	if pullErr := streamComposeCmd(ctx, pullArgs, stack.Directory, secrets, emit); pullErr != nil {
 		durationMs = time.Since(start).Milliseconds()
 		ar = truth.Failed("compose pull failed", pullErr)
 		return
@@ -952,7 +961,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + serviceName, Stream: StreamStatus})
 
 	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
-	if upErr := streamComposeCmd(ctx, upArgs, stack.Directory, StreamStdout, secrets, emit); upErr != nil {
+	if upErr := streamComposeCmd(ctx, upArgs, stack.Directory, secrets, emit); upErr != nil {
 		durationMs = time.Since(start).Milliseconds()
 		ar = truth.Failed("compose up failed", upErr)
 		return

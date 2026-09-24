@@ -231,6 +231,14 @@ type ContainerUpdateInfo struct {
 	ProjectName   string `json:"projectName"`
 	ServiceName   string `json:"serviceName"`
 	IsCompose     bool   `json:"isCompose"`
+	// StackLookupFailed, ComposeWorkingDir and ComposeConfigFiles mean what they
+	// mean on DashboardContainerInfo: an empty StackID with StackLookupFailed is
+	// "could not tell", not "unmanaged", and the two labels say where an
+	// unmanaged project lives (agent-os-zt0h). Unlike the digests below they
+	// survive the cache, so the /updates response carries them on every path.
+	StackLookupFailed  bool   `json:"stackLookupFailed"`
+	ComposeWorkingDir  string `json:"composeWorkingDir,omitempty"`
+	ComposeConfigFiles string `json:"composeConfigFiles,omitempty"`
 	// LocalDigest is the repo-matched local digest resolved during detection,
 	// carried through so performScan can persist it in cached_updates (finding #7).
 	// It is set on the live-scan path (CheckForUpdates), so it appears in that
@@ -277,9 +285,14 @@ type CachedUpdate struct {
 	ProjectName   string `json:"projectName,omitempty"`
 	ServiceName   string `json:"serviceName,omitempty"`
 	IsCompose     bool   `json:"isCompose"`
-	LocalDigest   string `json:"localDigest"`
-	RemoteDigest  string `json:"remoteDigest"`
-	ScannedAt     string `json:"scannedAt"`
+	// Carried from ContainerUpdateInfo so a cache read can still tell an
+	// unmanaged project from a failed stack lookup (agent-os-zt0h).
+	StackLookupFailed  bool   `json:"stackLookupFailed"`
+	ComposeWorkingDir  string `json:"composeWorkingDir,omitempty"`
+	ComposeConfigFiles string `json:"composeConfigFiles,omitempty"`
+	LocalDigest        string `json:"localDigest"`
+	RemoteDigest       string `json:"remoteDigest"`
+	ScannedAt          string `json:"scannedAt"`
 }
 
 type AutoUpdatePolicy struct {

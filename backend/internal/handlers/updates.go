@@ -34,6 +34,27 @@ func scanStartIsBenign(err error) bool {
 		errors.Is(err, services.ErrSchedulerStopping)
 }
 
+// updateInfoFromCache is the one projection both cache-reading branches of
+// checkUpdates send. The digests stay behind, as before; the stack lookup flag
+// and compose location travel, because without them the Updates tab cannot
+// tell an unmanaged project from a failed lookup (agent-os-zt0h).
+func updateInfoFromCache(cu models.CachedUpdate) models.ContainerUpdateInfo {
+	return models.ContainerUpdateInfo{
+		ContainerID:        cu.ContainerID,
+		ContainerName:      cu.ContainerName,
+		Image:              cu.Image,
+		ImageRef:           cu.ImageRef,
+		State:              cu.State,
+		StackID:            cu.StackID,
+		ProjectName:        cu.ProjectName,
+		ServiceName:        cu.ServiceName,
+		IsCompose:          cu.IsCompose,
+		StackLookupFailed:  cu.StackLookupFailed,
+		ComposeWorkingDir:  cu.ComposeWorkingDir,
+		ComposeConfigFiles: cu.ComposeConfigFiles,
+	}
+}
+
 func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 	refresh := c.Query("refresh")
 
@@ -55,17 +76,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 			}
 			var updates []models.ContainerUpdateInfo
 			for _, cu := range cachedUpdates {
-				updates = append(updates, models.ContainerUpdateInfo{
-					ContainerID:   cu.ContainerID,
-					ContainerName: cu.ContainerName,
-					Image:         cu.Image,
-					ImageRef:      cu.ImageRef,
-					State:         cu.State,
-					StackID:       cu.StackID,
-					ProjectName:   cu.ProjectName,
-					ServiceName:   cu.ServiceName,
-					IsCompose:     cu.IsCompose,
-				})
+				updates = append(updates, updateInfoFromCache(cu))
 			}
 			if updates == nil {
 				updates = []models.ContainerUpdateInfo{}
@@ -154,17 +165,7 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 
 	var updates []models.ContainerUpdateInfo
 	for _, cu := range cachedUpdates {
-		updates = append(updates, models.ContainerUpdateInfo{
-			ContainerID:   cu.ContainerID,
-			ContainerName: cu.ContainerName,
-			Image:         cu.Image,
-			ImageRef:      cu.ImageRef,
-			State:         cu.State,
-			StackID:       cu.StackID,
-			ProjectName:   cu.ProjectName,
-			ServiceName:   cu.ServiceName,
-			IsCompose:     cu.IsCompose,
-		})
+		updates = append(updates, updateInfoFromCache(cu))
 	}
 
 	// Same reasoning as the empty-cache branch above.

@@ -107,6 +107,7 @@ function makeContainer(overrides: Partial<ContainerUpdateInfo> = {}): ContainerU
     projectName: 'myproject',
     serviceName: 'web',
     isCompose: true,
+    stackLookupFailed: false,
     ...overrides,
   }
 }
@@ -120,6 +121,7 @@ function makeCachedUpdate(overrides: Partial<CachedUpdate> = {}): CachedUpdate {
     imageRef: 'api:latest',
     state: 'stopped',
     isCompose: false,
+    stackLookupFailed: false,
     localDigest: 'sha256:1111111111111111111111',
     remoteDigest: 'sha256:2222222222222222222222',
     scannedAt: new Date().toISOString(),
@@ -375,6 +377,77 @@ describe('UpdatesTab — updates table', () => {
     render(<UpdatesTab />)
 
     expect(screen.getByText('standalone')).toBeInTheDocument()
+  })
+})
+
+// ─── Unmanaged compose projects explain themselves (agent-os-zt0h) ─────────────
+
+/**
+ * The same note the Containers overview shows (agent-os-fnch), and only in the
+ * same state: a compose project with no stack row whose lookup SUCCEEDED. The
+ * must-not arms matter as much as the positive one: a note rendered
+ * unconditionally passes the first test, and a failed lookup that reads as
+ * "not managed by Capstan" is the made-up claim this bead exists to prevent.
+ */
+describe('UpdatesTab — unmanaged compose projects (agent-os-zt0h)', () => {
+  const NOTE = /not managed by Capstan/
+
+  it('states the project, its path, its compose files and the remedy on an unmanaged row', () => {
+    const containers = [
+      makeContainer({
+        containerId: 'u',
+        stackId: '',
+        projectName: 'other-proj',
+        composeWorkingDir: '/home/op/other',
+        composeConfigFiles: '/home/op/other/a.yml,/home/op/other/b.yml',
+      }),
+    ]
+    setCheckUpdates({ data: { updates: containers, fromCache: true } })
+    render(<UpdatesTab />)
+
+    expect(screen.getByText(NOTE)).toHaveTextContent('other-proj · not managed by Capstan')
+    expect(screen.getByText('/home/op/other')).toBeInTheDocument()
+    expect(screen.getByText('/home/op/other/a.yml,/home/op/other/b.yml')).toBeInTheDocument()
+    expect(screen.getByText('EXTRA_STACKS_DIRS')).toBeInTheDocument()
+  })
+
+  it('says compose recorded no directory for a row cached before the path was stored', () => {
+    const containers = [makeContainer({ containerId: 'o', stackId: '', projectName: 'old-proj' })]
+    setCheckUpdates({ data: { updates: containers, fromCache: true } })
+    render(<UpdatesTab />)
+
+    expect(screen.getByText(NOTE)).toHaveTextContent('old-proj')
+    expect(screen.getByText("Compose did not record this project's directory.")).toBeInTheDocument()
+  })
+
+  it('shows no note on a managed row', () => {
+    const containers = [
+      makeContainer({ containerId: 'm', stackId: 'stack1', projectName: 'myproject', composeWorkingDir: '/opt/stacks/myproject' }),
+    ]
+    setCheckUpdates({ data: { updates: containers, fromCache: true } })
+    render(<UpdatesTab />)
+
+    expect(screen.getByRole('link', { name: 'myproject' })).toBeInTheDocument()
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument()
+    expect(screen.queryByText('EXTRA_STACKS_DIRS')).not.toBeInTheDocument()
+  })
+
+  it('shows no note when the stack lookup failed, only the project name', () => {
+    const containers = [
+      makeContainer({
+        containerId: 'f',
+        stackId: '',
+        projectName: 'failed-proj',
+        stackLookupFailed: true,
+        composeWorkingDir: '/srv/failed',
+      }),
+    ]
+    setCheckUpdates({ data: { updates: containers, fromCache: true } })
+    render(<UpdatesTab />)
+
+    expect(screen.getByText('failed-proj')).toBeInTheDocument()
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument()
+    expect(screen.queryByText('EXTRA_STACKS_DIRS')).not.toBeInTheDocument()
   })
 })
 

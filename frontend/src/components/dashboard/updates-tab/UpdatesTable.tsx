@@ -12,6 +12,8 @@ import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
 import { BackupPoliciesRefreshNotice } from '@/components/dashboard/BackupPoliciesRefreshNotice'
 import { UpdateJobStatusCell } from '@/components/dashboard/UpdateJobStatusCell'
+import { UnmanagedComposeNote } from '@/components/dashboard/UnmanagedComposeNote'
+import { isUnmanagedCompose } from '@/components/dashboard/unmanaged-compose'
 import { UpdateJobLog } from '@/components/updates/UpdateJobLog'
 import type { AutoUpdatePolicy } from '@/types'
 import type { GlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
@@ -164,6 +166,8 @@ export function UpdatesTable({
                       >
                         {container.projectName}
                       </a>
+                    ) : isUnmanagedCompose(container) ? (
+                      <UnmanagedComposeNote c={container} />
                     ) : container.projectName ? (
                       <span className="text-sm text-muted-foreground">{container.projectName}</span>
                     ) : (

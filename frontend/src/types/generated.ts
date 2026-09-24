@@ -703,6 +703,16 @@ export interface ContainerUpdateInfo {
   serviceName: string;
   isCompose: boolean;
   /**
+   * StackLookupFailed, ComposeWorkingDir and ComposeConfigFiles mean what they
+   * mean on DashboardContainerInfo: an empty StackID with StackLookupFailed is
+   * "could not tell", not "unmanaged", and the two labels say where an
+   * unmanaged project lives (agent-os-zt0h). Unlike the digests below they
+   * survive the cache, so the /updates response carries them on every path.
+   */
+  stackLookupFailed: boolean;
+  composeWorkingDir?: string;
+  composeConfigFiles?: string;
+  /**
    * LocalDigest is the repo-matched local digest resolved during detection,
    * carried through so performScan can persist it in cached_updates (finding #7).
    * It is set on the live-scan path (CheckForUpdates), so it appears in that
@@ -752,6 +762,13 @@ export interface CachedUpdate {
   projectName?: string;
   serviceName?: string;
   isCompose: boolean;
+  /**
+   * Carried from ContainerUpdateInfo so a cache read can still tell an
+   * unmanaged project from a failed stack lookup (agent-os-zt0h).
+   */
+  stackLookupFailed: boolean;
+  composeWorkingDir?: string;
+  composeConfigFiles?: string;
   localDigest: string;
   remoteDigest: string;
   scannedAt: string;
