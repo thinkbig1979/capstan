@@ -125,8 +125,9 @@ export function useBuildCache() {
 //
 // The backend always returns an Action Truth Contract body
 // ({outcome, reason, details}), so `toastForResult` drives the correct toast
-// level from the outcome. The isActionResult() guard remains as a type-narrowing
-// gate over the api wire union, not a runtime legacy fallback.
+// level from the outcome. Every 2xx exit of these handlers renders an
+// ActionResult (resource_mutations.go) and non-2xx rejects in axios, so success
+// data is used as-is; isActionResult() only narrows the rejected value.
 
 export function useDeleteImage() {
   const queryClient = useQueryClient()
@@ -134,12 +135,10 @@ export function useDeleteImage() {
     mutationFn: ({ id, force }: { id: string; force: boolean }) =>
       resourcesApi.deleteImage(id, force),
     onSuccess: (data) => {
-      if (isActionResult(data)) {
-        // outcome drives the toast:
-        // no_change/partial = untagged-only (image still referenced) → info/warning
-        // success = fully deleted → success (green)
-        toastForResult(data, { successTitle: 'Image removed' })
-      }
+      // outcome drives the toast:
+      // no_change/partial = untagged-only (image still referenced) → info/warning
+      // success = fully deleted → success (green)
+      toastForResult(data, { successTitle: 'Image removed' })
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.images() })
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
       // The Images tab readout counts the dangling images this may have just
@@ -162,9 +161,7 @@ export function useDeleteVolume() {
     mutationFn: ({ name, force }: { name: string; force: boolean }) =>
       resourcesApi.deleteVolume(name, force),
     onSuccess: (data) => {
-      if (isActionResult(data)) {
-        toastForResult(data, { successTitle: 'Volume removed' })
-      }
+      toastForResult(data, { successTitle: 'Volume removed' })
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.volumes() })
     },
     onError: (err) => {
@@ -182,9 +179,7 @@ export function useDeleteNetwork() {
   return useMutation({
     mutationFn: (id: string) => resourcesApi.deleteNetwork(id),
     onSuccess: (data) => {
-      if (isActionResult(data)) {
-        toastForResult(data, { successTitle: 'Network removed' })
-      }
+      toastForResult(data, { successTitle: 'Network removed' })
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.networks() })
     },
     onError: (err) => {
@@ -203,13 +198,11 @@ export function useCreateNetwork() {
     mutationFn: (input: { name: string; driver?: string; internal?: boolean; attachable?: boolean }) =>
       resourcesApi.createNetwork(input),
     onSuccess: (data) => {
-      if (isActionResult(data)) {
-        // details.name is set by the backend (createNetwork returns {id, name} in details)
-        // agent-os-06c1: narrowed, not asserted. `?? 'unknown'` only ever
-        // caught an ABSENT name; a non-string one rendered as [object Object].
-        const networkName = stringOr((data.details as { name?: unknown } | undefined)?.name, 'unknown')
-        toast.success(`Network "${networkName}" created`)
-      }
+      // details.name is set by the backend (createNetwork returns {id, name} in details)
+      // agent-os-06c1: narrowed, not asserted. `?? 'unknown'` only ever
+      // caught an ABSENT name; a non-string one rendered as [object Object].
+      const networkName = stringOr((data.details as { name?: unknown } | undefined)?.name, 'unknown')
+      toast.success(`Network "${networkName}" created`)
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.networks() })
     },
     onError: (err) => {
@@ -269,13 +262,11 @@ export function usePruneImages() {
   return useMutation({
     mutationFn: (opts?: PruneOptions) => resourcesApi.pruneImages(opts),
     onSuccess: (data) => {
-      if (isActionResult(data)) {
-        if (data.outcome === 'no_change') {
-          toast.info(data.reason || 'No images to prune')
-        } else {
-          const summary = resolvePruneSummary(data, 'image')
-          toastForResult(data, { successTitle: `Pruned ${summary}` })
-        }
+      if (data.outcome === 'no_change') {
+        toast.info(data.reason || 'No images to prune')
+      } else {
+        const summary = resolvePruneSummary(data, 'image')
+        toastForResult(data, { successTitle: `Pruned ${summary}` })
       }
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.images() })
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
@@ -295,13 +286,11 @@ export function usePruneVolumes() {
   return useMutation({
     mutationFn: (opts?: PruneOptions) => resourcesApi.pruneVolumes(opts),
     onSuccess: (data) => {
-      if (isActionResult(data)) {
-        if (data.outcome === 'no_change') {
-          toast.info(data.reason || 'No volumes to prune')
-        } else {
-          const summary = resolvePruneSummary(data, 'volume')
-          toastForResult(data, { successTitle: `Pruned ${summary}` })
-        }
+      if (data.outcome === 'no_change') {
+        toast.info(data.reason || 'No volumes to prune')
+      } else {
+        const summary = resolvePruneSummary(data, 'volume')
+        toastForResult(data, { successTitle: `Pruned ${summary}` })
       }
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.volumes() })
     },
@@ -320,14 +309,12 @@ export function usePruneNetworks() {
   return useMutation({
     mutationFn: (opts?: PruneOptions) => resourcesApi.pruneNetworks(opts),
     onSuccess: (data) => {
-      if (isActionResult(data)) {
-        if (data.outcome === 'no_change') {
-          toast.info(data.reason || 'No networks to prune')
-        } else {
-          const details = data.details as { deleted?: string[] } | undefined
-          const count = details?.deleted?.length ?? 0
-          toastForResult(data, { successTitle: `Pruned ${count} network${count !== 1 ? 's' : ''}` })
-        }
+      if (data.outcome === 'no_change') {
+        toast.info(data.reason || 'No networks to prune')
+      } else {
+        const details = data.details as { deleted?: string[] } | undefined
+        const count = details?.deleted?.length ?? 0
+        toastForResult(data, { successTitle: `Pruned ${count} network${count !== 1 ? 's' : ''}` })
       }
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.networks() })
     },
@@ -346,13 +333,11 @@ export function usePruneBuildCache() {
   return useMutation({
     mutationFn: (opts?: PruneOptions) => resourcesApi.pruneBuildCache(opts),
     onSuccess: (data) => {
-      if (isActionResult(data)) {
-        if (data.outcome === 'no_change') {
-          toast.info(data.reason || 'No build cache to prune')
-        } else {
-          const summary = resolvePruneSummary(data, 'cache entry')
-          toastForResult(data, { successTitle: `Pruned ${summary}` })
-        }
+      if (data.outcome === 'no_change') {
+        toast.info(data.reason || 'No build cache to prune')
+      } else {
+        const summary = resolvePruneSummary(data, 'cache entry')
+        toastForResult(data, { successTitle: `Pruned ${summary}` })
       }
       queryClient.invalidateQueries({ queryKey: queryKeys.resources.buildCache() })
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })

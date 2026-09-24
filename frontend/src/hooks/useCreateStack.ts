@@ -1,8 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { stacksApi } from '@/lib/api'
+import { stacksApi, type CreateStackResult } from '@/lib/api'
 import { toast } from 'sonner'
 import { presentError, toastInvalid } from '@/lib/error-handler'
-import { isActionResult } from '@/lib/action-result'
 import type { LintResult, Stack } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
 
@@ -17,34 +16,22 @@ interface CreateStackInput {
 /**
  * Extracts `details.stack` from a CreateStackResult.
  *
- * Post-migration, the backend wraps everything inside `details`:
+ * The backend wraps everything inside `details`:
  *   { outcome, reason, details: { stack, lintResults, deployed, ... } }
  *
- * Returns undefined if no stack is present (genuine failure paths).
+ * Every 2xx exit of StacksHandler.Create renders an ActionResult carrying the
+ * stack (stack_crud.go), and non-2xx rejects in axios, so success data needs
+ * no runtime shape check.
  */
-function extractStack(data: unknown): Stack | undefined {
-  if (typeof data !== 'object' || data === null) return undefined
-  const d = data as Record<string, unknown>
-
-  // The backend always wraps the stack inside details (ActionResult contract).
-  if (isActionResult(d)) {
-    const details = d.details as { stack?: Stack } | undefined
-    return details?.stack
-  }
-  return undefined
+function extractStack(data: CreateStackResult): Stack | undefined {
+  return data.details?.stack
 }
 
 /**
  * Extracts `details.lintResults` from a CreateStackResult.
  */
-function extractLintResults(data: unknown): LintResult[] | undefined {
-  if (typeof data !== 'object' || data === null) return undefined
-  const d = data as Record<string, unknown>
-  if (isActionResult(d)) {
-    const details = d.details as { lintResults?: LintResult[] } | undefined
-    return details?.lintResults
-  }
-  return undefined
+function extractLintResults(data: CreateStackResult): LintResult[] | undefined {
+  return data.details?.lintResults
 }
 
 /**
@@ -78,26 +65,24 @@ export function useCreateStack() {
       queryClient.invalidateQueries({ queryKey: queryKeys.directories() })
       queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
 
-      if (isActionResult(data)) {
-        if (data.outcome === 'partial') {
-          // Stack was created but deploy failed. Show a warning, not an error.
-          // The stack exists in the DB — the UI must show it.
-          toast.warning(data.reason || 'Stack created but not deployed')
-        } else if (data.outcome === 'success') {
-          // Preserve lint-result toast differentiation.
-          const lintResults = extractLintResults(data)
-          if (lintResults?.some((r) => r.level === 'error')) {
-            toastInvalid('Stack created but has lint errors')
-          } else if (lintResults?.some((r) => r.level === 'warning')) {
-            toast.warning('Stack created but has lint warnings')
-          } else {
-            toast.success('Stack created successfully')
-          }
+      if (data.outcome === 'partial') {
+        // Stack was created but deploy failed. Show a warning, not an error.
+        // The stack exists in the DB — the UI must show it.
+        toast.warning(data.reason || 'Stack created but not deployed')
+      } else if (data.outcome === 'success') {
+        // Preserve lint-result toast differentiation.
+        const lintResults = extractLintResults(data)
+        if (lintResults?.some((r) => r.level === 'error')) {
+          toastInvalid('Stack created but has lint errors')
+        } else if (lintResults?.some((r) => r.level === 'warning')) {
+          toast.warning('Stack created but has lint warnings')
         } else {
-          // no_change/failed are unexpected from create (a real failure rejects
-          // and lands in onError), but never leave a 2xx body silent.
-          toastInvalid(data.reason || 'Stack create failed')
+          toast.success('Stack created successfully')
         }
+      } else {
+        // no_change/failed are unexpected from create (a real failure rejects
+        // and lands in onError), but never leave a 2xx body silent.
+        toastInvalid(data.reason || 'Stack create failed')
       }
     },
     onError: (error: unknown) => {
