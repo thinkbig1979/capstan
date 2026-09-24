@@ -406,6 +406,16 @@ answers **200 `[]`**. That is deliberate: deleting a stack does not delete its
 snapshots, and a stack whose ID changed keeps its older snapshots under the old
 ID, so an ID with no stack behind it can still name real backups.
 
+### `POST /api/v1/backups/restore`
+
+`snapshotId` must be 8–64 hex characters or `latest` (the same rule as the
+preview route), or the endpoint answers **400 `VALIDATION_ERROR` "Invalid
+snapshot ID"** before a run starts (agent-os-tyl6). Before 2026-09-24 a
+malformed id answered 202, took the backup lock and left a failed run in the
+history. It never reached `restic restore`: the run only restores an id that
+restic lists for the stack, and still fails for a well-formed id it does not
+list.
+
 ## Keeping this page honest
 
 `scripts/check-api-docs.sh` extracts every `group.METHOD("path", ...)` call

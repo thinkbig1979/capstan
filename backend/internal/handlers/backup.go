@@ -1239,6 +1239,19 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 		return
 	}
 
+	// Not an argv guard: RunRestore only hands restic an id that restic itself
+	// listed for this stack (validateSnapshotBelongsToStack). This answers a
+	// malformed id with a 400 up front instead of a 202 and a failed run
+	// (agent-os-tyl6).
+	if !validSnapshotIDRegex.MatchString(req.SnapshotID) {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid snapshot ID",
+		))
+		return
+	}
+
 	// Restore is destructive: require explicit confirmation.
 	if !req.Confirm {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
