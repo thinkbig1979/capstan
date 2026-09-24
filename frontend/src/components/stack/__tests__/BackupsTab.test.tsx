@@ -866,6 +866,14 @@ describe('BackupsTab — a failed REFETCH is a refresh failure (agent-os-vlqj)',
     expect(
       screen.getByText(/Could not refresh the snapshots\. The values shown are the last ones the server sent\./),
     ).toBeInTheDocument()
+
+    // agent-os-3k31: the notice offers Retry, and Retry re-runs the read that failed.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    mockListSnapshots.mockResolvedValue([makeSnapshot()])
+    const callsBeforeRetry = mockListSnapshots.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(mockListSnapshots.mock.calls.length).toBeGreaterThan(callsBeforeRetry))
+    await waitFor(() => expect(screen.queryByText(/Could not refresh the snapshots/)).not.toBeInTheDocument())
   })
 
   /** STALE-NOTICE arm. Cannot fail first; pinned by mutation evidence. */

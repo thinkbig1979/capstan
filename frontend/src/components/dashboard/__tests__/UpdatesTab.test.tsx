@@ -9,6 +9,7 @@ import type { ContainerUpdateInfo, CachedUpdate, AutoUpdatePolicy } from '@/type
 // resolution without depending on react-query internals.
 
 const mockCheckUpdates = vi.fn()
+const mockCheckUpdatesRefetch = vi.fn()
 const mockRefreshMutate = vi.fn()
 const mockUpdateMutate = vi.fn()
 let mockUpdateIsPending = false
@@ -147,6 +148,7 @@ function setCheckUpdates(
     // classifyError(error) on isError alone would print the invented sentence
     // "An unexpected error occurred" for all of them.
     error: undefined,
+    refetch: mockCheckUpdatesRefetch,
     ...overrides,
   })
 }
@@ -551,6 +553,13 @@ describe('UpdatesTab — a failed REFETCH must not discard a populated table (ag
       screen.getByText(/Could not refresh the available updates\. The values shown are the last ones the server sent\./),
     ).toBeInTheDocument()
     expect(screen.queryByText(/check them before saving/)).not.toBeInTheDocument()
+
+    // agent-os-3k31: Retry re-runs the failed READ, and does not start a
+    // registry scan (the table's "Check for Updates" button does that).
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(mockCheckUpdatesRefetch).toHaveBeenCalledTimes(1)
+    expect(mockRefreshMutate).not.toHaveBeenCalled()
   })
 
   /**
@@ -580,6 +589,12 @@ describe('UpdatesTab — a failed REFETCH must not discard a populated table (ag
 
     expect(screen.queryByText('Failed to Check for Updates')).not.toBeInTheDocument()
     expect(screen.getByText(/Could not refresh the available updates/)).toBeInTheDocument()
+
+    // agent-os-3k31: same Retry contract on the empty-list tail.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(mockCheckUpdatesRefetch).toHaveBeenCalledTimes(1)
+    expect(mockRefreshMutate).not.toHaveBeenCalled()
   })
 })
 

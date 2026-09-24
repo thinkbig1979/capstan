@@ -292,6 +292,14 @@ describe('BackupsTab — preview: a failed REFETCH is a refresh failure (agent-o
     expect(
       screen.getByText(/Could not refresh the preview\. The values shown are the last ones the server sent\./),
     ).toBeInTheDocument()
+
+    // agent-os-3k31: the notice offers Retry, and Retry re-runs the read that failed.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    mockPreviewSnapshot.mockResolvedValue({ entries: ['etc/app.conf'] })
+    const callsBeforeRetry = mockPreviewSnapshot.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(mockPreviewSnapshot.mock.calls.length).toBeGreaterThan(callsBeforeRetry))
+    await waitFor(() => expect(screen.queryByText(/Could not refresh the preview/)).not.toBeInTheDocument())
   })
 
   /**

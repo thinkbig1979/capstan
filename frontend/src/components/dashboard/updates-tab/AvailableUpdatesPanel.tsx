@@ -25,7 +25,7 @@ export function AvailableUpdatesPanel({ data }: AvailableUpdatesPanelProps) {
     isRefreshing, isLoading, isError, error, updateData, neverScanned, hasData,
     handleCheck, sortBy, setSortBy, query, setQuery, scannedAt, sortedUpdates,
     updates, policies, jobForContainer, expandedIds, toggleExpand, handleUpdate,
-    updatePending,
+    updatePending, refetchUpdates,
   } = data
 
   if (isRefreshing) {
@@ -77,14 +77,15 @@ export function AvailableUpdatesPanel({ data }: AvailableUpdatesPanelProps) {
   // agent-os-4gve, the other half: past the guard above, `isError` here means a
   // REFRESH failed while TanStack still holds the last payload the server really
   // sent. Without this the panel renders that payload with no sign the check
-  // failed -- "no updates" reads as "you are up to date". No onRetry: both tail
-  // states already carry their own check control.
+  // failed -- "no updates" reads as "you are up to date". onRetry re-runs the
+  // failed read (agent-os-3k31); the tail states' own "Check for Updates"
+  // control starts a registry scan, which is not a retry of that read.
   const refreshFailed = isError && Boolean(updateData)
 
   if (!hasData) {
     return (
       <>
-        {refreshFailed && <RefreshFailedNotice what="the available updates" />}
+        {refreshFailed && <RefreshFailedNotice what="the available updates" onRetry={() => void refetchUpdates()} />}
         <NoUpdatesCard onCheck={handleCheck} isRefreshing={isRefreshing} />
       </>
     )
@@ -92,7 +93,7 @@ export function AvailableUpdatesPanel({ data }: AvailableUpdatesPanelProps) {
 
   return (
     <>
-      {refreshFailed && <RefreshFailedNotice what="the available updates" />}
+      {refreshFailed && <RefreshFailedNotice what="the available updates" onRetry={() => void refetchUpdates()} />}
       <UpdatesTable
         sortedUpdates={sortedUpdates}
         totalCount={updates.length}

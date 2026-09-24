@@ -17,7 +17,7 @@ import { UPDATE_SEARCH_FIELDS, type SortKey, type UpdateItem } from './types'
  * toast wording depends on the same container data the table renders.
  */
 export function useUpdatesData() {
-  const { data: updateData, isLoading, isError, error } = useCheckUpdates()
+  const { data: updateData, isLoading, isError, error, refetch: refetchUpdates } = useCheckUpdates()
   const refreshMutation = useCheckUpdatesRefresh()
   const updateMutation = useUpdateContainer()
   const { data: policiesData } = useAutoUpdatePolicies()
@@ -111,6 +111,9 @@ export function useUpdatesData() {
     // site that decides what to render, so it calls classifyError itself --
     // same split as EnvEditor/EnvErrorState (#406).
     error,
+    // agent-os-3k31: re-runs the cached read that failed. Not handleCheck, which
+    // starts a registry scan: a different action from retrying the failed read.
+    refetchUpdates,
     isRefreshing,
     neverScanned,
     hasData,

@@ -20,7 +20,7 @@ function displayOrDash(value: string | undefined): string {
 }
 
 export function AboutContent() {
-  const { data, isLoading, isError } = useVersion()
+  const { data, isLoading, isError, refetch } = useVersion()
 
   if (isLoading) {
     return (
@@ -49,7 +49,7 @@ export function AboutContent() {
 
   return (
     <div className="space-y-4">
-      {isError && <RefreshFailedNotice what="the build identity" />}
+      {isError && <RefreshFailedNotice what="the build identity" onRetry={() => void refetch()} />}
       <dl className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-3 text-sm">
         <dt className="text-muted-foreground">Version</dt>
         <dd className="font-mono break-all" data-testid="about-version">

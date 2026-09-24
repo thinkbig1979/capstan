@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { AboutContent } from '../AboutContent'
@@ -139,5 +139,13 @@ describe('AboutContent — a failed REFETCH must not discard the build identity'
       screen.queryByText('Could not read the build identity from the server.'),
     ).not.toBeInTheDocument()
     expect(screen.getByText(/Could not refresh the build identity/)).toBeInTheDocument()
+
+    // agent-os-3k31: the notice offers Retry, and Retry re-runs the read that failed.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    mockGetVersion.mockResolvedValue({ version: '1.4.0', commit: 'a1b2c3d4e5f6', buildDate: '2026-07-31T09:00:00Z' })
+    const callsBeforeRetry = mockGetVersion.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(mockGetVersion.mock.calls.length).toBeGreaterThan(callsBeforeRetry))
+    await waitFor(() => expect(screen.queryByText(/Could not refresh the build identity/)).not.toBeInTheDocument())
   })
 })
