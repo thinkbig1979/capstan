@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 
@@ -10,8 +9,6 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
-
-	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // OperationStreamer is the operations handler's view of DockerService: stream a
@@ -75,18 +72,19 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 		// nil arm dropped, dead per GetStack's return shape (GetStack() in
 		// internal/database/stacks.go always returns either &stack or a non-nil
 		// err, never (nil, nil)).
+		//
+		// These refusals all happen before the upgrade, so a browser WebSocket
+		// never reads their bodies (it sees only a failed connection). They are
+		// AppErrors anyway so a non-browser client gets the same {code,message}
+		// as the REST lifecycle routes for the same condition (agent-os-vupj).
 		stack, err := h.db.GetStack(stackID)
 		if err != nil {
-			if errors.Is(err, errdefs.ErrNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Stack not found"})
-				return
-			}
-			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+			handleDBError(c, err, "Failed to load stack")
 			return
 		}
 
 		if _, err := h.opLock.Acquire(stackID); err != nil {
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			handleError(c, models.NewAppError(http.StatusConflict, models.ErrOperationInProgress, err.Error()))
 			return
 		}
 		defer h.opLock.Release(stackID)
@@ -104,7 +102,7 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 		case "restart":
 			subcommand = "restart"
 		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Unknown action: " + action})
+			handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Unknown action: "+action))
 			return
 		}
 

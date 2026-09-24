@@ -123,7 +123,8 @@ Every route that looks a stack up by id answers an unknown id with 404
 `INTERNAL_ERROR`. That covers the routes below plus `GET /api/v1/git*` with
 `?stackId=`, `GET /api/v1/ws/metrics/:id` and
 `POST /api/v1/resources/stacks/:id/update`, which answered `NOT_FOUND` until
-2026-09-24.
+2026-09-24, and `GET /api/v1/ws/operations/:id/:action`, which answered with no
+code at all until 2026-09-24.
 
 - `GET /api/v1/stacks` — list stacks
 - `POST /api/v1/stacks` — create a stack
@@ -252,7 +253,11 @@ Direct Docker resource management, independent of any stack.
 ## Operations
 
 - `GET /api/v1/ws/operations/:id/:action` — WebSocket stream of a long-running
-  stack operation's progress (start/stop/restart/pull/delete)
+  stack operation's progress (start/stop/restart/pull). Refused before
+  the upgrade with an AppError body: 404 `STACK_NOT_FOUND` for an unknown
+  stack, 409 `OPERATION_IN_PROGRESS` while another operation holds the stack,
+  400 `VALIDATION_ERROR` for an unknown action, 503 `DOCKER_UNAVAILABLE` when
+  the daemon was unreachable at startup
 
 ## Update Jobs (WebSocket)
 

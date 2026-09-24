@@ -26,7 +26,7 @@ import (
 // Two things are pinned here, and they are different claims:
 //
 //  1. handleError's mapping — a Kind becomes a status, a code and a message.
-//  2. That each of the 22 collapsed routes (18 from ymyc, 4 from symj) asks for the mapping it used to
+//  2. That each of the 23 collapsed routes (18 from ymyc, 4 from symj, 1 from vupj) asks for the mapping it used to
 //     produce by hand. The behavioural table cannot see that on its own,
 //     because every route reaches the same function; the source census at the
 //     bottom is what makes each row's "route" column true.
@@ -36,7 +36,7 @@ import (
 // written to disk, so an os.ReadFile census would read the UNMUTATED file and
 // pass against the very mutant it exists to catch.
 
-//go:embed backup.go compose.go directories.go env.go git.go logs.go monitoring.go stack_crud.go stack_lifecycle.go stacks.go updates.go
+//go:embed backup.go compose.go directories.go env.go git.go logs.go monitoring.go operations.go stack_crud.go stack_lifecycle.go stacks.go updates.go
 var collapsedRouteSources embed.FS
 
 // notFoundRoute is one collapsed route: the getter it calls, the Kind that
@@ -80,6 +80,9 @@ var collapsedRoutes = []notFoundRoute{
 	{"git.go", "resolvePathFromStack", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
 	{"monitoring.go", "getStackContainers", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
 	{"monitoring.go", "handleMetricsWebSocket", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
+	// agent-os-vupj: answered an absent stack with a bare {"error"} body and no
+	// code at all. Like the symj rows, the expected code is a deliberate change.
+	{"operations.go", "handleOperation", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
 }
 
 func runHandleDBError(t *testing.T, err error, faultMsg string) (int, models.AppError) {
@@ -105,8 +108,8 @@ func runHandleDBError(t *testing.T, err error, faultMsg string) (int, models.App
 // whole class is made of.
 func TestNotFoundWire_CollapsedRoutes(t *testing.T) {
 	t.Parallel()
-	if len(collapsedRoutes) != 22 {
-		t.Fatalf("table has %d rows, want 22 — one per collapsed route", len(collapsedRoutes))
+	if len(collapsedRoutes) != 23 {
+		t.Fatalf("table has %d rows, want 23 — one per collapsed route", len(collapsedRoutes))
 	}
 
 	fault := errors.New("sql: database is closed")
@@ -181,8 +184,8 @@ func TestNotFoundWire_RouteCensus(t *testing.T) {
 	// matched nothing would make every "expected site is present" check below
 	// fail loudly, but this states the corpus size so a silent narrowing of the
 	// embed list is visible too.
-	if total != 22 {
-		t.Fatalf("census found %d handleDBError/dbError call sites across %d embedded files, want 22 — the table and the source disagree", total, len(files))
+	if total != 23 {
+		t.Fatalf("census found %d handleDBError/dbError call sites across %d embedded files, want 23 — the table and the source disagree", total, len(files))
 	}
 
 	for _, r := range collapsedRoutes {
