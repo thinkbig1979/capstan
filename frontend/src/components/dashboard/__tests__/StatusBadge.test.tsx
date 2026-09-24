@@ -17,6 +17,7 @@ describe('StatusBadge', () => {
       ['running', 'Running'],
       ['stopped', 'Stopped'],
       ['partial', 'Partial'],
+      ['paused', 'Paused'],
       ['error', 'Error'],
       ['unknown', 'Unknown'],
     ] as [Status, string][])('renders label "%s" for status "%s"', (status, label) => {
@@ -106,6 +107,15 @@ describe('StatusBadge', () => {
       expect(badge.getAttribute('data-tone')).toBe('warning')
       expect(badge.className).toContain('text-warning')
       expect(badge.className).toContain('bg-warning/15')
+    })
+
+    // agent-os-n97z: a Docker pause arrives as stack_status "paused". It used to
+    // fall through to the unknown entry and read as "Unknown".
+    it('applies warning tone for paused', () => {
+      renderWithProviders(<StatusBadge status="paused" pulse={false} />)
+      const badge = getStatusByText('Paused')
+      expect(badge.getAttribute('data-tone')).toBe('warning')
+      expect(badge.className).toContain('text-warning')
     })
 
     it('applies neutral tone for unknown', () => {

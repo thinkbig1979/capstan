@@ -38,6 +38,7 @@ const STATUS_PILL: Record<StackStatus, { label: string; tone: StatusTone }> = {
   running: { label: 'Running', tone: 'success' },
   stopped: { label: 'Stopped', tone: 'neutral' },
   partial: { label: 'Partial', tone: 'warning' },
+  paused: { label: 'Paused', tone: 'warning' },
   error: { label: 'Error', tone: 'error' },
   unknown: { label: 'Unknown', tone: 'neutral' },
 }
@@ -358,7 +359,9 @@ export function StackPage() {
   const containerCount = stack.containers?.length ?? 0
   const runningCount = stack.containers?.filter((c) => c.state === 'running').length ?? 0
   const uptime = stackUptime(stack.containers)
-  const canStart = stack.status === 'stopped' || stack.status === 'partial'
+  // 'paused' keeps the Start it had when the API reported an all-paused stack
+  // as 'partial' (agent-os-n97z).
+  const canStart = stack.status === 'stopped' || stack.status === 'partial' || stack.status === 'paused'
   const canStop = stack.status === 'running'
 
   return (

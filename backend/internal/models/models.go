@@ -233,15 +233,20 @@ type ContainerUpdateInfo struct {
 	RemoteDigest string `json:"remoteDigest,omitempty"`
 }
 
+// StackEvent is the one envelope for every /ws/events frame. Status and
+// TargetType carry no omitempty: parseStackEvent requires status on
+// stack_status and update_job_* frames and targetType on update_job_* frames,
+// and every writer of those types sets them. Frame types that do not use them
+// send "" (agent-os-9kp2).
 type StackEvent struct {
 	Type        string    `json:"type"`
 	StackID     string    `json:"stackId,omitempty"`
 	ContainerID string    `json:"containerId,omitempty"`
 	Event       string    `json:"event,omitempty"`
-	Status      string    `json:"status,omitempty"`
+	Status      string    `json:"status"`
 	Timestamp   time.Time `json:"timestamp"`
 	JobID       string    `json:"jobId,omitempty"`
-	TargetType  string    `json:"targetType,omitempty"`
+	TargetType  string    `json:"targetType"`
 	TargetID    string    `json:"targetId,omitempty"`
 	Name        string    `json:"name,omitempty"`
 	JobError    string    `json:"error,omitempty"`

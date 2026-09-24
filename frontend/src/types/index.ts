@@ -114,7 +114,9 @@ export type {
 
 type ContainerState = 'created' | 'running' | 'paused' | 'restarting' | 'removing' | 'exited' | 'dead'
 
-export type StackStatus = 'running' | 'stopped' | 'partial' | 'unknown' | 'error'
+// 'paused' is never computed by the stacks API; it arrives on /ws/events as a
+// stack_status frame for a Docker pause (MonitorService.stackEventFor).
+export type StackStatus = 'running' | 'stopped' | 'partial' | 'paused' | 'unknown' | 'error'
 
 /**
  * Re-points a generated array field at this file's narrowed element type while

@@ -14,9 +14,7 @@ import type { StackStatus } from '@/types'
 export interface StackStatusEvent {
   type: 'stack_status'
   stackId: string
-  // 'paused' is not a StackStatus, but MonitorService.stackEventFor emits it
-  // for a Docker "pause" action (agent-os-r4kf).
-  status: StackStatus | 'paused'
+  status: StackStatus
   timestamp: string
 }
 
@@ -85,6 +83,12 @@ interface UpdateScanFailedEvent {
   timestamp: string
 }
 
+/** Emitted by the backend after a backup policy is saved (handlers/backup.go upsertPolicy). */
+interface BackupPolicyChangedEvent {
+  type: 'backup_policy_changed'
+  timestamp: string
+}
+
 export type StackEvent =
   | StackStatusEvent
   | ContainerEvent
@@ -96,16 +100,18 @@ export type StackEvent =
   | UpdateJobProgressStackEvent
   | UpdateJobCompleteStackEvent
   | UpdatesChangedEvent
+  | BackupPolicyChangedEvent
 
 // ── Frame validation (agent-os-r4kf) ─────────────────────────────────────────
-// Mirrors models.StackEvent, where every field but type and timestamp is a Go
-// string tagged omitempty. A field the union above declares required is read
-// with omitemptyStr, because Go really does omit some of them: stackId is
+// Mirrors models.StackEvent, where every field but type, timestamp, status and
+// targetType is a Go string tagged omitempty (status and targetType always
+// reach the wire, agent-os-9kp2). A field the union above declares required is
+// read with omitemptyStr, because Go really does omit some of them: stackId is
 // absent on a container_event for a container in no known stack
 // (unassociatedStackEvent) and on an update_job_* event for a standalone
 // container. Reading it back as "" is the value Go held.
 
-const STACK_EVENT_STATUSES = ['running', 'stopped', 'partial', 'unknown', 'error', 'paused'] as const satisfies readonly StackStatusEvent['status'][]
+const STACK_EVENT_STATUSES = ['running', 'stopped', 'partial', 'paused', 'unknown', 'error'] as const satisfies readonly StackStatus[]
 
 const readJobEvent = (f: Record<string, unknown>) => ({
   jobId: omitemptyStr(f.jobId),
@@ -116,9 +122,8 @@ const readJobEvent = (f: Record<string, unknown>) => ({
   status: oneOf(f.status, JOB_STATUSES),
 })
 
-// A type this union does not know (backup_policy_changed, for one) returns
-// null, so it is dropped with a warning, exactly as the switch below used to
-// ignore it.
+// A type this union does not know returns null, so it is dropped with a
+// warning, exactly as the switch below used to ignore it.
 export const parseStackEvent = frameValidator((raw): StackEvent | null => {
   const f = record(raw)
   const timestamp = str(f.timestamp)
@@ -141,6 +146,7 @@ export const parseStackEvent = frameValidator((raw): StackEvent | null => {
     case 'update_scan_failed':
     case 'update_policy_changed':
     case 'updates_changed':
+    case 'backup_policy_changed':
       return { type: f.type, timestamp }
     case 'update_job_progress':
       return { type: 'update_job_progress', ...readJobEvent(f) }
@@ -191,11 +197,7 @@ export function useStackEvents() {
     queryClient.setQueryData(queryKeys.stacks(), (old: Stack[] | undefined) => {
       if (!old) return old
       return old.map((stack) =>
-        // The one unchecked assertion left on this socket, and deliberate:
-        // 'paused' is written into the cache exactly as it was before
-        // agent-os-r4kf, because StackStatus (types/index.ts) does not list
-        // it and dropping the frame would lose the optimistic update.
-        stack.id === event.stackId ? { ...stack, status: event.status as StackStatus } : stack
+        stack.id === event.stackId ? { ...stack, status: event.status } : stack
       )
     })
     scheduleInvalidations([
@@ -326,6 +328,15 @@ export function useStackEvents() {
     ])
   }, [scheduleInvalidations])
 
+  // Same keys useToggleBackup invalidates on success, so a policy saved in
+  // another tab or session converges here too.
+  const handleBackupPolicyChangedEvent = useCallback(() => {
+    scheduleInvalidations([
+      queryKeys.backup.policies(),
+      queryKeys.backup.status(),
+    ])
+  }, [scheduleInvalidations])
+
   const handleMessage = useCallback((data: StackEvent) => {
     switch (data.type) {
       case 'stack_status':
@@ -358,6 +369,9 @@ export function useStackEvents() {
       case 'updates_changed':
         handleUpdatesChangedEvent()
         break
+      case 'backup_policy_changed':
+        handleBackupPolicyChangedEvent()
+        break
     }
   }, [
     handleStackStatusEvent,
@@ -370,6 +384,7 @@ export function useStackEvents() {
     handleUpdateJobProgressEvent,
     handleUpdateJobCompleteEvent,
     handleUpdatesChangedEvent,
+    handleBackupPolicyChangedEvent,
   ])
 
   useWebSocketJSON('/ws/events', handleMessage, { parse: parseStackEvent })

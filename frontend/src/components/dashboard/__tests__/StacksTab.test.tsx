@@ -543,6 +543,13 @@ describe('StacksTab — filtering', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Running' }))
     expect(props.onFilterChange).toHaveBeenCalledWith('running')
   })
+
+  it('offers paused as a status filter (agent-os-n97z)', () => {
+    const { props } = renderTab({ stacks: TWO })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Paused' }))
+    expect(props.onFilterChange).toHaveBeenCalledWith('paused')
+  })
 })
 
 describe('StacksTab — empty states', () => {

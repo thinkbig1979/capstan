@@ -9,6 +9,7 @@ vi.mock('@/lib/query-client', () => ({
 import { useStackEvents } from '../useStackEvents'
 import { queryClient } from '@/lib/query-client'
 import { queryKeys } from '@/lib/query-keys'
+import type { Stack } from '@/types'
 
 /**
  * agent-os-r4kf. The sibling useStackEvents tests mock useWebSocketJSON and
@@ -108,5 +109,34 @@ describe('useStackEvents through the real frame validator', () => {
 
     expect(flushInvalidations()).toEqual([])
     warn.mockRestore()
+  })
+
+  // agent-os-n97z. Behaviour here is unchanged by the fix (the old code wrote
+  // 'paused' too, through an `as StackStatus` cast), so this pins the cache
+  // contract rather than failing first; the fail-first arms are the render
+  // tests in StatusBadge/StackRow/StacksTab/Sidebar/DashboardPage.
+  it('writes a paused stack_status into the stacks cache as paused', async () => {
+    await mount()
+
+    deliver({ type: 'stack_status', stackId: 's1', containerId: 'c1', event: 'pause', status: 'paused', timestamp: '2026-09-23T10:00:00Z' })
+
+    const calls = vi.mocked(queryClient.setQueryData).mock.calls
+    expect(calls).toHaveLength(1)
+    const [key, updater] = calls[0] as unknown as [unknown, (old: Stack[] | undefined) => Stack[] | undefined]
+    expect(key).toEqual(queryKeys.stacks())
+    const old = [{ id: 's1', status: 'running' }, { id: 's2', status: 'running' }] as Stack[]
+    expect(updater(old)?.map((s) => [s.id, s.status])).toEqual([['s1', 'paused'], ['s2', 'running']])
+  })
+
+  // agent-os-oomh: handlers/backup.go upsertPolicy broadcasts this after saving a
+  // backup policy. It used to be dropped by the validator as an unknown type.
+  it('invalidates the backup-policy queries on backup_policy_changed', async () => {
+    await mount()
+
+    deliver({ type: 'backup_policy_changed', timestamp: '2026-09-23T10:00:00Z' })
+
+    const keys = flushInvalidations()
+    expect(keys).toContainEqual(queryKeys.backup.policies())
+    expect(keys).toContainEqual(queryKeys.backup.status())
   })
 })

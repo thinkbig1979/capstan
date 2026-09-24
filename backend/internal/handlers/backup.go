@@ -691,6 +691,7 @@ func (h *BackupHandler) deletePolicy(c *gin.Context) {
 		return
 	}
 
+	BroadcastEvent(models.StackEvent{Type: "backup_policy_changed", Timestamp: time.Now()})
 	c.Status(http.StatusNoContent)
 }
 

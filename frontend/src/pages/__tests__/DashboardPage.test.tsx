@@ -84,16 +84,19 @@ vi.mock('@/components/dashboard/StacksTab', () => ({
   StacksTab: ({
     sortBy,
     statusFilter,
+    filteredStacks,
     globalAutoUpdateState,
   }: {
     sortBy: string
     statusFilter: string
+    filteredStacks: Stack[]
     globalAutoUpdateState: string
   }) => (
     <div
       data-testid="tab-stacks"
       data-sort-by={sortBy}
       data-status-filter={statusFilter}
+      data-filtered-ids={filteredStacks.map((s) => s.id).join(',')}
       // agent-os-bueb: the page owns the policies query, so the state it
       // derives is only observable here.
       data-global-auto-update-state={globalAutoUpdateState}
@@ -402,6 +405,22 @@ describe('DashboardPage', () => {
       const tab = await screen.findByTestId('tab-stacks')
       expect(tab).toHaveAttribute('data-sort-by', 'status')
       expect(tab).toHaveAttribute('data-status-filter', 'running')
+    })
+
+    // agent-os-n97z: the page's own filter must honour 'paused', not fall
+    // through to the unfiltered list.
+    it('filters the stacks to paused ones under the paused filter', async () => {
+      localStorage.setItem('dashboard-filter', 'paused')
+      listStacks.mockResolvedValue([
+        makeStack({ id: 's1', status: 'running' }),
+        makeStack({ id: 's2', status: 'paused' }),
+      ])
+      listDirectories.mockResolvedValue([makeDir({ path: '/stacks/s1' })])
+
+      renderPage('/?tab=stacks')
+
+      const tab = await screen.findByTestId('tab-stacks')
+      await waitFor(() => expect(tab).toHaveAttribute('data-filtered-ids', 's2'))
     })
 
     it('falls back to the defaults when nothing is persisted', async () => {

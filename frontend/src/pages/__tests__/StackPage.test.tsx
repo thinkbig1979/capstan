@@ -255,6 +255,18 @@ describe('StackPage', () => {
       expect(screen.getByRole('button', { name: /Start/ })).toBeDisabled()
     })
 
+    // agent-os-n97z: an all-paused stack used to arrive from the API as
+    // "partial", which offered Start. It now arrives as "paused" and keeps
+    // exactly those actions.
+    it('lets a paused stack be started, but not stopped or restarted', async () => {
+      getStack.mockResolvedValue(makeStack({ status: 'paused' }))
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /Start/ })).toBeEnabled())
+      expect(screen.getByRole('button', { name: /Stop/ })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /Restart/ })).toBeDisabled()
+    })
+
     it('lets a partially-running stack be started', async () => {
       getStack.mockResolvedValue(makeStack({ status: 'partial' }))
       renderPage('/stacks/s1')

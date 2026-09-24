@@ -697,15 +697,22 @@ export interface ContainerUpdateInfo {
    */
   remoteDigest?: string;
 }
+/**
+ * StackEvent is the one envelope for every /ws/events frame. Status and
+ * TargetType carry no omitempty: parseStackEvent requires status on
+ * stack_status and update_job_* frames and targetType on update_job_* frames,
+ * and every writer of those types sets them. Frame types that do not use them
+ * send "" (agent-os-9kp2).
+ */
 export interface StackEvent {
   type: string;
   stackId?: string;
   containerId?: string;
   event?: string;
-  status?: string;
+  status: string;
   timestamp: string;
   jobId?: string;
-  targetType?: string;
+  targetType: string;
   targetId?: string;
   name?: string;
   error?: string;

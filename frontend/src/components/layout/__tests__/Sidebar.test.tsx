@@ -200,6 +200,23 @@ describe('Sidebar', () => {
     expect(screen.getAllByText('bravo').length).toBeGreaterThan(0)
   })
 
+  // agent-os-n97z: paused is a real StackStatus with its own filter button.
+  it('filters the stack list to paused stacks', async () => {
+    listMock.mockResolvedValueOnce([
+      { id: 's1', projectName: 'alpha', status: 'running', containers: [], directory: '/stacks', isGitRepo: false, gitDirty: false },
+      { id: 's3', projectName: 'charlie', status: 'paused', containers: [], directory: '/stacks', isGitRepo: false, gitDirty: false },
+    ] as never)
+    renderSidebar()
+    await waitFor(() => expect(screen.getAllByText('charlie').length).toBeGreaterThan(0))
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: /Paused/ })[0])
+    })
+
+    expect(screen.queryByText('alpha')).not.toBeInTheDocument()
+    expect(screen.getAllByText('charlie').length).toBeGreaterThan(0)
+  })
+
   it('shows an empty state message when filters exclude every stack', async () => {
     renderSidebar()
     await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))

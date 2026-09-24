@@ -76,3 +76,15 @@ describe('StackRow — the uncommitted-changes dot', () => {
     expect(screen.getByRole('link', { name: 'web - running' })).toBeInTheDocument()
   })
 })
+
+describe('StackRow — the status dot', () => {
+  // agent-os-n97z: 'paused' had no statusDotColor entry and fell back to the
+  // unknown grey, indistinguishable from a stopped stack.
+  it('gives a paused stack the warning dot, not the unknown grey', () => {
+    renderRow(stack({ status: 'paused' }))
+
+    const dot = screen.getByRole('link', { name: 'web - paused' }).querySelector('span[aria-hidden="true"]')
+    expect(dot?.className).toContain('bg-warning')
+    expect(dot?.className).not.toContain('bg-muted-foreground')
+  })
+})
