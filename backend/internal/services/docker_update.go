@@ -217,6 +217,7 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 		if len(c.Names) > 0 {
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
+		rowLookupFailed := false
 
 		imgInspect, err := s.updateAPI().ImageInspect(ctx, c.ImageID)
 		if err != nil {
@@ -252,6 +253,9 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 		stack, stackErr := lookupStackByProject(db, projectName)
 		switch {
 		case stackErr != nil:
+			// Flagged on the row too (agent-os-zt0h), so the Updates tab does not
+			// present "could not tell" as "not managed by Capstan".
+			rowLookupFailed = true
 			// agent-os-g482. Not a write, but not a display either: this StackID
 			// is what `policy, hasPolicy = stackPolicies[update.StackID]`
 			// (scheduler.go:821-822) looks up to decide whether a stack-scoped
@@ -282,7 +286,11 @@ func (s *DockerService) CheckForUpdates(ctx context.Context, db DashboardDB) ([]
 				ProjectName:   projectName,
 				ServiceName:   serviceName,
 				IsCompose:     projectName != "",
-				LocalDigest:   localDigest,
+				// Shown verbatim, never parsed, as on DashboardContainerInfo.
+				StackLookupFailed:  rowLookupFailed,
+				ComposeWorkingDir:  c.Labels["com.docker.compose.project.working_dir"],
+				ComposeConfigFiles: c.Labels["com.docker.compose.project.config_files"],
+				LocalDigest:        localDigest,
 			},
 		})
 	}

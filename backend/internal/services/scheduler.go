@@ -362,9 +362,13 @@ func (s *SchedulerService) performScan(ctx context.Context) ([]models.CachedUpda
 			ProjectName:   r.ProjectName,
 			ServiceName:   r.ServiceName,
 			IsCompose:     r.IsCompose,
-			LocalDigest:   r.LocalDigest,
-			RemoteDigest:  r.RemoteDigest,
-			ScannedAt:     now,
+			// agent-os-zt0h: the Updates tab reads this cache, not the scan.
+			StackLookupFailed:  r.StackLookupFailed,
+			ComposeWorkingDir:  r.ComposeWorkingDir,
+			ComposeConfigFiles: r.ComposeConfigFiles,
+			LocalDigest:        r.LocalDigest,
+			RemoteDigest:       r.RemoteDigest,
+			ScannedAt:          now,
 		})
 	}
 

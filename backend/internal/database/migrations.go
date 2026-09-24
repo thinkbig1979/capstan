@@ -731,6 +731,23 @@ CREATE TABLE IF NOT EXISTS docker_cleanup_runs (
 CREATE INDEX IF NOT EXISTS idx_docker_cleanup_runs_started_at ON docker_cleanup_runs(started_at);
 `,
 	},
+	{
+		Version: 18,
+		Name:    "cached_updates_stack_context",
+		SQL: `
+-- agent-os-zt0h. The Updates tab reads cached_updates, not the live scan, so
+-- the scan's "stack lookup failed" flag and compose's own working_dir /
+-- config_files labels have to be stored to reach it. Without the flag an empty
+-- stack_id cannot tell "not managed by Capstan" from "the stacks table could
+-- not be read". The defaults describe a row written before this migration:
+-- not known to have failed, no path recorded, which the UI already words as
+-- "Compose did not record this project's directory" until the next scan
+-- rewrites the table.
+ALTER TABLE cached_updates ADD COLUMN stack_lookup_failed BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE cached_updates ADD COLUMN compose_working_dir TEXT NOT NULL DEFAULT '';
+ALTER TABLE cached_updates ADD COLUMN compose_config_files TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // checkNoCaseCollidingUsernames is migration 13's PreCheck. It detects

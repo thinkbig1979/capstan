@@ -9,7 +9,8 @@ import (
 func (d *DB) GetCachedUpdates() ([]models.CachedUpdate, error) {
 	query := `SELECT id, container_id, container_name, image, image_ref, state,
 	          COALESCE(stack_id, ''), COALESCE(project_name, ''), COALESCE(service_name, ''),
-	          is_compose, local_digest, remote_digest, scanned_at
+	          is_compose, stack_lookup_failed, compose_working_dir, compose_config_files,
+	          local_digest, remote_digest, scanned_at
 	          FROM cached_updates ORDER BY container_name`
 	rows, err := d.db.Query(query)
 	if err != nil {
@@ -23,7 +24,8 @@ func (d *DB) GetCachedUpdates() ([]models.CachedUpdate, error) {
 		var stackID, projectName, serviceName string
 		err := rows.Scan(&u.ID, &u.ContainerID, &u.ContainerName, &u.Image, &u.ImageRef,
 			&u.State, &stackID, &projectName, &serviceName,
-			&u.IsCompose, &u.LocalDigest, &u.RemoteDigest, &u.ScannedAt)
+			&u.IsCompose, &u.StackLookupFailed, &u.ComposeWorkingDir, &u.ComposeConfigFiles,
+			&u.LocalDigest, &u.RemoteDigest, &u.ScannedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -59,10 +61,13 @@ func (d *DB) SetCachedUpdates(updates []models.CachedUpdate) error {
 
 	for _, u := range updates {
 		_, err := tx.Exec(`INSERT INTO cached_updates (id, container_id, container_name, image, image_ref, state,
-		                  stack_id, project_name, service_name, is_compose, local_digest, remote_digest, scanned_at)
-		                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                  stack_id, project_name, service_name, is_compose,
+		                  stack_lookup_failed, compose_working_dir, compose_config_files,
+		                  local_digest, remote_digest, scanned_at)
+		                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			u.ID, u.ContainerID, u.ContainerName, u.Image, u.ImageRef, u.State,
 			u.StackID, u.ProjectName, u.ServiceName, u.IsCompose,
+			u.StackLookupFailed, u.ComposeWorkingDir, u.ComposeConfigFiles,
 			u.LocalDigest, u.RemoteDigest, u.ScannedAt)
 		if err != nil {
 			// Rollback error is secondary to the exec error already being
