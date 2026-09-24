@@ -250,6 +250,7 @@ export interface DashboardStats {
 export interface GitRepoStatus {
   isRepo: true
   hasCommits: true
+  isBare: false
   branch: string
   commit: string
   commitShort: string
@@ -272,7 +273,23 @@ export interface GitEmptyRepoStatus {
   hasCommits: false
 }
 
-export type GitStatus = GitRepoStatus | GitEmptyRepoStatus | GitNotRepoStatus
+// agent-os-m2g8: a repository with no work tree. The work-tree fields are
+// absent on the wire, not zero, so they are absent here and reading one is a
+// compile error rather than a rendered "clean".
+export interface GitBareRepoStatus {
+  isRepo: true
+  hasCommits: true
+  isBare: true
+  branch: string
+  commit: string
+  commitShort: string
+  commitMessage: string
+  commitAuthor: string
+  commitDate: string
+  remote: string
+}
+
+export type GitStatus = GitRepoStatus | GitBareRepoStatus | GitEmptyRepoStatus | GitNotRepoStatus
 
 // narrows handlers.EnvResponse.HasEnvFile, a Go bool, to the literal the
 // present branch always carries. Entries stays the generated EnvEntry, whose

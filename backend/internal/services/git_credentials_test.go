@@ -677,8 +677,11 @@ func TestGetStatusCLI_ResolvedTokenReachesEveryInvocation(t *testing.T) {
 	// invocation is gone — one fewer process per request for every untracked
 	// repository. The count is still the guard it always was: it fails if a new
 	// call site is added without routing through gitCommandWithCreds.
-	if len(lines) != 10 {
-		t.Fatalf("wrapper observed %d git invocations, want 10 (one per getStatusCLI internal call): %v", len(lines), lines)
+	//
+	// 10 -> 11 under agent-os-m2g8: `rev-parse --is-bare-repository` runs on
+	// every request, through gitCommandWithCreds like the rest.
+	if len(lines) != 11 {
+		t.Fatalf("wrapper observed %d git invocations, want 11 (one per getStatusCLI internal call): %v", len(lines), lines)
 	}
 	want := fmt.Sprintf("user=%s token=%s", testGitUser, testGitToken)
 	for i, line := range lines {

@@ -106,14 +106,18 @@ type ActionLog struct {
 }
 
 type GitStatusResult struct {
-	Branch         string     `json:"branch"`
-	Commit         *GitCommit `json:"commit"`
-	Dirty          bool       `json:"dirty"`
-	DirtyCount     int        `json:"dirtyCount"`
-	Ahead          int        `json:"ahead"`
-	Behind         int        `json:"behind"`
-	RemoteURL      string     `json:"remoteUrl"`
-	TrackingBranch string     `json:"trackingBranch"`
+	Branch         string    `json:"branch"`
+	Commit         GitCommit `json:"commit"`
+	Dirty          bool      `json:"dirty"`
+	DirtyCount     int       `json:"dirtyCount"`
+	Ahead          int       `json:"ahead"`
+	Behind         int       `json:"behind"`
+	RemoteURL      string    `json:"remoteUrl"`
+	TrackingBranch string    `json:"trackingBranch"`
+	// IsBare marks a repository with no work tree (agent-os-m2g8). Dirty,
+	// DirtyCount, Ahead, Behind and TrackingBranch are not measured for it and
+	// stay zero; handlers/git.go leaves them out of the body.
+	IsBare bool `json:"isBare"`
 }
 
 type PullResult struct {

@@ -49,8 +49,8 @@ function GitPullActions({ canPull, onPull }: GitPullActionsProps) {
  * loading and when no data arrived. A failed request renders an explicit
  * "status unknown" chip with Pull disabled (agent-os-528x). A directory that
  * is not a repository gets a quiet chip that says so and offers Rescan
- * (agent-os-omvy); a repository with no commits yet gets an inert chip that
- * says so. Details and pull actions live in a popover behind the full chip.
+ * (agent-os-omvy); a repository with no commits yet, and a bare repository,
+ * each get an inert chip that says so (agent-os-m2g8). Details and pull actions live in a popover behind the full chip.
  */
 export function GitStatus({ stack }: GitStatusProps) {
   const { data: gitStatus, error, refetch } = useGitStatus(stack.id)
@@ -123,6 +123,7 @@ export function GitStatus({ stack }: GitStatusProps) {
     !!gitStatus &&
     gitStatus.isRepo &&
     gitStatus.hasCommits &&
+    !gitStatus.isBare &&
     !pullMutation.isPending
 
   // A failed request with nothing we can still show (agent-os-528x). It used to
@@ -211,6 +212,27 @@ export function GitStatus({ stack }: GitStatusProps) {
       >
         <GitBranch className="h-3 w-3" aria-hidden="true" />
         no commits
+      </span>
+    )
+  }
+
+  // A bare repository (agent-os-m2g8): a branch and a commit, and no work tree,
+  // so there is nothing to call clean or dirty and nothing to pull into. The
+  // server leaves those fields out rather than sending a zero, and this chip
+  // is inert for the same reason the no-commits one is: the popover below
+  // exists for Pull and its credentials. A failed refetch lands here too and
+  // keeps the last branch and commit, as the repository chip does.
+  if (gitStatus.isBare) {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-0.5 text-xs font-mono text-muted-foreground"
+        aria-label={`Git status: ${gitStatus.branch}, bare repository`}
+        title={gitStatus.commitMessage}
+      >
+        <GitBranch className="h-3 w-3" aria-hidden="true" />
+        {gitStatus.branch}
+        {gitStatus.commitShort && <span>{gitStatus.commitShort}</span>}
+        <span>· bare repo</span>
       </span>
     )
   }

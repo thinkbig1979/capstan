@@ -192,7 +192,7 @@ func yo9eCheck(t *testing.T, got *models.GitStatusResult, err error, want yo9eWa
 	if (got.RemoteURL != "") != want.remoteURLSet {
 		t.Errorf("RemoteURL = %q, want set=%v", got.RemoteURL, want.remoteURLSet)
 	}
-	if got.Commit == nil || len(got.Commit.Hash) != 40 {
+	if len(got.Commit.Hash) != 40 {
 		t.Fatalf("Commit = %+v, want a 40-char hash", got.Commit)
 	}
 	if got.Commit.Short != got.Commit.Hash[:7] {

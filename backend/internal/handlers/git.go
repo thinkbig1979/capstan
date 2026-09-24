@@ -184,14 +184,37 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 		return
 	}
 
+	if status.IsBare {
+		// agent-os-m2g8: a bare repository has a branch and a commit and no work
+		// tree, so the work-tree fields are ABSENT, not zero — the same
+		// absent-over-zero rule as the hasCommits:false answer above.
+		// `dirty: false` would say "clean" about a tree that does not exist, and
+		// `behind: 0` would say "nothing to pull" about a repository nothing can
+		// be pulled into.
+		c.JSON(http.StatusOK, gin.H{
+			"isRepo":        true,
+			"hasCommits":    true,
+			"isBare":        true,
+			"branch":        status.Branch,
+			"commit":        status.Commit.Hash,
+			"commitShort":   status.Commit.Short,
+			"commitMessage": status.Commit.Message,
+			"commitAuthor":  status.Commit.Author,
+			"commitDate":    status.Commit.Date,
+			"remote":        status.RemoteURL,
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		// Both discriminators are emitted on every branch that can carry them.
 		// The frontend's GitStatus type is a union narrowed on them, so a repo
 		// answer that omitted either would render no chip at all — hasCommits
 		// for the same reason as isRepo, since agent-os-4a4a split the repo
-		// answer in two.
+		// answer in two, and isBare since agent-os-m2g8 split it again.
 		"isRepo":        true,
 		"hasCommits":    true,
+		"isBare":        false,
 		"branch":        status.Branch,
 		"commit":        status.Commit.Hash,
 		"commitShort":   status.Commit.Short,
