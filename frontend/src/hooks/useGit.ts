@@ -18,7 +18,7 @@ export function useGitStatus(stackId: string) {
     // render a chip or nothing, from DATA, and neither hides the panel.
     //
     // What still does reach it is definitive — STACK_DIR_MISSING (the directory
-    // is gone) and NOT_FOUND (unknown stackId). Neither is a transient fault,
+    // is gone) and STACK_NOT_FOUND (unknown stackId). Neither is a transient fault,
     // so retrying just repeats the error in the console/network tab. A failure
     // renders GitStatus's "status unknown" chip with Pull disabled
     // (agent-os-528x), and its Retry refetches on demand.

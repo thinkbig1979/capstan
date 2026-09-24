@@ -423,11 +423,7 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 		// kept as a defensive no-op: database/stacks.go's GetStack always
 		// returns either &stack or a non-nil err, never both zero — nil arm
 		// dropped, dead per GetStack's return shape.
-		if errors.Is(err, errdefs.ErrNotFound) {
-			handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
-			return
-		}
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 

@@ -43,7 +43,7 @@ func TestMonitoringHandler_GetStackContainers_NotFound(t *testing.T) {
 	var response map[string]interface{}
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
-	assert.Equal(t, models.ErrNotFound, response["code"])
+	assert.Equal(t, models.ErrStackNotFound, response["code"])
 }
 
 // The handler used to dereference the nil Docker service here and panic; it now

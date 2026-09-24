@@ -118,6 +118,13 @@ honest answer rather than a blank.
 
 ## Stacks
 
+Every route that looks a stack up by id answers an unknown id with 404
+`STACK_NOT_FOUND`, and a database that could not answer with 500
+`INTERNAL_ERROR`. That covers the routes below plus `GET /api/v1/git*` with
+`?stackId=`, `GET /api/v1/ws/metrics/:id` and
+`POST /api/v1/resources/stacks/:id/update`, which answered `NOT_FOUND` until
+2026-09-24.
+
 - `GET /api/v1/stacks` — list stacks
 - `POST /api/v1/stacks` — create a stack
 - `GET /api/v1/stacks/:id` — stack details

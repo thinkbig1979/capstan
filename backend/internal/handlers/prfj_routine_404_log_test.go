@@ -65,9 +65,9 @@ func httpRequestLineLevel(t *testing.T, out string) string {
 //     gitFailure, pinned by services/git_notrepo_test.go), so this row is
 //     unchanged and still live — only the example endpoint moved.
 //
-//   - NOT_FOUND is git.go resolvePathFromStack's answer for an unknown
-//     stackId. Same endpoint, same 404, and a real client error that must
-//     still warn.
+//   - STACK_NOT_FOUND is git.go resolvePathFromStack's answer for an unknown
+//     stackId (NOT_FOUND until agent-os-symj converged it). Same endpoint,
+//     same 404, and a real client error that must still warn.
 //
 // So this is not a test that the routine 404 went quiet — that alone is also
 // what breaking 4xx logging entirely looks like. It is a test that the two
@@ -87,8 +87,8 @@ func TestHandleError_RoutineOutcomeLogLevel(t *testing.T) {
 			want: "INFO",
 		},
 		{
-			name: "NOT_FOUND 404 on the SAME path is a client error: still Warn",
-			err:  models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"),
+			name: "STACK_NOT_FOUND 404 on the SAME path is a client error: still Warn",
+			err:  models.NewAppError(http.StatusNotFound, models.ErrStackNotFound, "Stack not found"),
 			want: "WARN",
 		},
 		{
@@ -204,8 +204,9 @@ func TestHandleError_RoutineMarkerDoesNotDisturbLogServerFault(t *testing.T) {
 // models.ErrNotFound is the row that matters. It is deliberately NOT in
 // routineErrorCodes even though an in-class site in handlers/env.go answers
 // with it (agent-os-hjmf, "No env file associated with this stack" on the
-// write path), because the SAME code is also the genuine "Stack not found"
-// client error. Adding it to the list would silence both. That site must call
+// write path), because the SAME code also answers genuine client errors
+// ("Env file not found on disk", "Directory not found"). Adding it to the list
+// would silence those too. That site must call
 // middleware.MarkRoutineOutcome directly instead, and this assertion is what
 // stops the shortcut being taken here.
 //
@@ -223,8 +224,8 @@ func TestHandleError_MarksOnlyListedCodes(t *testing.T) {
 	}{
 		{models.ErrGitNotRepo, true},
 		// GIT_NO_COMMITS earned its own code in agent-os-n2df precisely so it
-		// could be listed here without dragging ErrNotFound's 20 genuine
-		// "Stack not found" sites along with it. The row below is the other
+		// could be listed here without dragging ErrNotFound's genuine
+		// client-error sites along with it. The row below is the other
 		// half of that argument and must stay false.
 		//
 		// The listing is now defence in depth rather than the live path:
@@ -234,6 +235,9 @@ func TestHandleError_MarksOnlyListedCodes(t *testing.T) {
 		// reintroducing a WARN for a routine state.
 		{models.ErrGitNoCommits, true},
 		{models.ErrNotFound, false},
+		// An unknown stackId is a client error on every route (agent-os-symj
+		// converged the last four onto this code), so it must keep warning.
+		{models.ErrStackNotFound, false},
 		// STACK_DIR_MISSING is minted by the same function as GIT_NOT_REPO and
 		// is deliberately NOT routine: an unmounted stacks volume must stay a
 		// warning (agent-os-n2df).
