@@ -803,6 +803,20 @@ func (s *BackupService) RunBackup(
 		return nil, fmt.Errorf("create backup run: %w", err)
 	}
 
+	return s.executeBackupRun(ctx, run, bc, restic, stackIDs, dryRun, out)
+}
+
+// executeBackupRun is the body RunBackup and RunBackupWithRunID share once
+// their run row exists. It finalises run in the DB before returning.
+func (s *BackupService) executeBackupRun(
+	ctx context.Context,
+	run *models.BackupRun,
+	bc BackupConfig,
+	restic *ResticManager,
+	stackIDs []string,
+	dryRun bool,
+	out chan<- StreamLine,
+) (*models.BackupRun, error) {
 	stream(out, "info", fmt.Sprintf("Backup run %s started (dryRun=%v)", run.ID, dryRun))
 
 	// Determine which stacks to back up.
@@ -823,6 +837,12 @@ func (s *BackupService) RunBackup(
 	// (agent-os-ck4: a Docker outage used to surface here as a raw panic string).
 	var firstItemErr error
 
+	// runNotes are run-level facts an operator must act on that are not the
+	// run's primary reason. They follow it in error_message, never replace it
+	// (see withRunNotes). stream() alone drops them when no client is attached.
+	var runNotes []string
+	restartIncomplete := false
+
 	// The database goes first, deliberately. It is the artifact without which a
 	// restore produces an empty Capstan, and capturing it before the per-stack
 	// loop means a stack failure part-way through still leaves it in the
@@ -837,7 +857,7 @@ func (s *BackupService) RunBackup(
 
 	for _, policy := range policies {
 		stackID := policy.TargetID
-		itemBytes, itemErr := s.backupStack(ctx, restic, stackID, policy.StopPolicy, dryRun, run.ID, out)
+		res, itemErr := s.backupStack(ctx, restic, stackID, policy.StopPolicy, dryRun, run.ID, out)
 		if itemErr != nil {
 			run.StacksFailed++
 			if firstItemErr == nil {
@@ -846,7 +866,13 @@ func (s *BackupService) RunBackup(
 			stream(out, "error", fmt.Sprintf("stack %s failed: %v", stackID, itemErr))
 		} else {
 			run.StacksOK++
-			totalBytesAdded += itemBytes
+			totalBytesAdded += res.bytesAdded
+		}
+		// A stack the backup stopped and could not fully bring back is down
+		// right now, whatever its backup did (agent-os-5gou).
+		if res.restartIncomplete != "" {
+			restartIncomplete = true
+			runNotes = append(runNotes, fmt.Sprintf("stack %s: %s", stackID, res.restartIncomplete))
 		}
 	}
 
@@ -909,6 +935,16 @@ func (s *BackupService) RunBackup(
 		}
 	}
 
+	// Same principle again: a stack left down after its backup is not a green
+	// run (agent-os-5gou). The item keeps "success" because its snapshot is
+	// good; the run is where "not everything came back" belongs.
+	if restartIncomplete && run.Status == "success" {
+		run.Status = "partial"
+	}
+
+	primaryReason := run.ErrorMessage
+	run.ErrorMessage = withRunNotes(primaryReason, runNotes)
+
 	s.finaliseRun(run)
 	stream(out, "info", fmt.Sprintf("Backup run finished: status=%s ok=%d failed=%d",
 		run.Status, run.StacksOK, run.StacksFailed))
@@ -929,6 +965,37 @@ func (s *BackupService) RunBackup(
 	}
 
 	return run, nil
+}
+
+// maxRunNotes caps how many notes withRunNotes appends after the primary
+// reason. Per-stack detail lives on the run items; the run message only has to
+// say that something needs a look.
+const maxRunNotes = 5
+
+// withRunNotes joins a run's primary reason and its notes into one
+// error_message. The primary reason always comes first so a note can never
+// displace it; notes follow in the order they happened, exact repeats dropped,
+// at most maxRunNotes of them.
+func withRunNotes(primary string, notes []string) string {
+	parts := make([]string, 0, maxRunNotes+2)
+	if primary != "" {
+		parts = append(parts, primary)
+	}
+	seen := make(map[string]bool, len(notes))
+	var unique []string
+	for _, n := range notes {
+		if n == "" || seen[n] || n == primary {
+			continue
+		}
+		seen[n] = true
+		unique = append(unique, n)
+	}
+	if len(unique) > maxRunNotes {
+		rest := len(unique) - maxRunNotes
+		unique = append(unique[:maxRunNotes], fmt.Sprintf("and %d more (see per-stack details)", rest))
+	}
+	parts = append(parts, unique...)
+	return strings.Join(parts, "; ")
 }
 
 // RunBackupWithRunID is identical to RunBackup but uses a caller-supplied
@@ -971,121 +1038,7 @@ func (s *BackupService) RunBackupWithRunID(
 	}
 
 	// Row was pre-created by the caller; skip CreateBackupRun.
-	stream(out, "info", fmt.Sprintf("Backup run %s started (dryRun=%v)", run.ID, dryRun))
-
-	policies, unresolved, err := s.resolveTargetPolicies(stackIDs)
-	if err != nil {
-		run.Status = "failed"
-		run.ErrorMessage = err.Error()
-		s.finaliseRun(run)
-		return run, fmt.Errorf("resolve policies: %w", err)
-	}
-
-	run.StacksTotal = len(policies)
-
-	var totalBytesAdded int64
-
-	// firstItemErr carries the first per-stack failure up to the run record, so a
-	// failed run names its cause instead of showing an empty ErrorMessage
-	// (agent-os-ck4: a Docker outage used to surface here as a raw panic string).
-	var firstItemErr error
-
-	// The database goes first, deliberately. It is the artifact without which a
-	// restore produces an empty Capstan, and capturing it before the per-stack
-	// loop means a stack failure part-way through still leaves it in the
-	// repository. See backupDatabase for the full rationale (agent-os-36o).
-	dbFailed := false
-	if dbBytes, dbErr := s.backupDatabase(ctx, restic, dryRun, out); dbErr != nil {
-		dbFailed = true
-		stream(out, "error", fmt.Sprintf("database snapshot failed: %v", dbErr))
-	} else {
-		totalBytesAdded += dbBytes
-	}
-
-	for _, policy := range policies {
-		stackID := policy.TargetID
-		itemBytes, itemErr := s.backupStack(ctx, restic, stackID, policy.StopPolicy, dryRun, run.ID, out)
-		if itemErr != nil {
-			run.StacksFailed++
-			if firstItemErr == nil {
-				firstItemErr = itemErr
-			}
-			stream(out, "error", fmt.Sprintf("stack %s failed: %v", stackID, itemErr))
-		} else {
-			run.StacksOK++
-			totalBytesAdded += itemBytes
-		}
-	}
-
-	if run.StacksOK > 0 {
-		run.BytesAdded = &totalBytesAdded
-	}
-
-	// BackupRun job status — see the equivalent switch in RunBackup for why
-	// this is intentionally distinct from truth.Outcome.
-	switch {
-	case run.StacksFailed == 0:
-		run.Status = "success"
-	case run.StacksOK == 0:
-		run.Status = "failed"
-		if run.ErrorMessage == "" && firstItemErr != nil {
-			run.ErrorMessage = firstItemErr.Error()
-		}
-	default:
-		run.Status = "partial"
-	}
-
-	// A run that saved every stack but lost the database is not a success. It
-	// would look green in the UI while leaving the single most important
-	// artifact out of the repository, which is exactly the silent failure
-	// agent-os-36o exists to remove.
-	if dbFailed && run.Status == "success" {
-		run.Status = "partial"
-		if run.ErrorMessage == "" {
-			run.ErrorMessage = "database snapshot failed; stack backups succeeded"
-		}
-	}
-
-	// A run asked for specific stacks that have no enabled policy backed up none
-	// of them, and the switch above still called it a success: StacksFailed stays
-	// 0 when there was nothing to fail. Name them and refuse that verdict
-	// (agent-os-6wr). Same principle as the database downgrade directly above —
-	// work that did not happen must not read as success.
-	if len(unresolved) > 0 {
-		msg := fmt.Sprintf("no enabled backup policy for requested stack(s): %s",
-			strings.Join(unresolved, ", "))
-		stream(out, "error", msg)
-		switch {
-		case run.StacksOK == 0:
-			// Nothing was backed up at all, which is a failed run whatever else
-			// happened — including a dbFailed downgrade to "partial" above.
-			run.Status = "failed"
-		case run.Status == "success":
-			run.Status = "partial"
-		}
-		if run.ErrorMessage == "" {
-			run.ErrorMessage = msg
-		}
-	}
-
-	s.finaliseRun(run)
-	stream(out, "info", fmt.Sprintf("Backup run finished: status=%s ok=%d failed=%d",
-		run.Status, run.StacksOK, run.StacksFailed))
-
-	s.actions.Log("system", nil, ActionBackup, map[string]interface{}{
-		"run_id":  run.ID,
-		"status":  run.Status,
-		"dry_run": dryRun,
-	})
-
-	if !dryRun && bc.SyncAfter && s.rcloneBin != "" {
-		stream(out, "info", "Starting post-backup rclone sync")
-		if syncErr := s.runSyncInternal(ctx, bc, out); syncErr != nil {
-			stream(out, "error", fmt.Sprintf("post-backup sync failed: %v", syncErr))
-		}
-	}
-
-	return run, nil
+	return s.executeBackupRun(ctx, run, bc, restic, stackIDs, dryRun, out)
 }
 
 // runState is the three-valued answer to "was this stack running before we
@@ -1145,6 +1098,15 @@ func (s *BackupService) announceUnprovenRestart(stackID, phase string, out chan<
 		stackID, phase))
 }
 
+// stackResult is what backupStack reports besides its error.
+type stackResult struct {
+	bytesAdded int64
+	// restartIncomplete is set when the stack was stopped for the backup and
+	// did not fully come back afterwards (agent-os-5gou). The stack is down or
+	// degraded now, so the run must not read as a clean success.
+	restartIncomplete string
+}
+
 // backupStack performs the full backup cycle for a single stack (stop, backup,
 // verify, retention, restart). It writes a BackupRunItem to the DB and returns
 // any error encountered.
@@ -1156,13 +1118,31 @@ func (s *BackupService) backupStack(
 	dryRun bool,
 	runID string,
 	out chan<- StreamLine,
-) (bytesAdded int64, retErr error) {
+) (res stackResult, retErr error) {
 	startedAt := time.Now()
+
+	// The run item is written by this defer, registered before the restart
+	// defer below so it runs AFTER it: a restart outcome is only known once the
+	// restart has happened, and it has to reach the durable item, not just the
+	// stream, which drops lines when no client is attached (agent-os-5gou).
+	var (
+		recordStatus string // "" = no item for this return path
+		snapshotID   string
+		stopApplied  bool
+		notes        []string
+	)
+	defer func() {
+		if recordStatus == "" {
+			return
+		}
+		s.recordItem(runID, stackID, recordStatus, snapshotID, stopApplied, time.Since(startedAt),
+			strings.Join(notes, "; "))
+	}()
 
 	// Per-stack operation lock — prevents a deploy from racing a backup.
 	lockToken, lockErr := s.opLock.Acquire(stackID)
 	if lockErr != nil {
-		return 0, fmt.Errorf("acquire lock: %w", lockErr)
+		return res, fmt.Errorf("acquire lock: %w", lockErr)
 	}
 	defer s.opLock.Release(lockToken)
 
@@ -1171,15 +1151,13 @@ func (s *BackupService) backupStack(
 	// Resolve the full stack record so we have the directory path.
 	stackRecord, dbErr := s.db.GetStack(stackID)
 	if dbErr != nil {
-		return 0, fmt.Errorf("get stack %s: %w", stackID, dbErr)
+		return res, fmt.Errorf("get stack %s: %w", stackID, dbErr)
 	}
 	stack := *stackRecord
 
 	// Determine whether the stack is currently running so we know whether to
 	// restart it after backup. A failed read is its own answer here, not a "no".
 	priorState := s.observeRunState(stack, stackID)
-
-	stopApplied := false
 
 	// Defensive restart: even if we return early due to a backup failure, we
 	// attempt to restart the stack if we stopped it. Only a stack we KNEW to be
@@ -1199,8 +1177,14 @@ func (s *BackupService) backupStack(
 				}
 				s.logger.Error("defensive restart failed", "stack", stackID, "error", startErr)
 				stream(out, "error", fmt.Sprintf("[%s] restart failed: %v", stackID, startErr))
+				res.restartIncomplete = fmt.Sprintf("restart after backup failed: %v", startErr)
 			case truth.OutcomePartial:
 				s.logger.Warn("defensive restart partially succeeded", "stack", stackID, "reason", ar.Reason)
+				stream(out, "error", fmt.Sprintf("[%s] restart partially succeeded: %s", stackID, ar.Reason))
+				res.restartIncomplete = fmt.Sprintf("restart after backup partially succeeded: %s", ar.Reason)
+			}
+			if res.restartIncomplete != "" {
+				notes = append(notes, res.restartIncomplete)
 			}
 		}
 	}()
@@ -1213,15 +1197,15 @@ func (s *BackupService) backupStack(
 			if stopErr == nil {
 				stopErr = errors.New(ar.Reason)
 			}
-			return 0, fmt.Errorf("stop stack: %w", stopErr)
+			return res, fmt.Errorf("stop stack: %w", stopErr)
 		}
 		stopApplied = true
 	}
 
 	if dryRun {
 		stream(out, "info", fmt.Sprintf("[%s] dry-run: skipping restic backup", stackID))
-		s.recordItem(runID, stackID, "success", "", stopApplied, time.Since(startedAt))
-		return 0, nil
+		recordStatus = "success"
+		return res, nil
 	}
 
 	// Run backup using the stack's directory as the source path.
@@ -1229,11 +1213,11 @@ func (s *BackupService) backupStack(
 	summary, backupErr := restic.Backup(ctx, stack.Directory, tags, out)
 	if backupErr != nil {
 		retErr = fmt.Errorf("restic backup: %w", backupErr)
-		s.recordItem(runID, stackID, "failed", "", stopApplied, time.Since(startedAt))
-		return 0, retErr
+		recordStatus = "failed"
+		return res, retErr
 	}
 	if summary != nil {
-		bytesAdded = summary.BytesAdded
+		res.bytesAdded = summary.BytesAdded
 	}
 
 	// Verify the snapshot we just created.
@@ -1251,12 +1235,11 @@ func (s *BackupService) backupStack(
 	//
 	// The read-back is best-effort, but its FAILURE is not the same fact as an
 	// empty repository (agent-os-qyg7.2): both leave snapshotID empty and
-	// recordItem below still writes "success", so a snapshot that exists but
+	// the item still records "success", so a snapshot that exists but
 	// could not be listed was indistinguishable in the run history from one
 	// that was never taken. Warned rather than returned, because the backup
 	// itself did succeed -- the same shape as the verify and retention
 	// warnings above.
-	snapshotID := ""
 	snaps, listErr := restic.ListSnapshots(ctx, stackID, 1)
 	if listErr != nil {
 		stream(out, "error", fmt.Sprintf("[%s] snapshot id unavailable: %v", stackID, listErr))
@@ -1264,12 +1247,12 @@ func (s *BackupService) backupStack(
 		snapshotID = snaps[0].ShortID
 	}
 
-	s.recordItem(runID, stackID, "success", snapshotID, stopApplied, time.Since(startedAt))
+	recordStatus = "success"
 	stream(out, "info", fmt.Sprintf("[%s] completed successfully", stackID))
 
 	// The deferred restart will fire here for the stop-policy path unless the
 	// stack was known to be stopped beforehand.
-	return bytesAdded, nil
+	return res, nil
 }
 
 // --- RunSync ---
@@ -1850,15 +1833,17 @@ func (s *BackupService) recordItem(
 	snapshotID string,
 	stopApplied bool,
 	duration time.Duration,
+	message string,
 ) {
 	item := &models.BackupRunItem{
-		ID:          uuid.New().String(),
-		RunID:       runID,
-		StackID:     stackID,
-		Status:      status,
-		SnapshotID:  snapshotID,
-		StopApplied: stopApplied,
-		DurationMs:  duration.Milliseconds(),
+		ID:           uuid.New().String(),
+		RunID:        runID,
+		StackID:      stackID,
+		Status:       status,
+		SnapshotID:   snapshotID,
+		StopApplied:  stopApplied,
+		DurationMs:   duration.Milliseconds(),
+		ErrorMessage: message,
 	}
 	if err := s.db.AddBackupRunItem(item); err != nil {
 		s.logger.Error("failed to record backup run item", "stack", stackID, "error", err)
