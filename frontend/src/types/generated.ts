@@ -585,7 +585,7 @@ export interface ActionLog {
 }
 export interface GitStatusResult {
   branch: string;
-  commit?: GitCommit;
+  commit: GitCommit;
   dirty: boolean;
   dirtyCount: number /* int */;
   ahead: number /* int */;

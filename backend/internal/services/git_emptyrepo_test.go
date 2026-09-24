@@ -91,7 +91,7 @@ func TestGetStatusCLI_DiscriminatesEmptyRepoFromNonRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("regression: getStatusCLI failed on a healthy repo: %v", err)
 	}
-	if result.Commit == nil || result.Commit.Hash == "" {
+	if result.Commit.Hash == "" {
 		t.Errorf("regression: healthy repo returned no commit: %+v", result)
 	}
 }

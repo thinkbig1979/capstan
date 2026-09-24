@@ -154,7 +154,7 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	if len(shortHash) > 7 {
 		shortHash = shortHash[:7]
 	}
-	commit := &models.GitCommit{
+	commit := models.GitCommit{
 		Hash:    commitHash,
 		Short:   shortHash,
 		Author:  author,

@@ -74,7 +74,7 @@ func TestManualRemote(t *testing.T) {
 			if st.Branch != "main" {
 				t.Errorf("branch = %q, want main", st.Branch)
 			}
-			if st.Commit == nil || len(st.Commit.Hash) != 40 {
+			if len(st.Commit.Hash) != 40 {
 				t.Fatalf("commit = %+v, want a 40-char hash", st.Commit)
 			}
 			if st.Commit.Author == "" || st.Commit.Message == "" || st.Commit.Date == "" {
