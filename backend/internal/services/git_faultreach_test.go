@@ -211,13 +211,17 @@ func TestGetStatusCLI_UnreadableHeadCommitIsReported(t *testing.T) {
 // pullCLI reads the worktree status first, and that read has two outcomes the
 // caller must not see merged: output it could read and found dirty (a 400 the
 // operator fixes by committing), and a read that failed (not a statement about
-// the worktree at all). A non-repository makes the second happen for real.
+// the worktree at all). The bare-repository probe now runs before it and fails
+// on a non-repository first (agent-os-00zg), so the status read is faulted
+// directly in a real repository instead.
 func TestPullCLI_UnreadableStatusIsReported(t *testing.T) {
-	svc := NewGitService(&config.Config{}, nil)
+	dir := repoWithCommit(t, t.TempDir())
+	faultingGitOnPath(t, "*\" status --porcelain\"")
 
-	_, err := svc.Pull(t.TempDir())
+	svc := NewGitService(&config.Config{}, nil)
+	_, err := svc.Pull(dir)
 	if err == nil {
-		t.Fatal("Pull succeeded on a directory that is not a git repository")
+		t.Fatal("Pull succeeded while `status --porcelain` was faulted")
 	}
 	var appErr *models.AppError
 	if errors.As(err, &appErr) && appErr.Code == models.ErrGitDirty {
@@ -227,6 +231,28 @@ func TestPullCLI_UnreadableStatusIsReported(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "failed to check status") {
 		t.Errorf("error = %q, want it to contain %q", err, "failed to check status")
+	}
+}
+
+// TestPullCLI_UnreadableBareProbeIsReported pins the bare-repository probe
+// that agent-os-00zg put at the top of pullCLI. A non-repository fails it for
+// real, and the failure must not be guessed into "not bare" (which walks into
+// status) or into the 409 GIT_BARE_REPO answer.
+func TestPullCLI_UnreadableBareProbeIsReported(t *testing.T) {
+	svc := NewGitService(&config.Config{}, nil)
+
+	_, err := svc.Pull(t.TempDir())
+	if err == nil {
+		t.Fatal("Pull succeeded on a directory that is not a git repository")
+	}
+	var appErr *models.AppError
+	if errors.As(err, &appErr) {
+		t.Fatalf("an unreadable bare probe was reported as %d %s; nothing is known about the repository", appErr.Status, appErr.Code)
+	}
+	requireExecFault(t, err)
+
+	if !strings.Contains(err.Error(), "failed to detect a bare repository") {
+		t.Errorf("error = %q, want it to contain %q", err, "failed to detect a bare repository")
 	}
 }
 
