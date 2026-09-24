@@ -512,6 +512,9 @@ func (s *DockerService) findComposeContainer(ctx context.Context, projectName, s
 	return containers[0].ID
 }
 
+// updateComposeContainer's errors carry compose's output redacted but at full
+// length (agent-os-zrm2): a long pull prints progress first and its real error
+// last, so trimOutput's first-500-bytes cut would drop the diagnosis.
 func (s *DockerService) updateComposeContainer(ctx context.Context, stack models.Stack, serviceName string, wasRunning bool) error {
 	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
@@ -519,7 +522,7 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 	pullCmd.Dir = stack.Directory
 	pullCmd.Env = dockerEnv()
 	if output, err := pullCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("compose pull failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return fmt.Errorf("compose pull failed: %s: %w", strings.TrimSpace(s.redactComposeOutputFor(stack, string(output))), err)
 	}
 
 	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
@@ -528,7 +531,7 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 	upCmd.Dir = stack.Directory
 	upCmd.Env = dockerEnv()
 	if output, err := upCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("compose up failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return fmt.Errorf("compose up failed: %s: %w", strings.TrimSpace(s.redactComposeOutputFor(stack, string(output))), err)
 	}
 
 	if !wasRunning {
@@ -609,7 +612,11 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect c
 // streamComposeCmd runs a docker compose command and streams each output line
 // via emit. Both stdout and stderr are merged. Returns the combined output for
 // error messages.
-func streamComposeCmd(ctx context.Context, args []string, dir string, stream LogLineStream, emit func(LogLine)) error {
+//
+// Each line passes redactComposeOutput with secrets, which the caller reads once
+// with composeSecrets for the whole update (agent-os-sdbr): the lines reach the
+// update job's log, which the API serves.
+func streamComposeCmd(ctx context.Context, args []string, dir string, stream LogLineStream, secrets []string, emit func(LogLine)) error {
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := execCommandContext(ctx, "docker", args...)
 	cmd.Dir = dir
@@ -636,7 +643,7 @@ func streamComposeCmd(ctx context.Context, args []string, dir string, stream Log
 			scanner := bufio.NewScanner(r)
 			for scanner.Scan() {
 				text := scanner.Text()
-				emit(LogLine{Ts: time.Now().UTC(), Text: text, Stream: s})
+				emit(LogLine{Ts: time.Now().UTC(), Text: redactComposeOutput(text, secrets), Stream: s})
 			}
 		}()
 	}
@@ -771,8 +778,9 @@ func (s *DockerService) updateComposeContainerStreaming(
 	setStatus(StatusPulling)
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Pulling " + imageRef, Stream: StreamStatus})
 
+	secrets := s.composeSecrets(stack)
 	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
-	if err := streamComposeCmd(ctx, pullArgs, stack.Directory, StreamStdout, emit); err != nil {
+	if err := streamComposeCmd(ctx, pullArgs, stack.Directory, StreamStdout, secrets, emit); err != nil {
 		return fmt.Errorf("compose pull failed: %w", err)
 	}
 
@@ -780,7 +788,7 @@ func (s *DockerService) updateComposeContainerStreaming(
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + serviceName, Stream: StreamStatus})
 
 	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
-	if err := streamComposeCmd(ctx, upArgs, stack.Directory, StreamStdout, emit); err != nil {
+	if err := streamComposeCmd(ctx, upArgs, stack.Directory, StreamStdout, secrets, emit); err != nil {
 		return fmt.Errorf("compose up failed: %w", err)
 	}
 
@@ -932,8 +940,9 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	setStatus(StatusPulling)
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Pulling " + serviceName, Stream: StreamStatus})
 
+	secrets := s.composeSecrets(stack)
 	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
-	if pullErr := streamComposeCmd(ctx, pullArgs, stack.Directory, StreamStdout, emit); pullErr != nil {
+	if pullErr := streamComposeCmd(ctx, pullArgs, stack.Directory, StreamStdout, secrets, emit); pullErr != nil {
 		durationMs = time.Since(start).Milliseconds()
 		ar = truth.Failed("compose pull failed", pullErr)
 		return
@@ -943,7 +952,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + serviceName, Stream: StreamStatus})
 
 	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
-	if upErr := streamComposeCmd(ctx, upArgs, stack.Directory, StreamStdout, emit); upErr != nil {
+	if upErr := streamComposeCmd(ctx, upArgs, stack.Directory, StreamStdout, secrets, emit); upErr != nil {
 		durationMs = time.Since(start).Milliseconds()
 		ar = truth.Failed("compose up failed", upErr)
 		return
