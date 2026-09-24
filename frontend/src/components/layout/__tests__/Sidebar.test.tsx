@@ -338,6 +338,18 @@ describe('Sidebar — failed stack list', () => {
     expect(screen.queryByText('Could not load the stack list.')).not.toBeInTheDocument()
   })
 
+  // Waits on the QUERY state, not on the notice, so this case fails on the
+  // header count alone when the count is the only thing still wrong.
+  it('first load fails: the header shows no stack count', async () => {
+    listMock.mockRejectedValueOnce(new Error('boom'))
+    const { queryClient } = renderSidebar()
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKeys.stacks())?.status).toBe('error'),
+    )
+    expect(screen.queryByText('(0)')).not.toBeInTheDocument()
+  })
+
   it('a refetch fails over a loaded list: keeps the stacks AND says so', async () => {
     const { queryClient } = renderSidebar()
     await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
