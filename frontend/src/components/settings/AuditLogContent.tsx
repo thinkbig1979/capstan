@@ -28,6 +28,10 @@ function humanizeDetail(detail: string): { summary: string; raw: string | null }
         let display: string
         if (typeof value === 'boolean') {
           display = value ? 'yes' : 'no'
+        } else if (value === null || typeof value === 'object') {
+          // String() renders a nested object as "[object Object]" and flattens
+          // an array to "a,b" (agent-os-w44n); JSON keeps both readable.
+          display = JSON.stringify(value)
         } else {
           display = String(value)
           // Shorten id-like values so the summary stays scannable
