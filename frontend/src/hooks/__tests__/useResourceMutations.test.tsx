@@ -39,7 +39,6 @@ vi.mock('@/lib/api', () => ({
     updateStack: vi.fn(),
     getUpdateJobs: vi.fn(),
     getUpdateHistory: vi.fn(),
-    clearUpdateHistory: vi.fn(),
   },
   settingsApi: {},
   autoUpdateApi: {},

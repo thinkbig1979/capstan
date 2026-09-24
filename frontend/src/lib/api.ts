@@ -13,7 +13,6 @@ import type {
   ApiError,
   LintResult,
   DashboardStats,
-  DashboardContainerInfo,
   DockerImage,
   DockerVolume,
   DockerNetwork,
@@ -584,11 +583,6 @@ export const dashboardApi = {
 }
 
 export const directoryConfigApi = {
-  get: async () => {
-    const response = await apiClient.get<{ directories: Array<{ path: string; name: string; isDefault: boolean }>; defaultDir: string }>('/settings/directories')
-    return response.data
-  },
-
   update: async (data: { directories?: string[]; defaultDir?: string }) => {
     const response = await apiClient.put<void>('/settings/directories', data)
     return response.data
@@ -696,10 +690,6 @@ export const resourcesApi = {
     return response.data
   },
 
-  containers: async () => {
-    const response = await apiClient.get<{ containers: DashboardContainerInfo[] }>('/resources/containers')
-    return response.data.containers
-  },
   deleteContainer: async (id: string, force = false) => {
     const response = await apiClient.delete<DeleteResult>(`/resources/containers/${encodeURIComponent(id)}?force=${force}`)
     return response.data
@@ -765,11 +755,6 @@ export const resourcesApi = {
       limit: number
       totalPages: number
     }>('/resources/updates/history', { params: filters })
-    return response.data
-  },
-
-  clearUpdateHistory: async (params?: { olderThan?: string; status?: string }) => {
-    const response = await apiClient.delete<{ deleted: number }>('/resources/updates/history', { params })
     return response.data
   },
 
