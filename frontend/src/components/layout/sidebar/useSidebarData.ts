@@ -13,10 +13,21 @@ interface UseSidebarDataParams {
 }
 
 export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks }: UseSidebarDataParams) {
-  const { data: stacks = [], isLoading } = useQuery({
+  const {
+    data: stacksData,
+    isLoading,
+    isError: stacksError,
+    refetch: refetchStacks,
+  } = useQuery({
     queryKey: queryKeys.stacks(),
     queryFn: () => stacksApi.list(),
   })
+  // A failed request has no data, and [] would read as "No stacks found"
+  // (agent-os-kdqm). The empty array only keeps the derivations below simple;
+  // consumers check stacksLoadFailed before treating it as an answer.
+  const stacks = useMemo(() => stacksData ?? [], [stacksData])
+  const stacksLoadFailed = stacksError && !stacksData
+  const stacksRefreshFailed = stacksError && !!stacksData
 
   const { data: config } = useQuery({
     queryKey: queryKeys.config(),
@@ -108,6 +119,9 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
   return {
     stacks,
     isLoading,
+    stacksLoadFailed,
+    stacksRefreshFailed,
+    refetchStacks,
     updateCount,
     backupStatus,
     configuredDirs,

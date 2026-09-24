@@ -1,4 +1,6 @@
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { LoadFailedNotice } from '@/components/LoadFailedNotice'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { ChevronDown, ChevronRight, FolderOpen, Star } from 'lucide-react'
 import { countTreeNodeStacks, type TreeNode } from '@/lib/stack-tree'
 import type { Stack } from '@/types'
@@ -13,6 +15,11 @@ interface RootGroup {
 
 interface StackListBodyProps {
   isLoading: boolean
+  /** The first load failed: there is no list, so no "No stacks found" either. */
+  loadFailed: boolean
+  /** A refetch failed over a list the server did send: keep it, say so. */
+  refreshFailed: boolean
+  onRetry: () => void
   hasFilters: boolean
   filteredStacks: Stack[]
   pinnedVisible: Stack[]
@@ -31,6 +38,9 @@ interface StackListBodyProps {
 
 export function StackListBody({
   isLoading,
+  loadFailed,
+  refreshFailed,
+  onRetry,
   hasFilters,
   filteredStacks,
   pinnedVisible,
@@ -49,6 +59,9 @@ export function StackListBody({
   return (
     <ScrollArea className="flex-1">
       <div className="p-2 space-y-0.5">
+        {refreshFailed && (
+          <RefreshFailedNotice what="the stack list" onRetry={onRetry} className="mb-1" />
+        )}
         {!selecting && pinnedVisible.length > 0 && (
           <div className="mb-1">
             <div className="flex items-center gap-1 px-2 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -73,6 +86,8 @@ export function StackListBody({
           <div className="px-2 py-4 text-sm text-muted-foreground">
             Loading...
           </div>
+        ) : loadFailed ? (
+          <LoadFailedNotice what="the stack list" onRetry={onRetry} />
         ) : filteredStacks.length === 0 ? (
           <div className="px-2 py-4 text-sm text-muted-foreground">
             {hasFilters ? 'No stacks match filters' : 'No stacks found'}

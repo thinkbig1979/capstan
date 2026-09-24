@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { BackupsTab } from '../BackupsTab'
@@ -888,5 +888,106 @@ describe('BackupsTab — a failed REFETCH is a refresh failure (agent-os-vlqj)',
     )
     expect(screen.queryByText(/Could not refresh the snapshots/)).not.toBeInTheDocument()
     expect(screen.queryByText(/failed to load snapshots/i)).not.toBeInTheDocument()
+  })
+})
+
+// agent-os-kdqm: the runs hook coalesced a failed read to [] and the policy
+// check coalesced it to `enabled: false`, so a failed request rendered as
+// "No backup runs yet" and "Backup is not enabled for this stack".
+function renderWithClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <BackupsTab stackId={STACK_ID} />
+    </QueryClientProvider>,
+  )
+  return queryClient
+}
+
+describe('BackupsTab — failed runs read', () => {
+  it('first load fails: an error with Retry, NOT "No backup runs yet"', async () => {
+    mockGetHistory.mockRejectedValueOnce(new Error('boom'))
+    renderWithClient()
+
+    expect(await screen.findByText('Could not load the backup runs.')).toBeInTheDocument()
+    expect(screen.queryByText('No backup runs yet')).not.toBeInTheDocument()
+
+    mockGetHistory.mockResolvedValueOnce({ runs: [makeRun()] })
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByPlaceholderText('Filter runs…')).toBeInTheDocument()
+    expect(screen.queryByText('Could not load the backup runs.')).not.toBeInTheDocument()
+  })
+
+  it('a refetch fails over loaded runs: keeps them AND says so', async () => {
+    const queryClient = renderWithClient()
+    expect(await screen.findByPlaceholderText('Filter runs…')).toBeInTheDocument()
+
+    mockGetHistory.mockRejectedValueOnce(new Error('boom'))
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ['backup'] })
+    })
+
+    expect(
+      await screen.findByText(
+        'Could not refresh the backup runs. The values shown are the last ones the server sent.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Filter runs…')).toBeInTheDocument()
+  })
+
+  it('a genuinely empty history still shows "No backup runs yet", with no error', async () => {
+    mockGetHistory.mockResolvedValue({ runs: [] })
+    renderWithClient()
+
+    expect(await screen.findByText('No backup runs yet')).toBeInTheDocument()
+    expect(screen.queryByText(/Could not (load|refresh) the backup runs/)).not.toBeInTheDocument()
+  })
+
+  it('runs failed and no snapshots: the empty state does not claim nothing has run', async () => {
+    mockListSnapshots.mockResolvedValue([])
+    mockGetHistory.mockRejectedValueOnce(new Error('boom'))
+    renderWithClient()
+
+    expect(await screen.findByText('Could not load the backup runs.')).toBeInTheDocument()
+    expect(await screen.findByText('No snapshots listed')).toBeInTheDocument()
+    expect(screen.queryByText('No snapshots yet')).not.toBeInTheDocument()
+  })
+})
+
+describe('BackupsTab — failed policies read', () => {
+  it('first load fails: an error with Retry, NOT "Backup is not enabled"', async () => {
+    mockGetPolicies.mockRejectedValueOnce(new Error('boom'))
+    renderWithClient()
+
+    expect(await screen.findByText('Could not load the backup policy.')).toBeInTheDocument()
+    expect(screen.queryByText(/backup is not enabled for this stack/i)).not.toBeInTheDocument()
+  })
+
+  it('a refetch fails over a loaded policy: keeps its verdict AND says so', async () => {
+    mockGetPolicies.mockResolvedValue(makePolicies(false))
+    const queryClient = renderWithClient()
+    expect(await screen.findByText(/backup is not enabled for this stack/i)).toBeInTheDocument()
+
+    mockGetPolicies.mockRejectedValueOnce(new Error('boom'))
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ['backup'] })
+    })
+
+    expect(
+      await screen.findByText(
+        'Could not refresh the backup policy. The values shown are the last ones the server sent.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/backup is not enabled for this stack/i)).toBeInTheDocument()
+  })
+
+  it('an enabled policy shows no notice at all (control)', async () => {
+    renderWithClient()
+    expect(await screen.findByPlaceholderText('Filter runs…')).toBeInTheDocument()
+    await waitFor(() => expect(mockGetPolicies).toHaveBeenCalled())
+    expect(screen.queryByText(/backup is not enabled for this stack/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Could not (load|refresh) the backup policy/)).not.toBeInTheDocument()
   })
 })

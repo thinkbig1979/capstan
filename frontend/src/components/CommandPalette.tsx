@@ -13,15 +13,20 @@ import {
   CommandSeparator,
 } from '@/components/ui/command'
 import { queryKeys } from '@/lib/query-keys'
+import { LoadFailedNotice } from '@/components/LoadFailedNotice'
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false)
   const navigate = useNavigate()
 
-  const { data: stacks = [] } = useQuery({
+  const { data, isError, refetch } = useQuery({
     queryKey: queryKeys.stacks(),
     queryFn: stacksApi.list,
   })
+  const stacks = data ?? []
+  // Without this a failed load leaves only "No results found." for a stack
+  // search, as if the stack did not exist (agent-os-kdqm).
+  const stacksLoadFailed = isError && !data
 
   const handleClose = useCallback(() => setOpen(false), [])
 
@@ -50,6 +55,9 @@ export function CommandPalette() {
     <CommandDialog open={open} onOpenChange={setOpen}>
       <CommandInput placeholder="Search stacks, navigate..." />
       <CommandList>
+        {stacksLoadFailed && (
+          <LoadFailedNotice what="the stack list" onRetry={() => void refetch()} className="m-2" />
+        )}
         <CommandEmpty>No results found.</CommandEmpty>
 
         {stacks.length > 0 && (

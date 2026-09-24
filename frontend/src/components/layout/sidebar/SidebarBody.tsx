@@ -16,6 +16,9 @@ interface RootGroup {
 interface SidebarBodyProps {
   stacks: Stack[]
   isLoading: boolean
+  stacksLoadFailed: boolean
+  stacksRefreshFailed: boolean
+  onRetryStacks: () => void
   updateCount: number
   backupStatus?: BackupStatus
   selecting: boolean
@@ -47,6 +50,9 @@ interface SidebarBodyProps {
 export function SidebarBody({
   stacks,
   isLoading,
+  stacksLoadFailed,
+  stacksRefreshFailed,
+  onRetryStacks,
   updateCount,
   backupStatus,
   selecting,
@@ -77,7 +83,7 @@ export function SidebarBody({
   return (
     <>
       <SidebarHeader
-        stackCount={stacks.length}
+        stackCount={stacksLoadFailed ? undefined : stacks.length}
         updateCount={updateCount}
         selecting={selecting}
         onToggleSelecting={onToggleSelecting}
@@ -98,7 +104,8 @@ export function SidebarBody({
         />
       )}
 
-      {hasFilters && (
+      {/* "0 of 0 stacks" would be a count nobody measured (agent-os-kdqm) */}
+      {hasFilters && !stacksLoadFailed && (
         <FilterSummaryBar
           visibleCount={filteredStacks.length}
           totalCount={stacks.length}
@@ -108,6 +115,9 @@ export function SidebarBody({
 
       <StackListBody
         isLoading={isLoading}
+        loadFailed={stacksLoadFailed}
+        refreshFailed={stacksRefreshFailed}
+        onRetry={onRetryStacks}
         hasFilters={hasFilters}
         filteredStacks={filteredStacks}
         pinnedVisible={pinnedVisible}

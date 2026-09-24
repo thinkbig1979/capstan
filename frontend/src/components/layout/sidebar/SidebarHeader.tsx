@@ -12,7 +12,8 @@ import {
 import type { StackStatus } from '@/types'
 
 interface SidebarHeaderProps {
-  stackCount: number
+  /** Undefined when the list failed to load: no count is known (agent-os-kdqm). */
+  stackCount: number | undefined
   updateCount: number
   selecting: boolean
   onToggleSelecting: () => void
@@ -40,9 +41,11 @@ export function SidebarHeader({
         <h2 className="text-sm font-semibold flex items-center gap-1.5">
           <Boxes className="h-4 w-4" />
           Stacks
-          <span className="text-muted-foreground font-normal">
-            ({stackCount})
-          </span>
+          {stackCount !== undefined && (
+            <span className="text-muted-foreground font-normal">
+              ({stackCount})
+            </span>
+          )}
         </h2>
         <div className="flex items-center gap-0.5">
           {updateCount > 0 && (
