@@ -68,8 +68,12 @@ func (d *DB) InsertDirectoryIfAbsent(dir models.Directory) (bool, error) {
 // touches this column (UpsertDirectory no longer does), so the ciphertext
 // column is empty if and only if the plaintext token was empty. Callers that
 // need the real token must use GetDirectoryCredentials instead.
+//
+// git_remote and git_branch are nullable; the COALESCE here and in
+// GetDirectory keeps a NULL written outside Capstan from failing rows.Scan and
+// losing the whole list (agent-os-d1c7). No Capstan writer stores one.
 func (d *DB) ListDirectories() ([]models.Directory, error) {
-	query := `SELECT path, name, root_dir, is_git_repo, git_remote, git_branch, git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at
+	query := `SELECT path, name, root_dir, is_git_repo, COALESCE(git_remote, ''), COALESCE(git_branch, ''), git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at
 	          FROM directories ORDER BY name`
 	rows, err := d.db.Query(query)
 	if err != nil {
@@ -99,7 +103,7 @@ func (d *DB) ListDirectories() ([]models.Directory, error) {
 // its comment. Use GetDirectoryCredentials for the decrypted token.
 func (d *DB) GetDirectory(path string) (*models.Directory, error) {
 	var dir models.Directory
-	query := `SELECT path, name, root_dir, is_git_repo, git_remote, git_branch, git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at
+	query := `SELECT path, name, root_dir, is_git_repo, COALESCE(git_remote, ''), COALESCE(git_branch, ''), git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at
 	          FROM directories WHERE path = ?`
 	err := d.db.QueryRow(query, path).Scan(&dir.Path, &dir.Name, &dir.RootDir, &dir.IsGitRepo, &dir.GitRemote, &dir.GitBranch,
 		&dir.GitAuthType, &dir.GitSSHKeyPath, &dir.GitHTTPSUser, &dir.GitHTTPSToken, &dir.ScannedAt)
