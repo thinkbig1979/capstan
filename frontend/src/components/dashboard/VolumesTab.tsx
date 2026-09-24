@@ -4,6 +4,8 @@ import { resourcesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/EmptyState'
+import { LoadFailedNotice } from '@/components/LoadFailedNotice'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -33,7 +35,7 @@ const VOL_SEARCH_FIELDS = [
 
 export function VolumesTab() {
   const { confirm, ConfirmComponent } = useConfirm()
-  const { data: volumes, isLoading } = useVolumes()
+  const { data: volumes, isLoading, isError, refetch } = useVolumes()
   const [sortBy, setSortBy] = useState<SortKey>('name')
   const [deletingName, setDeletingName] = useState<string | null>(null)
 
@@ -84,18 +86,34 @@ export function VolumesTab() {
     )
   }
 
+  // agent-os-v824: a failed Docker read with nothing loaded is not an empty
+  // host. Checked before the empty state, which would otherwise say "none".
+  if (isError && !volumes) {
+    return <LoadFailedNotice what="the volume list" onRetry={() => void refetch()} />
+  }
+
+  // Error WITH data: a refetch failed over a list the server did send. Keep it
+  // and say so (agent-os-wczm); a retained empty list counts too.
+  const refreshNotice = isError && (
+    <RefreshFailedNotice what="the volume list" onRetry={() => void refetch()} />
+  )
+
   if (!volumes || volumes.length === 0) {
     return (
-      <EmptyState
-        icon={<HardDrive className="h-12 w-12 text-muted-foreground" />}
-        title="No Volumes"
-        description="No Docker volumes found on this host"
-      />
+      <div className="space-y-4">
+        {refreshNotice}
+        <EmptyState
+          icon={<HardDrive className="h-12 w-12 text-muted-foreground" />}
+          title="No Volumes"
+          description="No Docker volumes found on this host"
+        />
+      </div>
     )
   }
 
   return (
     <div className="space-y-4">
+      {refreshNotice}
       <SortFilterBar
         sortOptions={[
           { key: 'name', label: 'Name' },

@@ -204,3 +204,61 @@ describe('VolumesTab — deleting', () => {
     expect(mockDeleteVolume).not.toHaveBeenCalled()
   })
 })
+
+describe('VolumesTab — a failed Docker read is not an empty host (agent-os-v824)', () => {
+  const serverFault = { status: 500, code: 'DOCKER_ERROR', message: 'docker unavailable' }
+
+  function renderWithClient() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+    })
+    render(<VolumesTab />, {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      ),
+    })
+    return queryClient
+  }
+
+  it('first load fails: an error with Retry, NOT "No Volumes"', async () => {
+    mockGetVolumes.mockRejectedValue(serverFault)
+    const queryClient = renderWithClient()
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['resources', 'volumes'])?.status).toBe('error'),
+    )
+
+    // Pre-fix this read "No Volumes": a failed Docker read shown as fact.
+    expect(screen.queryByText('No Volumes')).not.toBeInTheDocument()
+    expect(screen.getByText('Could not load the volume list.')).toBeInTheDocument()
+
+    mockGetVolumes.mockResolvedValue([volume()])
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('app-data')).toBeInTheDocument()
+    expect(screen.queryByText('Could not load the volume list.')).not.toBeInTheDocument()
+  })
+
+  it('a refetch fails over a loaded list: keeps the list AND says so', async () => {
+    const queryClient = renderWithClient()
+    expect(await screen.findByText('app-data')).toBeInTheDocument()
+
+    mockGetVolumes.mockRejectedValue(serverFault)
+    await queryClient.refetchQueries()
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['resources', 'volumes'])?.status).toBe('error'),
+    )
+
+    // Retention first, so a red below means RETAINED AND UNDISCLOSED.
+    expect(screen.getByText('app-data')).toBeInTheDocument()
+    expect(
+      screen.getByText('Could not refresh the volume list. The values shown are the last ones the server sent.'),
+    ).toBeInTheDocument()
+  })
+
+  it('a host that really has none still shows the empty state, with no error', async () => {
+    mockGetVolumes.mockResolvedValue([])
+    renderWithClient()
+
+    expect(await screen.findByText('No Volumes')).toBeInTheDocument()
+    expect(screen.queryByText(/Could not (load|refresh)/)).not.toBeInTheDocument()
+  })
+})

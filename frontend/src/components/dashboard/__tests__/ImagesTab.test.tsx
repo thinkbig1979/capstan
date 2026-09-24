@@ -135,8 +135,8 @@ describe('ImagesTab — the scheduled-cleanup readout', () => {
   it('renders no readout at all when the preview fails, even with a readable policy', async () => {
     // A preview that fails while the image list is healthy — a transient error
     // on the preview call alone. (A Docker-less host is NOT this case: the
-    // images query fails too and the tab early-returns to EmptyState before the
-    // readout is ever evaluated, ImagesTab.tsx:96-105.) The whole block goes,
+    // images query fails too and the tab early-returns to its load-failed
+    // notice before the readout is ever evaluated, agent-os-v824.) The whole block goes,
     // schedule sentence and link included: a schedule line with no figure
     // beside it reads as "nothing to reclaim".
     mockPreviewCleanup.mockRejectedValue(new Error('docker unavailable'))
@@ -337,5 +337,63 @@ describe('ImagesTab — deleting', () => {
 
     // id.substring(0, 19) — 'sha256:' plus 12 hex characters.
     expect(await screen.findByText('Remove Image "sha256:0123456789ab"?')).toBeInTheDocument()
+  })
+})
+
+describe('ImagesTab — a failed Docker read is not an empty host (agent-os-v824)', () => {
+  const serverFault = { status: 500, code: 'DOCKER_ERROR', message: 'docker unavailable' }
+
+  function renderWithClient() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+    })
+    render(<MemoryRouter><ImagesTab /></MemoryRouter>, {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      ),
+    })
+    return queryClient
+  }
+
+  it('first load fails: an error with Retry, NOT "No Images"', async () => {
+    mockGetImages.mockRejectedValue(serverFault)
+    const queryClient = renderWithClient()
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['resources', 'images'])?.status).toBe('error'),
+    )
+
+    // Pre-fix this read "No Images": a failed Docker read shown as fact.
+    expect(screen.queryByText('No Images')).not.toBeInTheDocument()
+    expect(screen.getByText('Could not load the image list.')).toBeInTheDocument()
+
+    mockGetImages.mockResolvedValue([image()])
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('nginx:latest')).toBeInTheDocument()
+    expect(screen.queryByText('Could not load the image list.')).not.toBeInTheDocument()
+  })
+
+  it('a refetch fails over a loaded list: keeps the list AND says so', async () => {
+    const queryClient = renderWithClient()
+    expect(await screen.findByText('nginx:latest')).toBeInTheDocument()
+
+    mockGetImages.mockRejectedValue(serverFault)
+    await queryClient.refetchQueries()
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['resources', 'images'])?.status).toBe('error'),
+    )
+
+    // Retention first, so a red below means RETAINED AND UNDISCLOSED.
+    expect(screen.getByText('nginx:latest')).toBeInTheDocument()
+    expect(
+      screen.getByText('Could not refresh the image list. The values shown are the last ones the server sent.'),
+    ).toBeInTheDocument()
+  })
+
+  it('a host that really has none still shows the empty state, with no error', async () => {
+    mockGetImages.mockResolvedValue([])
+    renderWithClient()
+
+    expect(await screen.findByText('No Images')).toBeInTheDocument()
+    expect(screen.queryByText(/Could not (load|refresh)/)).not.toBeInTheDocument()
   })
 })
