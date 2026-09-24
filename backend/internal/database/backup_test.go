@@ -281,3 +281,148 @@ func TestBackupRunReaders_SurviveNullErrorMessage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "repository locked", byID.ErrorMessage)
 }
+
+// TestBackupRunTimestamp pins the WRITE-side spelling of backup_runs.started_at
+// and finished_at (agent-os-zsgy), the third table in the class agent-os-lmbn
+// (update_history) and agent-os-fn7x.8 (docker_cleanup_runs) fixed.
+//
+// started_at is TEXT, ORDERed by GetBackupRuns and GetBackupRunsFiltered and
+// range-compared by the latter's From/To bounds, so a row written in a
+// non-UTC offset or with sub-second precision does not order or filter by
+// instant against a UTC one. Every arm below reads the SQL result or the raw
+// column, so a read-side normaliser cannot satisfy it: the rows on disk would
+// stay mixed and every SQL comparison over them would keep using the text.
+func TestBackupRunTimestamp(t *testing.T) {
+	db, err := NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	// Three distinct instants. Lexically the raw strings run "11..." >
+	// "10..." > "09...", so a verbatim bind returns subsecond, older, newer --
+	// the middle two swapped. By instant it is subsecond (11:00Z), newer
+	// (09:00Z), older (08:00Z).
+	olderFinished := "2026-01-01T10:30:00+02:00" // = 2026-01-01T08:30:00Z
+	older := &models.BackupRun{
+		ID: "run-older", Kind: "backup", Trigger: "scheduled", Status: "success",
+		StartedAt:  "2026-01-01T10:00:00+02:00", // = 2026-01-01T08:00:00Z
+		FinishedAt: &olderFinished,
+	}
+	newer := &models.BackupRun{
+		ID: "run-newer", Kind: "backup", Trigger: "manual", Status: "success",
+		StartedAt: "2026-01-01T09:00:00Z",
+	}
+	subsecond := &models.BackupRun{
+		ID: "run-subsecond", Kind: "backup", Trigger: "scheduled", Status: "running",
+		StartedAt: "2026-01-01T11:00:00.500Z",
+	}
+
+	// Inserted in none of the orders asserted below, so neither insertion
+	// order nor rowid can satisfy the ordering arms.
+	require.NoError(t, db.CreateBackupRun(newer))
+	require.NoError(t, db.CreateBackupRun(subsecond))
+	require.NoError(t, db.CreateBackupRun(older))
+
+	want := []string{"run-subsecond", "run-newer", "run-older"}
+
+	runs, err := db.GetBackupRuns(10)
+	require.NoError(t, err)
+	assert.Equal(t, want, runIDs(runs), "GetBackupRuns must order by instant, not by the text written")
+
+	runs, total, err := db.GetBackupRunsFiltered(models.BackupHistoryFilters{})
+	require.NoError(t, err)
+	assert.Equal(t, 3, total)
+	assert.Equal(t, want, runIDs(runs), "GetBackupRunsFiltered must order by instant, not by the text written")
+
+	// The range bounds are already UTC-formatted (agent-os-hxra), so what
+	// decides these is the stored spelling. A verbatim bind puts run-older
+	// ("...T10:00:00+02:00") above an 08:30Z From and above an 08:30Z To.
+	bound := time.Date(2026, 1, 1, 8, 30, 0, 0, time.UTC)
+	runs, total, err = db.GetBackupRunsFiltered(models.BackupHistoryFilters{From: &bound})
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	assert.Equal(t, []string{"run-subsecond", "run-newer"}, runIDs(runs), "From must select by instant")
+
+	runs, total, err = db.GetBackupRunsFiltered(models.BackupHistoryFilters{To: &bound})
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	assert.Equal(t, []string{"run-older"}, runIDs(runs), "To must select by instant")
+
+	// On disk, not merely through a getter.
+	var storedStart, storedFinish string
+	require.NoError(t, db.db.QueryRow(
+		`SELECT started_at, finished_at FROM backup_runs WHERE id = 'run-older'`,
+	).Scan(&storedStart, &storedFinish))
+	assert.Equal(t, "2026-01-01T08:00:00Z", storedStart, "started_at must be stored as UTC")
+	assert.Equal(t, "2026-01-01T08:30:00Z", storedFinish, "finished_at must be normalised on create too")
+
+	require.NoError(t, db.db.QueryRow(
+		`SELECT started_at FROM backup_runs WHERE id = 'run-subsecond'`,
+	).Scan(&storedStart))
+	assert.Equal(t, "2026-01-01T11:00:00Z", storedStart,
+		"sub-second precision must be truncated: '...00.500Z' sorts BELOW '...00Z' in the same second")
+
+	// UpdateBackupRun is the writer that finalises a run, so it binds
+	// finished_at too.
+	subFinished := "2026-01-01T13:05:00+02:00" // = 2026-01-01T11:05:00Z
+	subsecond.Status = "success"
+	subsecond.FinishedAt = &subFinished
+	require.NoError(t, db.UpdateBackupRun(subsecond))
+	require.NoError(t, db.db.QueryRow(
+		`SELECT finished_at FROM backup_runs WHERE id = 'run-subsecond'`,
+	).Scan(&storedFinish))
+	assert.Equal(t, "2026-01-01T11:05:00Z", storedFinish, "UpdateBackupRun must normalise finished_at")
+
+	// The caller owns the struct it passed and the runners reuse it after the
+	// write, so normalising must happen in locals -- never back into *r.
+	assert.Equal(t, "2026-01-01T10:00:00+02:00", older.StartedAt, "the caller's struct must not be mutated")
+	assert.Equal(t, "2026-01-01T10:30:00+02:00", *older.FinishedAt, "the caller's struct must not be mutated")
+	assert.Equal(t, "2026-01-01T13:05:00+02:00", *subsecond.FinishedAt, "the caller's struct must not be mutated")
+}
+
+// TestBackupRunTimestampCanonicalUnchanged is the other side of
+// TestBackupRunTimestamp: the spelling every Capstan writer actually binds,
+// time.Now().UTC().Format(time.RFC3339), is stored byte-identical, through
+// both CreateBackupRun and UpdateBackupRun. A normaliser that rewrote canonical
+// input (a different layout, a trailing fraction) would pass the mixed-spelling
+// test's ordering arms and still change every row written from here on.
+func TestBackupRunTimestampCanonicalUnchanged(t *testing.T) {
+	db, err := NewWithMigrations(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	started := "2026-01-01T09:00:00Z"
+	createFinished := "2026-01-01T09:01:00Z"
+	run := &models.BackupRun{
+		ID: "run-canonical", Kind: "backup", Trigger: "manual", Status: "success",
+		StartedAt: started, FinishedAt: &createFinished,
+	}
+	require.NoError(t, db.CreateBackupRun(run))
+
+	var storedStart, storedFinish string
+	require.NoError(t, db.db.QueryRow(
+		`SELECT started_at, finished_at FROM backup_runs WHERE id = 'run-canonical'`,
+	).Scan(&storedStart, &storedFinish))
+	assert.Equal(t, started, storedStart)
+	assert.Equal(t, createFinished, storedFinish)
+
+	updateFinished := "2026-01-01T09:05:00Z"
+	run.FinishedAt = &updateFinished
+	require.NoError(t, db.UpdateBackupRun(run))
+	require.NoError(t, db.db.QueryRow(
+		`SELECT finished_at FROM backup_runs WHERE id = 'run-canonical'`,
+	).Scan(&storedFinish))
+	assert.Equal(t, updateFinished, storedFinish)
+
+	// A run still in flight has no finished_at; it must stay NULL, not become
+	// an empty or zero-time string.
+	open := &models.BackupRun{
+		ID: "run-open", Kind: "backup", Trigger: "manual", Status: "running",
+		StartedAt: started,
+	}
+	require.NoError(t, db.CreateBackupRun(open))
+	var finished *string
+	require.NoError(t, db.db.QueryRow(
+		`SELECT finished_at FROM backup_runs WHERE id = 'run-open'`,
+	).Scan(&finished))
+	assert.Nil(t, finished, "a nil FinishedAt must be stored as NULL")
+}

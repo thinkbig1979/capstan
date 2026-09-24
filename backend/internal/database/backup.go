@@ -92,7 +92,18 @@ func (d *DB) DeleteBackupPolicy(targetID string) error {
 func (d *DB) CreateBackupRun(r *models.BackupRun) error {
 	query := `INSERT INTO backup_runs (id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message)
 	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := d.db.Exec(query, r.ID, r.Kind, r.Trigger, r.Status, r.StartedAt, r.FinishedAt,
+	// agent-os-zsgy: started_at and finished_at are ORDERed and range-compared
+	// as TEXT (GetBackupRuns, GetBackupRunsFiltered), so a row written in a
+	// local-offset or sub-second spelling does not sort or filter by instant
+	// against a UTC one. canonicalTimestamp is the same write-side chokepoint
+	// update_history and docker_cleanup_runs use. Every writer today already
+	// binds time.Now().UTC().Format(time.RFC3339), which this stores
+	// unchanged; the chokepoint exists so a writer added later cannot forget.
+	//
+	// Normalised into locals, never back into *r -- the caller owns that
+	// struct and the runners reuse it after the write.
+	startedAt := canonicalTimestamp(r.StartedAt)
+	_, err := d.db.Exec(query, r.ID, r.Kind, r.Trigger, r.Status, startedAt, canonicalFinishedAt(r.FinishedAt),
 		r.StacksTotal, r.StacksOK, r.StacksFailed, r.BytesAdded, r.ErrorMessage)
 	return err
 }
@@ -100,8 +111,17 @@ func (d *DB) CreateBackupRun(r *models.BackupRun) error {
 func (d *DB) UpdateBackupRun(r *models.BackupRun) error {
 	query := `UPDATE backup_runs SET status = ?, finished_at = ?, stacks_total = ?, stacks_ok = ?, stacks_failed = ?, bytes_added = ?, error_message = ?
 	          WHERE id = ?`
-	_, err := d.db.Exec(query, r.Status, r.FinishedAt, r.StacksTotal, r.StacksOK, r.StacksFailed, r.BytesAdded, r.ErrorMessage, r.ID)
+	_, err := d.db.Exec(query, r.Status, canonicalFinishedAt(r.FinishedAt), r.StacksTotal, r.StacksOK, r.StacksFailed, r.BytesAdded, r.ErrorMessage, r.ID)
 	return err
+}
+
+// canonicalFinishedAt normalises a backup run's optional finished_at for
+// binding, keeping nil as SQL NULL: a run still in flight has no finish time.
+func canonicalFinishedAt(finishedAt *string) interface{} {
+	if finishedAt == nil {
+		return nil
+	}
+	return canonicalTimestamp(*finishedAt)
 }
 
 // error_message is nullable, and a NULL scanned into a plain string fails
