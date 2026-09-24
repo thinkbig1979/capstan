@@ -180,7 +180,7 @@ func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
 	// log line. The branch is skipped entirely when stderr is empty.
 	if diag := strings.TrimSpace(stderr.String()); diag != "" {
 		slog.Debug("docker compose logs wrote to stderr but exited 0; diagnostic kept out of the returned log body",
-			"project", stack.ProjectName, "directory", stack.Directory, "stderr", trimOutput(diag))
+			"project", stack.ProjectName, "directory", stack.Directory, "stderr", trimOutput(s.redactComposeOutputFor(stack, diag)))
 	}
 
 	return stdout.String(), nil
