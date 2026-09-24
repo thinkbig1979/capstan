@@ -818,7 +818,10 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 	}
 
 	var failures []RedeployFailure
-	var redeployed []string
+	// An empty list, not nil: both results below send it as redeployedStacks,
+	// and a nil slice marshals as null when no stack's files changed or every
+	// redeploy failed (agent-os-io23). failures is only sent when non-empty.
+	redeployed := []string{}
 
 	for _, stack := range stacks {
 		if !stackFilesChanged(stack, pullResult.ChangedFiles) {
