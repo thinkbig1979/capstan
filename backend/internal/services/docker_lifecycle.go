@@ -658,13 +658,18 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 			return
 		}
 
+		// Every line reaches the client, so it gets the same redaction as the
+		// non-streaming verbs (agent-os-sdbr). The secrets are read once per
+		// stream, not per line.
+		secrets := s.composeSecrets(stack)
+
 		scanDone := make(chan struct{}, 2)
 		go func() {
 			scanner := bufio.NewScanner(stdout)
 			for scanner.Scan() {
 				line := scanner.Text()
 				if strings.TrimSpace(line) != "" {
-					out <- StreamLine{Type: "data", Line: line}
+					out <- StreamLine{Type: "data", Line: redactComposeOutput(line, secrets)}
 				}
 			}
 			if err := scanner.Err(); err != nil {
@@ -677,7 +682,7 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 			for scanner.Scan() {
 				line := scanner.Text()
 				if strings.TrimSpace(line) != "" {
-					out <- StreamLine{Type: "data", Line: line}
+					out <- StreamLine{Type: "data", Line: redactComposeOutput(line, secrets)}
 				}
 			}
 			if err := scanner.Err(); err != nil {
