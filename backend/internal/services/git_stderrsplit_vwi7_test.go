@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -78,12 +79,32 @@ func vwi7FsmonitorFault(t *testing.T, dir string) {
 
 // vwi7PrintingHook installs a post-index-change hook that writes to its own
 // stdout. `git status` runs it and exits 0.
+//
+// post-index-change runs only when status actually WRITES the index, and status
+// writes it only when a refresh changed an entry. On a clean tree that happens
+// only for a "racily clean" entry, one whose mtime is not older than the index
+// file, and git 2.47.3 compares those in WHOLE SECONDS. So left alone, the hook
+// fires only when writing f.txt and committing it land in the same second:
+// agent-os-b9nw, a CI run whose precondition read an empty stderr. MEASURED:
+// sleeping 1.1s between the write and the commit, or back-dating f.txt before
+// `git add`, silences the hook on every run.
+//
+// Dating f.txt a day into the FUTURE keeps the entry racy against any index
+// timestamp, so every status (the precondition's AND the one inside GetStatus)
+// re-checks it, rewrites the index and runs the hook. MEASURED: three
+// consecutive statuses all print. Both matter: if only the precondition's fired,
+// GetStatus would read an unfaulted repository and pass against the unsplit
+// streams.
 func vwi7PrintingHook(t *testing.T, dir string) {
 	t.Helper()
 	hook := filepath.Join(dir, ".git", "hooks", "post-index-change")
 	//nolint:gosec // a hook must be executable to run at all, and this one is written into this test's own t.TempDir() under a fixed name — not user input, and gone when the test ends
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho 'noise-from-a-printing-hook'\nexit 0\n"), 0o700); err != nil {
 		t.Fatalf("write post-index-change hook: %v", err)
+	}
+	future := time.Now().Add(24 * time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, "f.txt"), future, future); err != nil {
+		t.Fatalf("future-date f.txt: %v", err)
 	}
 }
 
