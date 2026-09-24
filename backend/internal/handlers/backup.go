@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 
@@ -25,6 +26,13 @@ import (
 // ID, or the literal "latest". Used to reject malformed/flag-like values before
 // they reach `restic ls` (M5).
 var validSnapshotIDRegex = regexp.MustCompile(`^([0-9a-fA-F]{8,64}|latest)$`)
+
+// maxStackIDLen bounds the stackId listSnapshots hands restic as a --tag value.
+// It sits far above any ID the scanner builds (a root basename, "~", a
+// directory name and a project name, each a single path component) and far
+// below Linux's 128 KiB MAX_ARG_STRLEN, past which execve fails with E2BIG and
+// the listing answered 500 (OBSERVED with restic 0.18.0, agent-os-qh3g).
+const maxStackIDLen = 1024
 
 // BackupHandler serves all /api/settings/backup and /api/backups/* REST
 // endpoints. WebSocket streaming routes (/ws/backups/*) are wired separately
@@ -1001,6 +1009,22 @@ func repoFault(av services.BackupAvailability) *models.AppError {
 // "you have never taken a backup", and the obvious next action from that screen
 // — initialise a repository — is the destructive-adjacent one (agent-os-81vr).
 func (h *BackupHandler) listSnapshots(c *gin.Context) {
+	// stackId becomes restic's --tag value. It is held to the stack-ID charset
+	// rather than resolved against the stacks table (agent-os-qh3g): deleting a
+	// stack leaves its snapshots in the repository, and a re-IDed stack leaves
+	// snapshots under its old ID, so an ID with no stacks row can still name
+	// real snapshots. The charset matters beyond tidiness — restic reads a comma
+	// in a tag as an AND of two tags. Empty means "no filter, list everything".
+	stackID := c.Query("stackId")
+	if stackID != "" && (len(stackID) > maxStackIDLen || !middleware.ValidateStackID(stackID)) {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid stack ID",
+		))
+		return
+	}
+
 	av := h.svc.Available()
 	if !av.ResticPresent {
 		// Was an empty 200, which is the same defect agent-os-81vr fixed six
@@ -1037,8 +1061,6 @@ func (h *BackupHandler) listSnapshots(c *gin.Context) {
 		c.JSON(http.StatusConflict, repoUninitialized(repoStatus))
 		return
 	}
-
-	stackID := c.Query("stackId")
 
 	snapshots, err := h.listSnapshotsViaRestic(c.Request.Context(), stackID)
 	if err != nil {
@@ -1084,15 +1106,10 @@ func (h *BackupHandler) previewSnapshot(c *gin.Context) {
 		// snapshot id, so the 404 was already describing a different resource
 		// than the one the status referred to.
 		//
-		// It does NOT follow that 404 is now free to mean "an id that names no
-		// snapshot", and an earlier draft of this comment said exactly that.
-		// VERIFIED by sweeping StatusNotFound over this file function by
-		// function: this was previewSnapshot's ONLY 404, so removing it leaves
-		// the handler with none. A well-formed id naming no snapshot reaches
-		// previewSnapshotViaRestic and answers 500. That is arguably this
-		// wave's own class one step along, and it is left for a separate bead
-		// rather than widened into here — but the false claim must not stand in
-		// the meantime.
+		// Folding this into 409 did not by itself free 404 to mean "an id that
+		// names no snapshot": it left the handler with no 404 at all, and an
+		// unknown id answered 500. agent-os-uh8y added that 404 separately,
+		// below, where restic has actually been asked about the snapshot.
 		//
 		// Second, the 404's own goal was to name the cause that holds instead of
 		// enumerating candidates — and at the time, 404 was the status that
@@ -1112,6 +1129,14 @@ func (h *BackupHandler) previewSnapshot(c *gin.Context) {
 
 	entries, err := h.previewSnapshotViaRestic(c.Request.Context(), snapshotID)
 	if err != nil {
+		if h.snapshotAbsent(c.Request.Context(), snapshotID) {
+			c.JSON(http.StatusNotFound, models.NewAppError(
+				http.StatusNotFound,
+				models.ErrNotFound,
+				fmt.Sprintf("Snapshot %s not found in the backup repository", snapshotID),
+			))
+			return
+		}
 		h.internalError(c, "Failed to preview snapshot", err)
 		return
 	}
@@ -1810,6 +1835,37 @@ func (h *BackupHandler) listSnapshotsViaRestic(ctx context.Context, stackID stri
 		return nil, err
 	}
 	return restic.ListSnapshots(ctx, stackID, 0)
+}
+
+// snapshotAbsent reports whether a failed preview failed because snapshotID
+// names no snapshot (agent-os-uh8y). It is asked only AFTER `restic ls` failed,
+// so the happy path pays for no second restic call.
+//
+// It re-lists rather than reading restic's error, because restic gives "not
+// found" no exit code of its own. OBSERVED with restic 0.18.0: `ls` exits 1
+// for an unknown prefix ("no matching ID found for prefix"), for an unknown
+// full-length id (a storage-backend load error, so the text differs per
+// backend) and for "latest" on an empty repository ("no snapshot found"), and
+// 1 is also restic's generic fatal exit. Absence is claimed only from a listing
+// that SUCCEEDED; a failed listing reports false, so the caller keeps its 500.
+//
+// Matching mirrors restic's own: an id is a hex prefix of a snapshot's full id,
+// and hex is case-insensitive. "latest" is absent only from an empty listing.
+func (h *BackupHandler) snapshotAbsent(ctx context.Context, snapshotID string) bool {
+	snapshots, err := h.listSnapshotsViaRestic(ctx, "")
+	if err != nil {
+		return false
+	}
+	if snapshotID == "latest" {
+		return len(snapshots) == 0
+	}
+	prefix := strings.ToLower(snapshotID)
+	for _, s := range snapshots {
+		if strings.HasPrefix(strings.ToLower(s.ID), prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 // previewSnapshotViaRestic runs restic ls and collects the output lines.

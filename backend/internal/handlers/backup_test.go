@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1897,6 +1898,16 @@ type recordingResticRunner struct {
 	// against a path holding no repository, 0 against an initialised but empty
 	// one, and 1 against one whose directory is unreadable.
 	repoProbeExitCode int
+
+	// failLs makes `restic ls` (the preview path, through Run()) fail with exit
+	// 1, which is what restic 0.18.0 exits with for an id naming no snapshot
+	// AND for other fatal errors alike — so the exit code cannot tell them
+	// apart (agent-os-uh8y).
+	failLs bool
+
+	// listingJSON, when non-empty, is what a successful `restic snapshots
+	// --json` returns instead of `[]`.
+	listingJSON string
 }
 
 type recordedResticCall struct {
@@ -1975,6 +1986,9 @@ func (r *recordingResticRunner) Run(
 		}
 		return fakeExitError{code: code}
 	}
+	if r.failLs && len(args) > 0 && args[0] == "ls" {
+		return fakeExitError{code: 1}
+	}
 	return nil
 }
 
@@ -1991,6 +2005,9 @@ func (r *recordingResticRunner) Output(
 			code = 10
 		}
 		return nil, fakeExitError{code: code}
+	}
+	if r.listingJSON != "" && argsContainAll(args, []string{"snapshots", "--json"}) {
+		return []byte(r.listingJSON), nil
 	}
 	return []byte(`[]`), nil
 }
@@ -3151,13 +3168,13 @@ func TestPreviewSnapshot_ReportsWhichCauseHolds(t *testing.T) {
 	// agent-os-rg8h folded this from 404 NOT_FOUND into the same 409 that
 	// listSnapshots answers for the same CheckRepository value. The 404's own
 	// argument was that the snapshot is genuinely absent — but the sentence it
-	// shipped described the REPOSITORY, and 404 is the one status on which
-	// classifyError replaces `message` with a fixed string, which defeats the
-	// naming the 404 existed to provide.
+	// shipped described the REPOSITORY, not the snapshot. (A second reason,
+	// that classifyError replaced `message` on 404, stopped holding with
+	// agent-os-mc4i.)
 	//
-	// Note what does NOT follow, because it is the tempting inference and it
-	// is false: preview is not left with a 404 meaning "unknown snapshot id".
-	// This was its only one. An id naming no snapshot answers 500 today.
+	// The 404 that now means "unknown snapshot id" is a different branch,
+	// reached only after restic was asked (agent-os-uh8y); see
+	// TestPreviewSnapshot_UnknownIDIsNotFound.
 	t.Run("never initialised", func(t *testing.T) {
 		r, _ := backupProbeRouter(t, 10)
 
@@ -3326,4 +3343,200 @@ func backupNoResticRouter(t *testing.T) *gin.Engine {
 	// registered above, and t.Cleanup runs LIFO.
 	t.Cleanup(h.Stop)
 	return newBackupRouter(h)
+}
+
+// listingArgs returns the argv of the first `restic snapshots --json` call the
+// runner recorded, and whether there was one.
+func (r *recordingResticRunner) listingArgs() ([]string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.calls {
+		if argsContainAll(c.args, []string{"snapshots", "--json"}) {
+			return c.args, true
+		}
+	}
+	return nil, false
+}
+
+// TestListSnapshots_ValidatesStackID pins agent-os-qh3g: stackId goes into
+// restic's argv as the value of --tag, so it is held to the stack-ID charset
+// (middleware.ValidateStackID) and a length bound before restic is called.
+//
+// It is NOT resolved against the stacks table, and the "unknown id" row below
+// is what pins that. Deleting a stack leaves its snapshots in the repository,
+// and a re-IDed stack leaves snapshots tagged with its old ID; both must stay
+// listable by filter.
+func TestListSnapshots_ValidatesStackID(t *testing.T) {
+	// Not parallel — injects a manager factory on the service.
+
+	listURL := func(stackID string) string {
+		return "/api/backups/snapshots?" + url.Values{"stackId": {stackID}}.Encode()
+	}
+
+	rejected := map[string]string{
+		// OBSERVED with restic 0.18.0: `--tag a,b` is an AND of two tags, so a
+		// comma silently changes what the filter means.
+		"comma":        "stacks~web,capstan-backup",
+		"slash":        "../etc",
+		"newline":      "stacks~web\nx",
+		"over the cap": strings.Repeat("a", maxStackIDLen+1),
+		// OBSERVED with restic 0.18.0: a 200000-byte tag fails execve with
+		// "Argument list too long", which answered 500.
+		"past MAX_ARG_STRLEN": strings.Repeat("a", 200000),
+	}
+	for name, stackID := range rejected {
+		t.Run("rejects "+name, func(t *testing.T) {
+			r, runner := backupProbeRouter(t, 0)
+
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, jsonReq(t, http.MethodGet, listURL(stackID), nil))
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			body := decodeBody(t, w)
+			assert.Equal(t, models.ErrValidation, body["code"])
+			assert.Equal(t, "Invalid stack ID", body["message"])
+			_, listed := runner.listingArgs()
+			assert.False(t, listed, "a rejected stackId must never reach restic")
+		})
+	}
+
+	t.Run("well-formed id with no snapshots answers 200 and an empty array", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+
+		const stackID = "stacks~deleted-long-ago:app"
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, listURL(stackID), nil))
+
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		var snapshots []models.BackupSnapshot
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &snapshots))
+		assert.Empty(t, snapshots)
+		args, listed := runner.listingArgs()
+		require.True(t, listed)
+		assert.Equal(t, []string{"snapshots", "--json", "--tag", stackID}, args)
+	})
+
+	t.Run("id at the cap is accepted", func(t *testing.T) {
+		r, _ := backupProbeRouter(t, 0)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, listURL(strings.Repeat("a", maxStackIDLen)), nil))
+
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	})
+
+	t.Run("empty id still lists everything, with no tag filter", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots", nil))
+
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		args, listed := runner.listingArgs()
+		require.True(t, listed)
+		assert.Equal(t, []string{"snapshots", "--json"}, args)
+	})
+}
+
+// TestPreviewSnapshot_UnknownIDIsNotFound pins agent-os-uh8y: a well-formed id
+// naming no snapshot answers 404, not 500. restic has no exit code for "not
+// found" (OBSERVED with 0.18.0: exit 1 for an unknown prefix, for an unknown
+// full id and for "latest" on an empty repository, and the message differs by
+// storage backend), so the handler decides it from a successful listing
+// instead. Every other preview failure stays 500, and the rows below pin both
+// sides.
+func TestPreviewSnapshot_UnknownIDIsNotFound(t *testing.T) {
+	// Not parallel — injects a manager factory on the service.
+
+	const existing = `[{"id":"aa1e6e99ac47207dc3f58912a79c11f2ca1140c3976899a589954f833e6b997f","short_id":"aa1e6e99","time":"2026-09-24T12:00:00Z","tags":["stacks~web"],"paths":["/stacks/web"]}]`
+
+	preview := func(t *testing.T, r *gin.Engine, id string) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots/"+id+"/preview", nil))
+		return w
+	}
+
+	t.Run("unknown id against a repository that lists fine answers 404", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+		runner.failLs = true
+		runner.listingJSON = existing
+
+		w := preview(t, r, "deadbeef")
+
+		require.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+		body := decodeBody(t, w)
+		assert.Equal(t, models.ErrNotFound, body["code"])
+		assert.Equal(t, "Snapshot deadbeef not found in the backup repository", body["message"])
+	})
+
+	t.Run("latest against a repository with no snapshots answers 404", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+		runner.failLs = true
+
+		w := preview(t, r, "latest")
+
+		require.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, models.ErrNotFound, decodeBody(t, w)["code"])
+	})
+
+	t.Run("preview fails and the listing fails too: 500", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+		runner.failLs = true
+		runner.failListing = true
+		runner.listingExitCode = 1
+
+		w := preview(t, r, "deadbeef")
+
+		require.Equal(t, http.StatusInternalServerError, w.Code,
+			"absence is only claimed from a listing that succeeded")
+		assert.Equal(t, "Failed to preview snapshot", decodeBody(t, w)["message"])
+	})
+
+	t.Run("preview fails for a snapshot that exists: 500", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+		runner.failLs = true
+		runner.listingJSON = existing
+
+		// Upper case and longer than the short id: restic matches ids by
+		// prefix, case-insensitively as hex, so this still names the snapshot.
+		w := preview(t, r, "AA1E6E99AC47")
+
+		require.Equal(t, http.StatusInternalServerError, w.Code,
+			"a snapshot that is listed exists; its preview failing is a server fault")
+		assert.Equal(t, "Failed to preview snapshot", decodeBody(t, w)["message"])
+	})
+
+	t.Run("latest fails while snapshots exist: 500", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+		runner.failLs = true
+		runner.listingJSON = existing
+
+		w := preview(t, r, "latest")
+
+		require.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+
+	t.Run("malformed id still answers 400 without calling restic", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+		runner.failLs = true
+
+		w := preview(t, r, "not-a-snapshot")
+
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Equal(t, "Invalid snapshot ID", decodeBody(t, w)["message"])
+		_, listed := runner.listingArgs()
+		assert.False(t, listed)
+	})
+
+	t.Run("existing snapshot previews with 200", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+		runner.listingJSON = existing
+
+		w := preview(t, r, "aa1e6e99")
+
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		_, listed := runner.listingArgs()
+		assert.False(t, listed, "the happy path must not pay for a second restic call")
+	})
 }
