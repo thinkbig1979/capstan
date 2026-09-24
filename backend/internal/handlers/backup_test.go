@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -3326,4 +3327,97 @@ func backupNoResticRouter(t *testing.T) *gin.Engine {
 	// registered above, and t.Cleanup runs LIFO.
 	t.Cleanup(h.Stop)
 	return newBackupRouter(h)
+}
+
+// listingArgs returns the argv of the first `restic snapshots --json` call the
+// runner recorded, and whether there was one.
+func (r *recordingResticRunner) listingArgs() ([]string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.calls {
+		if argsContainAll(c.args, []string{"snapshots", "--json"}) {
+			return c.args, true
+		}
+	}
+	return nil, false
+}
+
+// TestListSnapshots_ValidatesStackID pins agent-os-qh3g: stackId goes into
+// restic's argv as the value of --tag, so it is held to the stack-ID charset
+// (middleware.ValidateStackID) and a length bound before restic is called.
+//
+// It is NOT resolved against the stacks table, and the "unknown id" row below
+// is what pins that. Deleting a stack leaves its snapshots in the repository,
+// and a re-IDed stack leaves snapshots tagged with its old ID; both must stay
+// listable by filter.
+func TestListSnapshots_ValidatesStackID(t *testing.T) {
+	// Not parallel — injects a manager factory on the service.
+
+	listURL := func(stackID string) string {
+		return "/api/backups/snapshots?" + url.Values{"stackId": {stackID}}.Encode()
+	}
+
+	rejected := map[string]string{
+		// OBSERVED with restic 0.18.0: `--tag a,b` is an AND of two tags, so a
+		// comma silently changes what the filter means.
+		"comma":        "stacks~web,capstan-backup",
+		"slash":        "../etc",
+		"newline":      "stacks~web\nx",
+		"over the cap": strings.Repeat("a", maxStackIDLen+1),
+		// OBSERVED with restic 0.18.0: a 200000-byte tag fails execve with
+		// "Argument list too long", which answered 500.
+		"past MAX_ARG_STRLEN": strings.Repeat("a", 200000),
+	}
+	for name, stackID := range rejected {
+		t.Run("rejects "+name, func(t *testing.T) {
+			r, runner := backupProbeRouter(t, 0)
+
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, jsonReq(t, http.MethodGet, listURL(stackID), nil))
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			body := decodeBody(t, w)
+			assert.Equal(t, models.ErrValidation, body["code"])
+			assert.Equal(t, "Invalid stack ID", body["message"])
+			_, listed := runner.listingArgs()
+			assert.False(t, listed, "a rejected stackId must never reach restic")
+		})
+	}
+
+	t.Run("well-formed id with no snapshots answers 200 and an empty array", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+
+		const stackID = "stacks~deleted-long-ago:app"
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, listURL(stackID), nil))
+
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		var snapshots []models.BackupSnapshot
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &snapshots))
+		assert.Empty(t, snapshots)
+		args, listed := runner.listingArgs()
+		require.True(t, listed)
+		assert.Equal(t, []string{"snapshots", "--json", "--tag", stackID}, args)
+	})
+
+	t.Run("id at the cap is accepted", func(t *testing.T) {
+		r, _ := backupProbeRouter(t, 0)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, listURL(strings.Repeat("a", maxStackIDLen)), nil))
+
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	})
+
+	t.Run("empty id still lists everything, with no tag filter", func(t *testing.T) {
+		r, runner := backupProbeRouter(t, 0)
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, jsonReq(t, http.MethodGet, "/api/backups/snapshots", nil))
+
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		args, listed := runner.listingArgs()
+		require.True(t, listed)
+		assert.Equal(t, []string{"snapshots", "--json"}, args)
+	})
 }

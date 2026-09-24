@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 
@@ -25,6 +26,13 @@ import (
 // ID, or the literal "latest". Used to reject malformed/flag-like values before
 // they reach `restic ls` (M5).
 var validSnapshotIDRegex = regexp.MustCompile(`^([0-9a-fA-F]{8,64}|latest)$`)
+
+// maxStackIDLen bounds the stackId listSnapshots hands restic as a --tag value.
+// It sits far above any ID the scanner builds (a root basename, "~", a
+// directory name and a project name, each a single path component) and far
+// below Linux's 128 KiB MAX_ARG_STRLEN, past which execve fails with E2BIG and
+// the listing answered 500 (OBSERVED with restic 0.18.0, agent-os-qh3g).
+const maxStackIDLen = 1024
 
 // BackupHandler serves all /api/settings/backup and /api/backups/* REST
 // endpoints. WebSocket streaming routes (/ws/backups/*) are wired separately
@@ -1001,6 +1009,22 @@ func repoFault(av services.BackupAvailability) *models.AppError {
 // "you have never taken a backup", and the obvious next action from that screen
 // — initialise a repository — is the destructive-adjacent one (agent-os-81vr).
 func (h *BackupHandler) listSnapshots(c *gin.Context) {
+	// stackId becomes restic's --tag value. It is held to the stack-ID charset
+	// rather than resolved against the stacks table (agent-os-qh3g): deleting a
+	// stack leaves its snapshots in the repository, and a re-IDed stack leaves
+	// snapshots under its old ID, so an ID with no stacks row can still name
+	// real snapshots. The charset matters beyond tidiness — restic reads a comma
+	// in a tag as an AND of two tags. Empty means "no filter, list everything".
+	stackID := c.Query("stackId")
+	if stackID != "" && (len(stackID) > maxStackIDLen || !middleware.ValidateStackID(stackID)) {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid stack ID",
+		))
+		return
+	}
+
 	av := h.svc.Available()
 	if !av.ResticPresent {
 		// Was an empty 200, which is the same defect agent-os-81vr fixed six
@@ -1037,8 +1061,6 @@ func (h *BackupHandler) listSnapshots(c *gin.Context) {
 		c.JSON(http.StatusConflict, repoUninitialized(repoStatus))
 		return
 	}
-
-	stackID := c.Query("stackId")
 
 	snapshots, err := h.listSnapshotsViaRestic(c.Request.Context(), stackID)
 	if err != nil {

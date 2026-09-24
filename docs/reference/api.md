@@ -349,6 +349,22 @@ path just as it does on the probe — and now answers **409
 `GET /api/v1/backups/snapshots/:snapshotId/preview` answered that same state
 with **404**, and now answers the same 409, so one state has one shape.
 
+### `GET /api/v1/backups/snapshots?stackId=`
+
+`stackId` filters the listing by restic tag. Empty or absent means no filter:
+every snapshot in the repository. A non-empty value must match the stack-ID
+charset (letters, digits, space, `.`, `_`, `:`, `~`, `-`) and be at most 1024
+bytes, or the endpoint answers **400 `VALIDATION_ERROR` "Invalid stack ID"**
+before restic is called (agent-os-qh3g). Before 2026-09-24 the value went to
+restic unchecked: a comma silently turned the filter into an AND of two tags,
+and a value past Linux's argument-length limit answered 500.
+
+A well-formed `stackId` is NOT checked against the stacks table. An ID with no
+matching snapshots, including one for a stack that has since been deleted,
+answers **200 `[]`**. That is deliberate: deleting a stack does not delete its
+snapshots, and a stack whose ID changed keeps its older snapshots under the old
+ID, so an ID with no stack behind it can still name real backups.
+
 **That endpoint no longer emits 404 at all**, and this is stated rather than
 left implied because the obvious inference is wrong: folding the repository
 state into 409 does NOT leave 404 free to mean "unknown snapshot id". It was the
