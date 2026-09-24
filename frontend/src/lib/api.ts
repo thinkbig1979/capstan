@@ -12,6 +12,9 @@ import type {
   CommandResult,
   ApiError,
   LintResult,
+  ComposeResponse,
+  ComposeSaveResponse,
+  LintResponse,
   DashboardStats,
   DockerImage,
   DockerVolume,
@@ -457,18 +460,17 @@ export const stacksApi = {
   },
 
   getCompose: async (id: string) => {
-    const response = await apiClient.get<{ content: string; filename: string; size: number; lastModified: string }>(`/stacks/${encodeURIComponent(id)}/compose`)
+    const response = await apiClient.get<ComposeResponse>(`/stacks/${encodeURIComponent(id)}/compose`)
     return response.data
   },
 
   updateCompose: async (id: string, content: string) => {
-    // compose.go Put answers 200 ComposeSaveResponse; lintResults is omitempty.
-    const response = await apiClient.put<{ saved: boolean; lintResults?: LintResult[] }>(`/stacks/${encodeURIComponent(id)}/compose`, { content })
+    const response = await apiClient.put<ComposeSaveResponse>(`/stacks/${encodeURIComponent(id)}/compose`, { content })
     return response.data
   },
 
   lintCompose: async (id: string, content: string) => {
-    const response = await apiClient.post<{ valid: boolean; lintResults: LintResult[] }>(`/stacks/${encodeURIComponent(id)}/compose/lint`, { content })
+    const response = await apiClient.post<LintResponse>(`/stacks/${encodeURIComponent(id)}/compose/lint`, { content })
     return response.data
   },
 

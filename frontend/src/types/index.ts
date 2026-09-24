@@ -64,8 +64,11 @@ import type {
 } from './generated'
 import type {
   BuildCacheEntry,
+  ComposeResponse,
+  ComposeSaveResponse as WireComposeSaveResponse,
   EnvEntry,
   EnvResponse,
+  LintResponse as WireLintResponse,
 } from './generated-handlers'
 import type {
   DiskUsageBreakdown,
@@ -84,6 +87,7 @@ export type {
   BackupSnapshot,
   BuildCacheEntry,
   CachedUpdate,
+  ComposeResponse,
   ContainerMetrics,
   ContainerUpdateInfo,
   DiffResult,
@@ -153,6 +157,15 @@ export type DashboardContainerInfo = Omit<WireDashboardContainerInfo, 'state'> &
 // narrows models.LintResult.Level, a Go string
 export type LintResult = Omit<WireLintResult, 'level'> & {
   level: 'error' | 'warning' | 'info'
+}
+
+// handlers.ComposeSaveResponse and handlers.LintResponse, with lintResults
+// re-pointed at the narrowed LintResult above
+export type ComposeSaveResponse = Omit<WireComposeSaveResponse, 'lintResults'> & {
+  lintResults?: NarrowedArray<WireComposeSaveResponse['lintResults'], LintResult>
+}
+export type LintResponse = Omit<WireLintResponse, 'lintResults'> & {
+  lintResults: NarrowedArray<WireLintResponse['lintResults'], LintResult>
 }
 
 // narrows models.AutoUpdatePolicy.TargetType, a Go string
