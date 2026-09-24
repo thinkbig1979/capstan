@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
@@ -87,7 +88,23 @@ func (d *DB) GetRecentActions(limit int) ([]models.ActionLog, error) {
 // deleteOldActionLogsStmt is a named constant for the same reason as its two
 // siblings in retention.go: the floor guard's negative control runs this exact
 // statement unguarded, and must not drift away from what production issues.
-const deleteOldActionLogsStmt = `DELETE FROM action_log WHERE created_at < datetime('now', '-' || ? || ' days')`
+//
+// Unlike its siblings it takes a cutoff computed in Go, not a SQL clock.
+// LogAction binds a time.Time, which the driver stores as t.String() in the
+// process's local zone ("2026-06-26 19:02:30.59 -0400 EDT m=..."). A UTC
+// datetime('now', ...) cutoff compared as text against that was off by the zone
+// offset: west of UTC it deleted rows still inside the retention window, east of
+// UTC it kept expired ones (agent-os-h8qa, OBSERVED with TZ=America/New_York and
+// Europe/Amsterdam). Binding a time.Time cutoff makes the driver spell it the
+// same way, in the same zone.
+const deleteOldActionLogsStmt = `DELETE FROM action_log WHERE created_at < ?`
+
+// actionLogCutoff is the instant before which action_log rows are pruned. It is
+// a function, not inline, so the floor guard's negative control binds exactly
+// what production binds.
+func actionLogCutoff(retentionDays int) time.Time {
+	return time.Now().AddDate(0, 0, -retentionDays)
+}
 
 // DeleteOldActionLogs removes action_log rows older than retentionDays.
 //
@@ -98,7 +115,7 @@ func (d *DB) DeleteOldActionLogs(retentionDays int) error {
 	if err := errBelowRetentionFloor(retentionDays); err != nil {
 		return err
 	}
-	_, err := d.db.Exec(deleteOldActionLogsStmt, retentionDays)
+	_, err := d.db.Exec(deleteOldActionLogsStmt, actionLogCutoff(retentionDays))
 	return err
 }
 
@@ -106,7 +123,7 @@ func (d *DB) DeleteOldActionLogs(retentionDays int) error {
 type ActionLogFilter struct {
 	Action   string // exact action match
 	Search   string // substring match on detail or action
-	DateFrom string // inclusive lower bound, "YYYY-MM-DD" (compared on UTC date)
+	DateFrom string // inclusive lower bound, "YYYY-MM-DD" (compared on the server-local date created_at is stored in)
 	DateTo   string // inclusive upper bound, "YYYY-MM-DD"
 }
 

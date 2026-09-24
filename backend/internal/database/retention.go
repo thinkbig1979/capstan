@@ -113,17 +113,21 @@ func (d *DB) RetentionDays(key string) (int, error) {
 // same asymmetry the (*DB).RetentionDays comment argues (retention.go:65-70),
 // and the same choice as agent-os-r1kc and agent-os-6wbu.
 //
-// retentionDays = 0 is the destructive input: `datetime('now', '-' || 0 ||
+// retentionDays = 0 is the destructive input: `strftime(..., 'now', '-' || 0 ||
 // ' days')` is NOW, so the predicate becomes "older than this instant" and every
 // eligible row goes, including one written seconds ago. OBSERVED, not inferred —
 // TestRetentionFloor_UnguardedSQLWipesTable runs the unguarded statements and
 // shows the tables emptied.
 //
-// Negative values are refused too, though they are not destructive: `'-' || -1`
-// concatenates to "--1 days", which is not a valid SQLite modifier, so datetime()
-// returns NULL, `col < NULL` is NULL, and nothing matches. OBSERVED on the same
-// fixture. That makes a negative a prune that silently does nothing, which is
-// still out of contract and still worth surfacing.
+// Negative values are refused too. For the two statements here they are not
+// destructive: `'-' || -1` concatenates to "--1 days", which is not a valid
+// SQLite modifier, so strftime() returns NULL, `col < NULL` is NULL, and nothing
+// matches. OBSERVED on the same fixture. For action_log they ARE destructive:
+// its cutoff is computed in Go (actionLogCutoff, audit.go), where a negative is
+// a cutoff in the future and every row matches, so this guard is the only thing
+// between a negative and a wiped audit log. Both are covered by
+// TestRetentionFloor_NegativeIsANoOpNotAWipe and
+// TestRetentionFloor_UnguardedActionLogNegativeWipes.
 func errBelowRetentionFloor(retentionDays int) error {
 	if retentionDays >= MinRetentionDays {
 		return nil
@@ -136,12 +140,18 @@ func errBelowRetentionFloor(retentionDays int) error {
 // executes the SAME SQL these functions run; the third lives beside its function
 // as deleteOldActionLogsStmt (audit.go). Inlined literals would let a production
 // statement change while the control kept proving something about the old one.
+//
+// The cutoff is spelled with strftime in the columns' own canonical form
+// (RFC3339, T-separated, Z), not datetime(): datetime() is space-separated, and
+// compared as text 'T' (0x54) sorts after ' ' (0x20), so every row on the
+// cutoff's calendar date read as newer than it and was kept a day late
+// (agent-os-h8qa; the same fault agent-os-91jb fixed in GetUpdateStats).
 const (
 	deleteOldUpdateHistoryStmt = `DELETE FROM update_history
 	          WHERE completed_at IS NOT NULL
-	            AND completed_at < datetime('now', '-' || ? || ' days')`
+	            AND completed_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-' || ? || ' days')`
 
-	deleteOldBackupRunsStmt = `DELETE FROM backup_runs WHERE started_at < datetime('now', '-' || ? || ' days')`
+	deleteOldBackupRunsStmt = `DELETE FROM backup_runs WHERE started_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-' || ? || ' days')`
 )
 
 // DeleteOldUpdateHistory removes update_history rows completed longer ago than
