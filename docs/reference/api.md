@@ -212,7 +212,8 @@ Direct Docker resource management, independent of any stack.
   stack to its latest image
 - `GET /api/v1/resources/updates/jobs` — list running/recent update jobs
 - `GET /api/v1/resources/updates/jobs/:jobId` — a single update job's status
-- `GET /api/v1/resources/updates/history` — update history
+- `GET /api/v1/resources/updates/history` — update history. `limit`
+  defaults to 25 and is capped at 100; the response's `limit` is the applied value
 - `DELETE /api/v1/resources/updates/history` — clear update history
 - `GET /api/v1/resources/auto-update/policies` — list auto-update policies
 - `PUT /api/v1/resources/auto-update/policies/:targetType/:targetId` —
