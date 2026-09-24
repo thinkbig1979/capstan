@@ -38,7 +38,11 @@ func parsePruneOptions(c *gin.Context) services.PruneOptions {
 // but the underlying image still exists (referenced by another tag). Reporting
 // success when only tags were removed is the false-positive fixed by finding #12.
 func classifyImageDeleteResponse(resp []image.DeleteResponse) truth.ActionResult {
-	var deleted, untagged []string
+	var deleted []string
+	// An empty list, not nil: untagged is sent as details.untagged on every
+	// path below, and a nil slice marshals as null when Docker reports no
+	// Untagged entry (agent-os-413n). deleted is only sent when non-empty.
+	untagged := []string{}
 	for _, r := range resp {
 		if r.Deleted != "" {
 			deleted = append(deleted, r.Deleted)
