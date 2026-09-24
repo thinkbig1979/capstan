@@ -357,7 +357,10 @@ func (s *DockerService) StartVerified(stack models.Stack) (truth.ActionResult, s
 	cmd.Env = dockerEnv()
 
 	output, err := cmd.CombinedOutput()
-	out := string(output)
+	// Redacted here, once, because every consumer (the ActionResult, the
+	// handlers' response body, the action log) reads this one string
+	// (agent-os-fvk3).
+	out := s.redactComposeOutputFor(stack, string(output))
 	if err != nil {
 		return truth.Failed("compose up failed", err,
 			truth.KV("output", trimOutput(out))), out
@@ -380,7 +383,10 @@ func (s *DockerService) StopVerified(stack models.Stack) (truth.ActionResult, st
 	cmd.Env = dockerEnv()
 
 	output, err := cmd.CombinedOutput()
-	out := string(output)
+	// Redacted here, once, because every consumer (the ActionResult, the
+	// handlers' response body, the action log) reads this one string
+	// (agent-os-fvk3).
+	out := s.redactComposeOutputFor(stack, string(output))
 	if err != nil {
 		return truth.Failed("compose down failed", err,
 			truth.KV("output", trimOutput(out))), out
@@ -444,7 +450,10 @@ func (s *DockerService) PullVerified(stack models.Stack) (truth.ActionResult, st
 	cmd.Env = dockerEnv()
 
 	output, err := cmd.CombinedOutput()
-	out := string(output)
+	// Redacted here, once, because every consumer (the ActionResult, the
+	// handlers' response body, the action log) reads this one string
+	// (agent-os-fvk3).
+	out := s.redactComposeOutputFor(stack, string(output))
 	return s.verifyLifecycle(stack, actionPull, err, out), out
 }
 
@@ -465,7 +474,10 @@ func (s *DockerService) DeleteVerified(stack models.Stack) (truth.ActionResult, 
 	cmd.Env = dockerEnv()
 
 	output, err := cmd.CombinedOutput()
-	out := string(output)
+	// Redacted here, once, because every consumer (the ActionResult, the
+	// handlers' response body, the action log) reads this one string
+	// (agent-os-fvk3).
+	out := s.redactComposeOutputFor(stack, string(output))
 	if err != nil {
 		return truth.Failed("compose down failed", err,
 			truth.KV("output", trimOutput(out))), out
@@ -521,6 +533,13 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		// compose's own diagnosis is on stderr, and without it the error says
+		// only "exit status 1". Safe to surface since agent-os-fvk3 gave compose
+		// output a redactor; the error travels to truth.Failed and the client.
+		if diag := strings.TrimSpace(stderr.String()); diag != "" {
+			return "", nil, fmt.Errorf("docker compose ps failed: %w: %s", err,
+				trimOutput(s.redactComposeOutputFor(stack, diag)))
+		}
 		return "", nil, fmt.Errorf("docker compose ps failed: %w", err)
 	}
 
@@ -532,7 +551,7 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 	// nothing.
 	if diag := strings.TrimSpace(stderr.String()); diag != "" {
 		slog.Debug("docker compose ps wrote to stderr but exited 0; diagnostic kept out of the parsed output",
-			"project", stack.ProjectName, "directory", stack.Directory, "stderr", trimOutput(diag))
+			"project", stack.ProjectName, "directory", stack.Directory, "stderr", trimOutput(s.redactComposeOutputFor(stack, diag)))
 	}
 
 	return parseComposePSOutput(stdout.Bytes())

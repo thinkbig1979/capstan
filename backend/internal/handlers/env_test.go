@@ -150,39 +150,6 @@ func TestSerializeEnvFile(t *testing.T) {
 	}
 }
 
-func TestIsSensitiveKey(t *testing.T) {
-	handler := &EnvHandler{}
-
-	tests := []struct {
-		key      string
-		expected bool
-	}{
-		{"API_KEY", true},
-		{"DB_PASSWORD", true},
-		{"SECRET_TOKEN", true},
-		{"AUTH_SECRET", true},
-		{"MY_API_KEY", true},
-		{"TEST_API_ENDPOINT", true},
-		{"api_key", true},
-		{"db_password", true},
-		{"DB_HOST", false},
-		{"API_ENDPOINT", false},
-		{"PORT", false},
-		{"DEBUG", false},
-		{"HOSTNAME", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.key, func(t *testing.T) {
-			result := handler.isSensitiveKey(tt.key)
-
-			if result != tt.expected {
-				t.Errorf("isSensitiveKey(%q): expected %v, got %v", tt.key, tt.expected, result)
-			}
-		})
-	}
-}
-
 func TestRoundTrip(t *testing.T) {
 	handler := &EnvHandler{}
 

@@ -518,7 +518,7 @@ func (h *EnvHandler) parseEnvFile(content string) []EnvEntry {
 			Key:       key,
 			Value:     value,
 			Line:      lineNum,
-			Sensitive: h.isSensitiveKey(key),
+			Sensitive: services.IsSensitiveEnvKey(key),
 			Comment:   false,
 		})
 	}
@@ -563,30 +563,6 @@ func serializeEnvFile(entries []EnvEntry) string {
 	}
 
 	return buf.String()
-}
-
-func (h *EnvHandler) isSensitiveKey(key string) bool {
-	return isSensitiveEnvKey(key)
-}
-
-// isSensitiveEnvKey classifies a key as secret-bearing by name. Shared with the
-// global-env surface in settings.go so both redact on the same rule — a key that
-// masks in one place and leaks in the other is the whole bug class.
-func isSensitiveEnvKey(key string) bool {
-	upperKey := strings.ToUpper(key)
-
-	if strings.HasPrefix(upperKey, "EXPORT ") {
-		upperKey = strings.TrimSpace(upperKey[7:])
-	}
-
-	sensitiveSuffixes := []string{"_KEY", "_SECRET", "_PASSWORD", "_TOKEN"}
-	for _, suffix := range sensitiveSuffixes {
-		if strings.HasSuffix(upperKey, suffix) {
-			return true
-		}
-	}
-
-	return strings.Contains(upperKey, "_API_")
 }
 
 func (h *EnvHandler) logAction(c *gin.Context, stackID, action, detail string) {
