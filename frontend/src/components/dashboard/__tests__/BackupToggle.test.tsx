@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { BackupToggle } from '../BackupToggle'
+import { BackupToggle, BackupPoliciesRefreshNotice } from '../BackupToggle'
 import type { BackupStatus } from '@/types'
 
 // Radix UI Select uses scrollIntoView internally; jsdom does not implement it.
@@ -427,5 +427,85 @@ describe('BackupToggle — the locked tooltip names the fault the server found',
     const text = lockedTooltipText(makeStatus(false, '', 'restic binary not found in PATH'))
 
     expect(text).toContain('restic / rclone not installed.')
+  })
+})
+
+// ─── Tests: no write seeded from policies the server never sent ───────────────
+
+describe('BackupToggle — no write is seeded without loaded policies (agent-os-r6fx)', () => {
+  it('first load failed: no switch to click, an error with Retry instead', () => {
+    const refetch = vi.fn()
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isError: true,
+      refetch,
+    })
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    // Pre-fix: an ENABLED switch seeded enabled=false / stopPolicy='stop', and
+    // one click wrote both for a stack whose real policy nobody had read.
+    const switchEl = screen.queryByRole('switch')
+    if (switchEl) fireEvent.click(switchEl)
+    expect(mockMutate).not.toHaveBeenCalled()
+    expect(switchEl).toBeNull()
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Could not load the backup policy. Retry' }),
+    )
+    expect(refetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('still loading: nothing to click either', () => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+    })
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    const switchEl = screen.queryByRole('switch')
+    if (switchEl) fireEvent.click(switchEl)
+    expect(mockMutate).not.toHaveBeenCalled()
+    expect(switchEl).toBeNull()
+  })
+
+  it('loaded with no policy for this stack: a real "off", and it can be switched on', () => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue({ data: { policies: [] } })
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    const switchEl = screen.getByRole('switch', { name: `Backup stack ${STACK_ID}` })
+    expect(switchEl).not.toBeChecked()
+    fireEvent.click(switchEl)
+    expect(mockMutate).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: /Could not load/ })).toBeNull()
+  })
+})
+
+describe('BackupPoliciesRefreshNotice — a failed refetch is disclosed (agent-os-r6fx)', () => {
+  const notice = /Could not refresh the backup settings\. The values shown are the last ones the server sent, so check them before saving\./
+
+  it('policies loaded, then a refetch failed: the notice, with Retry', () => {
+    const refetch = vi.fn()
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...makePolicy(true, 'hot'),
+      isError: true,
+      refetch,
+    })
+    render(<BackupPoliciesRefreshNotice />)
+
+    expect(screen.getByText(notice)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(refetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('fresh policies: no notice', () => {
+    render(<BackupPoliciesRefreshNotice />)
+    expect(screen.queryByText(notice)).toBeNull()
+  })
+
+  it('first load failed: no "last ones the server sent" claim', () => {
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined, isError: true })
+    render(<BackupPoliciesRefreshNotice />)
+    expect(screen.queryByText(notice)).toBeNull()
   })
 })

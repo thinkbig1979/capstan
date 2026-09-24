@@ -2,7 +2,10 @@ import { useState, useEffect } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
-import { Lock, CheckCircle2, XCircle, CircleDashed } from 'lucide-react'
+import { Lock, CheckCircle2, XCircle, CircleDashed, AlertTriangle } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { useToggleBackup, useBackupPolicies, useBackupStatus } from '@/hooks/useBackup'
 import { presentError } from '@/lib/error-handler'
 import type { BackupPolicy } from '@/types'
@@ -18,9 +21,34 @@ interface BackupToggleProps {
   showLastRunStatus?: boolean
 }
 
+/**
+ * agent-os-r6fx: a failed REFETCH of the backup policies keeps the last list,
+ * and every BackupToggle seeds BOTH fields of its next write from it (changing
+ * the stop policy re-sends `enabled`, toggling re-sends `stopPolicy`). Mounted
+ * ONCE per surface that renders BackupToggles, not inside each toggle: they
+ * sit one per table row and share one query, and the rule is one notice per
+ * rendered list (agent-os-6iui).
+ */
+export function BackupPoliciesRefreshNotice({ className }: { className?: string }) {
+  const { data, isError, refetch } = useBackupPolicies()
+  if (!isError || !data) return null
+  return (
+    <RefreshFailedNotice
+      what="the backup settings"
+      beforeSave
+      onRetry={() => void refetch()}
+      className={className}
+    />
+  )
+}
+
 export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggleProps) {
   const { data: statusData } = useBackupStatus()
-  const { data: policiesData } = useBackupPolicies()
+  const {
+    data: policiesData,
+    isError: policiesError,
+    refetch: refetchPolicies,
+  } = useBackupPolicies()
   const toggleMutation = useToggleBackup()
 
   const policy: BackupPolicy | undefined = policiesData?.policies?.find(
@@ -131,6 +159,31 @@ export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggle
         </Tooltip>
       </TooltipProvider>
     )
+  }
+
+  // agent-os-r6fx: every write below sends BOTH enabled and stopPolicy, and
+  // without the policies they would be the `?? false` / `?? 'stop'` defaults, a
+  // policy nobody read. So no switch until the policies have loaded. Compact on
+  // purpose: this renders once per row in the stacks and updates tables.
+  if (!policiesData) {
+    if (policiesError) {
+      return (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 gap-1 px-2 text-xs"
+          onClick={() => void refetchPolicies()}
+          aria-label="Could not load the backup policy. Retry"
+          title="Could not load the backup policy. Retry"
+          data-testid={`backup-toggle-load-failed-${stackId}`}
+        >
+          <AlertTriangle className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />
+          Retry
+        </Button>
+      )
+    }
+    return <Skeleton className="h-5 w-9 rounded-full" data-testid={`backup-toggle-loading-${stackId}`} />
   }
 
   return (
