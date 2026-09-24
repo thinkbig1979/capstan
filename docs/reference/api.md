@@ -349,6 +349,39 @@ path just as it does on the probe — and now answers **409
 `GET /api/v1/backups/snapshots/:snapshotId/preview` answered that same state
 with **404**, and now answers the same 409, so one state has one shape.
 
+Folding the repository state into 409 did not by itself leave 404 free to mean
+"unknown snapshot id": it was the endpoint's only 404, and for a while a
+well-formed id naming no snapshot reached restic and answered **500
+`INTERNAL_ERROR`**. Since 2026-09-24 that case answers **404 `NOT_FOUND`**
+(agent-os-uh8y), below.
+
+### `GET /api/v1/backups/snapshots/:snapshotId/preview`
+
+The complete set of shapes:
+
+| status | code | when |
+|---|---|---|
+| 200 | — | `{"entries": [...]}`, the snapshot's file listing |
+| 400 | `VALIDATION_ERROR` | the id is not 8–64 hex characters or `latest`. restic is not called |
+| 409 | `BACKUP_UNAVAILABLE` | the restic binary is missing |
+| 503 | `BACKUP_REPO_UNREACHABLE` | the repository could not be read; `details.repoState` says why |
+| 409 | `BACKUP_REPO_UNINITIALIZED` | no repository exists yet |
+| 404 | `NOT_FOUND` | the repository lists fine and no snapshot's id starts with the given id (case-insensitive), or the id is `latest` and the repository holds no snapshots. `message` names the id |
+| 500 | `INTERNAL_ERROR` | any other preview failure, including a preview that failed for a snapshot the repository does list, and a failure where the repository could not be listed to check |
+
+How the 404 is decided: restic has no exit code for "snapshot not found".
+With restic 0.18.0, `restic ls` exits 1 for an unknown id prefix, an unknown
+full-length id and `latest` on an empty repository, and 1 is also its generic
+fatal exit; the message for a full-length id comes from the storage backend and
+differs between backends. So when a preview fails, the server lists the
+repository's snapshots and answers 404 only if that listing succeeds and names
+no matching snapshot. A successful preview costs no extra restic call.
+
+Why 404 and not 409: the missing thing is the snapshot, which is the resource
+the URL names. The earlier reason to avoid 404 here, that the web UI's
+`classifyError` replaced the server's message on 404, no longer holds; since
+agent-os-mc4i it shows the server's message on 404 as it does on 409.
+
 ### `GET /api/v1/backups/snapshots?stackId=`
 
 `stackId` filters the listing by restic tag. Empty or absent means no filter:
@@ -364,19 +397,6 @@ matching snapshots, including one for a stack that has since been deleted,
 answers **200 `[]`**. That is deliberate: deleting a stack does not delete its
 snapshots, and a stack whose ID changed keeps its older snapshots under the old
 ID, so an ID with no stack behind it can still name real backups.
-
-**That endpoint no longer emits 404 at all**, and this is stated rather than
-left implied because the obvious inference is wrong: folding the repository
-state into 409 does NOT leave 404 free to mean "unknown snapshot id". It was the
-endpoint's only 404 and it is gone. A well-formed id naming a snapshot that does
-not exist currently reaches restic and answers **500 `INTERNAL_ERROR`**; a
-malformed id answers 400. Preview's complete set of shapes is now 200, 400, 409
-(engine unavailable), 409 (repository uninitialised), 503 and 500.
-
-Answering an unknown id with 500 is arguably the same class of defect this
-section documents — a nameable client-side condition reported as a server fault
-— but changing it is a behaviour change, and it is filed separately rather than
-folded in here.
 
 ## Keeping this page honest
 
