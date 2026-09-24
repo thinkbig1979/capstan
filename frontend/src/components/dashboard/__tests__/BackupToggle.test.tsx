@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { BackupToggle, BackupPoliciesRefreshNotice } from '../BackupToggle'
+import { BackupToggle } from '../BackupToggle'
+import { BackupPoliciesRefreshNotice } from '../BackupPoliciesRefreshNotice'
 import type { BackupStatus } from '@/types'
 
 // Radix UI Select uses scrollIntoView internally; jsdom does not implement it.

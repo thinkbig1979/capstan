@@ -11,6 +11,7 @@ import { StackRowActions } from '@/components/dashboard/StackRowActions'
 import { AutoUpdateToggle } from '@/components/dashboard/AutoUpdateToggle'
 import type { GlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
 import { BackupToggle } from '@/components/dashboard/BackupToggle'
+import { BackupPoliciesRefreshNotice } from '@/components/dashboard/BackupPoliciesRefreshNotice'
 import {
   buildDirectoryTree,
   countTreeNodeStacks,
@@ -272,6 +273,7 @@ export function StacksTab({
             )
         }
       />
+      <BackupPoliciesRefreshNotice />
       {textFilteredStacks.length > 0 ? (
         <div className="rounded-md border">
           <Table>

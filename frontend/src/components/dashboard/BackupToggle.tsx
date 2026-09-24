@@ -5,7 +5,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/u
 import { Lock, CheckCircle2, XCircle, CircleDashed, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { useToggleBackup, useBackupPolicies, useBackupStatus } from '@/hooks/useBackup'
 import { presentError } from '@/lib/error-handler'
 import type { BackupPolicy } from '@/types'
@@ -19,27 +18,6 @@ interface BackupToggleProps {
    * assert an outcome for stacks that have no backup policy at all.
    */
   showLastRunStatus?: boolean
-}
-
-/**
- * agent-os-r6fx: a failed REFETCH of the backup policies keeps the last list,
- * and every BackupToggle seeds BOTH fields of its next write from it (changing
- * the stop policy re-sends `enabled`, toggling re-sends `stopPolicy`). Mounted
- * ONCE per surface that renders BackupToggles, not inside each toggle: they
- * sit one per table row and share one query, and the rule is one notice per
- * rendered list (agent-os-6iui).
- */
-export function BackupPoliciesRefreshNotice({ className }: { className?: string }) {
-  const { data, isError, refetch } = useBackupPolicies()
-  if (!isError || !data) return null
-  return (
-    <RefreshFailedNotice
-      what="the backup settings"
-      beforeSave
-      onRetry={() => void refetch()}
-      className={className}
-    />
-  )
 }
 
 export function BackupToggle({ stackId, showLastRunStatus = true }: BackupToggleProps) {

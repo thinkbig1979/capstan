@@ -23,8 +23,10 @@ import { renderWithProviders } from '../../../test/utils'
 import type { Stack } from '@/types'
 
 const mockGetPolicies = vi.fn()
+const mockGetBackupPolicies = vi.fn()
 vi.mock('@/lib/api', () => ({
   autoUpdateApi: { getPolicies: (...a: unknown[]) => mockGetPolicies(...a) },
+  backupApi: { getPolicies: (...a: unknown[]) => mockGetBackupPolicies(...a) },
 }))
 
 vi.mock('sonner', () => ({
@@ -372,5 +374,34 @@ describe('StackDetail — auto-update wiring', () => {
     renderDetail()
 
     expect(await screen.findByTestId('backup-toggle')).toBeInTheDocument()
+  })
+})
+
+describe('StackDetail — a failed backup-policies refresh (agent-os-r6fx)', () => {
+  const notice = /Could not refresh the backup settings\./
+
+  beforeEach(() => {
+    mockGetPolicies.mockResolvedValue({ policies: [] })
+    mockGetBackupPolicies.mockResolvedValue({ policies: [] })
+  })
+
+  it('discloses it once, beside the Backup toggle it feeds', async () => {
+    const { queryClient } = renderDetail()
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['backup', 'policies'])?.status).toBe('success'),
+    )
+    expect(screen.queryByText(notice)).toBeNull()
+
+    mockGetBackupPolicies.mockRejectedValue({ status: 500, code: 'INTERNAL_ERROR', message: 'read failed' })
+    await queryClient.refetchQueries({ queryKey: ['backup', 'policies'] })
+    await waitFor(() =>
+      expect(queryClient.getQueryState(['backup', 'policies'])?.status).toBe('error'),
+    )
+
+    expect(screen.getAllByText(notice)).toHaveLength(1)
+    expect(
+      screen.getByText(notice).compareDocumentPosition(screen.getByTestId('backup-toggle')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 })
