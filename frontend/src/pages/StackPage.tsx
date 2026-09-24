@@ -38,6 +38,7 @@ const STATUS_PILL: Record<StackStatus, { label: string; tone: StatusTone }> = {
   running: { label: 'Running', tone: 'success' },
   stopped: { label: 'Stopped', tone: 'neutral' },
   partial: { label: 'Partial', tone: 'warning' },
+  paused: { label: 'Paused', tone: 'warning' },
   error: { label: 'Error', tone: 'error' },
   unknown: { label: 'Unknown', tone: 'neutral' },
 }

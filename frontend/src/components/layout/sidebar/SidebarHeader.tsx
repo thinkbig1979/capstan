@@ -104,7 +104,7 @@ export function SidebarHeader({
       </div>
 
       <div className="flex items-center gap-1 flex-wrap">
-        {(['all', 'running', 'stopped', 'error'] as const).map((key) => (
+        {(['all', 'running', 'stopped', 'paused', 'error'] as const).map((key) => (
           <button
             key={key}
             type="button"
@@ -126,6 +126,12 @@ export function SidebarHeader({
               <>
                 <span className="h-1.5 w-1.5 rounded-sm bg-current" />
                 Stopped
+              </>
+            )}
+            {key === 'paused' && (
+              <>
+                <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                Paused
               </>
             )}
             {key === 'error' && (

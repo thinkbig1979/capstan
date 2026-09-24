@@ -6,8 +6,9 @@ import {
 } from '@/components/ui/tooltip'
 import { Status as StatusPill, StatusDot, type StatusTone } from '@/components/ui/status'
 import { cn } from '@/lib/utils'
+import type { StackStatus } from '@/types'
 
-export type Status = 'running' | 'stopped' | 'partial' | 'error' | 'unknown'
+export type Status = StackStatus
 
 const statusConfig: Record<Status, { label: string; tone: StatusTone }> = {
   running: { label: 'Running', tone: 'success' },
@@ -15,6 +16,7 @@ const statusConfig: Record<Status, { label: string; tone: StatusTone }> = {
   // reserved for actual errors.
   stopped: { label: 'Stopped', tone: 'neutral' },
   partial: { label: 'Partial', tone: 'warning' },
+  paused: { label: 'Paused', tone: 'warning' },
   // "error" means the stack's compose file is missing/unreadable (Capstan can't
   // resolve its state) — distinct from an intentionally stopped stack.
   error: { label: 'Error', tone: 'error' },

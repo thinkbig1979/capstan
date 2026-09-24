@@ -43,7 +43,7 @@ const CreateStackDialog = lazy(() =>
 )
 
 type SortOption = 'name' | 'status'
-type StatusFilter = 'all' | 'running' | 'stopped' | 'error'
+type StatusFilter = 'all' | 'running' | 'stopped' | 'paused' | 'error'
 
 function sortDirectories(items: ConfiguredDir[] | undefined) {
   if (!items) return []
@@ -169,17 +169,8 @@ export function DashboardPage() {
   const filterStacks = (stacksList: typeof stacks) => {
     if (!stacksList) return []
     // Exact status match, mirroring the sidebar filter so the two surfaces agree.
-    switch (statusFilter) {
-      case 'running':
-        return stacksList.filter((s) => s.status === 'running')
-      case 'stopped':
-        return stacksList.filter((s) => s.status === 'stopped')
-      case 'error':
-        return stacksList.filter((s) => s.status === 'error')
-      case 'all':
-      default:
-        return stacksList
-    }
+    if (statusFilter === 'all') return stacksList
+    return stacksList.filter((s) => s.status === statusFilter)
   }
 
   const sortedDirectories = sortDirectories(directories)

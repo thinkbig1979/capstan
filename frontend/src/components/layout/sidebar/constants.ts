@@ -5,6 +5,7 @@ import type { StackStatus } from '@/types'
 export const statusDotColor: Record<StackStatus, string> = {
   running: 'bg-success',
   partial: 'bg-warning',
+  paused: 'bg-warning',
   stopped: 'bg-muted-foreground',
   error: 'bg-destructive',
   unknown: 'bg-muted-foreground',

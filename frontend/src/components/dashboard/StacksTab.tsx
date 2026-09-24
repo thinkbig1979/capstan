@@ -46,7 +46,7 @@ const STACK_TABLE_COLUMNS = [
 const stopRowNavigation = (e: React.SyntheticEvent) => e.stopPropagation()
 
 type SortOption = 'name' | 'status'
-type StatusFilter = 'all' | 'running' | 'stopped' | 'error'
+type StatusFilter = 'all' | 'running' | 'stopped' | 'paused' | 'error'
 
 interface StacksTabProps {
   stacks: Stack[]
@@ -172,7 +172,7 @@ export function StacksTab({
   const renderStatusAndCountCells = (stack: Stack) => (
     <>
       <TableCell>
-        <StatusBadge status={stack.status as 'running' | 'stopped' | 'partial' | 'error' | 'unknown'} pulse={isAnimating(stack.id)} />
+        <StatusBadge status={stack.status} pulse={isAnimating(stack.id)} />
       </TableCell>
       <TableCell>
         {stack.containers?.length ? (
@@ -255,6 +255,7 @@ export function StacksTab({
           { key: 'all', label: 'All' },
           { key: 'running', label: 'Running' },
           { key: 'stopped', label: 'Stopped' },
+          { key: 'paused', label: 'Paused' },
           { key: 'error', label: 'Error' },
         ]}
         filterValue={statusFilter}

@@ -14,9 +14,7 @@ import type { StackStatus } from '@/types'
 export interface StackStatusEvent {
   type: 'stack_status'
   stackId: string
-  // 'paused' is not a StackStatus, but MonitorService.stackEventFor emits it
-  // for a Docker "pause" action (agent-os-r4kf).
-  status: StackStatus | 'paused'
+  status: StackStatus
   timestamp: string
 }
 
@@ -105,7 +103,7 @@ export type StackEvent =
 // (unassociatedStackEvent) and on an update_job_* event for a standalone
 // container. Reading it back as "" is the value Go held.
 
-const STACK_EVENT_STATUSES = ['running', 'stopped', 'partial', 'unknown', 'error', 'paused'] as const satisfies readonly StackStatusEvent['status'][]
+const STACK_EVENT_STATUSES = ['running', 'stopped', 'partial', 'paused', 'unknown', 'error'] as const satisfies readonly StackStatus[]
 
 const readJobEvent = (f: Record<string, unknown>) => ({
   jobId: omitemptyStr(f.jobId),
@@ -191,11 +189,7 @@ export function useStackEvents() {
     queryClient.setQueryData(queryKeys.stacks(), (old: Stack[] | undefined) => {
       if (!old) return old
       return old.map((stack) =>
-        // The one unchecked assertion left on this socket, and deliberate:
-        // 'paused' is written into the cache exactly as it was before
-        // agent-os-r4kf, because StackStatus (types/index.ts) does not list
-        // it and dropping the frame would lose the optimistic update.
-        stack.id === event.stackId ? { ...stack, status: event.status as StackStatus } : stack
+        stack.id === event.stackId ? { ...stack, status: event.status } : stack
       )
     })
     scheduleInvalidations([
