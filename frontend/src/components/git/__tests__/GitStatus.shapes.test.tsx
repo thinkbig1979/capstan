@@ -19,9 +19,10 @@
  *   not a repo        -> 200 {isRepo: false}  (agent-os-x40a)
  *   directory is gone -> 404 STACK_DIR_MISSING
  *   subdirectory      -> 200 with the parent repo's real branch
- *   bare repo         -> 500 INTERNAL_ERROR ("this operation must be run in a
- *                        work tree"): a backend defect filed separately
- * Both error rows render the "status unknown" chip (agent-os-528x).
+ *   bare repo         -> 200 with branch + commit and `isBare: true`, no
+ *                        work-tree fields (agent-os-m2g8; it was a 500,
+ *                        "this operation must be run in a work tree")
+ * The error row renders the "status unknown" chip (agent-os-528x).
  *
  * WHY EVERY ROW RUNS WITH BOTH VALUES OF `isGitRepo`. agent-os-ygqe was filed
  * saying the scanner reports isGitRepo=false for the nested and bare shapes.
@@ -115,6 +116,7 @@ const SHAPES: Shape[] = [
       Promise.resolve({
         isRepo: true,
         hasCommits: true,
+        isBare: false,
         branch: 'main',
         commit: 'abc123',
         commitShort: 'abc1234',
@@ -132,9 +134,19 @@ const SHAPES: Shape[] = [
     name: 'bare repo with commits',
     scannerIsGitRepo: true,
     answer: () =>
-      Promise.reject(apiError(500, 'INTERNAL_ERROR', 'An internal error occurred')),
-    // agent-os-528x: a failed request renders the unknown state, not nothing.
-    expectRender: () => expect(screen.getByRole('button', { name: 'Git status: unknown' })).toBeInTheDocument(),
+      Promise.resolve({
+        isRepo: true,
+        hasCommits: true,
+        isBare: true,
+        branch: 'main',
+        commit: 'abc123',
+        commitShort: 'abc1234',
+        commitMessage: 'seed',
+        commitAuthor: 't',
+        commitDate: '2026-09-23',
+        remote: '',
+      }),
+    expectRender: () => expect(screen.getByLabelText('Git status: main, bare repository')).toBeInTheDocument(),
   },
 ]
 

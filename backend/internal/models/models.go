@@ -114,6 +114,10 @@ type GitStatusResult struct {
 	Behind         int        `json:"behind"`
 	RemoteURL      string     `json:"remoteUrl"`
 	TrackingBranch string     `json:"trackingBranch"`
+	// IsBare marks a repository with no work tree (agent-os-m2g8). Dirty,
+	// DirtyCount, Ahead, Behind and TrackingBranch are not measured for it and
+	// stay zero; handlers/git.go leaves them out of the body.
+	IsBare bool `json:"isBare"`
 }
 
 type PullResult struct {

@@ -592,6 +592,12 @@ export interface GitStatusResult {
   behind: number /* int */;
   remoteUrl: string;
   trackingBranch: string;
+  /**
+   * IsBare marks a repository with no work tree (agent-os-m2g8). Dirty,
+   * DirtyCount, Ahead, Behind and TrackingBranch are not measured for it and
+   * stay zero; handlers/git.go leaves them out of the body.
+   */
+  isBare: boolean;
 }
 export interface PullResult {
   previousCommit: string;

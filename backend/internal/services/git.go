@@ -123,6 +123,23 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		return nil, fmt.Errorf("failed to resolve HEAD: %w", err)
 	}
 
+	// Asked before the commit hash, because a bare repository with an unborn
+	// HEAD answers `rev-parse HEAD` with exit 0 and the literal "HEAD"
+	// (OBSERVED, git 2.47.3): with no work tree git cannot read the argument
+	// as a path, so it echoes it back. The --abbrev-ref call above has the same
+	// blind spot and printed "HEAD" too, so without this an empty bare
+	// repository would be served as branch "HEAD", commit "HEAD". It gets the
+	// answer `git init` gets (agent-os-m2g8). The probe's error is returned:
+	// guessing "not bare" walks into `status`'s 500 below with a vaguer message.
+	isBare, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "--is-bare-repository")
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect a bare repository: %w", err)
+	}
+	bare := isBare == "true"
+	if bare && s.hasUnbornHead(dirPath) {
+		return nil, models.NewAppError(404, models.ErrGitNoCommits, "Repository has no commits yet")
+	}
+
 	commitHash, err := s.gitCommandWithCreds(dirPath, user, token, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
@@ -136,6 +153,37 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	shortHash := commitHash
 	if len(shortHash) > 7 {
 		shortHash = shortHash[:7]
+	}
+	commit := &models.GitCommit{
+		Hash:    commitHash,
+		Short:   shortHash,
+		Author:  author,
+		Email:   email,
+		Message: subject,
+		Date:    dateStr,
+	}
+
+	remoteURL, _ := s.gitCommandWithCreds(dirPath, user, token, "remote", "get-url", "origin") //nolint:errcheck // `git remote get-url origin` exits non-zero precisely when there is no origin, which is how a local-only repository is detected here. The empty string IS the answer, so propagating would fail status for every repo without a remote.
+	// redactToken has already run on this value, but it only removes the token
+	// Capstan itself resolved, so a credential the operator embedded
+	// independently survives it (agent-os-57xj). RemoteURL carries a json tag,
+	// so redacting at the source keeps "the struct never holds a credential" an
+	// invariant instead of a per-caller duty.
+	remoteURL = RedactURLUserinfo(remoteURL)
+
+	// A bare repository has no work tree, so `status` below fails with "this
+	// operation must be run in a work tree" and the whole request used to
+	// answer 500 for a repository the scanner lists and /git/log serves
+	// (agent-os-m2g8). Branch and commit are real; dirty, ahead and behind are
+	// not measured and are left zero here and out of the response body, never
+	// sent as a "clean, up to date" that nobody checked.
+	if bare {
+		return &models.GitStatusResult{
+			Branch:    branch,
+			Commit:    commit,
+			RemoteURL: remoteURL,
+			IsBare:    true,
+		}, nil
 	}
 
 	// agent-os-ufj7: the status probe's error is RETURNED, not softened to
@@ -309,24 +357,9 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 		}
 	}
 
-	remoteURL, _ := s.gitCommandWithCreds(dirPath, user, token, "remote", "get-url", "origin") //nolint:errcheck // `git remote get-url origin` exits non-zero precisely when there is no origin, which is how a local-only repository is detected here. The empty string IS the answer, so propagating would fail status for every repo without a remote.
-	// redactToken has already run on this value, but it only removes the token
-	// Capstan itself resolved, so a credential the operator embedded
-	// independently survives it (agent-os-57xj). RemoteURL carries a json tag,
-	// so redacting at the source keeps "the struct never holds a credential" an
-	// invariant instead of a per-caller duty.
-	remoteURL = RedactURLUserinfo(remoteURL)
-
 	return &models.GitStatusResult{
-		Branch: branch,
-		Commit: &models.GitCommit{
-			Hash:    commitHash,
-			Short:   shortHash,
-			Author:  author,
-			Email:   email,
-			Message: subject,
-			Date:    dateStr,
-		},
+		Branch:         branch,
+		Commit:         commit,
 		Dirty:          dirty,
 		DirtyCount:     dirtyCount,
 		Ahead:          ahead,
