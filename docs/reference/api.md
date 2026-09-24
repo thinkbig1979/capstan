@@ -178,7 +178,11 @@ With a live token, all four behave exactly as they did before.
 - `GET /api/v1/git` — status; the web UI passes `?stackId=<id>`, but the
   route itself is a plain query-string GET
 - `POST /api/v1/git/pull` — pull changes
-- `GET /api/v1/git/log` — commit log
+- `GET /api/v1/git/log` — commit log. Optional `?file=` limits it to commits
+  touching that path. The path must be relative, stay inside the repository
+  after `..` is resolved, not start with `:` (git pathspec magic), contain no
+  NUL and be at most 4096 bytes, else **400 `VALIDATION_ERROR` "Invalid file
+  path"** (agent-os-tyl6; git refused such paths and the route answered 500)
 - `GET /api/v1/git/diff/:hash` — commit diff
 
 ## Monitoring & Dashboard

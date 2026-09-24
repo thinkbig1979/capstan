@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -303,6 +304,14 @@ func (h *GitHandler) GetLog(c *gin.Context) {
 	}
 
 	file := c.Query("file")
+	if file != "" && !isValidLogFile(file) {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid file path",
+		))
+		return
+	}
 
 	var result *models.LogResult
 
@@ -374,6 +383,23 @@ func parseQueryParamInt(value string, min, max int) (int, error) {
 		return max, nil
 	}
 	return parsed, nil
+}
+
+// maxLogFileLen is PATH_MAX; a longer value is not a file in the repository.
+const maxLogFileLen = 4096
+
+// isValidLogFile reports whether a ?file= value is a path git can filter by
+// inside the repository. The value already follows "--" in the git argv, so it
+// can never be read as a flag; what git refuses (exit 128, answered 500) is a
+// path outside the repository, including through pathspec magic
+// (":(glob)../*", ":!../x"), so a leading ':' is refused too (agent-os-tyl6).
+func isValidLogFile(file string) bool {
+	if len(file) > maxLogFileLen || strings.ContainsRune(file, 0) ||
+		strings.HasPrefix(file, ":") || filepath.IsAbs(file) {
+		return false
+	}
+	cleaned := filepath.Clean(file)
+	return cleaned != ".." && !strings.HasPrefix(cleaned, "../")
 }
 
 func isValidHash(hash string) bool {
