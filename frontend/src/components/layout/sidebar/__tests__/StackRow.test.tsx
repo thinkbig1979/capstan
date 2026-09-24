@@ -88,3 +88,51 @@ describe('StackRow — the status dot', () => {
     expect(dot?.className).not.toContain('bg-muted-foreground')
   })
 })
+
+// agent-os-eqif: statusStale means the live Docker read failed and the status on
+// the wire is the last stored one. The sidebar has no page-level notice, so the
+// row itself must not present that status as live.
+describe('StackRow — a stale status', () => {
+  const dotOf = (el: HTMLElement) => el.querySelector('span[aria-hidden="true"]')
+
+  it('shows a neutral dot and discloses the stored status on the link', () => {
+    renderRow(stack({ status: 'running', statusStale: true }))
+
+    const link = screen.getByRole('link', {
+      name: 'web - status may be out of date (last recorded: running)',
+    })
+    expect(link).toHaveAttribute('title', 'Status may be out of date (last recorded: running)')
+    expect(dotOf(link)?.className).toContain('bg-muted-foreground')
+    expect(dotOf(link)?.className).not.toContain('bg-success')
+  })
+
+  it('shows a neutral dot in selection mode too', () => {
+    render(
+      <MemoryRouter>
+        <StackRow
+          stack={stack({ status: 'running', statusStale: true })}
+          selecting
+          selected={false}
+          onToggleSelect={vi.fn()}
+          pinned={false}
+          onTogglePin={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+
+    const row = screen.getByRole('button', { pressed: false })
+    expect(row).toHaveAttribute('title', 'Status may be out of date (last recorded: running)')
+    const dot = row.querySelector('span.rounded-full')
+    expect(dot?.className).toContain('bg-muted-foreground')
+    expect(dot?.className).not.toContain('bg-success')
+  })
+
+  // Control: a live status (flag absent or false) is unchanged.
+  it.each([undefined, false])('keeps the live dot when statusStale is %s', (statusStale) => {
+    renderRow(stack({ status: 'running', statusStale }))
+
+    const link = screen.getByRole('link', { name: 'web - running' })
+    expect(link).not.toHaveAttribute('title')
+    expect(dotOf(link)?.className).toContain('bg-success')
+  })
+})

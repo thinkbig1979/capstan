@@ -23,6 +23,9 @@ export function useStackStatusAnimation() {
           const newAnimatedStacks: AnimatedStack[] = []
 
           stacks.forEach((stack) => {
+            // A stale status is the stored one, not a live reading, so it is
+            // neither a change nor the baseline for the next one (agent-os-eqif).
+            if (stack.statusStale === true) return
             const previousStatus = previousStacksRef.current.get(stack.id)
             if (previousStatus && previousStatus !== stack.status) {
               newAnimatedStacks.push({
