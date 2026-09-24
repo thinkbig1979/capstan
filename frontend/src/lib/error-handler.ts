@@ -253,9 +253,13 @@ export function classifyError(error: unknown): AppError {
   }
 
   if (status === 422 || status === 400) {
-    const fieldErrors = details as Record<string, string> | undefined
-    const fieldMessage = fieldErrors 
-      ? Object.entries(fieldErrors).map(([field, err]) => `${field}: ${err}`).join(', ')
+    // agent-os-nud8: detail values are not all strings. The compose 422s send
+    // details.lintResults as an array of objects, which a template literal
+    // renders as "[object Object]"; JSON keeps it readable (as agent-os-w44n).
+    const fieldMessage = details
+      ? Object.entries(details)
+          .map(([field, value]) => `${field}: ${value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value)}`)
+          .join(', ')
       : message
 
     return {
