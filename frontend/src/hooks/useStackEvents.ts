@@ -83,6 +83,12 @@ interface UpdateScanFailedEvent {
   timestamp: string
 }
 
+/** Emitted by the backend after a backup policy is saved (handlers/backup.go upsertPolicy). */
+interface BackupPolicyChangedEvent {
+  type: 'backup_policy_changed'
+  timestamp: string
+}
+
 export type StackEvent =
   | StackStatusEvent
   | ContainerEvent
@@ -94,6 +100,7 @@ export type StackEvent =
   | UpdateJobProgressStackEvent
   | UpdateJobCompleteStackEvent
   | UpdatesChangedEvent
+  | BackupPolicyChangedEvent
 
 // ── Frame validation (agent-os-r4kf) ─────────────────────────────────────────
 // Mirrors models.StackEvent, where every field but type and timestamp is a Go
@@ -114,9 +121,8 @@ const readJobEvent = (f: Record<string, unknown>) => ({
   status: oneOf(f.status, JOB_STATUSES),
 })
 
-// A type this union does not know (backup_policy_changed, for one) returns
-// null, so it is dropped with a warning, exactly as the switch below used to
-// ignore it.
+// A type this union does not know returns null, so it is dropped with a
+// warning, exactly as the switch below used to ignore it.
 export const parseStackEvent = frameValidator((raw): StackEvent | null => {
   const f = record(raw)
   const timestamp = str(f.timestamp)
@@ -139,6 +145,7 @@ export const parseStackEvent = frameValidator((raw): StackEvent | null => {
     case 'update_scan_failed':
     case 'update_policy_changed':
     case 'updates_changed':
+    case 'backup_policy_changed':
       return { type: f.type, timestamp }
     case 'update_job_progress':
       return { type: 'update_job_progress', ...readJobEvent(f) }
@@ -320,6 +327,15 @@ export function useStackEvents() {
     ])
   }, [scheduleInvalidations])
 
+  // Same keys useToggleBackup invalidates on success, so a policy saved in
+  // another tab or session converges here too.
+  const handleBackupPolicyChangedEvent = useCallback(() => {
+    scheduleInvalidations([
+      queryKeys.backup.policies(),
+      queryKeys.backup.status(),
+    ])
+  }, [scheduleInvalidations])
+
   const handleMessage = useCallback((data: StackEvent) => {
     switch (data.type) {
       case 'stack_status':
@@ -352,6 +368,9 @@ export function useStackEvents() {
       case 'updates_changed':
         handleUpdatesChangedEvent()
         break
+      case 'backup_policy_changed':
+        handleBackupPolicyChangedEvent()
+        break
     }
   }, [
     handleStackStatusEvent,
@@ -364,6 +383,7 @@ export function useStackEvents() {
     handleUpdateJobProgressEvent,
     handleUpdateJobCompleteEvent,
     handleUpdatesChangedEvent,
+    handleBackupPolicyChangedEvent,
   ])
 
   useWebSocketJSON('/ws/events', handleMessage, { parse: parseStackEvent })

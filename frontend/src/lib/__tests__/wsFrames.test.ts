@@ -93,7 +93,7 @@ describe('parseStackEvent (models.StackEvent)', () => {
   })
 
   it('accepts the signal-only events', () => {
-    for (const type of ['update_scan_complete', 'update_scan_failed', 'update_policy_changed', 'updates_changed']) {
+    for (const type of ['update_scan_complete', 'update_scan_failed', 'update_policy_changed', 'updates_changed', 'backup_policy_changed']) {
       expect(parseStackEvent({ type, timestamp: ts })).toEqual({ type, timestamp: ts })
     }
     expect(parseStackEvent({ type: 'update_completed', containerId: 'c1', timestamp: ts }))
@@ -123,7 +123,7 @@ describe('parseStackEvent (models.StackEvent)', () => {
   })
 
   it('rejects a type the union does not declare', () => {
-    expect(parseStackEvent({ type: 'backup_policy_changed', timestamp: ts })).toBeNull()
+    expect(parseStackEvent({ type: 'something_new', timestamp: ts })).toBeNull()
   })
 })
 

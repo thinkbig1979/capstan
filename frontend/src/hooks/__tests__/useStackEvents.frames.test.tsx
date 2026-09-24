@@ -127,4 +127,16 @@ describe('useStackEvents through the real frame validator', () => {
     const old = [{ id: 's1', status: 'running' }, { id: 's2', status: 'running' }] as Stack[]
     expect(updater(old)?.map((s) => [s.id, s.status])).toEqual([['s1', 'paused'], ['s2', 'running']])
   })
+
+  // agent-os-oomh: handlers/backup.go upsertPolicy broadcasts this after saving a
+  // backup policy. It used to be dropped by the validator as an unknown type.
+  it('invalidates the backup-policy queries on backup_policy_changed', async () => {
+    await mount()
+
+    deliver({ type: 'backup_policy_changed', timestamp: '2026-09-23T10:00:00Z' })
+
+    const keys = flushInvalidations()
+    expect(keys).toContainEqual(queryKeys.backup.policies())
+    expect(keys).toContainEqual(queryKeys.backup.status())
+  })
 })
