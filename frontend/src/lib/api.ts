@@ -629,13 +629,15 @@ export type PruneResult = ActionResult<{
 /**
  * CreateStackResult is the wire type for stack create responses.
  *
- * Migrated backend (stack_crud.go):
- *   HTTP 201 success: { outcome:'success', reason, details:{stack, lintResults, deployed:true, deployOutput} }
- *   HTTP 207 partial: { outcome:'partial', reason, details:{stack, lintResults, deployed:false, deployError} }
+ * StacksHandler.Create (stack_crud.go):
+ *   HTTP 201 success, deploy=false: { outcome:'success', reason, details:{stack, lintResults, deployed:false} }
+ *   HTTP 201 success, deployed:     { outcome:'success', reason, details:{stack, lintResults, deployed:true, deployOutput} }
+ *   HTTP 207 partial:               { outcome:'partial', reason, details:{stack, lintResults, deployed:false, deployOutput, deployError} }
  *   HTTP 4xx/5xx errors: AppError (no stack)
  *
- * All fields live inside `details`. Use isActionResult() to branch.
- * A 207 partial = stack created but not deployed (deploy failed).
+ * All fields live inside `details`. Every 2xx is an ActionResult and non-2xx
+ * rejects in axios, so success data needs no isActionResult() guard: branch on
+ * `outcome`. A 207 partial = stack created but not deployed (deploy failed).
  */
 export type CreateStackResult = ActionResult<{
   stack: Stack

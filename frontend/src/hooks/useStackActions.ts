@@ -94,14 +94,10 @@ function useStackActionMutation(
       // success→toast.success, no_change→toast.info,
       // partial→toast.warning, failed→toast.error.
       // A crash-loop or no-op start will NEVER show as green success.
-      if (isActionResult(data)) {
-        toastForResult(data, { successTitle: ACTION_SUCCESS_TITLES[action] })
-      }
+      toastForResult(data, { successTitle: ACTION_SUCCESS_TITLES[action] })
       invalidateAll(queryClient)
       options?.onSuccess?.(action, id)
-      if (isActionResult(data)) {
-        options?.onResult?.(action, id)
-      }
+      options?.onResult?.(action, id)
     },
     onError: (err, id) => {
       // A declined collateral confirmation is a user cancel, not a failure —
