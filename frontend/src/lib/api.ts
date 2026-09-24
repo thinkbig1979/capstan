@@ -5,6 +5,7 @@ import { currentUnlockToken } from '@/stores/envUnlockStore'
 import type {
   User,
   AuthResponse,
+  ActionLog,
   ConfiguredDir,
   DirectoryCredentialStatus,
   Stack,
@@ -12,12 +13,12 @@ import type {
   ApiError,
   LintResult,
   DashboardStats,
+  DashboardContainerInfo,
   DockerImage,
   DockerVolume,
   DockerNetwork,
   BuildCacheEntry,
   ContainerUpdateInfo,
-  CachedUpdate,
   UpdateHistoryEntry,
   AutoUpdatePolicy,
   UpdateSettings,
@@ -45,14 +46,12 @@ import type {
 /**
  * LifecycleResult is the wire type for stack start/stop/restart/pull responses.
  *
- * Today the backend returns {status, output, duration} (CommandResult shape).
- * Once the backend is migrated to the Action Truth Contract it will return
- * {outcome, reason, details?} (ActionResult shape) with HTTP 200/207/500.
- *
- * Both shapes are surfaced here so callers can use isActionResult() to branch
- * during the migration window.
+ * The backend (stack_lifecycle.go) answers an ActionResult and puts the verified
+ * status, the compose output and the duration in `details`, never at the top
+ * level. This type used to intersect CommandResult's three fields onto the top
+ * level, which described keys the wire never carries (agent-os-zfa5).
  */
-export type LifecycleResult = ActionResult & Pick<CommandResult, 'status' | 'output' | 'duration'>
+export type LifecycleResult = ActionResult<Pick<CommandResult, 'status' | 'output' | 'duration'>>
 
 const API_BASE_URL = '/api/v1'
 
@@ -236,6 +235,18 @@ export const versionApi = {
   },
 }
 
+/**
+ * Body of GET and PUT /settings/git (GetGitSettings; the PUT re-renders the GET).
+ * httpsTokenUnreadable is true when the stored token exists but could not be
+ * read, in which case hasHttpsToken is reported true (agent-os-zfa5).
+ */
+export interface GitSettingsResponse {
+  sshKey: string
+  httpsUser: string
+  hasHttpsToken: boolean
+  httpsTokenUnreadable: boolean
+}
+
 export const settingsApi = {
   getGlobalEnv: async () => {
     const response = await apiClient.get<{ vars: Array<{ key: string; value: string }>; locked?: boolean }>('/settings/global-env')
@@ -263,12 +274,12 @@ export const settingsApi = {
   },
 
   getGit: async () => {
-    const response = await apiClient.get<{ sshKey: string; httpsUser: string; hasHttpsToken: boolean }>('/settings/git')
+    const response = await apiClient.get<GitSettingsResponse>('/settings/git')
     return response.data
   },
 
   updateGit: async (data: { sshKey?: string; httpsUser?: string; httpsToken?: string }) => {
-    const response = await apiClient.put<{ sshKey: string; httpsUser: string; hasHttpsToken: boolean }>('/settings/git', data)
+    const response = await apiClient.put<GitSettingsResponse>('/settings/git', data)
     return response.data
   },
 
@@ -292,7 +303,7 @@ export const settingsApi = {
     if (filters.dateFrom) params.dateFrom = filters.dateFrom
     if (filters.dateTo) params.dateTo = filters.dateTo
     const response = await apiClient.get<{
-      entries: Array<{ id: string; userId: string; stackId: string; action: string; detail: string; createdAt: string }>
+      entries: ActionLog[]
       total: number
       page: number
       pageSize: number
@@ -348,6 +359,10 @@ export const autoUpdateApi = {
  * Use isActionResult() to branch during the migration window.
  */
 export type GitPullResult = ActionResult<{
+  // no_change carries the unchanged HEAD; the partial arms carry the failure cause.
+  commit?: string
+  diffError?: string
+  listError?: string
   previousCommit?: string
   currentCommit?: string
   failedRedeploys?: Array<{ stack: string; reason: string }>
@@ -379,7 +394,9 @@ export type EnvSaveResult = ActionResult | { saved: boolean; filename: string }
 export type ComposeEnvResult = ActionResult<{
   compose?: string
   env?: string
-  lintResults?: unknown[]
+  lintResults?: LintResult[]
+  // Set on the partial result when the compose read-back failed and so did its rollback.
+  rollbackError?: string
 }>
 
 export const gitApi = {
@@ -490,7 +507,7 @@ export const stacksApi = {
 
   /** Create a new .env file for a stack that doesn't have one yet. POST /stacks/:id/env */
   createEnv: async (id: string, content = '') => {
-    const response = await apiClient.post<ActionResult<{ filename: string }>>(`/stacks/${encodeURIComponent(id)}/env`, { raw: content })
+    const response = await apiClient.post<ActionResult<{ filename: string; dbError?: string }>>(`/stacks/${encodeURIComponent(id)}/env`, { raw: content })
     return response.data
   },
 
@@ -568,7 +585,7 @@ export const dashboardApi = {
 
 export const directoryConfigApi = {
   get: async () => {
-    const response = await apiClient.get<{ directories: string[]; defaultDir: string }>('/settings/directories')
+    const response = await apiClient.get<{ directories: Array<{ path: string; name: string; isDefault: boolean }>; defaultDir: string }>('/settings/directories')
     return response.data
   },
 
@@ -604,8 +621,12 @@ function pruneQuery(opts?: PruneOptions): string {
  * Use isActionResult() to branch during the migration window.
  */
 export type DeleteResult = ActionResult<{
+  // Image delete
   untagged?: string[]
   deleted?: string[]
+  // Container and network delete carry id; volume delete carries name
+  id?: string
+  name?: string
 }> | { deleted: unknown[] | string }
 
 /**
@@ -676,7 +697,7 @@ export const resourcesApi = {
   },
 
   containers: async () => {
-    const response = await apiClient.get<{ containers: unknown[] }>('/resources/containers')
+    const response = await apiClient.get<{ containers: DashboardContainerInfo[] }>('/resources/containers')
     return response.data.containers
   },
   deleteContainer: async (id: string, force = false) => {
@@ -704,7 +725,8 @@ export const resourcesApi = {
     const params = refresh ? { refresh: 'true' } : undefined
     const response = await apiClient.get<{
       // Absent on a refresh 202 whose cache read failed (agent-os-oid3).
-      updates?: (ContainerUpdateInfo | CachedUpdate)[]
+      // Always ContainerUpdateInfo: updates.go converts cached rows before sending.
+      updates?: ContainerUpdateInfo[]
       fromCache?: boolean
       scannedAt?: string
       scanning?: boolean
@@ -718,7 +740,10 @@ export const resourcesApi = {
   },
 
   updateStack: async (id: string) => {
-    const response = await apiClient.post<{ jobId: string; wsUrl: string; noUpdates?: boolean }>(`/resources/stacks/${encodeURIComponent(id)}/update`)
+    const response = await apiClient.post<
+      // No outdated service: 200 with an empty jobId and no wsUrl (updateStack).
+      { jobId: string; wsUrl: string; noUpdates?: undefined } | { jobId: ''; noUpdates: true }
+    >(`/resources/stacks/${encodeURIComponent(id)}/update`)
     return response.data
   },
 
@@ -766,7 +791,7 @@ export const resourcesApi = {
     return response.data.networks
   },
   createNetwork: async (input: { name: string; driver?: string; internal?: boolean; attachable?: boolean }) => {
-    const response = await apiClient.post<ActionResult | { id: string; name: string }>('/resources/networks', input)
+    const response = await apiClient.post<ActionResult<{ id: string; name: string }> | { id: string; name: string }>('/resources/networks', input)
     return response.data
   },
   deleteNetwork: async (id: string) => {
