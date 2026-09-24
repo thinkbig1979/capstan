@@ -149,11 +149,15 @@ func (h *StacksHandler) List(c *gin.Context) {
 	// One ContainerList snapshot bucketed by compose project replaces the former
 	// per-stack `docker compose ps` subprocess fan-out (O(1) Docker call instead
 	// of O(N) process spawns). On snapshot error — including a Docker outage,
-	// which arrives as services.ErrDockerUnavailable — we leave each stack's
-	// stored DB status untouched (same graceful fallback as before).
+	// which arrives as services.ErrDockerUnavailable — we serve each stack's
+	// stored DB status and flag it stale, so the client can say it may be out
+	// of date instead of presenting it as live (agent-os-xjzr).
 	statuses, err := h.dockerSvc().GetStackStatuses(c.Request.Context(), h.db)
 	if err != nil {
 		slog.Error("Failed to derive live stack statuses", "error", err)
+		for i := range stacks {
+			stacks[i].StatusStale = true
+		}
 	} else {
 		for i := range stacks {
 			applyLiveStatus(&stacks[i], statuses)
@@ -209,10 +213,11 @@ func (h *StacksHandler) Get(c *gin.Context) {
 	// Derive status from the same single-snapshot path List uses so a stack's
 	// detail page agrees with its list row, instead of the old per-stack
 	// `docker compose ps` subprocess (which returned "unknown" on error). On
-	// snapshot failure we leave the stored DB status untouched, as List does.
+	// snapshot failure we serve the stored DB status flagged stale, as List does.
 	statuses, err := h.dockerSvc().GetStackStatuses(c.Request.Context(), h.db)
 	if err != nil {
 		slog.Error("Failed to derive live stack status", "error", err)
+		stack.StatusStale = true
 	} else {
 		applyLiveStatus(stack, statuses)
 	}

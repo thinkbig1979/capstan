@@ -360,6 +360,32 @@ describe('DashboardPage', () => {
     })
   })
 
+  // agent-os-xjzr: the list request succeeds but the server's live Docker
+  // read failed, so each stack carries its stored status with statusStale.
+  describe('stale stack status', () => {
+    const STALE_NOTE = /Stack statuses may be out of date/
+
+    it('shows the note with a Retry that refetches the stacks when statusStale is true', async () => {
+      listStacks.mockResolvedValue([makeStack({ id: 's1', statusStale: true })])
+
+      renderPage('/')
+
+      await waitFor(() => expect(screen.getByText(STALE_NOTE)).toBeInTheDocument())
+      listStacks.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      await waitFor(() => expect(listStacks).toHaveBeenCalledTimes(1))
+    })
+
+    it('shows no note when the status is live', async () => {
+      listStacks.mockResolvedValue([makeStack({ id: 's1' })])
+
+      renderPage('/')
+
+      await waitFor(() => expect(screen.getByTestId('tab-stacks')).toBeInTheDocument())
+      expect(screen.queryByText(STALE_NOTE)).not.toBeInTheDocument()
+    })
+  })
+
   describe('page-owned data plumbing', () => {
     it('computes the header subtitle from stack counts', async () => {
       listStacks.mockResolvedValue([

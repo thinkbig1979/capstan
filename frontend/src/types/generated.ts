@@ -524,6 +524,13 @@ export interface Stack {
   envFile: string;
   projectName: string;
   status: string;
+  /**
+   * StatusStale is set when the live Docker read failed and Status is the
+   * last one stored rather than the current one (agent-os-xjzr). omitempty
+   * on purpose: responses that never attempt a live read (Create) must not
+   * send an explicit false, which would claim a liveness nobody checked.
+   */
+  statusStale?: boolean;
   containers: Container[];
   isGitRepo: boolean;
   gitBranch: string;

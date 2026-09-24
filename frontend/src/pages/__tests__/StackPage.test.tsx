@@ -169,6 +169,30 @@ describe('StackPage', () => {
     })
   })
 
+  // agent-os-xjzr: the stack loaded, but the server's live Docker read
+  // failed, so the status shown is the stored one.
+  describe('stale stack status', () => {
+    const STALE_NOTE = /This stack's status may be out of date/
+
+    it('shows the note with a Retry that refetches the stack when statusStale is true', async () => {
+      getStack.mockResolvedValue(makeStack({ statusStale: true }))
+
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByText(STALE_NOTE)).toBeInTheDocument())
+      getStack.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      await waitFor(() => expect(getStack).toHaveBeenCalledTimes(1))
+    })
+
+    it('shows no note when the status is live', async () => {
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByTestId('stack-detail')).toBeInTheDocument())
+      expect(screen.queryByText(STALE_NOTE)).not.toBeInTheDocument()
+    })
+  })
+
   describe('header status pill and uptime', () => {
     it('shows running-count and uptime derived from container data', async () => {
       getStack.mockResolvedValue(
