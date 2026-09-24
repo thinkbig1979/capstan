@@ -88,7 +88,7 @@ describe('DiffViewer — load states', () => {
   it.each([
     [400, 'VALIDATION_ERROR', 'Invalid commit hash format'],
     [404, 'GIT_NOT_REPO', 'Not a git repository'],
-    [404, 'NOT_FOUND', 'Stack not found'],
+    [404, 'STACK_NOT_FOUND', 'Stack not found'],
   ])('names the cause the backend sent for a %s %s failure', async (status, code, message) => {
     mockDiff.mockRejectedValue({ status, code, message })
     renderWithProviders(<DiffViewer stackId="s1" commitHash="abc123" />)

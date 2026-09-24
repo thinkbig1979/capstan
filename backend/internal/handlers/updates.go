@@ -423,11 +423,7 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 		// kept as a defensive no-op: database/stacks.go's GetStack always
 		// returns either &stack or a non-nil err, never both zero — nil arm
 		// dropped, dead per GetStack's return shape.
-		if errors.Is(err, errdefs.ErrNotFound) {
-			handleError(c, models.NewAppError(http.StatusNotFound, models.ErrNotFound, "Stack not found"))
-			return
-		}
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to load stack", err))
+		handleDBError(c, err, "Failed to load stack")
 		return
 	}
 
@@ -631,6 +627,10 @@ func (h *ResourcesHandler) getUpdateJob(c *gin.Context) {
 	c.JSON(http.StatusOK, job)
 }
 
+// maxUpdateHistoryLimit is the largest page GET /resources/updates/history
+// serves. The web UI asks for 25 (UpdateLogTab) and 100 (StackUpdatesTab).
+const maxUpdateHistoryLimit = 100
+
 func (h *ResourcesHandler) getUpdateHistory(c *gin.Context) {
 	filters := models.UpdateHistoryFilters{
 		Page:        1,
@@ -647,9 +647,16 @@ func (h *ResourcesHandler) getUpdateHistory(c *gin.Context) {
 		}
 	}
 	if l := c.Query("limit"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil && v > 0 { //geterrors:ignore client-supplied ?limit: malformed and absent both take the default
+		if v, err := strconv.Atoi(l); err == nil && v > 0 { //geterrors:ignore client-supplied ?limit: malformed and absent both take the default, which is then clamped below
 			filters.Limit = v
 		}
+	}
+	// A true cap, not a substituted default, as maxBackupHistoryLimit in
+	// backup.go: limit=1000 is served 100 rows. Without it the client decided
+	// the response size and could fetch the whole table (agent-os-s21h).
+	// "limit" and totalPages below report this applied value.
+	if filters.Limit > maxUpdateHistoryLimit {
+		filters.Limit = maxUpdateHistoryLimit
 	}
 	if from := c.Query("from"); from != "" {
 		if t, err := time.Parse(time.RFC3339, from); err == nil { //geterrors:ignore client-supplied ?from: an unparseable timestamp leaves the filter unset, the same as omitting the parameter

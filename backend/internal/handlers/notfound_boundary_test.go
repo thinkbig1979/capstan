@@ -26,7 +26,7 @@ import (
 // Two things are pinned here, and they are different claims:
 //
 //  1. handleError's mapping — a Kind becomes a status, a code and a message.
-//  2. That each of the 18 collapsed routes asks for the mapping it used to
+//  2. That each of the 22 collapsed routes (18 from ymyc, 4 from symj) asks for the mapping it used to
 //     produce by hand. The behavioural table cannot see that on its own,
 //     because every route reaches the same function; the source census at the
 //     bottom is what makes each row's "route" column true.
@@ -36,7 +36,7 @@ import (
 // written to disk, so an os.ReadFile census would read the UNMUTATED file and
 // pass against the very mutant it exists to catch.
 
-//go:embed backup.go compose.go directories.go env.go logs.go stack_crud.go stack_lifecycle.go stacks.go
+//go:embed backup.go compose.go directories.go env.go git.go logs.go monitoring.go stack_crud.go stack_lifecycle.go stacks.go updates.go
 var collapsedRouteSources embed.FS
 
 // notFoundRoute is one collapsed route: the getter it calls, the Kind that
@@ -72,6 +72,14 @@ var collapsedRoutes = []notFoundRoute{
 	{"backup.go", "getRunDetail", "GetBackupRunByID", "backup run", "Failed to load backup run", models.ErrNotFound, "Backup run not found"},
 	{"directories.go", "UpdateCredentials", "GetDirectory", "directory", "Failed to load directory", models.ErrNotFound, "Directory not found"},
 	{"directories.go", "CredentialStatus", "GetDirectory", "directory", "Failed to load directory", models.ErrNotFound, "Directory not found"},
+	// agent-os-symj: these four answered NOT_FOUND for an absent stack while the
+	// fifteen stack rows above answered STACK_NOT_FOUND for the identical
+	// condition from the identical getter. They converge on STACK_NOT_FOUND, so
+	// here, unlike the rows above, the expected code is a deliberate change.
+	{"updates.go", "updateStack", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
+	{"git.go", "resolvePathFromStack", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
+	{"monitoring.go", "getStackContainers", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
+	{"monitoring.go", "handleMetricsWebSocket", "GetStack", "stack", "Failed to load stack", models.ErrStackNotFound, "Stack not found"},
 }
 
 func runHandleDBError(t *testing.T, err error, faultMsg string) (int, models.AppError) {
@@ -97,8 +105,8 @@ func runHandleDBError(t *testing.T, err error, faultMsg string) (int, models.App
 // whole class is made of.
 func TestNotFoundWire_CollapsedRoutes(t *testing.T) {
 	t.Parallel()
-	if len(collapsedRoutes) != 18 {
-		t.Fatalf("table has %d rows, want 18 — one per collapsed route", len(collapsedRoutes))
+	if len(collapsedRoutes) != 22 {
+		t.Fatalf("table has %d rows, want 22 — one per collapsed route", len(collapsedRoutes))
 	}
 
 	fault := errors.New("sql: database is closed")
@@ -142,7 +150,10 @@ func TestNotFoundWire_RouteCensus(t *testing.T) {
 	type site struct{ fn, msg string }
 	found := map[string][]site{}
 	funcRe := regexp.MustCompile(`(?m)^func (?:\([^)]*\) )?([A-Za-z0-9_]+)\(`)
-	callRe := regexp.MustCompile(`handleDBError\(c, err, "([^"]*)"\)`)
+	// Two call shapes route an absence through notFoundWire: handleDBError in a
+	// handler, and dbError in a helper that returns its error to a caller which
+	// hands it to handleError (git.go's resolvePathFromStack).
+	callRe := regexp.MustCompile(`(?:handleDBError\(c, err, |dbError\(err, )"([^"]*)"\)`)
 
 	files, err := collapsedRouteSources.ReadDir(".")
 	if err != nil {
@@ -170,8 +181,8 @@ func TestNotFoundWire_RouteCensus(t *testing.T) {
 	// matched nothing would make every "expected site is present" check below
 	// fail loudly, but this states the corpus size so a silent narrowing of the
 	// embed list is visible too.
-	if total != 18 {
-		t.Fatalf("census found %d handleDBError call sites across %d embedded files, want 18 — the table and the source disagree", total, len(files))
+	if total != 22 {
+		t.Fatalf("census found %d handleDBError/dbError call sites across %d embedded files, want 22 — the table and the source disagree", total, len(files))
 	}
 
 	for _, r := range collapsedRoutes {

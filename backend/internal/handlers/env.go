@@ -185,8 +185,9 @@ func (h *EnvHandler) Put(c *gin.Context) {
 	// changed. So the marker stays: this is still a 404 that must not WARN
 	// (agent-os-hjmf). It is marked per-site rather than by adding
 	// models.ErrNotFound to respond.go's routineErrorCodes, because the SAME
-	// code answers the genuine "Stack not found" above and "Env file not found
-	// on disk" in Get, both of which must keep warning.
+	// code answers genuine client errors elsewhere, such as "Env file not found
+	// on disk" in Get, which must keep warning. (An unknown stack answers
+	// STACK_NOT_FOUND, via handleDBError above.)
 	// prfj_routine_404_log_test.go's TestHandleError_MarksOnlyListedCodes pins
 	// ErrNotFound out of that list.
 	if stack.EnvFile == "" {

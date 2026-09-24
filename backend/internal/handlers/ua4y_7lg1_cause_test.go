@@ -264,9 +264,10 @@ func TestGitGetStatus_DBFaultReturns500WithLoggedCause(t *testing.T) {
 }
 
 // TestGitGetStatus_UnknownStackID404sQuietly is the two-sided control: a
-// genuinely missing stack against a HEALTHY db must still 404 exactly as
-// before (byte-for-byte preserved branch) and must stay silent — logServerFault
-// never fires below 500, so no ERROR line should appear either.
+// genuinely missing stack against a HEALTHY db must still 404 and must stay
+// silent — logServerFault never fires below 500, so no ERROR line should appear
+// either. The code is STACK_NOT_FOUND since agent-os-symj converged this route
+// with the other stack routes; it was NOT_FOUND before.
 func TestGitGetStatus_UnknownStackID404sQuietly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	buf := captureHandlerLogs(t)
@@ -294,7 +295,7 @@ func TestGitGetStatus_UnknownStackID404sQuietly(t *testing.T) {
 
 	var body map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.Equal(t, "NOT_FOUND", body["code"])
+	assert.Equal(t, "STACK_NOT_FOUND", body["code"])
 	assert.Equal(t, "Stack not found", body["message"])
 
 	requireNoOwnErrorLines(t, buf.String(), sentinel, "a plain missing-stack 404")

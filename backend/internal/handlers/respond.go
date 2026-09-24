@@ -64,8 +64,8 @@ func renderResultWithStatus(c *gin.Context, status int, r truth.ActionResult) {
 // GET /api/v1/git answers 404 for BOTH "this directory is not a git
 // repository" (routine — the frontend asks it of every stack, and most hosts
 // have no git-backed stack at all) and "stack not found" for an unknown
-// stackId (git.go's resolvePathFromStack, models.ErrNotFound — a real client
-// error). Same endpoint, same status, opposite answers; only the code
+// stackId (git.go's resolvePathFromStack, models.ErrStackNotFound — a real
+// client error). Same endpoint, same status, opposite answers; only the code
 // separates them.
 //
 // The list lives here rather than in middleware so middleware carries no
@@ -126,10 +126,11 @@ var routineErrorCodes = map[string]bool{
 // the wire. "stack" keeps STACK_NOT_FOUND because 15 routes minted that code and
 // docs/reference/api.md documents it.
 //
-// Four routes mint models.ErrNotFound for an absent STACK rather than
-// STACK_NOT_FOUND (updates.go, git.go, monitoring.go x2). They are deliberately
-// NOT collapsed here: they keep their own branch so their wire code is unchanged.
-// That inconsistency predates this change and is left for a follow-up.
+// Four more routes (updates.go, git.go, monitoring.go x2) used to answer an
+// absent stack with models.ErrNotFound, so one fact had two wire codes decided
+// by which route a client hit. agent-os-symj converged them here, on
+// STACK_NOT_FOUND. NOT_FOUND keeps its other genuine client-error mints
+// (directory, env file), which is why it stays out of routineErrorCodes.
 var notFoundWire = map[string]struct {
 	Code    string
 	Message string
@@ -160,11 +161,18 @@ var notFoundWire = map[string]struct {
 // like an absent row, and roughly a dozen of them answered 404 for a database
 // fault. Now only internal/database can mint the absence.
 func handleDBError(c *gin.Context, err error, faultMsg string) {
+	handleError(c, dbError(err, faultMsg))
+}
+
+// dbError is handleDBError's decision without the write, for a helper that
+// returns its error to a caller which passes it to handleError (git.go's
+// resolvePathFromStack). An absence is returned unchanged so handleError maps
+// it through notFoundWire; anything else becomes this route's 500.
+func dbError(err error, faultMsg string) error {
 	if errors.Is(err, errdefs.ErrNotFound) {
-		handleError(c, err)
-		return
+		return err
 	}
-	handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", faultMsg, err))
+	return models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", faultMsg, err)
 }
 
 func handleError(c *gin.Context, err error) {
