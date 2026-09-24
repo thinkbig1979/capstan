@@ -103,9 +103,10 @@ export type StackEvent =
   | BackupPolicyChangedEvent
 
 // ── Frame validation (agent-os-r4kf) ─────────────────────────────────────────
-// Mirrors models.StackEvent, where every field but type and timestamp is a Go
-// string tagged omitempty. A field the union above declares required is read
-// with omitemptyStr, because Go really does omit some of them: stackId is
+// Mirrors models.StackEvent, where every field but type, timestamp, status and
+// targetType is a Go string tagged omitempty (status and targetType always
+// reach the wire, agent-os-9kp2). A field the union above declares required is
+// read with omitemptyStr, because Go really does omit some of them: stackId is
 // absent on a container_event for a container in no known stack
 // (unassociatedStackEvent) and on an update_job_* event for a standalone
 // container. Reading it back as "" is the value Go held.

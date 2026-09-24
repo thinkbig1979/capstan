@@ -118,6 +118,25 @@ describe('parseStackEvent (models.StackEvent)', () => {
     expect(parseStackEvent(base)).toMatchObject({ status: 'success', outcome: undefined })
   })
 
+  // agent-os-9kp2: models.StackEvent no longer tags status/targetType
+  // omitempty, so every frame type carries them, as "" where unused. The frame
+  // types that do not read them must still be accepted.
+  it('accepts frames that carry an empty status and targetType they do not use', () => {
+    const unused = { status: '', targetType: '', timestamp: ts }
+    for (const type of ['resource_changed', 'update_completed', 'update_scan_complete', 'update_scan_failed', 'update_policy_changed', 'updates_changed', 'backup_policy_changed']) {
+      expect(parseStackEvent({ type, ...unused })).toMatchObject({ type })
+    }
+    expect(parseStackEvent({ type: 'container_event', containerId: 'c1', event: 'die', ...unused }))
+      .toEqual({ type: 'container_event', stackId: '', containerId: 'c1', event: 'die', timestamp: ts })
+    // stack_status reads status but not targetType.
+    expect(parseStackEvent({ type: 'stack_status', stackId: 's1', status: 'running', targetType: '', timestamp: ts }))
+      .toEqual({ type: 'stack_status', stackId: 's1', status: 'running', timestamp: ts })
+  })
+
+  it('still rejects a stack_status whose status is empty', () => {
+    expect(parseStackEvent({ type: 'stack_status', stackId: 's1', status: '', targetType: '', timestamp: ts })).toBeNull()
+  })
+
   it('rejects a numeric stackId', () => {
     expect(parseStackEvent({ type: 'stack_status', stackId: 5, status: 'running', timestamp: ts })).toBeNull()
   })
