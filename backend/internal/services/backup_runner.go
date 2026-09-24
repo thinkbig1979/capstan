@@ -486,7 +486,10 @@ func (reg *BackupRunnerRegistry) execRestore(dr *durableRun, stackID, snapshotID
 	defer finish()
 	ctx := context.Background()
 
-	err := reg.svc.RunRestore(ctx, stackID, snapshotID, target, out)
+	// notes carries warnings a successful restore still owes the run record,
+	// such as a restart on an unproven premise (agent-os-gokn).
+	var notes []string
+	err := reg.svc.runRestore(ctx, stackID, snapshotID, target, out, &notes)
 	finish()
 
 	// The restore landed but the stack did not fully restart: not a failed
@@ -494,8 +497,8 @@ func (reg *BackupRunnerRegistry) execRestore(dr *durableRun, stackID, snapshotID
 	var restartErr *RestartIncompleteError
 	if errors.As(err, &restartErr) {
 		dr.outcome = "partial"
-		dr.reason = err.Error()
-		reg.finaliseRunStatus(dr.runID, "partial", err.Error())
+		dr.reason = withRunNotes(err.Error(), notes)
+		reg.finaliseRunStatus(dr.runID, "partial", dr.reason)
 		reg.logger.Warn("durable restore finished with an incomplete restart", "run_id", dr.runID, "error", err)
 		return
 	}
@@ -509,8 +512,8 @@ func (reg *BackupRunnerRegistry) execRestore(dr *durableRun, stackID, snapshotID
 	}
 
 	dr.outcome = "success"
-	dr.reason = "restore completed"
-	reg.finaliseRunStatus(dr.runID, "success", "")
+	dr.reason = withRunNotes("restore completed", notes)
+	reg.finaliseRunStatus(dr.runID, "success", withRunNotes("", notes))
 	reg.logger.Info("durable restore finished", "run_id", dr.runID)
 }
 
