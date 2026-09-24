@@ -42,6 +42,9 @@ export function Sidebar() {
   const {
     stacks,
     isLoading,
+    stacksLoadFailed,
+    stacksRefreshFailed,
+    refetchStacks,
     updateCount,
     backupStatus,
     configuredDirs,
@@ -76,6 +79,9 @@ export function Sidebar() {
   const bodyProps = {
     stacks,
     isLoading,
+    stacksLoadFailed,
+    stacksRefreshFailed,
+    onRetryStacks: () => void refetchStacks(),
     updateCount,
     backupStatus,
     selecting,

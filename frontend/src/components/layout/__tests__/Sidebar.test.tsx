@@ -314,3 +314,57 @@ describe('Sidebar', () => {
     await waitFor(() => expect(screen.getByLabelText('Stacks (2)')).toBeInTheDocument())
   })
 })
+
+// agent-os-kdqm: the stacks query used to default `data` to [] and drop the
+// error, so a failed list request read as "No stacks found" and "Stacks (0)".
+describe('Sidebar — failed stack list', () => {
+  it('first load fails: an error with Retry, NOT "No stacks found" or a count of 0', async () => {
+    listMock.mockRejectedValueOnce(new Error('boom'))
+    renderSidebar()
+
+    await waitFor(() =>
+      expect(screen.getAllByText('Could not load the stack list.').length).toBeGreaterThan(0),
+    )
+    expect(screen.queryByText('No stacks found')).not.toBeInTheDocument()
+    expect(screen.queryByText('(0)')).not.toBeInTheDocument()
+
+    listMock.mockResolvedValueOnce([
+      { id: 's1', projectName: 'alpha', status: 'running', containers: [], directory: '/stacks', isGitRepo: false, gitDirty: false },
+    ] as never)
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0])
+    })
+    await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
+    expect(screen.queryByText('Could not load the stack list.')).not.toBeInTheDocument()
+  })
+
+  it('a refetch fails over a loaded list: keeps the stacks AND says so', async () => {
+    const { queryClient } = renderSidebar()
+    await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
+
+    listMock.mockRejectedValueOnce(new Error('boom'))
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: queryKeys.stacks() })
+    })
+
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(
+          'Could not refresh the stack list. The values shown are the last ones the server sent.',
+        ).length,
+      ).toBeGreaterThan(0),
+    )
+    expect(screen.getAllByText('alpha').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('bravo').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Could not load the stack list.')).not.toBeInTheDocument()
+  })
+
+  it('a genuinely empty list still shows "No stacks found", with no error', async () => {
+    listMock.mockResolvedValueOnce([] as never)
+    renderSidebar()
+
+    await waitFor(() => expect(screen.getAllByText('No stacks found').length).toBeGreaterThan(0))
+    expect(screen.getAllByText('(0)').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/Could not (load|refresh) the stack list/)).not.toBeInTheDocument()
+  })
+})

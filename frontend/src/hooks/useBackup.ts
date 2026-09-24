@@ -223,10 +223,16 @@ export function useStackBackupRuns(stackId: string, limit = 20) {
     enabled: !!stackId,
   })
 
+  // `runs` stays [] without data so callers can map it, but a FAILED read is
+  // not an empty history: check loadFailed before saying "no runs"
+  // (agent-os-kdqm).
   return {
     runs: result.data?.runs ?? [],
     isLoading: result.isLoading,
     isError: result.isError,
+    loadFailed: result.isError && !result.data,
+    refreshFailed: result.isError && !!result.data,
+    refetch: result.refetch,
   }
 }
 

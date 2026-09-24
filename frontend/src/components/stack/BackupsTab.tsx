@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+import { LoadFailedNotice } from '@/components/LoadFailedNotice'
 import { EmptyState } from '@/components/EmptyState'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { RunStatusBadge } from '@/components/dashboard/backup-run-status'
@@ -346,10 +347,16 @@ interface BackupsTabProps {
 export function BackupsTab({ stackId }: BackupsTabProps) {
   const queryClient = useQueryClient()
 
-  // Backup enabled check
-  const { data: policiesData } = useBackupPolicies()
+  // Backup enabled check. "Not enabled" is only said when the policies were
+  // actually read: without data (loading or a failed first load) nothing is
+  // known either way (agent-os-kdqm).
+  const {
+    data: policiesData,
+    isError: policiesError,
+    refetch: refetchPolicies,
+  } = useBackupPolicies()
   const policy = policiesData?.policies?.find((p) => p.targetId === stackId)
-  const backupEnabled = policy?.enabled ?? false
+  const backupNotEnabled = !!policiesData && !(policy?.enabled ?? false)
 
   // Snapshots
   const {
@@ -361,7 +368,13 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
   const repoFault = repoFaultFrom(snapshotsErrorCause)
 
   // Recent runs (global history — all runs are relevant when backup is enabled)
-  const { runs, isLoading: runsLoading } = useStackBackupRuns(stackId, 20)
+  const {
+    runs,
+    isLoading: runsLoading,
+    loadFailed: runsLoadFailed,
+    refreshFailed: runsRefreshFailed,
+    refetch: refetchRuns,
+  } = useStackBackupRuns(stackId, 20)
 
   // Restore mutation
   const restoreMutation = useRestore()
@@ -438,7 +451,13 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
     <div className="space-y-8">
 
       {/* ── Backup not enabled notice ────────────────────────────────────────── */}
-      {!backupEnabled && (
+      {policiesError && !policiesData && (
+        <LoadFailedNotice what="the backup policy" onRetry={() => void refetchPolicies()} />
+      )}
+      {policiesError && policiesData && (
+        <RefreshFailedNotice what="the backup policy" onRetry={() => void refetchPolicies()} />
+      )}
+      {backupNotEnabled && (
         <div className="flex items-start gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4">
           <AlertCircle className="h-5 w-5 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
           <p className="text-sm text-yellow-700 dark:text-yellow-300">
@@ -482,7 +501,14 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
         )}
 
         {!snapshotsLoading && !snapshotsError && (!snapshots || snapshots.length === 0) && (
-          hasSuccessfulBackupRuns ? (
+          runsLoadFailed ? (
+            /* The runs read failed, so whether any backup ran is unknown:
+               "No snapshots yet" would claim nothing has (agent-os-kdqm). */
+            <EmptyState
+              title="No snapshots listed"
+              description="The repository answered and holds no snapshots for this stack. Recent runs could not be loaded, so whether earlier backups ran is unknown."
+            />
+          ) : hasSuccessfulBackupRuns ? (
             /* The hedge is GONE, and removing it is the point rather than a
                tidy-up. agent-os-eo4u tried this and reverted, correctly at the
                time: listSnapshots still answered 200 with an EMPTY ARRAY when
@@ -577,7 +603,19 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
           </div>
         )}
 
-        {!runsLoading && runs.length === 0 && (
+        {runsLoadFailed && (
+          <LoadFailedNotice what="the backup runs" onRetry={() => void refetchRuns()} />
+        )}
+
+        {runsRefreshFailed && (
+          <RefreshFailedNotice
+            what="the backup runs"
+            onRetry={() => void refetchRuns()}
+            className="mb-3"
+          />
+        )}
+
+        {!runsLoading && !runsLoadFailed && runs.length === 0 && (
           <EmptyState
             title="No backup runs yet"
             description="Backup run history will appear here once backups have been executed."
