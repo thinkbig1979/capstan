@@ -298,7 +298,7 @@ func (h *SettingsHandler) GetGlobalEnv(c *gin.Context) {
 	locked := !envUnlocked(c)
 	if locked {
 		for i := range envVars {
-			if isSensitiveEnvKey(envVars[i]["key"]) {
+			if services.IsSensitiveEnvKey(envVars[i]["key"]) {
 				envVars[i]["value"] = ""
 			}
 		}
