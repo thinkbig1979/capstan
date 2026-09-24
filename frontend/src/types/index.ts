@@ -212,7 +212,9 @@ export interface AuthResponse {
 export interface ConfiguredDir {
   path: string
   name: string
-  isDefault: boolean
+  // Optional: GET /directories and POST /directories/scan serialise
+  // models.Directory, which has no such field (agent-os-zfa5).
+  isDefault?: boolean
   stackCount?: number
   isGitRepo?: boolean
   gitBranch?: string
