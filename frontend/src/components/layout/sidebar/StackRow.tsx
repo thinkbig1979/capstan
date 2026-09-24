@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router'
 import { Badge } from '@/components/ui/badge'
-import { CheckSquare, Square as SquareIcon, Star } from 'lucide-react'
+import { CheckSquare, Pin, Square as SquareIcon } from 'lucide-react'
 import type { Stack } from '@/types'
 import { statusDotColor } from './constants'
 
@@ -103,7 +103,7 @@ export function StackRow({ stack, selecting, selected, onToggleSelect, pinned, o
             : 'text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100'
         }`}
       >
-        <Star className={`h-3 w-3 ${pinned ? 'fill-current' : ''}`} />
+        <Pin className={`h-3 w-3 ${pinned ? 'fill-current' : ''}`} />
       </button>
     </Link>
   )
