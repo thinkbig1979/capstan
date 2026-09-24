@@ -648,6 +648,10 @@ type DashboardDB interface {
 	GetStackByProjectName(projectName string) (*models.Stack, error)
 }
 
+// errNoDashboardDB is the cause resolveDashboardStackAssociation reports when a
+// caller supplied no database, so the once-per-call log names it.
+var errNoDashboardDB = errors.New("no database supplied for the compose stack lookup")
+
 // dashboardStackAssociation is how one container's compose project resolved
 // against the stacks table for the dashboard.
 //
@@ -674,7 +678,15 @@ type dashboardStackAssociation struct {
 //
 // It returns the error as well as the flag so the caller keeps its existing
 // once-per-call log line; the flag is what reaches the wire.
+//
+// A nil db with a compose project is a failed lookup, not an absent row
+// (agent-os-oafx): lookupStackByProject answers nil db with (nil, nil), and
+// passing that through told GET /resources/containers' consumer that every
+// compose container was genuinely not a stack when nothing had been read.
 func resolveDashboardStackAssociation(db DashboardDB, projectName string) (dashboardStackAssociation, error) {
+	if db == nil && projectName != "" {
+		return dashboardStackAssociation{LookupFailed: true}, errNoDashboardDB
+	}
 	stack, err := lookupStackByProject(db, projectName)
 	switch {
 	case err != nil:
