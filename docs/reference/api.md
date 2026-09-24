@@ -183,7 +183,9 @@ With a live token, all four behave exactly as they did before.
   after `..` is resolved, not start with `:` (git pathspec magic), contain no
   NUL and be at most 4096 bytes, else **400 `VALIDATION_ERROR` "Invalid file
   path"** (agent-os-tyl6; git refused such paths and the route answered 500)
-- `GET /api/v1/git/diff/:hash` — commit diff
+- `GET /api/v1/git/diff/:hash` — commit diff. `:hash` must be 7–64 lowercase
+  hex characters, else **400 `VALIDATION_ERROR` "Invalid commit hash format"**
+  (the 64 upper bound is agent-os-tyl6; longer values answered 500)
 
 ## Monitoring & Dashboard
 

@@ -402,12 +402,12 @@ func isValidLogFile(file string) bool {
 	return cleaned != ".." && !strings.HasPrefix(cleaned, "../")
 }
 
+// validHashRegex accepts an abbreviated or full object id: 7 hex characters
+// (git's shortest abbreviation) up to 64 (a SHA-256 repository). It had no
+// upper bound, so an over-long value reached git and answered 500, past
+// ~128 KiB as an execve "Argument list too long" (agent-os-tyl6).
+var validHashRegex = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+
 func isValidHash(hash string) bool {
-	if len(hash) == 40 {
-		return regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(hash)
-	}
-	if len(hash) >= 7 {
-		return regexp.MustCompile(`^[0-9a-f]{7,}$`).MatchString(hash)
-	}
-	return false
+	return validHashRegex.MatchString(hash)
 }

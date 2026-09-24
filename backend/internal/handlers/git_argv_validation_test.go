@@ -91,3 +91,27 @@ func TestGitGetLog_FileParam(t *testing.T) {
 		assert.Equal(t, float64(1), decodeBody(t, w)["total"])
 	})
 }
+
+// TestGitGetDiff_OverLongHash pins agent-os-tyl6: a hex hash longer than any
+// object id answered 500 (git "unknown revision", or execve E2BIG past
+// ~128 KiB). It is now refused before git runs.
+func TestGitGetDiff_OverLongHash(t *testing.T) {
+	r, dir, hash := newGitArgvRouter(t)
+	diffURL := func(h string) string { return "/api/git/diff/" + h + "?dir=" + dir }
+
+	for name, h := range map[string]string{
+		"65 hex":     strings.Repeat("a", 65),
+		"200000 hex": strings.Repeat("a", 200000),
+	} {
+		t.Run("rejects "+name, func(t *testing.T) {
+			w := gitArgvGet(r, diffURL(h))
+			require.Equal(t, http.StatusBadRequest, w.Code, "body=%.300s", w.Body.String())
+			assert.Equal(t, "Invalid commit hash format", decodeBody(t, w)["message"])
+		})
+	}
+
+	t.Run("accepts the real 40-char hash", func(t *testing.T) {
+		w := gitArgvGet(r, diffURL(hash))
+		require.Equal(t, http.StatusOK, w.Code, "body=%.300s", w.Body.String())
+	})
+}
