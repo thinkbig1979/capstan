@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 // fakePinger records how often it was called, so a test can assert that
@@ -290,6 +291,31 @@ func TestNonLoopbackDeniedByDefault(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Errorf("GET %s from 10.1.2.3: status = %d, want %d — the default must not widen exposure",
 				path, w.Code, http.StatusForbidden)
+		}
+	}
+}
+
+// TestDeniedBodyIsAnAppError pins the 403 body to the AppError {code, message}
+// shape every other refusal uses (agent-os-bjlu). It was a bare {"error": ...},
+// the last such body in handlers. No probe reads it: the container HEALTHCHECK
+// comes from loopback, which is always allowed, and discards the body anyway.
+func TestDeniedBodyIsAnAppError(t *testing.T) {
+	r := healthRouter(NewHealthHandler(&fakePinger{}, ""))
+
+	for _, path := range []string{"/health", "/health/ready"} {
+		w := requestFrom(r, path, "10.1.2.3")
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("GET %s from 10.1.2.3: status = %d, want %d", path, w.Code, http.StatusForbidden)
+		}
+		body := decodeHealthBody(t, w)
+		if body["code"] != models.ErrForbidden {
+			t.Errorf("GET %s denied: code = %v, want %q (body %s)", path, body["code"], models.ErrForbidden, w.Body.String())
+		}
+		if msg, _ := body["message"].(string); !strings.Contains(msg, "HEALTH_ALLOWED_NETWORKS") {
+			t.Errorf("GET %s denied: message = %q, want it to name HEALTH_ALLOWED_NETWORKS", path, msg)
+		}
+		if _, bare := body["error"]; bare {
+			t.Errorf("GET %s denied: body still carries the bare \"error\" key: %s", path, w.Body.String())
 		}
 	}
 }

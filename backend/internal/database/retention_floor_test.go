@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 // MinRetentionDays is documented on the constant as a property of PRUNING
@@ -19,23 +21,29 @@ import (
 // including one written seconds ago. TestRetentionFloor_UnguardedSQLWipesTable
 // keeps that demonstration in the suite so these guards never look decorative.
 //
-// Negative values are NOT worse, contrary to the obvious reading: `'-' || -1`
-// concatenates to the string "--1 days", which SQLite does not accept as a
-// modifier, so datetime() yields NULL, `col < NULL` is NULL, and the DELETE
-// matches nothing. OBSERVED at a2c97e7 via a throwaway probe on this fixture:
-// v=-1 and v=-30 both left every seeded row in place in all three tables, while
-// v=0 left none. A sub-floor negative is therefore a silently ineffective prune
-// rather than a wipe. It is refused here anyway: it is equally out of contract,
-// and its silence is its own bug (unbounded growth was agent-os-0jp).
+// For update_history and backup_runs, negative values are NOT worse, contrary
+// to the obvious reading: `'-' || -1` concatenates to the string "--1 days",
+// which SQLite does not accept as a modifier, so strftime() yields NULL,
+// `col < NULL` is NULL, and the DELETE matches nothing. OBSERVED at a2c97e7 via
+// a throwaway probe on this fixture (then with datetime(), which agent-os-h8qa
+// replaced with strftime(); TestRetentionFloor_NegativeIsANoOpNotAWipe re-checks
+// it). It is refused anyway: it is equally out of contract, and its silence is
+// its own bug (unbounded growth was agent-os-0jp).
+//
+// For action_log a negative IS a wipe since agent-os-h8qa: its cutoff is
+// computed in Go (actionLogCutoff), and a negative retention is a cutoff in the
+// future. TestRetentionFloor_UnguardedActionLogNegativeWipes shows it.
 
-// seedActionLog inserts an action_log row created daysAgo days in the past.
+// seedActionLog inserts an action_log row created daysAgo days in the past,
+// through LogAction so the row carries the driver's real stored spelling (a
+// local-zone t.String(), agent-os-h8qa) rather than one a fixture picked.
 // action_log has no FK on user_id since migration v9, so a bare actor is fine.
 func seedActionLog(t *testing.T, d *DB, id string, daysAgo int) {
 	t.Helper()
-	when := time.Now().AddDate(0, 0, -daysAgo).UTC().Format(time.RFC3339)
-	_, err := d.db.Exec(`INSERT INTO action_log (id, user_id, action, detail, created_at)
-		VALUES (?, ?, ?, ?, ?)`, id, "u-"+id, "test.action", "seeded", when)
-	if err != nil {
+	if err := d.LogAction(models.ActionLog{
+		ID: id, UserID: "u-" + id, Action: "test.action", Detail: "seeded",
+		CreatedAt: time.Now().AddDate(0, 0, -daysAgo),
+	}); err != nil {
 		t.Fatalf("seed action_log %s: %v", id, err)
 	}
 }
@@ -169,15 +177,19 @@ func TestRetentionFloor_UnguardedSQLWipesTable(t *testing.T) {
 	seedActionLog(t, db, "ancient", 400)
 	seedActionLog(t, db, "fresh", 1)
 
-	for _, tc := range []struct{ stmt, table string }{
-		{deleteOldUpdateHistoryStmt, "update_history"},
-		{deleteOldBackupRunsStmt, "backup_runs"},
-		{deleteOldActionLogsStmt, "action_log"},
+	for _, tc := range []struct {
+		stmt, table string
+		arg         any
+	}{
+		{deleteOldUpdateHistoryStmt, "update_history", 0},
+		{deleteOldBackupRunsStmt, "backup_runs", 0},
+		// The same bind DeleteOldActionLogs(0) would issue.
+		{deleteOldActionLogsStmt, "action_log", actionLogCutoff(0)},
 	} {
 		if got := countRows(t, db, tc.table); got != 2 {
 			t.Fatalf("precondition: %s has %d rows, want 2", tc.table, got)
 		}
-		if _, err := db.db.Exec(tc.stmt, 0); err != nil {
+		if _, err := db.db.Exec(tc.stmt, tc.arg); err != nil {
 			t.Fatalf("unguarded %s at 0 days: %v", tc.table, err)
 		}
 		// Not "the old row went" — everything went, including a row one day old.
@@ -198,19 +210,20 @@ func TestRetentionFloor_UnguardedSQLWipesTable(t *testing.T) {
 // TestRetentionFloor_NegativeIsANoOpNotAWipe records the measured behaviour the
 // guard's doc comment asserts, so the comment cannot quietly become false.
 // "-1 is worse than 0" is the intuitive reading and it is wrong: `'-' || -1` is
-// the string "--1 days", not a modifier SQLite accepts, so datetime() is NULL
-// and the predicate matches nothing.
+// the string "--1 days", not a modifier SQLite accepts, so strftime() is NULL
+// and the predicate matches nothing. action_log is the exception, see the next
+// test.
 func TestRetentionFloor_NegativeIsANoOpNotAWipe(t *testing.T) {
 	db := newRetentionTestDB(t)
 	seedUpdateHistory(t, db, "ancient", 400)
 	seedUpdateHistory(t, db, "fresh", 1)
 
 	var modifier any
-	if err := db.db.QueryRow(`SELECT datetime('now', '-' || ? || ' days')`, -1).Scan(&modifier); err != nil {
+	if err := db.db.QueryRow(`SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-' || ? || ' days')`, -1).Scan(&modifier); err != nil {
 		t.Fatalf("evaluating the -1 modifier: %v", err)
 	}
 	if modifier != nil {
-		t.Errorf("datetime() with -1 returned %v, want NULL — the guard comment's "+
+		t.Errorf("strftime() with -1 returned %v, want NULL — the guard comment's "+
 			"reasoning about negatives no longer holds", modifier)
 	}
 
@@ -220,5 +233,27 @@ func TestRetentionFloor_NegativeIsANoOpNotAWipe(t *testing.T) {
 	if got := countRows(t, db, "update_history"); got != 2 {
 		t.Errorf("unguarded prune at -1 days deleted %d of 2 rows; negatives are "+
 			"no longer inert and the severity note needs revisiting", 2-got)
+	}
+}
+
+// TestRetentionFloor_UnguardedActionLogNegativeWipes is the negative arm for
+// action_log's negatives. Its cutoff is computed in Go (actionLogCutoff), so a
+// negative retention is a cutoff in the future and the unguarded statement
+// deletes every row, including one written a moment ago. Paired with
+// TestDeleteOldActionLogs_RefusesBelowFloor, which leaves both rows intact for
+// the same values, this shows the floor guard is what stops the wipe.
+func TestRetentionFloor_UnguardedActionLogNegativeWipes(t *testing.T) {
+	for _, days := range []int{-1, -30} {
+		db := newRetentionTestDB(t)
+		seedActionLog(t, db, "ancient", 400)
+		seedActionLog(t, db, "fresh", 0)
+
+		if _, err := db.db.Exec(deleteOldActionLogsStmt, actionLogCutoff(days)); err != nil {
+			t.Fatalf("unguarded action_log at %d days: %v", days, err)
+		}
+		if got := countRows(t, db, "action_log"); got != 0 {
+			t.Errorf("unguarded action_log at %d days left %d rows, want 0; if negatives "+
+				"are inert again, update the errBelowRetentionFloor comment", days, got)
+		}
 	}
 }
