@@ -256,9 +256,16 @@ export function classifyError(error: unknown): AppError {
     // agent-os-nud8: detail values are not all strings. The compose 422s send
     // details.lintResults as an array of objects, which a template literal
     // renders as "[object Object]"; JSON keeps it readable (as agent-os-w44n).
+    // agent-os-rwlw: a genuine LintResult array reads as lines instead, and
+    // Put's `saved: false` is dropped beside it -- a 422 already means unsaved.
+    const lintSummary = summarizeLintResults(details?.lintResults)
     const fieldMessage = details
       ? Object.entries(details)
-          .map(([field, value]) => `${field}: ${value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value)}`)
+          .flatMap(([field, value]) => {
+            if (lintSummary && field === 'lintResults') return [lintSummary]
+            if (lintSummary && field === 'saved') return []
+            return [`${field}: ${value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value)}`]
+          })
           .join(', ')
       : message
 
@@ -356,6 +363,43 @@ export function classifyError(error: unknown): AppError {
     originalError: error,
     action: 'Contact Support',
   }
+}
+
+type LintEntry = { level: string; line: number; message: string; rule: string }
+
+const LINT_SUMMARY_MAX = 3
+
+function isLintEntry(value: unknown): value is LintEntry {
+  if (value === null || typeof value !== 'object') return false
+  const v = value as Record<string, unknown>
+  return typeof v.level === 'string' && typeof v.line === 'number' &&
+    typeof v.message === 'string' && typeof v.rule === 'string'
+}
+
+function lintRank(level: string): number {
+  if (level === 'error') return 0
+  if (level === 'warning') return 1
+  return 2
+}
+
+/**
+ * The compose 422s' details.lintResults as "Line 4: message (rule); ...",
+ * errors first, or null when the value is not a non-empty LintResult array
+ * (the caller then falls back to JSON). Non-errors carry their level so a
+ * warning cannot read as an error; line 0 and an empty rule are omitted, as
+ * LintResultsPanel does.
+ */
+function summarizeLintResults(value: unknown): string | null {
+  if (!Array.isArray(value) || value.length === 0 || !value.every(isLintEntry)) return null
+  const sorted = [...value].sort((a, b) => lintRank(a.level) - lintRank(b.level))
+  const lines = sorted.slice(0, LINT_SUMMARY_MAX).map((r) => {
+    const level = r.level === 'error' ? '' : `(${r.level})`
+    const where = r.line ? `Line ${r.line}${level ? ` ${level}` : ''}: ` : level ? `${level} ` : ''
+    return `${where}${r.message}${r.rule ? ` (${r.rule})` : ''}`
+  })
+  const rest = sorted.length - LINT_SUMMARY_MAX
+  if (rest > 0) lines.push(`+${rest} more`)
+  return lines.join('; ')
 }
 
 /**
