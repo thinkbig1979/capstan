@@ -34,10 +34,11 @@ type fakeDocker struct {
 	stopCalls  []models.Stack
 	startCalls []models.Stack
 
-	stopErr   error
-	startErr  error
-	statusStr string // returned by Status; default "stopped"
-	statusErr error  // when set, Status returns this error instead of statusStr
+	stopErr      error
+	startErr     error
+	startPartial string // when set, StartVerified reports OutcomePartial with this reason
+	statusStr    string // returned by Status; default "stopped"
+	statusErr    error  // when set, Status returns this error instead of statusStr
 }
 
 func (f *fakeDocker) StopVerified(stack models.Stack) (truth.ActionResult, string) {
@@ -56,6 +57,9 @@ func (f *fakeDocker) StartVerified(stack models.Stack) (truth.ActionResult, stri
 	f.startCalls = append(f.startCalls, stack)
 	if f.startErr != nil {
 		return truth.Failed("start failed", f.startErr), ""
+	}
+	if f.startPartial != "" {
+		return truth.Partial(f.startPartial), ""
 	}
 	return truth.Success("stack running"), ""
 }
@@ -1385,6 +1389,168 @@ func TestRunRestore_FailedRestoreLeavesStackStopped(t *testing.T) {
 	}
 	assert.True(t, found,
 		"stream must tell the operator the stack was left stopped for inspection; got %v", lines)
+}
+
+// deliberateStopMarker is the phrase that tells an operator a failed restore
+// left the stack down on purpose (N13, agent-os-4pa.7).
+const deliberateStopMarker = "left stopped deliberately"
+
+// TestRunRestore_DeliberateStopExplanationSurvivesWithoutAStream is
+// agent-os-evtz. TestRunRestore_FailedRestoreLeavesStackStopped above drains a
+// 128-slot channel, the one configuration in which stream() always delivers,
+// so it cannot see that the explanation existed ONLY as a best-effort stream
+// line. Here nobody receives it: no channel at all, and a zero-capacity
+// channel nobody reads (stream()'s default: drop arm). The explanation must
+// still come back in the returned error, which execRestore stores as the run
+// record's error_message.
+func TestRunRestore_DeliberateStopExplanationSurvivesWithoutAStream(t *testing.T) {
+	t.Parallel()
+
+	outs := map[string]chan StreamLine{
+		"no client attached (nil channel)":        nil,
+		"full buffer (zero-capacity, never read)": make(chan StreamLine),
+	}
+	for name, out := range outs {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			db := newBackupTestDB(t)
+			docker := &fakeDocker{statusStr: "running"}
+			runner := &restoreFailingRunner{
+				fakeRunner: fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")},
+			}
+			svc := buildSvc(t, db, docker, runner, runner)
+			seedStack(t, db, "myapp", "stop")
+
+			err := svc.RunRestore(context.Background(), "myapp", "abc123", "/opt/stacks/myapp", out)
+			require.Error(t, err)
+			require.Equal(t, 0, docker.started(), "N13: a failed restore must not restart the stack")
+			assert.Contains(t, err.Error(), deliberateStopMarker)
+			assert.Contains(t, err.Error(), "/opt/stacks/myapp", "the explanation names what to inspect")
+			assert.Contains(t, err.Error(), "injected restore failure", "the cause must survive the wrap")
+		})
+	}
+}
+
+// TestLaunchRestore_DeliberateStopIsInTheRunRecord follows the explanation to
+// where it is actually stored: the backup_runs row, read back from the DB.
+func TestLaunchRestore_DeliberateStopIsInTheRunRecord(t *testing.T) {
+	db := newBackupTestDB(t)
+	runner := &restoreFailingRunner{
+		fakeRunner: fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")},
+	}
+	svc := buildSvc(t, db, &fakeDocker{statusStr: "running"}, runner, runner)
+	seedStack(t, db, "myapp", "stop")
+	reg := NewBackupRunnerRegistry(db, svc, slog.Default())
+
+	runID, err := reg.LaunchRestore("myapp", "abc123", "/opt/stacks/myapp")
+	require.NoError(t, err)
+	reg.Stop() // waits for the exec goroutine to finish and finalise the row
+
+	run, err := db.GetBackupRunByID(runID)
+	require.NoError(t, err)
+	t.Logf("stored run: status=%q errorMessage=%q", run.Status, run.ErrorMessage)
+	assert.Equal(t, "failed", run.Status)
+	assert.Contains(t, run.ErrorMessage, deliberateStopMarker)
+}
+
+// TestRunRestore_NoDeliberateStopClaimWhenNothingWasStopped is the control for
+// agent-os-evtz: the explanation is a claim that the guard fired, so it must
+// be absent wherever the stack was never stopped. Claiming it would be a new
+// fault-shown-as-a-benign-state instance of the same class.
+func TestRunRestore_NoDeliberateStopClaimWhenNothingWasStopped(t *testing.T) {
+	t.Parallel()
+
+	t.Run("snapshot validation fails before the stop", func(t *testing.T) {
+		t.Parallel()
+		db := newBackupTestDB(t)
+		docker := &fakeDocker{statusStr: "running"}
+		// The stack's snapshot list does not contain the requested id, so
+		// validation refuses before anything is stopped.
+		runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")}
+		svc := buildSvc(t, db, docker, runner, runner)
+		seedStack(t, db, "myapp", "stop")
+
+		err := svc.RunRestore(context.Background(), "myapp", "zzz999", "/opt/stacks/myapp", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "snapshot validation")
+		assert.Equal(t, 0, docker.stopped())
+		assert.NotContains(t, err.Error(), deliberateStopMarker)
+	})
+
+	t.Run("hot policy: restore fails but the stack was never stopped", func(t *testing.T) {
+		t.Parallel()
+		db := newBackupTestDB(t)
+		docker := &fakeDocker{statusStr: "running"}
+		runner := &restoreFailingRunner{
+			fakeRunner: fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")},
+		}
+		svc := buildSvc(t, db, docker, runner, runner)
+		seedStack(t, db, "myapp", "hot")
+
+		err := svc.RunRestore(context.Background(), "myapp", "abc123", "/opt/stacks/myapp", nil)
+		require.Error(t, err)
+		assert.Equal(t, 0, docker.stopped())
+		assert.NotContains(t, err.Error(), deliberateStopMarker)
+	})
+}
+
+// TestLaunchRestore_IncompleteRestartIsInTheRunRecord is the sibling half of
+// agent-os-evtz: a restore that landed but whose stack did not fully come back
+// used to finish as a plain "success" (the partial arm only logged a warning,
+// the failed arm only streamed). The run record must say so, as "partial"
+// rather than "failed", because the restore itself did succeed.
+func TestLaunchRestore_IncompleteRestartIsInTheRunRecord(t *testing.T) {
+	tests := []struct {
+		name       string
+		docker     *fakeDocker
+		wantStatus string
+		wantMsg    []string
+	}{
+		{
+			name:       "clean restart stays success",
+			docker:     &fakeDocker{statusStr: "running"},
+			wantStatus: "success",
+		},
+		{
+			name:       "partial restart",
+			docker:     &fakeDocker{statusStr: "running", startPartial: "1 of 3 containers not running"},
+			wantStatus: "partial",
+			wantMsg:    []string{"restore completed", "partially succeeded", "1 of 3 containers not running"},
+		},
+		{
+			name:       "failed restart",
+			docker:     &fakeDocker{statusStr: "running", startErr: errors.New("port already allocated")},
+			wantStatus: "partial",
+			wantMsg:    []string{"restore completed", "failed", "port already allocated"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newBackupTestDB(t)
+			runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")}
+			svc := buildSvc(t, db, tc.docker, runner, runner)
+			seedStack(t, db, "myapp", "stop")
+			reg := NewBackupRunnerRegistry(db, svc, slog.Default())
+
+			runID, err := reg.LaunchRestore("myapp", "abc123", "/opt/stacks/myapp")
+			require.NoError(t, err)
+			reg.Stop()
+
+			run, err := db.GetBackupRunByID(runID)
+			require.NoError(t, err)
+			t.Logf("stored run: status=%q errorMessage=%q", run.Status, run.ErrorMessage)
+			assert.Equal(t, 1, tc.docker.started(), "a successful restore restarts the stack it stopped")
+			assert.Equal(t, tc.wantStatus, run.Status)
+			if len(tc.wantMsg) == 0 {
+				assert.Empty(t, run.ErrorMessage)
+			}
+			for _, m := range tc.wantMsg {
+				assert.Contains(t, run.ErrorMessage, m)
+			}
+			assert.NotContains(t, run.ErrorMessage, deliberateStopMarker,
+				"the restore succeeded, so the N13 guard never fired")
+		})
+	}
 }
 
 // TestRunRestore_RunStateDecidesRestart covers the second site of agent-os-uacg:

@@ -461,6 +461,53 @@ describe('BackupHistoryTab — expandable run rows', () => {
     expect(screen.getByText('disk full')).toBeInTheDocument()
   })
 
+  /**
+   * agent-os-evtz. A restore run has no per-stack items, so the run's own
+   * errorMessage is the only durable record of WHY a failed restore left the
+   * stack stopped, or that a restored stack did not fully restart. It used to
+   * be fetched and never rendered: the panel said "No per-stack records".
+   */
+  const STOPPED_MSG =
+    'restic restore: exit 1; stack left stopped deliberately so you can inspect /opt/stacks/app and retry (not auto-restarting over a possibly partial restore)'
+  const PARTIAL_MSG =
+    'restore completed, but restarting stack app partially succeeded: 1 of 3 containers not running'
+
+  it.each([
+    ['failed', STOPPED_MSG, 'text-destructive'],
+    ['partial', PARTIAL_MSG, 'text-yellow-700'],
+  ] as const)('shows a %s restore run\'s error message instead of "no per-stack records"', async (status, msg, tone) => {
+    const user = userEvent.setup()
+    const restoreRun = run({ kind: 'restore', trigger: 'manual', status, stacksTotal: 0, stacksOk: 0, stacksFailed: 0, errorMessage: msg })
+    mockGetHistory.mockResolvedValue(historyPage({ runs: [restoreRun] }))
+    mockGetRun.mockResolvedValue({ run: restoreRun, items: [] })
+    renderTab()
+
+    await screen.findByText('run-1')
+    await user.click(screen.getByRole('button', { name: /Show details for run run-1/ }))
+
+    const shown = await screen.findByTestId('run-error-message-run-1')
+    expect(shown).toHaveTextContent(msg)
+    expect(shown).toHaveClass(tone)
+    expect(screen.queryByText('No per-stack records for this run.')).not.toBeInTheDocument()
+  })
+
+  it('still shows the run\'s error message when the detail fetch fails', async () => {
+    const user = userEvent.setup()
+    mockGetHistory.mockResolvedValue(
+      historyPage({ runs: [run({ kind: 'restore', status: 'failed', errorMessage: STOPPED_MSG })] }),
+    )
+    mockGetRun.mockRejectedValue(new Error('nope'))
+    renderTab()
+
+    await screen.findByText('run-1')
+    await user.click(screen.getByRole('button', { name: /Show details for run run-1/ }))
+
+    expect(
+      await screen.findByText('Failed to load run details.', {}, { timeout: 5000 }),
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('run-error-message-run-1')).toHaveTextContent(STOPPED_MSG)
+  })
+
   it('explains a run that recorded no per-stack items', async () => {
     const user = userEvent.setup()
     mockGetRun.mockResolvedValue({ run: run(), items: [] })
