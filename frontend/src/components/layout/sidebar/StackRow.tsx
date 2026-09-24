@@ -15,7 +15,14 @@ interface StackRowProps {
 
 export function StackRow({ stack, selecting, selected, onToggleSelect, pinned, onTogglePin }: StackRowProps) {
   const location = useLocation()
-  const dotColor = statusDotColor[stack.status] || statusDotColor.unknown
+  // statusStale: the live Docker read failed and stack.status is the last stored
+  // one. The sidebar has no page-level notice, so the row itself shows a neutral
+  // dot and names the stored status as a record, not a live reading (agent-os-eqif).
+  const stale = stack.statusStale === true
+  const staleTitle = stale ? `Status may be out of date (last recorded: ${stack.status})` : undefined
+  const dotColor = stale
+    ? statusDotColor.unknown
+    : statusDotColor[stack.status] || statusDotColor.unknown
 
   // Selection mode: a non-navigating row with a checkbox.
   if (selecting) {
@@ -24,6 +31,7 @@ export function StackRow({ stack, selecting, selected, onToggleSelect, pinned, o
         type="button"
         onClick={onToggleSelect}
         aria-pressed={selected}
+        title={staleTitle}
         className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm w-full text-left transition-colors ${
           selected
             ? 'bg-sidebar-accent text-sidebar-accent-foreground'
@@ -50,7 +58,12 @@ export function StackRow({ stack, selecting, selected, onToggleSelect, pinned, o
           ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
           : 'hover:bg-sidebar-accent/50 text-sidebar-foreground'
       }`}
-      aria-label={`${stack.projectName} - ${stack.status}`}
+      aria-label={
+        stale
+          ? `${stack.projectName} - status may be out of date (last recorded: ${stack.status})`
+          : `${stack.projectName} - ${stack.status}`
+      }
+      title={staleTitle}
     >
       <span className={`h-2 w-2 rounded-full shrink-0 ${dotColor}`} aria-hidden="true" />
       <span className="flex-1 truncate font-mono text-[12.5px]">{stack.projectName}</span>
