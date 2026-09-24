@@ -74,6 +74,7 @@ function OverviewTabContent({
         <ContainerList
           containers={stack.containers || []}
           stackId={stack.id}
+          statusStale={stack.statusStale === true}
           latestMetrics={latestMetrics}
           metricNames={metricContainers}
           onShowLogs={(name) => onTabChange(`logs?container=${encodeURIComponent(name)}`)}

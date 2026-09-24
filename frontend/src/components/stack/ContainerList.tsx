@@ -24,6 +24,11 @@ interface ContainerListProps {
   metricNames?: ContainerMetricHistory[]
   onShowLogs?: (containerName: string) => void
   onOpenShell?: (containerId: string) => void
+  /**
+   * The stack's live Docker read failed (agent-os-xjzr). The server then sends
+   * containers: [], which says nothing about whether the stack is stopped.
+   */
+  statusStale?: boolean
 }
 
 const CONTAINER_SEARCH_FIELDS = [
@@ -152,6 +157,7 @@ export function ContainerList({
   metricNames,
   onShowLogs,
   onOpenShell,
+  statusStale = false,
 }: ContainerListProps) {
   const { query, setQuery, filtered } = useTextFilter(containers ?? [], CONTAINER_SEARCH_FIELDS)
   const queryClient = useQueryClient()
@@ -183,7 +189,9 @@ export function ContainerList({
   if (!containers || containers.length === 0) {
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground">
-        Stack is stopped. Start it to see containers.
+        {statusStale
+          ? 'Containers unavailable: could not read live status from Docker.'
+          : 'Stack is stopped. Start it to see containers.'}
       </div>
     )
   }

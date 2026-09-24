@@ -197,7 +197,9 @@ export function useStackEvents() {
     queryClient.setQueryData(queryKeys.stacks(), (old: Stack[] | undefined) => {
       if (!old) return old
       return old.map((stack) =>
-        stack.id === event.stackId ? { ...stack, status: event.status } : stack
+        // The status now comes from Docker's event stream, so it is no longer
+        // the stored one the server flagged stale (agent-os-xjzr).
+        stack.id === event.stackId ? { ...stack, status: event.status, statusStale: false } : stack
       )
     })
     scheduleInvalidations([

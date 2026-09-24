@@ -336,3 +336,21 @@ describe('ContainerList', () => {
     expect(screen.getByText('Ports')).toBeInTheDocument()
   })
 })
+
+// agent-os-xjzr: when the live Docker read failed the server sends the stored
+// status with containers: [] (emptyStack, database/stacks.go), so the empty
+// list says nothing about whether the stack is stopped. Two-sided: a live
+// empty list keeps the stopped message.
+describe('ContainerList empty state when status is stale', () => {
+  it('says containers are unavailable, not that the stack is stopped', () => {
+    renderList({ containers: [], statusStale: true })
+    expect(screen.getByText(/Containers unavailable: could not read live status from Docker/)).toBeInTheDocument()
+    expect(screen.queryByText(/Stack is stopped/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the stopped message when the status is live', () => {
+    renderList({ containers: [] })
+    expect(screen.getByText('Stack is stopped. Start it to see containers.')).toBeInTheDocument()
+    expect(screen.queryByText(/Containers unavailable/)).not.toBeInTheDocument()
+  })
+})
