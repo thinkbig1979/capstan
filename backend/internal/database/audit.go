@@ -26,8 +26,12 @@ func (d *DB) LogAction(log models.ActionLog) error {
 	return err
 }
 
+// detail is nullable, and a NULL scanned into a plain string fails rows.Scan
+// and loses the whole list (agent-os-d1c7). No Capstan writer stores a NULL,
+// so the COALESCE here and in the two other action_log readers guards
+// databases edited or written outside Capstan.
 func (d *DB) GetActionsByStack(stackID string, limit int) ([]models.ActionLog, error) {
-	query := `SELECT id, user_id, stack_id, action, detail, request_id, created_at
+	query := `SELECT id, user_id, stack_id, action, COALESCE(detail, ''), request_id, created_at
 	          FROM action_log WHERE stack_id = ? ORDER BY created_at DESC LIMIT ?`
 	rows, err := d.db.Query(query, stackID, limit)
 	if err != nil {
@@ -54,7 +58,7 @@ func (d *DB) GetActionsByStack(stackID string, limit int) ([]models.ActionLog, e
 }
 
 func (d *DB) GetRecentActions(limit int) ([]models.ActionLog, error) {
-	query := `SELECT id, user_id, stack_id, action, detail, request_id, created_at
+	query := `SELECT id, user_id, stack_id, action, COALESCE(detail, ''), request_id, created_at
 	          FROM action_log ORDER BY created_at DESC LIMIT ?`
 	rows, err := d.db.Query(query, limit)
 	if err != nil {
@@ -144,7 +148,7 @@ func (d *DB) ListActionLogsFiltered(limit, offset int, f ActionLogFilter) ([]mod
 		return nil, 0, err
 	}
 
-	query := `SELECT id, user_id, stack_id, action, detail, request_id, created_at
+	query := `SELECT id, user_id, stack_id, action, COALESCE(detail, ''), request_id, created_at
 	          FROM action_log` + whereClause + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	queryArgs := append(append([]interface{}{}, args...), limit, offset)
 	rows, err := d.db.Query(query, queryArgs...)

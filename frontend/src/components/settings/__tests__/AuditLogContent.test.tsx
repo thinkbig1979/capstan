@@ -147,6 +147,20 @@ describe('AuditLogContent — the table', () => {
     expect(await screen.findByText('path: /srv/stacks/my-long-project')).toBeInTheDocument()
   })
 
+  // agent-os-w44n: String() rendered a nested object as "[object Object]" and
+  // flattened an array to "a,b". Non-primitive values are shown as JSON.
+  it('shows nested object, array and null values as JSON, not [object Object]', async () => {
+    mockGetAuditLog.mockResolvedValue(
+      page({ entries: [entry({ detail: '{"target":{"id":"x"},"names":["a","b"],"reason":null,"count":5}' })] }),
+    )
+    renderPanel()
+
+    expect(
+      await screen.findByText('target: {"id":"x"} · names: ["a","b"] · reason: null · count: 5'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/\[object Object\]/)).not.toBeInTheDocument()
+  })
+
   it('shows a non-JSON detail verbatim, with nothing to expand', async () => {
     mockGetAuditLog.mockResolvedValue(
       page({ entries: [entry({ detail: 'plain text reason' })] }),
