@@ -97,6 +97,20 @@ describe('BackupStatusCard — zero-stack backup badge', () => {
     expect(screen.getByText('No stacks backed up')).toBeInTheDocument()
   })
 
+  // agent-os-4i7r: a scheduled backup that never started gets its own grey
+  // badge, never Failed and never a blank.
+  it('shows a grey Skipped badge when the last run was skipped', () => {
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeStatus(makeRun({ status: 'skipped', stacksTotal: 0, stacksOk: 0 })),
+      isLoading: false,
+    })
+    renderCard()
+
+    const badge = screen.getByText('Skipped')
+    expect(badge.className).toContain('gray')
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
+  })
+
   it('still shows the green Success badge for a backup run that backed up stacks', () => {
     ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
       data: makeStatus(makeRun({ kind: 'backup', status: 'success', stacksTotal: 2, stacksOk: 2 })),

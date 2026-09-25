@@ -186,7 +186,8 @@ export type BackupPolicy = Omit<WireBackupPolicy, 'targetType' | 'stopPolicy'> &
 export type BackupRun = Omit<WireBackupRun, 'kind' | 'trigger' | 'status'> & {
   kind: 'backup' | 'sync' | 'restore' | 'dr_restore' | 'prune' | 'verify'
   trigger: 'manual' | 'scheduled'
-  status: 'running' | 'success' | 'partial' | 'failed' | 'interrupted'
+  // 'skipped' (agent-os-4i7r): a scheduled backup that never started.
+  status: 'running' | 'success' | 'partial' | 'failed' | 'interrupted' | 'skipped'
 }
 
 // narrows models.BackupRunItem.Status, a Go string

@@ -6,7 +6,7 @@ import type { BackupRun } from '@/types'
  * The tone mapping for a backup run's status, shared by the per-stack Backups
  * tab and the dashboard's install-wide backup history. It lives here rather
  * than in either consumer so the two surfaces cannot drift apart on what a
- * status means. It covers the in-progress `running` state as well as the four
+ * status means. It covers the in-progress `running` state as well as the five
  * terminal ones — `running` is the entry that renders the spinner below.
  *
  * Deliberately not exported: RunStatusBadge is its only consumer, and
@@ -24,6 +24,9 @@ const RUN_STATUS_VARIANTS: Record<BackupRun['status'], { label: string; classNam
   // outcome (crash or a restore from a mid-run snapshot) and may have
   // succeeded on the original instance, so "Failed" styling would mislead.
   interrupted: { label: 'Interrupted', className: 'bg-slate-500/15 text-slate-700 dark:text-slate-400 border-slate-500/30' },
+  // Grey: a scheduled backup that never started (engine unavailable, or
+  // another operation held the lock). Nothing failed; nothing ran either.
+  skipped: { label: 'Skipped', className: 'bg-gray-500/15 text-gray-600 dark:text-gray-400 border-gray-500/30' },
 }
 
 export function RunStatusBadge({ status }: { status: BackupRun['status'] }) {

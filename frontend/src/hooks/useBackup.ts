@@ -271,7 +271,7 @@ export interface BackupStreamState {
  * deal with frontend-level status names.
  */
 function doneFrameToStatus(msg: {
-  outcome?: 'success' | 'no_change' | 'partial' | 'failed' | 'interrupted'
+  outcome?: 'success' | 'no_change' | 'partial' | 'failed' | 'interrupted' | 'skipped'
   success?: boolean
 }): BackupStreamStatus {
   if (msg.outcome) {
@@ -288,6 +288,9 @@ function doneFrameToStatus(msg: {
       // territory, not the primary status surface (that's the dashboard
       // badge, which does get its own state). 'error' is the closest bucket.
       case 'interrupted': return 'error'
+      // 'skipped' (agent-os-4i7r): a scheduled backup that never started, also
+      // reached only through Attach's DB fallback. Same bucket, same reason.
+      case 'skipped':     return 'error'
     }
   }
   // Legacy fallback: key off success boolean.
@@ -378,7 +381,7 @@ export function useBackupStreaming(): BackupStreamState {
             line?: unknown
             message?: unknown
             // Action Truth Contract fields (B5 backend, migrated backends)
-            outcome?: 'success' | 'no_change' | 'partial' | 'failed'
+            outcome?: 'success' | 'no_change' | 'partial' | 'failed' | 'interrupted' | 'skipped'
             reason?: unknown
             // Legacy fields (pre-migration backends)
             success?: boolean

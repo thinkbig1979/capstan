@@ -140,6 +140,16 @@ function LastRunBadge({
       </Badge>
     )
   }
+  if (status === 'skipped') {
+    // Grey, like interrupted: a scheduled backup that never started
+    // (agent-os-4i7r). The run's error_message in the history says why.
+    return (
+      <Badge variant="outline" className="gap-1 border-gray-300 text-gray-600 dark:text-gray-400">
+        <CircleDashed className="h-3 w-3" />
+        Skipped
+      </Badge>
+    )
+  }
   return null
 }
 

@@ -123,6 +123,7 @@ type uwfuRunner struct {
 	failLs        bool // restic ls (Verify)
 	failForget    bool // restic forget (retention)
 	failSync      bool // restic snapshots --quiet: the sync's repository preflight
+	failDB        bool // restic backup --tag DatabaseBackupTag: the database snapshot
 	failSnapsFrom int  // fail the Nth and later `restic snapshots --tag uwfuStack` (1-based); 0 = never
 
 	snapCalls int
@@ -141,6 +142,8 @@ func (r *uwfuRunner) Run(_ context.Context, name string, args []string, _ []stri
 	// retry backoff.
 	case args[0] == "snapshots" && r.failSync:
 		return errors.New("repository unreachable")
+	case args[0] == "backup" && slices.Contains(args, DatabaseBackupTag) && r.failDB:
+		return errors.New("database is locked")
 	case args[0] == "backup" && forStack && r.failBackup:
 		return errors.New("repository locked")
 	case args[0] == "ls" && r.failLs:
