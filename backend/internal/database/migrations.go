@@ -748,6 +748,70 @@ ALTER TABLE cached_updates ADD COLUMN compose_working_dir TEXT NOT NULL DEFAULT 
 ALTER TABLE cached_updates ADD COLUMN compose_config_files TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		Version: 19,
+		Name:    "backup_runs_skipped_status",
+		SQL: `
+-- backup_runs.status gains 'skipped' (agent-os-4i7r): a scheduled backup that
+-- never started because the backup engine was unavailable or another backup,
+-- sync or restore held the lock now leaves a row in the history instead of a
+-- log line only. It is distinct from 'failed' because nothing went wrong with
+-- a backup; one simply did not run.
+--
+-- Another full rebuild of backup_runs, following migration 12's recipe exactly
+-- and for the reasons documented there (read that comment first). The
+-- CREATE TABLE below is migration 16's, with only the status CHECK list
+-- widened; every column, default and the kind CHECK are unchanged, and the
+-- same four indexes are recreated. backup_run_items is rebuilt unchanged.
+CREATE TABLE backup_run_items_v19 AS SELECT * FROM backup_run_items;
+
+CREATE TABLE backup_runs_new (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL CHECK (kind IN ('backup','sync','restore','dr_restore','prune','verify')),
+    trigger       TEXT NOT NULL CHECK (trigger IN ('manual','scheduled')),
+    status        TEXT NOT NULL CHECK (status IN ('running','success','partial','failed','interrupted','skipped')),
+    started_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at   DATETIME,
+    stacks_total  INTEGER NOT NULL DEFAULT 0,
+    stacks_ok     INTEGER NOT NULL DEFAULT 0,
+    stacks_failed INTEGER NOT NULL DEFAULT 0,
+    bytes_added   INTEGER,
+    error_message TEXT
+);
+
+INSERT INTO backup_runs_new (id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message)
+SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, error_message
+FROM backup_runs;
+
+DROP TABLE backup_run_items;
+DROP TABLE backup_runs;
+
+ALTER TABLE backup_runs_new RENAME TO backup_runs;
+
+CREATE TABLE backup_run_items (
+    id            TEXT PRIMARY KEY,
+    run_id        TEXT NOT NULL,
+    stack_id      TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('skipped','success','failed')),
+    snapshot_id   TEXT,
+    stop_applied  BOOLEAN NOT NULL DEFAULT FALSE,
+    duration_ms   INTEGER,
+    error_message TEXT,
+    FOREIGN KEY (run_id) REFERENCES backup_runs(id) ON DELETE CASCADE
+);
+
+INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message)
+SELECT id, run_id, stack_id, status, snapshot_id, stop_applied, duration_ms, error_message
+FROM backup_run_items_v19;
+
+DROP TABLE backup_run_items_v19;
+
+CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_backup_runs_kind ON backup_runs(kind);
+CREATE INDEX IF NOT EXISTS idx_backup_run_items_run_id ON backup_run_items(run_id);
+CREATE INDEX IF NOT EXISTS idx_backup_run_items_stack_id ON backup_run_items(stack_id);
+`,
+	},
 }
 
 // checkNoCaseCollidingUsernames is migration 13's PreCheck. It detects

@@ -3,10 +3,12 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
@@ -392,6 +394,12 @@ func (s *BackupSchedulerService) runCycle(ctx context.Context) {
 	drainWg.Wait()
 
 	if err != nil {
+		// A nil run means RunBackup refused before it wrote a run row, so
+		// without this the history would show nothing for the missed backup
+		// (agent-os-4i7r). A non-nil run already has its own finalised row.
+		if run == nil {
+			s.recordUnstartedCycle(err)
+		}
 		if errors.Is(err, ErrBackupUnavailable) {
 			s.logger.Warn("Scheduled backup skipped: backup engine unavailable", "error", err)
 			return
@@ -411,5 +419,47 @@ func (s *BackupSchedulerService) runCycle(ctx context.Context) {
 			"stacks_ok", run.StacksOK,
 			"stacks_failed", run.StacksFailed,
 		)
+	}
+}
+
+// RunStatusSkipped is the backup_runs.status of a scheduled backup that never
+// started (agent-os-4i7r). It MUST be in the backup_runs.status CHECK
+// constraint in migrations.go (migration 19); any other value fails the INSERT.
+const RunStatusSkipped = "skipped"
+
+// recordUnstartedCycle writes a finished backup_runs row for a scheduled cycle
+// that RunBackup refused before creating one. The engine being unavailable or
+// another operation holding the lock is a skip: nothing went wrong with a
+// backup, one just did not run. Anything else (the backup settings could not
+// be read, the run row could not be written, an error this code does not know)
+// is a failure the operator has to look at. Best effort: if the database write
+// fails too, the log line is all there is.
+func (s *BackupSchedulerService) recordUnstartedCycle(cause error) {
+	status := "failed"
+	var msg string
+	switch {
+	case errors.Is(cause, ErrBackupBusy):
+		status = RunStatusSkipped
+		msg = "scheduled backup skipped: another backup, sync or restore was in progress"
+	case errors.Is(cause, ErrBackupUnavailable):
+		status = RunStatusSkipped
+		msg = "scheduled backup skipped: backup engine unavailable"
+	default:
+		msg = fmt.Sprintf("scheduled backup could not start: %v", cause)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	run := &models.BackupRun{
+		ID:           uuid.New().String(),
+		Kind:         "backup",
+		Trigger:      TriggerScheduled,
+		Status:       status,
+		StartedAt:    now,
+		FinishedAt:   &now,
+		ErrorMessage: msg,
+	}
+	if err := s.db.CreateBackupRun(run); err != nil {
+		s.logger.Error("Could not record the unstarted scheduled backup in the history",
+			"status", status, "reason", msg, "error", err)
 	}
 }

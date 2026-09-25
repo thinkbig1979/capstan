@@ -191,6 +191,7 @@ describe('BackupHistoryTab — the Stacks column per kind', () => {
   it.each([
     ['running', 'Counted when the run finishes'],
     ['interrupted', 'Not recorded'],
+    ['skipped', 'Nothing ran'],
   ] as const)('shows a dash for a backup run that is %s', async (status, title) => {
     mockGetHistory.mockResolvedValue(
       historyPage({
@@ -261,6 +262,21 @@ describe('BackupHistoryTab — the status badge', () => {
     expect(badge.className).not.toContain('destructive')
   })
 
+  // agent-os-4i7r: a scheduled backup that never started is grey, and its
+  // reason (error_message) is shown when the row is expanded.
+  it('renders a skipped run grey with its reason, not the destructive tone', async () => {
+    mockGetHistory.mockResolvedValue(
+      historyPage({
+        runs: [run({ status: 'skipped', errorMessage: 'scheduled backup skipped: backup engine unavailable' })],
+      }),
+    )
+    renderTab()
+
+    const badge = await screen.findByText('Skipped')
+    expect(badge.className).toContain('gray')
+    expect(badge.className).not.toContain('destructive')
+  })
+
   it('renders a failed run with the destructive tone — the control for the case above', async () => {
     mockGetHistory.mockResolvedValue(historyPage({ runs: [run({ status: 'failed' })] }))
     renderTab()
@@ -300,6 +316,20 @@ describe('BackupHistoryTab — the filters', () => {
       expect(mockGetHistory).toHaveBeenLastCalledWith(
         expect.objectContaining({ status: 'failed', page: 1 }),
       ),
+    )
+  })
+
+  it('offers Skipped as a status filter and sends it', async () => {
+    const user = userEvent.setup()
+    mockGetHistory.mockResolvedValue(historyPage({}))
+    renderTab()
+
+    await screen.findByText('run-1')
+    await user.click(statusSelect())
+    await user.click(await screen.findByRole('option', { name: 'Skipped' }))
+
+    await waitFor(() =>
+      expect(mockGetHistory).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'skipped' })),
     )
   })
 

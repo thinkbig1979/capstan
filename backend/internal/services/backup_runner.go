@@ -891,7 +891,10 @@ func (reg *BackupRunnerRegistry) Attach(runID string, clientGone <-chan struct{}
 	// every run from before a restart). It must count as terminal here, or
 	// the sweep's specific error_message gets discarded in favour of the
 	// generic "operation state lost" reason below.
-	isTerminal := outcome == "success" || outcome == "partial" || outcome == "failed" || outcome == "interrupted"
+	// RunStatusSkipped (agent-os-4i7r) is written already finished by the
+	// scheduler for a cycle that never started, so it is terminal as well.
+	isTerminal := outcome == "success" || outcome == "partial" || outcome == "failed" || outcome == "interrupted" ||
+		outcome == RunStatusSkipped
 	if !isTerminal {
 		// DB says "running" but no in-memory entry — likely a server restart.
 		outcome = "failed"

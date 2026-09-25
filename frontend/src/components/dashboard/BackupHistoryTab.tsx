@@ -64,6 +64,7 @@ const RUN_IS_TERMINAL: Record<BackupRun['status'], boolean> = {
   partial: true,
   failed: true,
   interrupted: true,
+  skipped: true,
 }
 
 /**
@@ -103,14 +104,15 @@ const RUN_KIND_COUNTS_STACKS: Record<BackupRun['kind'], boolean> = {
 
 /**
  * The Stacks cell. Even a backup run saves its counts only when it finishes, so
- * a running one has none yet and an interrupted one never recorded them; both
- * get a dash rather than the zero default.
+ * a running one has none yet, an interrupted one never recorded them and a
+ * skipped one never started; all three get a dash rather than the zero default.
  */
 function RunStacks({ run }: { run: BackupRun }) {
   let missing: string | null = null
   if (!RUN_KIND_COUNTS_STACKS[run.kind]) missing = `Not applicable to ${RUN_KIND_LABEL[run.kind]} runs`
   else if (run.status === 'running') missing = 'Counted when the run finishes'
   else if (run.status === 'interrupted') missing = 'Not recorded'
+  else if (run.status === 'skipped') missing = 'Nothing ran'
 
   if (missing) return <span title={missing}>-</span>
   return <>{run.stacksOk} ok / {run.stacksFailed} failed</>
@@ -426,6 +428,7 @@ export function BackupHistoryTab() {
             <SelectItem value="partial">Partial</SelectItem>
             <SelectItem value="failed">Failed</SelectItem>
             <SelectItem value="interrupted">Interrupted</SelectItem>
+            <SelectItem value="skipped">Skipped</SelectItem>
           </SelectContent>
         </Select>
 

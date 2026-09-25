@@ -428,6 +428,19 @@ describe('useBackupStreaming — refused attach is a refused stream, not a faile
     expect(onDone).toHaveBeenCalledWith('error')
   })
 
+  it('outcome:skipped maps to error with its reason (agent-os-4i7r)', async () => {
+    const wrapper = createWrapper()
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper })
+    const onDone = vi.fn()
+
+    act(() => { result.current.connect('/ws/backups/run/abc', onDone) })
+    act(() => { send({ type: 'done', outcome: 'skipped', reason: 'scheduled backup skipped: backup engine unavailable' }) })
+
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(result.current.error).toBe('scheduled backup skipped: backup engine unavailable')
+    expect(onDone).toHaveBeenCalledWith('error')
+  })
+
   it('CONTROL: outcome:success still maps to success', async () => {
     const wrapper = createWrapper()
     const { result } = renderHook(() => useBackupStreaming(), { wrapper })

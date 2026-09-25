@@ -70,7 +70,7 @@ function makeStatus(
 }
 
 function makeStatusWithLastRun(
-  status: 'success' | 'failed' | 'interrupted' | 'partial' | 'running',
+  status: BackupRun['status'],
   over: Partial<BackupRun> = {},
 ) {
   return {
@@ -309,6 +309,16 @@ describe('BackupToggle — last run status indicator', () => {
     render(<BackupToggle stackId={STACK_ID} />)
 
     expect(screen.getByLabelText('Last backup was interrupted')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Last backup failed')).not.toBeInTheDocument()
+  })
+
+  it('shows a neutral skipped icon (not a failure icon) when the last run was skipped', () => {
+    // agent-os-4i7r: a scheduled backup that never started.
+    ;(useBackupPolicies as ReturnType<typeof vi.fn>).mockReturnValue(makePolicy(true))
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue(makeStatusWithLastRun('skipped'))
+    render(<BackupToggle stackId={STACK_ID} />)
+
+    expect(screen.getByLabelText('Last backup was skipped')).toBeInTheDocument()
     expect(screen.queryByLabelText('Last backup failed')).not.toBeInTheDocument()
   })
 

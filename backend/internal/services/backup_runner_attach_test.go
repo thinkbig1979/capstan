@@ -51,6 +51,35 @@ func TestAttach_InterruptedRun_ReportsSweptOutcome(t *testing.T) {
 		"the sweep's own error_message must be reported, not the generic 'operation state lost' fallback reason")
 }
 
+// TestAttach_SkippedRun_ReportsItsOwnOutcome: the scheduler writes a 'skipped'
+// row already finished for a cycle that never started (agent-os-4i7r). It has
+// no registry entry by construction, so Attach's DB fallback must report it as
+// it is, not rewrite it to "failed" / "operation state lost".
+func TestAttach_SkippedRun_ReportsItsOwnOutcome(t *testing.T) {
+	db := newBackupTestDB(t)
+
+	finished := "2026-01-01T00:00:00Z"
+	run := &models.BackupRun{
+		ID:           "run-skipped",
+		Kind:         "backup",
+		Trigger:      "scheduled",
+		Status:       RunStatusSkipped,
+		StartedAt:    finished,
+		FinishedAt:   &finished,
+		ErrorMessage: "scheduled backup skipped: backup engine unavailable",
+	}
+	require.NoError(t, db.CreateBackupRun(run))
+
+	reg := NewBackupRunnerRegistry(db, nil, slog.Default())
+	t.Cleanup(reg.Stop)
+
+	result, err := reg.Attach("run-skipped", nil)
+	require.NoError(t, err)
+	assert.True(t, result.Done)
+	assert.Equal(t, RunStatusSkipped, result.Outcome)
+	assert.Equal(t, "scheduled backup skipped: backup engine unavailable", result.Reason)
+}
+
 // TestAttach_UnknownRunningRow_UsesGenericFallback is the control case:
 // a row that is still genuinely 'running' in the DB with nothing in the
 // registry (the actual "server restarted mid-run, in-memory state is gone"

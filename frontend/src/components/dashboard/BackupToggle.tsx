@@ -38,6 +38,9 @@ function lastRunIndicator(run: BackupRun) {
       // (crash, or a restore from a mid-run snapshot) and may have succeeded on
       // the original instance.
       return { Icon: CircleDashed, className: 'text-muted-foreground', text: `Last ${kind} was interrupted` }
+    case 'skipped':
+      // A scheduled backup that never started (agent-os-4i7r): neutral, not red.
+      return { Icon: CircleDashed, className: 'text-muted-foreground', text: `Last ${kind} was skipped` }
     case 'running':
       return null
   }
