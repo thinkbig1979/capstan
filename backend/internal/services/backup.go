@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -847,10 +848,10 @@ func (s *BackupService) executeBackupRun(
 	// restore produces an empty Capstan, and capturing it before the per-stack
 	// loop means a stack failure part-way through still leaves it in the
 	// repository. See backupDatabase for the full rationale (agent-os-36o).
-	dbFailed := false
+	dbReason := ""
 	if dbBytes, dbErr := s.backupDatabase(ctx, restic, dryRun, out); dbErr != nil {
-		dbFailed = true
-		stream(out, "error", fmt.Sprintf("database snapshot failed: %v", dbErr))
+		dbReason = fmt.Sprintf("database snapshot failed: %v", dbErr)
+		stream(out, "error", dbReason)
 	} else {
 		totalBytesAdded += dbBytes
 	}
@@ -890,13 +891,19 @@ func (s *BackupService) executeBackupRun(
 	// not a single verified action's effect. "partial" here does carry the
 	// same domain meaning as truth.OutcomePartial (some targets succeeded,
 	// some failed), but the two are not coupled and must not be conflated.
+	//
+	// runReasons collects every run-level reason in order; the first is the
+	// primary. It used to be first-wins on run.ErrorMessage, which dropped a
+	// database failure or unresolved stacks whenever something else had
+	// already set a reason (agent-os-bscs).
+	var runReasons []string
 	switch {
 	case run.StacksFailed == 0:
 		run.Status = "success"
 	case run.StacksOK == 0:
 		run.Status = "failed"
-		if run.ErrorMessage == "" && firstItemErr != nil {
-			run.ErrorMessage = firstItemErr.Error()
+		if firstItemErr != nil {
+			runReasons = append(runReasons, firstItemErr.Error())
 		}
 	default:
 		run.Status = "partial"
@@ -906,11 +913,11 @@ func (s *BackupService) executeBackupRun(
 	// would look green in the UI while leaving the single most important
 	// artifact out of the repository, which is exactly the silent failure
 	// agent-os-36o exists to remove.
-	if dbFailed && run.Status == "success" {
-		run.Status = "partial"
-		if run.ErrorMessage == "" {
-			run.ErrorMessage = "database snapshot failed; stack backups succeeded"
+	if dbReason != "" {
+		if run.Status == "success" {
+			run.Status = "partial"
 		}
+		runReasons = append(runReasons, dbReason)
 	}
 
 	// A run asked for specific stacks that have no enabled policy backed up none
@@ -925,14 +932,12 @@ func (s *BackupService) executeBackupRun(
 		switch {
 		case run.StacksOK == 0:
 			// Nothing was backed up at all, which is a failed run whatever else
-			// happened — including a dbFailed downgrade to "partial" above.
+			// happened — including a database-failure downgrade to "partial" above.
 			run.Status = "failed"
 		case run.Status == "success":
 			run.Status = "partial"
 		}
-		if run.ErrorMessage == "" {
-			run.ErrorMessage = msg
-		}
+		runReasons = append(runReasons, msg)
 	}
 
 	// Same principle again: a stack left down after its backup is not a green
@@ -942,7 +947,13 @@ func (s *BackupService) executeBackupRun(
 		run.Status = "partial"
 	}
 
-	primaryReason := run.ErrorMessage
+	// The reasons after the primary go ahead of the restart notes, so the
+	// maxRunNotes cap can only ever cut notes, never a reason.
+	primaryReason := ""
+	if len(runReasons) > 0 {
+		primaryReason = runReasons[0]
+		runNotes = append(slices.Clone(runReasons[1:]), runNotes...)
+	}
 	run.ErrorMessage = withRunNotes(primaryReason, runNotes)
 
 	s.finaliseRun(run)
@@ -964,7 +975,7 @@ func (s *BackupService) executeBackupRun(
 			stream(out, "error", msg)
 			// The run row is already final, so record the sync failure with a
 			// second update. The off-site copy did not happen, so the run is not
-			// a clean success (agent-os-uwfu, same principle as dbFailed above).
+			// a clean success (agent-os-uwfu, same principle as the database downgrade above).
 			runNotes = append(runNotes, msg)
 			run.ErrorMessage = withRunNotes(primaryReason, runNotes)
 			if run.Status == "success" {
