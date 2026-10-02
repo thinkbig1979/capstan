@@ -27,6 +27,10 @@ const (
 	SettingLogRetentionDays           = "max_log_retention_days"
 	SettingUpdateHistoryRetentionDays = "max_update_history_retention_days"
 	SettingBackupHistoryRetentionDays = "max_backup_history_retention_days"
+	// SettingCleanupHistoryRetentionDays has no seed migration (agent-os-fn7x.7):
+	// an absent row resolves to DefaultRetentionDays through (*DB).RetentionDays,
+	// the same 90 a seed would have written.
+	SettingCleanupHistoryRetentionDays = "max_cleanup_history_retention_days"
 )
 
 // RetentionDays parses an already-read retention VALUE, applying the default
@@ -64,7 +68,7 @@ func RetentionDays(value string) int {
 //
 // An ABSENT row keeps DefaultRetentionDays: that is the fresh-install case, and
 // it is the only case the pre-agent-os-r1kc form was right about. ANY other
-// error is returned, because the value goes straight into three irreversible
+// error is returned, because the value goes straight into four irreversible
 // DELETEs (PruneHistory) and onto the settings page (handlers.GetLogRetention),
 // and a fault answered with a confident 90 silently truncates every retention an
 // operator deliberately raised — the fallback can only ever be less conservative
@@ -72,14 +76,17 @@ func RetentionDays(value string) int {
 //
 // The comment this replaces defended the swallow on the grounds that absence is
 // ordinary. It is not, after startup: migrations.go:182, :394 and :395 seed all
-// three keys with INSERT OR IGNORE, so on a started instance the row exists and
-// err != nil means an I/O error, corruption, or a closed or locked database.
+// three original keys with INSERT OR IGNORE, so on a started instance the row
+// exists and err != nil means an I/O error, corruption, or a closed or locked
+// database. SettingCleanupHistoryRetentionDays is the exception: it is not
+// seeded, so for it absence is the steady state until an operator saves a
+// value, and it correctly resolves to the default.
 //
 // This is the discrimination handlers/settings_read.go:26 settingOrFault already
 // makes for the handler layer, expressed here because these callers are in this
 // package. The error is safe to log verbatim: GetSetting only decrypts keys in
 // sensitiveSettingKeys (settings.go:9-12, :21), which holds git_https_token and
-// restic_password and none of the three retention keys, so no crypto output can
+// restic_password and none of the four retention keys, so no crypto output can
 // reach this error.
 //
 // The int returned beside a non-nil error is the Go zero, deliberately not
@@ -119,7 +126,7 @@ func (d *DB) RetentionDays(key string) (int, error) {
 // TestRetentionFloor_UnguardedSQLWipesTable runs the unguarded statements and
 // shows the tables emptied.
 //
-// Negative values are refused too. For the two statements here they are not
+// Negative values are refused too. For the three statements here they are not
 // destructive: `'-' || -1` concatenates to "--1 days", which is not a valid
 // SQLite modifier, so strftime() returns NULL, `col < NULL` is NULL, and nothing
 // matches. OBSERVED on the same fixture. For action_log they ARE destructive:
@@ -136,8 +143,8 @@ func errBelowRetentionFloor(retentionDays int) error {
 		retentionDays, MinRetentionDays)
 }
 
-// These two prune statements are named constants so the guard's negative control
-// executes the SAME SQL these functions run; the third lives beside its function
+// These three prune statements are named constants so the guard's negative control
+// executes the SAME SQL these functions run; the fourth lives beside its function
 // as deleteOldActionLogsStmt (audit.go). Inlined literals would let a production
 // statement change while the control kept proving something about the old one.
 //
@@ -152,6 +159,14 @@ const (
 	            AND completed_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-' || ? || ' days')`
 
 	deleteOldBackupRunsStmt = `DELETE FROM backup_runs WHERE started_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-' || ? || ' days')`
+
+	// The bare TEXT comparison is sound for this table because its one writer,
+	// CreateDockerCleanupRun, stores started_at through canonicalTimestamp,
+	// whose output is this cutoff's exact fixed-width spelling: UTC, whole
+	// seconds, 'Z' (update_history.go:243-249). A fractional '...:00.5Z' would
+	// sort below '...:00Z'; that shape cannot be written here.
+	// TestDeleteOldDockerCleanupRuns_StoredSpellingMatchesCutoff pins it.
+	deleteOldDockerCleanupRunsStmt = `DELETE FROM docker_cleanup_runs WHERE started_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-' || ? || ' days')`
 )
 
 // DeleteOldUpdateHistory removes update_history rows completed longer ago than
@@ -201,10 +216,33 @@ func (d *DB) DeleteOldBackupRuns(retentionDays int) (int, error) {
 	return int(affected), nil
 }
 
+// DeleteOldDockerCleanupRuns removes docker_cleanup_runs started longer ago
+// than retentionDays. Matching on started_at cannot catch a run in progress:
+// CreateDockerCleanupRun is called once, when a run has finished, so there is no
+// in-flight row to prune out from under itself.
+func (d *DB) DeleteOldDockerCleanupRuns(retentionDays int) (int, error) {
+	if err := errBelowRetentionFloor(retentionDays); err != nil {
+		return 0, err
+	}
+	result, err := d.db.Exec(deleteOldDockerCleanupRunsStmt, retentionDays)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		// Discarding this returns 0 with a nil error — "I could not find out"
+		// rendered as "nothing matched", which is the same fault rowserrcheck
+		// guards against on the read path (agent-os-qyg7.1).
+		return 0, fmt.Errorf("count docker cleanup runs deleted: %w", err)
+	}
+	return int(affected), nil
+}
+
 // RetentionResult reports what one cleanup pass removed.
 type RetentionResult struct {
 	UpdateHistory int
 	BackupRuns    int
+	CleanupRuns   int
 }
 
 // PruneHistory runs every retention policy once. Each table is pruned
@@ -246,12 +284,24 @@ func (d *DB) PruneHistory() RetentionResult {
 		result.BackupRuns = n
 	}
 
+	cleanupDays, cleanupErr := d.RetentionDays(SettingCleanupHistoryRetentionDays)
+	if cleanupErr != nil {
+		slog.Error("Refusing to prune docker cleanup history: the retention setting could not be read",
+			"setting", SettingCleanupHistoryRetentionDays, "error", cleanupErr)
+	} else if n, err := d.DeleteOldDockerCleanupRuns(cleanupDays); err != nil {
+		slog.Error("Failed to delete old docker cleanup runs", "error", err, "retention_days", cleanupDays)
+	} else {
+		result.CleanupRuns = n
+	}
+
 	slog.Info("History retention pass complete",
 		"log_retention_days", retentionForLog(logDays, logErr),
 		"update_history_retention_days", retentionForLog(updateDays, updateErr),
 		"backup_history_retention_days", retentionForLog(backupDays, backupErr),
+		"cleanup_history_retention_days", retentionForLog(cleanupDays, cleanupErr),
 		"update_history_deleted", result.UpdateHistory,
 		"backup_runs_deleted", result.BackupRuns,
+		"cleanup_runs_deleted", result.CleanupRuns,
 	)
 
 	return result

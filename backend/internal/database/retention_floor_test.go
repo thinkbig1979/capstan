@@ -21,7 +21,8 @@ import (
 // including one written seconds ago. TestRetentionFloor_UnguardedSQLWipesTable
 // keeps that demonstration in the suite so these guards never look decorative.
 //
-// For update_history and backup_runs, negative values are NOT worse, contrary
+// For update_history, backup_runs and docker_cleanup_runs (the last added by
+// agent-os-fn7x.7, same statement shape), negative values are NOT worse, contrary
 // to the obvious reading: `'-' || -1` concatenates to the string "--1 days",
 // which SQLite does not accept as a modifier, so strftime() yields NULL,
 // `col < NULL` is NULL, and the DELETE matches nothing. OBSERVED at a2c97e7 via
@@ -267,6 +268,17 @@ func TestRetentionFloor_NegativeIsANoOpNotAWipe(t *testing.T) {
 	}
 	if got := countRows(t, db, "update_history"); got != 2 {
 		t.Errorf("unguarded prune at -1 days deleted %d of 2 rows; negatives are "+
+			"no longer inert and the severity note needs revisiting", 2-got)
+	}
+
+	// The guard comment claims the same for the docker_cleanup_runs statement.
+	seedCleanupRun(t, db, "ancient", 400)
+	seedCleanupRun(t, db, "fresh", 1)
+	if _, err := db.db.Exec(deleteOldDockerCleanupRunsStmt, -1); err != nil {
+		t.Fatalf("unguarded docker_cleanup_runs at -1 days: %v", err)
+	}
+	if got := countRows(t, db, "docker_cleanup_runs"); got != 2 {
+		t.Errorf("unguarded cleanup prune at -1 days deleted %d of 2 rows; negatives are "+
 			"no longer inert and the severity note needs revisiting", 2-got)
 	}
 }

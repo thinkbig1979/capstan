@@ -610,6 +610,7 @@ export function useUpdateRetentionSettings() {
       retentionDays?: number
       updateHistoryRetentionDays?: number
       backupHistoryRetentionDays?: number
+      cleanupHistoryRetentionDays?: number
     }) => settingsApi.updateRetention(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.settings.retention() })

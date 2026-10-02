@@ -10,7 +10,11 @@ import { HelpHint } from '@/components/ui/help-hint'
 import { useRetentionSettings, useUpdateRetentionSettings } from '@/hooks/useResources'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
-type FieldKey = 'retentionDays' | 'updateHistoryRetentionDays' | 'backupHistoryRetentionDays'
+type FieldKey =
+  | 'retentionDays'
+  | 'updateHistoryRetentionDays'
+  | 'backupHistoryRetentionDays'
+  | 'cleanupHistoryRetentionDays'
 
 const FIELDS: { key: FieldKey; label: string; id: string; hint: string }[] = [
   {
@@ -31,9 +35,15 @@ const FIELDS: { key: FieldKey; label: string; id: string; hint: string }[] = [
     id: 'retention-backup-history',
     hint: 'One row per backup run, plus one per stack in it.',
   },
+  {
+    key: 'cleanupHistoryRetentionDays',
+    label: 'Cleanup history',
+    id: 'retention-cleanup-history',
+    hint: 'One row per Docker cleanup run.',
+  },
 ]
 
-/** History retention for the three tables that are pruned on a daily pass.
+/** History retention for the four tables that are pruned on a daily pass.
  *  Before this existed the retention endpoint had no caller in the UI at all,
  *  so the only way to change it was to edit the settings row by hand. */
 export function HistoryRetentionSection() {
@@ -126,7 +136,7 @@ export function HistoryRetentionSection() {
         </HelpHint>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 max-w-xl">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 max-w-xl">
         {FIELDS.map(({ key, label, id, hint }) => (
           <div key={key} className="space-y-1">
             <Label htmlFor={id}>{label}</Label>
