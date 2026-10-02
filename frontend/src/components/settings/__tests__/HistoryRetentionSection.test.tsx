@@ -34,6 +34,7 @@ const SETTINGS = {
   retentionDays: 90,
   updateHistoryRetentionDays: 45,
   backupHistoryRetentionDays: 30,
+  cleanupHistoryRetentionDays: 21,
   minRetentionDays: 7,
 }
 
@@ -48,12 +49,25 @@ describe('HistoryRetentionSection', () => {
     mockUpdateRetention.mockResolvedValue(undefined)
   })
 
-  it('shows the configured retention for all three history tables', async () => {
+  it('shows the configured retention for all four history tables', async () => {
     renderSection()
 
     expect(await screen.findByLabelText('Audit log')).toHaveValue(90)
     expect(screen.getByLabelText('Update history')).toHaveValue(45)
     expect(screen.getByLabelText('Backup history')).toHaveValue(30)
+    expect(screen.getByLabelText('Cleanup history')).toHaveValue(21)
+  })
+
+  // agent-os-fn7x.7: docker_cleanup_runs gained its own retention setting.
+  it('saves a changed cleanup history retention under its own field', async () => {
+    renderSection()
+
+    const cleanupHistory = await screen.findByLabelText('Cleanup history')
+    fireEvent.change(cleanupHistory, { target: { value: '14' } })
+    fireEvent.click(screen.getByRole('button', { name: /save retention/i }))
+
+    await waitFor(() => expect(mockUpdateRetention).toHaveBeenCalledTimes(1))
+    expect(mockUpdateRetention).toHaveBeenCalledWith({ cleanupHistoryRetentionDays: 14 })
   })
 
   it('sends only the fields that changed', async () => {

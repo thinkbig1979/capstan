@@ -10,10 +10,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // The retention endpoint used to govern action_log alone. update_history and
-// backup_runs grew without bound (agent-os-0jp), so it now carries all three.
+// backup_runs grew without bound (agent-os-0jp), so it now carries all three;
+// docker_cleanup_runs became the fourth in agent-os-fn7x.7.
 
 func newRetentionRouter(t *testing.T) (*database.DB, http.Handler) {
 	t.Helper()
@@ -53,6 +55,42 @@ func TestGetLogRetention_ReturnsEveryHistoryTable(t *testing.T) {
 	assert.Equal(t, database.MinRetentionDays, body["minRetentionDays"])
 }
 
+// TestGetLogRetention_ReturnsCleanupHistoryRetention: the cleanup key has no
+// seed migration, so the absent row must read as the 90-day default, and a
+// stored value must be returned as stored. Key presence is asserted separately
+// because a missing JSON key would also decode to 0 in a map[string]int.
+func TestGetLogRetention_ReturnsCleanupHistoryRetention(t *testing.T) {
+	db, router := newRetentionRouter(t)
+
+	get := func() map[string]int {
+		req := httptest.NewRequest(http.MethodGet, "/settings/log-retention", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		var body map[string]int
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		return body
+	}
+
+	body := get()
+	require.Contains(t, body, "cleanupHistoryRetentionDays")
+	assert.Equal(t, database.DefaultRetentionDays, body["cleanupHistoryRetentionDays"], "absent row resolves to the default")
+
+	require.NoError(t, db.SetSetting(database.SettingCleanupHistoryRetentionDays, "21"))
+	assert.Equal(t, 21, get()["cleanupHistoryRetentionDays"])
+}
+
+func TestUpdateLogRetention_AcceptsCleanupHistoryRetention(t *testing.T) {
+	db, router := newRetentionRouter(t)
+
+	w := putRetention(t, router, `{"cleanupHistoryRetentionDays": 14}`)
+	assert.Equal(t, http.StatusNoContent, w.Code)
+
+	value, err := db.GetSetting(database.SettingCleanupHistoryRetentionDays)
+	require.NoError(t, err)
+	assert.Equal(t, "14", value)
+}
+
 // TestGetLogRetention_ClampsStoredValue: a row edited by hand below the floor
 // must still report the value that will actually be applied.
 func TestGetLogRetention_ClampsStoredValue(t *testing.T) {
@@ -88,6 +126,7 @@ func TestUpdateLogRetention_AcceptsPartialUpdate(t *testing.T) {
 func TestUpdateLogRetention_RejectsBelowFloorOnEveryField(t *testing.T) {
 	for _, field := range []string{
 		"retentionDays", "updateHistoryRetentionDays", "backupHistoryRetentionDays",
+		"cleanupHistoryRetentionDays",
 	} {
 		t.Run(field, func(t *testing.T) {
 			db, router := newRetentionRouter(t)
@@ -104,6 +143,9 @@ func TestUpdateLogRetention_RejectsBelowFloorOnEveryField(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, "90", value, "%s should be untouched", key)
 			}
+			// The cleanup key has no seed row, so "untouched" means still absent.
+			_, err := db.GetSetting(database.SettingCleanupHistoryRetentionDays)
+			assert.ErrorIs(t, err, errdefs.ErrNotFound, "cleanup retention should be untouched")
 		})
 	}
 }

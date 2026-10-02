@@ -101,6 +101,27 @@ func TestDeleteOldBackupRuns_RefusesBelowFloor(t *testing.T) {
 	}
 }
 
+func TestDeleteOldDockerCleanupRuns_RefusesBelowFloor(t *testing.T) {
+	for _, days := range subFloorValues {
+		db := newRetentionTestDB(t)
+		seedCleanupRun(t, db, "ancient", 400)
+		seedCleanupRun(t, db, "fresh", 1)
+
+		deleted, err := db.DeleteOldDockerCleanupRuns(days)
+		if err == nil {
+			t.Errorf("days=%d: DeleteOldDockerCleanupRuns returned no error, want a refusal", days)
+		} else if !strings.Contains(err.Error(), "retention") {
+			t.Errorf("days=%d: refusal %q does not mention retention", days, err)
+		}
+		if deleted != 0 {
+			t.Errorf("days=%d: reported %d deleted, want 0", days, deleted)
+		}
+		if got := countRows(t, db, "docker_cleanup_runs"); got != 2 {
+			t.Errorf("days=%d: docker_cleanup_runs has %d rows, want both seeded runs intact", days, got)
+		}
+	}
+}
+
 func TestDeleteOldActionLogs_RefusesBelowFloor(t *testing.T) {
 	for _, days := range subFloorValues {
 		db := newRetentionTestDB(t)
@@ -121,13 +142,15 @@ func TestDeleteOldActionLogs_RefusesBelowFloor(t *testing.T) {
 
 // TestRetentionFloor_AcceptsTheFloorItself is the must-PASS half of the same
 // instrument. A guard that refuses everything would satisfy every assertion
-// above, so the floor value itself has to still prune, at all three deleters.
+// above, so the floor value itself has to still prune, at all four deleters.
 func TestRetentionFloor_AcceptsTheFloorItself(t *testing.T) {
 	db := newRetentionTestDB(t)
 	seedUpdateHistory(t, db, "stale", MinRetentionDays+1)
 	seedUpdateHistory(t, db, "recent", 1)
 	seedBackupRun(t, db, "stale", MinRetentionDays+1)
 	seedBackupRun(t, db, "recent", 1)
+	seedCleanupRun(t, db, "stale", MinRetentionDays+1)
+	seedCleanupRun(t, db, "recent", 1)
 	seedActionLog(t, db, "stale", MinRetentionDays+1)
 	seedActionLog(t, db, "recent", 1)
 
@@ -147,6 +170,15 @@ func TestRetentionFloor_AcceptsTheFloorItself(t *testing.T) {
 	if n != 1 || countRows(t, db, "backup_runs") != 1 {
 		t.Errorf("backup_runs: deleted %d, %d left; want 1 deleted and the recent run kept",
 			n, countRows(t, db, "backup_runs"))
+	}
+
+	n, err = db.DeleteOldDockerCleanupRuns(MinRetentionDays)
+	if err != nil {
+		t.Fatalf("DeleteOldDockerCleanupRuns at the floor: %v", err)
+	}
+	if n != 1 || countRows(t, db, "docker_cleanup_runs") != 1 {
+		t.Errorf("docker_cleanup_runs: deleted %d, %d left; want 1 deleted and the recent run kept",
+			n, countRows(t, db, "docker_cleanup_runs"))
 	}
 
 	if err := db.DeleteOldActionLogs(MinRetentionDays); err != nil {
@@ -174,6 +206,8 @@ func TestRetentionFloor_UnguardedSQLWipesTable(t *testing.T) {
 	seedUpdateHistory(t, db, "fresh", 1)
 	seedBackupRun(t, db, "ancient", 400)
 	seedBackupRun(t, db, "fresh", 1)
+	seedCleanupRun(t, db, "ancient", 400)
+	seedCleanupRun(t, db, "fresh", 1)
 	seedActionLog(t, db, "ancient", 400)
 	seedActionLog(t, db, "fresh", 1)
 
@@ -183,6 +217,7 @@ func TestRetentionFloor_UnguardedSQLWipesTable(t *testing.T) {
 	}{
 		{deleteOldUpdateHistoryStmt, "update_history", 0},
 		{deleteOldBackupRunsStmt, "backup_runs", 0},
+		{deleteOldDockerCleanupRunsStmt, "docker_cleanup_runs", 0},
 		// The same bind DeleteOldActionLogs(0) would issue.
 		{deleteOldActionLogsStmt, "action_log", actionLogCutoff(0)},
 	} {
