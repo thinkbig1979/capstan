@@ -2,9 +2,12 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -335,11 +338,18 @@ func (s *DockerCleanupSchedulerService) IsRunning() bool {
 // It also never falls back to DefaultCleanupMinAgeHours on a fault. Pruning
 // under a floor nobody chose, on the strength of a database fault, is exactly
 // what agent-os-rltu and agent-os-r1kc refused.
+//
+// Both the unreadable-policy skip and an Execute that fails without returning a
+// run also leave a 'failed' docker_cleanup_runs row (agent-os-8fw2): the log line
+// is not where an operator looks for a missed cleanup, the history list is. A
+// run Execute did return is already recorded by Execute's record(), so it is not
+// written twice.
 func (s *DockerCleanupSchedulerService) runCycle(ctx context.Context) {
 	policy, err := ResolveDockerCleanupPolicy(s.db)
 	if err != nil {
 		s.logger.Error("Docker cleanup skipped: the cleanup policy could not be read, so it is unknown whether an operator opted in and under which age floor; nothing was pruned this pass",
 			"error", err)
+		s.recordUnstartedCycle(0, fmt.Errorf("the cleanup policy could not be read, so nothing was pruned this pass: %w", err))
 		return
 	}
 	if !policy.Enabled {
@@ -352,6 +362,9 @@ func (s *DockerCleanupSchedulerService) runCycle(ctx context.Context) {
 	run, err := s.runner.Execute(cycleCtx, TriggerScheduled, policy.MinAgeHours)
 	if err != nil {
 		s.logger.Error("Scheduled Docker cleanup failed", "error", err)
+		if run == nil {
+			s.recordUnstartedCycle(policy.MinAgeHours, err)
+		}
 		return
 	}
 	if run != nil {
@@ -363,5 +376,35 @@ func (s *DockerCleanupSchedulerService) runCycle(ctx context.Context) {
 			"cache_bytes_reclaimed", run.CacheBytesReclaimed,
 			"min_age_hours", run.MinAgeHours,
 		)
+	}
+}
+
+// recordUnstartedCycle writes a finished 'failed' docker_cleanup_runs row for a
+// scheduled pass that never produced one of its own (agent-os-8fw2), the
+// counterpart of BackupSchedulerService.recordUnstartedCycle (agent-os-4i7r).
+//
+// minAgeHours is the floor the pass would have applied, or 0 when the policy
+// itself could not be read. 0 is never a floor a real run records, because
+// clampCleanupAgeHours lifts every applied floor to MinCleanupAgeHours (1), so
+// the history can tell "no floor was applied" from a chosen one. The column is
+// NOT NULL, and recording DefaultCleanupMinAgeHours instead would show a floor
+// nobody chose.
+//
+// Best effort: if the write fails too, the database is probably what is broken
+// and the log line is all there is.
+func (s *DockerCleanupSchedulerService) recordUnstartedCycle(minAgeHours int, cause error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	run := &models.DockerCleanupRun{
+		ID:           uuid.New().String(),
+		Trigger:      TriggerScheduled,
+		Status:       "failed",
+		StartedAt:    now,
+		FinishedAt:   &now,
+		MinAgeHours:  minAgeHours,
+		ErrorMessage: fmt.Sprintf("scheduled Docker cleanup did not run: %v", cause),
+	}
+	if err := s.db.CreateDockerCleanupRun(run); err != nil {
+		s.logger.Error("Could not record the unstarted scheduled Docker cleanup in the history",
+			"reason", run.ErrorMessage, "error", err)
 	}
 }

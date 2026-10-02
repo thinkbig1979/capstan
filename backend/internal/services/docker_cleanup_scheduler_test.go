@@ -359,3 +359,100 @@ func TestResolveDockerCleanupPolicyRefusesOnAFault(t *testing.T) {
 	_, err = ResolveDockerCleanupPolicy(db)
 	require.NoError(t, err)
 }
+
+// agent-os-8fw2 — a scheduled cleanup that never reached the runner leaves a
+// history row, not only a log line.
+//
+// The runner writes its own docker_cleanup_runs row on every path (record() is
+// Execute's single exit), so the history table can only be missing a row for a
+// pass that never got that far: an unreadable policy, or an Execute that
+// returned no run. These arms read the table back through the same
+// GetDockerCleanupRuns the history handler lists from.
+
+// fn8fw2ErrWithRunRunner returns BOTH a run and an error, the shape the real
+// DockerCleanupService.Execute produces when a prune fails: the row is already
+// written, so the scheduler must not write a second one.
+type fn8fw2ErrWithRunRunner struct{ err error }
+
+func (f *fn8fw2ErrWithRunRunner) Execute(_ context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error) {
+	return &models.DockerCleanupRun{ID: "fn8fw2-run", Trigger: trigger, Status: "failed", MinAgeHours: minAgeHours}, f.err
+}
+
+func TestDockerCleanupUnreadablePolicyLeavesAHistoryRow(t *testing.T) {
+	db, hide, restore := hiddenSettingsDB(t)
+	require.NoError(t, db.SetSetting(SettingDockerCleanupEnabled, "true"))
+	runner := &fn7x3FakeCleanupRunner{}
+	s, _ := fn7x3Scheduler(t, db, runner)
+
+	hide()
+	s.runCycle(context.Background())
+
+	runs, err := db.GetDockerCleanupRuns(10)
+	require.NoError(t, err)
+	require.Len(t, runs, 1,
+		"an unreadable policy skipped the cycle and left no docker_cleanup_runs row, so the history shows nothing for the missed pass")
+	require.Equal(t, TriggerScheduled, runs[0].Trigger)
+	require.Equal(t, "failed", runs[0].Status)
+	require.NotNil(t, runs[0].FinishedAt, "an unstarted cycle is finished the moment it is written")
+	require.Equal(t, runs[0].StartedAt, *runs[0].FinishedAt)
+	require.Zero(t, runs[0].ImagesDeleted)
+	require.Zero(t, runs[0].MinAgeHours,
+		"no prune ran, so no age floor was applied; recording the default would show a floor nobody chose")
+	require.Contains(t, runs[0].ErrorMessage, "cleanup policy could not be read")
+	require.Contains(t, runs[0].ErrorMessage, "no such table",
+		"the row does not carry the underlying cause: %s", runs[0].ErrorMessage)
+	require.Empty(t, runner.recorded(), "the unreadable-policy pass pruned")
+
+	// Same scheduler, same table, settings readable again: a healthy pass adds
+	// no row of its own (the runner owns that), so the row above was about the
+	// fault and not something every tick writes.
+	restore()
+	s.runCycle(context.Background())
+	runs, err = db.GetDockerCleanupRuns(10)
+	require.NoError(t, err)
+	require.Len(t, runs, 1, "a healthy pass wrote a scheduler-side row")
+	require.Len(t, runner.recorded(), 1)
+}
+
+func TestDockerCleanupDisabledWritesNoHistoryRow(t *testing.T) {
+	db := fn7x3MemoryDB(t)
+	s, _ := fn7x3Scheduler(t, db, &fn7x3FakeCleanupRunner{})
+
+	s.runCycle(context.Background())
+
+	runs, err := db.GetDockerCleanupRuns(10)
+	require.NoError(t, err)
+	require.Empty(t, runs, "a deliberately disabled cleanup wrote a history row")
+}
+
+func TestDockerCleanupExecuteErrorLeavesExactlyOneRow(t *testing.T) {
+	t.Run("no run returned: the scheduler records the pass", func(t *testing.T) {
+		db := fn7x3MemoryDB(t)
+		require.NoError(t, db.SetSetting(SettingDockerCleanupEnabled, "true"))
+		require.NoError(t, db.SetSetting(SettingDockerCleanupMinAgeHours, "48"))
+		s, _ := fn7x3Scheduler(t, db, &fn7x3FakeCleanupRunner{err: errors.New("fn8fw2-refused-before-row")})
+
+		s.runCycle(context.Background())
+
+		runs, err := db.GetDockerCleanupRuns(10)
+		require.NoError(t, err)
+		require.Len(t, runs, 1, "Execute returned an error and no run, and the history shows nothing")
+		require.Equal(t, TriggerScheduled, runs[0].Trigger)
+		require.Equal(t, "failed", runs[0].Status)
+		require.Contains(t, runs[0].ErrorMessage, "fn8fw2-refused-before-row")
+		require.Equal(t, 48, runs[0].MinAgeHours,
+			"the policy WAS read here, so the row carries the floor the pass would have applied")
+	})
+
+	t.Run("run returned with the error: the runner already wrote it, no second row", func(t *testing.T) {
+		db := fn7x3MemoryDB(t)
+		require.NoError(t, db.SetSetting(SettingDockerCleanupEnabled, "true"))
+		s, _ := fn7x3Scheduler(t, db, &fn8fw2ErrWithRunRunner{err: errors.New("fn8fw2-prune-exploded")})
+
+		s.runCycle(context.Background())
+
+		runs, err := db.GetDockerCleanupRuns(10)
+		require.NoError(t, err)
+		require.Empty(t, runs, "the scheduler wrote a row for a run the runner owns")
+	})
+}
