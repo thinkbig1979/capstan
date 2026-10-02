@@ -148,6 +148,33 @@ describe('DockerCleanupCard', () => {
       expect(screen.getByText('Cannot connect to the Docker daemon')).toBeInTheDocument()
     })
 
+    // agent-os-8fw2: a scheduled pass that never ran (policy unreadable) is stored
+    // with minAgeHours 0, because no floor was applied. Real runs never record
+    // 0 (the server clamps every applied floor to at least 1), so "0 h" would
+    // read as "pruned with no age floor", which is the opposite of what happened.
+    it('shows no number for the age floor of a run that applied none', async () => {
+      const unstartedRun = {
+        id: 'run-3',
+        trigger: 'scheduled',
+        status: 'failed',
+        startedAt: '2026-09-18T08:00:00Z',
+        finishedAt: '2026-09-18T08:00:00Z',
+        imagesDeleted: 0,
+        bytesReclaimed: 0,
+        cacheBytesReclaimed: 0,
+        minAgeHours: 0,
+        errorMessage: 'scheduled Docker cleanup did not run: the cleanup policy could not be read',
+      }
+      mockGetCleanupHistory.mockResolvedValue({ runs: [SUCCESS_RUN, unstartedRun], limit: 20 })
+      renderCard()
+
+      expect(await screen.findByText(/the cleanup policy could not be read/)).toBeInTheDocument()
+      expect(screen.queryByText('0 h')).toBeNull()
+      expect(screen.getByText('—')).toBeInTheDocument()
+      // Same table, same render: a run that did apply a floor still shows it.
+      expect(screen.getByText('72 h')).toBeInTheDocument()
+    })
+
     it('prints no "undefined" for a run whose optional fields are absent', async () => {
       // Both keys OMITTED, exactly as the wire sends a successful run: Go's
       // omitempty drops finishedAt (a nil *string) and errorMessage (an empty

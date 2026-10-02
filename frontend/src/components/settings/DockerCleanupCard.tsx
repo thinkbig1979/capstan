@@ -355,7 +355,11 @@ export function DockerCleanupCard() {
                   </TableCell>
                   <TableCell>{run.imagesDeleted}</TableCell>
                   <TableCell>{runReclaimed(run)}</TableCell>
-                  <TableCell>{run.minAgeHours} h</TableCell>
+                  {/* Keyed on 0, not on status: the server clamps every floor a real
+                      run applies to at least 1 (clampCleanupAgeHours), so 0 only
+                      ever means no floor was applied, as on a scheduled pass that
+                      never ran (agent-os-8fw2). "0 h" would read as no floor. */}
+                  <TableCell>{run.minAgeHours === 0 ? '—' : `${run.minAgeHours} h`}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
