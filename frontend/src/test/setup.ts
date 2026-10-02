@@ -1,6 +1,24 @@
-import '@testing-library/jest-dom'
-import { afterEach, vi } from 'vitest'
+import * as jestDomMatchers from '@testing-library/jest-dom/matchers'
+import type { TestingLibraryMatchers } from '@testing-library/jest-dom/matchers'
+import { afterEach, expect, vi } from 'vitest'
 import { act, cleanup } from '@testing-library/react'
+
+// Vitest 5 no longer reads matcher types from the global `jest.Matchers`
+// interface that '@testing-library/jest-dom' augments, and jest-dom 7.0.1's own
+// '/vitest' entry still declares the one-parameter `Assertion<T>` that vitest 5
+// replaced with `Assertion<R, T>`. So register the matchers on vitest's expect
+// and augment `Matchers<R, T>`, the documented vitest 5 extension point
+// (https://vitest.dev/guide/migration). The type parameters must match
+// vitest's declaration exactly for the interfaces to merge.
+expect.extend(jestDomMatchers)
+
+declare module 'vitest' {
+  // Merging needs vitest's exact parameter list, unused `T` included, and adds
+  // no members of its own: both lint rules are inherent to the augmentation.
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type, @typescript-eslint/no-unused-vars
+  interface Matchers<R extends void | Promise<void> = void | Promise<void>, T = unknown>
+    extends TestingLibraryMatchers<unknown, R> {}
+}
 
 // cmdk uses ResizeObserver internally; jsdom doesn't implement it.
 if (typeof ResizeObserver === 'undefined') {
