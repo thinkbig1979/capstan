@@ -208,8 +208,9 @@ export type DockerCleanupRun = Omit<WireDockerCleanupRun, 'trigger' | 'status'> 
 }
 
 // narrows models.UpdateSettingsResponse.ApplyMode, a Go string.
-// LastScanAt and LastScanError are Go strings WITH omitempty: an empty value
-// omits the key, so they arrive absent and never as null.
+// LastScanAt, LastScanError, LastApplyError and ApplyArmError are Go strings
+// WITH omitempty: an empty value omits the key, so they arrive absent and never
+// as null.
 export type UpdateSettings = Omit<UpdateSettingsResponse, 'applyMode'> & {
   applyMode: 'immediate' | 'scheduled'
 }

@@ -212,6 +212,48 @@ describe('UpdateScheduleContent — last scan', () => {
   })
 })
 
+// agent-os-ehie: an auto-update pass or apply arming that gave up used to say so
+// only in the server log. The two arms below are the shown and the cleared side.
+describe('UpdateScheduleContent — auto-update errors', () => {
+  const lastApplyText =
+    'Last auto-update run applied nothing: policies unreadable. The server log has more detail.'
+  const armText =
+    'Scheduled updates are not armed: apply settings unreadable. The server log has more detail.'
+
+  it('surfaces why the last auto-update run and the apply arming did nothing', async () => {
+    mockGetUpdates.mockResolvedValue(
+      makeSettings({
+        lastApplyError: 'policies unreadable',
+        applyArmError: 'apply settings unreadable',
+      }),
+    )
+    renderPanel()
+
+    expect(await screen.findByText(lastApplyText)).toBeInTheDocument()
+    expect(screen.getByText(armText)).toBeInTheDocument()
+  })
+
+  it('hides both once the server has cleared them', async () => {
+    mockGetUpdates.mockResolvedValue(
+      makeSettings({
+        lastApplyError: 'policies unreadable',
+        applyArmError: 'apply settings unreadable',
+      }),
+    )
+    const { queryClient } = renderPanelWithClient()
+    expect(await screen.findByText(lastApplyText)).toBeInTheDocument()
+
+    // A cleared error is omitted from the response, not sent as "".
+    mockGetUpdates.mockResolvedValue(makeSettings())
+    await queryClient.refetchQueries({ queryKey: ['settings', 'updates'] })
+
+    await waitFor(() => expect(screen.queryByText(lastApplyText)).not.toBeInTheDocument())
+    expect(screen.queryByText(armText)).not.toBeInTheDocument()
+    // The panel itself is still rendered: the errors went, not the page.
+    expect(screen.getByLabelText('Enable Auto-Update')).toBeInTheDocument()
+  })
+})
+
 describe('UpdateScheduleContent — auto-update', () => {
   it('warns that per-container toggles are locked while the master switch is off', async () => {
     renderPanel()

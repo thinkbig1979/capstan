@@ -342,6 +342,19 @@ export function UpdateScheduleContent() {
             </p>
           </div>
         </div>
+        {/* Set by the scheduler when a pass or the apply arming gave up, and
+            omitted once a later one succeeds (agent-os-ehie). */}
+        {settings?.lastApplyError && (
+          <p className="text-sm text-destructive">
+            Last auto-update run applied nothing: {settings.lastApplyError}. The server log has more
+            detail.
+          </p>
+        )}
+        {settings?.applyArmError && (
+          <p className="text-sm text-destructive">
+            Scheduled updates are not armed: {settings.applyArmError}. The server log has more detail.
+          </p>
+        )}
         {effectiveAutoUpdate && (
           <>
             <ScheduleModeFields
