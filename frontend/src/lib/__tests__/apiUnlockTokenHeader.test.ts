@@ -28,8 +28,13 @@ vi.mock('axios', () => ({
 import '@/lib/api'
 import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
+// api.ts registers its interceptors once, at import. Vitest 5 clears every
+// mock's call history before each test (clearMocks defaults to true), so the
+// registration has to be snapshotted here, before the first test runs.
+const registeredRequestUse = [...instance.interceptors.request.use.mock.calls]
+
 function runRequestInterceptor(): Record<string, unknown> {
-  const calls = instance.interceptors.request.use.mock.calls
+  const calls = registeredRequestUse
   expect(calls.length).toBeGreaterThan(0)
   const onFulfilled = calls[0][0] as (config: { headers: Record<string, unknown> }) => {
     headers: Record<string, unknown>

@@ -37,10 +37,15 @@ vi.mock('axios', () => ({
 
 import { setAuthCallbacks } from '@/lib/api'
 
+// api.ts registers its interceptors once, at import. Vitest 5 clears every
+// mock's call history before each test (clearMocks defaults to true), so the
+// registration has to be snapshotted here, before the first test runs.
+const registeredResponseUse = [...instance.interceptors.response.use.mock.calls]
+
 const logout = vi.fn()
 
 function getRegisteredRejectedHandler(): (error: unknown) => Promise<never> {
-  const calls = instance.interceptors.response.use.mock.calls
+  const calls = registeredResponseUse
   expect(calls.length).toBeGreaterThan(0)
   // apiClient.interceptors.response.use(onFulfilled, onRejected)
   return calls[0][1] as (error: unknown) => Promise<never>
