@@ -335,7 +335,12 @@ type UpdateSettingsResponse struct {
 	ScanIntervalMinutes int    `json:"scanIntervalMinutes"`
 	LastScanAt          string `json:"lastScanAt,omitempty"`
 	LastScanError       string `json:"lastScanError,omitempty"`
-	GlobalAutoUpdate    bool   `json:"globalAutoUpdate"`
+	// LastApplyError is why the last auto-update pass applied nothing, and
+	// ApplyArmError why no scheduled apply is armed. Both are cleared (and so
+	// omitted) once a later pass or arming succeeds (agent-os-ehie).
+	LastApplyError   string `json:"lastApplyError,omitempty"`
+	ApplyArmError    string `json:"applyArmError,omitempty"`
+	GlobalAutoUpdate bool   `json:"globalAutoUpdate"`
 	// ApplyMode is "immediate" (apply on the scan tick) or "scheduled" (apply
 	// at ApplyTime on ApplyDays).
 	ApplyMode string `json:"applyMode"`

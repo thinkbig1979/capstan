@@ -329,6 +329,27 @@ func (s *SchedulerService) IsRunning() bool {
 	return s.ticker != nil
 }
 
+// Settings keys that tell the operator why auto-update applied nothing, the
+// apply-side counterparts of update_scan_last_error (agent-os-ehie). They are
+// separate keys because they clear at different times: the arm error when the
+// apply loop next arms cleanly (Start or a settings save), the pass error when
+// the next auto-update pass gets past its reads. One shared key would let a
+// clean re-arm wipe a pass failure that no pass has yet disproved.
+const (
+	applyArmErrorKey  = "update_apply_arm_error"
+	applyLastErrorKey = "update_apply_last_error"
+)
+
+// recordApplyError writes (or, with "", clears) one of the keys above. Best
+// effort: a pass that already failed must not fail again over its own report,
+// and when this write fails the database is probably what broke, so the log is
+// the only place left to say so.
+func (s *SchedulerService) recordApplyError(key, msg string) {
+	if err := s.db.SetSetting(key, msg); err != nil {
+		s.logger.Error("Failed to record auto-update apply status", "key", key, "error", err)
+	}
+}
+
 // performScan executes the update scan body. It does not touch s.mu or s.scanning.
 // On success it broadcasts update_scan_complete; on failure it broadcasts update_scan_failed.
 // Finding #7: local/remote digests are persisted when available.
@@ -483,7 +504,10 @@ func (s *SchedulerService) runCycle(ctx context.Context) {
 		// RunAutoUpdates and apply on the strength of a failed query
 		// (agent-os-rltu). loadApplySchedule has already logged the cause and
 		// the consequence at ERROR, so this branch stays quiet rather than
-		// emitting a second line for one event.
+		// emitting a second line for one event. The operator still needs to
+		// see it without the log, though (agent-os-ehie).
+		s.recordApplyError(applyLastErrorKey,
+			"the update_apply_* settings could not be read, so this scan tick applied no updates")
 		return
 	}
 	if cfg.scheduled {
@@ -706,17 +730,26 @@ func (s *SchedulerService) logApplyArming(cfg applySchedule, nextAt time.Time, a
 	if cfg.unreadable {
 		s.logger.Error("Auto-update apply mode is unknown: the update_apply_* settings could not be read, " +
 			"so nothing will be applied on the scan tick and no apply is scheduled")
+		s.recordApplyError(applyArmErrorKey,
+			"the update_apply_* settings could not be read, so no update apply is scheduled")
 		return
 	}
+	// Every branch below is a known state, so it clears an arm error left by an
+	// earlier arming. The loop does not re-read its settings until the next
+	// Start or settings save, so an arm error stays true until one of those.
 	if !cfg.scheduled {
 		s.logger.Info("Auto-update apply mode: immediate (applying on the scan tick)")
+		s.recordApplyError(applyArmErrorKey, "")
 		return
 	}
 	if !armed {
 		s.logger.Error("Auto-update apply mode is scheduled but no next run could be computed; no update will be applied",
 			"apply_time", cfg.schedule.FormatTime(), "apply_days", cfg.schedule.FormatDays())
+		s.recordApplyError(applyArmErrorKey,
+			"apply mode is scheduled but no next run could be computed, so no update apply is scheduled")
 		return
 	}
+	s.recordApplyError(applyArmErrorKey, "")
 	s.logger.Info("Auto-update apply scheduled",
 		"apply_time", cfg.schedule.FormatTime(),
 		"apply_days", cfg.schedule.FormatDays(),
@@ -766,6 +799,7 @@ func (s *SchedulerService) applyNow(ctx context.Context) bool {
 	updates, err := s.db.GetCachedUpdates()
 	if err != nil {
 		s.logger.Error("Scheduled auto-update apply: failed to read cached updates", "error", err)
+		s.recordApplyError(applyLastErrorKey, "the scheduled apply could not read the cached updates: "+err.Error())
 		return true
 	}
 
@@ -865,18 +899,28 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 		if !errors.Is(err, errdefs.ErrNotFound) {
 			s.logger.Error("Failed to read auto_update_enabled; skipping this auto-update run, so no container will be patched until this read succeeds",
 				"error", err)
+			s.recordApplyError(applyLastErrorKey, "could not read auto_update_enabled, so this auto-update run was skipped: "+err.Error())
+			return
 		}
+		s.recordApplyError(applyLastErrorKey, "")
 		return
 	}
 	if autoEnabledStr != "true" {
+		// Switched off, and read cleanly: nothing is expected to apply, so an
+		// error from an earlier pass no longer describes the system.
+		s.recordApplyError(applyLastErrorKey, "")
 		return
 	}
 
 	policies, err := s.db.GetEnabledAutoUpdatePolicies()
 	if err != nil {
 		s.logger.Error("Failed to get auto-update policies", "error", err)
+		s.recordApplyError(applyLastErrorKey, "could not read the auto-update policies, so this auto-update run was skipped: "+err.Error())
 		return
 	}
+	// Past every read that can stop the whole pass. Per-container failures
+	// below have their own update_history rows, so they do not touch this key.
+	s.recordApplyError(applyLastErrorKey, "")
 
 	containerPolicies := make(map[string]*models.AutoUpdatePolicy)
 	stackPolicies := make(map[string]*models.AutoUpdatePolicy)

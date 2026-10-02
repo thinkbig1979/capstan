@@ -551,6 +551,8 @@ func (h *SettingsHandler) GetUpdateSettings(c *gin.Context) {
 		"update_scan_interval",
 		"update_scan_last_run",
 		"update_scan_last_error",
+		"update_apply_last_error",
+		"update_apply_arm_error",
 		"auto_update_enabled",
 		"update_apply_mode",
 		"update_apply_time",
@@ -611,6 +613,8 @@ func (h *SettingsHandler) GetUpdateSettings(c *gin.Context) {
 		ApplyMode:           applyMode,
 		ApplyTime:           applyTime,
 		ApplyDays:           []int{},
+		LastApplyError:      s["update_apply_last_error"],
+		ApplyArmError:       s["update_apply_arm_error"],
 	}
 	response.ServerTimezone, response.ServerTimeOffset = services.ServerTimezone()
 

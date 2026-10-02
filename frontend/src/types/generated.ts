@@ -810,6 +810,13 @@ export interface UpdateSettingsResponse {
   scanIntervalMinutes: number /* int */;
   lastScanAt?: string;
   lastScanError?: string;
+  /**
+   * LastApplyError is why the last auto-update pass applied nothing, and
+   * ApplyArmError why no scheduled apply is armed. Both are cleared (and so
+   * omitted) once a later pass or arming succeeds (agent-os-ehie).
+   */
+  lastApplyError?: string;
+  applyArmError?: string;
   globalAutoUpdate: boolean;
   /**
    * ApplyMode is "immediate" (apply on the scan tick) or "scheduled" (apply

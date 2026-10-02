@@ -331,6 +331,38 @@ func TestSettingsHandler_GetUpdateSettings_DefaultsFromMigration(t *testing.T) {
 	assert.NotContains(t, response, "nextApplyAt", "immediate mode has no next apply instant")
 }
 
+// TestSettingsHandler_GetUpdateSettings_ServesApplyErrors is agent-os-ehie's
+// route to the Updates tab: the scheduler writes why an auto-update pass or
+// the apply arming did nothing, and this GET is the only way the UI sees it.
+// The cleared side is the other half: an empty value omits the key, exactly
+// as lastScanError does, so a cleared error disappears from the screen.
+func TestSettingsHandler_GetUpdateSettings_ServesApplyErrors(t *testing.T) {
+	router, db, _ := newUpdateSettingsFixture(t)
+
+	get := func() map[string]interface{} {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/settings/updates", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		var response map[string]interface{}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		return response
+	}
+
+	require.NoError(t, db.SetSetting("update_apply_last_error", "policies unreadable"))
+	require.NoError(t, db.SetSetting("update_apply_arm_error", "apply settings unreadable"))
+	response := get()
+	assert.Equal(t, "policies unreadable", response["lastApplyError"])
+	assert.Equal(t, "apply settings unreadable", response["applyArmError"])
+
+	require.NoError(t, db.SetSetting("update_apply_last_error", ""))
+	require.NoError(t, db.SetSetting("update_apply_arm_error", ""))
+	response = get()
+	assert.NotContains(t, response, "lastApplyError", "a cleared pass error must not be served")
+	assert.NotContains(t, response, "applyArmError", "a cleared arm error must not be served")
+}
+
 // TestSettingsHandler_UpdateUpdateSettings_ApplyScheduleRoundTrips is the trap-D
 // test: gin silently accepts unknown JSON fields, so a struct-tag typo would
 // ship green and the value would simply never arrive. Only a PUT through the
