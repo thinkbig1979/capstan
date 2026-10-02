@@ -420,7 +420,7 @@ func parseEnvFile(path string) ([]map[string]string, error) {
 }
 
 func (h *SettingsHandler) GetLogRetention(c *gin.Context) {
-	// All three histories are read through the same clamped accessor, so the
+	// All four histories are read through the same clamped accessor, so the
 	// UI shows the value that will actually be applied rather than the raw row.
 	//
 	// Refused rather than defaulted on a fault, for the reason GetUpdateSettings
@@ -439,6 +439,7 @@ func (h *SettingsHandler) GetLogRetention(c *gin.Context) {
 		{"retentionDays", database.SettingLogRetentionDays},
 		{"updateHistoryRetentionDays", database.SettingUpdateHistoryRetentionDays},
 		{"backupHistoryRetentionDays", database.SettingBackupHistoryRetentionDays},
+		{"cleanupHistoryRetentionDays", database.SettingCleanupHistoryRetentionDays},
 	}
 	settings := gin.H{"minRetentionDays": database.MinRetentionDays}
 	for _, f := range fields {
@@ -455,12 +456,13 @@ func (h *SettingsHandler) GetLogRetention(c *gin.Context) {
 }
 
 func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {
-	// All three fields are optional so a client can update one without having
+	// All four fields are optional so a client can update one without having
 	// to know the others; at least one must be present.
 	var req struct {
-		RetentionDays              *int `json:"retentionDays"`
-		UpdateHistoryRetentionDays *int `json:"updateHistoryRetentionDays"`
-		BackupHistoryRetentionDays *int `json:"backupHistoryRetentionDays"`
+		RetentionDays               *int `json:"retentionDays"`
+		UpdateHistoryRetentionDays  *int `json:"updateHistoryRetentionDays"`
+		BackupHistoryRetentionDays  *int `json:"backupHistoryRetentionDays"`
+		CleanupHistoryRetentionDays *int `json:"cleanupHistoryRetentionDays"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -480,6 +482,7 @@ func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {
 		{req.RetentionDays, database.SettingLogRetentionDays, "log_retention"},
 		{req.UpdateHistoryRetentionDays, database.SettingUpdateHistoryRetentionDays, "update_history_retention"},
 		{req.BackupHistoryRetentionDays, database.SettingBackupHistoryRetentionDays, "backup_history_retention"},
+		{req.CleanupHistoryRetentionDays, database.SettingCleanupHistoryRetentionDays, "cleanup_history_retention"},
 	}
 
 	applied := gin.H{}

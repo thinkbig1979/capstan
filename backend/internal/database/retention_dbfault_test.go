@@ -11,10 +11,12 @@ import (
 // agent-os-r1kc. (*DB).RetentionDays returned a bare int with no error channel,
 // so ANY settings read fault — a closed, locked or corrupt database, not just an
 // absent row — was answered with DefaultRetentionDays = 90 and fed straight into
-// three irreversible DELETEs. All three retention keys are seeded by a migration
-// (migrations.go:182, :394, :395), so after migrations an error means a fault,
-// never absence, and the comment that justified the swallow was false in
-// production.
+// three irreversible DELETEs (four since agent-os-fn7x.7 added
+// docker_cleanup_runs). The original three retention keys are seeded by a
+// migration (migrations.go:182, :394, :395), so after migrations an error means
+// a fault, never absence, and the comment that justified the swallow was false
+// in production. The cleanup key is deliberately NOT seeded: its absent row
+// resolves to the default, which is the same answer a seed would give.
 
 // faultRetentionReads makes the settings READ fail while leaving every table the
 // prune DELETEs from intact and populated.
@@ -43,7 +45,7 @@ func faultRetentionReads(t *testing.T, d *DB) {
 	}
 }
 
-// seedOldAndFresh puts one 200-day-old row and one fresh row in each of the three
+// seedOldAndFresh puts one 200-day-old row and one fresh row in each of the four
 // tables PruneHistory deletes from. At the default 90 days the old rows are
 // exactly what an unrefused pass destroys.
 func seedOldAndFresh(t *testing.T, d *DB) {
@@ -52,6 +54,8 @@ func seedOldAndFresh(t *testing.T, d *DB) {
 	seedUpdateHistory(t, d, "fresh", 1)
 	seedBackupRun(t, d, "old", 200)
 	seedBackupRun(t, d, "fresh", 1)
+	seedCleanupRun(t, d, "old", 200)
+	seedCleanupRun(t, d, "fresh", 1)
 	if _, err := d.db.Exec(
 		`INSERT INTO action_log (id, user_id, action, detail, created_at)
 		 VALUES ('old', 'u', 'login', '{}', datetime('now', '-200 days')),
@@ -75,10 +79,11 @@ func TestPruneHistory_RefusesWhenRetentionUnreadable(t *testing.T) {
 	db.PruneHistory()
 
 	for table, want := range map[string]int{
-		"update_history":   2,
-		"backup_runs":      2,
-		"backup_run_items": 2,
-		"action_log":       2,
+		"update_history":      2,
+		"backup_runs":         2,
+		"backup_run_items":    2,
+		"docker_cleanup_runs": 2,
+		"action_log":          2,
 	} {
 		if got := countRows(t, db, table); got != want {
 			t.Errorf("%s has %d rows after a pass whose retention could not be read, want %d — the pass deleted at the default instead of refusing", table, got, want)
@@ -118,10 +123,18 @@ func TestPruneHistory_FaultFixtureLeavesDeletesWorking(t *testing.T) {
 	if n != 1 {
 		t.Errorf("DeleteOldBackupRuns deleted %d under the fault fixture, want 1 — the fixture broke the write path too", n)
 	}
+
+	n, err = db.DeleteOldDockerCleanupRuns(DefaultRetentionDays)
+	if err != nil {
+		t.Fatalf("DeleteOldDockerCleanupRuns under the fault fixture: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("DeleteOldDockerCleanupRuns deleted %d under the fault fixture, want 1 — the fixture broke the write path too", n)
+	}
 }
 
 // TestPruneHistory_AbsentKeysStillPruneAtDefault is the passing side of the same
-// instrument (criterion 5): with the settings table PRESENT but the three
+// instrument (criterion 5): with the settings table PRESENT but the four
 // retention rows absent — the documented fresh-install case, before the
 // migration's INSERT OR IGNORE — the pass must still run at the default.
 //
@@ -130,8 +143,9 @@ func TestPruneHistory_FaultFixtureLeavesDeletesWorking(t *testing.T) {
 func TestPruneHistory_AbsentKeysStillPruneAtDefault(t *testing.T) {
 	db := newRetentionTestDB(t)
 	seedOldAndFresh(t, db)
-	if _, err := db.db.Exec(`DELETE FROM settings WHERE key IN (?, ?, ?)`,
-		SettingLogRetentionDays, SettingUpdateHistoryRetentionDays, SettingBackupHistoryRetentionDays); err != nil {
+	if _, err := db.db.Exec(`DELETE FROM settings WHERE key IN (?, ?, ?, ?)`,
+		SettingLogRetentionDays, SettingUpdateHistoryRetentionDays, SettingBackupHistoryRetentionDays,
+		SettingCleanupHistoryRetentionDays); err != nil {
 		t.Fatalf("clear seeded retention settings: %v", err)
 	}
 	if _, err := db.GetSetting(SettingLogRetentionDays); !errors.Is(err, errdefs.ErrNotFound) {
@@ -140,14 +154,15 @@ func TestPruneHistory_AbsentKeysStillPruneAtDefault(t *testing.T) {
 
 	result := db.PruneHistory()
 
-	if result.UpdateHistory != 1 || result.BackupRuns != 1 {
+	if result.UpdateHistory != 1 || result.BackupRuns != 1 || result.CleanupRuns != 1 {
 		t.Errorf("PruneHistory with absent retention keys reported %+v, want 1 of each", result)
 	}
 	for table, want := range map[string]int{
-		"update_history":   1,
-		"backup_runs":      1,
-		"backup_run_items": 1,
-		"action_log":       1,
+		"update_history":      1,
+		"backup_runs":         1,
+		"backup_run_items":    1,
+		"docker_cleanup_runs": 1,
+		"action_log":          1,
 	} {
 		if got := countRows(t, db, table); got != want {
 			t.Errorf("%s has %d rows after a default-retention pass, want %d", table, got, want)
@@ -202,5 +217,73 @@ func TestRetentionDays_DiscriminatesFaultFromAbsence(t *testing.T) {
 	}
 	if errors.Is(err, errdefs.ErrNotFound) {
 		t.Errorf("a fault must not be reported as absence, got %v", err)
+	}
+}
+
+// faultCleanupRetentionRead makes ONLY the cleanup-history key unreadable,
+// leaving the other three keys readable and every table intact.
+//
+// faultRetentionReads above drops the whole settings table, so every key faults
+// together and "the other tables are still pruned" cannot be asked of it. Here
+// settings is moved aside and replaced by a view that yields NULL for the one
+// key. The row exists (a real 90 is stored first), so the read reaches Scan,
+// and scanning NULL into a string fails with a driver error that is neither
+// sql.ErrNoRows nor errdefs.ErrNotFound: the fault branch, not the absence one.
+func faultCleanupRetentionRead(t *testing.T, d *DB) {
+	t.Helper()
+	if err := d.SetSetting(SettingCleanupHistoryRetentionDays, "90"); err != nil {
+		t.Fatalf("store cleanup retention: %v", err)
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE settings RENAME TO settings_backing`,
+		`CREATE VIEW settings AS SELECT key,
+			CASE WHEN key = '` + SettingCleanupHistoryRetentionDays + `' THEN NULL ELSE value END AS value
+			FROM settings_backing`,
+	} {
+		if _, err := d.db.Exec(stmt); err != nil {
+			t.Fatalf("per-key fault fixture: %v", err)
+		}
+	}
+	// Positive control: the cleanup key now faults, and not as absence.
+	_, err := d.GetSetting(SettingCleanupHistoryRetentionDays)
+	if err == nil {
+		t.Fatalf("fixture did not fault: GetSetting(%q) succeeded", SettingCleanupHistoryRetentionDays)
+	}
+	if errors.Is(err, errdefs.ErrNotFound) {
+		t.Fatalf("fixture produced errdefs.ErrNotFound, which is the absence case, not a fault: %v", err)
+	}
+	// Negative control: the other three keys still read, so the fault is per-key.
+	for _, key := range []string{
+		SettingLogRetentionDays, SettingUpdateHistoryRetentionDays, SettingBackupHistoryRetentionDays,
+	} {
+		if _, err := d.GetSetting(key); err != nil {
+			t.Fatalf("fixture faulted %q too, so it is not per-key: %v", key, err)
+		}
+	}
+}
+
+// TestPruneHistory_RefusesCleanupPruneWhenOnlyItsRetentionUnreadable: the
+// cleanup prune is refused on its own key's fault, and that refusal does not
+// skip the other three tables (PruneHistory's "each table independently" rule).
+func TestPruneHistory_RefusesCleanupPruneWhenOnlyItsRetentionUnreadable(t *testing.T) {
+	db := newRetentionTestDB(t)
+	seedOldAndFresh(t, db)
+	faultCleanupRetentionRead(t, db)
+
+	result := db.PruneHistory()
+
+	if result.CleanupRuns != 0 || result.UpdateHistory != 1 || result.BackupRuns != 1 {
+		t.Errorf("PruneHistory reported %+v, want CleanupRuns=0 and 1 for each other table", result)
+	}
+	for table, want := range map[string]int{
+		"docker_cleanup_runs": 2,
+		"update_history":      1,
+		"backup_runs":         1,
+		"backup_run_items":    1,
+		"action_log":          1,
+	} {
+		if got := countRows(t, db, table); got != want {
+			t.Errorf("%s has %d rows after the pass, want %d", table, got, want)
+		}
 	}
 }

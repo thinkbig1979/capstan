@@ -350,6 +350,7 @@ export interface RetentionSettings {
   retentionDays: number
   updateHistoryRetentionDays: number
   backupHistoryRetentionDays: number
+  cleanupHistoryRetentionDays: number
   minRetentionDays: number
 }
 
