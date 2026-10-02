@@ -2008,8 +2008,14 @@ func (s *BackupService) backupDatabase(
 	defer func() {
 		if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
 			stream(out, "error", fmt.Sprintf("[database] failed to remove staged snapshot %s: %v", dest, err))
+			// Keep both when the backup already failed: the stream line is
+			// live-only, and the run's database reason is the one durable
+			// record that a plaintext database copy was left on disk. A "; "
+			// join, not errors.Join, because the reason is stored as one line.
 			if retErr == nil {
 				retErr = fmt.Errorf("remove staged snapshot: %w", err)
+			} else {
+				retErr = fmt.Errorf("%w; remove staged snapshot: %w", retErr, err)
 			}
 		}
 	}()
