@@ -456,3 +456,61 @@ func TestDockerCleanupExecuteErrorLeavesExactlyOneRow(t *testing.T) {
 		require.Empty(t, runs, "the scheduler wrote a row for a run the runner owns")
 	})
 }
+
+// agent-os-7yjx — the arm-time twin of agent-os-8fw2. StartFromPolicy refuses to
+// arm on an unreadable policy; no tick ever runs after that, so without a row the
+// history list (the only place an operator looks for a missed cleanup) shows
+// nothing while no cleanup happens. The row must say the scheduler was NOT armed,
+// which is a different statement from runCycle's "nothing was pruned this pass".
+
+func TestDockerCleanupStartFromPolicyUnreadablePolicyLeavesAHistoryRow(t *testing.T) {
+	db, hide, restore := hiddenSettingsDB(t)
+	require.NoError(t, db.SetSetting(SettingDockerCleanupEnabled, "true"))
+	s, _ := fn7x3Scheduler(t, db, &fn7x3FakeCleanupRunner{})
+	t.Cleanup(s.Stop)
+
+	hide()
+	s.StartFromPolicy()
+
+	require.False(t, s.IsRunning(), "armed a ticker from a policy that could not be read")
+	runs, err := db.GetDockerCleanupRuns(10)
+	require.NoError(t, err)
+	require.Len(t, runs, 1,
+		"an unreadable policy at arm time left no docker_cleanup_runs row, so the history shows nothing while no cleanup will ever run")
+	require.Equal(t, TriggerScheduled, runs[0].Trigger)
+	require.Equal(t, "failed", runs[0].Status)
+	require.NotNil(t, runs[0].FinishedAt)
+	require.Zero(t, runs[0].MinAgeHours, "no policy was read, so no floor was applied")
+	require.Contains(t, runs[0].ErrorMessage, "NOT armed",
+		"the row must say the scheduler never armed: %s", runs[0].ErrorMessage)
+	require.NotContains(t, runs[0].ErrorMessage, "this pass",
+		"the row reuses the per-tick wording, which describes a cycle that ran: %s", runs[0].ErrorMessage)
+	require.Contains(t, runs[0].ErrorMessage, "no such table",
+		"the row does not carry the underlying cause: %s", runs[0].ErrorMessage)
+
+	// Same scheduler, settings readable again: it arms and adds no row, so the row
+	// above was about the fault and not something every arm writes.
+	restore()
+	s.StartFromPolicy()
+	require.True(t, s.IsRunning())
+	runs, err = db.GetDockerCleanupRuns(10)
+	require.NoError(t, err)
+	require.Len(t, runs, 1, "a readable policy wrote a row at arm time")
+}
+
+func TestDockerCleanupStartFromPolicyReadableWritesNoHistoryRow(t *testing.T) {
+	for name, enabled := range map[string]string{"disabled": "false", "enabled": "true"} {
+		t.Run(name, func(t *testing.T) {
+			db := fn7x3MemoryDB(t)
+			require.NoError(t, db.SetSetting(SettingDockerCleanupEnabled, enabled))
+			s, _ := fn7x3Scheduler(t, db, &fn7x3FakeCleanupRunner{})
+			t.Cleanup(s.Stop)
+
+			s.StartFromPolicy()
+
+			runs, err := db.GetDockerCleanupRuns(10)
+			require.NoError(t, err)
+			require.Empty(t, runs, "arming from a readable %s policy wrote a history row", name)
+		})
+	}
+}

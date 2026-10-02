@@ -185,14 +185,19 @@ func (s *DockerCleanupSchedulerService) Start(interval time.Duration) {
 // exist.
 //
 // Three outcomes, not two:
-//   - policy unreadable: log at ERROR and arm nothing. Acting at a default here
-//     is the rltu/r1kc shape.
+//   - policy unreadable: log at ERROR, arm nothing, and leave a 'failed'
+//     docker_cleanup_runs row (agent-os-7yjx). No tick will ever run, so without
+//     the row nothing but the log would say cleanup is off. Acting at a default
+//     here is the rltu/r1kc shape.
 //   - disabled: arm nothing, silently. This is the fresh-install state (FR7) and
 //     logging it would print a line on every boot of every install.
 //   - enabled: arm at the policy interval.
 //
 // It always Stops first, so calling it after an operator disables cleanup tears
-// the previous ticker down rather than leaving it running.
+// the previous ticker down rather than leaving it running. That also means the
+// policy PUT handler's call, when the read-back fails, has just stopped a ticker
+// that was armed: the row is written for both callers, because in both the
+// outcome is the same (no cleanup runs until the policy is readable).
 func (s *DockerCleanupSchedulerService) StartFromPolicy() {
 	s.Stop()
 
@@ -200,6 +205,7 @@ func (s *DockerCleanupSchedulerService) StartFromPolicy() {
 	if err != nil {
 		s.logger.Error("Docker cleanup scheduler not started: the cleanup policy could not be read, so it is unknown whether an operator opted in; nothing will be pruned until this is resolved",
 			"error", err)
+		s.recordUnstartedCycle(0, fmt.Errorf("the Docker cleanup scheduler was NOT armed: the cleanup policy could not be read, so no cleanup will run until it is readable: %w", err))
 		return
 	}
 	if !policy.Enabled {
