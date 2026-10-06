@@ -80,6 +80,12 @@ const applyMaxSleep = 60 * time.Second
 // deferred fire deliberately leaves the scheduled instant in the past.
 const applyRetryDelay = 30 * time.Second
 
+// autoApplyTimeout bounds one RunAutoUpdates pass, whichever path started it.
+// Each update in the pass holds its stack's operation lock, so without a bound a
+// hung docker pull or compose up would hold that lock until the server
+// restarted (agent-os-o1jg).
+const autoApplyTimeout = 10 * time.Minute
+
 // applySchedule is the scheduler's resolved view of the update_apply_* settings.
 // A zero value means immediate mode, which is both the seeded default and the
 // fallback for an absent key or an unparseable stored value (see
@@ -153,6 +159,11 @@ type SchedulerService struct {
 	applyClock    func() time.Time
 	applyMaxSleep time.Duration
 
+	// applyTimeout bounds one RunAutoUpdates pass; production leaves it at
+	// autoApplyTimeout and a test shrinks it so a hung update ends in
+	// milliseconds.
+	applyTimeout time.Duration
+
 	// applyNextAt is the instant the apply loop is currently waiting for, or
 	// the zero time when nothing is scheduled. The loop publishes it under mu
 	// on every (re-)arm so that a caller can tell a pending re-arm from one
@@ -182,6 +193,7 @@ func NewSchedulerService(docker updateChecker, db *database.DB, logger *slog.Log
 		parentCancel:  cancel,
 		applyClock:    time.Now,
 		applyMaxSleep: applyMaxSleep,
+		applyTimeout:  autoApplyTimeout,
 	}
 }
 
@@ -808,7 +820,10 @@ func (s *SchedulerService) applyNow(ctx context.Context) bool {
 		s.wg.Done()
 	}()
 
-	applyCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	// The same bound as RunAutoUpdates' own, started here so it also covers
+	// pruneVanishedTargets. RunAutoUpdates derives its deadline from this one,
+	// so the pass as a whole still ends applyTimeout after this line.
+	applyCtx, cancel := withCommandDeadline(ctx, s.applyTimeout)
 	defer cancel()
 
 	updates, err := s.db.GetCachedUpdates()
@@ -897,6 +912,14 @@ func (s *SchedulerService) pruneVanishedTargets(ctx context.Context, updates []m
 // Eviction (finding #4): on success or no_change, the cached_updates row is
 // deleted so the frontend list converges without waiting for the next scan.
 func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.CachedUpdate) {
+	// Bounded here rather than by each caller, so no path can apply without a
+	// deadline: the immediate path used to pass the scheduler's cancel-only
+	// context, and a hung pull then held the stack's lock until restart
+	// (agent-os-o1jg). withCommandDeadline's cause lets timeoutError tell this
+	// deadline from Stop() cancelling the parent.
+	ctx, cancel := withCommandDeadline(ctx, s.applyTimeout)
+	defer cancel()
+
 	autoEnabledStr, err := s.db.GetSetting("auto_update_enabled")
 	if err != nil {
 		// agent-os-koy9. The read error used to be merged into the value test
@@ -1067,10 +1090,11 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 
 		default: // OutcomeFailed
 			failed++
-			errMsg := ar.Reason
-			if ar.Err != nil {
-				errMsg = ar.Err.Error()
+			failErr := ar.Err
+			if failErr == nil {
+				failErr = errors.New(ar.Reason)
 			}
+			errMsg := timeoutError(ctx, failErr, "auto-update").Error()
 			if err := s.db.UpdateUpdateHistory(historyID, map[string]interface{}{
 				"status":        "failed",
 				"error_message": errMsg,
