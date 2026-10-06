@@ -3,13 +3,16 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/docker/docker/api/types/build"
+	"github.com/docker/docker/api/types/container"
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
@@ -42,12 +45,30 @@ type dockerCleanupArmer interface {
 	StartFromPolicy()
 }
 
+// containerActionDocker is the slice of *services.DockerService the
+// single-container action routes need: the inspect that finds the container's
+// stack, and the four mutations. Declared on the consumer side so the lock
+// those routes take can be tested without a Docker daemon. A nil
+// *DockerService boxed into it is a non-nil interface value, which is fine
+// here: every one of these methods guards a nil receiver and returns
+// services.ErrDockerUnavailable.
+type containerActionDocker interface {
+	InspectContainer(ctx context.Context, containerID string) (container.InspectResponse, error)
+	StartContainer(ctx context.Context, containerID string) error
+	StopContainer(ctx context.Context, containerID string) error
+	RestartContainer(ctx context.Context, containerID string) error
+	DeleteContainer(ctx context.Context, containerID string, force bool) error
+}
+
 type ResourcesHandler struct {
-	docker     *services.DockerService
-	db         *database.DB
-	scheduler  updateScanner
-	jobManager *services.UpdateJobManager
-	actionLog  *services.ActionLogger
+	docker *services.DockerService
+	// containerOps is docker, seen through containerActionDocker. Set by the
+	// constructor; tests replace it with a fake.
+	containerOps containerActionDocker
+	db           *database.DB
+	scheduler    updateScanner
+	jobManager   *services.UpdateJobManager
+	actionLog    *services.ActionLogger
 	// cleanup and cleanupArmer are injected by setters rather than through a
 	// constructor parameter: both are nil on a Docker-less host (see
 	// cmd/server/main.go), every cleanup handler nil-checks them, and adding
@@ -99,7 +120,7 @@ func NewResourcesHandler(docker *services.DockerService, db *database.DB, schedu
 }
 
 func NewResourcesHandlerWithJobManager(docker *services.DockerService, db *database.DB, scheduler *services.SchedulerService, jobManager *services.UpdateJobManager) *ResourcesHandler {
-	h := &ResourcesHandler{docker: docker, db: db, jobManager: jobManager, actionLog: services.NewActionLogger(db)}
+	h := &ResourcesHandler{docker: docker, containerOps: docker, db: db, jobManager: jobManager, actionLog: services.NewActionLogger(db)}
 	if scheduler != nil {
 		h.scheduler = scheduler
 	}
@@ -173,11 +194,55 @@ func (h *ResourcesHandler) listContainers(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"containers": containers})
 }
 
+// lockContainerStack takes the operation lock of the managed stack that owns
+// container id, so a single-container action cannot interleave with a backup
+// (which stops the stack), a restore or a compose up on it (agent-os-w1cj).
+// The owner is found the way updateContainer finds it: the container's compose
+// project label, looked up in the stacks table. A container with no label, or
+// whose project no stack here manages, takes no lock.
+//
+// On ok=false the response is written: dockerFail renders an inspect error the
+// way the action renders its own Docker error, a busy stack answers 409, and a
+// stacks table that cannot be read answers 500, because managed and standalone
+// are then indistinguishable and acting unlocked is the unsafe guess.
+func (h *ResourcesHandler) lockContainerStack(c *gin.Context, id string, dockerFail func(error)) (release func(), ok bool) {
+	inspect, err := h.containerOps.InspectContainer(c.Request.Context(), id)
+	if err != nil {
+		dockerFail(err)
+		return nil, false
+	}
+	projectName := ""
+	if inspect.Config != nil {
+		projectName = inspect.Config.Labels["com.docker.compose.project"]
+	}
+	if projectName == "" {
+		return func() {}, true
+	}
+	stack, err := h.db.GetStackByProjectName(projectName)
+	switch {
+	case errors.Is(err, errdefs.ErrNotFound):
+		return func() {}, true
+	case err != nil:
+		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
+			"Failed to look up the stack that owns this container", err))
+		return nil, false
+	}
+	return acquireStackLock(c, h.opLock, stack.ID, services.OpKindContainer)
+}
+
 func (h *ResourcesHandler) startContainer(c *gin.Context) {
 	id := c.Param("id")
-	if err := h.docker.StartContainer(c.Request.Context(), id); err != nil {
+	fail := func(err error) {
 		slog.Error("Failed to start container", "id", id, "error", err)
 		respondDockerErr(c, err, http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to start container")
+	}
+	release, ok := h.lockContainerStack(c, id, fail)
+	if !ok {
+		return
+	}
+	defer release()
+	if err := h.containerOps.StartContainer(c.Request.Context(), id); err != nil {
+		fail(err)
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_start", ContainerID: id, Timestamp: time.Now()})
@@ -186,9 +251,17 @@ func (h *ResourcesHandler) startContainer(c *gin.Context) {
 
 func (h *ResourcesHandler) stopContainer(c *gin.Context) {
 	id := c.Param("id")
-	if err := h.docker.StopContainer(c.Request.Context(), id); err != nil {
+	fail := func(err error) {
 		slog.Error("Failed to stop container", "id", id, "error", err)
 		respondDockerErr(c, err, http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to stop container")
+	}
+	release, ok := h.lockContainerStack(c, id, fail)
+	if !ok {
+		return
+	}
+	defer release()
+	if err := h.containerOps.StopContainer(c.Request.Context(), id); err != nil {
+		fail(err)
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_stop", ContainerID: id, Timestamp: time.Now()})
@@ -197,9 +270,17 @@ func (h *ResourcesHandler) stopContainer(c *gin.Context) {
 
 func (h *ResourcesHandler) restartContainer(c *gin.Context) {
 	id := c.Param("id")
-	if err := h.docker.RestartContainer(c.Request.Context(), id); err != nil {
+	fail := func(err error) {
 		slog.Error("Failed to restart container", "id", id, "error", err)
 		respondDockerErr(c, err, http.StatusInternalServerError, "DOCKER_OPERATION", "Failed to restart container")
+	}
+	release, ok := h.lockContainerStack(c, id, fail)
+	if !ok {
+		return
+	}
+	defer release()
+	if err := h.containerOps.RestartContainer(c.Request.Context(), id); err != nil {
+		fail(err)
 		return
 	}
 	BroadcastEvent(models.StackEvent{Type: "resource_changed", Event: "container_restart", ContainerID: id, Timestamp: time.Now()})

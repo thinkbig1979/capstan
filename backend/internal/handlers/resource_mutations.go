@@ -170,12 +170,20 @@ func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
 func (h *ResourcesHandler) deleteContainer(c *gin.Context) {
 	id := c.Param("id")
 	force := c.Query("force") == "true"
-
-	if err := h.docker.DeleteContainer(c.Request.Context(), id, force); err != nil {
+	fail := func(err error) {
 		slog.Error("Failed to delete container", "id", id, "error", err)
 		renderDockerResult(c, err, truth.Failed("failed to delete container", err,
 			truth.KV("id", id),
 		))
+	}
+
+	release, ok := h.lockContainerStack(c, id, fail)
+	if !ok {
+		return
+	}
+	defer release()
+	if err := h.containerOps.DeleteContainer(c.Request.Context(), id, force); err != nil {
+		fail(err)
 		return
 	}
 
