@@ -22,7 +22,7 @@ const (
 	OpKindBackup  = "backup"
 	OpKindRestore = "restore"
 	OpKindUpdate  = "update"
-	OpKindGitPull = "git pull with redeploy"
+	OpKindGitPull = "git pull"
 	OpKindCompose = "compose file write"
 	OpKindEnv     = "env file write"
 )
