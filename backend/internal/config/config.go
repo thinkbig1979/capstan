@@ -381,7 +381,10 @@ func unescapeMountinfo(s string) string {
 func validateVolumePathIdentity(cfg *Config) {
 	// A read error (not Linux, no procfs) leaves mountinfo empty, which
 	// inspectStacksMount reports as not inspected.
-	mountinfo, _ := os.ReadFile(mountinfoPath)
+	mountinfo, err := os.ReadFile(mountinfoPath)
+	if err != nil {
+		slog.Debug("Volume path identity: cannot read mounts", "path", mountinfoPath, "error", err)
+	}
 	verdict, source := inspectStacksMount(cfg.StacksDir, string(mountinfo))
 
 	switch verdict {
