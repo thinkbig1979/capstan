@@ -19,6 +19,12 @@ actually running afterwards with `GET /api/v1/version` or Settings → About.
 > are invalidated on upgrade — log in again once. Previously stored secrets stay
 > readable and are re-encrypted under the new key scheme on next save.
 
+> **Upgrading from a `docker-compose.prod.yaml` without `init: true`:** add
+> `init: true` to the `app` service (next to `restart:`), then run
+> `docker compose -f docker-compose.prod.yaml up -d`. Compose sees the changed
+> config and recreates the container. Without it, killed child processes
+> accumulate as zombies for the container's lifetime.
+
 > **Upgrading from a `docker-compose.prod.yaml` that mounts `./stacks:/opt/stacks`:**
 > that older template broke Volume Path Identity. Your stack files live in
 > `./stacks` next to the compose file, but a managed stack's relative binds

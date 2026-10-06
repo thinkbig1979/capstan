@@ -29,6 +29,11 @@ relative binds against that path. Use an absolute host path, and create it
 owned by `PUID`/`PGID` before the first start. The startup log line
 `Volume path identity` reports an `ERROR` if the mount breaks this rule.
 
+`docker-compose.prod.yaml` sets `init: true` on the `app` service. The Go server
+runs as the container's PID 1, so without an init process, child processes it
+kills (for example a timed-out `docker compose` run) stay as zombies until the
+container is recreated. Keep the line if you copy the file into your own setup.
+
 `STORAGE_KEY` encrypts stored secrets (git tokens, restic password) at rest with
 a key independent of `JWT_SECRET`; if unset it falls back to `JWT_SECRET`. Using a
 separate value means rotating `JWT_SECRET` doesn't require re-encryption and a
