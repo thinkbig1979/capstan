@@ -96,10 +96,11 @@ func SecurityHeaders(cfg *config.Config) gin.HandlerFunc {
 	connectSrc := buildConnectSrc(cfg)
 	return func(c *gin.Context) {
 		nonceBytes := make([]byte, 16)
-		if _, err := rand.Read(nonceBytes); err != nil {
-			slog.Error("Failed to generate CSP nonce", "error", err)
-			nonceBytes = []byte("fallback-nonce")
-		}
+		// crypto/rand.Read never returns an error: on failure it crashes the
+		// program (go1.27.1's src/crypto/rand/rand.go, Read's doc comment and
+		// its fatal() call), so there is no failure branch to handle and no
+		// fallback nonce to fall open to (agent-os-n4ca.6).
+		_, _ = rand.Read(nonceBytes)
 		nonce := hex.EncodeToString(nonceBytes)
 		c.Set("csp_nonce", nonce)
 
