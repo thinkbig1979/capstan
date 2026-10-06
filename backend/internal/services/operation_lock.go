@@ -25,6 +25,9 @@ const (
 	OpKindGitPull = "git pull"
 	OpKindCompose = "compose file write"
 	OpKindEnv     = "env file write"
+	// OpKindContainer is a single-container start, stop, restart or delete
+	// from the Resources page on a container a managed stack owns.
+	OpKindContainer = "container action"
 )
 
 // OperationLock is a per-stack try-lock: Acquire fails fast instead of waiting
