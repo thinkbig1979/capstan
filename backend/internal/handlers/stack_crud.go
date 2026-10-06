@@ -121,7 +121,8 @@ func (h *StacksHandler) Create(c *gin.Context) {
 	// DUPLICATE_STACK rather than a new code: losing this race is the same
 	// user-visible situation as the sequential duplicate below — the name is
 	// taken — and the sequential path already answers 409 DUPLICATE_STACK for it.
-	if _, err := h.opLock.Acquire(stackID); err != nil {
+	lockToken, lockErr := h.opLock.Acquire(stackID, services.OpKindCreate)
+	if lockErr != nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
 			models.ErrDuplicateStack,
@@ -129,7 +130,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		))
 		return
 	}
-	defer h.opLock.Release(stackID)
+	defer h.opLock.Release(stackID, lockToken)
 
 	if _, err := os.Stat(stackDir); err == nil { //geterrors:ignore existence probe: a stat error that is not NotExist reads as "not there" and the directory create below is the real gate
 		c.JSON(http.StatusConflict, models.NewAppError(
@@ -434,15 +435,16 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.opLock.Acquire(id); err != nil {
+	lockToken, lockErr := h.opLock.Acquire(id, services.OpKindDelete)
+	if lockErr != nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
 			models.ErrOperationInProgress,
-			err.Error(),
+			lockErr.Error(),
 		))
 		return
 	}
-	defer h.opLock.Release(id)
+	defer h.opLock.Release(id, lockToken)
 
 	// Path-traversal guard: resolve the stack directory to an absolute path and
 	// confirm it is strictly inside the configured stacks root before we attempt

@@ -24,6 +24,9 @@ type ComposeHandler struct {
 	db        *database.DB
 	config    *config.Config
 	actionLog *services.ActionLogger
+	// opLock serialises file writes with every other operation on the stack
+	// (agent-os-a1ye.4). Set by SetOperationLock; nil (tests) means no locking.
+	opLock *services.OperationLock
 }
 
 type ComposeRequest struct {
@@ -37,6 +40,12 @@ func NewComposeHandler(linter *services.LinterService, db *database.DB, config *
 		config:    config,
 		actionLog: services.NewActionLogger(db),
 	}
+}
+
+// SetOperationLock installs the per-stack operation lock shared with the
+// lifecycle, update and backup paths. main.go passes the same instance.
+func (h *ComposeHandler) SetOperationLock(l *services.OperationLock) {
+	h.opLock = l
 }
 
 func (h *ComposeHandler) RegisterRoutes(group *gin.RouterGroup) {
@@ -119,6 +128,14 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 		))
 		return
 	}
+
+	// Held from before the lint (which reads the stack directory) to after
+	// the write.
+	releaseLock, ok := acquireStackLock(c, h.opLock, id, services.OpKindCompose)
+	if !ok {
+		return
+	}
+	defer releaseLock()
 
 	lintResults, err := h.linter.LintWithDir(req.Content, stack.Directory)
 	if err != nil {
@@ -290,6 +307,13 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		))
 		return
 	}
+
+	// Held across the lint, both writes, and the rollback paths.
+	releaseLock, ok := acquireStackLock(c, h.opLock, id, services.OpKindCompose)
+	if !ok {
+		return
+	}
+	defer releaseLock()
 
 	// ── Determine env content ───────────────────────────────────────────────
 	var envContent string

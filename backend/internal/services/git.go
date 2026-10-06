@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -27,8 +28,8 @@ type RedeployFailure struct {
 // PullResult is the raw outcome of a git pull (no redeploy logic).
 // The Redeploy path is handled separately via PullVerified on the DockerService.
 
-// GitService is two pointer fields, immutable after construction, and built
-// once at startup (main.go); it is reached concurrently from request handlers
+// GitService is three pointer fields, set once at startup (main.go) and never
+// written after; it is reached concurrently from request handlers
 // on gin's per-request goroutines. It deliberately carries no cache of
 // resolved credentials or of what has already been logged: a shared map would
 // need synchronization to avoid a data race, would suppress a credential
@@ -40,6 +41,10 @@ type RedeployFailure struct {
 type GitService struct {
 	config *config.Config
 	db     *database.DB
+	// opLock is the per-stack operation lock PullVerified takes when it will
+	// redeploy (agent-os-a1ye.4). Set by SetOperationLock before the server
+	// starts; nil (tests) means no locking.
+	opLock *OperationLock
 }
 
 func NewGitService(cfg *config.Config, db *database.DB) *GitService {
@@ -47,6 +52,34 @@ func NewGitService(cfg *config.Config, db *database.DB) *GitService {
 		config: cfg,
 		db:     db,
 	}
+}
+
+// SetOperationLock installs the per-stack operation lock shared with the
+// handlers and the backup service. main.go calls it once, before serving.
+func (s *GitService) SetOperationLock(l *OperationLock) {
+	s.opLock = l
+}
+
+// lockStacks takes every stack's operation lock, all or nothing: if one is
+// held, the ones already taken are released and the error names the busy
+// stack. Acquire never waits, so taking several in sequence cannot deadlock.
+func (s *GitService) lockStacks(stacks []models.Stack, kind string) (release func(), err error) {
+	type held struct{ id, token string }
+	var taken []held
+	release = func() {
+		for _, h := range taken {
+			s.opLock.Release(h.id, h.token)
+		}
+	}
+	for _, st := range stacks {
+		token, err := s.opLock.Acquire(st.ID, kind)
+		if err != nil {
+			release()
+			return nil, fmt.Errorf("stack %s: %w", st.ProjectName, err)
+		}
+		taken = append(taken, held{st.ID, token})
+	}
+	return release, nil
 }
 
 // GetStatus was a go-git call with a git-CLI fallback until agent-os-yo9e. The
@@ -785,7 +818,31 @@ func gitExitCode(err error) int {
 //   - pull itself failed → failed
 //
 // docker may be nil; in that case redeploy is skipped even when requested.
+//
+// When it will redeploy and a lock is wired, it first takes the operation lock
+// of every stack in dirPath and holds them across the pull, the restarts and
+// their verification, so neither the pulled files nor the redeploy interleave
+// with a backup or lifecycle op on those stacks. A held stack fails the whole
+// call before anything is pulled, as 409 OPERATION_IN_PROGRESS.
 func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerService) (truth.ActionResult, *models.PullResult) {
+	var lockedStacks []models.Stack
+	locked := false
+	if redeploy && docker != nil && s.opLock != nil {
+		stacks, err := s.db.ListStacksByDirectory(dirPath)
+		if err != nil {
+			// Nothing has been pulled yet, so this is a plain failure, not
+			// the partial the post-pull listing below reports.
+			return truth.Failed("could not list the stacks to lock before pulling", err), nil
+		}
+		release, err := s.lockStacks(stacks, OpKindGitPull)
+		if err != nil {
+			return truth.Failed("another operation is in progress",
+				models.NewAppError(http.StatusConflict, models.ErrOperationInProgress, err.Error())), nil
+		}
+		defer release()
+		lockedStacks, locked = stacks, true
+	}
+
 	pullResult, err := s.pullCLI(dirPath)
 	if err != nil {
 		return truth.Failed("git pull failed", err), nil
@@ -824,15 +881,20 @@ func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerS
 		), pullResult
 	}
 
-	// Determine which stacks are affected by the changed files.
-	stacks, err := s.db.ListStacksByDirectory(dirPath)
-	if err != nil {
-		// Can list stacks — treat as partial: pull succeeded but redeploy untried.
-		return truth.Partial("pulled new commits but could not list stacks for redeploy",
-			truth.KV("previousCommit", pullResult.PreviousCommit),
-			truth.KV("currentCommit", pullResult.CurrentCommit),
-			truth.KV("listError", err.Error()),
-		), pullResult
+	// Determine which stacks are affected by the changed files. When they were
+	// locked above, redeploy exactly the set that is locked.
+	stacks := lockedStacks
+	if !locked {
+		var listErr error
+		stacks, listErr = s.db.ListStacksByDirectory(dirPath)
+		if listErr != nil {
+			// Can list stacks — treat as partial: pull succeeded but redeploy untried.
+			return truth.Partial("pulled new commits but could not list stacks for redeploy",
+				truth.KV("previousCommit", pullResult.PreviousCommit),
+				truth.KV("currentCommit", pullResult.CurrentCommit),
+				truth.KV("listError", listErr.Error()),
+			), pullResult
+		}
 	}
 
 	var failures []RedeployFailure

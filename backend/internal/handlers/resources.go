@@ -55,6 +55,17 @@ type ResourcesHandler struct {
 	// no gain.
 	cleanup      dockerCleanupService
 	cleanupArmer dockerCleanupArmer
+	// opLock is the per-stack operation lock the manual update handlers take,
+	// so an update cannot interleave with a lifecycle op or backup on the same
+	// stack (agent-os-a1ye.4). Injected by SetOperationLock like the two
+	// above; nil (test-built handlers) means no locking.
+	opLock *services.OperationLock
+}
+
+// SetOperationLock installs the per-stack operation lock shared with the
+// stacks, operations and backup paths. main.go passes the same instance.
+func (h *ResourcesHandler) SetOperationLock(l *services.OperationLock) {
+	h.opLock = l
 }
 
 // SetCleanupService installs the Docker cleanup service. Nil-checked on the

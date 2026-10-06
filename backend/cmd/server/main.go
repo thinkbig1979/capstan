@@ -394,7 +394,13 @@ func main() {
 
 	scannerService := services.NewScannerService(cfg, db)
 
+	// One per-stack operation lock for every path that runs docker compose or
+	// writes stack files; each consumer below gets this same instance
+	// (agent-os-a1ye.4). oplock_wiring_test.go checks every consumer gets it.
 	opLock := services.NewOperationLock()
+	if schedulerService != nil {
+		schedulerService.SetOperationLock(opLock)
+	}
 
 	hasGlobalEnv, scanErr := scannerService.ScanAll()
 	if scanErr != nil {
@@ -536,13 +542,17 @@ func main() {
 
 	stacksHandler := handlers.NewStacksHandler(dockerService, scannerService, services.NewLinterService(), db, cfg, services.NewActionLogger(db), opLock)
 	envHandler := handlers.NewEnvHandler(db, cfg)
+	envHandler.SetOperationLock(opLock)
 	composeHandler := handlers.NewComposeHandler(services.NewLinterService(), db, cfg)
+	composeHandler.SetOperationLock(opLock)
 	wireStacksGroup(protected, stacksHandler, envHandler, composeHandler, 120*time.Second)
 
 	composeGroup := protected.Group("/compose")
 	composeGroup.POST("/lint", stacksHandler.Lint)
 
-	gitHandler := handlers.NewGitHandler(services.NewGitService(cfg, db), dockerService, db, cfg)
+	gitService := services.NewGitService(cfg, db)
+	gitService.SetOperationLock(opLock)
+	gitHandler := handlers.NewGitHandler(gitService, dockerService, db, cfg)
 	gitGroup := protected.Group("/git")
 	gitHandler.RegisterRoutes(gitGroup)
 
@@ -609,6 +619,7 @@ func main() {
 	updateJobManager.SetJobTimeout(cfg.UpdateTimeout)
 
 	resourcesHandler := handlers.NewResourcesHandlerWithJobManager(dockerService, db, schedulerService, updateJobManager)
+	resourcesHandler.SetOperationLock(opLock)
 
 	// ── Scheduled Docker cleanup (agent-os-fn7x.3) ─────────────────────────────
 	//

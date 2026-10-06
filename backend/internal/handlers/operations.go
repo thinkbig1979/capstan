@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -83,12 +84,8 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			return
 		}
 
-		if _, err := h.opLock.Acquire(stackID); err != nil {
-			handleError(c, models.NewAppError(http.StatusConflict, models.ErrOperationInProgress, err.Error()))
-			return
-		}
-		defer h.opLock.Release(stackID)
-
+		// Validated before Acquire: action names the lock holder in the 409
+		// another client reads, so it must be one of these four, never raw input.
 		var subcommand string
 		var extraArgs []string
 		switch action {
@@ -105,6 +102,20 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "Unknown action: "+action))
 			return
 		}
+
+		lockToken, err := h.opLock.Acquire(stackID, action)
+		if err != nil {
+			handleError(c, models.NewAppError(http.StatusConflict, models.ErrOperationInProgress, err.Error()))
+			return
+		}
+		// The one release path for this acquisition (agent-os-a1ye.4). It is
+		// called explicitly right after the streaming body below, and deferred
+		// as the safety net for the early returns before it and for panics.
+		// OnceFunc makes the second call a no-op, so the deferred call can never
+		// release a lock that a newer operation on this stack acquired after the
+		// explicit one freed it.
+		releaseLock := sync.OnceFunc(func() { h.opLock.Release(stackID, lockToken) })
+		defer releaseLock()
 
 		// After authentication, so the cap keys on a real user ID. Operations
 		// streams were the other endpoint missing from the ConnectionManager
@@ -127,15 +138,13 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 		// path below — not just the final fallthrough — releases the stack
 		// lock (right after the closure call, below) before the outer
 		// function's deferred conn.Conn.Close() unwinds. Defers run LIFO, so
-		// without this the deferred Release (kept below as the safety net
-		// for the early returns between Acquire and here, and for panics)
-		// would be the LAST thing to run on return — after the socket is
-		// already closed — letting a client that observed the close redial
-		// the same stack and hit a spurious 409 ("operation already in
-		// progress") because this goroutine had not finished unwinding yet
-		// (agent-os-o26). Release is idempotent (operation_lock.go:59-64
-		// no-ops once the slot is already free), so the deferred Release
-		// still runs harmlessly.
+		// without this the deferred releaseLock (the safety net for the early
+		// returns between Acquire and here, and for panics) would be the LAST
+		// thing to run on return — after the socket is already closed —
+		// letting a client that observed the close redial the same stack and
+		// hit a spurious 409 because this goroutine had not finished unwinding
+		// yet (agent-os-o26). releaseLock is a sync.OnceFunc, so the deferred
+		// call after this one does nothing.
 		func() {
 			// DESIGN CHOICE (agent-os-a1ye.3): the compose process does NOT run
 			// under the socket's context. It used to, and the reader below
@@ -159,6 +168,7 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			go func() {
 				for {
 					if _, _, err := conn.Conn.ReadMessage(); err != nil {
+						conn.logReadErr(err)
 						wsCancel()
 						return
 					}
@@ -232,6 +242,6 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			slog.Info("Streaming operation completed", "stack_id", stackID, "action", action)
 		}()
 
-		h.opLock.Release(stackID)
+		releaseLock()
 	}
 }

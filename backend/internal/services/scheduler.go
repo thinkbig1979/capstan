@@ -3,7 +3,10 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -156,6 +159,12 @@ type SchedulerService struct {
 	// already picked up — which is what makes the timer tests deterministic
 	// instead of sleep-and-hope.
 	applyNextAt time.Time
+
+	// opLock is the per-stack operation lock: auto-apply skips a container
+	// whose stack is held instead of updating it under a running backup or
+	// lifecycle op (agent-os-a1ye.4). Set by SetOperationLock; nil (tests)
+	// means no locking.
+	opLock *OperationLock
 }
 
 func NewSchedulerService(docker updateChecker, db *database.DB, logger *slog.Logger, broadcastFn EventBroadcaster) *SchedulerService {
@@ -174,6 +183,12 @@ func NewSchedulerService(docker updateChecker, db *database.DB, logger *slog.Log
 		applyClock:    time.Now,
 		applyMaxSleep: applyMaxSleep,
 	}
+}
+
+// SetOperationLock installs the per-stack operation lock shared with the
+// handlers and the backup service. main.go passes the same instance.
+func (s *SchedulerService) SetOperationLock(l *OperationLock) {
+	s.opLock = l
 }
 
 func (s *SchedulerService) Start(interval time.Duration) {
@@ -937,6 +952,10 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 	succeeded := 0
 	failed := 0
 	skipped := 0
+	// Stacks whose lock was held when their update came up. Their cached
+	// update rows are left in place, so the next pass tries them again.
+	var busyStacks []string
+	busySkipped := 0
 
 	for _, update := range updates {
 		policy, hasPolicy := containerPolicies[update.ContainerID]
@@ -949,6 +968,27 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 		if !hasPolicy {
 			skipped++
 			continue
+		}
+
+		// Taken before the history insert, so a skipped update leaves no
+		// pending row, and held across UpdateContainer and its verification.
+		// update_history cannot record a 'skipped' status (its CHECK allows
+		// pending/success/failed/paused), so the skip is reported through
+		// update_apply_last_error after the loop.
+		releaseLock := func() {}
+		if s.opLock != nil && update.StackID != "" {
+			token, lockErr := s.opLock.Acquire(update.StackID, OpKindUpdate)
+			if lockErr != nil {
+				s.logger.Warn("Auto-update skipped: another operation holds the stack; retried next pass",
+					"container", update.ContainerName, "stack_id", update.StackID, "holder", lockErr.Error())
+				skipped++
+				busySkipped++
+				if !slices.Contains(busyStacks, update.StackID) {
+					busyStacks = append(busyStacks, update.StackID)
+				}
+				continue
+			}
+			releaseLock = func() { s.opLock.Release(update.StackID, token) }
 		}
 
 		historyID := uuid.New().String()
@@ -970,6 +1010,7 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 
 		if err := s.db.InsertUpdateHistory(historyEntry); err != nil {
 			s.logger.Error("Failed to insert update history", "error", err)
+			releaseLock()
 			continue
 		}
 
@@ -1074,6 +1115,13 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 				}
 			}
 		}
+		releaseLock()
+	}
+
+	if len(busyStacks) > 0 {
+		s.recordApplyError(applyLastErrorKey, fmt.Sprintf(
+			"%d auto-update(s) skipped: another operation in progress on stack %s; retried next pass",
+			busySkipped, strings.Join(busyStacks, ", ")))
 	}
 
 	s.logger.Info("Auto-update cycle completed",

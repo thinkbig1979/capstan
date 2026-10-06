@@ -133,8 +133,8 @@ func TestOperations_ClientDisconnectDoesNotKillTheProcess(t *testing.T) {
 			}
 
 			// Still running, so the stack is still locked.
-			if _, err := lock.Acquire("stack-a"); err == nil {
-				lock.Release("stack-a")
+			if token, err := lock.Acquire("stack-a", services.OpKindBackup); err == nil {
+				lock.Release("stack-a", token)
 				t.Fatal("the stack lock was released while the operation was still running")
 			}
 
@@ -142,8 +142,8 @@ func TestOperations_ClientDisconnectDoesNotKillTheProcess(t *testing.T) {
 
 			guard := hangGuardDeadline(t)
 			for {
-				if _, err := lock.Acquire("stack-a"); err == nil {
-					lock.Release("stack-a")
+				if token, err := lock.Acquire("stack-a", services.OpKindBackup); err == nil {
+					lock.Release("stack-a", token)
 					break
 				}
 				if time.Now().After(guard) {

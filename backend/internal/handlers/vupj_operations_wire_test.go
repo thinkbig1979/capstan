@@ -67,9 +67,9 @@ func TestVupj_OperationsRefusals_AreAppErrors(t *testing.T) {
 
 	t.Run("held lock is 409 OPERATION_IN_PROGRESS", func(t *testing.T) {
 		lock := services.NewOperationLock()
-		_, err := lock.Acquire("stack-a")
+		token, err := lock.Acquire("stack-a", services.OpKindBackup)
 		require.NoError(t, err)
-		t.Cleanup(func() { lock.Release("stack-a") })
+		t.Cleanup(func() { lock.Release("stack-a", token) })
 
 		status, body := call(t, build(seeded(t), lock), "/api/ws/operations/stack-a/pull")
 		require.Equal(t, http.StatusConflict, status)
