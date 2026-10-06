@@ -151,6 +151,29 @@ code at all until 2026-09-24.
 - `GET /api/v1/stacks/:id/containers` — list a stack's containers with live
   status
 
+## Per-stack operation lock
+
+One operation at a time runs against a stack. A request that would start a
+second one is refused, never queued, with **409 `OPERATION_IN_PROGRESS`** and
+the message `<kind> in progress since <RFC3339 time>`, naming what holds the
+stack (for example `backup in progress since 2026-10-06T09:12:44Z`). Retry once
+it finishes. Until agent-os-a1ye.4 the message repeated the stack id.
+
+Routes that take the lock: start, stop, restart, pull and delete of a stack;
+`GET /api/v1/ws/operations/:id/:action`; `POST /api/v1/resources/stacks/:id/update`
+and `POST /api/v1/resources/containers/:id/update` (the latter only for a
+container belonging to a managed stack); `PUT /api/v1/stacks/:id/compose`,
+`PUT /api/v1/stacks/:id/compose-env`, `PUT /api/v1/stacks/:id/env` and
+`POST /api/v1/stacks/:id/env`; and `POST /api/v1/git/pull?redeploy=true`, which
+locks every stack in the pulled directory and refuses before pulling anything if
+one is held. Backups and restores take it too. `POST /api/v1/stacks` answers
+409 `DUPLICATE_STACK` instead, because losing that race means the name is taken.
+
+An update job holds the lock from the request until the job finishes, including
+its time in the update queue. Scheduled auto-updates skip a container whose stack
+is held, leave it pending for the next pass, and report the skip in
+`lastApplyError` on `GET /api/v1/settings/updates`.
+
 ## Compose & Environment Files
 
 - `GET /api/v1/stacks/:id/compose` / `PUT /api/v1/stacks/:id/compose` —

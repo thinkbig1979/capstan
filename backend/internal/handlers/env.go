@@ -24,6 +24,9 @@ type EnvHandler struct {
 	db        *database.DB
 	config    *config.Config
 	actionLog *services.ActionLogger
+	// opLock serialises file writes with every other operation on the stack
+	// (agent-os-a1ye.4). Set by SetOperationLock; nil (tests) means no locking.
+	opLock *services.OperationLock
 }
 
 type EnvRequest struct {
@@ -37,6 +40,12 @@ func NewEnvHandler(db *database.DB, config *config.Config) *EnvHandler {
 		config:    config,
 		actionLog: services.NewActionLogger(db),
 	}
+}
+
+// SetOperationLock installs the per-stack operation lock shared with the
+// lifecycle, update and backup paths. main.go passes the same instance.
+func (h *EnvHandler) SetOperationLock(l *services.OperationLock) {
+	h.opLock = l
 }
 
 func (h *EnvHandler) RegisterRoutes(group *gin.RouterGroup) {
@@ -221,6 +230,13 @@ func (h *EnvHandler) Put(c *gin.Context) {
 		return
 	}
 
+	// Held across the write and its round-trip verification.
+	releaseLock, ok := acquireStackLock(c, h.opLock, id, services.OpKindEnv)
+	if !ok {
+		return
+	}
+	defer releaseLock()
+
 	var content string
 	if req.Raw != "" {
 		content = req.Raw
@@ -291,6 +307,14 @@ func (h *EnvHandler) Create(c *gin.Context) {
 		))
 		return
 	}
+
+	// Held from the existence check to after the create and its verification,
+	// so the check and the write see the same directory.
+	releaseLock, ok := acquireStackLock(c, h.opLock, id, services.OpKindEnv)
+	if !ok {
+		return
+	}
+	defer releaseLock()
 
 	// Refuse if the file already exists.
 	if _, statErr := os.Stat(envPath); statErr == nil { //geterrors:ignore existence probe: a stat error that is not NotExist reads as "not there" and the create below is the real gate, which fails loudly

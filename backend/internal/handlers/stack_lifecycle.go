@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -22,7 +23,8 @@ func (h *StacksHandler) Start(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.opLock.Acquire(id); err != nil {
+	lockToken, err := h.opLock.Acquire(id, services.OpKindStart)
+	if err != nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
 			"OPERATION_IN_PROGRESS",
@@ -30,7 +32,7 @@ func (h *StacksHandler) Start(c *gin.Context) {
 		))
 		return
 	}
-	defer h.opLock.Release(id)
+	defer h.opLock.Release(id, lockToken)
 
 	startTime := time.Now()
 	ar, output := h.dockerSvc().StartVerified(*stack)
@@ -67,7 +69,8 @@ func (h *StacksHandler) Stop(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.opLock.Acquire(id); err != nil {
+	lockToken, err := h.opLock.Acquire(id, services.OpKindStop)
+	if err != nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
 			"OPERATION_IN_PROGRESS",
@@ -75,7 +78,7 @@ func (h *StacksHandler) Stop(c *gin.Context) {
 		))
 		return
 	}
-	defer h.opLock.Release(id)
+	defer h.opLock.Release(id, lockToken)
 
 	startTime := time.Now()
 	ar, output := h.dockerSvc().StopVerified(*stack)
@@ -112,7 +115,8 @@ func (h *StacksHandler) Restart(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.opLock.Acquire(id); err != nil {
+	lockToken, err := h.opLock.Acquire(id, services.OpKindRestart)
+	if err != nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
 			"OPERATION_IN_PROGRESS",
@@ -120,7 +124,7 @@ func (h *StacksHandler) Restart(c *gin.Context) {
 		))
 		return
 	}
-	defer h.opLock.Release(id)
+	defer h.opLock.Release(id, lockToken)
 
 	startTime := time.Now()
 	ar, output := h.dockerSvc().RestartVerified(*stack)
@@ -157,7 +161,8 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.opLock.Acquire(id); err != nil {
+	lockToken, err := h.opLock.Acquire(id, services.OpKindPull)
+	if err != nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
 			http.StatusConflict,
 			"OPERATION_IN_PROGRESS",
@@ -165,7 +170,7 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 		))
 		return
 	}
-	defer h.opLock.Release(id)
+	defer h.opLock.Release(id, lockToken)
 
 	startTime := time.Now()
 	pullAR, pullOutput := h.dockerSvc().PullVerified(*stack)

@@ -1173,11 +1173,11 @@ func (s *BackupService) backupStack(
 	}
 
 	// Per-stack operation lock — prevents a deploy from racing a backup.
-	lockToken, lockErr := s.opLock.Acquire(stackID)
+	lockToken, lockErr := s.opLock.Acquire(stackID, OpKindBackup)
 	if lockErr != nil {
 		return res, fmt.Errorf("acquire lock: %w", lockErr)
 	}
-	defer s.opLock.Release(lockToken)
+	defer s.opLock.Release(stackID, lockToken)
 
 	stream(out, "info", fmt.Sprintf("[%s] starting (policy=%s dryRun=%v)", stackID, stopPolicy, dryRun))
 
@@ -1495,11 +1495,11 @@ func (s *BackupService) runRestore(
 	}
 
 	// Acquire per-stack lock.
-	lockToken, lockErr := s.opLock.Acquire(stackID)
+	lockToken, lockErr := s.opLock.Acquire(stackID, OpKindRestore)
 	if lockErr != nil {
 		return fmt.Errorf("acquire lock: %w", lockErr)
 	}
-	defer s.opLock.Release(lockToken)
+	defer s.opLock.Release(stackID, lockToken)
 
 	// Determine if the stack was running. As in backupStack, a failed read is a
 	// third answer — "could not find out" — and not a "no".

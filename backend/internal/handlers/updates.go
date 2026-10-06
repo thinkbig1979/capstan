@@ -183,6 +183,20 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 	})
 }
 
+// lockStackForUpdate takes stackID's operation lock for an update job, or
+// answers 409 OPERATION_IN_PROGRESS (the lifecycle routes' code) and returns
+// ok=false. The lock is taken here, at request time, so a busy stack is
+// refused before anything is queued; the job's run closure defers the
+// returned release, so the lock covers the queue wait, the compose/docker
+// subprocesses and the post-update verification. release is a no-op when no
+// lock is wired or stackID is empty (a container no managed stack owns).
+func (h *ResourcesHandler) lockStackForUpdate(c *gin.Context, stackID string) (release func(), ok bool) {
+	if stackID == "" {
+		return func() {}, true
+	}
+	return acquireStackLock(c, h.opLock, stackID, services.OpKindUpdate)
+}
+
 func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	id := c.Param("id")
 	// Audit who initiated the update.
@@ -238,6 +252,12 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 		}
 	}
 
+	// Before the history insert, so a refused update leaves no pending row.
+	releaseLock, ok := h.lockStackForUpdate(c, stackID)
+	if !ok {
+		return
+	}
+
 	historyID := uuid.New().String()
 	now := time.Now().Format(time.RFC3339)
 	historyEntry := &models.UpdateHistoryEntry{
@@ -275,6 +295,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	stackIDCopy := stackID
 
 	run := func(ctx context.Context, jobID string, emit func(services.LogLine), setStatus func(services.Status)) error {
+		defer releaseLock()
 		result, ar := docker.UpdateContainerStreaming(ctx, containerIDCopy, db, emit, setStatus)
 
 		// Persist outcome on the job (findable via GET /updates/jobs/:id).
@@ -448,6 +469,11 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 		return
 	}
 
+	releaseLock, ok := h.lockStackForUpdate(c, stack.ID)
+	if !ok {
+		return
+	}
+
 	stackIDForLog := stack.ID
 	logActionFromContext(h.actionLog, c, &stackIDForLog, services.ActionUpdateStack, gin.H{
 		"stack":    stack.ProjectName,
@@ -468,6 +494,7 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 	outdatedCopy := outdated
 
 	run := func(ctx context.Context, jobID string, emit func(services.LogLine), setStatus func(services.Status)) error {
+		defer releaseLock()
 		total := len(outdatedCopy)
 		serviceNames := make([]string, total)
 		for i, s := range outdatedCopy {

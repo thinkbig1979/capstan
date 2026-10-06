@@ -62,10 +62,11 @@ func TestStartVerified_HungChildTimesOutAndFreesTheLock(t *testing.T) {
 			done := make(chan truth.ActionResult, 1)
 			start := time.Now()
 			go func() {
-				if _, err := lock.Acquire(stack.ID); err != nil {
+				token, err := lock.Acquire(stack.ID, OpKindStart)
+				if err != nil {
 					t.Errorf("first Acquire: %v", err)
 				}
-				defer lock.Release(stack.ID)
+				defer lock.Release(stack.ID, token)
 				ar, _ := svc.StartVerified(stack)
 				done <- ar
 			}()
@@ -82,9 +83,9 @@ func TestStartVerified_HungChildTimesOutAndFreesTheLock(t *testing.T) {
 			require.Error(t, ar.Err)
 			assert.Contains(t, ar.Err.Error(), "docker compose up timed out after 300ms")
 
-			_, err := lock.Acquire(stack.ID)
+			token, err := lock.Acquire(stack.ID, OpKindStart)
 			require.NoError(t, err, "the lock must be free once StartVerified has returned")
-			lock.Release(stack.ID)
+			lock.Release(stack.ID, token)
 		})
 	}
 }
