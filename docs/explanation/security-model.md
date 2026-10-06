@@ -205,6 +205,19 @@ reach the bypass too (agent-os-0s4). Widening the `AUTH_DISABLED` bypass
 beyond loopback is now a separate, explicit opt-in via
 `AUTH_DISABLED_ALLOWED_NETWORKS`.
 
+**With `AUTH_DISABLED`, the `Host` header must also be a name you allowed.**
+The peer-address check above cannot see DNS rebinding: a page on an attacker's
+domain re-points that domain at `127.0.0.1`, and the operator's own browser then
+sends it requests from loopback, which the bypass always admits. The one thing
+that gives it away is the `Host` header, which a page cannot change and which
+still names the attacker's domain. So while `AUTH_DISABLED=true`, a global
+middleware (`backend/internal/middleware/allowed_hosts.go`) answers `403` to any
+request whose `Host` is not `localhost`, `127.0.0.1`, `[::1]` or listed in
+`ALLOWED_HOSTS`, before any route runs, WebSocket upgrades and the SPA included
+(agent-os-n4ca.1). `X-Forwarded-Host` is ignored: unlike `Host`, a rebound page
+can set it. With authentication on, the check is off, because every route
+needs a session token whatever name the browser used.
+
 **A reverse proxy must overwrite `X-Forwarded-For`, and its address must be in
 `TRUSTED_NETWORKS`.** The resolved client IP keys the login rate limiter (not
 `AUTH_DISABLED`, which is peer-address-only as above), so a proxy

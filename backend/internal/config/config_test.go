@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -251,6 +252,32 @@ func TestLoad_HonoursAuthDisabledAllowedNetworksFromEnvironment(t *testing.T) {
 	}
 	if cfg.AuthDisabledAllowedNetworks != "10.1.0.0/16" {
 		t.Errorf("expected Load() to honour AUTH_DISABLED_ALLOWED_NETWORKS=10.1.0.0/16, got %q", cfg.AuthDisabledAllowedNetworks)
+	}
+}
+
+// TestLoad_ParsesAllowedHosts pins that ALLOWED_HOSTS reaches the Host check
+// (agent-os-n4ca.1) as a trimmed list with blank entries dropped, and that
+// unset means no extra hosts (loopback only).
+func TestLoad_ParsesAllowedHosts(t *testing.T) {
+	setBaseLoadEnv(t)
+	t.Setenv("ALLOWED_HOSTS", " capstan.lan, ,192.168.1.10 ,")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	want := []string{"capstan.lan", "192.168.1.10"}
+	if !reflect.DeepEqual(cfg.AllowedHosts, want) {
+		t.Errorf("AllowedHosts = %q, want %q", cfg.AllowedHosts, want)
+	}
+
+	t.Setenv("ALLOWED_HOSTS", "")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if len(cfg.AllowedHosts) != 0 {
+		t.Errorf("unset ALLOWED_HOSTS: AllowedHosts = %q, want empty", cfg.AllowedHosts)
 	}
 }
 

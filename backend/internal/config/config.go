@@ -86,7 +86,13 @@ type Config struct {
 	// who can skip authentication entirely (agent-os-0s4). Empty means
 	// loopback only, which is the narrowest and safest default.
 	AuthDisabledAllowedNetworks string
-	ExtraStacksDirs             []string
+	// AllowedHosts lists the Host header names, beyond localhost, 127.0.0.1
+	// and [::1], a request may carry while AuthDisabled is on (ALLOWED_HOSTS).
+	// The AUTH_DISABLED bypass trusts loopback peers, and a DNS-rebinding
+	// page also arrives from loopback; its Host is what gives it away
+	// (middleware.AllowedHosts, agent-os-n4ca.1). Ignored when auth is on.
+	AllowedHosts    []string
+	ExtraStacksDirs []string
 
 	// Child-process deadlines; see DefaultComposeTimeout. Zero means default.
 	ComposeTimeout time.Duration
@@ -215,14 +221,8 @@ func Load() (*Config, error) {
 
 	cfg.CORSOrigins = os.Getenv("CORS_ORIGINS")
 
-	if extraDirs := os.Getenv("EXTRA_STACKS_DIRS"); extraDirs != "" {
-		for _, d := range strings.Split(extraDirs, ",") {
-			d = strings.TrimSpace(d)
-			if d != "" {
-				cfg.ExtraStacksDirs = append(cfg.ExtraStacksDirs, d)
-			}
-		}
-	}
+	cfg.ExtraStacksDirs = splitCommaList(os.Getenv("EXTRA_STACKS_DIRS"))
+	cfg.AllowedHosts = splitCommaList(os.Getenv("ALLOWED_HOSTS"))
 
 	// Backup env-var fallbacks (DB settings override these at runtime via resolveBackupConfig).
 	cfg.ResticRepository = os.Getenv("RESTIC_REPOSITORY")
@@ -298,6 +298,18 @@ func OrDefault(d, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// splitCommaList splits a comma-separated env value into trimmed entries,
+// dropping blanks. An empty value yields nil.
+func splitCommaList(v string) []string {
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // minSecretLength is the length floor JWT_SECRET enforces as a hard startup
