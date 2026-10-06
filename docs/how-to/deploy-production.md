@@ -4,6 +4,9 @@
 # Generate secrets (use two distinct values)
 JWT_SECRET=$(openssl rand -hex 32)
 STORAGE_KEY=$(openssl rand -hex 32)
+# Your reverse proxy's address on capstan-network, e.g. from
+# docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' <proxy-container>
+PROXY_IP=172.20.0.5
 
 # Create production .env file
 cat > .env << EOF
@@ -15,7 +18,7 @@ AUTH_DISABLED=false
 STACKS_DIR=/opt/stacks
 HOST_STACKS_DIR=/opt/stacks
 DATA_DIR=/app/data
-TRUSTED_NETWORKS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.1
+TRUSTED_NETWORKS=$PROXY_IP/32,127.0.0.1
 EOF
 
 docker compose -f docker-compose.prod.yaml up -d
@@ -53,7 +56,9 @@ the [Configuration reference](../reference/configuration.md).
   honoured**, otherwise it is ignored and cookies are not marked `Secure` even
   on an HTTPS site. A warning naming the peer is logged the first time this
   happens.
-- **Configure `TRUSTED_NETWORKS`** for correct client-IP attribution (rate
+- **Configure `TRUSTED_NETWORKS`** with your reverse proxy's IP only, never a
+  whole private range (any host in a trusted range can spoof `X-Forwarded-For`).
+  It sets correct client-IP attribution (rate
   limiting), reverse-proxy trust, and — since it gates `X-Forwarded-Proto` —
   whether `Secure` cookies and HSTS are issued at all. If you must run `AUTH_DISABLED=true`
   beyond loopback, set `AUTH_DISABLED_ALLOWED_NETWORKS` explicitly — it is a
