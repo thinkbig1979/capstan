@@ -307,9 +307,113 @@ func warnWeakStorageKey(cfg *Config) {
 		"hint", "Set STORAGE_KEY to a random string at least 32 characters long for new deployments; existing deployments should plan a coordinated rotation.")
 }
 
+// stacksMountVerdict is what /proc/self/mountinfo can say about STACKS_DIR.
+type stacksMountVerdict int
+
+const (
+	// No usable mount entry: not in a container, or STACKS_DIR is not on a
+	// bind mount. The caller falls back to comparing the two env strings.
+	stacksMountNotInspected stacksMountVerdict = iota
+	// The mount's source path is STACKS_DIR exactly.
+	stacksMountVerified
+	// The mount's source ends in STACKS_DIR's path but lives on a filesystem
+	// mounted elsewhere on the host, so equality cannot be proven from here.
+	stacksMountConsistent
+	// The mount's source cannot be STACKS_DIR: Volume Path Identity is broken.
+	stacksMountMismatch
+)
+
+// mountinfoPath is a var so tests can point it at a fixture.
+var mountinfoPath = "/proc/self/mountinfo"
+
+// inspectStacksMount finds the mount holding stacksDir and checks that its
+// host source can be stacksDir itself. It also returns the source path it
+// derived, for the log line.
+//
+// mountinfo's field 4 is the path relative to the SOURCE FILESYSTEM's root,
+// not the host path: `-v /home/u/stacks:/opt/stacks` with /home on its own
+// partition shows as "/u/stacks" (observed, see volume_identity_test.go's
+// fixtures). So a match is only provable when the source is on the root
+// filesystem; otherwise the best available check is that the source is a
+// path-suffix of stacksDir, and anything that is not a suffix is wrong.
+func inspectStacksMount(stacksDir, mountinfo string) (stacksMountVerdict, string) {
+	stacksDir = filepath.Clean(stacksDir)
+	var root, mountPoint string
+	for _, line := range strings.Split(mountinfo, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		mp := unescapeMountinfo(fields[4])
+		// "/" is the container's own overlay root (or the host root when not
+		// in a container): STACKS_DIR on it means no bind mount to inspect.
+		if mp == "/" || (stacksDir != mp && !strings.HasPrefix(stacksDir, mp+"/")) {
+			continue
+		}
+		// Later lines win on equal length: they stack on top of earlier ones.
+		if len(mp) >= len(mountPoint) {
+			root, mountPoint = unescapeMountinfo(fields[3]), mp
+		}
+	}
+	if mountPoint == "" {
+		return stacksMountNotInspected, ""
+	}
+
+	source := filepath.Join(root, strings.TrimPrefix(stacksDir, mountPoint))
+	switch {
+	case source == stacksDir:
+		return stacksMountVerified, source
+	// source always starts with "/", so HasSuffix only matches on a path
+	// boundary: "/stacks" is not a suffix of "/opt/mystacks".
+	case source == "/" || strings.HasSuffix(stacksDir, source):
+		return stacksMountConsistent, source
+	default:
+		return stacksMountMismatch, source
+	}
+}
+
+// unescapeMountinfo reverses the kernel's octal escaping of space, tab,
+// newline and backslash in mountinfo paths.
+func unescapeMountinfo(s string) string {
+	return strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(s)
+}
+
 func validateVolumePathIdentity(cfg *Config) {
+	// A read error (not Linux, no procfs) leaves mountinfo empty, which
+	// inspectStacksMount reports as not inspected.
+	mountinfo, err := os.ReadFile(mountinfoPath)
+	if err != nil {
+		slog.Debug("Volume path identity: cannot read mounts", "path", mountinfoPath, "error", err)
+	}
+	verdict, source := inspectStacksMount(cfg.StacksDir, string(mountinfo))
+
+	switch verdict {
+	case stacksMountMismatch:
+		//nolint:gosec // slog's structured key-value logging stores each field separately rather than concatenating into the message text, so a value can't forge a new log line the way string-built log messages can
+		slog.Error("Volume path identity broken: the host directory mounted at STACKS_DIR is not STACKS_DIR. Relative bind mounts in managed stacks will resolve to the wrong host path.",
+			"stacks_dir", cfg.StacksDir,
+			"host_stacks_dir", cfg.HostStacksDir,
+			"mount_source", source,
+			"mount_source_note", "path relative to the source filesystem's root, from "+mountinfoPath,
+			"hint", "Mount the stacks directory at the same path on both sides, e.g. /opt/stacks:/opt/stacks, and set STACKS_DIR and HOST_STACKS_DIR to that path")
+		return
+	case stacksMountVerified:
+		slog.Info("Volume path identity verified from the container's mounts",
+			"stacks_dir", cfg.StacksDir,
+			"mount_source", source)
+	case stacksMountConsistent:
+		slog.Info("Volume path identity consistent: the mount source matches STACKS_DIR as far as the container can see, but lives on a separate host filesystem so cannot be fully proven",
+			"stacks_dir", cfg.StacksDir,
+			"mount_source", source)
+	}
+
+	notInspected := ""
+	if verdict == stacksMountNotInspected {
+		notInspected = " (no bind mount found for STACKS_DIR in " + mountinfoPath + "; compared STACKS_DIR and HOST_STACKS_DIR as strings only)"
+	}
+
 	if cfg.HostStacksDir == "" {
-		slog.Warn("Volume path identity: Set HOST_STACKS_DIR to verify path matching. STACKS_DIR must be the same path inside and outside the container for Docker Compose operations to work correctly.",
+		slog.Warn("Volume path identity: Set HOST_STACKS_DIR to verify path matching. STACKS_DIR must be the same path inside and outside the container for Docker Compose operations to work correctly."+notInspected,
 			"stacks_dir", cfg.StacksDir,
 			"host_stacks_dir", "not set",
 			"hint", "Add HOST_STACKS_DIR environment variable matching your docker-compose.yaml volume path")
@@ -317,16 +421,18 @@ func validateVolumePathIdentity(cfg *Config) {
 	}
 
 	if cfg.HostStacksDir != cfg.StacksDir {
-		slog.Warn("Volume path identity mismatch: STACKS_DIR and HOST_STACKS_DIR do not match. Docker Compose operations may fail.",
+		slog.Warn("Volume path identity mismatch: STACKS_DIR and HOST_STACKS_DIR do not match. Docker Compose operations may fail."+notInspected,
 			"stacks_dir", cfg.StacksDir,
 			"host_stacks_dir", cfg.HostStacksDir,
 			"hint", "Ensure both variables use the same path (e.g., STACKS_DIR=/opt/stacks and HOST_STACKS_DIR=/opt/stacks)")
 		return
 	}
 
-	slog.Info("Volume path identity verified",
-		"stacks_dir", cfg.StacksDir,
-		"host_stacks_dir", cfg.HostStacksDir)
+	if verdict == stacksMountNotInspected {
+		slog.Info("Volume path identity verified"+notInspected,
+			"stacks_dir", cfg.StacksDir,
+			"host_stacks_dir", cfg.HostStacksDir)
+	}
 }
 
 type ConfigError struct {

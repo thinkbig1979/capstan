@@ -21,6 +21,14 @@ EOF
 docker compose -f docker-compose.prod.yaml up -d
 ```
 
+`STACKS_DIR` in `.env` also sets the stacks bind mount in
+`docker-compose.prod.yaml` (`${STACKS_DIR}:${STACKS_DIR}`), so the directory is
+the same path inside and outside the container. That is required: Capstan runs
+`docker compose` through the host's daemon, which resolves a managed stack's
+relative binds against that path. Use an absolute host path, and create it
+owned by `PUID`/`PGID` before the first start. The startup log line
+`Volume path identity` reports an `ERROR` if the mount breaks this rule.
+
 `STORAGE_KEY` encrypts stored secrets (git tokens, restic password) at rest with
 a key independent of `JWT_SECRET`; if unset it falls back to `JWT_SECRET`. Using a
 separate value means rotating `JWT_SECRET` doesn't require re-encryption and a
