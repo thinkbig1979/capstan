@@ -150,3 +150,18 @@ func TestAuthMiddleware_HeaderWithoutBearerSchemeIsIgnored(t *testing.T) {
 		})
 	}
 }
+
+// An empty capstan_token cookie is still a sent cookie: it wins and yields no
+// token, rather than letting the header decide.
+func TestAuthMiddleware_EmptyCookieDoesNotFallBackToHeader(t *testing.T) {
+	r, _, headerTok := newTokenSourceRouter(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/stats", nil)
+	req.Header.Set("Cookie", "capstan_token=")
+	req.Header.Set("Authorization", "Bearer "+headerTok)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for an empty cookie even with a valid header, got %d (%s)", w.Code, w.Body.String())
+	}
+}
