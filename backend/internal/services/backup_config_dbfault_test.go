@@ -72,16 +72,18 @@ func closedDBWithSettings(t *testing.T, settings map[string]string) *database.DB
 	return db
 }
 
-// rotatedKeyDB seeds restic_repository (never encrypted) and restic_password
-// (encrypted) under STORAGE_KEY A, then reopens the same directory under key B.
+// rotatedKeyDB seeds restic_password (encrypted) under STORAGE_KEY A and
+// restic_repository in clear, then reopens the same directory under key B.
 // The database is healthy and unlocked; only the password fails, in
-// GetSetting's encryptor branch (database/settings.go:21-24).
+// GetSetting's encryptor branch.
 //
 // A closed database never reaches that branch, and a STORAGE_KEY rotation is
 // the realistic production fault, so this — not closedDBWithSettings — is the
-// instrument for the password key. sensitiveSettingKeys is exactly
-// {git_https_token, restic_password} (database/settings.go:9-12), so the
-// rotation produces this fault for the password key ONLY.
+// instrument for the password key. restic_repository is encrypted too since
+// agent-os-n4ca.7, so a repository sealed under key A would fail under key B
+// as well; seedUnderKeyOne writes it in clear instead (the keyless path), and
+// the reopen under key B seals it under B. That keeps the rotation's fault on
+// the password key ONLY, which is what the tests built on this need.
 func rotatedKeyDB(t *testing.T, repo string) *database.DB {
 	t.Helper()
 	return reopenSeededDB(t, seedUnderKeyOne(t, repo), dbFaultKeyTwo)
@@ -96,9 +98,11 @@ func intactKeyDB(t *testing.T, repo string) *database.DB {
 	return reopenSeededDB(t, seedUnderKeyOne(t, repo), dbFaultKeyOne)
 }
 
-// seedUnderKeyOne writes restic_repository (plaintext) and restic_password
-// (encrypted under key one) into a fresh migrated database, closes it, and
-// returns the directory.
+// seedUnderKeyOne writes restic_password (encrypted under key one) and then
+// restic_repository in clear (through a keyless open, the only path that
+// stores it unencrypted) into a fresh migrated database, closes it, and
+// returns the directory. Whichever key reopens it seals the repository under
+// that key at boot (database.ReencryptSecrets).
 func seedUnderKeyOne(t *testing.T, repo string) string {
 	t.Helper()
 	dataDir := t.TempDir()
@@ -107,16 +111,23 @@ func seedUnderKeyOne(t *testing.T, repo string) string {
 	if err != nil {
 		t.Fatalf("open database under key one: %v", err)
 	}
-	if repo != "" {
-		if err := db1.SetSetting("restic_repository", repo); err != nil {
-			t.Fatalf("seed restic_repository: %v", err)
-		}
-	}
 	if err := db1.SetSetting("restic_password", dbFaultTestPassword); err != nil {
 		t.Fatalf("seed restic_password: %v", err)
 	}
 	if err := db1.Close(); err != nil {
 		t.Fatalf("close database under key one: %v", err)
+	}
+	if repo != "" {
+		db0, err := database.NewWithMigrations(dataDir)
+		if err != nil {
+			t.Fatalf("open database with no key: %v", err)
+		}
+		if err := db0.SetSetting("restic_repository", repo); err != nil {
+			t.Fatalf("seed restic_repository: %v", err)
+		}
+		if err := db0.Close(); err != nil {
+			t.Fatalf("close database with no key: %v", err)
+		}
 	}
 	return dataDir
 }
@@ -252,7 +263,7 @@ func TestClosedDBFailsDifferentlyFromHealthyNotFound(t *testing.T) {
 }
 
 // TestRotatedKeyDBIsHealthyButPasswordUnreadable proves the password fixture is
-// discriminating in BOTH directions: the unencrypted repository key still reads
+// discriminating in BOTH directions: the repository key (seeded in clear) still reads
 // correctly (so the database is genuinely healthy and unlocked) while the
 // encrypted password key fails.
 func TestRotatedKeyDBIsHealthyButPasswordUnreadable(t *testing.T) {
@@ -714,10 +725,10 @@ func TestRepoSettingSources_HealthyDBStillClassifies(t *testing.T) {
 // Measured on d7c686f: a mutant discarding only the password read's error built
 // clean and left the whole package green.
 //
-// rotatedKeyDB is the only fixture that reaches the site. restic_repository is
-// not in sensitiveSettingKeys (database/settings.go:9-12) so it is stored
-// plaintext and survives the key rotation; only restic_password enters
-// GetSetting's decrypt branch (database/settings.go:21-24) and fails there.
+// rotatedKeyDB is the only fixture that reaches the site. Its restic_repository
+// is seeded in clear and sealed under the reopening key, so it survives the
+// key rotation (see rotatedKeyDB); only restic_password fails GetSetting's
+// decrypt.
 //
 // The state assertion comes BEFORE the error assertion deliberately: under the
 // mutant it is the one that fires, and its message names repoSource="db" —

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,9 +68,9 @@ func TestConstructors_NeverLeaveEncryptorNil(t *testing.T) {
 			require.NotNil(t, db.encryptor, "constructor must install a fail-closed encryptor, never a literal nil")
 
 			// The installed null object must refuse, not pass plaintext through.
-			_, err = db.encryptor.Encrypt("some-secret")
+			_, err = db.encryptor.Encrypt("some-secret", "settings:test")
 			assert.ErrorIs(t, err, ErrEncryptionUnavailable)
-			_, err = db.encryptor.Decrypt("some-ciphertext")
+			_, err = db.encryptor.Decrypt("some-ciphertext", "settings:test")
 			assert.ErrorIs(t, err, ErrEncryptionUnavailable)
 		})
 	}
@@ -462,8 +463,10 @@ func TestAddBackupRunItem_AndGetBackupRunItems(t *testing.T) {
 
 // testAESGCMEncryptor is a minimal AES-GCM TokenEncryptor for DB tests.
 // It is intentionally local to avoid importing the services package (which
-// would create an import cycle). Its behaviour is identical to the production
-// services.TokenEncryptor.
+// would create an import cycle). It follows the production v2 format (prefix,
+// associated data) and the v1 arm for unprefixed values; the production
+// services.TokenEncryptor is exercised against a real database in
+// services/secrets_at_rest_test.go.
 type testAESGCMEncryptor struct {
 	aead cipher.AEAD
 }
@@ -478,7 +481,7 @@ func newTestEncryptor(t *testing.T, secret string) *testAESGCMEncryptor {
 	return &testAESGCMEncryptor{aead: aead}
 }
 
-func (e *testAESGCMEncryptor) Encrypt(plaintext string) (string, error) {
+func (e *testAESGCMEncryptor) Encrypt(plaintext, aad string) (string, error) {
 	if plaintext == "" {
 		return "", nil
 	}
@@ -486,11 +489,15 @@ func (e *testAESGCMEncryptor) Encrypt(plaintext string) (string, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	ct := e.aead.Seal(nonce, nonce, []byte(plaintext), nil)
-	return base64.StdEncoding.EncodeToString(ct), nil
+	ct := e.aead.Seal(nonce, nonce, []byte(plaintext), []byte(aad))
+	return SealedV2Prefix + base64.StdEncoding.EncodeToString(ct), nil
 }
 
-func (e *testAESGCMEncryptor) Decrypt(encoded string) (string, error) {
+func (e *testAESGCMEncryptor) Decrypt(encoded, aad string) (string, error) {
+	var ad []byte
+	if body, ok := strings.CutPrefix(encoded, SealedV2Prefix); ok {
+		encoded, ad = body, []byte(aad)
+	}
 	ct, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return "", err
@@ -499,7 +506,7 @@ func (e *testAESGCMEncryptor) Decrypt(encoded string) (string, error) {
 	if len(ct) < ns {
 		return "", fmt.Errorf("ciphertext too short")
 	}
-	pt, err := e.aead.Open(nil, ct[:ns], ct[ns:], nil)
+	pt, err := e.aead.Open(nil, ct[:ns], ct[ns:], ad)
 	if err != nil {
 		return "", err
 	}
@@ -538,8 +545,11 @@ func TestResticPasswordCiphertextAtRest(t *testing.T) {
 	assert.NotEqual(t, plaintext, raw,
 		"raw DB value must be ciphertext, not the plaintext password")
 
-	// The raw value must be valid base64 (as produced by AES-GCM + base64 encoding).
-	_, decodeErr := base64.StdEncoding.DecodeString(raw)
+	// The raw value must be a v2 ciphertext: the prefix, then base64 (as
+	// produced by AES-GCM + base64 encoding).
+	body, isV2 := strings.CutPrefix(raw, SealedV2Prefix)
+	assert.True(t, isV2, "raw DB value must carry the v2 prefix, got %q", raw)
+	_, decodeErr := base64.StdEncoding.DecodeString(body)
 	assert.NoError(t, decodeErr, "raw DB value must be base64-encoded ciphertext")
 
 	// GetSetting must still return the original plaintext (transparent decryption).
@@ -574,11 +584,12 @@ func TestGitHTTPSTokenCiphertextAtRest(t *testing.T) {
 }
 
 // TestNonSensitiveSettingNotEncrypted confirms that non-sensitive keys (e.g.
-// restic_repository) are stored as plaintext in the DB row.
+// rclone_path) are stored as plaintext in the DB row. restic_repository was
+// the example here until agent-os-n4ca.7 made it sensitive.
 func TestNonSensitiveSettingNotEncrypted(t *testing.T) {
 	t.Parallel()
 
-	const value = "/data/restic-repo"
+	const value = "backups/capstan"
 	const secret = "test-aes-gcm-key-32chars-padding"
 
 	enc := newTestEncryptor(t, secret)
@@ -586,9 +597,9 @@ func TestNonSensitiveSettingNotEncrypted(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	require.NoError(t, db.SetSetting("restic_repository", value))
+	require.NoError(t, db.SetSetting("rclone_path", value))
 
-	raw := rawSettingValue(t, db, "restic_repository")
+	raw := rawSettingValue(t, db, "rclone_path")
 	assert.Equal(t, value, raw,
 		"non-sensitive setting must be stored as plaintext")
 }

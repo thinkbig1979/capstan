@@ -127,13 +127,21 @@ func (d *DB) GetDirectoryCredentials(path string) (*models.Directory, error) {
 		return nil, notFound(err, "directory", path)
 	}
 	if d.encryptor != nil && dir.GitHTTPSToken != "" {
-		decrypted, err := d.encryptor.Decrypt(dir.GitHTTPSToken)
+		decrypted, err := d.encryptor.Decrypt(dir.GitHTTPSToken, directoryTokenAAD(path))
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt token: %w", err)
 		}
 		dir.GitHTTPSToken = decrypted
 	}
 	return &dir, nil
+}
+
+// directoryTokenAAD binds a git_https_token ciphertext to its directory row,
+// so a token copied to another directory, or a settings ciphertext copied into
+// this column, does not decrypt. path is the primary key and is never
+// rewritten (no UPDATE sets it), so the binding is stable for the row's life.
+func directoryTokenAAD(path string) string {
+	return "directories.git_https_token:" + path
 }
 
 func (d *DB) DeleteDirectory(path string) error {
@@ -144,7 +152,7 @@ func (d *DB) DeleteDirectory(path string) error {
 
 func (d *DB) UpdateDirectoryCredentials(path, authType, sshKeyPath, httpsUser, httpsToken string) error {
 	if d.encryptor != nil && httpsToken != "" {
-		encrypted, err := d.encryptor.Encrypt(httpsToken)
+		encrypted, err := d.encryptor.Encrypt(httpsToken, directoryTokenAAD(path))
 		if err != nil {
 			return fmt.Errorf("failed to encrypt token: %w", err)
 		}

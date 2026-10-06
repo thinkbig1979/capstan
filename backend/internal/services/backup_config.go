@@ -81,8 +81,9 @@ type BackupConfig struct {
 	BackupHostname string
 }
 
-// resticPasswordSettingKey is the one key this file reads that the DB layer
-// encrypts (sensitiveSettingKeys, database/settings.go:9-12).
+// resticPasswordSettingKey is the one key this file reads whose refusal has its
+// own sentinel; restic_repository and rclone_remote are encrypted too
+// (database.IsSensitiveSetting) and share ErrBackupSettingUnreadable.
 const resticPasswordSettingKey = "restic_password"
 
 // ErrResticPasswordUnreadable is the fixed cause reported when the stored
@@ -96,10 +97,10 @@ const resticPasswordSettingKey = "restic_password"
 // resolver's error as the cause, so this sentinel is what makes a plain
 // `"cause", err` at the log site safe.
 //
-// SCOPE: only restic_password is encrypted here. restic_repository and the rest
-// are stored in clear, so a STORAGE_KEY rotation produces this fault for the
-// PASSWORD key alone; an unreadable repository key means a closed, locked or
-// otherwise broken database.
+// SCOPE: restic_password, restic_repository and rclone_remote are encrypted
+// (agent-os-n4ca.7), so a STORAGE_KEY rotation can fault any of the three. The
+// password keeps this sentinel; the other two get ErrBackupSettingUnreadable,
+// for the same reason and with the same rule: no wrapped error.
 //
 // TWO IN-REPO CONVENTIONS MEET HERE, AND THIS FILE DELIBERATELY SPLITS THEM.
 // services/git_credentials.go:139-157 is the model for the SHAPE: the
@@ -117,6 +118,13 @@ const resticPasswordSettingKey = "restic_password"
 // value, and never the wrapped error.
 var ErrResticPasswordUnreadable = errors.New(
 	"the stored restic_password setting could not be read or decrypted (STORAGE_KEY may have been rotated)")
+
+// ErrBackupSettingUnreadable is ErrResticPasswordUnreadable's counterpart for
+// the other encrypted backup settings (restic_repository, rclone_remote). It is
+// wrapped with the KEY name only, never with the GetSetting error, for the
+// reason given above: that error can be crypto output.
+var ErrBackupSettingUnreadable = errors.New(
+	"the stored value could not be read or decrypted (STORAGE_KEY may have been rotated)")
 
 // readSetting reads one DB setting and separates "no such row" from "this
 // database could not answer".
@@ -136,12 +144,14 @@ func readSetting(db *database.DB, key string) (string, error) {
 		return "", nil
 	case key == resticPasswordSettingKey:
 		return "", ErrResticPasswordUnreadable
+	case database.IsSensitiveSetting(key):
+		return "", fmt.Errorf("read backup setting %q: %w", key, ErrBackupSettingUnreadable)
 	default:
 		// Setting KEYS are not secret and naming the one that failed is the
 		// only thing that makes the refusal actionable. The VALUE never
 		// reaches the error: a driver error does not echo the row it failed
-		// to read, and the one key whose error could carry key material is
-		// handled by the branch above.
+		// to read, and the keys whose error could carry key material are
+		// handled by the two branches above.
 		return "", fmt.Errorf("read backup setting %q: %w", key, err)
 	}
 }
@@ -167,9 +177,10 @@ func resolveBackupConfig(db *database.DB, cfg *config.Config) (BackupConfig, err
 	var bc BackupConfig
 
 	// --- restic_repository ---
-	// Read first, and unencrypted: a closed or locked database refuses here and
-	// never reaches the password read below, so ErrResticPasswordUnreadable
-	// fires in practice only on a genuine decrypt failure.
+	// Read first. It is encrypted too (agent-os-n4ca.7), so this read can fail
+	// on a decrypt as well as on a closed or locked database; either way it
+	// refuses here, through ErrBackupSettingUnreadable or the wrapped database
+	// error, before the password read below.
 	repo, err := readSetting(db, "restic_repository")
 	if err != nil {
 		return BackupConfig{}, err

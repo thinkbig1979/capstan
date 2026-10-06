@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -812,6 +813,146 @@ CREATE INDEX IF NOT EXISTS idx_backup_run_items_run_id ON backup_run_items(run_i
 CREATE INDEX IF NOT EXISTS idx_backup_run_items_stack_id ON backup_run_items(stack_id);
 `,
 	},
+	{
+		Version: 20,
+		Name:    "secrets_bound_ciphertext",
+		// A marker: no schema changes. The data change is ReencryptSecrets,
+		// which needs the encryptor and runs every boot (agent-os-n4ca.7).
+		// The version exists for the forward-version guard in RunMigrations.
+		// A binary from before this version reads an encrypted
+		// restic_repository or rclone_remote as a plaintext value (its
+		// GetSetting does not decrypt those keys), so that binary must refuse
+		// to start against this database rather than hand restic a repository
+		// string it never wrote. What restic then does with
+		// "$capstan$v2$..." is not tested: inferred from the value having no
+		// backend prefix restic knows, which restic treats as a local path.
+		SQL: `SELECT 1;`,
+	},
+}
+
+// ReencryptSecrets rewrites every stored secret that is not yet in the v2
+// format (see services.TokenEncryptor) as v2, bound to its column and row, and
+// returns how many it rewrote (agent-os-n4ca.7).
+//
+// What it converts: v1 and legacy ciphertexts under the strict sensitive
+// settings keys and in directories.git_https_token; plaintext under
+// plaintextTolerantSettingKeys (written before those keys were encrypted, or
+// while no key was configured). Values already in v2 are skipped, so running
+// it again rewrites nothing.
+//
+// Safety, because a wrong rewrite here makes a credential unreadable:
+//   - One transaction. An interrupted run rolls back and every value stays in
+//     its previous, still-readable format; the next boot redoes the work.
+//   - Each new value is decrypted again and compared before it is written, so
+//     nothing is stored that does not round-trip.
+//   - Each UPDATE matches the old value too (compare-and-swap), so a row that
+//     changed underneath is left alone instead of overwritten.
+//   - A value that cannot be decrypted (STORAGE_KEY rotated) is left exactly as
+//     it is and logged by its key or path only: never the error, which can
+//     carry crypto output (see services/backup_config.go,
+//     ErrResticPasswordUnreadable).
+//
+// With no encryption key it does nothing.
+func (d *DB) ReencryptSecrets() (int, error) {
+	if _, err := d.encryptor.Encrypt("probe", "reencrypt-probe"); errors.Is(err, ErrEncryptionUnavailable) {
+		return 0, nil
+	}
+
+	type pending struct {
+		location string // a settings key or a directory path
+		stored   string
+		aad      string
+		tolerant bool
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin re-encrypt: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // After a successful Commit this is sql.ErrTxDone by design; on an error path the error being returned is the one that matters.
+
+	// Rows are read in full before any UPDATE: an open result set and a write
+	// on the same transaction's connection must not interleave.
+	collect := func(query string, args []any, aad func(string) string, tolerant func(string) bool) ([]pending, error) {
+		rows, err := tx.Query(query, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []pending
+		for rows.Next() {
+			var loc, stored string
+			if err := rows.Scan(&loc, &stored); err != nil {
+				return nil, err
+			}
+			if stored == "" || IsSealedV2(stored) {
+				continue
+			}
+			out = append(out, pending{location: loc, stored: stored, aad: aad(loc), tolerant: tolerant(loc)})
+		}
+		return out, rows.Err()
+	}
+
+	keys := make([]any, 0, len(sensitiveSettingKeys))
+	for k := range sensitiveSettingKeys {
+		keys = append(keys, k)
+	}
+	settingsRows, err := collect(
+		`SELECT key, value FROM settings WHERE key IN (?`+strings.Repeat(",?", len(keys)-1)+`)`, keys,
+		settingAAD, func(key string) bool { return plaintextTolerantSettingKeys[key] })
+	if err != nil {
+		return 0, fmt.Errorf("read sensitive settings: %w", err)
+	}
+	dirRows, err := collect(`SELECT path, git_https_token FROM directories`, nil,
+		directoryTokenAAD, func(string) bool { return false })
+	if err != nil {
+		return 0, fmt.Errorf("read directory tokens: %w", err)
+	}
+
+	rewritten := 0
+	rewrite := func(p pending, update string, logKey string) error {
+		plaintext := p.stored
+		if !p.tolerant {
+			pt, err := d.encryptor.Decrypt(p.stored, p.aad)
+			if err != nil {
+				slog.Warn("A stored secret could not be decrypted and was left in its previous format; STORAGE_KEY may have been rotated", logKey, p.location)
+				return nil
+			}
+			plaintext = pt
+		}
+		sealed, err := d.encryptor.Encrypt(plaintext, p.aad)
+		if err != nil {
+			return fmt.Errorf("re-encrypt %s %q: encryption failed", logKey, p.location)
+		}
+		if check, err := d.encryptor.Decrypt(sealed, p.aad); err != nil || check != plaintext {
+			return fmt.Errorf("re-encrypt %s %q: the new value did not decrypt back to the old one", logKey, p.location)
+		}
+		res, err := tx.Exec(update, sealed, p.location, p.stored)
+		if err != nil {
+			return fmt.Errorf("re-encrypt %s %q: %w", logKey, p.location, err)
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return fmt.Errorf("re-encrypt %s %q: %w", logKey, p.location, err)
+		} else if n == 1 {
+			rewritten++
+		}
+		return nil
+	}
+	for _, p := range settingsRows {
+		if err := rewrite(p, `UPDATE settings SET value = ? WHERE key = ? AND value = ?`, "setting"); err != nil {
+			return 0, err
+		}
+	}
+	for _, p := range dirRows {
+		if err := rewrite(p, `UPDATE directories SET git_https_token = ? WHERE path = ? AND git_https_token = ?`, "directory"); err != nil {
+			return 0, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit re-encrypt: %w", err)
+	}
+	return rewritten, nil
 }
 
 // checkNoCaseCollidingUsernames is migration 13's PreCheck. It detects
