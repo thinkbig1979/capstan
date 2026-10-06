@@ -1,6 +1,16 @@
 import { QueryClient } from '@tanstack/react-query'
 import { isAutoRetryable } from '@/lib/error-handler'
 
+// The stack list's fallback for a silent gap in /ws/events: a Docker event
+// stream that was lost and re-subscribed, or a frame dropped in transit. The
+// WS stream is the fast path; this only bounds how long a missed event can
+// leave a status wrong without a window refocus (agent-os-a1ye.5). Not polled
+// from a background tab, where nobody is looking.
+export const STACKS_LIST_POLLING = {
+  refetchInterval: 60_000,
+  refetchIntervalInBackground: false,
+} as const
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

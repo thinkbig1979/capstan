@@ -89,6 +89,16 @@ interface BackupPolicyChangedEvent {
   timestamp: string
 }
 
+/**
+ * Sent after the backend re-subscribes to a lost Docker event stream
+ * (services.EventsResyncType). Events from the gap are gone, so the stack
+ * list is refetched rather than trusted (agent-os-a1ye.5).
+ */
+interface EventsResyncEvent {
+  type: 'events_resync'
+  timestamp: string
+}
+
 export type StackEvent =
   | StackStatusEvent
   | ContainerEvent
@@ -101,6 +111,7 @@ export type StackEvent =
   | UpdateJobCompleteStackEvent
   | UpdatesChangedEvent
   | BackupPolicyChangedEvent
+  | EventsResyncEvent
 
 // ── Frame validation (agent-os-r4kf) ─────────────────────────────────────────
 // Mirrors models.StackEvent, where every field but type, timestamp, status and
@@ -147,6 +158,7 @@ export const parseStackEvent = frameValidator((raw): StackEvent | null => {
     case 'update_policy_changed':
     case 'updates_changed':
     case 'backup_policy_changed':
+    case 'events_resync':
       return { type: f.type, timestamp }
     case 'update_job_progress':
       return { type: 'update_job_progress', ...readJobEvent(f) }
@@ -339,6 +351,13 @@ export function useStackEvents() {
     ])
   }, [scheduleInvalidations])
 
+  const handleEventsResyncEvent = useCallback(() => {
+    scheduleInvalidations([
+      queryKeys.stacks(),
+      queryKeys.dashboardStats(),
+    ])
+  }, [scheduleInvalidations])
+
   const handleMessage = useCallback((data: StackEvent) => {
     switch (data.type) {
       case 'stack_status':
@@ -374,6 +393,9 @@ export function useStackEvents() {
       case 'backup_policy_changed':
         handleBackupPolicyChangedEvent()
         break
+      case 'events_resync':
+        handleEventsResyncEvent()
+        break
     }
   }, [
     handleStackStatusEvent,
@@ -387,6 +409,7 @@ export function useStackEvents() {
     handleUpdateJobCompleteEvent,
     handleUpdatesChangedEvent,
     handleBackupPolicyChangedEvent,
+    handleEventsResyncEvent,
   ])
 
   useWebSocketJSON('/ws/events', handleMessage, { parse: parseStackEvent })
