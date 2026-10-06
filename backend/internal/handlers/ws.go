@@ -761,8 +761,8 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 		// only as the HttpOnly cookie (agent-os-n4ca.2). The first-message
 		// {type:"auth", token} handshake that used to cover the no-cookie case
 		// is gone with it.
-		cookieToken, cookieErr := c.Cookie("capstan_token") //geterrors:ignore c.Cookie's only error is http.ErrNoCookie, which the empty-token check below already refuses
-		if cookieErr != nil || cookieToken == "" {
+		cookieToken, cookieErr := c.Cookie("capstan_token")
+		if cookieErr != nil || cookieToken == "" { //geterrors:ignore c.Cookie's only error is http.ErrNoCookie, so a missing cookie and an empty one are one state and both are refused
 			writeCloseMessage(conn, CloseCodeAuthFailure, "Authentication required")
 			conn.Close()
 			return nil, &models.AppError{Code: models.ErrSessionExpired, Message: "No session cookie", Status: 401}
