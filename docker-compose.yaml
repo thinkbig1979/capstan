@@ -7,6 +7,9 @@ services:
       dockerfile: docker/Dockerfile
     container_name: capstan
     restart: unless-stopped
+    # entrypoint.sh ends in `exec gosu`, so the Go server is PID 1. Killed docker
+    # CLI children reparent to it and are never reaped; init: true adds a reaper.
+    init: true
     # See docker-compose.prod.yaml's stop_grace_period comment: Docker's 10s
     # default is shorter than the server's own graceful-shutdown budget
     # (up to 15s HTTP drain + up to 30s backup drain — backupDrainTimeout in
