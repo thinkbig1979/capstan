@@ -486,8 +486,11 @@ func (c *Config) MatchStacksRoot(path string) (string, bool, error) {
 
 func sameDir(a, b string) (bool, error) {
 	inside, err := pathutil.IsContained(a, b)
-	if err != nil || !inside {
+	if err != nil {
 		return false, err
+	}
+	if !inside {
+		return false, nil
 	}
 	return pathutil.IsContained(b, a)
 }
@@ -507,11 +510,18 @@ func ApplyPersistedDefaultStacksDir(cfg *Config, persisted string) {
 		return
 	}
 	root, ok, err := cfg.MatchStacksRoot(persisted)
-	if err != nil || !ok {
-		slog.Warn("Ignoring persisted default stacks directory: it is not a configured stacks root",
+	if err != nil {
+		slog.Warn("Ignoring persisted default stacks directory: could not resolve it against the stacks roots",
 			"default_stacks_dir", persisted,
 			"stacks_dir", cfg.StacksDir,
 			"error", err,
+		)
+		return
+	}
+	if !ok {
+		slog.Warn("Ignoring persisted default stacks directory: it is not a configured stacks root",
+			"default_stacks_dir", persisted,
+			"stacks_dir", cfg.StacksDir,
 		)
 		return
 	}

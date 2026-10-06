@@ -1088,7 +1088,16 @@ func (h *SettingsHandler) UpdateConfiguredDirectories(c *gin.Context) {
 
 	if req.DefaultDir != "" {
 		root, ok, err := h.cfg.MatchStacksRoot(req.DefaultDir)
-		if err != nil || !ok {
+		if err != nil {
+			handleError(c, models.NewAppErrorWithCause(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to resolve directory path",
+				err,
+			))
+			return
+		}
+		if !ok {
 			c.JSON(http.StatusBadRequest, models.NewAppError(
 				http.StatusBadRequest,
 				"VALIDATION_ERROR",
