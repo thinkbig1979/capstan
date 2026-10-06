@@ -85,6 +85,9 @@ honest answer rather than a blank.
   frontend polls it on every navigation, and it shares no bucket with `/login`.
 - `POST /api/v1/auth/setup` — create the first admin (only when no user exists)
 - `POST /api/v1/auth/login` — log in
+
+  Both set the session as the HttpOnly `capstan_token` cookie and return only
+  `{user}`; the body carries no token. WebSockets authenticate with that cookie.
 - `POST /api/v1/auth/logout` — log out
 - `GET /api/v1/auth/me` — current user
 - `POST /api/v1/auth/verify-password` — re-confirm the current user's password

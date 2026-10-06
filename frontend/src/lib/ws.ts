@@ -79,6 +79,9 @@ export class WSClient {
   }
 
   private openSocket(path: string, onMessage: (data: string | ArrayBuffer) => void, options: WSClientOptions): boolean {
+    // The browser sends the HttpOnly session cookie with the upgrade; that is
+    // the only credential the server's WS gate reads (agent-os-n4ca.2). The
+    // store's token is just the "signed in" sentinel here.
     const token = useAuthStore.getState().token
     const authDisabled = useAuthStore.getState().authDisabled
 
@@ -106,9 +109,6 @@ export class WSClient {
         this.resetAttemptsTimer = null
         this.reconnectAttempts = 0
       }, RECONNECT_RESET_AFTER_MS)
-      if (token && token !== 'cookie') {
-        this.ws!.send(JSON.stringify({ type: 'auth', token }))
-      }
       options.onOpen?.()
     }
 

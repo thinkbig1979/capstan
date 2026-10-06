@@ -285,8 +285,9 @@ func (h *AuthHandler) Setup(c *gin.Context) {
 
 	h.actionLog.Log(userID, nil, services.ActionSetup, gin.H{"username": req.Username})
 
+	// No "token" key: the JWT lives only in the HttpOnly cookie set above, so
+	// script on the page cannot read it (agent-os-n4ca.2).
 	c.JSON(http.StatusOK, gin.H{
-		"token": token,
 		"user": gin.H{
 			"id":       userID,
 			"username": req.Username,
@@ -413,8 +414,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		"ip":       c.ClientIP(),
 	})
 
+	// No "token" key: the JWT lives only in the HttpOnly cookie set above, so
+	// script on the page cannot read it (agent-os-n4ca.2).
 	c.JSON(http.StatusOK, gin.H{
-		"token": token,
 		"user": gin.H{
 			"id":       user.ID,
 			"username": user.Username,

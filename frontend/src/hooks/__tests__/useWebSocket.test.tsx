@@ -88,7 +88,7 @@ describe('useWebSocket auth-disabled behavior', () => {
       useAuthStore.setState({
         isAuthenticated: true,
         authDisabled: false,
-        token: 'valid.jwt.token',
+        token: 'cookie',
       })
 
       const onMessage = vi.fn()
@@ -106,7 +106,7 @@ describe('useWebSocket auth-disabled behavior', () => {
       useAuthStore.setState({
         isAuthenticated: true,
         authDisabled: true,
-        token: 'valid.jwt.token',
+        token: 'cookie',
       })
 
       const onMessage = vi.fn()
@@ -124,7 +124,7 @@ describe('useWebSocket auth-disabled behavior', () => {
       useAuthStore.setState({
         isAuthenticated: true,
         authDisabled: false,
-        token: 'valid.jwt.token',
+        token: 'cookie',
       })
 
       const onMessage = vi.fn()
@@ -150,10 +150,12 @@ describe('useWebSocket auth-disabled behavior', () => {
       expect(MockWebSocket.instance!.url).toMatch(/\/api\/v1\/containers$/)
     })
 
-    it('sends auth message as first message when token exists', () => {
+    // agent-os-n4ca.2: the session cookie rides on the upgrade request, so a
+    // signed-in client never repeats a token in a frame.
+    it('sends no auth message when signed in via the session cookie', () => {
       useAuthStore.setState({
         authDisabled: false,
-        token: 'my.jwt.token',
+        token: 'cookie',
         isAuthenticated: true,
       })
 
@@ -167,7 +169,7 @@ describe('useWebSocket auth-disabled behavior', () => {
       MockWebSocket.instance!.send = sendSpy
       MockWebSocket.instance!.onopen!()
 
-      expect(sendSpy).toHaveBeenCalledWith(JSON.stringify({ type: 'auth', token: 'my.jwt.token' }))
+      expect(sendSpy).not.toHaveBeenCalled()
     })
 
     it('does not send auth message when authDisabled=true without token', () => {

@@ -96,7 +96,7 @@ func TestAuthHandler_Setup_Success(t *testing.T) {
 	err = json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 
-	assert.NotEmpty(t, response["token"])
+	assertSessionInCookieNotBody(t, w, response)
 	userData := response["user"].(map[string]interface{})
 	assert.Equal(t, "admin", userData["username"])
 	assert.NotEmpty(t, userData["id"])
@@ -191,9 +191,26 @@ func TestAuthHandler_Login_Success(t *testing.T) {
 	err = json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 
-	assert.NotEmpty(t, response["token"])
+	assertSessionInCookieNotBody(t, w, response)
 	userData := response["user"].(map[string]interface{})
 	assert.Equal(t, "testuser", userData["username"])
+}
+
+// assertSessionInCookieNotBody pins agent-os-n4ca.2: the JWT travels only in
+// the HttpOnly capstan_token cookie. A body copy is readable by any script on
+// the page, so the response must not carry a "token" key at all.
+func assertSessionInCookieNotBody(t *testing.T, w *httptest.ResponseRecorder, response map[string]interface{}) {
+	t.Helper()
+	assert.NotContains(t, response, "token", "the JWT must not be in the response body")
+	var session *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "capstan_token" {
+			session = c
+		}
+	}
+	require.NotNil(t, session, "the session must still be issued, as the capstan_token cookie")
+	assert.NotEmpty(t, session.Value)
+	assert.True(t, session.HttpOnly, "capstan_token must be HttpOnly")
 }
 
 // TestAuthHandler_Login_CaseInsensitiveUsername pins agent-os-tmo end to end
@@ -223,7 +240,7 @@ func TestAuthHandler_Login_CaseInsensitiveUsername(t *testing.T) {
 		err = json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 
-		assert.NotEmpty(t, response["token"], "typed %q", typedUsername)
+		assertSessionInCookieNotBody(t, w, response)
 		userData := response["user"].(map[string]interface{})
 		assert.Equal(t, "Admin", userData["username"], "typed %q: the account's stored casing must be returned, not the casing typed at login", typedUsername)
 	}
