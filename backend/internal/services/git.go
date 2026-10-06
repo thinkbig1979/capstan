@@ -41,8 +41,8 @@ type RedeployFailure struct {
 type GitService struct {
 	config *config.Config
 	db     *database.DB
-	// opLock is the per-stack operation lock PullVerified takes when it will
-	// redeploy (agent-os-a1ye.4). Set by SetOperationLock before the server
+	// opLock is the per-stack operation lock PullVerified takes around every
+	// pull (agent-os-a1ye.4, agent-os-ai1z). Set by SetOperationLock before the server
 	// starts; nil (tests) means no locking.
 	opLock *OperationLock
 }
@@ -819,15 +819,17 @@ func gitExitCode(err error) int {
 //
 // docker may be nil; in that case redeploy is skipped even when requested.
 //
-// When it will redeploy and a lock is wired, it first takes the operation lock
-// of every stack in dirPath and holds them across the pull, the restarts and
-// their verification, so neither the pulled files nor the redeploy interleave
-// with a backup or lifecycle op on those stacks. A held stack fails the whole
-// call before anything is pulled, as 409 OPERATION_IN_PROGRESS.
+// When a lock is wired, it first takes the operation lock of every stack in
+// dirPath and holds them across the pull and any restarts and their
+// verification, so neither the pulled files nor the redeploy interleave with a
+// backup or lifecycle op on those stacks. That holds with or without redeploy:
+// the pull alone rewrites files under the stack directories (agent-os-ai1z). A
+// held stack fails the whole call before anything is pulled, as 409
+// OPERATION_IN_PROGRESS.
 func (s *GitService) PullVerified(dirPath string, redeploy bool, docker *DockerService) (truth.ActionResult, *models.PullResult) {
 	var lockedStacks []models.Stack
 	locked := false
-	if redeploy && docker != nil && s.opLock != nil {
+	if s.opLock != nil {
 		stacks, err := s.db.ListStacksByDirectory(dirPath)
 		if err != nil {
 			// Nothing has been pulled yet, so this is a plain failure, not

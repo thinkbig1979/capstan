@@ -55,7 +55,8 @@ func headOf(t *testing.T, dir string) string {
 
 // TestPullVerified_RedeployOnLockedStackIs409AndPullsNothing is agent-os-a1ye.4:
 // a git pull with redeploy used to rewrite a stack's files and restart it while
-// a backup or lifecycle op held that stack.
+// a backup or lifecycle op held that stack. The pull without redeploy had the
+// same gap; see git_pull_lock_ai1z_test.go.
 func TestPullVerified_RedeployOnLockedStackIs409AndPullsNothing(t *testing.T) {
 	svc, lock, work := pullLockFixture(t)
 	before := headOf(t, work)
