@@ -1043,12 +1043,36 @@ func (h *SettingsHandler) GetConfiguredDirectories(c *gin.Context) {
 		})
 	}
 
+	// The default directory is a boot-time setting (agent-os-a1ye.6): active
+	// is what this process uses, pending is what the next start will use.
+	active := h.cfg.StacksDir
+	pending, err := h.db.GetSetting("default_stacks_dir")
+	if err != nil && !errors.Is(err, errdefs.ErrNotFound) {
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to read default stacks directory",
+			err,
+		))
+		return
+	}
+	if pending == "" {
+		pending = active
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"directories": result,
-		"defaultDir":  allDirs[0],
+		"directories":     result,
+		"defaultDir":      allDirs[0],
+		"active":          active,
+		"pending":         pending,
+		"restartRequired": pending != active,
 	})
 }
 
+// UpdateConfiguredDirectories persists the default stacks directory. It never
+// writes h.cfg: every scanner, watcher and handler goroutine reads the shared
+// config without a lock, so the choice is applied at the next boot by
+// config.ApplyPersistedDefaultStacksDir (agent-os-a1ye.6).
 func (h *SettingsHandler) UpdateConfiguredDirectories(c *gin.Context) {
 	var req struct {
 		DefaultDir string `json:"defaultDir"`
@@ -1063,26 +1087,27 @@ func (h *SettingsHandler) UpdateConfiguredDirectories(c *gin.Context) {
 	}
 
 	if req.DefaultDir != "" {
-		absDir, err := filepath.Abs(req.DefaultDir)
+		root, ok, err := h.cfg.MatchStacksRoot(req.DefaultDir)
 		if err != nil {
+			handleError(c, models.NewAppErrorWithCause(
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"Failed to resolve directory path",
+				err,
+			))
+			return
+		}
+		if !ok {
 			c.JSON(http.StatusBadRequest, models.NewAppError(
 				http.StatusBadRequest,
 				"VALIDATION_ERROR",
-				"Invalid directory path",
+				"Directory must be one of the configured stacks directories",
 			))
 			return
 		}
 
-		if !h.isPathWithinAllowedDirs(absDir) {
-			c.JSON(http.StatusBadRequest, models.NewAppError(
-				http.StatusBadRequest,
-				"VALIDATION_ERROR",
-				"Directory must be within a configured stacks directory",
-			))
-			return
-		}
-
-		if err := os.MkdirAll(absDir, 0755); err != nil {
+		//nolint:gosec // root is a configured stacks root (STACKS_DIR / EXTRA_STACKS_DIRS), matched after symlink resolution, not the request string
+		if err := os.MkdirAll(root, 0755); err != nil {
 			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
 				"INTERNAL_ERROR",
@@ -1092,7 +1117,7 @@ func (h *SettingsHandler) UpdateConfiguredDirectories(c *gin.Context) {
 			return
 		}
 
-		if err := h.db.SetSetting("default_stacks_dir", absDir); err != nil {
+		if err := h.db.SetSetting("default_stacks_dir", root); err != nil {
 			slog.Error("Failed to update default stacks dir", "error", err)
 			handleError(c, models.NewAppErrorWithCause(
 				http.StatusInternalServerError,
@@ -1103,29 +1128,14 @@ func (h *SettingsHandler) UpdateConfiguredDirectories(c *gin.Context) {
 			return
 		}
 
-		h.stacksDir = absDir
-		h.cfg.StacksDir = absDir
-		slog.Info("Default stacks directory updated", "path", absDir)
+		slog.Info("Default stacks directory saved; takes effect after restart", "path", root)
 		logActionFromContext(h.actionLog, c, nil, services.ActionUpdateSettings, gin.H{
 			"setting": "default_directory",
-			"path":    absDir,
+			"path":    root,
 		})
 	}
 
 	h.GetConfiguredDirectories(c)
-}
-
-func (h *SettingsHandler) isPathWithinAllowedDirs(path string) bool {
-	for _, dir := range h.cfg.GetAllStacksDirs() {
-		absDir, err := filepath.Abs(dir)
-		if err != nil {
-			continue
-		}
-		if path == absDir || strings.HasPrefix(path, absDir+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
 }
 
 func (h *SettingsHandler) GetAuditLog(c *gin.Context) {

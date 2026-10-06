@@ -49,6 +49,9 @@ export const queryKeys = {
   /** Server config (stacks directories etc.). */
   config: () => ['config'] as const,
 
+  /** Active and pending default stacks directory (GET /settings/directories). */
+  directorySettings: () => ['directory-settings'] as const,
+
   /** Discovered stack directories. */
   directories: () => ['directories'] as const,
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/handlers"
 	"github.com/thinkbig1979/capstan/backend/internal/logging"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
@@ -307,6 +309,15 @@ func main() {
 		log.Fatal("Failed to initialize database:", err)
 	}
 	defer db.Close()
+
+	// The default stacks directory chosen in Settings is a boot-time setting
+	// (agent-os-a1ye.6). It must be applied here, before the first reader of
+	// cfg.StacksDir below and before cfg is handed to any goroutine.
+	if persisted, err := db.GetSetting("default_stacks_dir"); err != nil && !errors.Is(err, errdefs.ErrNotFound) {
+		slog.Warn("Failed to read persisted default stacks directory; using STACKS_DIR", "error", err)
+	} else {
+		config.ApplyPersistedDefaultStacksDir(cfg, persisted)
+	}
 
 	if err := db.MigrateStackIDsToRootPrefixed(cfg.StacksDir); err != nil {
 		slog.Warn("Failed to migrate stack IDs", "error", err)
