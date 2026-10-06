@@ -474,6 +474,11 @@ func main() {
 	// Before LoggingMiddleware: the HTTP log line carries the request ID.
 	r.Use(middleware.RequestID())
 	r.Use(middleware.LoggingMiddleware())
+	// Global, not on the protected group: a DNS-rebinding page must be refused
+	// on every route, WebSocket upgrades and the SPA index included. After
+	// RequestID/Logging so a refusal is logged with its request ID
+	// (agent-os-n4ca.1).
+	r.Use(middleware.AllowedHosts(cfg.AuthDisabled, cfg.AllowedHosts))
 	r.Use(middleware.BodySizeLimit())
 	r.Use(middleware.CORSMiddleware(cfg.CORSOrigins))
 	r.Use(middleware.ValidateInput())

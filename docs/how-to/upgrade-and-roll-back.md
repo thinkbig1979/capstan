@@ -42,6 +42,18 @@ actually running afterwards with `GET /api/v1/version` or Settings → About.
 > `up -d`, `docker compose -f docker-compose.prod.yaml logs | grep "Volume path identity"`
 > must not show an `ERROR` line.
 
+> **Upgrading an `AUTH_DISABLED=true` instance that you reach by anything other
+> than `localhost`:** set `ALLOWED_HOSTS` first. With authentication disabled,
+> Capstan now answers `403` (message: `Host "<name>" is not allowed while
+> authentication is disabled; add it to ALLOWED_HOSTS`) to a request whose
+> `Host` is not `localhost`, `127.0.0.1`, `[::1]` or in `ALLOWED_HOSTS`. That
+> covers browsing by LAN IP or LAN name, a reverse proxy forwarding its public
+> name, and an uptime monitor probing `/health` by address. Add each name or IP
+> you use, e.g. `ALLOWED_HOSTS=capstan.lan,192.168.1.10`, then
+> `docker compose -f docker-compose.prod.yaml up -d`. The container's own
+> healthcheck uses `localhost` and needs nothing. Instances with authentication
+> on are unaffected.
+
 ## Rolling back
 
 Recovering from a bad release usually means re-pinning an older image tag (or
