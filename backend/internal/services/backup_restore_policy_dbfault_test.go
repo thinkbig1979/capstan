@@ -20,35 +20,20 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
-// agent-os-r1by. RunRestore read the stack's stop policy with a softened error:
-//
-//	stopPolicy := "stop"
-//	if policy, pErr := s.db.GetBackupPolicy(stackID); pErr == nil && policy != nil {
-//	    stopPolicy = policy.StopPolicy
-//	}
-//
-// The default is assigned BEFORE the getter and the read only ever OVERWRITES
-// it, so a fault leaves "stop" standing and the stack IS stopped. What was
-// silently discarded is a configured "hot" policy: the operator asked for the
-// stack to stay up through the restore and it went down anyway, with nothing
-// logged and no way to tell the outage from a policy they set themselves.
+// agent-os-r1by made RunRestore refuse when the stack's backup policy could
+// not be read, so that an unreadable "hot" policy was not silently replaced by
+// "stop". agent-os-a1ye.2 removed the read altogether: the backup StopPolicy is
+// a BACKUP setting ("Back up live") and a restore always stops the stack. The
+// partial-fault fixture below is kept because it is now the guard that the
+// read stays gone — with the policy table unreadable, a restore must proceed
+// exactly as it does on a healthy database.
 //
 // THE FAULT FIXTURE IS NOT THE PACKAGE'S USUAL ONE, deliberately.
-// closedDBWithSettings (backup_config_dbfault_test.go:57) cannot reach this
-// site at all: a closed database trips resolveOrRefuse at backup.go:1108, and
-// GetStack at backup.go:1121 would trip next, so control never arrives at the
-// policy read. TESTED, not inferred: driving RunRestore with
-// closedDBWithSettings returned
-//
-//	read backup setting "restic_repository": sql: database is closed
-//
-// with stopped=0, started=0 and only resolveOrRefuse's own ERROR line — the
-// policy read never ran. Only a PARTIAL fault — settings and stacks readable,
-// the policy table not — exercises it. That is what policyTableDroppedDB
-// builds. This is method gap (i) from agent-os-l42o's close reason
-// ("source-sweeping is not test-sweeping") recurring one bead later: the site
-// was converted, and the package's existing fault instrument could not drive
-// an error into it.
+// closedDBWithSettings (backup_config_dbfault_test.go) cannot reach the restore
+// path past resolveOrRefuse and GetStack, which both refuse on a closed
+// database. Only a PARTIAL fault — settings and stacks readable, the policy
+// table not — tells "restore ignores the policy" apart from "restore refuses
+// on a database fault". That is what policyTableDroppedDB builds.
 
 // The sentinel the fixture's narrowness self-control round-trips through the
 // settings table. Deliberately not a restic key: nothing on the restore path
@@ -101,10 +86,9 @@ func policyTableDroppedDB(t *testing.T, seed func(*database.DB)) *database.DB {
 	// SELF-CONTROL, PERMANENT, TWO HALVES. Both are required and neither implies
 	// the other.
 	//
-	// ARMED: the policy read must fail, and must NOT fail with errdefs.ErrNotFound, or
-	// a green test below would be one that quietly exercised today's absent-row
-	// path — the arm the fix deliberately leaves alone — while appearing to
-	// exercise the fault arm.
+	// ARMED: the policy read must fail, and must NOT fail with errdefs.ErrNotFound,
+	// or a green test below would be one that ran against a readable (or merely
+	// empty) policy table while appearing to prove that a fault there is ignored.
 	if _, pErr := db.GetBackupPolicy("myapp"); pErr == nil {
 		t.Fatal("fixture is unarmed: GetBackupPolicy returned no error after DROP TABLE")
 	} else if errors.Is(pErr, errdefs.ErrNotFound) {
@@ -112,11 +96,9 @@ func policyTableDroppedDB(t *testing.T, seed func(*database.DB)) *database.DB {
 	}
 
 	// NARROW: stacks and settings must still READ. Without this the fixture
-	// could widen into a whole-DB fault and the test would keep passing while
-	// testing something else entirely — resolveOrRefuse's refusal at
-	// backup.go:1108, or GetStack's at :1121, both of which fire BEFORE the
-	// policy read and are other beads' behaviour, not this one's. Pinning the
-	// narrowness is what keeps this test pointed at the site it names.
+	// could widen into a whole-DB fault, and the test below would then fail on
+	// resolveOrRefuse's or GetStack's refusal, which are other beads' behaviour.
+	// Pinning the narrowness keeps this fixture pointed at the policy table alone.
 	if _, sErr := db.GetStack("myapp"); sErr != nil {
 		t.Fatalf("fixture is too wide: GetStack must still succeed, got %v", sErr)
 	}
@@ -169,12 +151,12 @@ func seedStackOnly(t *testing.T, db *database.DB, stackID string) {
 	}))
 }
 
-// TestRunRestore_UnreadablePolicy_RefusesRatherThanSilentlyStopping is the
-// FAILING-FIRST arm. A stack configured "hot" is restored behind a policy table
-// that will not read. Pre-fix the read is softened, "stop" stands, StopVerified
-// is called and RunRestore returns nil — a service interruption the operator
-// explicitly configured against, with nothing logged.
-func TestRunRestore_UnreadablePolicy_RefusesRatherThanSilentlyStopping(t *testing.T) {
+// TestRunRestore_UnreadablePolicyDoesNotMatter inverts agent-os-r1by's refusal
+// test. A restore no longer reads the backup policy, so a policy table that
+// will not read cannot refuse, delay or change it: the running stack is
+// stopped, restored and restarted, and no ERROR is logged. Re-adding a policy
+// read to the restore path turns this red.
+func TestRunRestore_UnreadablePolicyDoesNotMatter(t *testing.T) {
 	t.Parallel()
 
 	db := policyTableDroppedDB(t, func(db *database.DB) {
@@ -195,32 +177,45 @@ func TestRunRestore_UnreadablePolicy_RefusesRatherThanSilentlyStopping(t *testin
 	svc, logBuf := bufferedSvc(t, db, docker, runner)
 
 	out := make(chan StreamLine, 128)
-	err := svc.RunRestore(context.Background(), "myapp", "abc123", "", out)
+	require.NoError(t, svc.RunRestore(context.Background(), "myapp", "abc123", "", out),
+		"an unreadable backup policy must not refuse a restore that never reads it")
 
-	// THE BEHAVIOURAL ASSERTION COMES FIRST, DELIBERATELY. The defect is a stack
-	// that gets stopped against the operator's configured "hot" policy, so that
-	// is what the red output has to NAME. Ordered the other way round, the
-	// leading require.Error short-circuits the test on the pre-fix code and the
-	// failure reads only "an error is expected but got nil" — true, but no
-	// evidence at all that the stack was wrongly stopped. Both assertions here
-	// are non-fatal so a single run reports the behaviour AND the refusal.
-	assert.Equal(t, 0, docker.stopped(),
-		"the stack must not be stopped on a policy the operator may have configured hot")
-	assert.Equal(t, 0, docker.started())
-
-	require.Error(t, err, "an unreadable stop policy must refuse the restore, not fall back to \"stop\"")
-	assert.Contains(t, err.Error(), "backup policy",
-		"the refusal must name the policy read as the cause")
+	assert.Equal(t, 1, docker.stopped(), "the restore stops the running stack")
+	assert.Equal(t, 1, docker.started(), "and restarts it after the successful restore")
 
 	logged := logBuf.String()
-	assert.Contains(t, logged, "level=ERROR", "the fault must be logged at ERROR")
-	assert.Contains(t, logged, "cause=", "the ERROR line must carry cause=")
+	assert.NotContains(t, logged, "level=ERROR", "nothing on the restore path reads the policy, so nothing faults")
+	assert.NotContains(t, logged, "cause=")
 }
 
-// TestRunRestore_HealthyDBHotPolicyApplied is CONTROL 1: healthy database, a
-// stored non-default policy, applied byte-for-byte. Without this the test above
-// would pass equally on code that refused every restore.
-func TestRunRestore_HealthyDBHotPolicyApplied(t *testing.T) {
+// stopOrderRunner records, at the moment restic restore runs, how many times
+// the stack had been stopped and started. stopped() == 1 after the call says a
+// stop happened; only this snapshot says it happened BEFORE the restore wrote
+// over the directory.
+type stopOrderRunner struct {
+	fakeRunner
+	docker          *fakeDocker
+	restoreCalls    int
+	stopsAtRestore  int
+	startsAtRestore int
+}
+
+func (r *stopOrderRunner) Run(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
+	if len(args) > 0 && args[0] == "restore" {
+		r.restoreCalls++
+		r.stopsAtRestore = r.docker.stopped()
+		r.startsAtRestore = r.docker.started()
+	}
+	return r.fakeRunner.Run(ctx, name, args, env, out)
+}
+
+// TestRunRestore_HotPolicyStillStopsRunningStack pins agent-os-a1ye.2: the
+// backup StopPolicy is a BACKUP setting ("Back up live"), and restore must not
+// read it. A running stack whose stored policy is "hot" is stopped before the
+// snapshot is written over its directory, and restarted after a successful
+// restore. Pre-fix, the "hot" policy was applied to the restore and the stack
+// stayed up underneath it while the confirm dialog promised a stop.
+func TestRunRestore_HotPolicyStillStopsRunningStack(t *testing.T) {
 	t.Parallel()
 
 	db := newBackupTestDB(t)
@@ -228,23 +223,28 @@ func TestRunRestore_HealthyDBHotPolicyApplied(t *testing.T) {
 
 	stored, err := db.GetBackupPolicy("myapp")
 	require.NoError(t, err)
-	require.Equal(t, "hot", stored.StopPolicy, "the fixture must actually store the non-default policy")
+	require.Equal(t, "hot", stored.StopPolicy, "the fixture must actually store the hot policy")
 
 	docker := &fakeDocker{statusStr: "running"}
-	runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")}
+	runner := &stopOrderRunner{
+		fakeRunner: fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")},
+		docker:     docker,
+	}
 	svc, logBuf := bufferedSvc(t, db, docker, runner)
 
 	out := make(chan StreamLine, 128)
 	require.NoError(t, svc.RunRestore(context.Background(), "myapp", "abc123", "", out))
 
-	assert.Equal(t, 0, docker.stopped(), `a stored "hot" policy must leave the stack running`)
-	assert.Equal(t, 0, docker.started(), "nothing was stopped, so nothing is restarted")
+	assert.Equal(t, 1, docker.stopped(), `a stored "hot" backup policy must not keep the stack running through a restore`)
+	require.Equal(t, 1, runner.restoreCalls, "restic restore must have run exactly once")
+	assert.Equal(t, 1, runner.stopsAtRestore, "the stop must happen BEFORE restic restore writes the directory")
+	assert.Equal(t, 0, runner.startsAtRestore, "nothing may be restarted before the restore has run")
+	assert.Equal(t, 1, docker.started(), "a stack that was running is restarted after a successful restore")
 	assert.NotContains(t, logBuf.String(), "level=ERROR")
 }
 
-// TestRunRestore_HealthyDBNoPolicyRowKeepsStopDefault is CONTROL 2: a healthy
-// database with NO policy row keeps today's "stop" default and logs no ERROR.
-// This is the errdefs.ErrNotFound arm — the half the fix must leave untouched.
+// TestRunRestore_HealthyDBNoPolicyRowKeepsStopDefault: a stack with NO policy
+// row is stopped and restarted like any other, and logs no ERROR.
 func TestRunRestore_HealthyDBNoPolicyRowKeepsStopDefault(t *testing.T) {
 	t.Parallel()
 
@@ -262,7 +262,7 @@ func TestRunRestore_HealthyDBNoPolicyRowKeepsStopDefault(t *testing.T) {
 	out := make(chan StreamLine, 128)
 	require.NoError(t, svc.RunRestore(context.Background(), "myapp", "abc123", "", out))
 
-	assert.Equal(t, 1, docker.stopped(), `no policy row must keep the conservative "stop" default`)
+	assert.Equal(t, 1, docker.stopped(), "a stack with no policy row is stopped before the restore")
 	assert.Equal(t, 1, docker.started(), "a running stack that was stopped is restarted after a successful restore")
 
 	logged := logBuf.String()

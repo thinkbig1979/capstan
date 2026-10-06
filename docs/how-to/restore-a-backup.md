@@ -16,6 +16,10 @@ curl -X POST http://localhost:5001/api/v1/backups/restore \
   -d '{"stackId":"<id>","snapshotId":"<short-id>"}'
 ```
 
+A restore always stops the stack first, even when its backup policy is set to
+back up live, and restarts it after a successful restore. If the restore fails,
+the stack is left stopped so you can inspect the directory and retry.
+
 ## Disaster recovery
 
 Follow this in order. **The database is restored before the stacks** — restoring
