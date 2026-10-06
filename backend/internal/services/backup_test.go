@@ -1477,20 +1477,27 @@ func TestRunRestore_NoDeliberateStopClaimWhenNothingWasStopped(t *testing.T) {
 		assert.NotContains(t, err.Error(), deliberateStopMarker)
 	})
 
-	t.Run("hot policy: restore fails but the stack was never stopped", func(t *testing.T) {
+	// A restore always stops the stack (agent-os-a1ye.2), so the only way past
+	// validation without a stop is a stop that failed.
+	t.Run("stop fails: the stack was never stopped", func(t *testing.T) {
 		t.Parallel()
 		db := newBackupTestDB(t)
-		docker := &fakeDocker{statusStr: "running"}
-		runner := &restoreFailingRunner{
-			fakeRunner: fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")},
-		}
+		docker := &fakeDocker{statusStr: "running", stopErr: errors.New("injected stop failure")}
+		runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")}
 		svc := buildSvc(t, db, docker, runner, runner)
-		seedStack(t, db, "myapp", "hot")
+		seedStack(t, db, "myapp", "stop")
 
 		err := svc.RunRestore(context.Background(), "myapp", "abc123", "/opt/stacks/myapp", nil)
 		require.Error(t, err)
-		assert.Equal(t, 0, docker.stopped())
+		assert.Contains(t, err.Error(), "stop stack")
+		assert.Equal(t, 1, docker.stopped(), "the stop was attempted")
+		assert.Equal(t, 0, docker.started())
 		assert.NotContains(t, err.Error(), deliberateStopMarker)
+		for _, c := range runner.calls {
+			if c.Binary == "restic" && len(c.Args) > 0 {
+				assert.NotEqual(t, "restore", c.Args[0], "restic restore must not run when the stop failed")
+			}
+		}
 	})
 }
 
@@ -1756,7 +1763,7 @@ func TestRunRestore_AcceptsStackDirAsTarget(t *testing.T) {
 		outputData: snapshotJSON("abc123", "abc123", "myapp"),
 	}
 	svc := buildSvc(t, db, docker, runner, runner)
-	seedStack(t, db, "myapp", "hot") // hot = no stop
+	seedStack(t, db, "myapp", "hot") // restore ignores the backup policy
 
 	out := make(chan StreamLine, 128)
 	// Pass the exact stack directory — must be accepted.
@@ -2648,7 +2655,7 @@ func TestRunRestore_HappyPathConfinesTarget(t *testing.T) {
 				outputData: snapshotJSON("snap001", "snap001", "myapp"),
 			}
 			svc := buildSvc(t, db, docker, runner, runner)
-			seedStack(t, db, "myapp", "hot") // hot = no stop/restart
+			seedStack(t, db, "myapp", "hot") // restore ignores the backup policy
 
 			out := make(chan StreamLine, 128)
 			err := svc.RunRestore(context.Background(), "myapp", "snap001", tc.targetDir, out)

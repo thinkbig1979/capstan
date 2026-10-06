@@ -21,8 +21,6 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
-
-	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
 // ErrBackupBusy is returned by RunBackup/RunSync/RunRestore when another
@@ -1411,8 +1409,9 @@ func (e *RestartIncompleteError) Error() string {
 
 // RunRestore restores a specific snapshot to the stack's directory. It
 // validates that the snapshot belongs to the given stackID (contains the
-// stack's tag), applies the stop policy before restoring, and restarts the
-// stack afterwards. This is a destructive operation and is logged via
+// stack's tag), always stops the stack before restoring (whatever its backup
+// StopPolicy), and restarts it after a successful restore unless it was
+// known to be stopped. This is a destructive operation and is logged via
 // ActionLogger.
 //
 // RunRestore has no run record, so it discards runRestore's notes;
@@ -1506,31 +1505,11 @@ func (s *BackupService) runRestore(
 	// third answer — "could not find out" — and not a "no".
 	priorState := s.observeRunState(stack, stackID)
 
-	// Fetch the stop policy from the backup policy, defaulting to "stop"
-	// for restores (restore is always destructive).
-	//
-	// agent-os-r1by: the default is assigned BEFORE the read, so the read only
-	// ever OVERWRITES it. That made a DB fault indistinguishable from an absent
-	// row and silently discarded a configured "hot" policy: the stack the
-	// operator deliberately asked to keep running went down anyway, with
-	// nothing logged. errdefs.ErrNotFound keeps the "stop" default unchanged; any
-	// other error means the stored policy is UNREADABLE, and we refuse rather
-	// than act on a policy we could not read. Refusing costs nothing in the
-	// whole-DB-fault case — resolveOrRefuse (:1108) and GetStack (:1121) both
-	// already refuse before control reaches here — so it only denies the narrow
-	// partial fault, where re-running once the table reads is the operator's
-	// call rather than ours to pre-empt with an unconsented outage.
-	stopPolicy := "stop"
-	policy, pErr := s.db.GetBackupPolicy(stackID)
-	if pErr != nil && !errors.Is(pErr, errdefs.ErrNotFound) {
-		s.logger.Error("refusing restore: stack backup policy is unreadable",
-			"stack", stackID, "cause", pErr)
-		return fmt.Errorf("get backup policy %s: %w", stackID, pErr)
-	}
-	if policy != nil {
-		stopPolicy = policy.StopPolicy
-	}
-
+	// agent-os-a1ye.2: a restore always stops the stack. The backup policy's
+	// StopPolicy is not consulted: "hot" means "back up live", which the
+	// operator chose for backups, and restoring a directory under running
+	// containers is how a live database gets corrupted. The confirm dialog
+	// promises the stop unconditionally.
 	stopApplied := false
 
 	defer func() {
@@ -1581,17 +1560,15 @@ func (s *BackupService) runRestore(
 		}
 	}()
 
-	if stopPolicy == "stop" {
-		stream(out, "info", fmt.Sprintf("[%s] stopping stack before restore", stackID))
-		if ar, _ := s.dockerSvc().StopVerified(stack); ar.Outcome == truth.OutcomeFailed {
-			stopErr := ar.Err
-			if stopErr == nil {
-				stopErr = errors.New(ar.Reason)
-			}
-			return fmt.Errorf("stop stack: %w", stopErr)
+	stream(out, "info", fmt.Sprintf("[%s] stopping stack before restore", stackID))
+	if ar, _ := s.dockerSvc().StopVerified(stack); ar.Outcome == truth.OutcomeFailed {
+		stopErr := ar.Err
+		if stopErr == nil {
+			stopErr = errors.New(ar.Reason)
 		}
-		stopApplied = true
+		return fmt.Errorf("stop stack: %w", stopErr)
 	}
+	stopApplied = true
 
 	stream(out, "info", fmt.Sprintf("[%s] restoring snapshot %s to %s", stackID, snapshotID, restoreTarget))
 	// stackDir is the snapshot's stored source path; pass it so restic strips that
