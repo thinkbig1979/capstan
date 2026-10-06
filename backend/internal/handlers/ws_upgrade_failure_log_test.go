@@ -103,12 +103,10 @@ func requestIDSentinel() (id, attr string) {
 // client that completes the handshake and then fails auth (invalid token, no
 // AUTH_DISABLED bypass) left no record anywhere that it happened.
 //
-// Drives the auth failure via upgradeConnection's non-cookie branch: no
-// capstan_token cookie is sent, so it falls into conn.ReadJSON(&authMsg), and
-// the client immediately sends an invalid token -- this resolves in
+// Drives the auth failure with an invalid capstan_token cookie, the only
+// credential upgradeConnection reads (agent-os-n4ca.2): it resolves in
 // milliseconds via authenticateToken -> middleware.ValidateJWT failing to
-// parse, rather than waiting out the 5s "no auth frame" timeout branch (the
-// other way to reach the same AppError-401 shape).
+// parse.
 //
 // Seen failing first: with serveWS's new log line absent, `go build ./...`
 // exits 0 and this test fails on its ASSERTION (captured ERROR-line count is
@@ -495,24 +493,25 @@ func newDashboardAuthEnabledFixture(t *testing.T, cm *ConnectionManager) (*httpt
 	return srv, handled, probe
 }
 
-// dialWSAndSendInvalidToken completes a WebSocket handshake with no cookie
-// (so upgradeConnection reads a JSON auth message instead), sends an
-// obviously-invalid token, and returns the close code the server sends back.
+// dialWSAndSendInvalidToken completes a WebSocket handshake carrying an
+// obviously-invalid capstan_token cookie and returns the close code the
+// server sends back.
 // Same shape as readRefusalCloseCode (ws_cap_refusal_close_code_test.go),
 // reused rather than adding a distinct dial helper, extended with the one
-// extra step (WriteJSON) this bead's auth handshake needs. requestID goes
+// extra step (the cookie) this bead's auth handshake needs. requestID goes
 // out as X-Request-ID so the fixture's RequestID middleware stamps it on the
 // context and serveWS's log line carries it (agent-os-737f).
 func dialWSAndSendInvalidToken(t *testing.T, srv *httptest.Server, path, requestID string) (int, string) {
 	t.Helper()
 
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + path
-	conn, resp, err := websocket.DefaultDialer.Dial(url, http.Header{middleware.RequestIDHeader: {requestID}})
+	conn, resp, err := websocket.DefaultDialer.Dial(url, http.Header{
+		middleware.RequestIDHeader: {requestID},
+		"Cookie":                   {"capstan_token=not-a-valid-jwt"},
+	})
 	require.NoError(t, err, "dialing %s", url)
 	defer conn.Close()
 	defer resp.Body.Close()
-
-	require.NoError(t, conn.WriteJSON(map[string]string{"type": "auth", "token": "not-a-valid-jwt"}))
 
 	closeCode := 0
 	closeText := ""

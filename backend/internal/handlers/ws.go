@@ -755,44 +755,25 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 		// still relies on distinguishing (see its doc comment).
 		userID = "anon:" + c.ClientIP()
 	} else {
-		cookieToken, cookieErr := c.Cookie("capstan_token") //geterrors:ignore c.Cookie's only error is http.ErrNoCookie; the guard below already requires a non-empty token, and with no cookie the token comes from the first message (the WS path never reads the Authorization header)
+		// The session cookie is the only credential a WebSocket accepts. A
+		// browser cannot set headers on an upgrade, and the app no longer has
+		// the JWT in script to send any other way: login and setup return it
+		// only as the HttpOnly cookie (agent-os-n4ca.2). The first-message
+		// {type:"auth", token} handshake that used to cover the no-cookie case
+		// is gone with it.
+		cookieToken, cookieErr := c.Cookie("capstan_token") //geterrors:ignore c.Cookie's only error is http.ErrNoCookie, which the empty-token check below already refuses
+		if cookieErr != nil || cookieToken == "" {
+			writeCloseMessage(conn, CloseCodeAuthFailure, "Authentication required")
+			conn.Close()
+			return nil, &models.AppError{Code: models.ErrSessionExpired, Message: "No session cookie", Status: 401}
+		}
 
-		if cookieErr == nil && cookieToken != "" {
-			userID, err = authenticateToken(cookieToken, db, jwtSecret)
-			if err != nil {
-				closeCode, closeReason := wsAuthCloseFor(err)
-				writeCloseMessage(conn, closeCode, closeReason)
-				conn.Close()
-				return nil, err
-			}
-		} else {
-			// A failed deadline set surfaces immediately as a read error
-			// below, which is already handled.
-			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
-			var authMsg struct {
-				Type  string `json:"type"`
-				Token string `json:"token"`
-			}
-			if err := conn.ReadJSON(&authMsg); err != nil {
-				logIfWSReadLimit(err, readLimit, "remote_addr", conn.RemoteAddr(), "phase", "auth")
-				writeCloseMessage(conn, CloseCodeAuthFailure, "Auth timeout")
-				conn.Close()
-				return nil, &models.AppError{Code: models.ErrSessionExpired, Message: "No auth message received", Status: 401}
-			}
-
-			if authMsg.Type != "auth" || authMsg.Token == "" {
-				writeCloseMessage(conn, CloseCodeAuthFailure, "Invalid auth message")
-				conn.Close()
-				return nil, &models.AppError{Code: models.ErrSessionExpired, Message: "Invalid auth message", Status: 401}
-			}
-
-			userID, err = authenticateToken(authMsg.Token, db, jwtSecret)
-			if err != nil {
-				closeCode, closeReason := wsAuthCloseFor(err)
-				writeCloseMessage(conn, closeCode, closeReason)
-				conn.Close()
-				return nil, err
-			}
+		userID, err = authenticateToken(cookieToken, db, jwtSecret)
+		if err != nil {
+			closeCode, closeReason := wsAuthCloseFor(err)
+			writeCloseMessage(conn, closeCode, closeReason)
+			conn.Close()
+			return nil, err
 		}
 	}
 
@@ -814,12 +795,11 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 		// with an empty UserID) — OBSERVED by running the suite, not
 		// inferred. SessionID has no equivalent test dependency (those same
 		// fixtures never set "jti" either way, so it stays "" in both
-		// designs), which is why only it was switched to context. The latent
-		// risk this leaves: on the one path where AuthMiddleware validated a
-		// header token but upgradeConnection's own gate re-validates a
-		// DIFFERENT token read from inside the WS frame (no cookie present),
-		// UserID and SessionID could in principle name different sessions.
-		// No current caller sends a second, different token there.
+		// designs), which is why only it was switched to context. Both still
+		// name one session: the gate above accepts only the capstan_token
+		// cookie, and AuthMiddleware reads that same cookie first
+		// (agent-os-n4ca.6), so there is no second token for them to disagree
+		// on (agent-os-n4ca.2 removed the in-frame one).
 		UserID:    userID,
 		SessionID: c.GetString("jti"),
 		Conn:      conn,

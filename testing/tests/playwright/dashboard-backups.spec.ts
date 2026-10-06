@@ -261,8 +261,11 @@ test.describe('Dashboard backups tab and stack toggles E2E', () => {
         data: { email: TEST_USER, password: TEST_PASSWORD },
       })
       if (loginResp.ok()) {
-        const body = await loginResp.json()
-        authToken = body.token ?? ''
+        // Login sets the session only as the capstan_token cookie, with no
+        // token in the body (agent-os-n4ca.2). Read it from this context's
+        // jar so later tests, each with a fresh jar, can send it as Bearer.
+        const state = await request.storageState()
+        authToken = state.cookies.find((c) => c.name === 'capstan_token')?.value ?? ''
       }
     }
     await ensureCsrf(request)

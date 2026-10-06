@@ -361,12 +361,13 @@ func dialWSAndSendToken(t *testing.T, srv *httptest.Server, path, requestID, tok
 	t.Helper()
 
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + path
-	conn, resp, err := websocket.DefaultDialer.Dial(url, http.Header{middleware.RequestIDHeader: {requestID}})
+	conn, resp, err := websocket.DefaultDialer.Dial(url, http.Header{
+		middleware.RequestIDHeader: {requestID},
+		"Cookie":                   {"capstan_token=" + token},
+	})
 	require.NoError(t, err, "dialing %s", url)
 	defer conn.Close()
 	defer resp.Body.Close()
-
-	require.NoError(t, conn.WriteJSON(map[string]string{"type": "auth", "token": token}))
 
 	closeCode := 0
 	closeText := ""

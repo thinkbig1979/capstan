@@ -43,16 +43,16 @@ describe('authStore initial state', () => {
 })
 
 describe('authStore login', () => {
-  it('sets token, user, and isAuthenticated on success', async () => {
+  it('sets the cookie sentinel, user, and isAuthenticated on success', async () => {
     const mockUser = {
       createdAt: '',
       updatedAt: '', id: '1', username: 'admin' }
-    mockLogin.mockResolvedValue({ token: 'jwt-token-123', user: mockUser })
+    mockLogin.mockResolvedValue({ user: mockUser })
 
     await useAuthStore.getState().login('admin', 'password')
 
     const state = useAuthStore.getState()
-    expect(state.token).toBe('jwt-token-123')
+    expect(state.token).toBe('cookie')
     expect(state.user).toEqual(mockUser)
     expect(state.isAuthenticated).toBe(true)
   })
@@ -68,17 +68,17 @@ describe('authStore login', () => {
 })
 
 describe('authStore setup', () => {
-  it('sets token, user, and clears needsSetup', async () => {
+  it('sets the cookie sentinel, user, and clears needsSetup', async () => {
     const mockUser = {
       createdAt: '',
       updatedAt: '', id: '1', username: 'newadmin' }
-    mockSetup.mockResolvedValue({ token: 'setup-token', user: mockUser })
+    mockSetup.mockResolvedValue({ user: mockUser })
 
     useAuthStore.setState({ needsSetup: true })
     await useAuthStore.getState().setup('newadmin', 'password123')
 
     const state = useAuthStore.getState()
-    expect(state.token).toBe('setup-token')
+    expect(state.token).toBe('cookie')
     expect(state.user).toEqual(mockUser)
     expect(state.isAuthenticated).toBe(true)
     expect(state.needsSetup).toBe(false)

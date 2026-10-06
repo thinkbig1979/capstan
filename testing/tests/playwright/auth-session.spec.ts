@@ -222,10 +222,11 @@ test.describe('Auth session E2E', () => {
     await sharedPage.getByLabel('Password', { exact: true }).fill(TEST_PASSWORD)
     await sharedPage.getByLabel('Confirm Password', { exact: true }).fill(TEST_PASSWORD)
 
-    // Intercept the UI's own POST /auth/setup response to capture the bearer
-    // token it mints (handlers/auth.go's Setup returns {token, user}) — this
-    // IS the real UI submission (one auth-bucket request), not a second,
-    // separate API call. The captured token is reused by every later test.
+    // Intercept the UI's own POST /auth/setup response — this IS the real UI
+    // submission (one auth-bucket request), not a second, separate API call.
+    // Setup returns only {user}; the JWT it mints is set as the HttpOnly
+    // capstan_token cookie (agent-os-n4ca.2), so the token every later test
+    // reuses is read from the browser context's cookie jar.
     const [setupResponse] = await Promise.all([
       sharedPage.waitForResponse(
         (r) => r.url().includes('/api/v1/auth/setup') && r.request().method() === 'POST',
@@ -234,9 +235,12 @@ test.describe('Auth session E2E', () => {
     ])
     expect(setupResponse.status()).toBe(200)
     const setupBody = await setupResponse.json()
-    expect(setupBody.token).toBeTruthy()
+    expect(setupBody, 'the JWT must not be in the setup response body').not.toHaveProperty('token')
     expect(setupBody.user?.username).toBe(TEST_USER)
-    bearerToken = setupBody.token
+    const sessionCookie = (await sharedContext.cookies()).find((c) => c.name === 'capstan_token')
+    expect(sessionCookie?.httpOnly, 'capstan_token must be an HttpOnly cookie').toBe(true)
+    bearerToken = sessionCookie?.value ?? ''
+    expect(bearerToken, 'setup must set the capstan_token cookie').toBeTruthy()
 
     // setAuthCookies (handlers/auth.go:495-516) mints the CSRF cookie AND
     // echoes it in this response's X-Csrf-Token header — captured here so

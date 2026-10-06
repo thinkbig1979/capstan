@@ -219,8 +219,9 @@ export type UpdateSettings = Omit<UpdateSettingsResponse, 'applyMode'> & {
  * Shapes with no single Go struct behind them, and request types.
  * ------------------------------------------------------------------ */
 
+// Login and setup carry no token: the session is the HttpOnly capstan_token
+// cookie (agent-os-n4ca.2).
 export interface AuthResponse {
-  token: string
   user: User
 }
 

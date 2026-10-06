@@ -66,7 +66,7 @@
 // byte-for-byte the pair of assertions this bead asks for, with the revocation
 // code never invoked:
 //
-//  1. upgradeConnection — "Auth failed", "Auth timeout", "Invalid auth message"
+//  1. upgradeConnection — "Auth failed", "Authentication required"
 //  2. assertContainerInStack's deny closure — "Container does not belong to this stack"
 //  3. closeMatching — "Session revoked"   ← the only one under test
 //
@@ -78,9 +78,9 @@
 // Emitter 1 is also the reason authentication here is by capstan_token COOKIE
 // and not an Authorization header. AuthMiddleware accepts either, but
 // upgradeConnection re-authenticates independently and reads ONLY the cookie:
-// header-only auth would pass the middleware, publish a jti, then strand
-// upgradeConnection waiting 5s for an in-band auth frame and emit 4401 "Auth
-// timeout" — green test, nothing proven. The cookie is the only configuration
+// header-only auth would pass the middleware, publish a jti, then be refused
+// by upgradeConnection with 4401 "Authentication required" — green test,
+// nothing proven. The cookie is the only configuration
 // where both gates pass on the same token and the same session.
 //
 // ── WHY THE REAL AuthMiddleware ────────────────────────────────────────────
@@ -262,8 +262,8 @@ func newTerminalWSFixture(t *testing.T, cm *handlers.ConnectionManager, dir, pro
 }
 
 // mintTerminalWSToken signs the token that both AuthMiddleware (via
-// extractBearerToken's capstan_token cookie fallback) and upgradeConnection
-// (via the same cookie) will validate for this session.
+// extractBearerToken, which reads the capstan_token cookie first) and
+// upgradeConnection (via the same cookie) will validate for this session.
 func mintTerminalWSToken(t *testing.T, jti string) string {
 	t.Helper()
 

@@ -111,8 +111,10 @@ export const useAuthStore = create<AuthState>()((set) => ({
   login: async (username: string, password: string) => {
     const { authApi } = await import('@/lib/api')
     const response = await authApi.login(username, password)
+    // The JWT is only in the HttpOnly cookie (agent-os-n4ca.2); 'cookie' is the
+    // same sentinel checkAuth sets, and it is what opens ws.ts's gate.
     set({
-      token: response.token,
+      token: 'cookie',
       user: response.user,
       isAuthenticated: true,
     })
@@ -122,7 +124,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
     const { authApi } = await import('@/lib/api')
     const response = await authApi.setup(username, password)
     set({
-      token: response.token,
+      token: 'cookie',
       user: response.user,
       isAuthenticated: true,
       needsSetup: false,
