@@ -150,15 +150,20 @@ func warnInvalidTrustedNetworkOnce(networkStr string, err error) {
 	slog.Warn("Invalid trusted network entry - neither a valid IP nor a valid CIDR", "network", networkStr, "error", err)
 }
 
-// extractBearerToken returns the JWT from either the Authorization header
-// or the capstan_token cookie. The ?token= query param is deliberately
-// not accepted to keep tokens out of access logs and Referer headers.
+// extractBearerToken returns the JWT from the capstan_token cookie, or from
+// an Authorization header only when no cookie was sent. The cookie is the
+// credential the app issues and the browser never sends the header (App.tsx
+// registers `() => null` as getToken), so a header next to a cookie must not
+// override it, and a present-but-invalid cookie does not fall back to the
+// header (agent-os-n4ca.6). The header counts only with the "Bearer " scheme.
+// The ?token= query param is deliberately not accepted to keep tokens out of
+// access logs and Referer headers.
 func extractBearerToken(c *gin.Context) string {
-	if h := c.GetHeader("Authorization"); h != "" {
-		return strings.TrimPrefix(h, "Bearer ")
-	}
-	if cookie, err := c.Cookie("capstan_token"); err == nil { //geterrors:ignore gin's c.Cookie returns http.ErrNoCookie and nothing else, so err != nil IS "no cookie was sent"; either way the function falls through to return ""
+	if cookie, err := c.Cookie("capstan_token"); err == nil { //geterrors:ignore gin's c.Cookie returns http.ErrNoCookie and nothing else, so err != nil IS "no cookie was sent"; either way the function falls through to the header
 		return cookie
+	}
+	if token, ok := strings.CutPrefix(c.GetHeader("Authorization"), "Bearer "); ok {
+		return token
 	}
 	return ""
 }

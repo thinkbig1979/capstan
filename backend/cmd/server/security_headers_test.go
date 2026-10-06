@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -72,5 +73,46 @@ func TestSecurityHeadersCSP_ConnectSrcFromConfig(t *testing.T) {
 		t.Error("expected a csp_nonce to be set on the context")
 	} else if !strings.Contains(csp, "'nonce-"+nonce.(string)+"'") {
 		t.Errorf("CSP script-src missing the request nonce %q\n  got: %s", nonce, csp)
+	}
+}
+
+// TestSecurityHeaders_NonceIsRandomPerRequestAndMatchesPage guards
+// agent-os-n4ca.6: the nonce must come from crypto/rand on every request,
+// never a constant fallback, and the nonce in the CSP header must be the one
+// spliced into the served page, or 'strict-dynamic' blocks every script.
+func TestSecurityHeaders_NonceIsRandomPerRequestAndMatchesPage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(SecurityHeaders(&config.Config{}))
+	registerIndexRoute(r, `<html><head><link rel="stylesheet" href="/a.css"></head><body><script src="/a.js"></script></body></html>`)
+
+	nonceRe := regexp.MustCompile(`'nonce-([^']*)'`)
+	hex32 := regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+	seen := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/dashboard", nil))
+
+		m := nonceRe.FindStringSubmatch(w.Header().Get("Content-Security-Policy"))
+		if m == nil {
+			t.Fatalf("request %d: no nonce in CSP header %q", i, w.Header().Get("Content-Security-Policy"))
+		}
+		nonce := m[1]
+		if !hex32.MatchString(nonce) {
+			t.Fatalf("request %d: expected a 32-hex-char nonce, got %q", i, nonce)
+		}
+		if seen[nonce] {
+			t.Fatalf("request %d: nonce %q repeated across requests", i, nonce)
+		}
+		seen[nonce] = true
+
+		body := w.Body.String()
+		for _, tag := range []string{`<script nonce="` + nonce + `"`, `<link nonce="` + nonce + `"`} {
+			if !strings.Contains(body, tag) {
+				t.Errorf("request %d: page missing %q, so the header nonce does not match the page\n  body: %s", i, tag, body)
+			}
+		}
 	}
 }
