@@ -40,6 +40,17 @@ export function DirectoriesSettingsContent() {
     queryKey: queryKeys.scanDepth(),
     queryFn: () => settingsApi.getScanDepth(),
   })
+  // agent-os-a1ye.6: the default directory is a boot-time setting. `pending`
+  // is the saved choice; `active` is what the running server still uses.
+  const {
+    data: dirSettings,
+    isLoading: isLoadingDirSettings,
+    isError: dirSettingsError,
+    refetch: refetchDirSettings,
+  } = useQuery({
+    queryKey: queryKeys.directorySettings(),
+    queryFn: () => directoryConfigApi.get(),
+  })
   const queryClient = useQueryClient()
   const [defaultDir, setDefaultDir] = useState('')
   const [scanDepth, setScanDepth] = useState('1')
@@ -58,9 +69,9 @@ export function DirectoriesSettingsContent() {
   // Hydrate local editable state from the query results once they load.
   // Adjusted during render (rather than in an effect) — the `initialized`
   // guards make this a one-shot assignment, not an unbounded render loop.
-  if (config && !initialized) {
+  if (dirSettings && !initialized) {
     setInitialized(true)
-    setDefaultDir(config.stacksDir || '')
+    setDefaultDir(dirSettings.pending)
   }
 
   if (scanDepthData && !depthInitialized) {
@@ -71,19 +82,19 @@ export function DirectoriesSettingsContent() {
   const allDirs = useMemo(() => config?.stacksDirectories ?? [], [config])
   const { query, setQuery, filtered: filteredDirs } = useTextFilter(allDirs, DIR_SEARCH_FIELDS)
 
-  if (isLoading || isLoadingDepth) {
+  if (isLoading || isLoadingDepth || isLoadingDirSettings) {
     return <div className="py-4"><LoadingSpinner /></div>
   }
 
-  const effectiveDefault = initialized ? defaultDir : (config?.stacksDir || '')
+  const effectiveDefault = initialized ? defaultDir : (dirSettings?.pending ?? '')
   // Only read once scanDepthData exists: the Scan Depth controls do not mount
   // without it (agent-os-gs2y), so no fallback value is ever shown or saved.
   const effectiveDepth = depthInitialized ? scanDepth : String(scanDepthData?.scanDepth)
 
   const handleSaveDefault = () => {
     directoryConfigApi.update({ defaultDir: effectiveDefault }).then(() => {
-      toast.success('Default directory updated')
-      queryClient.invalidateQueries({ queryKey: queryKeys.config() })
+      toast.success('Default directory saved. It takes effect after the server restarts.')
+      queryClient.invalidateQueries({ queryKey: queryKeys.directorySettings() })
     }).catch((error: unknown) => {
       presentError(error, { fallback: 'Failed to update default directory' })
     })
@@ -206,29 +217,52 @@ export function DirectoriesSettingsContent() {
       {allDirs.length > 1 && (
         <div className="space-y-4 pt-4 border-t">
           <h3 className="text-lg font-medium">Default Stack Directory</h3>
-          <div className="space-y-2">
-            <Label htmlFor="default-dir">Default Directory for New Stacks</Label>
-            <Select value={effectiveDefault} onValueChange={setDefaultDir}>
-              <SelectTrigger id="default-dir" className="w-full max-w-md" aria-label="Default Directory for New Stacks">
-                <SelectValue placeholder="Select default directory" />
-              </SelectTrigger>
-              <SelectContent>
-                {allDirs.map((dir: string) => (
-                  <SelectItem key={dir} value={dir}>
-                    {dir.split('/').filter(Boolean).pop() || dir} ({dir})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              New stacks will be created in this directory by default unless changed in the creation dialog.
-            </p>
-          </div>
-          <div className="flex justify-end">
-            <Button onClick={handleSaveDefault} disabled={effectiveDefault === config?.stacksDir}>
-              Save Default Directory
-            </Button>
-          </div>
+          {!dirSettings && dirSettingsError ? (
+            <LoadFailedNotice
+              what="the default directory setting"
+              consequence="Saving is disabled until it loads."
+              onRetry={() => void refetchDirSettings()}
+            />
+          ) : (
+            <>
+              {dirSettingsError && (
+                <RefreshFailedNotice
+                  what="the default directory setting"
+                  beforeSave
+                  onRetry={() => void refetchDirSettings()}
+                />
+              )}
+              {dirSettings?.restartRequired && (
+                <p data-testid="default-dir-pending" className="text-sm rounded-md border bg-muted/30 p-3">
+                  In use now: {dirSettings.active}. After the server restarts: {dirSettings.pending}.
+                </p>
+              )}
+              <div className="space-y-2">
+                <Label htmlFor="default-dir">Default Directory for New Stacks</Label>
+                <Select value={effectiveDefault} onValueChange={setDefaultDir}>
+                  <SelectTrigger id="default-dir" className="w-full max-w-md" aria-label="Default Directory for New Stacks">
+                    <SelectValue placeholder="Select default directory" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allDirs.map((dir: string) => (
+                      <SelectItem key={dir} value={dir}>
+                        {dir.split('/').filter(Boolean).pop() || dir} ({dir})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  New stacks will be created in this directory by default unless changed in the creation dialog.
+                  A change takes effect after the server restarts.
+                </p>
+              </div>
+              <div className="flex justify-end">
+                <Button onClick={handleSaveDefault} disabled={effectiveDefault === dirSettings?.pending}>
+                  Save Default Directory
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

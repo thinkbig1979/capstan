@@ -60,11 +60,12 @@ environment variable → hard-coded default**.
 
 **Env-only** — read once at startup (`PUID`/`PGID` even earlier, by the
 entrypoint script before the server process starts); no UI or database
-override.
+override, with one exception: which configured stacks directory is the
+default (see "Default stacks directory" below the table).
 
 | Name | Default | Required | What it does |
 | --- | --- | --- | --- |
-| `STACKS_DIR` | `/opt/stacks` | No | Where Capstan reads/writes managed stacks. Must be identical inside and outside the container (bind mount) for Docker Compose operations issued from inside Capstan to resolve correctly on the host. |
+| `STACKS_DIR` | `/opt/stacks` | No | Where Capstan reads/writes managed stacks. Must be identical inside and outside the container (bind mount) for Docker Compose operations issued from inside Capstan to resolve correctly on the host. Normally the default (primary) stacks directory; a default saved in Settings → Directories takes precedence at startup, see below. |
 | `DOCKGE_STACKS_DIR` | — | No | Fallback for `STACKS_DIR` when `STACKS_DIR` is unset, for compatibility with a prior Dockge stacks directory. Ignored if `STACKS_DIR` is set. |
 | `HOST_STACKS_DIR` | none (empty) | No | The host-side path matching `STACKS_DIR`, used only to verify volume path identity at startup. Left unset, the server logs a warning on every boot; set but mismatched from `STACKS_DIR`, it also warns. Separately, at startup the server reads its own mounts from `/proc/self/mountinfo`: if the directory mounted at `STACKS_DIR` cannot be the same host path, it logs an `ERROR` naming both paths. Where the mount source is on a separate host filesystem it can only be shown consistent, not proven, and logs that at `INFO`. With no bind mount found it falls back to comparing the two variables and says so. None of these block startup. `docker-compose.prod.yaml` sets both variables from `STACKS_DIR`. |
 | `EXTRA_STACKS_DIRS` | none | No | Comma-separated list of additional stack directories beyond `STACKS_DIR`, whitespace-trimmed, empty entries dropped. |
@@ -72,6 +73,33 @@ override.
 | `PUID` | `1000` | No | Host UID the container's `appuser` is remapped to at startup by `docker/entrypoint.sh`. Not read by the Go binary — set as a container environment variable and consumed by the entrypoint script before the server process starts. Match it to the host user that owns your `stacks`/`data` directories. |
 | `PGID` | `1000` | No | Host GID counterpart to `PUID`, same remapping mechanism. |
 | `TZ` | `UTC` | No | IANA zone name the container's clock runs in. Not read by the Go binary either — the runtime resolves it through `tzdata` into Go's `time.Local`, which is what clock-time schedules are interpreted against. `tzdata` ships in the image (`docker/Dockerfile:165`, installed explicitly on top of `debian:trixie-slim`), so any IANA name resolves as-is and there is no need to bind-mount `/etc/localtime` or `/usr/share/zoneinfo` from the host. This is the one setting that decides *when* scheduled updates and backups actually fire: a schedule saved as `03:00` means 03:00 in this zone, so leaving it at `UTC` gives an operator in `Europe/Amsterdam` a 05:00 local run in summer and 04:00 in winter, with no error anywhere to say so. Both bundled compose files set it as `TZ=${TZ:-UTC}`, so exporting `TZ` or putting it in `.env` is enough. The resolved zone and offset are shown beside the schedule fields in Settings → Backup and Settings → Updates. |
+
+### Default stacks directory
+
+The default stacks directory is where new stacks are created and the root
+whose stack IDs carry no fingerprint. Precedence, applied once at startup:
+
+1. The default saved in Settings → Directories (database setting
+   `default_stacks_dir`).
+2. `STACKS_DIR`.
+3. `DOCKGE_STACKS_DIR`, then `/opt/stacks`.
+
+The saved value can only be one of the configured roots (`STACKS_DIR` or an
+`EXTRA_STACKS_DIRS` entry, compared after resolving symlinks). It picks which
+of them is the default; it never adds or removes a root. At startup the server
+moves the saved root to the front and the `STACKS_DIR` root becomes an extra
+root, so every root is still scanned, and logs `INFO` naming both. If the saved
+value no longer matches any configured root (the environment changed since it
+was saved), the server logs a `WARN` and uses `STACKS_DIR`.
+
+Saving a new default does not change the running server: it takes effect after
+a restart, and Settings → Directories shows the directory in use now beside the
+one the next start will use. The startup volume-path identity check above
+always inspects `STACKS_DIR`, not the saved default.
+
+Stack IDs carry the root's directory name as a prefix. Changing which root is
+the default changes stack IDs only when two configured roots share a directory
+name: the default keeps the bare name, the others get a fingerprint suffix.
 
 ## Git integration
 

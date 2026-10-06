@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/thinkbig1979/capstan/backend/internal/logging"
+	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 )
 
 // DefaultAPIRateLimitPerMin is the API budget, in requests per rolling minute,
@@ -464,4 +465,70 @@ func (c *Config) GetAllStacksDirs() []string {
 	dirs := []string{c.StacksDir}
 	dirs = append(dirs, c.ExtraStacksDirs...)
 	return dirs
+}
+
+// MatchStacksRoot returns the configured stacks root that resolves to the same
+// real directory as path, following symlinks on both sides. Only a root
+// matches: a subdirectory of one does not, because making it the default would
+// nest one root inside another at the next boot (agent-os-a1ye.6).
+func (c *Config) MatchStacksRoot(path string) (string, bool, error) {
+	for _, root := range c.GetAllStacksDirs() {
+		same, err := sameDir(root, path)
+		if err != nil {
+			return "", false, err
+		}
+		if same {
+			return root, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func sameDir(a, b string) (bool, error) {
+	inside, err := pathutil.IsContained(a, b)
+	if err != nil || !inside {
+		return false, err
+	}
+	return pathutil.IsContained(b, a)
+}
+
+// ApplyPersistedDefaultStacksDir makes the persisted default_stacks_dir setting
+// the primary root. It runs once at boot, before cfg is shared with any
+// goroutine; the settings endpoint only persists the choice and never writes
+// cfg, which is read without a lock (agent-os-a1ye.6).
+//
+// It REORDERS the roots rather than replacing StacksDir: the env STACKS_DIR
+// root moves to the front of ExtraStacksDirs, so the set of scanned and allowed
+// roots is unchanged and nothing on disk drops out of view. A persisted value
+// that matches no configured root (the env changed since it was saved) is
+// ignored with a warning and the env value stays.
+func ApplyPersistedDefaultStacksDir(cfg *Config, persisted string) {
+	if persisted == "" {
+		return
+	}
+	root, ok, err := cfg.MatchStacksRoot(persisted)
+	if err != nil || !ok {
+		slog.Warn("Ignoring persisted default stacks directory: it is not a configured stacks root",
+			"default_stacks_dir", persisted,
+			"stacks_dir", cfg.StacksDir,
+			"error", err,
+		)
+		return
+	}
+	if root == cfg.StacksDir {
+		return
+	}
+
+	extras := []string{cfg.StacksDir}
+	for _, extra := range cfg.ExtraStacksDirs {
+		if extra != root {
+			extras = append(extras, extra)
+		}
+	}
+	slog.Info("Using persisted default stacks directory over STACKS_DIR",
+		"default_stacks_dir", root,
+		"env_stacks_dir", cfg.StacksDir,
+	)
+	cfg.StacksDir = root
+	cfg.ExtraStacksDirs = extras
 }

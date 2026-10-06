@@ -572,7 +572,22 @@ export const dashboardApi = {
   },
 }
 
+// GET /settings/directories. The default stacks directory is a boot-time
+// setting (agent-os-a1ye.6): `active` is what the running server uses,
+// `pending` is what the next start will use.
+export interface DirectorySettings {
+  directories: { path: string; name: string; isDefault: boolean }[]
+  defaultDir: string
+  active: string
+  pending: string
+  restartRequired: boolean
+}
+
 export const directoryConfigApi = {
+  get: async () => {
+    const response = await apiClient.get<DirectorySettings>('/settings/directories')
+    return response.data
+  },
   update: async (data: { directories?: string[]; defaultDir?: string }) => {
     const response = await apiClient.put<void>('/settings/directories', data)
     return response.data

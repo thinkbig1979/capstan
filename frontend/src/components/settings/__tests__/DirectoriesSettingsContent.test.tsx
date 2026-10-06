@@ -17,6 +17,7 @@ const mockGetConfig = vi.fn()
 const mockGetScanDepth = vi.fn()
 const mockUpdateScanDepth = vi.fn()
 const mockDirectoryConfigUpdate = vi.fn()
+const mockDirectoryConfigGet = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   settingsApi: {
@@ -25,6 +26,7 @@ vi.mock('@/lib/api', () => ({
     updateScanDepth: (...args: unknown[]) => mockUpdateScanDepth(...args),
   },
   directoryConfigApi: {
+    get: (...args: unknown[]) => mockDirectoryConfigGet(...args),
     update: (...args: unknown[]) => mockDirectoryConfigUpdate(...args),
   },
 }))
@@ -64,7 +66,18 @@ beforeEach(() => {
   mockGetScanDepth.mockResolvedValue({ scanDepth: 1 })
   mockUpdateScanDepth.mockResolvedValue({})
   mockDirectoryConfigUpdate.mockResolvedValue({})
+  mockDirectoryConfigGet.mockResolvedValue(directorySettings('/srv/stacks', '/srv/stacks'))
 })
+
+function directorySettings(active: string, pending: string) {
+  return {
+    directories: [],
+    defaultDir: active,
+    active,
+    pending,
+    restartRequired: active !== pending,
+  }
+}
 
 describe('DirectoriesSettingsContent — directory list', () => {
   it('shows a spinner while either query is still loading', () => {
@@ -223,7 +236,9 @@ describe('DirectoriesSettingsContent — default directory', () => {
       }),
     )
     await waitFor(() =>
-      expect(toast.success).toHaveBeenCalledWith('Default directory updated'),
+      expect(toast.success).toHaveBeenCalledWith(
+        'Default directory saved. It takes effect after the server restarts.',
+      ),
     )
   })
 
@@ -413,5 +428,62 @@ describe('DirectoriesSettingsContent — a failed FIRST load fabricates nothing 
     renderWithClient()
     expect(await screen.findByText('No directories configured')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
+describe('DirectoriesSettingsContent — the default directory is a boot-time setting (agent-os-a1ye.6)', () => {
+  it('shows the active and the pending directory, with a restart note, when they differ', async () => {
+    mockDirectoryConfigGet.mockResolvedValue(
+      directorySettings('/srv/stacks', '/mnt/extra/more-stacks'),
+    )
+    renderPanel()
+
+    const note = await screen.findByTestId('default-dir-pending')
+    expect(note).toHaveTextContent(
+      'In use now: /srv/stacks. After the server restarts: /mnt/extra/more-stacks.',
+    )
+    // The Select starts on the saved choice, so Save does not re-offer it.
+    expect(
+      screen.getByRole('combobox', { name: 'Default Directory for New Stacks' }),
+    ).toHaveTextContent('more-stacks')
+    expect(screen.getByRole('button', { name: 'Save Default Directory' })).toBeDisabled()
+  })
+
+  it('shows no pending note when nothing is waiting for a restart', async () => {
+    renderPanel()
+
+    await screen.findByText('Default Stack Directory')
+    expect(screen.queryByTestId('default-dir-pending')).not.toBeInTheDocument()
+    expect(screen.getByText(/takes effect after the server restarts/)).toBeInTheDocument()
+  })
+
+  it('refetches the setting after a save so the pending value appears', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+
+    await user.click(
+      await screen.findByRole('combobox', { name: 'Default Directory for New Stacks' }),
+    )
+    await user.click(await screen.findByRole('option', { name: /more-stacks/ }))
+    mockDirectoryConfigGet.mockResolvedValue(
+      directorySettings('/srv/stacks', '/mnt/extra/more-stacks'),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save Default Directory' }))
+
+    expect(await screen.findByTestId('default-dir-pending')).toHaveTextContent(
+      'After the server restarts: /mnt/extra/more-stacks.',
+    )
+  })
+
+  it('a failed first load of the setting offers Retry and no Save', async () => {
+    mockDirectoryConfigGet.mockRejectedValue({ status: 500, code: 'INTERNAL_ERROR', message: 'x' })
+    renderPanel()
+
+    expect(
+      await screen.findByText(
+        'Could not load the default directory setting. Saving is disabled until it loads.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save Default Directory' })).not.toBeInTheDocument()
   })
 })
