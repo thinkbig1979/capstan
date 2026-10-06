@@ -924,8 +924,12 @@ func (d *DB) ReencryptSecrets() (int, error) {
 		if err != nil {
 			return fmt.Errorf("re-encrypt %s %q: encryption failed", logKey, p.location)
 		}
-		if check, err := d.encryptor.Decrypt(sealed, p.aad); err != nil || check != plaintext {
-			return fmt.Errorf("re-encrypt %s %q: the new value did not decrypt back to the old one", logKey, p.location)
+		check, err := d.encryptor.Decrypt(sealed, p.aad)
+		if err != nil {
+			return fmt.Errorf("re-encrypt %s %q: the new value did not decrypt", logKey, p.location)
+		}
+		if check != plaintext {
+			return fmt.Errorf("re-encrypt %s %q: the new value decrypted to something other than the old one", logKey, p.location)
 		}
 		res, err := tx.Exec(update, sealed, p.location, p.stored)
 		if err != nil {
