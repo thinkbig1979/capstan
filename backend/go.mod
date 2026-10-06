@@ -2,7 +2,7 @@ module github.com/thinkbig1979/capstan/backend
 
 go 1.26.0
 
-toolchain go1.26.6
+toolchain go1.27.1
 
 require (
 	github.com/compose-spec/compose-go/v2 v2.16.1

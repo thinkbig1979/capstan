@@ -83,8 +83,13 @@ jobs:
         # firing and "Bugs: Ref mutated during render" replaced it as the top
         # error, with 2 additional Performance warnings. No source file was
         # touched between the two runs, so all of that is 0.9.3's ruleset, not
-        # a regression or a repair. The next review compares against
-        # 0.9.3's 73/100 (1 error, 53 warnings).
+        # a regression or a repair.
+        #   0.9.14 -> 75/100, 1 error, 71 warnings, 48 files, exit 0
+        # (MEASURED 2026-10-06 with the local binary on c65f70c, which is a
+        # different tree from the two runs above: 48 files scanned, not 37, so
+        # only the version-to-version ruleset claim carries across, not the
+        # delta.) The next review compares against 0.9.14's 75/100 (1 error,
+        # 71 warnings). The check is advisory: `blocking` is not set.
         with:
           directory: frontend        # The React app lives here, not at the repo root.
           # Must equal frontend/package.json's react-doctor version. There are
@@ -96,8 +101,9 @@ jobs:
           # was removed rather than re-synchronised; a lockstep rule over two
           # files is one you can actually check.
           #
-          # 0.9.3 is what frontend/pnpm-lock.yaml resolves as of 2026-08-08
-          # (agent-os-vfp). Check with:
+          # 0.9.14 is what frontend/pnpm-lock.yaml resolves as of 2026-10-06
+          # (agent-os-k4ad; the pin had sat at 0.9.3 while package.json moved
+          # to 0.9.14). Check with:
           #   grep '"react-doctor"' frontend/package.json
           # and don't take this comment's word for it — the last one asserted a
           # lockstep that had already broken.
@@ -118,7 +124,7 @@ jobs:
           # behind, and do NOT add minimumReleaseAgeExclude entries to catch up:
           # excluding a release's ~4 brand-new packages to install it sooner
           # removes the guard exactly where it is doing work.
-          version: "0.9.3"
+          version: "0.9.14"
         #   blocking: error          # Gate level: "none" (advisory, the default) | "warning" | "error"
         #   scope: full              # On PRs, scan the whole project instead of just changed files
         #   comment: false           # Disable the sticky PR summary comment

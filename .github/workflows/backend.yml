@@ -45,7 +45,10 @@
 #
 #   The paths that used to be listed here — 'backend/**', 'docker/Dockerfile',
 #   '.github/workflows/backend.yml' — are now a subset of "everything", so the
-#   Dockerfile/go.mod lockstep this filter was protecting is still covered.
+#   Dockerfile/go.mod lockstep this filter was protecting is covered by the
+#   "Go toolchain lockstep" step below, which runs on every PR. Until
+#   agent-os-k4ad that sentence was a claim with nothing behind it: no step
+#   compared the two, and a Dependabot Dockerfile-only bump passed every check.
 
 name: Backend CI
 
@@ -75,11 +78,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # The Dockerfile builder image, backend/go.mod's `toolchain` and
+      # backend/tools/geterrors/go.mod's `toolchain` must name one Go release:
+      # otherwise this job tests one standard library while the shipped binary
+      # compiles against another, and govulncheck scans the one that does not
+      # ship. Dependabot bumps the Dockerfile alone, so this is a step of the
+      # job that runs on EVERY pull request (see the header: no `paths:` filter
+      # on purpose), not a filtered one that a Dockerfile-only PR could skip.
+      # Placed before Set up Go so a mismatch is reported even when the
+      # toolchain download is what fails. agent-os-k4ad.
+      - name: Go toolchain lockstep
+        run: bash scripts/check-toolchain-lockstep.sh
+
       # go-version-file reads backend/go.mod, and from v6 setup-go prefers its
       # `toolchain` directive over the `go` directive — so CI installs exactly
       # the toolchain the code is pinned to. The v6 pin is load-bearing: v5
-      # reads only the `go` directive, and go.mod carries both `go 1.25.0` and
-      # `toolchain go1.25.12`.
+      # reads only the `go` directive, and go.mod carries both a `go` and a
+      # `toolchain` directive that differ (as of writing: `go 1.26.0` and
+      # `toolchain go1.27.1`).
       #
       # This replaces a `grep '^go ' backend/go.mod` step that matched that
       # same wrong line. CI installed 1.25.0 and reached the pinned toolchain
@@ -278,23 +294,31 @@ jobs:
       # frontend.yml. The action itself is SHA-pinned, same convention as
       # react-doctor.yml's millionco/react-doctor pin.
       #
-      # Verified locally on 2026-08-08 via `golangci-lint --version`: reports
-      # 2.12.2, matching the pin below, and `golangci-lint run ./...` in
-      # backend/ exits 0. This claim goes stale the moment either binary or
+      # Verified locally on 2026-10-06 via `golangci-lint version`: reports
+      # 2.14.0 built with go1.27.0, matching the pin below, and
+      # `golangci-lint run ./...` in backend/ on toolchain go1.27.1 exits 0
+      # ("0 issues."; a planted unchecked os.Chdir was reported, so the zero
+      # is not a lint that never ran). This claim goes stale the moment either binary or
       # pin changes — re-run both commands yourself before trusting it;
       # don't assume it still holds.
       #
-      # A bare `go install .../golangci-lint@v2.12.2` is NOT enough to
+      # THE PIN MUST BE A RELEASE BUILT WITH A GO AT LEAST AS NEW AS backend/go.mod's
+      # `toolchain`. v2.12.2 was built with go1.26 and stopped loading the
+      # config when the toolchain moved to go1.27.1 (agent-os-k4ad, PR #513):
+      # a Dependabot golang bump therefore needs a golangci-lint bump with it.
+      #
+      # A bare `go install .../golangci-lint@v2.14.0` is NOT enough to
       # reproduce this: it builds against whatever Go toolchain is your
       # shell default, and if that's older than backend/go.mod's `toolchain`
       # directive, the resulting binary refuses to run here with "the Go
       # language version used to build golangci-lint is lower than the
       # targeted Go version" — an error that names a Go version, not the
       # pin, so it doesn't read as an install problem. Force the build
-      # toolchain instead: `GOTOOLCHAIN=go1.26.5 go install .../golangci-lint@v2.12.2`
-      # (match whatever `toolchain` line backend/go.mod currently declares).
+      # toolchain instead: `GOTOOLCHAIN=go<toolchain> go install .../golangci-lint@v2.14.0`
+      # (substitute the version of the `toolchain` line backend/go.mod currently
+      # declares).
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.12.2
+          version: v2.14.0
           working-directory: backend
