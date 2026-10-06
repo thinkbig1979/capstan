@@ -12,6 +12,9 @@ other mechanically — see `scripts/check-api-docs.sh`.
 on), not literal path text. `/ws/...` routes are WebSocket upgrades, not plain
 HTTP.
 
+Every WebSocket route limits each incoming frame to 64 KiB. A larger frame closes
+the connection with code 1009 (message too big) and logs one warning.
+
 ## Health
 
 Liveness and readiness are separate endpoints, because Capstan is a separate
