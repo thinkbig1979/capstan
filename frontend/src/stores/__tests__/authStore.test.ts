@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useAuthStore } from '../authStore'
+import { useEnvUnlockStore } from '../envUnlockStore'
+import { queryClient } from '@/lib/query-client'
 
 const mockLogin = vi.fn()
 const mockSetup = vi.fn()
@@ -19,6 +21,8 @@ vi.mock('@/lib/api', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  queryClient.clear()
+  useEnvUnlockStore.getState().lock()
   useAuthStore.setState({
     token: null,
     user: null,
@@ -116,6 +120,68 @@ describe('authStore logout', () => {
     expect(state.token).toBeNull()
     expect(state.user).toBeNull()
     expect(state.isAuthenticated).toBe(false)
+  })
+})
+
+// agent-os-n4ca.8 (safe-defaults rule 16): an identity change resets per-identity
+// client state. Both Header's logout and SettingsPage's post-password-change
+// logout go through authStore.logout, so these arms cover both paths.
+describe('authStore logout resets per-identity client state', () => {
+  function seedPreviousUser() {
+    useAuthStore.setState({
+      token: 'existing-token',
+      user: { createdAt: '', updatedAt: '', id: '1', username: 'admin' },
+      isAuthenticated: true,
+    })
+    queryClient.setQueryData(['stacks'], [{ id: 'prev-user-stack' }])
+    queryClient.setQueryData(['env', 'stack-1'], { SECRET: 'prev-user-secret' })
+    useEnvUnlockStore.getState().unlock('unlock-token')
+  }
+
+  afterEach(() => {
+    useEnvUnlockStore.getState().lock()
+  })
+
+  it.each([
+    ['succeeds', () => mockLogout.mockResolvedValue(undefined)],
+    ['fails', () => mockLogout.mockRejectedValue(new Error('Network error'))],
+  ])('empties the query cache and locks the env-unlock store when the API call %s', async (_label, arrange) => {
+    seedPreviousUser()
+    // Seeding is what makes this discriminate: assert the precondition held.
+    expect(queryClient.getQueryCache().getAll()).toHaveLength(2)
+    expect(useEnvUnlockStore.getState().isUnlocked()).toBe(true)
+    arrange()
+
+    await useAuthStore.getState().logout()
+
+    expect(queryClient.getQueryCache().getAll()).toHaveLength(0)
+    expect(queryClient.getQueryData(['stacks'])).toBeUndefined()
+    const unlock = useEnvUnlockStore.getState()
+    expect(unlock.isUnlocked()).toBe(false)
+    expect(unlock.unlockedUntil).toBeNull()
+    expect(unlock.token).toBeNull()
+  })
+
+  it('clears the cache only after the auth state has flipped, and it stays empty', async () => {
+    seedPreviousUser()
+    mockLogout.mockResolvedValue(undefined)
+    let authenticatedWhenCleared: boolean | null = null
+    const realClear = queryClient.clear.bind(queryClient)
+    const clearSpy = vi.spyOn(queryClient, 'clear').mockImplementation(() => {
+      authenticatedWhenCleared = useAuthStore.getState().isAuthenticated
+      realClear()
+    })
+
+    try {
+      await useAuthStore.getState().logout()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(clearSpy).toHaveBeenCalledTimes(1)
+      expect(authenticatedWhenCleared).toBe(false)
+      expect(queryClient.getQueryCache().getAll()).toHaveLength(0)
+    } finally {
+      clearSpy.mockRestore()
+    }
   })
 })
 

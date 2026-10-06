@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import type { User } from '@/types'
+import { queryClient } from '@/lib/query-client'
+import { useEnvUnlockStore } from '@/stores/envUnlockStore'
 
 interface AuthState {
   token: string | null
@@ -142,6 +144,16 @@ export const useAuthStore = create<AuthState>()((set) => ({
       user: null,
       isAuthenticated: false,
     })
+    // agent-os-n4ca.8 (safe-defaults rule 16): an identity change resets
+    // per-identity client state, whatever the API call returned. The server
+    // already revoked the unlock token; this drops the client's copy and its
+    // timers. Static imports, so the reset cannot be lost to a failed lazy chunk.
+    //
+    // Order matters: the cache is cleared LAST, after isAuthenticated flips
+    // false, so queries still mounted cannot refetch into the fresh cache under
+    // a session that is going away.
+    useEnvUnlockStore.getState().lock()
+    queryClient.clear()
   },
 
   checkAuth: () => {
