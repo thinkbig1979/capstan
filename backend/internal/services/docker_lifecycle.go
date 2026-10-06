@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
@@ -332,6 +333,15 @@ func allRunningNoUnhealthy(containers []models.Container) bool {
 	return true
 }
 
+// composeTimeout is the deadline for one docker compose invocation:
+// CAPSTAN_COMPOSE_TIMEOUT, or config.DefaultComposeTimeout.
+func (s *DockerService) composeTimeout() time.Duration {
+	if s.config == nil {
+		return config.DefaultComposeTimeout
+	}
+	return config.OrDefault(s.config.ComposeTimeout, config.DefaultComposeTimeout)
+}
+
 // trimOutput returns a truncated copy of output for use in ActionResult.Details.
 func trimOutput(s string) string {
 	const maxLen = 500
@@ -352,11 +362,13 @@ func (s *DockerService) StartVerified(stack models.Stack) (truth.ActionResult, s
 
 	args := s.buildComposeArgs(stack, "up", []string{"-d"})
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	cmd := execCommand("docker", args...)
+	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
+	defer cancel()
 	cmd.Dir = stack.Directory
 	cmd.Env = dockerEnv()
 
 	output, err := cmd.CombinedOutput()
+	err = timeoutError(ctx, err, "docker compose up")
 	// Redacted here, once, because every consumer (the ActionResult, the
 	// handlers' response body, the action log) reads this one string
 	// (agent-os-fvk3).
@@ -378,11 +390,13 @@ func (s *DockerService) StopVerified(stack models.Stack) (truth.ActionResult, st
 
 	args := s.buildComposeArgs(stack, "down", nil)
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	cmd := execCommand("docker", args...)
+	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
+	defer cancel()
 	cmd.Dir = stack.Directory
 	cmd.Env = dockerEnv()
 
 	output, err := cmd.CombinedOutput()
+	err = timeoutError(ctx, err, "docker compose down")
 	// Redacted here, once, because every consumer (the ActionResult, the
 	// handlers' response body, the action log) reads this one string
 	// (agent-os-fvk3).
@@ -445,11 +459,13 @@ func (s *DockerService) PullVerified(stack models.Stack) (truth.ActionResult, st
 
 	args := s.buildComposeArgs(stack, "pull", nil)
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	cmd := execCommand("docker", args...)
+	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
+	defer cancel()
 	cmd.Dir = stack.Directory
 	cmd.Env = dockerEnv()
 
 	output, err := cmd.CombinedOutput()
+	err = timeoutError(ctx, err, "docker compose pull")
 	// Redacted here, once, because every consumer (the ActionResult, the
 	// handlers' response body, the action log) reads this one string
 	// (agent-os-fvk3).
@@ -469,11 +485,13 @@ func (s *DockerService) DeleteVerified(stack models.Stack) (truth.ActionResult, 
 
 	args := s.buildComposeArgs(stack, "down", []string{"-v"})
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	cmd := execCommand("docker", args...)
+	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
+	defer cancel()
 	cmd.Dir = stack.Directory
 	cmd.Env = dockerEnv()
 
 	output, err := cmd.CombinedOutput()
+	err = timeoutError(ctx, err, "docker compose down -v")
 	// Redacted here, once, because every consumer (the ActionResult, the
 	// handlers' response body, the action log) reads this one string
 	// (agent-os-fvk3).
@@ -499,7 +517,8 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 	args := s.buildComposeArgs(stack, "ps", []string{"--format", "json"})
 
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	cmd := execCommand("docker", args...)
+	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
+	defer cancel()
 	cmd.Dir = stack.Directory
 	cmd.Env = dockerEnv()
 
@@ -532,7 +551,7 @@ func (s *DockerService) Status(stack models.Stack) (string, []models.Container, 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	if err := timeoutError(ctx, cmd.Run(), "docker compose ps"); err != nil {
 		// compose's own diagnosis is on stderr, and without it the error says
 		// only "exit status 1". Safe to surface since agent-os-fvk3 gave compose
 		// output a redactor; the error travels to truth.Failed and the client.
@@ -638,7 +657,11 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 
 		args := s.buildComposeArgs(stack, subcommand, extraArgs)
 		//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-		cmd := execCommandContext(ctx, "docker", args...)
+		// The deadline is applied here, not by the caller, so a caller that
+		// hands in a context that never ends (operations.go does, so a closed
+		// browser tab cannot kill compose) still gets a bounded process.
+		cmd, cmdCtx, cancel := commandWithDeadline(ctx, s.composeTimeout(), "docker", args...)
+		defer cancel()
 		cmd.Dir = stack.Directory
 		cmd.Env = dockerEnv()
 
@@ -694,15 +717,25 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 		<-scanDone
 		<-scanDone
 
-		cmdErr := cmd.Wait()
+		cmdErr := timeoutError(cmdCtx, cmd.Wait(), "docker compose "+subcommand)
 
 		// Verify end state before emitting the terminal done frame.
 		// For pull: classify from exit code.
 		// For start/stop/restart: call verifyLifecycle which runs Status
 		// and (for start/restart) pollUntilSettled to prove real end state.
+		// A timeout is reported as itself: the process was killed part-way,
+		// so whatever state Status would find is not what was asked for.
 		var ar truth.ActionResult
-		if action != "" {
-			ar = s.verifyLifecycle(stack, action, cmdErr, "")
+		if cmdErr != nil && commandTimedOut(cmdCtx) {
+			ar = truth.Failed("docker compose "+subcommand+" did not finish in time", cmdErr)
+		} else if action != "" {
+			// Verification runs Status, which builds its own compose
+			// deadline from context.Background() because most of its callers
+			// have no context. Not passing ctx through costs nothing today:
+			// RunStreaming's one caller, handlers/operations.go, hands it
+			// context.Background() on purpose (agent-os-a1ye.3), checked with
+			// `command grep -rn 'RunStreaming(' internal cmd --include=*.go`.
+			ar = s.verifyLifecycle(stack, action, cmdErr, "") //nolint:contextcheck // see the comment above: the only caller's ctx is context.Background(), and Status is bounded by its own deadline
 		} else {
 			// Unknown subcommand — fall back to exit-code semantics.
 			if cmdErr != nil {

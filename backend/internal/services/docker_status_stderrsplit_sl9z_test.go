@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"os/exec"
 	"strings"
 	"testing"
@@ -19,21 +20,21 @@ import (
 // parseComposePSOutput splits on newlines and json.Unmarshals line by line.
 //
 // These tests drive the real Status() through the package's established
-// execCommand indirection (exec_env.go) rather than a PATH wrapper, so the
+// execCommandContext indirection (exec_env.go) rather than a PATH wrapper, so the
 // stdout/stderr contract of the actual call site is what is under test.
 
-// stubComposeScript redirects execCommand at `sh -c <script>`, ignoring the
+// stubComposeScript redirects execCommandContext at `sh -c <script>`, ignoring the
 // real ("docker", "compose", ...) argv. The script stands in for the compose
 // child: it writes the NDJSON rows the parser is supposed to see, plus whatever
 // the fault puts on stderr.
 func stubComposeScript(t *testing.T, script string) {
 	t.Helper()
-	orig := execCommand
-	execCommand = func(name string, arg ...string) *exec.Cmd {
+	orig := execCommandContext
+	execCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
 		//nolint:gosec // G204: `script` is a const-composed test fixture built in this file from literals, never attacker-controlled; a shell is the point — these tests need one child writing to both fds in a fixed order
-		return exec.Command("sh", "-c", script)
+		return exec.CommandContext(ctx, "sh", "-c", script)
 	}
-	t.Cleanup(func() { execCommand = orig })
+	t.Cleanup(func() { execCommandContext = orig })
 }
 
 func stubbedStatusService(t *testing.T) (*DockerService, models.Stack) {

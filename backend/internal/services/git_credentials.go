@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -226,9 +227,9 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 // `status` with a configured upstream can all reach the network, and an
 // omission from such a list is exactly the failure mode being fixed here. git
 // only runs the helper when a remote actually challenges it.
-func (s *GitService) gitCmd(dirPath string, args ...string) (*exec.Cmd, string) {
+func (s *GitService) gitCmd(ctx context.Context, dirPath string, args ...string) (*exec.Cmd, string) {
 	user, token := s.httpsCredentials(dirPath)
-	return s.gitCmdWithCreds(dirPath, user, token, args...)
+	return s.gitCmdWithCreds(ctx, dirPath, user, token, args...)
 }
 
 // gitCmdWithCreds is gitCmd with credential resolution factored out: it takes
@@ -240,7 +241,12 @@ func (s *GitService) gitCmd(dirPath string, args ...string) (*exec.Cmd, string) 
 // per operation into one (agent-os-9ha). It intentionally carries no memoizing
 // state of its own: see the doc comment on GitService for why a shared cache
 // was rejected.
-func (s *GitService) gitCmdWithCreds(dirPath, user, token string, args ...string) (*exec.Cmd, string) {
+//
+// The child runs under ctx, which the caller bounds (gitCommandWithCreds uses
+// the git deadline, agent-os-a1ye.3): a git fetch or pull stalled on the
+// network used to hang its request, and with it any operation lock held
+// around it, until the server restarted.
+func (s *GitService) gitCmdWithCreds(ctx context.Context, dirPath, user, token string, args ...string) (*exec.Cmd, string) {
 	gitArgs := []string{"-c", "safe.directory=" + dirPath}
 	// stripCapstanSecrets removes Capstan's own secrets (JWT_SECRET,
 	// STORAGE_KEY, GIT_HTTPS_TOKEN, RESTIC_PASSWORD) before the process
@@ -299,7 +305,7 @@ func (s *GitService) gitCmdWithCreds(dirPath, user, token string, args ...string
 	}
 
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	cmd := exec.Command("git", append(gitArgs, args...)...)
+	cmd := boundCommand(ctx, "git", append(gitArgs, args...)...)
 	cmd.Dir = dirPath
 	cmd.Env = env
 	return cmd, token

@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
@@ -369,6 +371,17 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 	}, nil
 }
 
+// gitTimeout is the deadline for one git invocation: CAPSTAN_GIT_TIMEOUT, or
+// config.DefaultGitTimeout. It bounds each child, not a whole operation: a
+// failed pull runs up to three diagnostic probes after it (pullFailure), each
+// with its own bound.
+func (s *GitService) gitTimeout() time.Duration {
+	if s.config == nil {
+		return config.DefaultGitTimeout
+	}
+	return config.OrDefault(s.config.GitTimeout, config.DefaultGitTimeout)
+}
+
 func (s *GitService) gitCommand(dirPath string, args ...string) (string, error) {
 	user, token := s.httpsCredentials(dirPath)
 	return s.gitCommandWithCreds(dirPath, user, token, args...)
@@ -414,12 +427,17 @@ func (s *GitService) gitCommand(dirPath string, args ...string) (string, error) 
 // stdout AND on stderr, so a credential can leak on either stream of a FAILING
 // command.
 func (s *GitService) gitCommandWithCreds(dirPath, user, token string, args ...string) (string, error) {
-	cmd, _ := s.gitCmdWithCreds(dirPath, user, token, args...)
+	ctx, cancel := withCommandDeadline(context.Background(), s.gitTimeout())
+	defer cancel()
+	cmd, _ := s.gitCmdWithCreds(ctx, dirPath, user, token, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	// A timeout keeps the *exec.ExitError in the chain (timeoutError wraps
+	// with %w), and a killed process reports exit code -1, so gitExitCode
+	// classifies it as "git never answered", which is what it is.
+	if err := timeoutError(ctx, cmd.Run(), "command"); err != nil {
 		return "", fmt.Errorf("git %s: %w (%s)", args[0], err,
 			redactToken(gitDiagnostic(stdout.String(), stderr.String()), token))
 	}

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/thinkbig1979/capstan/backend/internal/config"
 )
 
 // Status represents the lifecycle state of an update job.
@@ -141,6 +143,10 @@ type UpdateJobManager struct {
 	ttl      time.Duration
 	cancelFn context.CancelFunc
 	wg       sync.WaitGroup
+	// jobTimeout bounds each job's run (agent-os-a1ye.3). Before it, a job's
+	// context ended only at shutdown, so one hung pull or compose up held the
+	// sequential worker, and every job queued behind it, indefinitely.
+	jobTimeout time.Duration
 }
 
 // NewUpdateJobManager creates and starts the manager.
@@ -148,15 +154,26 @@ type UpdateJobManager struct {
 func NewUpdateJobManager(ttl time.Duration) *UpdateJobManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &UpdateJobManager{
-		jobs:     make(map[string]*jobState),
-		queue:    make(chan queuedItem, 256),
-		ttl:      ttl,
-		cancelFn: cancel,
+		jobs:       make(map[string]*jobState),
+		queue:      make(chan queuedItem, 256),
+		ttl:        ttl,
+		cancelFn:   cancel,
+		jobTimeout: config.DefaultUpdateTimeout,
 	}
 	m.wg.Add(2)
 	go m.worker(ctx)
 	go m.janitor(ctx)
 	return m
+}
+
+// SetJobTimeout sets how long one job may run, counted from when it starts
+// (not from when it was queued). main.go passes CAPSTAN_UPDATE_TIMEOUT; a
+// value <= 0 restores config.DefaultUpdateTimeout. Call it before the first
+// Enqueue.
+func (m *UpdateJobManager) SetJobTimeout(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.jobTimeout = config.OrDefault(d, config.DefaultUpdateTimeout)
 }
 
 // Stop shuts down the background goroutines gracefully.
@@ -324,7 +341,15 @@ func (m *UpdateJobManager) runJob(ctx context.Context, item queuedItem) {
 		js.mu.Unlock()
 	}
 
-	runErr := item.run(ctx, item.id, emit, setStatus)
+	m.mu.Lock()
+	timeout := m.jobTimeout
+	m.mu.Unlock()
+	jobCtx, cancel := withCommandDeadline(ctx, timeout)
+	runErr := item.run(jobCtx, item.id, emit, setStatus)
+	// Named here, once, so the job's error says why whichever call inside run
+	// noticed the deadline first; nil and unrelated errors pass through.
+	runErr = timeoutError(jobCtx, runErr, "update job")
+	cancel()
 
 	finishedAt := time.Now().UTC()
 	js.mu.Lock()

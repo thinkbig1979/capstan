@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/logging"
 )
@@ -21,6 +22,24 @@ import (
 // (transitively, via internal/services) and the reverse edge would be an import
 // cycle. Verified 2026-09-01 with `go list -deps ./internal/middleware`.
 const DefaultAPIRateLimitPerMin = 300
+
+// Child-process deadlines (agent-os-a1ye.3). Lifecycle compose commands and
+// git run while the per-stack operation lock is held, so a child that never
+// exits (a network stall, a wedged daemon) used to hold that lock until the
+// server restarted. Each kind gets a bound, overridable by the matching
+// CAPSTAN_*_TIMEOUT variable. A zero value in a Config means "use the default",
+// so a Config built as a struct literal (as tests do) is never unbounded and
+// never times out instantly.
+const (
+	// DefaultComposeTimeout bounds one docker compose invocation (up, down,
+	// pull, ps, logs --tail), streamed or not.
+	DefaultComposeTimeout = 10 * time.Minute
+	// DefaultGitTimeout bounds one git invocation (fetch, pull, status, log...).
+	DefaultGitTimeout = 2 * time.Minute
+	// DefaultUpdateTimeout bounds one manual update job from the moment it
+	// starts running, image pulls included.
+	DefaultUpdateTimeout = 15 * time.Minute
+)
 
 type StacksDirEntry struct {
 	Path      string `json:"path"`
@@ -67,6 +86,11 @@ type Config struct {
 	// loopback only, which is the narrowest and safest default.
 	AuthDisabledAllowedNetworks string
 	ExtraStacksDirs             []string
+
+	// Child-process deadlines; see DefaultComposeTimeout. Zero means default.
+	ComposeTimeout time.Duration
+	GitTimeout     time.Duration
+	UpdateTimeout  time.Duration
 
 	// Backup / restic env-var fallbacks (DB settings take precedence at runtime).
 	ResticRepository       string
@@ -147,6 +171,29 @@ func Load() (*Config, error) {
 		cfg.APIRateLimitPerMin = parsed
 	}
 
+	// Same hard-failure rule as RATE_LIMIT_API_PER_MIN: a typo in a deadline
+	// must not silently fall back, or an operator who raised it for a slow
+	// registry still sees pulls killed at the default.
+	// Literal os.Getenv calls, not a loop over names: scripts/check-docs.sh's
+	// env-coverage gate finds variables by that literal shape, and only then
+	// enforces that docs/reference/configuration.md lists them.
+	for _, d := range []struct {
+		env    string
+		raw    string
+		target *time.Duration
+		def    time.Duration
+	}{
+		{"CAPSTAN_COMPOSE_TIMEOUT", os.Getenv("CAPSTAN_COMPOSE_TIMEOUT"), &cfg.ComposeTimeout, DefaultComposeTimeout},
+		{"CAPSTAN_GIT_TIMEOUT", os.Getenv("CAPSTAN_GIT_TIMEOUT"), &cfg.GitTimeout, DefaultGitTimeout},
+		{"CAPSTAN_UPDATE_TIMEOUT", os.Getenv("CAPSTAN_UPDATE_TIMEOUT"), &cfg.UpdateTimeout, DefaultUpdateTimeout},
+	} {
+		parsed, err := parseTimeout(d.env, d.raw, d.def)
+		if err != nil {
+			return nil, err
+		}
+		*d.target = parsed
+	}
+
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
 		cfg.LogLevel = logLevel
 	}
@@ -224,6 +271,32 @@ func Load() (*Config, error) {
 	)
 
 	return cfg, nil
+}
+
+// parseTimeout parses raw, the value of env, as a Go duration ("90s", "10m"),
+// returning def when it is empty.
+func parseTimeout(env, raw string, def time.Duration) (time.Duration, error) {
+	if raw == "" {
+		return def, nil
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, &ConfigError{Field: env, Message: "must be a duration such as 10m or 90s, got " + strconv.Quote(raw)}
+	}
+	if parsed <= 0 {
+		return 0, &ConfigError{Field: env, Message: "must be greater than zero, got " + raw}
+	}
+	return parsed, nil
+}
+
+// OrDefault returns d, or def when d is zero or negative. It is how consumers
+// read a Config timeout field, so a zero-valued Config gets the documented
+// default rather than an instant deadline.
+func OrDefault(d, def time.Duration) time.Duration {
+	if d <= 0 {
+		return def
+	}
+	return d
 }
 
 // minSecretLength is the length floor JWT_SECRET enforces as a hard startup

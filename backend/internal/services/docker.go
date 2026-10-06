@@ -126,8 +126,12 @@ func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
 
 	args := s.buildComposeArgs(stack, "logs", []string{"--tail", fmt.Sprintf("%d", tail), "--timestamps"})
 
+	// --tail makes this a one-shot read, not a follow, so it gets the compose
+	// deadline like the lifecycle commands (agent-os-a1ye.3). The followed
+	// stream is handlers/logs.go's, bounded by its WebSocket instead.
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	cmd := execCommand("docker", args...)
+	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
+	defer cancel()
 	cmd.Dir = stack.Directory
 	cmd.Env = dockerEnv()
 
@@ -168,8 +172,10 @@ func (s *DockerService) Logs(stack models.Stack, tail int) (string, error) {
 	// Unwrapped, as before: handlers/logs.go logs this error and maps it through
 	// respondDockerErr, so wrapping it here would change an operator-visible
 	// string for no gain. cmd.Stderr is assigned either way, so the
-	// *exec.ExitError's own .Stderr stays nil exactly as it did.
-	if err := cmd.Run(); err != nil {
+	// *exec.ExitError's own .Stderr stays nil exactly as it did. The one
+	// exception is a timeout, which timeoutError names; any other error comes
+	// back from it unchanged.
+	if err := timeoutError(ctx, cmd.Run(), "docker compose logs"); err != nil {
 		return "", err
 	}
 

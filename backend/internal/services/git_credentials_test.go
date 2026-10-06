@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"log/slog"
@@ -367,7 +368,7 @@ func TestGitCmd_DirectoryToken_TravelsInEnvNotArgv(t *testing.T) {
 	dirPath := "/stacks/https-repo"
 	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, testGitToken)
 
-	cmd, token := svc.gitCmd(dirPath, "pull", "--ff-only")
+	cmd, token := svc.gitCmd(context.Background(), dirPath, "pull", "--ff-only")
 
 	if token != testGitToken {
 		t.Errorf("gitCmd returned token %q, want the directory-scoped one", token)
@@ -459,7 +460,7 @@ func TestPull_TokenNeverPersistsToGitConfig(t *testing.T) {
 func TestGitCmd_TokenTravelsInEnvNotArgv(t *testing.T) {
 	svc := gitServiceWithStoredToken(t)
 
-	cmd, token := svc.gitCmd(t.TempDir(), "pull", "--ff-only")
+	cmd, token := svc.gitCmd(context.Background(), t.TempDir(), "pull", "--ff-only")
 
 	if token != testGitToken {
 		t.Errorf("gitCmd returned token %q, want the stored one", token)
@@ -493,7 +494,7 @@ func TestGitCmd_TokenTravelsInEnvNotArgv(t *testing.T) {
 func TestGitCmd_NoCredentialWhenNoneConfigured(t *testing.T) {
 	svc := NewGitService(&config.Config{}, newTestDBWithEncryptor(t))
 
-	cmd, token := svc.gitCmd(t.TempDir(), "status", "--porcelain")
+	cmd, token := svc.gitCmd(context.Background(), t.TempDir(), "status", "--porcelain")
 
 	if token != "" {
 		t.Errorf("expected no token, got %q", token)
@@ -519,7 +520,7 @@ func TestGitCmdWithCreds_StripsCapstanSecrets(t *testing.T) {
 	t.Setenv("JWT_SECRET", "sentinel-jwt-secret")
 
 	svc := gitServiceWithStoredToken(t)
-	cmd, _ := svc.gitCmd(t.TempDir(), "status", "--porcelain")
+	cmd, _ := svc.gitCmd(context.Background(), t.TempDir(), "status", "--porcelain")
 
 	var sawSecret, sawPrompt, sawUser, sawToken bool
 	for _, kv := range cmd.Env {
