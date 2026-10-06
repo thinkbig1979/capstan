@@ -42,6 +42,15 @@ func readLimitProbe(t *testing.T, reg wsRegistration) (dial func() *websocket.Co
 	}, out
 }
 
+// sendOversize writes a frame the server is expected to refuse. The write error
+// is deliberately ignored: once the server has seen enough bytes to know the
+// frame exceeds its limit it closes, so the client's remaining writes can fail
+// with "connection reset by peer" (OBSERVED in CI's -race run, 2026-10-06). The
+// assertions are on what the server's read and the client's next read return.
+func sendOversize(conn *websocket.Conn, msgType int, payload []byte) {
+	_ = conn.WriteMessage(msgType, payload) //nolint:errcheck // see doc comment: a reset here is the refusal working.
+}
+
 func awaitRead(t *testing.T, results <-chan error) error {
 	t.Helper()
 	select {
@@ -61,8 +70,7 @@ func TestWSReadLimit_FrameOverLimitIsRefused(t *testing.T) {
 	dial, results := readLimitProbe(t, wsRegistration{})
 	conn := dial()
 
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
-		[]byte(strings.Repeat("a", int(wsReadLimitDefault)+1))))
+	sendOversize(conn, websocket.TextMessage, []byte(strings.Repeat("a", int(wsReadLimitDefault)+1)))
 
 	err := awaitRead(t, results)
 	require.ErrorIs(t, err, websocket.ErrReadLimit,
@@ -90,8 +98,7 @@ func TestWSReadLimit_ClientSeesTooBigClose(t *testing.T) {
 	conn := dial()
 	require.NoError(t, conn.SetReadDeadline(hangGuardDeadline(t)))
 
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
-		[]byte(strings.Repeat("a", int(wsReadLimitDefault)+1))))
+	sendOversize(conn, websocket.TextMessage, []byte(strings.Repeat("a", int(wsReadLimitDefault)+1)))
 
 	_, _, err := conn.ReadMessage()
 	require.True(t, websocket.IsCloseError(err, websocket.CloseMessageTooBig),
@@ -107,7 +114,7 @@ func TestWSReadLimit_RegistrationOverridesDefault(t *testing.T) {
 	dial, results := readLimitProbe(t, wsRegistration{readLimit: custom})
 	conn := dial()
 
-	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, make([]byte, custom+1)))
+	sendOversize(conn, websocket.BinaryMessage, make([]byte, custom+1))
 
 	require.ErrorIs(t, awaitRead(t, results), websocket.ErrReadLimit,
 		"a %d-byte frame is far under wsReadLimitDefault but over the registration's %d limit", custom+1, custom)
@@ -138,8 +145,7 @@ func TestWSReadLimit_LogsOnceWithoutPayload(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 	defer resp.Body.Close()
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage,
-		[]byte(strings.Repeat("SECRETPAYLOAD", int(wsReadLimitDefault)/10))))
+	sendOversize(conn, websocket.TextMessage, []byte(strings.Repeat("SECRETPAYLOAD", int(wsReadLimitDefault)/10)))
 	<-done
 
 	got := buf.String()
