@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -76,6 +77,44 @@ func TestPullVerified_FailedPullReleasesTheLock(t *testing.T) {
 			"redeploy=%v: the failed pull left its lock held, so the next pull is a 409", redeploy)
 		token, err := lock.Acquire("s1", OpKindStart)
 		require.NoError(t, err, "redeploy=%v: PullVerified left the stack locked after a failed pull", redeploy)
+		lock.Release("s1", token)
+	}
+}
+
+// TestPullVerified_LockIsHeldWhileThePullRuns pins that the lock covers the
+// pull itself, not just its start: a lock taken and dropped before pullCLI
+// would pass every test above. A post-merge hook in the clone (git runs it
+// inside `git pull`, after the fast-forward has rewritten the files) signals
+// that the pull is in progress and then waits, so the test can try the lock
+// at exactly that moment.
+func TestPullVerified_LockIsHeldWhileThePullRuns(t *testing.T) {
+	for _, redeploy := range []bool{false, true} {
+		svc, lock, work := pullLockFixture(t)
+		signal := t.TempDir()
+		inPull, resume := filepath.Join(signal, "in-pull"), filepath.Join(signal, "resume")
+		hook := "#!/bin/sh\n: > '" + inPull + "'\n" +
+			"i=0; while [ ! -e '" + resume + "' ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done\n"
+		require.NoError(t, os.WriteFile(filepath.Join(work, ".git", "hooks", "post-merge"), []byte(hook), 0o755))
+		mustGit(t, work, "config", "core.hooksPath", ".git/hooks")
+
+		done := make(chan truth.ActionResult, 1)
+		go func() {
+			ar, _ := svc.PullVerified(work, redeploy, &DockerService{})
+			done <- ar
+		}()
+
+		require.Eventually(t, func() bool { _, err := os.Stat(inPull); return err == nil },
+			10*time.Second, 20*time.Millisecond, "redeploy=%v: the post-merge hook never ran", redeploy)
+		backupToken, err := lock.Acquire("s1", OpKindBackup)
+		if !assert.Error(t, err, "redeploy=%v: a backup could take the stack's lock while the pull was rewriting its files", redeploy) {
+			lock.Release("s1", backupToken)
+		}
+		require.NoError(t, os.WriteFile(resume, nil, 0o644))
+
+		ar := <-done
+		require.Equal(t, truth.OutcomeSuccess, ar.Outcome, "redeploy=%v reason %q err %v", redeploy, ar.Reason, ar.Err)
+		token, err := lock.Acquire("s1", OpKindStart)
+		require.NoError(t, err, "redeploy=%v: PullVerified left the stack locked", redeploy)
 		lock.Release("s1", token)
 	}
 }
