@@ -19,6 +19,23 @@ actually running afterwards with `GET /api/v1/version` or Settings → About.
 > are invalidated on upgrade — log in again once. Previously stored secrets stay
 > readable and are re-encrypted under the new key scheme on next save.
 
+> **Upgrading from a `docker-compose.prod.yaml` that mounts `./stacks:/opt/stacks`:**
+> that older template broke Volume Path Identity. Your stack files live in
+> `./stacks` next to the compose file, but a managed stack's relative binds
+> (`./data:/data`) were resolved by the host against `/opt/stacks/<stack>/`, so
+> that data is under `/opt/stacks` on the host, outside what Capstan backs up.
+> The current template mounts `${STACKS_DIR:-/opt/stacks}` at the same path on
+> both sides. Before switching, stop Capstan and either:
+>
+> - move `./stacks` to `/opt/stacks` on the host and keep the default, or
+> - set `STACKS_DIR` (and `HOST_STACKS_DIR`) in `.env` to the **absolute** path
+>   of your existing `stacks` directory, e.g. `STACKS_DIR=/home/capstan/stacks`.
+>
+> Then check `/opt/stacks/<stack>/` on the host for data your stacks wrote
+> through relative binds and merge it into the stack directory. After
+> `up -d`, `docker compose -f docker-compose.prod.yaml logs | grep "Volume path identity"`
+> must not show an `ERROR` line.
+
 ## Rolling back
 
 Recovering from a bad release usually means re-pinning an older image tag (or
