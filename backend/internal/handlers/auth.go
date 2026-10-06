@@ -121,7 +121,7 @@ func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *AuthHandler) RegisterProtectedRoutes(group *gin.RouterGroup) {
 	group.POST("/auth/logout", h.Logout)
 	group.GET("/auth/me", h.Me)
-	group.POST("/auth/verify-password", h.VerifyPassword)
+	group.POST("/auth/verify-password", middleware.RateLimitPasswordCheck(), h.VerifyPassword)
 }
 
 func (h *AuthHandler) Status(c *gin.Context) {
