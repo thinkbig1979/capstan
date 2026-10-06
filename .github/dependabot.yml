@@ -111,15 +111,16 @@ updates:
 
   # ---------------------------------------------------------------------------
   # Covers the Dockerfile's pinned bases: node:22-trixie-slim,
-  # golang:1.26.5-trixie, debian:trixie-slim, and the digest-pinned docker:29-cli
+  # golang:<version>-trixie, debian:trixie-slim, and the digest-pinned docker:29-cli
   # stage the runtime lifts the Docker CLI binaries out of.
   #
   # NOTE for reviewers of these PRs: the Go base image is pinned in lockstep with
   # backend/go.mod's `toolchain` directive. Dependabot updates the Dockerfile
   # only and cannot know about that relationship, so a golang:* bump here must be
   # paired with the matching go.mod change or CI and the shipped image compile
-  # against different standard libraries. backend.yml deliberately triggers on
-  # docker/Dockerfile so this drift is at least visible.
+  # against different standard libraries. The "Go toolchain lockstep" step in
+  # backend.yml (scripts/check-toolchain-lockstep.sh) runs on every PR and
+  # fails when the Dockerfile tag and go.mod's toolchain differ.
   #
   # The restic and rclone binaries are fetched by URL with pinned SHA256 sums,
   # not by image reference, so Dependabot cannot see them. Trivy's scan of the

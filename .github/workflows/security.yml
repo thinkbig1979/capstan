@@ -80,8 +80,8 @@ jobs:
         uses: actions/checkout@v7
 
       # setup-go@v6 or later is load-bearing: v5 reads only go.mod's `go`
-      # directive, and backend/go.mod carries both `go 1.25.0` and
-      # `toolchain go1.26.5`. See backend.yml for the full explanation.
+      # directive, and backend/go.mod carries both a `go` and a `toolchain`
+      # directive that differ. See backend.yml for the full explanation.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:

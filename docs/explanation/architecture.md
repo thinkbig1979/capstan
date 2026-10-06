@@ -25,7 +25,9 @@ unique on every request and cannot be cached.
    React + Vite app, produces static `dist/` output. Runs on the build host's
    native architecture (`$BUILDPLATFORM`) since the output is
    architecture-neutral, avoiding QEMU emulation of the Node build.
-2. **`backend-build`** (`golang:1.26.5-trixie`) — cross-compiles the Go
+2. **`backend-build`** (`golang:<version>-trixie`, the version
+   pinned in [`docker/Dockerfile`](../../docker/Dockerfile) and kept equal to
+   `toolchain` in `backend/go.mod`) — cross-compiles the Go
    server with `CGO_ENABLED=0` for the target architecture. Also runs on
    `$BUILDPLATFORM`; Go's own cross-compiler emits the target binary without
    emulation.

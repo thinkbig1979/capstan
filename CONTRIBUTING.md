@@ -45,7 +45,7 @@ environment files: [`.env.example`](.env.example) (production) and
 [`backend/.env.example`](backend/.env.example) (local dev).
 
 ### Backend
-- Language: Go 1.25
+- Language: Go (version pinned in [`backend/go.mod`](backend/go.mod); the Docker builder image must match its `toolchain` line, which CI checks)
 - Database: SQLite
 - Framework: Gin
 - Docker SDK: docker/docker (Moby) client
