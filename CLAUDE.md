@@ -62,7 +62,7 @@ minutes. Closing a bug bead therefore requires a class sweep, not just a green t
 
 ### The required close-time block
 
-Every bug bead's close reason states four fields:
+Every bug bead's close reason states five fields:
 
 1. **Class statement** — one sentence naming the defect class, not this instance
    ("a WebSocket handler that upgrades but doesn't guarantee close on every exit
@@ -75,8 +75,14 @@ Every bug bead's close reason states four fields:
 3. **Verbatim output** — trimmed to the relevant lines, not paraphrased.
 4. **Verdict** — either "0 further sites" or the list of follow-up bead IDs filed
    for the sites the sweep found.
+5. **Guard** — the safe helper the class should have used, and either the guard
+   that now keeps every site on it (lint rule, AST or wiring test, check script)
+   or the bead filed for one, or why none is possible. A class that recurs after
+   its fix is almost always a helper that existed and was opt-in; the rules that
+   name Capstan's helpers are in `.claude/rules/safe-defaults.md`. The close hook
+   checks fields 1-4 today; agent-os-qags.8 makes it check this one.
 
-A count in any of these four fields is pinned to the SHA it was measured on.
+A count in any of these fields is pinned to the SHA it was measured on.
 Re-measure at close time and name the SHA: `agent-os-nho7`'s brief carried
 "10 lines, 5 in class" from `3dbaef2`, and the same command returned 14 and 8 on
 `25f192c` three commits later.
