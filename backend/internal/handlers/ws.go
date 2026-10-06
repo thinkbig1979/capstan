@@ -239,6 +239,13 @@ func (cm *ConnectionManager) CloseAll() {
 // dev-mode (AUTH_DISABLED) caller — which never carries a jti — close every
 // anonymous connection on the host (agent-os-teop).
 func (cm *ConnectionManager) CloseForSession(sessionID string) {
+	cm.closeSession(sessionID, CloseCodeAuthFailure, "Session revoked")
+}
+
+// closeSession is CloseForSession with the close code and reason chosen by
+// the caller: the session sweep closes a session whose lookup keeps failing
+// with 1011 instead of 4401, so the client reconnects rather than giving up.
+func (cm *ConnectionManager) closeSession(sessionID string, closeCode int, reason string) {
 	if sessionID == "" {
 		return
 	}
@@ -246,7 +253,19 @@ func (cm *ConnectionManager) CloseForSession(sessionID string) {
 	// comment), and this runs on the logout request path.
 	cm.closeMatching(func(conn *Connection) bool {
 		return conn.SessionID == sessionID
-	}, CloseCodeAuthFailure, "Session revoked", 0)
+	}, closeCode, reason, 0)
+}
+
+// addSessionIDs adds the SessionID of every live connection to into, skipping
+// connections with none (AUTH_DISABLED never mints a session).
+func (cm *ConnectionManager) addSessionIDs(into map[string]struct{}) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	for _, conn := range cm.connections {
+		if conn.SessionID != "" {
+			into[conn.SessionID] = struct{}{}
+		}
+	}
 }
 
 // CloseForUser closes every live connection belonging to userID, except one
@@ -362,6 +381,99 @@ func (cms ConnectionManagers) CloseForUser(userID, exceptSessionID string) {
 	for _, cm := range cms {
 		if cm != nil {
 			cm.CloseForUser(userID, exceptSessionID)
+		}
+	}
+}
+
+// SessionSweepInterval is how often RunSessionSweep re-checks the session
+// every open WebSocket was opened under. It bounds how long a socket outlives
+// a revocation made outside this process (agent-os-n4ca.4).
+const SessionSweepInterval = 30 * time.Second
+
+// sessionSweepFailureLimit is how many consecutive failed lookups of one
+// session close its sockets. One SQLite blip must not close every socket (a
+// closed terminal socket kills the user's shell), but a sustained fault must
+// not hide a revocation forever: at 30s per sweep this caps it near 90s.
+const sessionSweepFailureLimit = 3
+
+// sessionLookup is the one *database.DB method the sweep needs, an interface
+// so tests can make a lookup fail with something other than not-found.
+type sessionLookup interface {
+	GetSession(id string) (*models.Session, error)
+}
+
+// RunSessionSweep re-checks, every interval, the session each open connection
+// in every manager was opened under, and closes the connections whose session
+// is gone or expired with 4401 "Session revoked", as logout does. It returns
+// only when ctx ends (safe-defaults rule 3).
+//
+// Logout and password change close sockets in-process (CloseForSession /
+// CloseForUser). This sweep is what reaches a revocation made anywhere else:
+// the CLI `admin reset-password` deletes session rows from a separate process
+// that has no way to reach this ConnectionManager (agent-os-n4ca.4).
+func (cms ConnectionManagers) RunSessionSweep(ctx context.Context, lookup sessionLookup, interval time.Duration) {
+	s := newSessionSweeper(cms, lookup)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.sweep()
+		}
+	}
+}
+
+type sessionSweeper struct {
+	cms    ConnectionManagers
+	lookup sessionLookup
+	// failures counts consecutive failed lookups per session. Only the sweep
+	// goroutine touches it, so it needs no lock.
+	failures map[string]int
+}
+
+func newSessionSweeper(cms ConnectionManagers, lookup sessionLookup) *sessionSweeper {
+	return &sessionSweeper{cms: cms, lookup: lookup, failures: map[string]int{}}
+}
+
+// sweep looks each distinct session up once, outside every manager's lock:
+// one GetSession per session, not per connection.
+func (s *sessionSweeper) sweep() {
+	live := map[string]struct{}{}
+	for _, cm := range s.cms {
+		if cm != nil {
+			cm.addSessionIDs(live)
+		}
+	}
+	for id := range s.failures {
+		if _, ok := live[id]; !ok {
+			delete(s.failures, id)
+		}
+	}
+
+	for id := range live {
+		session, err := s.lookup.GetSession(id)
+		switch {
+		case err == nil && time.Now().Before(session.ExpiresAt):
+			delete(s.failures, id)
+		case err == nil, errors.Is(err, errdefs.ErrNotFound):
+			// Expired (the row exists but AuthMiddleware would reject it),
+			// or revoked.
+			delete(s.failures, id)
+			s.cms.CloseForSession(id)
+		default:
+			s.failures[id]++
+			slog.Warn("WebSocket session check failed",
+				"session_id", id, "consecutive_failures", s.failures[id], "error", err)
+			if s.failures[id] >= sessionSweepFailureLimit {
+				delete(s.failures, id)
+				for _, cm := range s.cms {
+					if cm != nil {
+						cm.closeSession(id, websocket.CloseInternalServerErr, "Session check failed")
+					}
+				}
+			}
 		}
 	}
 }

@@ -115,6 +115,11 @@ audit; the measures below are in place and covered by tests.
 - Sessions are tracked server-side and revoked on logout and on password change.
   The session cookie is `HttpOnly`, `SameSite=Lax`, and marked `Secure` when the
   request arrives over HTTPS. JWTs are bound to an issuer claim.
+- Open WebSockets (terminal, logs, metrics and the rest) close when their session
+  ends. Logout and password change close them at once. A revocation made outside
+  the server, such as the offline password reset, closes them within 30 seconds,
+  because the server re-checks every open socket's session on that interval. A
+  socket also closes when its session expires.
 - Exactly one account exists and there is no network-reachable password reset. If
   the password is lost, recover it offline — see
   [Recovering Admin Access](../how-to/recover-admin-access.md).

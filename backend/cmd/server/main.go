@@ -600,6 +600,10 @@ func main() {
 	allConnectionManagers := handlers.ConnectionManagers{connectionManager, terminalConnections}
 	authHandler.SetConnectionManagers(allConnectionManagers)
 	settingsHandler.SetConnectionManagers(allConnectionManagers)
+	// Closes sockets whose session was revoked outside this process, e.g. by
+	// the CLI `admin reset-password` (agent-os-n4ca.4). Stops at shutdown's
+	// cancel().
+	go allConnectionManagers.RunSessionSweep(ctx, db, handlers.SessionSweepInterval)
 	settingsHandler.SetEnvUnlockStore(envUnlockStore)
 
 	logsHandler := handlers.NewLogsHandler(dockerService, db, cfg.JWTSecret, cfg.AuthDisabled, cfg.DataDir, connectionManager)
