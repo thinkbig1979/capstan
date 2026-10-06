@@ -96,6 +96,15 @@ honest answer rather than a blank.
   unconditionally and the gate is open. See [Secret reveal](#secret-reveal).
 - `PUT /api/v1/auth/password` — change the current user's password
 
+Every route that checks a password is rate-limited per account and per client
+IP, on top of the general API budget. `setup` and `login` key on the submitted
+username. `verify-password` and `PUT /auth/password` key on the signed-in user
+and share one budget, separate from login's: 5 attempts per minute per user
+from one IP, 20 per IP across users, and 60 per user across all IPs. Successful
+attempts count too. Over budget, the route answers **429** with
+`Retry-After: 60` and `{"code":"RATE_LIMITED","message":"..."}` before the
+password is checked.
+
 ## Settings
 
 - `GET /api/v1/settings/config` — effective server configuration (non-secret

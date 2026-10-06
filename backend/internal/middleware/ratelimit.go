@@ -325,9 +325,30 @@ func (rl *RateLimiter) Middleware(keyFunc func(*gin.Context) string) gin.Handler
 	}
 }
 
-var authIPRateLimiter *RateLimiter
-var authAccountRateLimiter *RateLimiter
-var authAccountAnyIPRateLimiter *RateLimiter
+// credentialLimiters is one set of the three brute-force layers a request that
+// checks a password goes through: per client IP, per (client IP, account), and
+// per account across all addresses.
+type credentialLimiters struct {
+	perIP        *RateLimiter
+	perIPAccount *RateLimiter
+	perAccount   *RateLimiter
+}
+
+func newCredentialLimiters() *credentialLimiters {
+	return &credentialLimiters{
+		perIP:        NewRateLimiter(1*time.Minute, authIPMaxReqs),
+		perIPAccount: NewRateLimiter(1*time.Minute, authAccountMaxReqs),
+		perAccount:   NewRateLimiter(1*time.Minute, authAccountAnyIPMaxReqs),
+	}
+}
+
+// authLimiters serves login and setup, keyed on the submitted username.
+// passwordCheckLimiters serves the authenticated routes that re-check the
+// current password, keyed on the session's userID (agent-os-n4ca.3). They are
+// separate so a signed-in user re-entering their password does not spend the
+// login budget of everyone behind the same proxy address.
+var authLimiters *credentialLimiters
+var passwordCheckLimiters *credentialLimiters
 var apiRateLimiter *RateLimiter
 
 const (
@@ -350,8 +371,9 @@ const (
 	authAccountAnyIPMaxReqs = 60
 )
 
-// InitRateLimiters builds the four process-wide limiters. apiMaxReqs is the
-// general API budget per rolling minute; callers pass
+// InitRateLimiters builds the process-wide limiters: two sets of credential
+// limiters (login, and password re-checks) and the general API limiter.
+// apiMaxReqs is the general API budget per rolling minute; callers pass
 // config.DefaultAPIRateLimitPerMin unless RATE_LIMIT_API_PER_MIN overrides it.
 // It panics if apiMaxReqs is below 1 — see the guard below for why that is a
 // panic and not a clamp.
@@ -398,14 +420,14 @@ func InitRateLimiters(apiMaxReqs int) {
 			strconv.Itoa(apiMaxReqs) + " (check RATE_LIMIT_API_PER_MIN and config.DefaultAPIRateLimitPerMin)")
 	}
 
-	authIPRateLimiter = NewRateLimiter(1*time.Minute, authIPMaxReqs)
-	authAccountRateLimiter = NewRateLimiter(1*time.Minute, authAccountMaxReqs)
-	authAccountAnyIPRateLimiter = NewRateLimiter(1*time.Minute, authAccountAnyIPMaxReqs)
+	authLimiters = newCredentialLimiters()
+	passwordCheckLimiters = newCredentialLimiters()
 	apiRateLimiter = NewRateLimiter(1*time.Minute, apiMaxReqs)
 	slog.Info("Rate limiters initialized",
 		"auth_per_ip", strconv.Itoa(authIPMaxReqs)+"/min",
 		"auth_per_ip_account", strconv.Itoa(authAccountMaxReqs)+"/min",
 		"auth_per_account", strconv.Itoa(authAccountAnyIPMaxReqs)+"/min",
+		"password_check", "same budgets as auth, separate buckets",
 		"api", strconv.Itoa(apiMaxReqs)+"/min",
 	)
 }
@@ -418,36 +440,81 @@ func InitRateLimiters(apiMaxReqs int) {
 // login bucket and one person mistyping a password locks out everybody.
 func RateLimitAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		clientIP := c.ClientIP()
-
-		if !enforceLimit(c, authIPRateLimiter, clientIP) {
+		if !limitCredentialAttempt(c, authLimiters, func() string {
+			return normalizeAccount(peekLoginUsername(c))
+		}) {
 			return
 		}
-
-		if !validateIPKey(clientIP) {
-			// enforceLimit already accepted clientIP, so this cannot happen; guard
-			// anyway rather than build a composite key around an unvalidated half.
-			c.Next()
-			return
-		}
-
-		account := normalizeAccount(peekLoginUsername(c))
-
-		if !enforceLimit(c, authAccountRateLimiter, loginRateLimitKey(clientIP, account)) {
-			return
-		}
-
-		// Attempts whose username could not name a real account all share the
-		// sentinel; counting them account-wide would let a scanner spraying junk
-		// exhaust one globally shared bucket. The two layers above already cap it.
-		if account != loginKeyUnknownAccount {
-			if !enforceLimit(c, authAccountAnyIPRateLimiter, loginRateLimitKey(loginKeyAnyIP, account)) {
-				return
-			}
-		}
-
 		c.Next()
 	}
+}
+
+// RateLimitPasswordCheck limits the authenticated routes that re-check the
+// current password (POST /auth/verify-password, PUT /auth/password) with the
+// same three layers and budgets as login, keyed on the userID AuthMiddleware
+// published, so it must run after AuthMiddleware. Without it these routes sat
+// behind only the general API budget, and a stolen session cookie bought far
+// more password guesses than the login form allows (agent-os-n4ca.3).
+//
+// Every attempt counts, not only failed ones: the limiter decides before the
+// handler runs, and counting failures afterwards would let a burst of parallel
+// requests all pass the check before any failure was recorded.
+func RateLimitPasswordCheck() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !limitCredentialAttempt(c, passwordCheckLimiters, func() string {
+			return normalizeAccount(c.GetString("userID"))
+		}) {
+			return
+		}
+		c.Next()
+	}
+}
+
+// limitCredentialAttempt runs one request through the three layers of ls. The
+// account is resolved only after the per-IP layer admits the request, so a
+// refused request never has its body read. It returns false when the request
+// has been answered and must not continue.
+func limitCredentialAttempt(c *gin.Context, ls *credentialLimiters, account func() string) bool {
+	// Fail closed: a route registered with a limiter that was never built must
+	// not quietly run unlimited.
+	if ls == nil {
+		slog.Error("Credential rate limiter used before InitRateLimiters", "path", c.FullPath())
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    "INTERNAL_ERROR",
+			"message": "Rate limiter not initialised",
+		})
+		c.Abort()
+		return false
+	}
+
+	clientIP := c.ClientIP()
+
+	if !enforceLimit(c, ls.perIP, clientIP) {
+		return false
+	}
+
+	if !validateIPKey(clientIP) {
+		// enforceLimit already accepted clientIP, so this cannot happen; guard
+		// anyway rather than build a composite key around an unvalidated half.
+		return true
+	}
+
+	acct := account()
+
+	if !enforceLimit(c, ls.perIPAccount, loginRateLimitKey(clientIP, acct)) {
+		return false
+	}
+
+	// Attempts whose account could not name a real one all share the
+	// sentinel; counting them account-wide would let a scanner spraying junk
+	// exhaust one globally shared bucket. The two layers above already cap it.
+	if acct != loginKeyUnknownAccount {
+		if !enforceLimit(c, ls.perAccount, loginRateLimitKey(loginKeyAnyIP, acct)) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // peekLoginUsername reads the username out of a JSON request body without

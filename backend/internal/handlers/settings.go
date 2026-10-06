@@ -75,7 +75,7 @@ func (h *SettingsHandler) SetConnectionManagers(cms ConnectionManagers) {
 }
 
 func (h *SettingsHandler) RegisterRoutes(group *gin.RouterGroup) {
-	group.PUT("/auth/password", h.ChangePassword)
+	group.PUT("/auth/password", middleware.RateLimitPasswordCheck(), h.ChangePassword)
 	group.GET("/settings/config", h.GetConfig)
 	group.GET("/settings/global-env", h.GetGlobalEnv)
 	group.PUT("/settings/global-env", h.UpdateGlobalEnv)

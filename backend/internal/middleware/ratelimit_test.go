@@ -767,3 +767,159 @@ func TestInitRateLimiters_PassesPositiveBudgetThrough(t *testing.T) {
 		t.Fatalf("second request at budget 1: expected 429, got %d (%s)", w.Code, w.Body.String())
 	}
 }
+
+// newPasswordCheckTestRouter puts RateLimitPasswordCheck behind a stand-in for
+// AuthMiddleware that publishes the userID named in a header, and the login
+// limiter on a second route, so tests can show the two budgets are separate.
+func newPasswordCheckTestRouter(t *testing.T) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	InitRateLimiters(config.DefaultAPIRateLimitPerMin)
+
+	r := gin.New()
+	setUser := func(c *gin.Context) {
+		if id := c.GetHeader("X-Test-User"); id != "" {
+			c.Set("userID", id)
+		}
+		c.Next()
+	}
+	r.POST("/api/v1/auth/verify-password", setUser, RateLimitPasswordCheck(), func(c *gin.Context) {
+		c.Status(http.StatusUnauthorized)
+	})
+	r.POST("/api/v1/auth/login", RateLimitAuth(), func(c *gin.Context) {
+		c.Status(http.StatusUnauthorized)
+	})
+	return r
+}
+
+func passwordCheck(r *gin.Engine, ip, userID string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/verify-password", strings.NewReader(`{"password":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+	if userID != "" {
+		req.Header.Set("X-Test-User", userID)
+	}
+	req.RemoteAddr = ip + ":54321"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+const (
+	testUserA = "0b4e7c1a-9f2d-4c3e-8a1b-2d3c4e5f6a7b"
+	testUserB = "7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918"
+)
+
+// The per-(IP, user) layer: the sixth attempt is refused with the same 429 shape
+// as login, and a second user on the same address is unaffected.
+func TestPasswordCheckLimit_PerUserFromOneIP(t *testing.T) {
+	r := newPasswordCheckTestRouter(t)
+	const ip = "203.0.113.50"
+
+	for i := 0; i < authAccountMaxReqs; i++ {
+		if w := passwordCheck(r, ip, testUserA); w.Code != http.StatusUnauthorized {
+			t.Fatalf("user A attempt %d: expected the handler's 401, got %d (%s)", i+1, w.Code, w.Body.String())
+		}
+	}
+
+	w := passwordCheck(r, ip, testUserA)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("user A over budget: expected 429, got %d (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"code":"RATE_LIMITED"`) || w.Header().Get("Retry-After") != "60" {
+		t.Fatalf("429 must match RateLimitAuth's shape, got body %s, Retry-After %q", w.Body.String(), w.Header().Get("Retry-After"))
+	}
+
+	if w := passwordCheck(r, ip, testUserB); w.Code != http.StatusUnauthorized {
+		t.Fatalf("user B shares user A's bucket: expected 401, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// The account-wide layer: a stolen cookie replayed from many addresses still
+// meets a ceiling on that user.
+func TestPasswordCheckLimit_OneUserAcrossManyIPs(t *testing.T) {
+	r := newPasswordCheckTestRouter(t)
+
+	for i := 0; i < authAccountAnyIPMaxReqs; i++ {
+		ip := fmt.Sprintf("198.51.100.%d", i+1)
+		if w := passwordCheck(r, ip, testUserA); w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d from %s: expected 401, got %d (%s)", i+1, ip, w.Code, w.Body.String())
+		}
+	}
+
+	if w := passwordCheck(r, "198.51.100.200", testUserA); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 once the per-user ceiling is reached, got %d (%s)", w.Code, w.Body.String())
+	}
+	if w := passwordCheck(r, "198.51.100.201", testUserB); w.Code != http.StatusUnauthorized {
+		t.Fatalf("user B caught by user A's account-wide bucket: expected 401, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// Password re-checks and logins draw on separate buckets, in both directions.
+func TestPasswordCheckLimit_SeparateFromLoginBudget(t *testing.T) {
+	r := newPasswordCheckTestRouter(t)
+	const ip = "203.0.113.51"
+
+	for i := 0; i < authAccountMaxReqs; i++ {
+		passwordCheck(r, ip, testUserA)
+	}
+	if w := passwordCheck(r, ip, testUserA); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("precondition: password checks should be exhausted, got %d", w.Code)
+	}
+	if w := loginAttempt(r, ip, "alice"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("login spent by password checks: expected 401, got %d (%s)", w.Code, w.Body.String())
+	}
+
+	for i := 0; i < authIPMaxReqs; i++ {
+		loginAttempt(r, "203.0.113.52", fmt.Sprintf("user%03d", i))
+	}
+	if w := loginAttempt(r, "203.0.113.52", "user999"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("precondition: login per-IP budget should be exhausted, got %d", w.Code)
+	}
+	if w := passwordCheck(r, "203.0.113.52", testUserB); w.Code != http.StatusUnauthorized {
+		t.Fatalf("password check spent by logins: expected 401, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// No userID (a route mounted without AuthMiddleware ahead of it) still meets
+// the per-(IP, sentinel) layer rather than running unlimited.
+func TestPasswordCheckLimit_MissingUserIDStillLimited(t *testing.T) {
+	r := newPasswordCheckTestRouter(t)
+	const ip = "203.0.113.53"
+
+	for i := 0; i < authAccountMaxReqs; i++ {
+		if w := passwordCheck(r, ip, ""); w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: expected 401, got %d", i+1, w.Code)
+		}
+	}
+	if w := passwordCheck(r, ip, ""); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 on the sentinel bucket, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// Fails closed: if InitRateLimiters never ran, the route answers 500 instead
+// of checking passwords unlimited. The second request shows the same route
+// admits once the limiters exist.
+func TestPasswordCheckLimit_FailsClosedWhenUninitialised(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	saved := passwordCheckLimiters
+	t.Cleanup(func() { passwordCheckLimiters = saved })
+	passwordCheckLimiters = nil
+
+	r := gin.New()
+	r.POST("/check", RateLimitPasswordCheck(), func(c *gin.Context) { c.Status(http.StatusUnauthorized) })
+	do := func() int {
+		req := httptest.NewRequest(http.MethodPost, "/check", nil)
+		req.RemoteAddr = "203.0.113.54:54321"
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	if code := do(); code != http.StatusInternalServerError {
+		t.Fatalf("uninitialised limiter: expected 500, got %d", code)
+	}
+	passwordCheckLimiters = newCredentialLimiters()
+	if code := do(); code != http.StatusUnauthorized {
+		t.Fatalf("initialised limiter: expected the handler's 401, got %d", code)
+	}
+}
