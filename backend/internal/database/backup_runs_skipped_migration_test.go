@@ -101,7 +101,7 @@ INSERT INTO backup_run_items (id, run_id, stack_id, status, snapshot_id, stop_ap
 
 	var stamped int
 	require.NoError(t, db.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&stamped))
-	require.Equal(t, 19, stamped)
+	require.Equal(t, migrations[len(migrations)-1].Version, stamped)
 
 	// Every row, every column, verbatim; items still joined to their runs.
 	assert.Equal(t, runsBefore, dumpRows(t, db, runsQ), "backup_runs rows must survive the rebuild unchanged")

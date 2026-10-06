@@ -10,7 +10,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 
+	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 )
 
@@ -27,8 +29,19 @@ const storageKeyInfo = "capstan-token-encryption-v1"
 // secret is no longer used as an AES key via a single SHA-256 pass.
 //
 // A legacy AEAD keyed by SHA-256(JWT_SECRET) — the previous scheme — is retained
-// for decryption only, so existing ciphertexts remain readable. They are
-// re-encrypted with the primary key on the next write.
+// for decryption only, so existing ciphertexts remain readable.
+//
+// CIPHERTEXT FORMATS (agent-os-n4ca.7). Every value written now is v2:
+// database.SealedV2Prefix followed by base64(nonce || AES-GCM ciphertext),
+// sealed with the primary key and with associated data naming the column and
+// row it belongs to ("settings:restic_password",
+// "directories.git_https_token:/opt/stacks/app"). A v2 value copied to another
+// row or column therefore fails authentication instead of decrypting as that
+// row's secret. Older values carry no prefix and no associated data: v1 under
+// the primary key, legacy under SHA-256(JWT_SECRET). The prefix contains '$',
+// which is outside the base64 alphabet, so no v1 or legacy value can carry it:
+// the format is read from the prefix, never guessed from the shape.
+// database.ReencryptSecrets converts v1 and legacy values to v2 at startup.
 type TokenEncryptor struct {
 	primary cipher.AEAD
 	legacy  cipher.AEAD // decrypt-only; nil when no legacy secret is available
@@ -91,9 +104,13 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 // null-object noEncryptor below. database.DB depends on this shape
 // structurally (it declares its own identical TokenEncryptor interface), so
 // returning it here does not require the database package to import services.
+//
+// aad is the associated data binding a ciphertext to the column and row it is
+// stored in; it must be non-empty, and Decrypt must be given the same value
+// Encrypt was.
 type Encryptor interface {
-	Encrypt(plaintext string) (string, error)
-	Decrypt(encoded string) (string, error)
+	Encrypt(plaintext, aad string) (string, error)
+	Decrypt(encoded, aad string) (string, error)
 }
 
 // ErrEncryptionUnavailable is returned by noEncryptor's Encrypt/Decrypt (check
@@ -126,8 +143,8 @@ var ErrEncryptionUnavailable = errdefs.ErrEncryptionUnavailable
 // actionable API error.
 type noEncryptor struct{}
 
-func (noEncryptor) Encrypt(string) (string, error) { return "", ErrEncryptionUnavailable }
-func (noEncryptor) Decrypt(string) (string, error) { return "", ErrEncryptionUnavailable }
+func (noEncryptor) Encrypt(string, string) (string, error) { return "", ErrEncryptionUnavailable }
+func (noEncryptor) Decrypt(string, string) (string, error) { return "", ErrEncryptionUnavailable }
 
 // NewTokenEncryptorOrDefault constructs a TokenEncryptor, returning a
 // null-object noEncryptor (with a WARN logged) if construction fails, so the
@@ -152,9 +169,18 @@ func NewTokenEncryptorOrDefault(storageSecret, jwtSecret string) Encryptor {
 	return enc
 }
 
-func (e *TokenEncryptor) Encrypt(plaintext string) (string, error) {
+// errMissingAAD refuses a call that would seal or open a v2 value without
+// binding it to a location: an empty aad would make every such value
+// interchangeable again, which is the defect the associated data exists to close.
+var errMissingAAD = errors.New("encryption requires associated data naming the stored location")
+
+// Encrypt seals plaintext as a v2 value bound to aad.
+func (e *TokenEncryptor) Encrypt(plaintext, aad string) (string, error) {
 	if plaintext == "" {
 		return "", nil
+	}
+	if aad == "" {
+		return "", errMissingAAD
 	}
 
 	nonce := make([]byte, e.primary.NonceSize())
@@ -162,13 +188,37 @@ func (e *TokenEncryptor) Encrypt(plaintext string) (string, error) {
 		return "", err
 	}
 
-	ciphertext := e.primary.Seal(nonce, nonce, []byte(plaintext), nil)
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
+	ciphertext := e.primary.Seal(nonce, nonce, []byte(plaintext), []byte(aad))
+	return database.SealedV2Prefix + base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-func (e *TokenEncryptor) Decrypt(encoded string) (string, error) {
+// Decrypt opens a value stored at the location aad names.
+//
+// A v2 value (prefixed) is opened with the primary key and aad, and nothing
+// else: it has no other valid reading, so a failure there is final. Trying the
+// unbound arms on it would only give a moved or tampered value a second chance.
+//
+// An unprefixed value predates v2 and was sealed with no associated data, so
+// aad is not used for it: the primary key is tried, then the legacy key. A v2
+// value with its prefix stripped lands here and still fails, because it was
+// sealed with associated data and these arms open with none.
+func (e *TokenEncryptor) Decrypt(encoded, aad string) (string, error) {
 	if encoded == "" {
 		return "", nil
+	}
+
+	if body, ok := strings.CutPrefix(encoded, database.SealedV2Prefix); ok {
+		if aad == "" {
+			return "", errMissingAAD
+		}
+		ciphertext, err := base64.StdEncoding.DecodeString(body)
+		if err != nil {
+			return "", errors.New("invalid encrypted token format")
+		}
+		if pt, ok := openWith(e.primary, ciphertext, []byte(aad)); ok {
+			return pt, nil
+		}
+		return "", errors.New("failed to decrypt token")
 	}
 
 	ciphertext, err := base64.StdEncoding.DecodeString(encoded)
@@ -176,12 +226,12 @@ func (e *TokenEncryptor) Decrypt(encoded string) (string, error) {
 		return "", errors.New("invalid encrypted token format")
 	}
 
-	if pt, ok := openWith(e.primary, ciphertext); ok {
+	if pt, ok := openWith(e.primary, ciphertext, nil); ok {
 		return pt, nil
 	}
 	// Fall back to the legacy key for ciphertext written by the previous scheme.
 	if e.legacy != nil {
-		if pt, ok := openWith(e.legacy, ciphertext); ok {
+		if pt, ok := openWith(e.legacy, ciphertext, nil); ok {
 			return pt, nil
 		}
 	}
@@ -190,15 +240,15 @@ func (e *TokenEncryptor) Decrypt(encoded string) (string, error) {
 }
 
 // openWith attempts to authenticate-and-decrypt ciphertext (nonce-prefixed) with
-// aead. It returns ok=false on any error rather than the error itself so the
-// caller can try the next key.
-func openWith(aead cipher.AEAD, ciphertext []byte) (string, bool) {
+// aead and the given associated data. It returns ok=false on any error rather
+// than the error itself so the caller can try the next key.
+func openWith(aead cipher.AEAD, ciphertext, aad []byte) (string, bool) {
 	nonceSize := aead.NonceSize()
 	if len(ciphertext) < nonceSize {
 		return "", false
 	}
 	nonce, ct := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	plaintext, err := aead.Open(nil, nonce, ct, nil)
+	plaintext, err := aead.Open(nil, nonce, ct, aad)
 	if err != nil {
 		return "", false
 	}

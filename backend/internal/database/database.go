@@ -13,9 +13,28 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// TokenEncryptor mirrors services.Encryptor (see its doc for the formats). aad
+// binds a ciphertext to the column and row it is stored in; settingAAD and
+// directoryTokenAAD build it, and every caller in this package goes through
+// them.
 type TokenEncryptor interface {
-	Encrypt(plaintext string) (string, error)
-	Decrypt(encoded string) (string, error)
+	Encrypt(plaintext, aad string) (string, error)
+	Decrypt(encoded, aad string) (string, error)
+}
+
+// SealedV2Prefix marks a v2 ciphertext: sealed with associated data that binds
+// it to its column and row (agent-os-n4ca.7). It is defined here, not in
+// services, because it is a property of what is stored in this database: the
+// settings reader needs it to tell a v2 value from a plaintext one for the
+// keys that predate encryption (plaintextTolerantSettingKeys), and this
+// package cannot import services. '$' is outside the base64 alphabet, so no
+// v1 or legacy ciphertext can begin with it, and rclone does not allow it in a
+// remote name. Changing it makes every stored v2 value unreadable.
+const SealedV2Prefix = "$capstan$v2$"
+
+// IsSealedV2 reports whether a stored value is a v2 ciphertext.
+func IsSealedV2(stored string) bool {
+	return strings.HasPrefix(stored, SealedV2Prefix)
 }
 
 // ErrEncryptionUnavailable is returned by noEncryptor when the DB was built
@@ -51,8 +70,8 @@ var ErrEncryptionUnavailable = errdefs.ErrEncryptionUnavailable
 // tidier name.
 type noEncryptor struct{}
 
-func (noEncryptor) Encrypt(string) (string, error) { return "", ErrEncryptionUnavailable }
-func (noEncryptor) Decrypt(string) (string, error) { return "", ErrEncryptionUnavailable }
+func (noEncryptor) Encrypt(string, string) (string, error) { return "", ErrEncryptionUnavailable }
+func (noEncryptor) Decrypt(string, string) (string, error) { return "", ErrEncryptionUnavailable }
 
 type DB struct {
 	db        *sql.DB
@@ -153,6 +172,17 @@ func NewWithMigrationsAndEncryptor(dataDir string, encryptor TokenEncryptor) (*D
 		slog.Warn("Failed to sweep interrupted backup runs", "error", err)
 	} else if n > 0 {
 		slog.Warn("Marked interrupted backup runs as failed on startup", "count", n)
+	}
+
+	// Every boot, not once: a value can arrive in an old format after the
+	// upgrade too (a repository stored in clear while no key was configured,
+	// a restored pre-upgrade snapshot). Not fatal, for the same reason as the
+	// sweep above: a value this pass could not convert is still read through
+	// its old format's arm, so nothing becomes unreadable by it failing.
+	if n, err := db.ReencryptSecrets(); err != nil {
+		slog.Warn("Failed to re-encrypt stored secrets to the bound format; they stay readable in their previous format", "error", err)
+	} else if n > 0 {
+		slog.Info("Re-encrypted stored secrets to the bound format", "count", n)
 	}
 
 	return db, nil

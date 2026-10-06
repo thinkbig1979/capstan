@@ -120,9 +120,25 @@ audit; the measures below are in place and covered by tests.
   [Recovering Admin Access](../how-to/recover-admin-access.md).
 
 **Secrets at rest**
-- Stored secrets (git HTTPS tokens, the restic repository password) are encrypted
+- Stored secrets (git HTTPS tokens, the restic repository password, and the
+  restic repository and rclone remote, which can embed credentials) are encrypted
   with AES-256-GCM. The key is derived with HKDF from a dedicated `STORAGE_KEY`,
   independent of the JWT signing secret, so leaking one does not expose the other.
+- Each encrypted value is bound to the setting or directory it belongs to
+  (GCM associated data). Copying one value over another in the database, for
+  example the restic password into the git token, makes the read fail rather
+  than serve the wrong secret. Values written by releases before this binding
+  are converted at startup. One gap remains: an old, unbound value taken from a
+  pre-upgrade database copy and planted under the git token or restic password
+  still decrypts, because those values must stay readable after an upgrade.
+- Changing `STORAGE_KEY` makes every encrypted value unreadable: the git tokens,
+  the restic password, and the restic repository and rclone remote. Re-enter
+  them after a change. Backups refuse to run until you do, rather than run
+  against a partial configuration.
+- With no `STORAGE_KEY` or `JWT_SECRET` set, the restic repository and rclone
+  remote are stored unencrypted so a keyless install can still configure them.
+  They are encrypted at the first start that has a key. The password and git
+  tokens cannot be saved without a key.
 - The restic password is passed to restic via a private file, never on the
   command line or in logs. Secrets are never returned in API responses.
 

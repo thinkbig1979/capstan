@@ -1,0 +1,33 @@
+{
+  "generated_by": "backend/internal/services/crypto.go at 54d0f04 (unchanged since 638214a), via a throwaway -overlay test",
+  "jwt_secret": "fixture-jwt-secret-n4ca7",
+  "legacy_jwt_sha256": {
+    "directory_token": {
+      "Plaintext": "ghp_fixtureDirectoryToken",
+      "Ciphertext": "vBbiNveuJ+72WiPxFiYvzhdRCVMJeGabdQHIYXEfC1f5zANr4fT753jClN56EYlkeQJMd2c="
+    },
+    "git_https_token": {
+      "Plaintext": "ghp_fixtureGlobalToken",
+      "Ciphertext": "j8KzKOEAnqw4t1oSB04S98bz05WJtL/R9vyV3CwDCKojg+IMJy0KQgZVFwSNxb8ta+E="
+    },
+    "restic_password": {
+      "Plaintext": "fixture-restic-password",
+      "Ciphertext": "EgcDjIckf8H3nQH0umC6nLxR0eNrwgt0tGoefqhpnzPbTxH922X9HAPtQlcs8xIuNCWU"
+    }
+  },
+  "storage_secret": "fixture-storage-key-n4ca7",
+  "v1_primary": {
+    "directory_token": {
+      "Plaintext": "ghp_fixtureDirectoryToken",
+      "Ciphertext": "6aI0TkDk5Gs5vJSFXoe4VG2N9qEk376/0cm2XEAAIrGyVIi+sNCe6T/fnkXfAh1+lhMbuG4="
+    },
+    "git_https_token": {
+      "Plaintext": "ghp_fixtureGlobalToken",
+      "Ciphertext": "Z9zS5fficQg/SYchT0L8k3GpvFlHyB6gR6EMwI67cPg9oAdZ1FALtinkFrpfvTnCvXE="
+    },
+    "restic_password": {
+      "Plaintext": "fixture-restic-password",
+      "Ciphertext": "HNwFFxX5naYB/H8y/BhazAU4/hZx1kYjnmeBi3ErGHKuuNxetah4VSIhq+UDLRNuNufk"
+    }
+  }
+}

@@ -54,6 +54,22 @@ actually running afterwards with `GET /api/v1/version` or Settings → About.
 > healthcheck uses `localhost` and needs nothing. Instances with authentication
 > on are unaffected.
 
+> **Upgrading to the release that binds stored secrets to their setting:** at
+> the first start, Capstan re-encrypts every stored secret in a new format tied
+> to the setting or directory it belongs to, and starts encrypting the restic
+> repository and rclone remote, which were stored in clear before. Nothing to do
+> on upgrade. Two consequences:
+>
+> - **Rolling back below this release needs the pre-upgrade database.** Older
+>   releases cannot read the new format, and would read the encrypted repository
+>   as a local folder path. The schema version stops an older image from
+>   starting. Do not get past that with `CAPSTAN_ALLOW_SCHEMA_DOWNGRADE=1`: for
+>   this release it is not safe. Restore the `capstan.db` snapshot taken before
+>   the upgrade, or roll back and then re-enter the git tokens and all backup
+>   settings (repository, password, rclone remote).
+> - **Changing `STORAGE_KEY` now also requires re-entering the restic repository
+>   and rclone remote**, not only the password and git tokens.
+
 ## Rolling back
 
 Recovering from a bad release usually means re-pinning an older image tag (or
