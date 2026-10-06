@@ -294,24 +294,31 @@ jobs:
       # frontend.yml. The action itself is SHA-pinned, same convention as
       # react-doctor.yml's millionco/react-doctor pin.
       #
-      # Verified locally on 2026-08-08 via `golangci-lint --version`: reports
-      # 2.12.2, matching the pin below, and `golangci-lint run ./...` in
-      # backend/ exits 0. This claim goes stale the moment either binary or
+      # Verified locally on 2026-10-06 via `golangci-lint version`: reports
+      # 2.14.0 built with go1.27.0, matching the pin below, and
+      # `golangci-lint run ./...` in backend/ on toolchain go1.27.1 exits 0
+      # ("0 issues."; a planted unchecked os.Chdir was reported, so the zero
+      # is not a lint that never ran). This claim goes stale the moment either binary or
       # pin changes — re-run both commands yourself before trusting it;
       # don't assume it still holds.
       #
-      # A bare `go install .../golangci-lint@v2.12.2` is NOT enough to
+      # THE PIN MUST BE A RELEASE BUILT WITH A GO AT LEAST AS NEW AS backend/go.mod's
+      # `toolchain`. v2.12.2 was built with go1.26 and stopped loading the
+      # config when the toolchain moved to go1.27.1 (agent-os-k4ad, PR #513):
+      # a Dependabot golang bump therefore needs a golangci-lint bump with it.
+      #
+      # A bare `go install .../golangci-lint@v2.14.0` is NOT enough to
       # reproduce this: it builds against whatever Go toolchain is your
       # shell default, and if that's older than backend/go.mod's `toolchain`
       # directive, the resulting binary refuses to run here with "the Go
       # language version used to build golangci-lint is lower than the
       # targeted Go version" — an error that names a Go version, not the
       # pin, so it doesn't read as an install problem. Force the build
-      # toolchain instead: `GOTOOLCHAIN=go<toolchain> go install .../golangci-lint@v2.12.2`
+      # toolchain instead: `GOTOOLCHAIN=go<toolchain> go install .../golangci-lint@v2.14.0`
       # (substitute the version of the `toolchain` line backend/go.mod currently
       # declares).
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.12.2
+          version: v2.14.0
           working-directory: backend
