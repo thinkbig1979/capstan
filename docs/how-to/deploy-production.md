@@ -58,6 +58,10 @@ the [Configuration reference](../reference/configuration.md).
   happens.
 - **Configure `TRUSTED_NETWORKS`** with your reverse proxy's IP only, never a
   whole private range (any host in a trusted range can spoof `X-Forwarded-For`).
+  A recreated proxy container can get a new IP and the `/32` then stops
+  matching, so pin it (`ipv4_address` on the proxy service) or use
+  `capstan-network`'s own subnet (`docker network inspect capstan-network`),
+  which is still far narrower than all of RFC1918.
   It sets correct client-IP attribution (rate
   limiting), reverse-proxy trust, and — since it gates `X-Forwarded-Proto` —
   whether `Secure` cookies and HSTS are issued at all. If you must run `AUTH_DISABLED=true`
