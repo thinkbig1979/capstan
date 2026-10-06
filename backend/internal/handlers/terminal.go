@@ -81,6 +81,7 @@ func (h *TerminalHandler) handleTerminalWS(jwtSecret string, authDisabled bool) 
 		conn, release, err := serveWS(c, h.db, jwtSecret, authDisabled, h.cm, wsRegistration{
 			refuseCode:   CloseCodeRateLimit,
 			refuseReason: "Too many open terminal sessions",
+			readLimit:    wsReadLimitTerminal,
 			onRefuse: func(conn *Connection) {
 				slog.Warn("Terminal connection refused: per-user limit reached",
 					"user_id", conn.UserID, "stack_id", stackID, "container", containerName)
@@ -247,6 +248,7 @@ func (h *TerminalHandler) readFromWebSocket(conn *Connection, session *services.
 			_ = conn.Conn.SetReadDeadline(time.Now().Add(60 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
 			messageType, data, err := conn.Conn.ReadMessage()
 			if err != nil {
+				conn.logReadErr(err)
 				if err != io.EOF {
 					slog.Debug("WebSocket read error", "error", err)
 				}

@@ -33,6 +33,25 @@ const (
 	DefaultConnectionLimit = 10
 )
 
+// Per-frame read limits (agent-os-a1ye.8). gorilla/websocket's default is NO
+// limit, so without these an authenticated client could push one arbitrarily
+// large frame into server memory on any WS route. upgradeConnection applies
+// the limit right after Upgrade, so every serveWS caller gets it by
+// construction. A frame over the limit makes the next read return
+// websocket.ErrReadLimit, and gorilla itself sends close 1009 (message too big).
+const (
+	// wsReadLimitDefault covers every route whose client never sends more than
+	// an auth frame, a ping/pong or a close (logs, metrics, operations, backups,
+	// update jobs).
+	wsReadLimitDefault int64 = 64 << 10
+	// wsReadLimitTerminal bounds terminal input. It equals the default on
+	// purpose: the frontend sends an xterm paste as ONE binary frame
+	// (frontend/src/components/stack/terminal/useTerminalSession.ts,
+	// handleTerminalData), so a limit below the default would close the
+	// session on a modest paste. Kept as its own name so the two can diverge.
+	wsReadLimitTerminal int64 = wsReadLimitDefault
+)
+
 var upgrader websocket.Upgrader
 
 func InitUpgrader(corsOrigins string, authDisabled bool) {
@@ -98,6 +117,9 @@ type Connection struct {
 	Conn       *websocket.Conn
 	CreatedAt  time.Time
 	WriteMutex sync.Mutex
+	// ReadLimit is the per-frame read limit upgradeConnection set on Conn;
+	// carried only so a read-limit refusal can log it (agent-os-a1ye.8).
+	ReadLimit int64
 }
 
 type ConnectionManager struct {
@@ -436,7 +458,31 @@ func readJSON(conn *websocket.Conn, v interface{}) error {
 	// A failed deadline set surfaces immediately as a read error below,
 	// which the caller already handles.
 	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second)) //nolint:errcheck // A failed deadline set surfaces as the very next read/write on this conn, which IS checked; handling it here would double-report one fault.
-	return conn.ReadJSON(v)
+	err := conn.ReadJSON(v)
+	logIfWSReadLimit(err, 0, "remote_addr", conn.RemoteAddr())
+	return err
+}
+
+// logIfWSReadLimit logs one WARN when err is a read-limit refusal
+// (websocket.ErrReadLimit) and does nothing for any other error, so every read
+// site can call it on its existing error path. Never logs the payload: gorilla
+// has not delivered it, and an oversize frame is the attacker-controlled part.
+// limit <= 0 omits the limit attribute (readJSON has no Connection to read it
+// from). gorilla has already sent close 1009 by the time the read returns the
+// error; this adds the server-side record only (agent-os-a1ye.8).
+func logIfWSReadLimit(err error, limit int64, attrs ...any) {
+	if !errors.Is(err, websocket.ErrReadLimit) {
+		return
+	}
+	if limit > 0 {
+		attrs = append(attrs, "limit_bytes", limit)
+	}
+	slog.Warn("WebSocket frame exceeded read limit; connection closed", attrs...)
+}
+
+// logReadErr is logIfWSReadLimit with this connection's identity attached.
+func (c *Connection) logReadErr(err error) {
+	logIfWSReadLimit(err, c.ReadLimit, "connection_id", c.ID, "user_id", c.UserID, "session_id", c.SessionID)
 }
 
 func safeWriteJSON(c *Connection, v interface{}) error {
@@ -560,11 +606,20 @@ func wsAuthCloseFor(err error) (int, string) {
 	return CloseCodeAuthFailure, "Auth failed"
 }
 
-func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDisabled bool) (*Connection, error) {
+func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDisabled bool, readLimit int64) (*Connection, error) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return nil, err
 	}
+
+	// Set before ANY read, including the auth frame below: gorilla's default
+	// is unlimited, so an unauthenticated client could otherwise push one huge
+	// frame at the auth read. This is the only Upgrade call in the backend, so
+	// every WS route inherits the limit (agent-os-a1ye.8).
+	if readLimit <= 0 {
+		readLimit = wsReadLimitDefault
+	}
+	conn.SetReadLimit(readLimit)
 
 	var userID string
 
@@ -607,6 +662,7 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 				Token string `json:"token"`
 			}
 			if err := conn.ReadJSON(&authMsg); err != nil {
+				logIfWSReadLimit(err, readLimit, "remote_addr", conn.RemoteAddr(), "phase", "auth")
 				writeCloseMessage(conn, CloseCodeAuthFailure, "Auth timeout")
 				conn.Close()
 				return nil, &models.AppError{Code: models.ErrSessionExpired, Message: "No auth message received", Status: 401}
@@ -656,6 +712,7 @@ func upgradeConnection(c *gin.Context, db *database.DB, jwtSecret string, authDi
 		SessionID: c.GetString("jti"),
 		Conn:      conn,
 		CreatedAt: time.Now(),
+		ReadLimit: readLimit,
 	}
 
 	// Deadlines here govern reads the caller performs after this function
@@ -694,6 +751,9 @@ type wsRegistration struct {
 	// onRefuse runs before the refusal close frame is written, e.g. to log
 	// the refusal with site-specific fields. Optional.
 	onRefuse func(conn *Connection)
+	// readLimit is the per-frame read limit for this route; zero means
+	// wsReadLimitDefault. Only terminal.go sets it (agent-os-a1ye.8).
+	readLimit int64
 }
 
 // errWSRefused marks a serveWS error as a registration refusal (the
@@ -737,7 +797,7 @@ var errWSRefused = errors.New("websocket connection refused: registration limit"
 // opt-in, and its own test suite routinely runs with cm nil), and warning
 // there would train readers to ignore the warning.
 func serveWS(c *gin.Context, db *database.DB, jwtSecret string, authDisabled bool, cm *ConnectionManager, reg wsRegistration) (*Connection, func(), error) {
-	conn, err := upgradeConnection(c, db, jwtSecret, authDisabled)
+	conn, err := upgradeConnection(c, db, jwtSecret, authDisabled, reg.readLimit)
 	if err != nil {
 		// One ERROR line for EVERY upgrade/auth failure, at every call site,
 		// independent of handleError/logServerFault (respond.go's 4xx-silent

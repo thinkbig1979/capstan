@@ -1654,6 +1654,7 @@ func (h *BackupHandler) wsAttach(jwtSecret string, authDisabled bool, action str
 		go func() {
 			for {
 				if _, _, err := conn.Conn.ReadMessage(); err != nil {
+					conn.logReadErr(err)
 					wsCancel()
 					return
 				}

@@ -126,6 +126,7 @@ func (h *UpdateJobsWSHandler) streamJob(c *gin.Context) {
 			default:
 				_, _, readErr := conn.Conn.ReadMessage()
 				if readErr != nil {
+					conn.logReadErr(readErr)
 					cancel()
 					return
 				}
