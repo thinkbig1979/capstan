@@ -158,6 +158,18 @@ a remote.
 | `RCLONE_PATH` | none | No | Destination path within the rclone remote. |
 | `RCLONE_TRANSFERS` | `4` | No | Number of parallel file transfers rclone uses during sync. |
 
+## Child-process timeouts
+
+**Env-only** — read once at startup, no UI or database override.
+
+Each value is a Go duration: a number with a unit, such as `90s`, `10m` or `1h30m`. A value without a unit, or one that is zero or negative, fails startup rather than falling back to the default. Each timeout bounds one child process. When it passes, the process is killed and the operation reports a failure naming the timeout, for example `docker compose up timed out after 10m0s`. Lifecycle operations hold the stack's operation lock while their command runs, so before these bounds existed a single hung command blocked every later operation on that stack until the server restarted. The interactive terminal (`docker exec -it`) and the followed log stream have no timeout: the browser session sets their lifetime.
+
+| Name | Default | Required | What it does |
+| --- | --- | --- | --- |
+| `CAPSTAN_COMPOSE_TIMEOUT` | `10m` | No | Limit for one `docker compose` command run by Capstan: start (`up -d`), stop (`down`), pull, delete (`down -v`), the status read (`ps`) and the one-shot log read (`logs --tail`). Restart is a stop followed by a start, so each half gets its own limit. A streamed operation started from the stack page keeps running if the browser tab closes and is still bound by this limit. Raise it if image pulls on a slow registry are being cut off. |
+| `CAPSTAN_GIT_TIMEOUT` | `2m` | No | Limit for one `git` command: status, log, diff, fetch, pull and the probes a failed pull runs afterwards to explain the failure. It applies to each command separately, so a failed pull followed by its diagnostic probes can take several multiples of it in total. |
+| `CAPSTAN_UPDATE_TIMEOUT` | `15m` | No | Limit for one manual container or compose-service update job, image pull included, counted from when the job starts running rather than from when it was queued. Jobs run one at a time, so this also bounds how long one stuck job can hold up the jobs queued behind it. Scheduled automatic updates have their own fixed 10-minute limit and do not read this value. |
+
 ## Database & migrations
 
 **Env-only** — read once at startup, no UI or database override.

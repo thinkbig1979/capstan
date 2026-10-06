@@ -25,12 +25,12 @@ import (
 // OS-merged body and pins all three outcomes.
 //
 // These tests drive the real Logs() through the package's established
-// execCommand indirection (exec_env.go) rather than a PATH wrapper, so the
+// execCommandContext indirection (exec_env.go) rather than a PATH wrapper, so the
 // stdout/stderr contract of the actual call site is what is under test. They
 // reuse stubComposeScript and stubbedStatusService from
 // docker_status_stderrsplit_sl9z_test.go: the sibling bead built the same
 // harness, and it is a DockerService with a temp-dir config plus a redirected
-// execCommand, which is exactly what Logs() needs too.
+// execCommandContext, which is exactly what Logs() needs too.
 
 // The two stdout rows stand in for the container's own output, in the shape
 // `docker compose logs --timestamps` emits: "<container> | <RFC3339Nano> <msg>".

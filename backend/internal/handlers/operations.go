@@ -137,79 +137,96 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 		// no-ops once the slot is already free), so the deferred Release
 		// still runs harmlessly.
 		func() {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			// DESIGN CHOICE (agent-os-a1ye.3): the compose process does NOT run
+			// under the socket's context. It used to, and the reader below
+			// cancelled it on any read error, so closing the browser tab killed
+			// a `compose up`/`down` part-way and could leave a restart stopped.
+			// A detached compose up/down must finish rather than be killed by a
+			// disconnect (or by shutdown: main.go hands this handler no server
+			// context, so none cancels it either). RunStreaming bounds it with
+			// the compose deadline, CAPSTAN_COMPOSE_TIMEOUT, which is what keeps
+			// a hung child from holding the lock forever. There is no client
+			// cancel frame to honour: the UI's cancel only closes the socket.
+			opCtx := context.Background()
 
-			go safePingLoop(ctx, conn, DefaultPingInterval)
+			// The socket's own lifetime: ends the ping loop once the client
+			// is gone. It never reaches the process.
+			wsCtx, wsCancel := context.WithCancel(context.Background())
+			defer wsCancel()
+
+			go safePingLoop(wsCtx, conn, DefaultPingInterval)
 
 			go func() {
 				for {
-					select {
-					case <-ctx.Done():
+					if _, _, err := conn.Conn.ReadMessage(); err != nil {
+						wsCancel()
 						return
-					default:
-						_, _, err := conn.Conn.ReadMessage()
-						if err != nil {
-							cancel()
-							return
-						}
 					}
 				}
 			}()
 
-			// Best-effort notification; a write failure here surfaces on the
-			// next read/ping and the connection is torn down there.
-			_ = safeWriteJSON(conn, gin.H{ //nolint:errcheck // Best-effort frame: a write failure surfaces on the next read/ping and the connection is torn down there.
+			// send writes to the client until the first failure, then drops
+			// everything after it. The caller keeps draining RunStreaming
+			// either way: its goroutines block on a full channel, so an
+			// abandoned channel would stall the process it streams.
+			detached := false
+			send := func(v any, what string) {
+				if detached {
+					return
+				}
+				if wsCtx.Err() != nil {
+					detached = true
+				} else if err := safeWriteJSON(conn, v); err != nil {
+					slog.Debug("Failed to write "+what+"; operation continues without a client", "error", err)
+					detached = true
+				}
+				if detached {
+					slog.Info("Client left a streaming operation; it continues to completion",
+						"stack_id", stackID, "action", action)
+				}
+			}
+
+			send(gin.H{
 				"type":   "start",
 				"action": action,
 				"stack":  stack.ProjectName,
-			})
+			}, "start frame")
 
 			if action == "restart" {
 				// Two-phase restart: stream the down phase first, then the up phase.
 				// Only the up-phase terminal done frame is the definitive result
 				// (finding #18 fix: down-phase done is consumed and not forwarded as terminal).
-				stopCh := h.docker.RunStreaming(ctx, *stack, "down", nil)
-				for line := range stopCh {
+				stopFailed := false
+				for line := range h.docker.RunStreaming(opCtx, *stack, "down", nil) {
 					if line.Type == "done" {
 						if !line.Success {
-							// The stop phase failed — emit the failure done frame and return.
-							if err := safeWriteJSON(conn, line); err != nil {
-								slog.Debug("Failed to write stop failure frame", "error", err)
-							}
-							return
+							// The stop phase failed: forward its done frame
+							// as the result and do not start.
+							send(line, "stop failure frame")
+							stopFailed = true
 						}
 						// Stop succeeded — do not forward the intermediate done frame;
 						// the client will see the phase announcement instead.
 						continue
 					}
-					if err := safeWriteJSON(conn, line); err != nil {
-						slog.Debug("Failed to write stop output", "error", err)
-						return
-					}
+					send(line, "stop output")
 				}
-				// Best-effort notification; a write failure here surfaces on the
-				// next line written below, which is error-checked.
-				_ = safeWriteJSON(conn, gin.H{ //nolint:errcheck // Best-effort frame: a write failure surfaces on the next read/ping and the connection is torn down there.
+				if stopFailed {
+					return
+				}
+				send(gin.H{
 					"type":    "phase",
 					"phase":   "starting",
 					"message": "Stack stopped, starting...",
-				})
+				}, "phase frame")
 				subcommand = "up"
 				extraArgs = []string{"-d"}
 			}
 
 			// Stream the main (or up-phase) command. The terminal done frame now
 			// carries outcome+reason from the verified end state (finding #5 + #18 fix).
-			lineCh := h.docker.RunStreaming(ctx, *stack, subcommand, extraArgs)
-			for line := range lineCh {
-				if ctx.Err() != nil {
-					return
-				}
-				if err := safeWriteJSON(conn, line); err != nil {
-					slog.Debug("Failed to write operation output", "error", err)
-					return
-				}
+			for line := range h.docker.RunStreaming(opCtx, *stack, subcommand, extraArgs) {
+				send(line, "operation output")
 			}
 
 			slog.Info("Streaming operation completed", "stack_id", stackID, "action", action)

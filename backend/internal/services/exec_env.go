@@ -1,15 +1,21 @@
 package services
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/dockerenv"
 )
 
 // execCommand and execCommandContext are indirections over exec.Command and
-// exec.CommandContext used at every docker/docker-compose call site in this
-// package (docker.go, docker_lifecycle.go, docker_update.go, terminal.go).
+// exec.CommandContext used at every docker/docker-compose and git call site in
+// this package. execCommand (no context, no deadline) is left with exactly one
+// caller, terminal.go's interactive `docker exec -it`, whose lifetime is the
+// user's session; everything else goes through commandWithDeadline.
 // Production never overrides them. Tests substitute them to redirect the
 // constructed command at a harmless stand-in binary (e.g. `sh -c env`) so they
 // can inspect the *exec.Cmd the real call site actually builds — including its
@@ -19,6 +25,70 @@ var (
 	execCommand        = exec.Command
 	execCommandContext = exec.CommandContext
 )
+
+// commandWaitDelay is how long Wait keeps waiting for a killed child's output
+// pipes to close. The docker CLI runs compose as a plugin subprocess, and git
+// spawns helpers, so killing the direct child can leave a grandchild holding
+// stdout open; without a WaitDelay, CombinedOutput then blocks until the
+// grandchild exits on its own, which is the unbounded wait the deadline exists
+// to prevent. OBSERVED in lifecycle_deadline_a1ye3_test.go's "grandchild holds
+// the pipe" case: without it, StartVerified outlived the 300ms deadline by 8s+.
+const commandWaitDelay = 5 * time.Second
+
+// commandTimeoutError is the cause attached to a commandWithDeadline context.
+// Using it as the context's cause (rather than checking DeadlineExceeded) means
+// a parent cancellation, such as UpdateJobManager.Stop, is never misreported
+// as a timeout.
+type commandTimeoutError struct{ timeout time.Duration }
+
+func (e *commandTimeoutError) Error() string {
+	return fmt.Sprintf("timed out after %s", e.timeout)
+}
+
+// withCommandDeadline derives the context a child process runs under: parent,
+// bounded by timeout. Callers defer the returned cancel.
+func withCommandDeadline(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeoutCause(parent, timeout, &commandTimeoutError{timeout: timeout})
+}
+
+// boundCommand builds the child under ctx, with commandWaitDelay so a killed
+// child's pipes are reaped.
+func boundCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := execCommandContext(ctx, name, args...)
+	cmd.WaitDelay = commandWaitDelay
+	return cmd
+}
+
+// commandWithDeadline is the one constructor for a non-interactive child
+// process in this package (agent-os-a1ye.3): the command is killed once
+// timeout passes or parent ends, whichever is first. Lifecycle commands run
+// while the stack's operation lock is held, so before this a single hung
+// `docker compose` held that lock until the server restarted. The caller
+// defers cancel and passes its error through timeoutError, so a timeout reads
+// as one rather than as "signal: killed".
+func commandWithDeadline(parent context.Context, timeout time.Duration, name string, args ...string) (*exec.Cmd, context.Context, context.CancelFunc) {
+	ctx, cancel := withCommandDeadline(parent, timeout)
+	return boundCommand(ctx, name, args...), ctx, cancel
+}
+
+// timeoutError names the timeout when err came from a command whose
+// commandWithDeadline context ran out, e.g. "docker compose up timed out
+// after 10m0s: signal: killed". Any other err, including nil, is returned
+// unchanged.
+func timeoutError(ctx context.Context, err error, what string) error {
+	var te *commandTimeoutError
+	if err == nil || !errors.As(context.Cause(ctx), &te) {
+		return err
+	}
+	return fmt.Errorf("%s %w: %w", what, te, err)
+}
+
+// commandTimedOut reports whether ctx, from commandWithDeadline, ended because
+// its timeout passed (and not because its parent was cancelled).
+func commandTimedOut(ctx context.Context) bool {
+	var te *commandTimeoutError
+	return errors.As(context.Cause(ctx), &te)
+}
 
 // dockerEnv builds the environment for a docker/docker-compose child process:
 // only dockerenv.AllowedEnvVars, taken from Capstan's own process

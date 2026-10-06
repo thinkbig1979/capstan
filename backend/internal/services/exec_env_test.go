@@ -64,20 +64,13 @@ func TestStripCapstanSecrets_RemovesOnlyKnownSecrets(t *testing.T) {
 // ---- call-site tests: prove the 11 docker/compose sites actually route
 // through dockerEnv(), not just that the helper works in isolation ----
 
-// withStubExecCommand redirects execCommand to run `sh -c env`, ignoring the
-// real ("docker", ...) argv, so the test can capture the exact environment
-// the real call site hands to os/exec — without a docker binary or daemon.
-func withStubExecCommand(t *testing.T) {
-	t.Helper()
-	orig := execCommand
-	execCommand = func(name string, arg ...string) *exec.Cmd {
-		return exec.Command("sh", "-c", "env")
-	}
-	t.Cleanup(func() { execCommand = orig })
-}
-
-// withStubExecCommandContext is the execCommandContext equivalent of
-// withStubExecCommand.
+// withStubExecCommandContext redirects execCommandContext to run `sh -c env`,
+// ignoring the real ("docker", ...) argv, so the test can capture the exact
+// environment the real call site hands to os/exec — without a docker binary or
+// daemon. Every non-interactive site builds its command through
+// commandWithDeadline, which uses execCommandContext (agent-os-a1ye.3), so this
+// one stub covers them all; only terminal.go's `docker exec -it` is left on
+// execCommand.
 func withStubExecCommandContext(t *testing.T) {
 	t.Helper()
 	orig := execCommandContext
@@ -88,13 +81,13 @@ func withStubExecCommandContext(t *testing.T) {
 }
 
 // TestLogs_DoesNotLeakCapstanSecrets covers docker.go's Logs, the one
-// execCommand call site in that file. Before the fix, cmd.Env was left nil, so
+// compose call site in that file. Before the fix, cmd.Env was left nil, so
 // the stubbed `env` process (which inherits cmd.Env, or the whole test process
 // environment if cmd.Env is nil) would print the sentinel — this test fails on
 // that code the same way it would fail before the dockerEnv() fix.
 func TestLogs_DoesNotLeakCapstanSecrets(t *testing.T) {
 	t.Setenv("JWT_SECRET", "sentinel-value-logs")
-	withStubExecCommand(t)
+	withStubExecCommandContext(t)
 
 	tempDir := t.TempDir()
 	cfg := &config.Config{StacksDir: tempDir}
@@ -109,12 +102,12 @@ func TestLogs_DoesNotLeakCapstanSecrets(t *testing.T) {
 }
 
 // TestPullVerified_DoesNotLeakCapstanSecrets covers docker_lifecycle.go's
-// PullVerified, standing in for its five sibling execCommand/execCommandContext
+// PullVerified, standing in for its five sibling commandWithDeadline
 // sites in that file (StartVerified, StopVerified, DeleteVerified, Status,
 // RunStreaming all follow the identical construct-cmd-then-set-Env shape).
 func TestPullVerified_DoesNotLeakCapstanSecrets(t *testing.T) {
 	t.Setenv("JWT_SECRET", "sentinel-value-pull")
-	withStubExecCommand(t)
+	withStubExecCommandContext(t)
 
 	tempDir := t.TempDir()
 	cfg := &config.Config{StacksDir: tempDir}
@@ -133,7 +126,7 @@ func TestPullVerified_DoesNotLeakCapstanSecrets(t *testing.T) {
 
 // TestRunStreaming_DoesNotLeakCapstanSecrets covers docker_lifecycle.go's
 // RunStreaming, the execCommandContext site used for the streamed compose
-// endpoints (as opposed to PullVerified's execCommand/CombinedOutput shape).
+// endpoints (as opposed to PullVerified's CombinedOutput shape).
 func TestRunStreaming_DoesNotLeakCapstanSecrets(t *testing.T) {
 	t.Setenv("JWT_SECRET", "sentinel-value-runstreaming")
 	withStubExecCommandContext(t)

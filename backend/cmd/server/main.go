@@ -606,6 +606,7 @@ func main() {
 	dashboardHandler.RegisterRoutes(protected, cfg.JWTSecret, cfg.AuthDisabled)
 
 	updateJobManager := services.NewUpdateJobManager(15 * time.Minute)
+	updateJobManager.SetJobTimeout(cfg.UpdateTimeout)
 
 	resourcesHandler := handlers.NewResourcesHandlerWithJobManager(dockerService, db, schedulerService, updateJobManager)
 

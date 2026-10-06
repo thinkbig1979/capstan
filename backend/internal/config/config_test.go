@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // LOG_LEVEL used to be dead configuration — read, logged back out, never
@@ -404,6 +405,73 @@ func TestLoad_RejectsImplausibleAPIRateLimit(t *testing.T) {
 				t.Errorf("error should name the offending variable, got: %v", err)
 			}
 		})
+	}
+}
+
+// The three child-process deadlines (agent-os-a1ye.3): unset gives the
+// documented default, a set value is read, and a typo or non-positive value
+// fails startup like RATE_LIMIT_API_PER_MIN rather than silently keeping the
+// default.
+func TestLoad_ChildProcessTimeouts(t *testing.T) {
+	fields := []struct {
+		env string
+		get func(*Config) time.Duration
+		def time.Duration
+	}{
+		{"CAPSTAN_COMPOSE_TIMEOUT", func(c *Config) time.Duration { return c.ComposeTimeout }, DefaultComposeTimeout},
+		{"CAPSTAN_GIT_TIMEOUT", func(c *Config) time.Duration { return c.GitTimeout }, DefaultGitTimeout},
+		{"CAPSTAN_UPDATE_TIMEOUT", func(c *Config) time.Duration { return c.UpdateTimeout }, DefaultUpdateTimeout},
+	}
+	for _, f := range fields {
+		t.Run(f.env+"/unset", func(t *testing.T) {
+			setBaseLoadEnv(t)
+			t.Setenv(f.env, "")
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() returned unexpected error: %v", err)
+			}
+			if got := f.get(cfg); got != f.def {
+				t.Errorf("unset %s = %s, want default %s", f.env, got, f.def)
+			}
+		})
+		t.Run(f.env+"/set", func(t *testing.T) {
+			setBaseLoadEnv(t)
+			t.Setenv(f.env, "90s")
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() returned unexpected error: %v", err)
+			}
+			if got := f.get(cfg); got != 90*time.Second {
+				t.Errorf("%s=90s gave %s", f.env, got)
+			}
+		})
+		for _, bad := range []string{"10", "ten minutes", "0s", "-1m"} {
+			t.Run(f.env+"/rejects "+bad, func(t *testing.T) {
+				setBaseLoadEnv(t)
+				t.Setenv(f.env, bad)
+				_, err := Load()
+				if err == nil {
+					t.Fatalf("expected Load() to reject %s=%q, got nil error", f.env, bad)
+				}
+				if !strings.Contains(err.Error(), f.env) {
+					t.Errorf("error should name the offending variable, got: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// A Config built as a struct literal has zero timeouts; consumers read them
+// through OrDefault so that never means "expire immediately".
+func TestOrDefault(t *testing.T) {
+	if got := OrDefault(0, time.Minute); got != time.Minute {
+		t.Errorf("OrDefault(0) = %s, want 1m", got)
+	}
+	if got := OrDefault(-time.Second, time.Minute); got != time.Minute {
+		t.Errorf("OrDefault(-1s) = %s, want 1m", got)
+	}
+	if got := OrDefault(5*time.Second, time.Minute); got != 5*time.Second {
+		t.Errorf("OrDefault(5s) = %s, want 5s", got)
 	}
 }
 
