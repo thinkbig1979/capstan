@@ -49,7 +49,7 @@ fix: file them.
    `writeEnvFileAtomic` (`backend/internal/handlers/env.go`) does, never by a
    bare `os.WriteFile`.
 8. **Frontend mutations** that return an `ActionResult` go through
-   `useActionMutation` (`frontend/src/lib/error-handler.ts`). A `toast.success`
+   `useActionMutation` (`frontend/src/hooks/useActionMutation.ts`). A `toast.success`
    that doesn't read the outcome is a defect.
 
 ## Trust and secrets
