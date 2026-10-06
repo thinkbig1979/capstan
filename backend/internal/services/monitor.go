@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
@@ -22,6 +25,22 @@ import (
 type MonitorService struct {
 	client *client.Client
 	db     Database
+	// events overrides where ListenEvents subscribes. Nil means s.client;
+	// tests set it to a fake that can fail and recover on demand.
+	events eventsSource
+	// wait overrides the reconnect backoff sleep. Nil means a real timer.
+	wait func(ctx context.Context, d time.Duration) bool
+}
+
+// EventsResyncType is the StackEvent type ListenEvents emits after it
+// re-subscribes to a lost Docker event stream. Events from the gap are gone,
+// so clients refetch instead of trusting their cached stack statuses.
+const EventsResyncType = "events_resync"
+
+// eventsSource is the part of the Docker SDK ListenEvents needs.
+type eventsSource interface {
+	Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error)
+	Ping(ctx context.Context) (types.Ping, error)
 }
 
 type Database interface {
@@ -296,68 +315,184 @@ func (s *MonitorService) stackEventFor(action, containerID, projectName string, 
 }
 
 func (s *MonitorService) ListenEvents(ctx context.Context) (<-chan models.StackEvent, error) {
-	if s == nil || s.client == nil {
+	if s == nil {
 		return nil, ErrDockerUnavailable
+	}
+	// Resolved through a nil check on the concrete pointer: boxing a nil
+	// *client.Client into the interface would make it non-nil.
+	src := s.events
+	if src == nil {
+		if s.client == nil {
+			return nil, ErrDockerUnavailable
+		}
+		src = s.client
 	}
 
 	eventChan := make(chan models.StackEvent, 100)
-
-	dockerEvents, errChan := s.client.Events(ctx, events.ListOptions{
+	opts := events.ListOptions{
 		Filters: filters.NewArgs(
 			filters.KeyValuePair{
 				Key:   "type",
 				Value: "container",
 			},
 		),
-	})
+	}
 
+	// The SDK ends a stream on its first error (a daemon restart reads as EOF)
+	// and leaves reopening it to the caller. This loop is that caller: the
+	// channel stays open across reconnects and closes only when ctx ends, so
+	// the broadcaster and every WS client attached to it outlive an outage
+	// (agent-os-a1ye.5).
 	go func() {
 		defer close(eventChan)
 
+		delay := eventsBackoffMin
+		resync := false
 		for {
-			select {
-			case event := <-dockerEvents:
-				if event.Type != "container" {
-					continue
-				}
-
-				containerID := event.Actor.ID
-				action := string(event.Action)
-
-				slog.Debug("Docker container event", "action", action, "container", containerID[:12])
-
-				switch action {
-				case "start", "stop", "die", "kill", "destroy", "restart", "pause", "unpause", "create", "rename":
-				default:
-					continue
-				}
-
-				containerLabels := event.Actor.Attributes
-				projectName := containerLabels["com.docker.compose.project"]
-
-				stackEvent, ok := s.stackEventFor(action, containerID, projectName, time.Unix(event.Time, 0))
-				if !ok {
-					continue
-				}
-
-				select {
-				case eventChan <- stackEvent:
-				case <-ctx.Done():
-					return
-				}
-
-			case err := <-errChan:
-				if err != nil {
-					slog.Error("Docker event error", "error", err)
-					return
-				}
-			case <-ctx.Done():
+			started := time.Now()
+			delivered, err := s.forwardEvents(ctx, src, opts, eventChan, resync)
+			if ctx.Err() != nil {
 				return
 			}
+			// Only a stream that did real work resets the backoff. One that
+			// dies straight after a good ping (the events API itself failing)
+			// keeps climbing, or it would log a WARN every second forever.
+			if delivered || time.Since(started) >= eventsBackoffMax {
+				delay = eventsBackoffMin
+			}
+			next, ok := s.awaitDaemon(ctx, src, err, delay)
+			if !ok {
+				return
+			}
+			delay = next
+			resync = true
 		}
 	}()
 
 	return eventChan, nil
+}
+
+const (
+	eventsBackoffMin = 1 * time.Second
+	eventsBackoffMax = 60 * time.Second
+)
+
+// forwardEvents runs one subscription until it fails or ctx ends, mapping
+// Docker events onto out. With resync set it first announces the reconnect.
+// It reports whether any event was forwarded, and the error that ended it.
+func (s *MonitorService) forwardEvents(ctx context.Context, src eventsSource, opts events.ListOptions, out chan<- models.StackEvent, resync bool) (bool, error) {
+	dockerEvents, errChan := src.Events(ctx, opts)
+
+	delivered := false
+	send := func(ev models.StackEvent) bool {
+		select {
+		case out <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	if resync {
+		slog.Info("Docker event stream restored")
+		// Sent after subscribing, so a refetch it triggers cannot predate
+		// the events that follow it.
+		if !send(models.StackEvent{Type: EventsResyncType, Timestamp: time.Now()}) {
+			return delivered, ctx.Err()
+		}
+	}
+
+	for {
+		select {
+		case event := <-dockerEvents:
+			if event.Type != "container" {
+				continue
+			}
+
+			containerID := event.Actor.ID
+			action := string(event.Action)
+
+			slog.Debug("Docker container event", "action", action, "container", containerID[:12])
+
+			switch action {
+			case "start", "stop", "die", "kill", "destroy", "restart", "pause", "unpause", "create", "rename":
+			default:
+				continue
+			}
+
+			containerLabels := event.Actor.Attributes
+			projectName := containerLabels["com.docker.compose.project"]
+
+			stackEvent, ok := s.stackEventFor(action, containerID, projectName, time.Unix(event.Time, 0))
+			if !ok {
+				continue
+			}
+
+			if !send(stackEvent) {
+				return delivered, ctx.Err()
+			}
+			delivered = true
+
+		case err := <-errChan:
+			// The SDK closes errChan after its one error; a bare close is
+			// still the end of this stream.
+			if err == nil {
+				err = io.EOF
+			}
+			return delivered, err
+		case <-ctx.Done():
+			return delivered, ctx.Err()
+		}
+	}
+}
+
+// awaitDaemon logs the outage once at WARN, then waits with jittered
+// exponential backoff, starting at delay, until the daemon answers a ping.
+// It returns the delay the next outage should start from, and false if ctx
+// ended first.
+func (s *MonitorService) awaitDaemon(ctx context.Context, src eventsSource, cause error, delay time.Duration) (time.Duration, bool) {
+	wait := s.wait
+	if wait == nil {
+		wait = sleepCtx
+	}
+
+	for attempt := 0; ; attempt++ {
+		d := jitterDelay(delay)
+		if attempt == 0 {
+			slog.Warn("Docker event stream lost, reconnecting", "error", cause, "retryIn", d)
+		}
+		if !wait(ctx, d) {
+			return delay, false
+		}
+		delay = min(delay*2, eventsBackoffMax)
+
+		_, err := src.Ping(ctx)
+		if err == nil {
+			return delay, true
+		}
+		if ctx.Err() != nil {
+			return delay, false
+		}
+		slog.Debug("Docker daemon still unreachable", "error", err, "attempt", attempt+1)
+	}
+}
+
+// jitterDelay picks a delay in [d/2, d] so many instances restarted with the
+// daemon do not reconnect in lockstep.
+func jitterDelay(d time.Duration) time.Duration {
+	half := d / 2
+	return half + rand.N(d-half+1) //nolint:gosec // jitter, not security
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (s *MonitorService) GetContainersForStack(ctx context.Context, projectName string) ([]string, error) {

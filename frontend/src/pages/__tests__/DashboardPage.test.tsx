@@ -141,6 +141,7 @@ vi.mock('@/components/dashboard/HostStrip', () => ({
 }))
 
 import { DashboardPage } from '../DashboardPage'
+import { queryKeys } from '@/lib/query-keys'
 
 function makeStack(overrides: Partial<Stack>): Stack {
   return {
@@ -200,6 +201,21 @@ describe('DashboardPage', () => {
     dashboardStats.mockResolvedValue({ runningContainers: 0 })
     getConfig.mockResolvedValue({ stacksDirectories: [] })
     getAutoUpdatePolicies.mockResolvedValue({ globalEnabled: false, policies: [] })
+  })
+
+  // agent-os-a1ye.5: the /ws/events stream can go silent (a lost Docker event
+  // stream, a dropped frame). The stack list polls slowly as the fallback, so a
+  // missed status change heals without a window refocus.
+  it('polls the stack list every 60s, not from a background tab', async () => {
+    const { queryClient } = renderPage('/')
+    await waitFor(() => expect(listStacks).toHaveBeenCalled())
+
+    const observers = queryClient.getQueryCache().find({ queryKey: queryKeys.stacks() })!.observers
+    expect(observers.length).toBeGreaterThan(0)
+    for (const observer of observers) {
+      expect(observer.options.refetchInterval).toBe(60_000)
+      expect(observer.options.refetchIntervalInBackground).toBe(false)
+    }
   })
 
   describe('tab routing', () => {

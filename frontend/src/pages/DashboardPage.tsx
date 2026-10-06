@@ -33,6 +33,7 @@ import { useConfirm } from '@/hooks/useConfirm'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import type { ConfiguredDir } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
+import { STACKS_LIST_POLLING } from '@/lib/query-client'
 import { useAutoUpdatePolicies } from '@/hooks/useResources'
 import { toGlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
 
@@ -111,6 +112,7 @@ export function DashboardPage() {
   } = useQuery({
     queryKey: queryKeys.stacks(),
     queryFn: () => stacksApi.list(),
+    ...STACKS_LIST_POLLING,
   })
 
   const {

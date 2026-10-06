@@ -27,7 +27,7 @@ vi.mock('sonner', () => ({
   toast: { loading: vi.fn(), success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
 }))
 
-import { useStackEvents } from '../useStackEvents'
+import { parseStackEvent, useStackEvents } from '../useStackEvents'
 import { UPDATE_SCAN_TOAST_ID } from '../useResources'
 import { queryClient } from '@/lib/query-client'
 import { queryKeys } from '@/lib/query-keys'
@@ -206,5 +206,35 @@ describe('useStackEvents stack_status clears statusStale', () => {
     expect(next[0]).toMatchObject({ id: 's1', status: 'running' })
     expect(next[0].statusStale).not.toBe(true)
     expect(next[1]).toMatchObject({ id: 's2', status: 'stopped', statusStale: true })
+  })
+})
+
+// agent-os-a1ye.5: the backend re-subscribes to a lost Docker event stream and
+// then sends events_resync, because events from the gap are gone. The frame
+// must survive validation and refetch everything a missed container event
+// would have touched; dropping it leaves stack statuses frozen until focus.
+describe('useStackEvents events_resync', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('accepts the frame instead of dropping it as unknown', () => {
+    expect(parseStackEvent({ type: 'events_resync', status: '', targetType: '', timestamp: 't' }))
+      .toEqual({ type: 'events_resync', timestamp: 't' })
+  })
+
+  it('refetches the stack list and dashboard stats', () => {
+    renderHook(() => useStackEvents())
+
+    capturedOnMessage!({ type: 'events_resync', timestamp: '' })
+
+    expect(flushInvalidations()).toEqual([
+      queryKeys.stacks(),
+      queryKeys.dashboardStats(),
+    ])
   })
 })

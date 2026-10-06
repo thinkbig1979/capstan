@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 
 const mockGetStatus = vi.fn()
+const mockListStacks = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   backupApi: {
@@ -11,7 +12,7 @@ vi.mock('@/lib/api', () => ({
   },
   resourcesApi: { checkUpdates: vi.fn().mockResolvedValue({ updates: [] }) },
   settingsApi: { getConfig: vi.fn().mockResolvedValue({ stacksDirectories: [] }) },
-  stacksApi: { list: vi.fn().mockResolvedValue([]) },
+  stacksApi: { list: (...args: unknown[]) => mockListStacks(...args) },
 }))
 
 import { useSidebarData } from '../useSidebarData'
@@ -37,6 +38,7 @@ const params = {
 beforeEach(() => {
   vi.clearAllMocks()
   mockGetStatus.mockResolvedValue({ lastRun: null, nextRun: null })
+  mockListStacks.mockResolvedValue([])
 })
 
 describe('useSidebarData backup-status cache key', () => {
@@ -67,5 +69,21 @@ describe('useSidebarData backup-status cache key', () => {
     const keys = queryClient.getQueryCache().getAll().map((q) => q.queryKey)
     expect(keys).toContainEqual([...queryKeys.backup.status()])
     expect(keys).not.toContainEqual(['backup-status'])
+  })
+})
+
+// agent-os-a1ye.5: the sidebar is mounted on every page, so its observer is the
+// one that keeps the shared stack list polling when /ws/events goes silent.
+describe('useSidebarData stack list polling', () => {
+  it('polls the stack list every 60s, not from a background tab', async () => {
+    const { wrapper, queryClient } = createWrapper()
+    renderHook(() => useSidebarData(params), { wrapper })
+
+    await waitFor(() => expect(mockListStacks).toHaveBeenCalledTimes(1))
+
+    const observers = queryClient.getQueryCache().find({ queryKey: queryKeys.stacks() })!.observers
+    expect(observers).toHaveLength(1)
+    expect(observers[0].options.refetchInterval).toBe(60_000)
+    expect(observers[0].options.refetchIntervalInBackground).toBe(false)
   })
 })

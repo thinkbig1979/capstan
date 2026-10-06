@@ -4,6 +4,7 @@ import { backupApi, resourcesApi, settingsApi, stacksApi } from '@/lib/api'
 import { buildDirectoryTree, hasTreeNesting } from '@/lib/stack-tree'
 import type { StackStatus } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
+import { STACKS_LIST_POLLING } from '@/lib/query-client'
 
 interface UseSidebarDataParams {
   searchQuery: string
@@ -21,6 +22,7 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
   } = useQuery({
     queryKey: queryKeys.stacks(),
     queryFn: () => stacksApi.list(),
+    ...STACKS_LIST_POLLING,
   })
   // A failed request has no data, and [] would read as "No stacks found"
   // (agent-os-kdqm). The empty array only keeps the derivations below simple;
