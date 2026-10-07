@@ -46,7 +46,7 @@
 #   The paths that used to be listed here — 'backend/**', 'docker/Dockerfile',
 #   '.github/workflows/backend.yml' — are now a subset of "everything", so the
 #   Dockerfile/go.mod lockstep this filter was protecting is covered by the
-#   "Go toolchain lockstep" step below, which runs on every PR. Until
+#   "Toolchain and pin lockstep" step below, which runs on every PR. Until
 #   agent-os-k4ad that sentence was a claim with nothing behind it: no step
 #   compared the two, and a Dependabot Dockerfile-only bump passed every check.
 
@@ -87,7 +87,7 @@ jobs:
       # on purpose), not a filtered one that a Dockerfile-only PR could skip.
       # Placed before Set up Go so a mismatch is reported even when the
       # toolchain download is what fails. agent-os-k4ad.
-      - name: Go toolchain lockstep
+      - name: Toolchain and pin lockstep
         run: bash scripts/check-toolchain-lockstep.sh
 
       # go-version-file reads backend/go.mod, and from v6 setup-go prefers its

@@ -118,7 +118,7 @@ updates:
   # backend/go.mod's `toolchain` directive. Dependabot updates the Dockerfile
   # only and cannot know about that relationship, so a golang:* bump here must be
   # paired with the matching go.mod change or CI and the shipped image compile
-  # against different standard libraries. The "Go toolchain lockstep" step in
+  # against different standard libraries. The "Toolchain and pin lockstep" step in
   # backend.yml (scripts/check-toolchain-lockstep.sh) runs on every PR and
   # fails when the Dockerfile tag and go.mod's toolchain differ.
   #
