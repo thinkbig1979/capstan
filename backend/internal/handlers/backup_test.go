@@ -1734,7 +1734,7 @@ func TestRegistry_AttachUnfinishedRun_IsNotReportedDone(t *testing.T) {
 	// RunSync reaches the restic manager first: runSyncInternal calls
 	// restic.CheckRepository before it ever builds the rclone manager
 	// (services/backup.go:965).
-	runID, err := reg.LaunchSync()
+	runID, err := reg.LaunchSync(0)
 	require.NoError(t, err)
 
 	select {
@@ -1839,7 +1839,7 @@ func TestRegistry_PanicInExec_RunTerminatesAsFailed(t *testing.T) {
 	reg := services.NewBackupRunnerRegistry(db, svc, slog.Default())
 	t.Cleanup(reg.Stop)
 
-	runID, err := reg.LaunchSync()
+	runID, err := reg.LaunchSync(0)
 	require.NoError(t, err)
 	require.NotEmpty(t, runID)
 
@@ -3064,6 +3064,7 @@ func TestBackupUnavailableHasOneShapeEverywhere(t *testing.T) {
 		// a defect when it had only failed to arrive.
 		{"runDRRestore", http.MethodPost, "/api/backups/dr-restore", map[string]interface{}{"confirm": true}},
 		{"cloudTest", http.MethodPost, "/api/backups/cloud/test", map[string]interface{}{}},
+		{"syncPreflight", http.MethodGet, "/api/backups/sync/preflight", nil},
 		{"requireAvailable via runBackup", http.MethodPost, "/api/backups/run", map[string]interface{}{}},
 	}
 

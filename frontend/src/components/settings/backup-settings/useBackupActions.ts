@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { toast } from 'sonner'
-import { presentFault, toastInvalid } from '@/lib/error-handler'
-import { useInitRepo, useTestCloud } from '@/hooks/useBackup'
+import { presentError, presentFault, toastInvalid } from '@/lib/error-handler'
+import { useInitRepo, useRunSync, useSyncPreflight, useTestCloud } from '@/hooks/useBackup'
 import { repoFaultFrom } from '@/lib/backup-repo-fault'
 import { messageOrNull } from '@/lib/narrow'
+import type { SyncPreflightResponse } from '@/types'
 
 /**
  * The two standalone backup engine actions: initializing the restic
@@ -24,9 +26,28 @@ function validationMessage(error: unknown): string | null {
   return messageOrNull(body.message)
 }
 
+/**
+ * Reads a rejection from the sync endpoints: the shared repository mapping
+ * first (it knows BACKUP_UNAVAILABLE's rclone_missing cause), otherwise the
+ * server's own message under the action's title.
+ */
+function presentSyncError(error: unknown, title: string) {
+  const fault = repoFaultFrom(error)
+  if (fault) {
+    presentFault(fault.title, fault.detail ?? null)
+    return
+  }
+  presentError(error, { fallback: title })
+}
+
 export function useBackupActions() {
   const initRepo = useInitRepo()
   const testCloud = useTestCloud()
+  const syncPreflight = useSyncPreflight()
+  const runSync = useRunSync()
+  // The pre-flight answer awaiting the operator's confirmation, or null when
+  // no confirmation is open. It ends when the dialog closes either way.
+  const [pendingLargeDelete, setPendingLargeDelete] = useState<SyncPreflightResponse | null>(null)
 
   const handleInitRepo = () => {
     initRepo.mutate(undefined, {
@@ -147,7 +168,44 @@ export function useBackupActions() {
     })
   }
 
+  const startSync = (allowDeleteCount?: number) => {
+    runSync.mutate(allowDeleteCount, {
+      // 202 means the run STARTED; its outcome lands in the backup history.
+      onSuccess: () => toast.success('Sync started', { description: 'The result appears in the backup history.' }),
+      onError: (error) => presentSyncError(error, 'Sync could not be started'),
+    })
+  }
+
+  // Sync now (agent-os-z91e.9): count first. Over the cap, the operator sees
+  // the count and confirms it, and that exact count is what the run may
+  // delete; under the cap the sync starts straight away.
+  const handleSyncNow = () => {
+    syncPreflight.mutate(undefined, {
+      onSuccess: (pf) => {
+        if (pf.remoteOnly > pf.cap) {
+          setPendingLargeDelete(pf)
+          return
+        }
+        startSync()
+      },
+      onError: (error) => presentSyncError(error, 'Could not count the files a sync would delete'),
+    })
+  }
+
+  const handleConfirmLargeDelete = () => {
+    if (pendingLargeDelete) startSync(pendingLargeDelete.remoteOnly)
+  }
+
+  const handleLargeDeleteOpenChange = (open: boolean) => {
+    if (!open) setPendingLargeDelete(null)
+  }
+
   return {
+    handleSyncNow,
+    isSyncing: syncPreflight.isPending || runSync.isPending,
+    pendingLargeDelete,
+    handleConfirmLargeDelete,
+    handleLargeDeleteOpenChange,
     handleInitRepo,
     isInitializing: initRepo.isPending,
     handleTestCloud,

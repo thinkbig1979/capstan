@@ -99,7 +99,7 @@ func TestLaunchSync_RunRowCreatedRunningBeforeFinalisation(t *testing.T) {
 
 	reg := NewBackupRunnerRegistry(spy, svc, slog.Default())
 
-	runID, err := reg.LaunchSync()
+	runID, err := reg.LaunchSync(0)
 	require.NoError(t, err)
 
 	// Blocks until execSync (and its finaliseRunStatus DB write) has fully

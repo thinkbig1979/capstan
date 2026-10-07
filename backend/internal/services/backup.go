@@ -31,6 +31,10 @@ var ErrBackupBusy = errors.New("backup operation already in progress")
 // the repository is not reachable.
 var ErrBackupUnavailable = errors.New("backup engine unavailable")
 
+// ErrRcloneRemoteNotConfigured is returned by SyncPreflight when no rclone
+// remote is set, so the handler can answer 400 rather than a remote failure.
+var ErrRcloneRemoteNotConfigured = errors.New("rclone remote is not configured")
+
 // Backup run trigger values. These MUST match the backup_runs.trigger CHECK
 // constraint in migrations.go (trigger IN ('manual','scheduled')). Passing any
 // other value makes CreateBackupRun fail with a CHECK constraint error, which
@@ -968,7 +972,10 @@ func (s *BackupService) executeBackupRun(
 	// Optionally sync after backup.
 	if !dryRun && bc.SyncAfter && s.rcloneBin != "" {
 		stream(out, "info", "Starting post-backup rclone sync")
-		if syncErr := s.runSyncInternal(ctx, bc, out); syncErr != nil {
+		// A post-backup sync never carries a confirmed large delete
+		// (agent-os-z91e.9): only a manual RunSync can, so an unattended
+		// run always stops at the delete cap.
+		if syncErr := s.runSyncInternal(ctx, bc, 0, out); syncErr != nil {
 			msg := fmt.Sprintf("post-backup sync failed: %v", syncErr)
 			stream(out, "error", msg)
 			// The run row is already final, so record the sync failure with a
@@ -1288,7 +1295,10 @@ func (s *BackupService) backupStack(
 
 // RunSync runs an rclone sync from the local restic repository to the
 // configured cloud remote. It is protected by the global single-flight guard.
-func (s *BackupService) RunSync(ctx context.Context, out chan<- StreamLine) error {
+// allowDeleteCount is the remote delete count the operator confirmed for this
+// one manual run after SyncPreflight showed it above the cap (0 for none);
+// see RcloneManager.Sync.
+func (s *BackupService) RunSync(ctx context.Context, allowDeleteCount int, out chan<- StreamLine) error {
 	if !s.tryAcquireGlobal() {
 		return ErrBackupBusy
 	}
@@ -1306,12 +1316,30 @@ func (s *BackupService) RunSync(ctx context.Context, out chan<- StreamLine) erro
 		return err
 	}
 	stream(out, "info", "Starting rclone sync")
-	if err := s.runSyncInternal(ctx, bc, out); err != nil {
+	if err := s.runSyncInternal(ctx, bc, allowDeleteCount, out); err != nil {
 		return err
 	}
 	stream(out, "info", "rclone sync completed")
 	s.actions.Log("system", nil, ActionBackup, map[string]interface{}{"kind": "sync"})
 	return nil
+}
+
+// SyncPreflight reports how many remote files a sync would delete and the
+// cap one run may delete without a confirmation (agent-os-z91e.9). It only
+// lists, so it does not take the global guard; the sync repeats the count
+// under the guard, which makes this answer advisory.
+func (s *BackupService) SyncPreflight(ctx context.Context) (SyncPreflight, error) {
+	if s.rcloneBin == "" {
+		return SyncPreflight{}, ErrBackupUnavailable
+	}
+	bc, err := s.resolveOrRefuse("count the files a sync would delete")
+	if err != nil {
+		return SyncPreflight{}, err
+	}
+	if bc.RcloneRemote == "" {
+		return SyncPreflight{}, ErrRcloneRemoteNotConfigured
+	}
+	return s.newRcloneMgr(bc).PreflightSync(ctx, bc.ResticRepository, bc.RcloneRemote, bc.RclonePath)
 }
 
 // runSyncInternal executes the rclone sync without acquiring the global lock.
@@ -1350,7 +1378,7 @@ func (s *BackupService) RunSync(ctx context.Context, out chan<- StreamLine) erro
 // check only runs on this rare empty-local branch: a populated local
 // repository (the normal, steady-state case) proceeds straight to sync
 // without the extra network round trip.
-func (s *BackupService) runSyncInternal(ctx context.Context, bc BackupConfig, out chan<- StreamLine) error {
+func (s *BackupService) runSyncInternal(ctx context.Context, bc BackupConfig, allowDeleteCount int, out chan<- StreamLine) error {
 	if bc.RcloneRemote == "" {
 		return fmt.Errorf("rclone remote is not configured")
 	}
@@ -1384,7 +1412,7 @@ func (s *BackupService) runSyncInternal(ctx context.Context, bc BackupConfig, ou
 		}
 	}
 
-	return rclone.Sync(ctx, bc.ResticRepository, bc.RcloneRemote, bc.RclonePath, bc.RcloneTransfers, 3, out)
+	return rclone.Sync(ctx, bc.ResticRepository, bc.RcloneRemote, bc.RclonePath, bc.RcloneTransfers, 3, allowDeleteCount, out)
 }
 
 // --- RunRestore ---

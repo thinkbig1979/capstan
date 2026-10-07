@@ -323,7 +323,7 @@ func dbFaultCases() []dbFaultCase {
 			name:    "RunSync",
 			wantErr: true,
 			call: func(_ *testing.T, svc *BackupService, out chan StreamLine) error {
-				return svc.RunSync(context.Background(), out)
+				return svc.RunSync(context.Background(), 0, out)
 			},
 		},
 		{

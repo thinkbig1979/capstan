@@ -109,3 +109,14 @@ export interface LintResponse {
   valid: boolean;
   lintResults: models.LintResult[];
 }
+/**
+ * SyncPreflightResponse is the wire shape of GET /backups/sync/preflight
+ * (agent-os-z91e.9): how many remote files a sync would delete now, and how
+ * many one run may delete without a confirmation. When RemoteOnly exceeds
+ * Cap, the UI asks the operator to confirm RemoteOnly and sends it as
+ * allowDeleteCount on POST /backups/sync.
+ */
+export interface SyncPreflightResponse {
+  remoteOnly: number /* int */;
+  cap: number /* int */;
+}

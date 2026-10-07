@@ -45,7 +45,17 @@ export function BackupSettingsContent() {
     handleDialogOpenChange,
   } = usePasswordReveal(authDisabled, isUnlocked, unlockedUntil)
 
-  const { handleInitRepo, isInitializing, handleTestCloud, isTestingCloud } = useBackupActions()
+  const {
+    handleInitRepo,
+    isInitializing,
+    handleTestCloud,
+    isTestingCloud,
+    handleSyncNow,
+    isSyncing,
+    pendingLargeDelete,
+    handleConfirmLargeDelete,
+    handleLargeDeleteOpenChange,
+  } = useBackupActions()
 
   if (isLoading) {
     return (
@@ -128,6 +138,12 @@ export function BackupSettingsContent() {
         rcloneAvailable={settings.rcloneAvailable}
         onTestCloud={handleTestCloud}
         isTestingCloud={isTestingCloud}
+        onSyncNow={handleSyncNow}
+        isSyncing={isSyncing}
+        isDirty={isDirty}
+        pendingLargeDelete={pendingLargeDelete}
+        onConfirmLargeDelete={handleConfirmLargeDelete}
+        onLargeDeleteOpenChange={handleLargeDeleteOpenChange}
       />
 
       {/* Directly above the save control, not a transient toast: the operator is

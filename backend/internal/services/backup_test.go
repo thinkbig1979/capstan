@@ -946,7 +946,7 @@ func TestRunSync_Success(t *testing.T) {
 	svc := buildSvc(t, db, docker, runner, runner)
 
 	out := make(chan StreamLine, 64)
-	err := svc.RunSync(context.Background(), out)
+	err := svc.RunSync(context.Background(), 0, out)
 	require.NoError(t, err)
 }
 
@@ -960,7 +960,7 @@ func TestRunSync_UnavailableWhenNoRclone(t *testing.T) {
 	svc.rcloneBin = ""
 
 	out := make(chan StreamLine, 64)
-	err := svc.RunSync(context.Background(), out)
+	err := svc.RunSync(context.Background(), 0, out)
 	assert.ErrorIs(t, err, ErrBackupUnavailable)
 }
 
@@ -974,7 +974,7 @@ func TestRunSync_BusyWhileBackupRunning(t *testing.T) {
 
 	svc.busy.Store(1)
 	out := make(chan StreamLine, 64)
-	err := svc.RunSync(context.Background(), out)
+	err := svc.RunSync(context.Background(), 0, out)
 	assert.ErrorIs(t, err, ErrBackupBusy)
 }
 
@@ -1013,7 +1013,7 @@ func TestRunSync_RefusesWhenLocalRepositoryCheckFails(t *testing.T) {
 	svc := buildSvc(t, db, docker, runner, runner)
 
 	out := make(chan StreamLine, 64)
-	err := svc.RunSync(context.Background(), out)
+	err := svc.RunSync(context.Background(), 0, out)
 
 	require.Error(t, err, "RunSync must refuse when the local repository check fails")
 	assert.NotContains(t, calledBinaries, "rclone", "rclone must never be invoked once the local repository check has failed")
@@ -1045,7 +1045,7 @@ func TestRunSync_ProceedsWhenLocalRepositoryCheckSucceeds(t *testing.T) {
 	svc := buildSvc(t, db, docker, runner, runner)
 
 	out := make(chan StreamLine, 64)
-	err := svc.RunSync(context.Background(), out)
+	err := svc.RunSync(context.Background(), 0, out)
 
 	require.NoError(t, err, "a genuine sync from a repository that passes the check must still succeed")
 	assert.Equal(t, []string{"restic", "rclone"}, calledBinaries, "the local repository check must run before rclone, and rclone must still run when it succeeds")
@@ -1149,7 +1149,7 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 		svc := buildArm(t, []byte("null"), nil, []byte("1c8dd5b20b330c7bf7d6e49cbdc71d58ace311bd508b9154c5848a6d87a2c991\n"), nil, &syncCalled, &lsfArgs)
 
 		out := make(chan StreamLine, 64)
-		err := svc.RunSync(context.Background(), out)
+		err := svc.RunSync(context.Background(), 0, out)
 
 		require.Error(t, err, "arm 1: must refuse -- local has zero snapshots but the remote already holds some, so syncing would mirror-delete them")
 		assert.False(t, syncCalled, "arm 1: rclone sync must never run once the guard has refused")
@@ -1174,7 +1174,7 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 		svc := buildArm(t, []byte("null"), nil, nil, fakeExitError{code: 3}, &syncCalled, nil)
 
 		out := make(chan StreamLine, 64)
-		err := svc.RunSync(context.Background(), out)
+		err := svc.RunSync(context.Background(), 0, out)
 
 		require.NoError(t, err, "arm 2: a genuine first-ever sync (both sides empty) must proceed, not be refused")
 		assert.True(t, syncCalled, "arm 2: rclone sync must actually run for a genuine first sync")
@@ -1190,7 +1190,7 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 		svc := buildArm(t, []byte("null"), nil, []byte(""), nil, &syncCalled, nil)
 
 		out := make(chan StreamLine, 64)
-		err := svc.RunSync(context.Background(), out)
+		err := svc.RunSync(context.Background(), 0, out)
 
 		require.NoError(t, err, "arm 2b: an existing-but-empty remote must proceed like a never-synced one")
 		assert.True(t, syncCalled, "arm 2b: rclone sync must actually run")
@@ -1208,7 +1208,7 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 		svc := buildArm(t, localJSON, nil, []byte("some-other-snapshot-file\n"), nil, &syncCalled, nil)
 
 		out := make(chan StreamLine, 64)
-		err := svc.RunSync(context.Background(), out)
+		err := svc.RunSync(context.Background(), 0, out)
 
 		require.NoError(t, err, "arm 3: normal sync from a populated local repository must proceed")
 		assert.True(t, syncCalled, "arm 3: rclone sync must actually run")
@@ -1226,7 +1226,7 @@ func TestRunSync_ThreeArms_ZeroSnapshotMirrorDelete(t *testing.T) {
 		svc := buildArm(t, []byte("null"), nil, nil, fakeExitError{code: 1}, &syncCalled, nil)
 
 		out := make(chan StreamLine, 64)
-		err := svc.RunSync(context.Background(), out)
+		err := svc.RunSync(context.Background(), 0, out)
 
 		require.Error(t, err, "an unreadable remote must refuse, not be treated as empty")
 		assert.False(t, syncCalled, "rclone sync must never run when the remote could not be verified as empty")

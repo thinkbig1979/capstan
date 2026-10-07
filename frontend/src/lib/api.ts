@@ -39,6 +39,7 @@ import type {
   BackupSettings,
   BackupStatus,
   BackupOperationResult,
+  SyncPreflightResponse,
   VersionInfo,
   DockerCleanupPolicy,
   DockerCleanupPreview,
@@ -931,8 +932,20 @@ export const backupApi = {
     return response.data
   },
 
-  runSync: async () => {
-    const response = await apiClient.post<BackupOperationResult>('/backups/sync')
+  // How many remote files a sync would delete now, and the cap one run may
+  // delete without a confirmation (agent-os-z91e.9).
+  syncPreflight: async () => {
+    const response = await apiClient.get<SyncPreflightResponse>('/backups/sync/preflight')
+    return response.data
+  },
+
+  // allowDeleteCount is the remote delete count the operator confirmed after
+  // syncPreflight showed it above the cap. Omitted, the sync stops at the cap.
+  runSync: async (allowDeleteCount?: number) => {
+    const response = await apiClient.post<BackupOperationResult>(
+      '/backups/sync',
+      allowDeleteCount === undefined ? {} : { allowDeleteCount },
+    )
     return response.data
   },
 

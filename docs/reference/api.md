@@ -335,7 +335,11 @@ Direct Docker resource management, independent of any stack.
 - `GET /api/v1/backups/snapshots/:snapshotId/preview` — preview a snapshot's
   contents before restoring
 - `POST /api/v1/backups/run` — start a backup run
-- `POST /api/v1/backups/sync` — sync to the configured cloud remote
+- `GET /api/v1/backups/sync/preflight` — count the remote files a sync would
+  delete now and the per-run cap (`{remoteOnly, cap}`)
+- `POST /api/v1/backups/sync` — sync to the configured cloud remote; optional
+  body `{allowDeleteCount}` lets this one run delete up to that many remote
+  files when the pre-flight count is above the cap
 - `POST /api/v1/backups/restore` — restore a stack from a snapshot
 - `POST /api/v1/backups/dr-restore` — disaster-recovery restore (whole
   instance, onto a fresh host)
