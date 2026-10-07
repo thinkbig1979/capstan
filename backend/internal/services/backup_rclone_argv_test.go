@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -68,14 +69,17 @@ func TestRcloneManager_PositionalsFollowEndOfOptions(t *testing.T) {
 		t.Parallel()
 		runner := &fakeRunner{outputData: []byte("config\n")}
 		out := drain()
-		require.NoError(t, testRcloneManager(runner).RestoreRepo(context.Background(), remote, "p", "/restore", "/bak", 1, out))
+		// RestoreRepo creates the backup dir, so it must sit somewhere a
+		// non-root local run can write (agent-os-trao).
+		bak := filepath.Join(t.TempDir(), "bak")
+		require.NoError(t, testRcloneManager(runner).RestoreRepo(context.Background(), remote, "p", "/restore", bak, 1, out))
 		close(out)
 		require.Len(t, runner.calls, 2)
 		check(t, runner.calls[0].Args, remote+":p/config")
 		args := runner.calls[1].Args
 		check(t, args, remote+":p", "/restore")
 		i := slices.Index(args, "--")
-		assert.Equal(t, "/bak", args[slices.Index(args, "--backup-dir")+1])
+		assert.Equal(t, bak, args[slices.Index(args, "--backup-dir")+1])
 		assert.Less(t, slices.Index(args, "--backup-dir"), i, "--backup-dir precedes --")
 	})
 
