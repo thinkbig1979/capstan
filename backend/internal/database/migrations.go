@@ -828,6 +828,58 @@ CREATE INDEX IF NOT EXISTS idx_backup_run_items_stack_id ON backup_run_items(sta
 		// backend prefix restic knows, which restic treats as a local path.
 		SQL: `SELECT 1;`,
 	},
+	{
+		Version: 21,
+		Name:    "update_history_skipped_status",
+		SQL: `
+-- update_history.status gains 'skipped' (agent-os-z91e.32): an auto-update a
+-- pass never started (its deadline or shutdown came first) or skipped because
+-- another operation held the stack now leaves a row in the Updates history
+-- instead of only a note in update_apply_last_error. It is distinct from
+-- 'failed' because nothing went wrong with the update; it did not run.
+--
+-- A full rebuild, as SQLite cannot widen a CHECK in place. Nothing holds a
+-- foreign key to update_history, so migration 12's child-table hazards do not
+-- apply, but the safe ordering (create _new, copy, drop, rename INTO the name)
+-- is used anyway so the recipe stays the one documented at the top of this
+-- file. The CREATE TABLE below is migration 3's with only the status CHECK
+-- list widened, and all six indexes are recreated (five from migration 3,
+-- idx_update_history_completed_at from migration 11).
+CREATE TABLE update_history_new (
+    id TEXT PRIMARY KEY,
+    container_id TEXT NOT NULL,
+    container_name TEXT NOT NULL,
+    stack_id TEXT,
+    stack_name TEXT,
+    image TEXT NOT NULL,
+    old_digest TEXT,
+    new_digest TEXT,
+    old_image_ref TEXT,
+    new_image_ref TEXT,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'success', 'failed', 'paused', 'skipped')),
+    trigger TEXT NOT NULL CHECK (trigger IN ('manual', 'auto')),
+    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME,
+    duration_ms INTEGER,
+    error_message TEXT
+);
+
+INSERT INTO update_history_new (id, container_id, container_name, stack_id, stack_name, image, old_digest, new_digest, old_image_ref, new_image_ref, status, trigger, started_at, completed_at, duration_ms, error_message)
+SELECT id, container_id, container_name, stack_id, stack_name, image, old_digest, new_digest, old_image_ref, new_image_ref, status, trigger, started_at, completed_at, duration_ms, error_message
+FROM update_history;
+
+DROP TABLE update_history;
+
+ALTER TABLE update_history_new RENAME TO update_history;
+
+CREATE INDEX IF NOT EXISTS idx_update_history_container_id ON update_history(container_id);
+CREATE INDEX IF NOT EXISTS idx_update_history_stack_id ON update_history(stack_id);
+CREATE INDEX IF NOT EXISTS idx_update_history_status ON update_history(status);
+CREATE INDEX IF NOT EXISTS idx_update_history_trigger ON update_history(trigger);
+CREATE INDEX IF NOT EXISTS idx_update_history_started_at ON update_history(started_at);
+CREATE INDEX IF NOT EXISTS idx_update_history_completed_at ON update_history(completed_at);
+`,
+	},
 }
 
 // ReencryptSecrets rewrites every stored secret that is not yet in the v2
