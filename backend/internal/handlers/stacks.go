@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
@@ -221,8 +224,32 @@ func (h *StacksHandler) Get(c *gin.Context) {
 	} else {
 		applyLiveStatus(stack, statuses)
 	}
+	stack.ProjectNameSharedWith = h.projectNameSharedWith(stack)
 
 	c.JSON(http.StatusOK, stack)
+}
+
+// projectNameSharedWith returns the other stacks carrying stack's compose
+// project name, for the stack page's warning (agent-os-z91e.19). It is display
+// only: a lookup that fails for any other reason is logged and the field left
+// out, never a failed Get.
+func (h *StacksHandler) projectNameSharedWith(stack *models.Stack) []models.StackRef {
+	_, err := h.db.GetStackByProjectName(stack.ProjectName)
+	var amb *database.AmbiguousProjectNameError
+	switch {
+	case errors.As(err, &amb):
+		others := make([]models.StackRef, 0, len(amb.Stacks)-1)
+		for _, s := range amb.Stacks {
+			if s.ID != stack.ID {
+				others = append(others, models.StackRef{ID: s.ID, Directory: s.Directory})
+			}
+		}
+		return others
+	case err != nil && !errors.Is(err, errdefs.ErrNotFound):
+		slog.Error("Failed to check whether the stack's compose project name is shared; the stack page will not warn about it",
+			"stack", stack.ID, "project", stack.ProjectName, "error", err)
+	}
+	return nil
 }
 
 func (h *StacksHandler) logAction(c *gin.Context, stackID, action, detail string) {

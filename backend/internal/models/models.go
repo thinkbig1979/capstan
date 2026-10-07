@@ -51,6 +51,18 @@ type Stack struct {
 	GitDirty    bool        `json:"gitDirty"`
 	GitAhead    int         `json:"gitAhead"`
 	GitBehind   int         `json:"gitBehind"`
+	// ProjectNameSharedWith lists the OTHER stacks that carry this stack's
+	// compose project name. Non-empty means container actions and updates on
+	// that project are refused, because a container's project label cannot say
+	// which stack it belongs to (agent-os-z91e.19, D25). Filled only by the
+	// single-stack read; omitempty so every other response is unchanged.
+	ProjectNameSharedWith []StackRef `json:"projectNameSharedWith,omitempty"`
+}
+
+// StackRef names a stack without its live state.
+type StackRef struct {
+	ID        string `json:"id"`
+	Directory string `json:"directory"`
 }
 
 type Container struct {

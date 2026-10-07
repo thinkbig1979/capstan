@@ -193,6 +193,32 @@ describe('StackPage', () => {
     })
   })
 
+  // agent-os-z91e.19 (D25): two stacks share this stack's compose project
+  // name, so container actions and updates on it are refused server-side.
+  // Both stack pages say so and name the other stack.
+  describe('shared compose project name', () => {
+    const SHARED_NOTE = /also uses the compose project name/
+
+    it('warns and names the other stack when projectNameSharedWith is set', async () => {
+      getStack.mockResolvedValue(
+        makeStack({ projectNameSharedWith: [{ id: 's2', directory: '/srv/stacks/beta' }] }),
+      )
+
+      renderPage('/stacks/s1')
+
+      const note = await screen.findByText(SHARED_NOTE)
+      expect(note).toHaveTextContent('/srv/stacks/beta')
+      expect(note).toHaveTextContent(/container actions and updates/i)
+    })
+
+    it('shows no warning when the name is unique', async () => {
+      renderPage('/stacks/s1')
+
+      await waitFor(() => expect(screen.getByTestId('stack-detail')).toBeInTheDocument())
+      expect(screen.queryByText(SHARED_NOTE)).not.toBeInTheDocument()
+    })
+  })
+
   describe('header status pill and uptime', () => {
     it('shows running-count and uptime derived from container data', async () => {
       getStack.mockResolvedValue(
