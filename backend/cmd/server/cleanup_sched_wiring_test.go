@@ -126,3 +126,85 @@ func TestMain_CleanupSchedulerIsStoppedAtShutdown(t *testing.T) {
 		}
 	}
 }
+
+// TestMain_UpdateSchedulerIsClosedAtShutdown is agent-os-z91e.5's wiring
+// check. The scheduler's Close latch only protects shutdown if main.go calls
+// Close, not Stop: Stop leaves Start/Restart free, so a settings save still
+// being served before srv.Shutdown would re-arm auto-apply. Every unit test
+// calls Close directly, so swapping the call back to Stop would leave them
+// all green. This asserts a schedulerService.Close() call between `<-quit` and
+// srv.Shutdown, and no schedulerService.Stop() there. It reads mainSource, so
+// a `go test -overlay` mutant of main.go is what it sees.
+func TestMain_UpdateSchedulerIsClosedAtShutdown(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", mainSource, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var mainFn *ast.FuncDecl
+	for _, d := range file.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "main" && fn.Recv == nil {
+			mainFn = fn
+		}
+	}
+	if mainFn == nil {
+		t.Fatal("main.go has no func main")
+	}
+
+	var quitPos token.Pos
+	for _, stmt := range mainFn.Body.List {
+		if es, ok := stmt.(*ast.ExprStmt); ok {
+			if u, ok := es.X.(*ast.UnaryExpr); ok && u.Op == token.ARROW {
+				if id, ok := u.X.(*ast.Ident); ok && id.Name == "quit" {
+					quitPos = es.Pos()
+				}
+			}
+		}
+	}
+	if quitPos == token.NoPos {
+		t.Fatal("main() has no top-level `<-quit`; this test can no longer find the shutdown sequence and must be updated")
+	}
+
+	var shutdownPos token.Pos
+	var closes, stops []token.Pos
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || call.Pos() < quitPos {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		switch {
+		case recv.Name == "srv" && sel.Sel.Name == "Shutdown":
+			shutdownPos = call.Pos()
+		case recv.Name == "schedulerService" && sel.Sel.Name == "Close":
+			closes = append(closes, call.Pos())
+		case recv.Name == "schedulerService" && sel.Sel.Name == "Stop":
+			stops = append(stops, call.Pos())
+		}
+		return true
+	})
+	if shutdownPos == token.NoPos {
+		t.Fatal("main() has no srv.Shutdown after `<-quit`; this test can no longer find the shutdown sequence and must be updated")
+	}
+
+	closed := false
+	for _, p := range closes {
+		if p < shutdownPos {
+			closed = true
+		}
+	}
+	if !closed {
+		t.Error("schedulerService.Close() is not called between `<-quit` and srv.Shutdown, so a late settings save can Restart the update scheduler during shutdown (agent-os-z91e.5)")
+	}
+	for _, p := range stops {
+		t.Errorf("%s: schedulerService.Stop() after `<-quit` does not latch the scheduler; call Close() (agent-os-z91e.5)", fset.Position(p))
+	}
+}
