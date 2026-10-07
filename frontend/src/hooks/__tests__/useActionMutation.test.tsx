@@ -308,6 +308,73 @@ describe('useActionMutation — rejected ActionResult', () => {
   })
 })
 
+// ─── errorTitle (agent-os-z91e.10) ────────────────────────────────────────────
+//
+// The wrapper does not know WHICH action failed, so it cannot title an error
+// itself. `errorTitle` supplies that context, and only for a `failed` outcome:
+// a rejected `partial` / `no_change` must keep its toast LEVEL.
+
+describe('useActionMutation — errorTitle', () => {
+  async function reject(rejection: unknown, errorTitle?: string) {
+    const queryClient = makeClient()
+    const { result: hook } = renderHook(
+      () => useActionMutation({ mutationFn: vi.fn().mockRejectedValue(rejection), errorTitle }),
+      { wrapper: wrapper(queryClient) },
+    )
+    await act(async () => {
+      hook.current.mutate(undefined as unknown as never)
+    })
+    await waitFor(() => expect(hook.current.isError).toBe(true))
+  }
+
+  it('titles a rejected failed ActionResult and carries the reason as the description', async () => {
+    await reject({ outcome: 'failed', reason: 'Docker daemon unreachable', status: 503 }, 'Failed to start stack')
+    expect(toast.error).toHaveBeenCalledTimes(1)
+    expect(toast.error).toHaveBeenCalledWith('Failed to start stack', {
+      description: 'Docker daemon unreachable',
+    })
+  })
+
+  it('keeps the WARNING level for a rejected partial even when errorTitle is set', async () => {
+    await reject({ outcome: 'partial', reason: 'rollback also failed', status: 500 }, 'Failed to start stack')
+    expect(toast.warning).toHaveBeenCalledWith('rollback also failed')
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('keeps the INFO level for a rejected no_change even when errorTitle is set', async () => {
+    await reject({ outcome: 'no_change', reason: 'Already up to date', status: 500 }, 'Failed to start stack')
+    expect(toast.info).toHaveBeenCalledWith('Already up to date')
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('titles a non-ActionResult rejection and puts the classified cause in the description', async () => {
+    await reject({ code: 'ERR_NETWORK', message: 'Network Error' }, 'Failed to start stack')
+    expect(toast.error).toHaveBeenCalledTimes(1)
+    expect(toast.error).toHaveBeenCalledWith('Failed to start stack', {
+      description: 'Check your connection and try again',
+    })
+  })
+
+  it('titles a failed ActionResult with an empty reason with the classified status', async () => {
+    await reject({ outcome: 'failed', reason: '', status: 503 }, 'Failed to start stack')
+    expect(toast.error).toHaveBeenCalledWith('Failed to start stack', {
+      description: '503: Something went wrong on the server',
+    })
+  })
+
+  it('without errorTitle a failed rejection is still the bare reason (unchanged)', async () => {
+    await reject({ outcome: 'failed', reason: 'Docker daemon unreachable', status: 503 })
+    expect(toast.error).toHaveBeenCalledTimes(1)
+    expect(toast.error).toHaveBeenCalledWith('Docker daemon unreachable')
+  })
+
+  it('without errorTitle a non-ActionResult rejection is still the bare cause (unchanged)', async () => {
+    await reject({ code: 'ERR_NETWORK', message: 'Network Error' })
+    expect(toast.error).toHaveBeenCalledTimes(1)
+    expect(toast.error).toHaveBeenCalledWith('Check your connection and try again')
+  })
+})
+
 // ─── network/throw error ──────────────────────────────────────────────────────
 
 describe('useActionMutation — mutationFn throws', () => {

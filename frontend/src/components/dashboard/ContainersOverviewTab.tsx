@@ -1,6 +1,6 @@
 import { useState, useMemo, Suspense, lazy } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { stacksApi, resourcesApi, type LifecycleResult } from '@/lib/api'
+import { stacksApi, resourcesApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -21,9 +21,11 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { presentError } from '@/lib/error-handler'
+import { useActionMutation } from '@/hooks/useActionMutation'
+import type { ActionResult } from '@/lib/action-result'
 import { DialogLoadingFallback } from '@/components/LoadingSkeleton'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
-import type { DashboardStats, DashboardContainerInfo, CommandResult } from '@/types'
+import type { DashboardStats, DashboardContainerInfo } from '@/types'
 import type { DashboardContainerMetric } from '@/hooks/useDashboardMetrics'
 import { SortFilterBar } from '@/components/dashboard/SortFilterBar'
 import { PruneButton } from '@/components/dashboard/PruneButton'
@@ -149,18 +151,26 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
   const actedOnStack = mode === 'stack' && Boolean(stackId)
   const actioned = actedOnStack ? 'stack' : 'container'
 
-  const startMutation = useMutation({
-    mutationFn: async (): Promise<LifecycleResult | CommandResult> => {
+  const actionedTitle = actioned.charAt(0).toUpperCase() + actioned.slice(1)
+  const lifecycleInvalidations = [
+    queryKeys.dashboardStats(),
+    ...(actedOnStack ? [queryKeys.stacks()] : []),
+  ]
+
+  // The three mutations resolve an ActionResult, so useActionMutation derives the
+  // toast LEVEL from its outcome: a 207 `partial` from the stack route warns
+  // instead of announcing green success (agent-os-z91e.10). The container route
+  // answers a plain message, which is wrapped as a `success` outcome.
+  const startMutation = useActionMutation({
+    mutationFn: async (): Promise<ActionResult> => {
       if (mode === 'stack' && stackId) return stacksApi.start(stackId)
       const res = await resourcesApi.startContainer(containerId)
-      return { status: 'started', output: res.message, duration: 0 }
+      return { outcome: 'success', reason: res.message }
     },
-    onSuccess: () => {
-      toast.success(`${actioned.charAt(0).toUpperCase() + actioned.slice(1)} started`)
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
-      if (actedOnStack) queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
-    },
-    // presentError owns the branch this used to hand-roll (agent-os-5g8a).
+    successTitle: `${actionedTitle} started`,
+    invalidate: lifecycleInvalidations,
+    // errorTitle hands the rejection to presentError, which owns the branch this
+    // used to hand-roll (agent-os-5g8a).
     // What it preserves, and why each half mattered (agent-os-mc4i): in stack
     // mode start/stop/restart/pull hit stack_lifecycle.go's renderDockerResult,
     // which answers a truth.ActionResult carrying `reason` and neither `error`
@@ -174,43 +184,31 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
     // before preferring it, and presentFault drops an empty description rather
     // than rendering one. The one- vs two-argument split a vitest spy can see is
     // now decided inside presentFault, in one place, rather than at each site.
-    onError: (err) => {
-      presentError(err, { fallback: `Failed to start ${actioned}` })
-    },
+    errorTitle: `Failed to start ${actioned}`,
   })
 
-  const stopMutation = useMutation({
-    mutationFn: async (): Promise<LifecycleResult | CommandResult> => {
+  const stopMutation = useActionMutation({
+    mutationFn: async (): Promise<ActionResult> => {
       if (mode === 'stack' && stackId) return stacksApi.stop(stackId)
       const res = await resourcesApi.stopContainer(containerId)
-      return { status: 'stopped', output: res.message, duration: 0 }
+      return { outcome: 'success', reason: res.message }
     },
-    onSuccess: () => {
-      toast.success(`${actioned.charAt(0).toUpperCase() + actioned.slice(1)} stopped`)
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
-      if (actedOnStack) queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
-    },
-    // Same presenter as startMutation above.
-    onError: (err) => {
-      presentError(err, { fallback: `Failed to stop ${actioned}` })
-    },
+    successTitle: `${actionedTitle} stopped`,
+    invalidate: lifecycleInvalidations,
+    // Same title as startMutation above.
+    errorTitle: `Failed to stop ${actioned}`,
   })
 
-  const restartMutation = useMutation({
-    mutationFn: async (): Promise<LifecycleResult | CommandResult> => {
+  const restartMutation = useActionMutation({
+    mutationFn: async (): Promise<ActionResult> => {
       if (mode === 'stack' && stackId) return stacksApi.restart(stackId)
       const res = await resourcesApi.restartContainer(containerId)
-      return { status: 'restarted', output: res.message, duration: 0 }
+      return { outcome: 'success', reason: res.message }
     },
-    onSuccess: () => {
-      toast.success(`${actioned.charAt(0).toUpperCase() + actioned.slice(1)} restarted`)
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
-      if (actedOnStack) queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
-    },
-    // Same presenter as startMutation above.
-    onError: (err) => {
-      presentError(err, { fallback: `Failed to restart ${actioned}` })
-    },
+    successTitle: `${actionedTitle} restarted`,
+    invalidate: lifecycleInvalidations,
+    // Same title as startMutation above.
+    errorTitle: `Failed to restart ${actioned}`,
   })
 
   const pullMutation = useMutation({

@@ -380,7 +380,7 @@ describe('ContainersOverviewTab — a compose project with no stack record', () 
   })
 
   it('still renders a row that HAS a stack record in stack mode, and does invalidate the stacks query', async () => {
-    stacksMock.start.mockResolvedValue({ status: 'started', output: '', duration: 0 })
+    stacksMock.start.mockResolvedValue({ outcome: 'success', reason: 'started', details: {} })
     const { queryClient } = renderTab(makeContainer({ state: 'exited', stackId: 'stack-1' }))
     const spy = spyOnInvalidations(queryClient)
 
@@ -546,5 +546,71 @@ describe('ContainersOverviewTab — an unmanaged compose project explains itself
     expect(screen.queryByText(/not managed by Capstan/i)).toBeNull()
     expect(screen.queryByText(/EXTRA_STACKS_DIRS/)).toBeNull()
     expect(screen.queryByText(WORKING_DIR)).toBeNull()
+  })
+})
+
+describe('ContainersOverviewTab — a 207 partial lifecycle outcome is not a green success (agent-os-z91e.10)', () => {
+  /**
+   * renderDockerResult answers a `partial` ActionResult as HTTP 207, which axios
+   * RESOLVES, so stacksApi.start/stop/restart hand the tab a result whose outcome
+   * is "partial". The tab used to toast.success on any resolution.
+   *
+   * mode="stack" throughout (singular 'Start stack' labels, see the docblock at the
+   * top of this file). Each arm asserts BOTH sides: the warning carries the reason,
+   * and toast.success never fired. The success arms below are the same instrument
+   * on the other side: an unchanged `success` outcome still shows the action title.
+   */
+  const PARTIAL_REASON = 'web started, worker exited 1'
+  const partial = () => ({ outcome: 'partial', reason: PARTIAL_REASON, details: {} })
+
+  it.each([
+    ['start', 'Start stack', 'exited'],
+    ['stop', 'Stop stack', 'running'],
+    ['restart', 'Restart stack', 'running'],
+  ] as const)('%s (stack route) warns with the reason on a partial outcome', async (action, label, state) => {
+    stacksMock[action].mockResolvedValue(partial())
+    renderTab(makeContainer({ state }))
+
+    fireEvent.click(screen.getByLabelText(label))
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(PARTIAL_REASON))
+    expect(toast.warning).toHaveBeenCalledTimes(1)
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['start', 'Start stack', 'exited', 'Stack started'],
+    ['stop', 'Stop stack', 'running', 'Stack stopped'],
+    ['restart', 'Restart stack', 'running', 'Stack restarted'],
+  ] as const)('%s (stack route) keeps the action title on a success outcome', async (action, label, state, title) => {
+    stacksMock[action].mockResolvedValue({ outcome: 'success', reason: 'ok', details: {} })
+    const { queryClient } = renderTab(makeContainer({ state }))
+    const spy = spyOnInvalidations(queryClient)
+
+    fireEvent.click(screen.getByLabelText(label))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(title))
+    expect(toast.success).toHaveBeenCalledTimes(1)
+    expect(toast.warning).not.toHaveBeenCalled()
+    expect(invalidatedStacks(spy)).toBe(true)
+  })
+
+  it.each([
+    ['startContainer', 'Start container', 'exited', 'Container started'],
+    ['stopContainer', 'Stop container', 'running', 'Container stopped'],
+    ['restartContainer', 'Restart container', 'running', 'Container restarted'],
+  ] as const)('%s (container route) keeps the action title and does not invalidate stacks', async (fn, label, state, title) => {
+    resourcesMock[fn].mockResolvedValue({ message: 'done' })
+    const { queryClient } = renderTab(makeContainer({ state, projectName: '', stackId: '' }))
+    const spy = spyOnInvalidations(queryClient)
+
+    // A standalone row lives on the "Other Containers" tab.
+    await userEvent.click(screen.getByRole('tab', { name: /Other Containers/ }))
+    fireEvent.click(screen.getByLabelText(label))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(title))
+    expect(toast.success).toHaveBeenCalledTimes(1)
+    expect(invalidatedStacks(spy)).toBe(false)
   })
 })
