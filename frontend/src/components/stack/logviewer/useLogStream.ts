@@ -132,11 +132,22 @@ export function useLogStream({ stackId, initialContainer, hasRunningContainers }
     }
   )
 
+  // The client drops frames sent while the socket is not open, and the server
+  // keeps the filter per connection, so a new connection starts unfiltered.
+  // Send the current selection on every open (first connect and each reconnect)
+  // rather than once on mount. Read through a ref so a toggle, which sends its
+  // own frame, does not also re-fire this effect (agent-os-z91e.14).
+  const selectedContainersRef = useRef(selectedContainers)
   useEffect(() => {
-    if (initialContainer) {
-      send(JSON.stringify({ type: 'filter', containers: [initialContainer] }))
+    selectedContainersRef.current = selectedContainers
+  }, [selectedContainers])
+
+  const isConnected = status === 'connected'
+  useEffect(() => {
+    if (isConnected && selectedContainersRef.current.length > 0) {
+      send(JSON.stringify({ type: 'filter', containers: selectedContainersRef.current }))
     }
-  }, [initialContainer, send])
+  }, [isConnected, send])
 
   const handleScroll = useCallback(() => {
     if (!logContainerRef.current || isAutoScrollingRef.current) return
