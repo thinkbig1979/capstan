@@ -219,8 +219,6 @@ func (s *TerminalService) terminateSession(ctx context.Context, session *Termina
 // found) are logged, not returned — CloseSession/reapExpiredSessions tear the
 // session down from this service's side regardless.
 func (s *TerminalService) reapContainerShell(ctx context.Context, containerName, sessionID string) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
 
 	script := fmt.Sprintf(`for d in /proc/[0-9]*; do
   pid="${d#/proc/}"
@@ -232,10 +230,11 @@ done
 exit 0`, sessionEnvVar, sessionID)
 
 	//nolint:gosec // explicit argv; script is built from constant text and a uuid.New() session ID, never attacker-controlled
-	cmd := execCommandContext(ctx, "docker", "exec", "--", containerName, "sh", "-c", script)
+	cmd, cmdCtx, cancel := commandWithDeadline(ctx, 5*time.Second, "docker", "exec", "--", containerName, "sh", "-c", script)
+	defer cancel()
 	cmd.Env = dockerEnv()
 	if out, err := cmd.CombinedOutput(); err != nil {
-		slog.Debug("reapContainerShell: docker exec failed", "container", containerName, "session_id", sessionID, "error", err, "output", string(out))
+		slog.Debug("reapContainerShell: docker exec failed", "container", containerName, "session_id", sessionID, "error", timeoutError(cmdCtx, err, "docker exec reap"), "output", string(out))
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -63,6 +64,11 @@ type execRunner struct{}
 // only place WaitDelay acts) was never reached: Run outlived its context until
 // the grandchild exited on its own (agent-os-z91e.25, same shape as
 // agent-os-z91e.24).
+//
+// The group kill is cmd.Cancel, as in Output. It used to be a goroutine waiting
+// on ctx, which outlived Run whenever ctx outlived the child, and on a later
+// cancel signalled a pgid that might belong to another group by then
+// (agent-os-z91e.26).
 func (r *execRunner) Run(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
 	cmd := boundCommand(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -78,17 +84,11 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
 
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %w", name, err)
 	}
-
-	// Kill the whole process group on context cancellation.
-	pgid := cmd.Process.Pid
-	go func() {
-		<-ctx.Done()
-		// Negative PID signals the process group.
-		_ = syscall.Kill(-pgid, syscall.SIGKILL) //nolint:errcheck // Best-effort teardown: the process is already gone or unkillable, and neither outcome is actionable here.
-	}()
 
 	scanDone := make(chan struct{}, 2)
 	scan := func(r io.Reader) {
@@ -130,22 +130,28 @@ func (r *execRunner) Output(ctx context.Context, name string, args []string, env
 	cmd := boundCommand(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = append(stripCapstanSecrets(os.Environ()), env...)
-	cmd.Cancel = func() error {
-		// Negative PID signals the process group.
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-			if errors.Is(err, syscall.ESRCH) {
-				return os.ErrProcessDone
-			}
-			return err
-		}
-		return nil
-	}
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
 
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	return out, nil
+}
+
+// killProcessGroup is the cmd.Cancel of both execRunner methods: it SIGKILLs
+// the child's whole process group (Setpgid), not just the child. As cmd.Cancel
+// it runs only while exec is waiting on the child, so it can never signal a
+// group after the child has been reaped and its pgid reused.
+func killProcessGroup(cmd *exec.Cmd) error {
+	// Negative PID signals the process group.
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	return nil
 }
 
 // ResticManager wraps restic operations for a single BackupConfig.
