@@ -75,7 +75,7 @@ func TestResticManager_Restore_RealRestic_MatchesSnapshot(t *testing.T) {
 	closeOut()
 	require.NoError(t, err)
 
-	got, err := os.ReadFile(filepath.Join(stack, "a.txt"))
+	got, err := os.ReadFile(filepath.Join(stack, "a.txt")) //nolint:gosec // G304: stack is this test's own t.TempDir()
 	require.NoError(t, err)
 	require.Equal(t, "snapshot", string(got), "a file in the snapshot is restored to its snapshot content")
 	require.NoFileExists(t, filepath.Join(stack, "b.txt"),
@@ -179,22 +179,37 @@ func TestScanRestoreProtected_MissingDirectoriesProtectNothing(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+// lockDir sets dir to mode (one that denies listing it) for the rest of the
+// test, or skips the test where that does not deny (root holds
+// CAP_DAC_OVERRIDE): there the directory cannot stand in for an unreadable one.
+func lockDir(t *testing.T, dir string, mode os.FileMode) {
+	t.Helper()
+	require.NoError(t, os.Chmod(dir, mode))
+	// t.TempDir's cleanup cannot descend into a 000 directory.
+	//nolint:gosec // G302: 0755 is REQUIRED here, not lax. It restores the directory's own traversal bits so t.TempDir's RemoveAll can descend into it
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(dir, 0o755)) })
+	if _, err := os.ReadDir(dir); err == nil {
+		t.Skip("chmod does not deny reads for this uid, so this fixture cannot arm here")
+	}
+}
+
 func TestScanRestoreProtected_UnreadableDirectoryFailsClosed(t *testing.T) {
 	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("root reads a 0o000 directory, so it cannot stand in for an unreadable one")
+
+	// 0o000 fails at the CACHEDIR.TAG read; 0o100 lets that read through (the
+	// tag is simply absent) and fails at listing the directory, the walk's own
+	// error. Both must refuse.
+	for _, mode := range []os.FileMode{0o000, 0o100} {
+		stack := filepath.Join(t.TempDir(), "stack")
+		locked := filepath.Join(stack, "locked")
+		require.NoError(t, os.MkdirAll(locked, 0o755))
+		_, err := scanRestoreProtected(stack, stack, statDevice)
+		require.NoError(t, err, "the same tree scans cleanly while the directory is readable")
+
+		lockDir(t, locked, mode)
+		_, err = scanRestoreProtected(stack, stack, statDevice)
+		require.Error(t, err, "mode %o: a directory the scan cannot read might hold a mount or cache, so the restore is refused", mode)
 	}
-
-	stack := filepath.Join(t.TempDir(), "stack")
-	locked := filepath.Join(stack, "locked")
-	require.NoError(t, os.MkdirAll(locked, 0o755))
-	_, err := scanRestoreProtected(stack, stack, statDevice)
-	require.NoError(t, err, "the same tree scans cleanly while the directory is readable")
-
-	require.NoError(t, os.Chmod(locked, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
-	_, err = scanRestoreProtected(stack, stack, statDevice)
-	require.Error(t, err, "a directory the scan cannot read might hold a mount or cache, so the restore is refused")
 }
 
 func TestResticManager_Restore_ExcludesAreAnchoredAndEscaped(t *testing.T) {
@@ -250,9 +265,6 @@ func TestRunRestore_PassesProtectedPathsToRestic(t *testing.T) {
 
 func TestRunRestore_ScanFailureRefusesBeforeStopping(t *testing.T) {
 	t.Parallel()
-	if os.Geteuid() == 0 {
-		t.Skip("root reads a 0o000 directory, so it cannot stand in for an unreadable one")
-	}
 
 	db := newBackupTestDB(t)
 	docker := &fakeDocker{statusStr: "running"}
@@ -261,8 +273,7 @@ func TestRunRestore_ScanFailureRefusesBeforeStopping(t *testing.T) {
 	stack := filepath.Join(t.TempDir(), "myapp")
 	locked := filepath.Join(stack, "locked")
 	require.NoError(t, os.MkdirAll(locked, 0o755))
-	require.NoError(t, os.Chmod(locked, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	lockDir(t, locked, 0o000)
 	seedStackAt(t, db, "myapp", stack)
 
 	out, closeOut := drainStream()

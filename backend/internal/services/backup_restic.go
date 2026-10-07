@@ -855,7 +855,7 @@ func scanRestoreProtected(stackDir, target string, deviceOf func(fs.FileInfo) (u
 // hasCacheDirTag reports whether dir holds a CACHEDIR.TAG that starts with
 // cacheDirTagSignature, the test restic's --exclude-caches applies.
 func hasCacheDirTag(dir string) (bool, error) {
-	f, err := os.Open(filepath.Join(dir, "CACHEDIR.TAG"))
+	f, err := os.Open(filepath.Join(dir, "CACHEDIR.TAG")) //nolint:gosec // G304: dir is a directory restoreProtectedPaths is walking under the stack's restore target, already confined by runRestore
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
