@@ -171,6 +171,25 @@ type SchedulerService struct {
 	// instead of sleep-and-hope.
 	applyNextAt time.Time
 
+	// lifecycleMu serialises Start, Stop, Restart and Close, so Restart's
+	// stop-then-start is one transition and no other one can land between its
+	// halves (agent-os-z91e.5). It is separate from mu on purpose: Stop holds
+	// it across its up-to-10s wait for in-flight scans, and the tick, scan and
+	// apply goroutines take mu but never lifecycleMu, so that wait cannot
+	// deadlock against the goroutines it is waiting for. Order: lifecycleMu
+	// before mu, never the reverse.
+	lifecycleMu sync.Mutex
+	// closed is the terminal latch set by Close at process shutdown. Once set,
+	// Start and Restart refuse, so a settings save that lands during shutdown
+	// cannot re-arm the scan ticker or the apply loop. Guarded by lifecycleMu;
+	// nothing clears it, it ends with the process.
+	closed bool
+	// onTransition is a TEST-ONLY seam, nil in production: called under
+	// lifecycleMu at the end of every applied transition with whether the
+	// scheduler is now running, so a test can tell which of several concurrent
+	// calls was applied last.
+	onTransition func(running bool)
+
 	// opLock is the per-stack operation lock: auto-apply skips a container
 	// whose stack is held instead of updating it under a running backup or
 	// lifecycle op (agent-os-a1ye.4). Set by SetOperationLock; nil (tests)
@@ -204,6 +223,36 @@ func (s *SchedulerService) SetOperationLock(l *OperationLock) {
 }
 
 func (s *SchedulerService) Start(interval time.Duration) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.refuseIfClosed("Start") {
+		return
+	}
+	s.startLocked(interval)
+	s.noteTransition(true)
+}
+
+// refuseIfClosed reports whether Close has latched the scheduler shut, logging
+// the refused call. The caller holds lifecycleMu.
+func (s *SchedulerService) refuseIfClosed(op string) bool {
+	if !s.closed {
+		return false
+	}
+	s.logger.Warn("Scheduler is closed for shutdown; ignoring "+op, "op", op)
+	return true
+}
+
+// noteTransition calls the test-only onTransition seam. The caller holds
+// lifecycleMu.
+func (s *SchedulerService) noteTransition(running bool) {
+	if s.onTransition != nil {
+		s.onTransition(running)
+	}
+}
+
+// startLocked arms the scan ticker and the apply loop. The caller holds
+// lifecycleMu.
+func (s *SchedulerService) startLocked(interval time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -298,6 +347,28 @@ func (s *SchedulerService) ReloadApplySchedule() {
 }
 
 func (s *SchedulerService) Stop() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.stopLocked()
+	s.noteTransition(false)
+}
+
+// Close stops the scheduler for good: main.go calls it at shutdown instead of
+// Stop, and every later Start or Restart is refused. Without the latch, a
+// settings save still being served after shutdown began would Restart the
+// scheduler, re-arming auto-apply in the window before process exit
+// (agent-os-z91e.5).
+func (s *SchedulerService) Close() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.closed = true
+	s.stopLocked()
+	s.noteTransition(false)
+}
+
+// stopLocked halts the ticker and the apply loop and waits (bounded) for
+// in-flight scans. The caller holds lifecycleMu.
+func (s *SchedulerService) stopLocked() {
 	s.mu.Lock()
 
 	// Commit to shutdown before releasing mu (and long before the s.wg.Wait()
@@ -345,9 +416,18 @@ func (s *SchedulerService) Stop() {
 	}
 }
 
+// Restart stops and re-starts the scheduler as one transition under
+// lifecycleMu, so a concurrent Stop or Restart cannot interleave between the
+// halves and leave the runtime disagreeing with the last call made.
 func (s *SchedulerService) Restart(interval time.Duration) {
-	s.Stop()
-	s.Start(interval)
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.refuseIfClosed("Restart") {
+		return
+	}
+	s.stopLocked()
+	s.startLocked(interval)
+	s.noteTransition(true)
 }
 
 func (s *SchedulerService) IsRunning() bool {

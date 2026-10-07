@@ -763,8 +763,10 @@ func main() {
 
 	cancel()
 
+	// Close, not Stop: it latches the scheduler shut, so a settings save still
+	// being served before srv.Shutdown below cannot Restart it (agent-os-z91e.5).
 	if schedulerService != nil {
-		schedulerService.Stop()
+		schedulerService.Close()
 	}
 
 	// Stopped here, before srv.Shutdown, so no scheduled prune starts during
