@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -45,6 +46,11 @@ type SettingsHandler struct {
 	// the user. Same injection-after-construction reasoning as envUnlock; a
 	// nil/unset slice closes nothing (agent-os-teop).
 	connMgrs ConnectionManagers
+	// scanIntervalMu makes UpdateUpdateSettings' read of the old interval, its
+	// write of the new one and the scheduler Restart/Stop one critical section,
+	// so two concurrent saves cannot leave the running scheduler disagreeing
+	// with the stored interval (agent-os-z91e.5).
+	scanIntervalMu sync.Mutex
 }
 
 func NewSettingsHandler(db *database.DB, stacksDir string, jwtSecret string, authDisabled bool, scheduler *services.SchedulerService, cfg *config.Config) *SettingsHandler {
@@ -750,6 +756,9 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	applied := gin.H{"setting": "update_schedule"}
 
 	if req.ScanIntervalMinutes != nil {
+		h.scanIntervalMu.Lock()
+		defer h.scanIntervalMu.Unlock()
+
 		// The old interval decides whether the scheduler is restarted or stopped
 		// below, inside the write path. Defaulting it to "" on a fault would make
 		// that decision on invented state (agent-os-1gqn).
