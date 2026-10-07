@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# scripts/check-close-reason.sh — a bug bead's close reason carries the four
-# class-sweep fields, or the close is refused (agent-os-o1jp.6).
+# scripts/check-close-reason.sh — a bug bead's close reason carries the five
+# class-sweep fields, or the close is refused (agent-os-o1jp.6, agent-os-qags.8).
 #
 # CLAUDE.md, "Beads: closing a bug bead", requires every bug bead's close
 # reason to state (1) a class statement, (2) the sweep command, (3) its
-# verbatim output, (4) a verdict. agent-os-o1jp.4 put that rule in CLAUDE.md,
-# which nothing reads. This script is the reader.
+# verbatim output, (4) a verdict, (5) the guard that keeps the class closed.
+# agent-os-o1jp.4 put that rule in CLAUDE.md, which nothing reads. This script
+# is the reader. Field 5 has no grace rule for older beads: a bead with no
+# mechanical guard writes "Guard: none possible, because ...".
 #
 # WHY NOT CI: the tracker is not reachable from a runner. `.beads/` is
 # gitignored (.gitignore:97), `git ls-files .beads` is empty, no workflow
@@ -89,6 +91,7 @@
 #                    line starting with "->", "=>" or "→" (the shape closes
 #                    in this tracker already use under SWEEP)
 #   Verdict          a line beginning "verdict", or the phrase "further sites"
+#   Guard            a line beginning "guard" followed by a colon or dash
 # OBSERVED 2026-09-05: agent-os-hpe9's real close reason has exactly this
 # shape (CLASS STATEMENT: / SWEEP (scope ...): / indented command grep /
 # "->" lines / VERDICT:) and passes; the same text with its VERDICT line
@@ -120,14 +123,15 @@ check_reason() {
   if has "${H}sweep" && has '^[[:space:]]*```|(^|[^a-z])(command[[:space:]]+)?(grep|rg|git[[:space:]]+grep|find)([[:space:]]|$)'; then :; else missing+=("Sweep command"); fi
   has "${H}(verbatim|output)|^[[:space:]]*(->|=>|→)" || missing+=("Verbatim output")
   has "${H}verdict|further sites" || missing+=("Verdict")
+  has "${H}guard(\*\*)?[[:space:]]*[:—-]" || missing+=("Guard")
 
   if [ "${#missing[@]}" -eq 0 ]; then
-    echo "close-reason: all four class-sweep fields present (Class statement, Sweep command, Verbatim output, Verdict)"
+    echo "close-reason: all five class-sweep fields present (Class statement, Sweep command, Verbatim output, Verdict, Guard)"
     return 0
   fi
   {
     echo "close-reason: REFUSED - a bug bead's close reason is missing: $(IFS=,; echo "${missing[*]}" | command sed 's/,/, /g')"
-    echo "  Required by CLAUDE.md 'Beads: closing a bug bead': Class statement / Sweep command (command grep ..., receiver-agnostic, with a positive control) / Verbatim output / Verdict ('0 further sites' or the follow-up bead ids)."
+    echo "  Required by CLAUDE.md 'Beads: closing a bug bead': Class statement / Sweep command (command grep ..., receiver-agnostic, with a positive control) / Verbatim output / Verdict ('0 further sites' or the follow-up bead ids) / Guard (the helper or check that keeps every site on the safe form, the bead filed for one, or 'none possible, because ...')."
   } >&2
   return 1
 }
@@ -1241,6 +1245,7 @@ SWEEP (scope frontend/src, non-test; positive control = the same command at d6b4
   command grep -rn 'reconnectAttempts = \|new WebSocket(' frontend/src --include=*.ts --include=*.tsx | command grep -v __tests__
   -> ws.ts:61 (field), :77 (connect(): fresh ladder), :98 (the only new WebSocket( in the app)
 VERDICT: 0 further sites. Follow-up filed: agent-os-e06q (P4).
+GUARD: the reconnect ladder lives in connect(), so a new caller cannot skip it; TestReconnect pins it.
 R
   # Twins: the same text minus exactly one field.
   command grep -viE '^verdict' "$ST_DIR/complete.txt" > "$ST_DIR/no-verdict.txt"
@@ -1248,6 +1253,7 @@ R
   command grep -vE '^  -> ' "$ST_DIR/complete.txt" > "$ST_DIR/no-output.txt"
   command grep -vE 'command grep' "$ST_DIR/complete.txt" > "$ST_DIR/no-command.txt"
   command grep -viE '^sweep' "$ST_DIR/complete.txt" > "$ST_DIR/no-sweep-header.txt"
+  command grep -viE '^guard' "$ST_DIR/complete.txt" > "$ST_DIR/no-guard.txt"
   # The markdown-flavoured shape CLAUDE.md's block itself uses.
   command cat > "$ST_DIR/markdown.txt" <<'R'
 1. **Class statement** — a WebSocket handler that upgrades but does not guarantee close on every exit path.
@@ -1261,24 +1267,28 @@ dashboard.go:41
 logs.go:88
 ```
 4. **Verdict** — 0 further sites.
+5. **Guard** — a lint rule keeps every upgrade on upgradeConnection.
 R
   # A reason with none of it, and an empty one.
   command printf 'Fixed the bug, tests green, merged as abc1234.\n' > "$ST_DIR/bare.txt"
   : > "$ST_DIR/empty.txt"
 
   # --- the three the bead asks for, each with its twin
-  selftest_case complete-bug          0 bug  "$ST_DIR/complete.txt"   'all four class-sweep fields present'
+  selftest_case complete-bug          0 bug  "$ST_DIR/complete.txt"   'all five class-sweep fields present'
   selftest_case bug-missing-verdict   1 bug  "$ST_DIR/no-verdict.txt" 'missing: Verdict$'
   selftest_case task-bare             0 task "$ST_DIR/bare.txt"       'not a bug bead \(type: task\)'
-  selftest_case bug-bare              1 bug  "$ST_DIR/bare.txt"       'missing: Class statement, Sweep command, Verbatim output, Verdict'
+  selftest_case bug-bare              1 bug  "$ST_DIR/bare.txt"       'missing: Class statement, Sweep command, Verbatim output, Verdict, Guard'
   # --- every other field, one at a time, named
   selftest_case bug-missing-class     1 bug  "$ST_DIR/no-class.txt"   'missing: Class statement$'
   selftest_case bug-missing-output    1 bug  "$ST_DIR/no-output.txt"  'missing: Verbatim output$'
   selftest_case bug-missing-command   1 bug  "$ST_DIR/no-command.txt" 'missing: Sweep command$'
+  selftest_case bug-missing-guard     1 bug  "$ST_DIR/no-guard.txt"   'missing: Guard$'
+  selftest_case bug-guard-present     0 bug  "$ST_DIR/complete.txt"   'all five class-sweep fields present'
+  selftest_case task-missing-guard    0 task "$ST_DIR/no-guard.txt"   'not a bug bead \(type: task\)'
   selftest_case bug-missing-sweep-hdr 1 bug  "$ST_DIR/no-sweep-header.txt" 'missing: Sweep command$'
   # --- shape tolerance and the empty edge
-  selftest_case markdown-shape        0 bug  "$ST_DIR/markdown.txt"   'all four class-sweep fields present'
-  selftest_case bug-empty             1 bug  "$ST_DIR/empty.txt"      'missing: Class statement, Sweep command, Verbatim output, Verdict'
+  selftest_case markdown-shape        0 bug  "$ST_DIR/markdown.txt"   'all five class-sweep fields present'
+  selftest_case bug-empty             1 bug  "$ST_DIR/empty.txt"      'missing: Class statement, Sweep command, Verbatim output, Verdict, Guard'
   selftest_case task-empty            0 task "$ST_DIR/empty.txt"      'not a bug bead'
   # --- more text than a pipe buffer holds (64 KiB), fields on the first
   # lines: the reader stops at its first match while the writer still has
@@ -1288,7 +1298,7 @@ R
   for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do pad+=$pad; done
   { command cat "$ST_DIR/complete.txt"; command printf '%s' "$pad"; } > "$ST_DIR/large.txt"
   command grep -viE '^verdict' "$ST_DIR/large.txt" > "$ST_DIR/large-no-verdict.txt"
-  selftest_case large-reason          0 bug  "$ST_DIR/large.txt"      'all four class-sweep fields present'
+  selftest_case large-reason          0 bug  "$ST_DIR/large.txt"      'all five class-sweep fields present'
   selftest_case large-missing-verdict 1 bug  "$ST_DIR/large-no-verdict.txt" 'missing: Verdict$'
   # The self-test's own matcher, both ways, on the same large text.
   ST_RUN=$((ST_RUN + 1))
@@ -1320,7 +1330,7 @@ STUB
   # inside. (bash's %q form, $'...', is not something shlex can read: next to
   # a close the hook refuses it, see ansi_c() and the ansi-c-* controls.)
   local ok; ok=$(command cat "$ST_DIR/complete.txt")
-  local G="--reason-file complete.txt" ALL='missing: Class statement, Sweep command, Verbatim output, Verdict'
+  local G="--reason-file complete.txt" ALL='missing: Class statement, Sweep command, Verbatim output, Verdict, Guard'
   hook_case not-a-close               0 "bd show t-bug-1 --json"
   hook_case close-complete-reason     0 "bd close t-bug-1 --reason \"$ok\""
   hook_case close-bare-reason         2 "bd close t-bug-1 --reason 'Fixed it, merged.'"   "$ALL"
