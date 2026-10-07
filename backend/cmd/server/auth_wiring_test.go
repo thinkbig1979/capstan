@@ -39,7 +39,7 @@ func TestAuthMiddlewareIsWiredToTheAuthDisabledAllowlist(t *testing.T) {
 	)
 
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "main.go", nil, parser.AllErrors)
+	file, err := parser.ParseFile(fset, "main.go", mainSource, parser.AllErrors)
 	if err != nil {
 		t.Fatalf("failed to parse main.go: %v", err)
 	}
