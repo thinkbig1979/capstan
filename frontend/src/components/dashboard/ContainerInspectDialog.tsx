@@ -12,10 +12,14 @@ import {
 import { AlertCircle, Info, Copy, Check } from 'lucide-react'
 import { toast } from 'sonner'
 import { EditorView, basicSetup } from 'codemirror'
-import { EditorState } from '@codemirror/state'
+import { Compartment, EditorState, type Extension } from '@codemirror/state'
 import { json } from '@codemirror/lang-json'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { useUIStore } from '@/stores/uiStore'
+
+function themeExtension(isDark: boolean): Extension {
+  return isDark ? oneDark : []
+}
 
 // Split into its own chunk (behind React.lazy in ContainersOverviewTab) so the
 // codemirror bundle only loads when a user actually opens the Inspect dialog,
@@ -37,6 +41,14 @@ export function ContainerInspectDialog({
   const [copied, setCopied] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  // The theme lives in a Compartment so a theme change reconfigures the live
+  // viewer instead of rebuilding it, which reset its scroll position and
+  // selection (agent-os-z91e.45). One Compartment per view, created with it.
+  const themeCompartmentRef = useRef<Compartment | null>(null)
+  const isDarkRef = useRef(false)
+  // The theme the live view was last given, so the reconfigure effect below
+  // stays silent on creation, when the view is already right.
+  const appliedDarkRef = useRef(false)
   const { theme } = useUIStore()
 
   const isDark = useMemo(
@@ -47,6 +59,10 @@ export function ContainerInspectDialog({
         window.matchMedia('(prefers-color-scheme: dark)').matches),
     [theme],
   )
+
+  useEffect(() => {
+    isDarkRef.current = isDark
+  })
 
   useEffect(() => {
     if (!open) return
@@ -68,6 +84,10 @@ export function ContainerInspectDialog({
 
     viewRef.current?.destroy()
     viewRef.current = null
+
+    const themeCompartment = new Compartment()
+    themeCompartmentRef.current = themeCompartment
+    appliedDarkRef.current = isDarkRef.current
 
     const formattedJson = JSON.stringify(inspectData, null, 2)
 
@@ -94,11 +114,8 @@ export function ContainerInspectDialog({
           backgroundColor: 'transparent',
         },
       }),
+      themeCompartment.of(themeExtension(appliedDarkRef.current)),
     ]
-
-    if (isDark) {
-      extensions.push(oneDark)
-    }
 
     const state = EditorState.create({
       doc: formattedJson,
@@ -113,8 +130,19 @@ export function ContainerInspectDialog({
     return () => {
       viewRef.current?.destroy()
       viewRef.current = null
+      themeCompartmentRef.current = null
     }
-  }, [inspectData, isDark, loading])
+    // The view is rebuilt only for new data or a reload; the theme reaches the
+    // live view through the Compartment and the effect below.
+  }, [inspectData, loading])
+
+  useEffect(() => {
+    const view = viewRef.current
+    const compartment = themeCompartmentRef.current
+    if (!view || !compartment || appliedDarkRef.current === isDark) return
+    appliedDarkRef.current = isDark
+    view.dispatch({ effects: compartment.reconfigure(themeExtension(isDark)) })
+  }, [isDark])
 
   const handleCopy = async () => {
     if (!inspectData) return
