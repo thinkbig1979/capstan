@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useUpdateBackupSettings } from '@/hooks/useBackup'
 import type { BackupSettings } from '@/types'
-import { buildPayload, toDraft } from './backup-payload'
+import { buildPayload, hasInvalidFields, toDraft } from './backup-payload'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
 import { presentError, presentFault } from '@/lib/error-handler'
 import type { Draft } from './types'
@@ -39,10 +39,13 @@ export function useBackupForm(settings: BackupSettings | undefined) {
   // Edits live only in `draft`/`password` until saved; compare against the last
   // persisted server values to know whether anything is pending.
   const pendingChanges = settings && draft ? buildPayload(settings, draft, password) : {}
-  const isDirty = Object.keys(pendingChanges).length > 0
+  const invalid = draft ? hasInvalidFields(draft) : false
+  // An empty numeric field is an edit too: it keeps Discard reachable even
+  // though buildPayload leaves the field out.
+  const isDirty = Object.keys(pendingChanges).length > 0 || invalid
 
   const handleSave = () => {
-    if (!settings || !draft) return
+    if (!settings || !draft || invalid) return
     const payload = buildPayload(settings, draft, password)
     if (Object.keys(payload).length === 0) {
       toast.info('No changes to save')
@@ -94,6 +97,7 @@ export function useBackupForm(settings: BackupSettings | undefined) {
     password,
     setPassword,
     isDirty,
+    canSave: !invalid,
     isSaving: updateSettings.isPending,
     handleSave,
     handleDiscard,

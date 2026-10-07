@@ -1,6 +1,6 @@
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { NumericField } from '../NumericField'
 import { ScheduleModeFields } from '../ScheduleModeFields'
 import type { Draft } from './types'
 
@@ -28,14 +28,11 @@ export function ScheduleSection({ draft, onChange }: ScheduleSectionProps) {
         intervalControl={
           <>
             {/* id must match `${idPrefix}-interval`, the htmlFor of intervalLabel. */}
-            <Input
+            <NumericField
               id="backup-schedule-interval"
-              type="number"
               min={0}
               value={draft.scheduleIntervalMinutes}
-              onChange={(e) =>
-                onChange('scheduleIntervalMinutes', parseInt(e.target.value, 10) || 0)
-              }
+              onValueChange={(v) => onChange('scheduleIntervalMinutes', v)}
               className="max-w-xs"
             />
             <p className="text-xs text-muted-foreground">

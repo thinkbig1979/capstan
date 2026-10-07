@@ -706,3 +706,58 @@ describe('UpdateScheduleContent — a failed settings query', () => {
     expect(screen.getByText('Schedule')).toBeInTheDocument()
   })
 })
+
+// agent-os-z91e.15. The custom interval used to map an empty field to 0 at once,
+// and the server reads 0 as "stop the scheduler", so clearing the box and
+// leaving it switched scanning off.
+describe('UpdateScheduleContent — a cleared custom interval (agent-os-z91e.15)', () => {
+  it('sends nothing on blur and says the field needs a number', async () => {
+    mockGetUpdates.mockResolvedValue(makeSettings({ scanIntervalMinutes: 45 }))
+    renderPanel()
+
+    const input = await screen.findByLabelText('Custom interval (minutes)')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.blur(input)
+    // mutate() reaches the API on a later tick, so a bare synchronous
+    // not.toHaveBeenCalled would pass even for a save that is on its way.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(mockUpdateUpdates).not.toHaveBeenCalled()
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(input).toHaveValue(null)
+    expect(screen.getByText('Enter a number')).toBeInTheDocument()
+  })
+
+  it('sends the persisted interval, not 0, when an unrelated control saves', async () => {
+    mockGetUpdates.mockResolvedValue(makeSettings({ scanIntervalMinutes: 45 }))
+    renderPanel()
+
+    const input = await screen.findByLabelText('Custom interval (minutes)')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('switch', { name: 'Enable Auto-Update' }))
+
+    await waitFor(() => expect(mockUpdateUpdates).toHaveBeenCalledTimes(1))
+    expect(mockUpdateUpdates).toHaveBeenCalledWith({
+      scanIntervalMinutes: 45,
+      globalAutoUpdate: true,
+    })
+  })
+
+  it('still lets a typed 0 through as "disabled" after a cleared field', async () => {
+    mockGetUpdates.mockResolvedValue(makeSettings({ scanIntervalMinutes: 45 }))
+    renderPanel()
+
+    const input = await screen.findByLabelText('Custom interval (minutes)')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.change(input, { target: { value: '0' } })
+    fireEvent.blur(input)
+
+    await waitFor(() =>
+      expect(mockUpdateUpdates).toHaveBeenCalledWith({
+        scanIntervalMinutes: 0,
+        globalAutoUpdate: false,
+      }),
+    )
+    expect(screen.queryByText('Enter a number')).not.toBeInTheDocument()
+  })
+})

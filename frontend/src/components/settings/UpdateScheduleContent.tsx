@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
@@ -7,6 +6,7 @@ import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { useUpdateSettings, useUpdateUpdateSettings } from '@/hooks/useResources'
 import { HelpHint } from '@/components/ui/help-hint'
+import { NumericField } from '@/components/settings/NumericField'
 import { formatDateFull } from '@/lib/format'
 import { ScheduleModeFields } from '@/components/settings/ScheduleModeFields'
 import { AlertCircle } from 'lucide-react'
@@ -34,7 +34,9 @@ export function UpdateScheduleContent() {
 
   const [initialized, setInitialized] = useState(false)
   const [scanPreset, setScanPreset] = useState<string>('0')
-  const [customMinutes, setCustomMinutes] = useState<number>(60)
+  // null = the box is empty. Never 0: the server reads 0 as "stop scanning"
+  // (agent-os-z91e.15).
+  const [customMinutes, setCustomMinutes] = useState<number | null>(60)
   const [globalAutoUpdate, setGlobalAutoUpdate] = useState(false)
   const [applyMode, setApplyMode] = useState<'immediate' | 'scheduled'>('immediate')
   const [applyTime, setApplyTime] = useState(DEFAULT_APPLY_TIME)
@@ -70,7 +72,10 @@ export function UpdateScheduleContent() {
   const effectiveApplyDays = initialized
     ? applyDays
     : (settings?.applyDays?.length ? settings.applyDays : DEFAULT_APPLY_DAYS)
-  const effectiveScanMinutes = effectivePreset === 'custom' ? effectiveCustom : parseInt(effectivePreset, 10)
+  // A cleared custom box counts as the interval the server already has, so the
+  // warning below does not flicker while the operator is typing.
+  const effectiveScanMinutes =
+    effectivePreset === 'custom' ? (effectiveCustom ?? scanInterval) : parseInt(effectivePreset, 10)
 
   if (isLoading) {
     return (
@@ -144,7 +149,10 @@ export function UpdateScheduleContent() {
   }
 
   const save = (updates: { scanIntervalMinutes?: number; globalAutoUpdate?: boolean } & ApplyUpdates) => {
-    const minutes = updates.scanIntervalMinutes ?? (effectivePreset === 'custom' ? effectiveCustom : parseInt(effectivePreset, 10))
+    // A cleared custom box is not a value. Every control other than the box's own
+    // blur save falls back to the interval the server already has, so flipping
+    // the auto-update switch with the box empty neither writes 0 nor does nothing.
+    const minutes = updates.scanIntervalMinutes ?? effectiveScanMinutes
     const autoUpdate = updates.globalAutoUpdate ?? effectiveAutoUpdate
     if (minutes > 0 && minutes < 15) {
       toastInvalid('Custom interval must be at least 15 minutes')
@@ -209,7 +217,8 @@ export function UpdateScheduleContent() {
   }
 
   const handleCustomBlur = () => {
-    if (scanPreset === 'custom') {
+    // An empty box saves nothing; NumericField shows the message.
+    if (scanPreset === 'custom' && effectiveCustom !== null) {
       save({ scanIntervalMinutes: effectiveCustom })
     }
   }
@@ -298,13 +307,12 @@ export function UpdateScheduleContent() {
         {effectivePreset === 'custom' && (
           <div className="space-y-2">
             <Label htmlFor="custom-minutes">Custom interval (minutes)</Label>
-            <Input
+            <NumericField
               id="custom-minutes"
-              type="number"
               min={15}
               max={10080}
               value={effectiveCustom}
-              onChange={(e) => setCustomMinutes(parseInt(e.target.value, 10) || 0)}
+              onValueChange={setCustomMinutes}
               onBlur={handleCustomBlur}
               className="max-w-xs"
             />
