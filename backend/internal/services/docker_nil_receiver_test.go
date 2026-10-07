@@ -174,6 +174,13 @@ func TestNilDockerService_FailsLoudly(t *testing.T) {
 		if method.Name == "ValidateName" {
 			continue
 		}
+		// SetStackLookup is startup wiring, not an operation: main.go calls it
+		// on whatever NewDockerService returned, and on a nil service there is
+		// nothing to install and no result for a caller to misread. It is still
+		// covered by TestNilDockerService_NoExportedMethodPanics (agent-os-z91e.38).
+		if method.Name == "SetStackLookup" {
+			continue
+		}
 
 		t.Run(method.Name, func(t *testing.T) {
 			fn := nilSvc.MethodByName(method.Name)

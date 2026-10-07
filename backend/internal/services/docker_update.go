@@ -524,7 +524,15 @@ func (s *DockerService) findComposeContainer(ctx context.Context, projectName, s
 // length (agent-os-zrm2): a long pull prints progress first and its real error
 // last, so trimOutput's first-500-bytes cut would drop the diagnosis.
 func (s *DockerService) updateComposeContainer(ctx context.Context, stack models.Stack, serviceName string, wasRunning bool) error {
-	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
+	// Both built before anything runs, so a refusal leaves the service untouched.
+	pullArgs, err := s.mutatingComposeArgs(stack, "pull", []string{"--", serviceName})
+	if err != nil {
+		return err
+	}
+	upArgs, err := s.mutatingComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
+	if err != nil {
+		return err
+	}
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	pullCmd, pullCtx, cancelPull := commandWithDeadline(ctx, s.composeTimeout(), "docker", pullArgs...)
 	defer cancelPull()
@@ -535,7 +543,6 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 		return fmt.Errorf("compose pull failed: %s: %w", strings.TrimSpace(s.redactComposeOutputFor(stack, string(output))), err)
 	}
 
-	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	upCmd, upCtx, cancelUp := commandWithDeadline(ctx, s.composeTimeout(), "docker", upArgs...)
 	defer cancelUp()
@@ -801,11 +808,20 @@ func (s *DockerService) updateComposeContainerStreaming(
 ) error {
 	imageRef := serviceName
 
+	// Both built before anything runs, so a refusal leaves the service untouched.
+	pullArgs, err := s.mutatingComposeArgs(stack, "pull", []string{"--", serviceName})
+	if err != nil {
+		return err
+	}
+	upArgs, err := s.mutatingComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
+	if err != nil {
+		return err
+	}
+
 	setStatus(StatusPulling)
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Pulling " + imageRef, Stream: StreamStatus})
 
 	secrets := s.composeSecrets(stack)
-	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
 	if err := streamComposeCmd(ctx, s.composeTimeout(), pullArgs, stack.Directory, secrets, emit); err != nil {
 		return fmt.Errorf("compose pull failed: %w", err)
 	}
@@ -813,7 +829,6 @@ func (s *DockerService) updateComposeContainerStreaming(
 	setStatus(StatusRecreating)
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + serviceName, Stream: StreamStatus})
 
-	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
 	if err := streamComposeCmd(ctx, s.composeTimeout(), upArgs, stack.Directory, secrets, emit); err != nil {
 		return fmt.Errorf("compose up failed: %w", err)
 	}
@@ -963,11 +978,25 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	}
 	oldImageID = oldImgID
 
+	// Both built before the pull, so a refusal changes nothing and announces
+	// no pull (agent-os-z91e.38).
+	pullArgs, refuseErr := s.mutatingComposeArgs(stack, "pull", []string{"--", serviceName})
+	if refuseErr != nil {
+		durationMs = time.Since(start).Milliseconds()
+		ar = refusedCompose(refuseErr)
+		return
+	}
+	upArgs, refuseErr := s.mutatingComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
+	if refuseErr != nil {
+		durationMs = time.Since(start).Milliseconds()
+		ar = refusedCompose(refuseErr)
+		return
+	}
+
 	setStatus(StatusPulling)
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Pulling " + serviceName, Stream: StreamStatus})
 
 	secrets := s.composeSecrets(stack)
-	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
 	if pullErr := streamComposeCmd(ctx, s.composeTimeout(), pullArgs, stack.Directory, secrets, emit); pullErr != nil {
 		durationMs = time.Since(start).Milliseconds()
 		ar = truth.Failed("compose pull failed", pullErr)
@@ -977,7 +1006,6 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	setStatus(StatusRecreating)
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + serviceName, Stream: StreamStatus})
 
-	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
 	if upErr := streamComposeCmd(ctx, s.composeTimeout(), upArgs, stack.Directory, secrets, emit); upErr != nil {
 		durationMs = time.Since(start).Milliseconds()
 		ar = truth.Failed("compose up failed", upErr)

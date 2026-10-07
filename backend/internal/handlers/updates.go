@@ -451,6 +451,11 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 		return
 	}
 
+	// Before the lock and the job, so nothing is queued (agent-os-z91e.38).
+	if refuseSharedProjectName(c, h.db, stack) {
+		return
+	}
+
 	// Find outdated services for this stack from the cache.
 	cachedUpdates, err := h.db.GetCachedUpdates()
 	if err != nil {

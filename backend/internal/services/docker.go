@@ -21,6 +21,7 @@ import (
 	"github.com/docker/docker/client"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -77,6 +78,21 @@ type DockerService struct {
 	// list poll concurrently.
 	unmanagedMu   sync.Mutex
 	lastUnmanaged string
+	// stackLookup answers whether another stack carries a stack's compose
+	// project name, so mutatingComposeArgs can refuse (agent-os-z91e.38).
+	// main.go installs it with SetStackLookup; nil turns the check off, which
+	// is what lets the unit tests build a bare DockerService.
+	// stacklookup_wiring_test.go proves main.go installs it.
+	stackLookup DashboardDB
+}
+
+// SetStackLookup installs the stacks table that mutatingComposeArgs checks a
+// stack's compose project name against.
+func (s *DockerService) SetStackLookup(db DashboardDB) {
+	if s == nil {
+		return
+	}
+	s.stackLookup = db
 }
 
 func NewDockerService(cfg *config.Config) (*DockerService, error) {
@@ -356,6 +372,42 @@ func (s *DockerService) buildComposeArgs(stack models.Stack, subcommand string, 
 	args = append(args, extraArgs...)
 
 	return args
+}
+
+// mutatingComposeArgs is buildComposeArgs for every compose command that can
+// change containers (up, down, pull, restart). buildComposeArgs itself is only
+// for the read-only logs and ps; composeargs_guard_z91e38_test.go holds every
+// other call site to this function.
+//
+// Compose finds a project's containers by `-p <project name>`, and two stacks
+// can carry one name (D25), so a command run for one stack also acts on the
+// other's containers of any service both define, under only the first stack's
+// lock. It is refused instead (agent-os-z91e.38, owner decision D28).
+func (s *DockerService) mutatingComposeArgs(stack models.Stack, subcommand string, extraArgs []string) ([]string, error) {
+	if err := s.refuseSharedProjectName(stack); err != nil {
+		return nil, err
+	}
+	return s.buildComposeArgs(stack, subcommand, extraArgs), nil
+}
+
+// refuseSharedProjectName returns an error when stack's compose project name
+// belongs to another stack too, or when that cannot be told. A shared name
+// returns the lookup's error unchanged: it matches errdefs.ErrAmbiguous and its
+// text names every stack carrying the name. A lookup fault refuses as well
+// (fail closed): the command would run without knowing whose containers it
+// touches.
+func (s *DockerService) refuseSharedProjectName(stack models.Stack) error {
+	if s.stackLookup == nil {
+		return nil
+	}
+	_, err := s.stackLookup.GetStackByProjectName(stack.ProjectName)
+	switch {
+	case err == nil, errors.Is(err, errdefs.ErrNotFound):
+		return nil
+	case errors.Is(err, errdefs.ErrAmbiguous):
+		return err
+	}
+	return fmt.Errorf("cannot tell whether another stack shares compose project name %q, so the command was not run: %w", stack.ProjectName, err)
 }
 
 // ValidateName is the one exported method with no nil-receiver guard, and
@@ -770,8 +822,12 @@ type LiveStatus struct {
 // ps` itself errored on an unreadable dir / invalid file — a condition container
 // labels can't reveal), so the caller decides between "stopped" and "error" for
 // absent projects. Multiple stacks sharing a project name each resolve to that
-// project's containers (mirroring current /stacks behavior); production project
-// names are unique per stack so this is moot there.
+// project's containers (mirroring current /stacks behavior). That happens in
+// production: two directories whose compose files share a top-level `name:`
+// get one project name, and both stay listed (D25). Their containers cannot be
+// told apart by label, so each such stack shows the combined status; the stack
+// page warns that the name is shared (agent-os-z91e.19) and every compose
+// command that changes containers is refused for them (agent-os-z91e.38).
 func BuildStackStatuses(containers []models.DashboardContainerInfo) map[string]LiveStatus {
 	byProject := make(map[string][]models.Container)
 	allRunning := make(map[string]bool)

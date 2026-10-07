@@ -23,6 +23,10 @@ func (h *StacksHandler) Start(c *gin.Context) {
 		return
 	}
 
+	if refuseSharedProjectName(c, h.db, stack) {
+		return
+	}
+
 	lockToken, err := h.opLock.Acquire(id, services.OpKindStart)
 	if err != nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
@@ -66,6 +70,10 @@ func (h *StacksHandler) Stop(c *gin.Context) {
 	stack, err := h.db.GetStack(id)
 	if err != nil {
 		handleDBError(c, err, "Failed to load stack")
+		return
+	}
+
+	if refuseSharedProjectName(c, h.db, stack) {
 		return
 	}
 
@@ -115,6 +123,10 @@ func (h *StacksHandler) Restart(c *gin.Context) {
 		return
 	}
 
+	if refuseSharedProjectName(c, h.db, stack) {
+		return
+	}
+
 	lockToken, err := h.opLock.Acquire(id, services.OpKindRestart)
 	if err != nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
@@ -158,6 +170,10 @@ func (h *StacksHandler) Pull(c *gin.Context) {
 	stack, err := h.db.GetStack(id)
 	if err != nil {
 		handleDBError(c, err, "Failed to load stack")
+		return
+	}
+
+	if refuseSharedProjectName(c, h.db, stack) {
 		return
 	}
 

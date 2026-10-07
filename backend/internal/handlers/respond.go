@@ -280,6 +280,12 @@ func renderDockerResult(c *gin.Context, err error, r truth.ActionResult) {
 		renderResultWithStatus(c, http.StatusServiceUnavailable, truth.Failed(DockerUnavailableMessage, err))
 		return
 	}
+	// The compose paths' own refusal of a shared project name (agent-os-z91e.38),
+	// reached when the name became shared after the handler's pre-check.
+	if errors.Is(err, errdefs.ErrAmbiguous) {
+		refuseAmbiguousStack(c, err)
+		return
+	}
 	renderResult(c, r)
 }
 
