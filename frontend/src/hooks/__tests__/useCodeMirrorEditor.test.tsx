@@ -30,6 +30,14 @@ vi.mock('codemirror', () => {
 })
 
 vi.mock('@codemirror/state', () => ({
+  Compartment: class {
+    of(ext: unknown) {
+      return ext
+    }
+    reconfigure() {
+      return {}
+    }
+  },
   EditorState: {
     create: ({ doc }: { doc: string }) => ({
       doc: { toString: () => doc, length: doc.length },
