@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
 import { presentFault } from '@/lib/error-handler'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { NumericField } from '@/components/settings/NumericField'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { HelpHint } from '@/components/ui/help-hint'
@@ -42,7 +42,17 @@ function runReclaimed(run: DockerCleanupRun): string {
   return formatBytes(run.bytesReclaimed + run.cacheBytesReclaimed)
 }
 
+/** The edit buffer. A key is absent while untouched (the saved value shows) and
+ *  null once the operator has emptied the box (agent-os-qags.4): empty is not a
+ *  number, so Save stays off instead of the box turning into a 0 they never typed. */
 interface PolicyDraft {
+  enabled?: boolean
+  minAgeHours?: number | null
+  intervalHours?: number | null
+}
+
+/** The wire shape of a save: every field optional, and never null. */
+interface PolicyPayload {
   enabled?: boolean
   minAgeHours?: number
   intervalHours?: number
@@ -88,12 +98,17 @@ export function DockerCleanupCard() {
   }
 
   const enabled = draft.enabled ?? data.enabled
-  const minAgeHours = draft.minAgeHours ?? data.minAgeHours
-  const intervalHours = draft.intervalHours ?? data.intervalHours
+  // `!== undefined`, not `??`: null is "cleared", and `??` would turn it back
+  // into the saved value, so the box would snap back as the operator cleared it.
+  const minAgeHours = draft.minAgeHours !== undefined ? draft.minAgeHours : data.minAgeHours
+  const intervalHours = draft.intervalHours !== undefined ? draft.intervalHours : data.intervalHours
 
-  const ageBelowFloor = minAgeHours < data.minAllowedAgeHours
-  const intervalBelowFloor = intervalHours < data.minAllowedIntervalHours
-  const belowFloor = ageBelowFloor || intervalBelowFloor
+  const ageEmpty = minAgeHours === null
+  const intervalEmpty = intervalHours === null
+  const ageBelowFloor = minAgeHours !== null && minAgeHours < data.minAllowedAgeHours
+  const intervalBelowFloor =
+    intervalHours !== null && intervalHours < data.minAllowedIntervalHours
+  const invalid = ageEmpty || intervalEmpty || ageBelowFloor || intervalBelowFloor
 
   const dirty =
     enabled !== data.enabled ||
@@ -103,7 +118,8 @@ export function DockerCleanupCard() {
   const handleSave = () => {
     // Only what changed: every field of the PUT is optional, and sending an
     // unchanged interval re-arms the scheduler's ticker for no reason.
-    const payload: PolicyDraft = {}
+    if (minAgeHours === null || intervalHours === null) return
+    const payload: PolicyPayload = {}
     if (enabled !== data.enabled) payload.enabled = enabled
     if (minAgeHours !== data.minAgeHours) payload.minAgeHours = minAgeHours
     if (intervalHours !== data.intervalHours) payload.intervalHours = intervalHours
@@ -130,6 +146,7 @@ export function DockerCleanupCard() {
   }
 
   const handlePreview = () => {
+    if (minAgeHours === null) return
     preview.mutate(minAgeHours, {
       // The preview validates the age floor through the same code path as the
       // PUT, so it can carry the same server sentence.
@@ -176,14 +193,11 @@ export function DockerCleanupCard() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 max-w-xl">
           <div className="space-y-1">
             <Label htmlFor="docker-cleanup-min-age">Age floor (hours)</Label>
-            <Input
+            <NumericField
               id="docker-cleanup-min-age"
-              type="number"
               min={data.minAllowedAgeHours}
               value={minAgeHours}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, minAgeHours: parseInt(e.target.value, 10) || 0 }))
-              }
+              onValueChange={(v) => setDraft((d) => ({ ...d, minAgeHours: v }))}
             />
             <p className="text-xs text-muted-foreground">
               Only images created more than this many hours ago are removed.
@@ -192,14 +206,11 @@ export function DockerCleanupCard() {
 
           <div className="space-y-1">
             <Label htmlFor="docker-cleanup-interval">Run every (hours)</Label>
-            <Input
+            <NumericField
               id="docker-cleanup-interval"
-              type="number"
               min={data.minAllowedIntervalHours}
               value={intervalHours}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, intervalHours: parseInt(e.target.value, 10) || 0 }))
-              }
+              onValueChange={(v) => setDraft((d) => ({ ...d, intervalHours: v }))}
             />
             <p className="text-xs text-muted-foreground">
               How often the scheduled cleanup runs.
@@ -226,7 +237,7 @@ export function DockerCleanupCard() {
           />
         )}
 
-        <Button type="submit" disabled={!dirty || belowFloor || updatePolicy.isPending}>
+        <Button type="submit" disabled={!dirty || invalid || updatePolicy.isPending}>
           {updatePolicy.isPending ? 'Saving…' : 'Save cleanup schedule'}
         </Button>
       </form>
@@ -246,7 +257,7 @@ export function DockerCleanupCard() {
           // The age floor only. The preview endpoint validates minAgeHours and
           // nothing else (cleanupMinAgeFromRequest, docker_cleanup.go), so an
           // interval the PUT would reject is no reason to refuse a preview.
-          disabled={ageBelowFloor || preview.isPending}
+          disabled={ageEmpty || ageBelowFloor || preview.isPending}
         >
           {preview.isPending ? 'Checking…' : 'Preview'}
         </Button>

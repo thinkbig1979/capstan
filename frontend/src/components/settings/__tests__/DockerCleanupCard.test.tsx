@@ -437,3 +437,61 @@ describe('DockerCleanupCard — a failed REFETCH must not discard data', () => {
     )
   })
 })
+
+/**
+ * agent-os-qags.4. `parseInt('') || 0` turned a cleared box into 0, and 0 sits
+ * below the floor, so the box showed a "0" the operator never typed. The draft is
+ * now number | null: undefined = untouched (show the saved value), null = cleared
+ * (show an empty box). `draft ?? saved` would collapse null back into the saved
+ * value, so each arm asserts the box STAYS empty as well as that Save is off.
+ */
+describe('DockerCleanupCard — a cleared numeric field is empty, not 0 (agent-os-qags.4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetCleanupPolicy.mockResolvedValue(POLICY)
+    mockUpdateCleanupPolicy.mockResolvedValue(POLICY)
+    mockPreviewCleanup.mockResolvedValue(previewOf([]))
+    mockGetCleanupHistory.mockResolvedValue({ runs: [], limit: 20 })
+  })
+
+  it.each([
+    ['Age floor (hours)', '240'],
+    ['Run every (hours)', '48'],
+  ])('%s: clearing keeps the box empty and blocks Save', async (label, typed) => {
+    renderCard()
+    const input = await screen.findByLabelText(label)
+
+    fireEvent.change(input, { target: { value: typed } })
+    fireEvent.change(input, { target: { value: '' } })
+
+    expect(input).toHaveValue(null)
+    expect(screen.getByText('Enter a number')).toBeInTheDocument()
+    const save = screen.getByRole('button', { name: 'Save cleanup schedule' })
+    expect(save).toBeDisabled()
+    fireEvent.click(save)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockUpdateCleanupPolicy).not.toHaveBeenCalled()
+  })
+
+  it('clearing the age floor also disables Preview, which sends it', async () => {
+    renderCard()
+    fireEvent.change(await screen.findByLabelText('Age floor (hours)'), { target: { value: '' } })
+
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeDisabled()
+    expect(mockPreviewCleanup).not.toHaveBeenCalled()
+  })
+
+  it('refilling the field re-enables Save and sends the typed value', async () => {
+    renderCard()
+    const input = await screen.findByLabelText('Run every (hours)')
+
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.change(input, { target: { value: '48' } })
+
+    expect(screen.queryByText('Enter a number')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save cleanup schedule' }))
+    await waitFor(() =>
+      expect(mockUpdateCleanupPolicy).toHaveBeenCalledWith({ intervalHours: 48 }),
+    )
+  })
+})

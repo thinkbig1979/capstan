@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { NumericField } from '../NumericField'
 import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { HelpHint } from '@/components/ui/help-hint'
@@ -61,13 +62,12 @@ export function CloudSection({ draft, onChange, rcloneAvailable, onTestCloud, is
 
       <div className="space-y-2">
         <Label htmlFor="backup-rclone-transfers">Parallel transfers</Label>
-        <Input
+        <NumericField
           id="backup-rclone-transfers"
-          type="number"
           min={1}
           max={32}
           value={draft.rcloneTransfers}
-          onChange={(e) => onChange('rcloneTransfers', parseInt(e.target.value, 10) || 4)}
+          onValueChange={(v) => onChange('rcloneTransfers', v)}
           className="max-w-xs"
         />
         <p className="text-xs text-muted-foreground">

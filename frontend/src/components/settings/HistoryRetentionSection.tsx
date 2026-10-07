@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
 import { presentFault } from '@/lib/error-handler'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { NumericField } from '@/components/settings/NumericField'
 import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { HelpHint } from '@/components/ui/help-hint'
@@ -49,7 +49,10 @@ const FIELDS: { key: FieldKey; label: string; id: string; hint: string }[] = [
 export function HistoryRetentionSection() {
   const { data, isLoading, isError, refetch } = useRetentionSettings()
   const updateRetention = useUpdateRetentionSettings()
-  const [draft, setDraft] = useState<Partial<Record<FieldKey, number>>>({})
+  // A key is absent while untouched (the saved value shows) and null once the
+  // operator has emptied the box (agent-os-qags.4): empty is not a number, so
+  // Save stays off instead of the box turning into a 0 they never typed.
+  const [draft, setDraft] = useState<Partial<Record<FieldKey, number | null>>>({})
 
   if (isLoading) {
     return <div className="py-4"><LoadingSpinner /></div>
@@ -85,14 +88,22 @@ export function HistoryRetentionSection() {
   }
 
   const min = data.minRetentionDays
-  const valueOf = (key: FieldKey) => draft[key] ?? data[key]
+  // `!== undefined`, not `??`: null is "cleared", and `??` would turn it back
+  // into the saved value, so the box would snap back as the operator cleared it.
+  const valueOf = (key: FieldKey): number | null =>
+    draft[key] !== undefined ? draft[key] : data[key]
   const dirty = FIELDS.some(({ key }) => draft[key] !== undefined && draft[key] !== data[key])
-  const belowFloor = FIELDS.some(({ key }) => valueOf(key) < min)
+  const belowFloor = FIELDS.some(({ key }) => {
+    const v = valueOf(key)
+    return v !== null && v < min
+  })
+  const invalid = belowFloor || FIELDS.some(({ key }) => valueOf(key) === null)
 
   const handleSave = () => {
     const payload: Partial<Record<FieldKey, number>> = {}
     for (const { key } of FIELDS) {
-      if (draft[key] !== undefined && draft[key] !== data[key]) payload[key] = draft[key]
+      const v = draft[key]
+      if (v !== undefined && v !== null && v !== data[key]) payload[key] = v
     }
     updateRetention.mutate(payload, {
       onSuccess: () => {
@@ -140,14 +151,11 @@ export function HistoryRetentionSection() {
         {FIELDS.map(({ key, label, id, hint }) => (
           <div key={key} className="space-y-1">
             <Label htmlFor={id}>{label}</Label>
-            <Input
+            <NumericField
               id={id}
-              type="number"
               min={min}
               value={valueOf(key)}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, [key]: parseInt(e.target.value, 10) || 0 }))
-              }
+              onValueChange={(v) => setDraft((d) => ({ ...d, [key]: v }))}
             />
             <p className="text-xs text-muted-foreground">{hint}</p>
           </div>
@@ -168,7 +176,7 @@ export function HistoryRetentionSection() {
         />
       )}
 
-      <Button type="submit" disabled={!dirty || belowFloor || updateRetention.isPending}>
+      <Button type="submit" disabled={!dirty || invalid || updateRetention.isPending}>
         {updateRetention.isPending ? 'Saving…' : 'Save retention'}
       </Button>
     </form>

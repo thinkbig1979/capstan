@@ -56,6 +56,7 @@ function makeSettings(overrides: Partial<{
   repoState: BackupSettings['repoState']
   repoStateMessage: string
   scheduleIntervalMinutes: number
+  rcloneTransfers: number
   scheduleMode: 'interval' | 'scheduled'
   scheduleTime: string
   scheduleDays: number[]
@@ -1214,5 +1215,52 @@ describe('BackupSettingsContent — a cleared numeric field blocks Save (agent-o
 
     expect(screen.getByLabelText('Interval (minutes)')).toHaveValue(30)
     expect(screen.queryByText('Enter a number')).not.toBeInTheDocument()
+  })
+})
+
+describe('BackupSettingsContent — a cleared Parallel transfers field is empty, not 4 (agent-os-qags.4)', () => {
+  const saveButton = () => screen.getByRole('button', { name: /save backup settings/i })
+
+  // `parseInt('') || 4` snapped a cleared box to the engine default as the
+  // operator typed, so Save could persist a value they never chose. Same
+  // pre-seeded 4 as the fixture, so "stays empty" cannot be satisfied by the
+  // saved value coming back.
+  it('clearing keeps the box empty, blocks Save and sends nothing', async () => {
+    mockGetSettings.mockResolvedValue(makeSettings({ rcloneTransfers: 6 }))
+    render(<BackupSettingsContent />, { wrapper: createWrapper() })
+
+    const input = await screen.findByLabelText('Parallel transfers')
+    expect(input).toHaveValue(6)
+    fireEvent.change(input, { target: { value: '' } })
+
+    expect(input).toHaveValue(null)
+    expect(screen.getByText('Enter a number')).toBeInTheDocument()
+    expect(saveButton()).toBeDisabled()
+    fireEvent.click(saveButton())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockUpdateSettings).not.toHaveBeenCalled()
+  })
+
+  it('Discard restores the saved value', async () => {
+    mockGetSettings.mockResolvedValue(makeSettings({ rcloneTransfers: 6 }))
+    render(<BackupSettingsContent />, { wrapper: createWrapper() })
+
+    const input = await screen.findByLabelText('Parallel transfers')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+
+    expect(screen.getByLabelText('Parallel transfers')).toHaveValue(6)
+    expect(screen.queryByText('Enter a number')).not.toBeInTheDocument()
+  })
+
+  it('refilling the field re-enables Save and sends the typed value', async () => {
+    render(<BackupSettingsContent />, { wrapper: createWrapper() })
+
+    const input = await screen.findByLabelText('Parallel transfers')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.change(input, { target: { value: '8' } })
+
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledWith({ rcloneTransfers: 8 }))
   })
 })
