@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import type { ReactElement } from 'react'
+import { BrowserRouter } from 'react-router'
+import { render as rtlRender, screen, fireEvent } from '@testing-library/react'
 import { UpdatesTab } from '../UpdatesTab'
 import type { ContainerUpdateInfo, CachedUpdate, AutoUpdatePolicy } from '@/types'
+
+// UpdatesTable and UpdatesEmptyStates link into the SPA with react-router's
+// <Link> (agent-os-z91e.12), which needs a Router. Every render here gets a real
+// BrowserRouter so the link tests below can read the router's own location.
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: BrowserRouter })
 
 // ─── Hook mocks ───────────────────────────────────────────────────────────────
 // Mock the query/mutation and store hooks directly (mirrors BackupToggle.test.tsx)
@@ -163,6 +170,7 @@ function setCheckUpdates(
 
 beforeEach(() => {
   vi.clearAllMocks()
+  window.history.pushState({}, '', '/')
   backupPolicies.current = { data: { policies: [] }, isError: false, refetch: () => {} }
   mockIsScanning = false
   mockUpdateIsPending = false
@@ -275,6 +283,17 @@ describe('UpdatesTab — Available Updates state machine', () => {
     expect(screen.getByRole('link', { name: /settings/i })).toHaveAttribute('href', '/settings')
   })
 
+  it('the Settings link on the never-scanned state navigates inside the SPA (agent-os-z91e.12)', () => {
+    setCheckUpdates()
+    render(<UpdatesTab />)
+
+    fireEvent.click(screen.getByRole('link', { name: /settings/i }))
+
+    // A raw <a href> does a document navigation: jsdom does not follow it, so
+    // the router location stays '/'. A <Link> pushes through history.
+    expect(window.location.pathname).toBe('/settings')
+  })
+
   it('"Check for Updates" button on the never-scanned state triggers a refresh', () => {
     setCheckUpdates()
     render(<UpdatesTab />)
@@ -313,6 +332,15 @@ describe('UpdatesTab — updates table', () => {
     expect(screen.getByText('alpha')).toBeInTheDocument()
     // TabsList badge reflects updates.length
     expect(screen.getByText('2')).toBeInTheDocument()
+  })
+
+  it('the stack link in a row navigates inside the SPA (agent-os-z91e.12)', () => {
+    setCheckUpdates({ data: { updates: [makeContainer({ stackId: 'stack1', projectName: 'myproject' })], fromCache: false } })
+    render(<UpdatesTab />)
+
+    fireEvent.click(screen.getByRole('link', { name: 'myproject' }))
+
+    expect(window.location.pathname).toBe('/stacks/stack1')
   })
 
   it('sorts by name by default (localeCompare ascending)', () => {

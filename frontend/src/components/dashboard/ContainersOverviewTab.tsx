@@ -1,4 +1,5 @@
 import { useState, useMemo, Suspense, lazy } from 'react'
+import { Link } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { stacksApi, resourcesApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -394,12 +395,12 @@ function ContainerTable({
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <a
-                                href={`/stacks/${container.stackId}`}
+                              <Link
+                                to={`/stacks/${container.stackId}`}
                                 className="text-xs text-info hover:underline truncate max-w-[200px]"
                               >
                                 {container.projectName}
-                              </a>
+                              </Link>
                             </TooltipTrigger>
                             <TooltipContent side="top" className="max-w-md">
                               <p className="font-mono text-xs break-all">{stackDirMap.get(container.stackId) || container.stackId}</p>
