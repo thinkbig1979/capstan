@@ -6,7 +6,7 @@ class MockWebSocket {
   url: string
   readyState: number
   onopen: (() => void) | null = null
-  onclose: (() => void) | null = null
+  onclose: ((e?: { code: number }) => void) | null = null
   onmessage: ((e: { data: string }) => void) | null = null
   onerror: ((e: Event) => void) | null = null
   static OPEN = 1
@@ -17,14 +17,19 @@ class MockWebSocket {
     this.url = url
     this.readyState = 0
     MockWebSocket.instance = this
+    MockWebSocket.instances.push(this)
   }
 
-  send() {}
+  sent: unknown[] = []
+  send(data: unknown) {
+    this.sent.push(data)
+  }
   close() {
     this.readyState = MockWebSocket.CLOSED
   }
 
   static instance: MockWebSocket | null = null
+  static instances: MockWebSocket[] = []
 }
 
 let originalWebSocket: typeof WebSocket
@@ -34,6 +39,7 @@ beforeEach(() => {
   originalWebSocket = globalThis.WebSocket
   globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket
   MockWebSocket.instance = null
+  MockWebSocket.instances = []
   useAuthStore.setState({ authDisabled: true, token: null })
 })
 
@@ -206,6 +212,71 @@ describe('WSClient post-cap recovery', () => {
       document.dispatchEvent(new Event('visibilitychange'))
 
       expect(MockWebSocket.instance).toBe(staleInstance)
+
+      client.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// agent-os-z91e.13: no handler may touch the client's state unless its socket is
+// still the current one, and an errored socket stays tracked until its close.
+describe('WSClient socket identity', () => {
+  function open(ws: MockWebSocket) {
+    ws.readyState = MockWebSocket.OPEN
+    ws.onopen!()
+  }
+
+  it('a replaced socket\'s late close does not drop the live socket or dial another', () => {
+    vi.useFakeTimers()
+    try {
+      const client = new WSClient()
+      client.connect('/test', vi.fn())
+      const first = MockWebSocket.instances[0]
+      open(first)
+
+      // The manual reconnect path: close() then connect(). A real socket closed
+      // while OPEN reports its close event later, after #2 exists.
+      client.close()
+      client.connect('/test', vi.fn())
+      const second = MockWebSocket.instances[1]
+      open(second)
+
+      first.onclose!({ code: 1006 })
+      vi.advanceTimersByTime(MAX_RECONNECT_DELAY_MS)
+
+      expect(MockWebSocket.instances).toHaveLength(2)
+      client.send('x')
+      expect(second.sent).toEqual(['x'])
+
+      client.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('an errored socket is not forgotten before its close, so recovery does not open a second one', () => {
+    vi.useFakeTimers()
+    try {
+      const client = new WSClient()
+      client.connect('/test', vi.fn())
+      const first = MockWebSocket.instances[0]
+
+      first.onerror!(new Event('error'))
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(MockWebSocket.instances).toHaveLength(1)
+
+      // The close that follows every error owns the teardown and the redial.
+      first.onclose!({ code: 1006 })
+      vi.advanceTimersByTime(MAX_RECONNECT_DELAY_MS)
+      expect(MockWebSocket.instances).toHaveLength(2)
+
+      const second = MockWebSocket.instances[1]
+      open(second)
+      client.send('x')
+      expect(second.sent).toEqual(['x'])
 
       client.close()
     } finally {
