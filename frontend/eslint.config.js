@@ -170,6 +170,21 @@ export default defineConfig([
           message:
             'Drop the `error` disjunct: !data already covers "failed and never loaded", and `error ||` also fires on a REFETCH failure over data TanStack still holds, discarding a populated view. Report the failure with RefreshFailedNotice instead.',
         },
+        // agent-os-qags.4 (rule 9): an empty numeric settings field must never
+        // become a number. `parseInt('') || 0` is NaN || 0, so a cleared box saved
+        // 0 -- "disabled" or "keep none" on most of these screens -- and `|| 4`
+        // saved the engine default the operator never chose (agent-os-z91e.15).
+        // Keyed on the `||`/`??` NODE whose immediate left is the parse call and
+        // whose right is a numeric literal, so it matches however the callee is
+        // spelled (parseInt, Number, parseFloat, Number.parseInt) and whatever
+        // the literal is. NumericField is the one place that maps text to
+        // number | null.
+        {
+          selector:
+            "LogicalExpression[operator=/^(\\|\\||\\?\\?)$/][right.type='Literal'][right.value=type(number)]:matches([left.callee.name=/^(parseInt|parseFloat|Number)$/], [left.callee.property.name=/^(parseInt|parseFloat)$/])",
+          message:
+            'An empty numeric field must not become a number. Use NumericField (components/settings/NumericField.tsx) and hold number | null in the draft, or parseWholeNumber, and block Save while it is null.',
+        },
       ],
     },
   },
