@@ -307,8 +307,7 @@ describe('TerminalComponent — inactivity timeout', () => {
     render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
     connect()
     expect(screen.getByText('Connected')).toBeInTheDocument()
-    // Input arms the timer: the xterm effect re-runs when isConnected flips and
-    // its cleanup clears whatever onOpen armed (separate defect, not this bead).
+    // Input re-arms the timer from the last keystroke.
     act(() => {
       capturedTerminal!.input('x', true)
     })
@@ -322,6 +321,61 @@ describe('TerminalComponent — inactivity timeout', () => {
     expect(disconnectSpy).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('button', { name: /Reconnect/ })).toBeInTheDocument()
     expect(screen.queryByText('Connected')).not.toBeInTheDocument()
+  })
+
+  // agent-os-z91e.27: onOpen arms the timer, and the render it triggers re-runs
+  // the xterm effect, whose cleanup used to clear it. An idle session never got
+  // its warning or its disconnect until the user typed once.
+  it('disconnects an idle session that never typed', () => {
+    vi.useFakeTimers()
+    render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+    expect(screen.getByText('Connected')).toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime((25 * 60 + 5 * 60 + 61) * 1000)
+    })
+
+    expect(vi.mocked(toast.warning)).toHaveBeenCalledWith(
+      'Session will disconnect in 5 minutes',
+      expect.anything(),
+    )
+    expect(disconnectSpy).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: /Reconnect/ })).toBeInTheDocument()
+  })
+
+  // The timers must still stop with the session: the cleanup moved out of the
+  // xterm effect, so a disconnect and an unmount each need their own proof.
+  it('stops the inactivity timer when the session closes', () => {
+    vi.useFakeTimers()
+    render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+    act(() => {
+      capturedOptions?.onClose?.({ code: 1006 } as CloseEvent)
+    })
+    // Synchronous: waitFor would poll on fake timers and hang.
+    expect(screen.getByRole('button', { name: /Reconnect/ })).toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime((25 * 60 + 5 * 60 + 61) * 1000)
+    })
+
+    expect(vi.mocked(toast.warning)).not.toHaveBeenCalled()
+    expect(disconnectSpy).not.toHaveBeenCalled()
+  })
+
+  it('stops the inactivity timer when the terminal unmounts', () => {
+    vi.useFakeTimers()
+    const { unmount } = render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+    unmount()
+
+    act(() => {
+      vi.advanceTimersByTime((25 * 60 + 5 * 60 + 61) * 1000)
+    })
+
+    expect(vi.mocked(toast.warning)).not.toHaveBeenCalled()
+    expect(disconnectSpy).not.toHaveBeenCalled()
   })
 })
 
