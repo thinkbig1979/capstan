@@ -99,7 +99,7 @@ func imageRefRepository(ref string) string {
 // a 300ms context in imagedigest_deadline_z91e26_test.go before this was set
 // (agent-os-z91e.26). Same value and reason as services.commandWaitDelay, which
 // this package cannot import (services imports truth).
-const imagetoolsWaitDelay = 5 * time.Second
+var imagetoolsWaitDelay = 5 * time.Second // a var, not a const: tygo emits an empty section for any file with a top-level const
 
 // buildImagetoolsRawCmd and buildImagetoolsVerboseCmd build (without
 // starting) the two `docker buildx imagetools inspect` child processes
