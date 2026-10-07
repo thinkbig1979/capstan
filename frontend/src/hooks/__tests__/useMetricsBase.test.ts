@@ -229,6 +229,32 @@ describe('useMetricsBase', () => {
     expect(result.current.isConnected).toBe(false)
   })
 
+  // agent-os-z91e.35: the old socket's late close is ignored since 199d0c0
+  // (agent-os-z91e.13), so nothing else would clear a path's connected flag or
+  // its containers when the hook is pointed at a new path while mounted.
+  it('reads as connecting, with no containers, after its path changes', () => {
+    const { result, rerender } = renderHook(({ path }) => useMetricsBase(path), {
+      initialProps: { path: '/ws/metrics/a' },
+    })
+    act(() => {
+      capturedOptions!.onOpen!()
+      capturedOnMessage!(frame({ cpuPercent: 7 }))
+    })
+    expect(result.current.isConnected).toBe(true)
+
+    rerender({ path: '/ws/metrics/b' })
+
+    expect(capturedPath).toBe('/ws/metrics/b')
+    expect(result.current.isConnected).toBe(false)
+    expect(result.current.containers).toEqual([])
+
+    // The new path's own open still connects it.
+    act(() => {
+      capturedOptions!.onOpen!()
+    })
+    expect(result.current.isConnected).toBe(true)
+  })
+
   it('keeps the history it already collected when the socket closes', () => {
     const { result } = renderHook(() => useMetricsBase('/ws/metrics'))
 

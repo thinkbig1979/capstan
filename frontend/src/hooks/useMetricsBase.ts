@@ -87,6 +87,16 @@ export function useMetricsBase(path: string, options: MetricsBaseOptions = {}) {
   const [containers, setContainers] = useState<Record<string, ContainerMetricHistory>>({})
   const [isConnected, setIsConnected] = useState(false)
 
+  // A new path is a new stream: reset during render, not in an effect, so no
+  // frame shows the old path as connected. The old socket's late onClose is
+  // ignored (agent-os-z91e.13), so it cannot do this (agent-os-z91e.35).
+  const [prevPath, setPrevPath] = useState(path)
+  if (path !== prevPath) {
+    setPrevPath(path)
+    setIsConnected(false)
+    setContainers({})
+  }
+
   const handleMessage = useCallback((message: MetricsMessage) => {
     setIsConnected(true)
     setContainers((prev) => {
