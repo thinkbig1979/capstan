@@ -30,6 +30,7 @@ export function BackupSettingsContent() {
     password,
     setPassword,
     isDirty,
+    canSave,
     isSaving,
     handleSave,
     handleDiscard,
@@ -140,7 +141,13 @@ export function BackupSettingsContent() {
         />
       )}
 
-      <SaveBar isDirty={isDirty} isSaving={isSaving} onDiscard={handleDiscard} onSave={handleSave} />
+      <SaveBar
+        isDirty={isDirty}
+        canSave={canSave}
+        isSaving={isSaving}
+        onDiscard={handleDiscard}
+        onSave={handleSave}
+      />
     </div>
   )
 }

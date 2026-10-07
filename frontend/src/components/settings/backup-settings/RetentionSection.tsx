@@ -1,7 +1,7 @@
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { HelpHint } from '@/components/ui/help-hint'
+import { NumericField } from '../NumericField'
 import type { Draft } from './types'
 
 interface RetentionSectionProps {
@@ -39,12 +39,11 @@ export function RetentionSection({ draft, onChange }: RetentionSectionProps) {
         {RETENTION_FIELDS.map(({ key, label, id }) => (
           <div key={key} className="space-y-1">
             <Label htmlFor={id}>{label}</Label>
-            <Input
+            <NumericField
               id={id}
-              type="number"
               min={0}
               value={draft[key]}
-              onChange={(e) => onChange(key, parseInt(e.target.value, 10) || 0)}
+              onValueChange={(v) => onChange(key, v)}
               className="w-full"
             />
           </div>

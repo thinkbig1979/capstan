@@ -1154,3 +1154,65 @@ describe('BackupSettingsContent — a failed REFETCH must not discard the form',
     expect(screen.getByText(/Could not refresh the backup settings/)).toBeInTheDocument()
   })
 })
+
+// agent-os-z91e.15. Clearing a numeric field used to become 0 at once. For the
+// schedule interval that is "scheduled backups off", for a keep-* field it is
+// "keep none at this level", and the next prune deletes the snapshots.
+describe('BackupSettingsContent — a cleared numeric field blocks Save (agent-os-z91e.15)', () => {
+  const saveButton = () => screen.getByRole('button', { name: /save backup settings/i })
+
+  it('schedule interval: Save is disabled and nothing is sent', async () => {
+    mockGetSettings.mockResolvedValue(makeSettings({ scheduleIntervalMinutes: 30 }))
+    render(<BackupSettingsContent />, { wrapper: createWrapper() })
+
+    const input = await screen.findByLabelText('Interval (minutes)')
+    fireEvent.change(input, { target: { value: '' } })
+
+    expect(saveButton()).toBeDisabled()
+    fireEvent.click(saveButton())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockUpdateSettings).not.toHaveBeenCalled()
+    expect(input).toHaveValue(null)
+    expect(screen.getByText('Enter a number')).toBeInTheDocument()
+  })
+
+  it('a retention field: Save is disabled and nothing is sent', async () => {
+    render(<BackupSettingsContent />, { wrapper: createWrapper() })
+
+    const input = await screen.findByLabelText('Keep weekly')
+    fireEvent.change(input, { target: { value: '' } })
+
+    expect(saveButton()).toBeDisabled()
+    fireEvent.click(saveButton())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockUpdateSettings).not.toHaveBeenCalled()
+    expect(input).toHaveValue(null)
+    expect(screen.getByText('Enter a number')).toBeInTheDocument()
+  })
+
+  it('a typed 0 still saves as "keep none" once the field is filled again', async () => {
+    render(<BackupSettingsContent />, { wrapper: createWrapper() })
+
+    const input = await screen.findByLabelText('Keep weekly')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.change(input, { target: { value: '0' } })
+
+    expect(screen.queryByText('Enter a number')).not.toBeInTheDocument()
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledWith({ keepWeekly: 0 }))
+  })
+
+  it('Discard restores the saved value and clears the message', async () => {
+    mockGetSettings.mockResolvedValue(makeSettings({ scheduleIntervalMinutes: 30 }))
+    render(<BackupSettingsContent />, { wrapper: createWrapper() })
+
+    const input = await screen.findByLabelText('Interval (minutes)')
+    fireEvent.change(input, { target: { value: '' } })
+    expect(screen.getByText('Enter a number')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+
+    expect(screen.getByLabelText('Interval (minutes)')).toHaveValue(30)
+    expect(screen.queryByText('Enter a number')).not.toBeInTheDocument()
+  })
+})

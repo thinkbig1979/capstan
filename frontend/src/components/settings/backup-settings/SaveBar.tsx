@@ -3,12 +3,14 @@ import { LoadingSpinner } from '@/components/LoadingSkeleton'
 
 interface SaveBarProps {
   isDirty: boolean
+  /** False while a field is invalid; Save stays disabled. */
+  canSave: boolean
   isSaving: boolean
   onDiscard: () => void
   onSave: () => void
 }
 
-export function SaveBar({ isDirty, isSaving, onDiscard, onSave }: SaveBarProps) {
+export function SaveBar({ isDirty, canSave, isSaving, onDiscard, onSave }: SaveBarProps) {
   return (
     <div className="sticky bottom-0 -mx-1 mt-2 flex items-center justify-between gap-3 border-t bg-background/95 px-1 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -27,7 +29,7 @@ export function SaveBar({ isDirty, isSaving, onDiscard, onSave }: SaveBarProps) 
             Discard
           </Button>
         )}
-        <Button type="button" onClick={onSave} disabled={isSaving || !isDirty}>
+        <Button type="button" onClick={onSave} disabled={isSaving || !isDirty || !canSave}>
           {isSaving ? (
             <>
               <span className="mr-2"><LoadingSpinner size="small" /></span>

@@ -26,6 +26,21 @@ function sameDays(a: number[], b: number[]): boolean {
   return a.length === b.length && a.every((day, i) => day === b[i])
 }
 
+/**
+ * True while a numeric field is empty. An empty field is not 0 (0 disables the
+ * schedule or keeps no snapshots), so Save is blocked until it is filled
+ * (agent-os-z91e.15). buildPayload also skips a null field, as a second guard.
+ */
+export function hasInvalidFields(draft: Draft): boolean {
+  return (
+    draft.keepDaily === null ||
+    draft.keepWeekly === null ||
+    draft.keepMonthly === null ||
+    draft.keepYearly === null ||
+    draft.scheduleIntervalMinutes === null
+  )
+}
+
 /** Build update payload — only include fields that differ from remote settings. */
 export function buildPayload(
   remote: BackupSettings,
@@ -37,12 +52,15 @@ export function buildPayload(
 
   if (draft.repository !== remote.repository) payload.repository = draft.repository
   if (password) payload.password = password
-  if (draft.keepDaily !== remote.keepDaily) payload.keepDaily = draft.keepDaily
-  if (draft.keepWeekly !== remote.keepWeekly) payload.keepWeekly = draft.keepWeekly
-  if (draft.keepMonthly !== remote.keepMonthly) payload.keepMonthly = draft.keepMonthly
-  if (draft.keepYearly !== remote.keepYearly) payload.keepYearly = draft.keepYearly
+  if (draft.keepDaily !== null && draft.keepDaily !== remote.keepDaily) payload.keepDaily = draft.keepDaily
+  if (draft.keepWeekly !== null && draft.keepWeekly !== remote.keepWeekly) payload.keepWeekly = draft.keepWeekly
+  if (draft.keepMonthly !== null && draft.keepMonthly !== remote.keepMonthly) payload.keepMonthly = draft.keepMonthly
+  if (draft.keepYearly !== null && draft.keepYearly !== remote.keepYearly) payload.keepYearly = draft.keepYearly
   if (draft.autoPrune !== remote.autoPrune) payload.autoPrune = draft.autoPrune
-  if (draft.scheduleIntervalMinutes !== remote.scheduleIntervalMinutes)
+  if (
+    draft.scheduleIntervalMinutes !== null &&
+    draft.scheduleIntervalMinutes !== remote.scheduleIntervalMinutes
+  )
     payload.scheduleIntervalMinutes = draft.scheduleIntervalMinutes
   if (draft.scheduleMode !== schedule.scheduleMode) payload.scheduleMode = draft.scheduleMode
   if (draft.scheduleTime !== schedule.scheduleTime) payload.scheduleTime = draft.scheduleTime
