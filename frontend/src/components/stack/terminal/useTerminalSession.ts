@@ -109,8 +109,20 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
     },
   )
 
+  // WSClient ignores a closed socket's late close event, so onClose never
+  // reports a disconnect we asked for: the code that disconnects resets the
+  // session state itself (agent-os-z91e.13). The inactivity timer has already
+  // cleared its own countdown and timers by the time it calls this.
+  const disconnectForInactivity = useCallback(() => {
+    disconnect()
+    setIsConnected(false)
+    setIsConnecting(false)
+    setSessionDuration(0)
+    xtermRef.current?.writeln('\r\n\x1b[31mDisconnected. Press Reconnect to continue.\x1b[0m\r\n')
+  }, [disconnect])
+
   const { disconnectCountdown, resetInactivityTimer, clearInactivityTimers, clearDisconnectCountdown } =
-    useInactivityTimer(disconnect)
+    useInactivityTimer(disconnectForInactivity)
 
   useEffect(() => {
     if (isConnected) {

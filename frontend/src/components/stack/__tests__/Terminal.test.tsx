@@ -297,6 +297,34 @@ describe('TerminalComponent — disconnect / reconnect controls', () => {
   })
 })
 
+// agent-os-z91e.13: WSClient ignores a closed socket's late close event, so the
+// caller that closes owns its own state. The inactivity path used to lean on
+// that late onClose to flip isConnected; the mocked disconnect() here, like the
+// real one, delivers no onClose.
+describe('TerminalComponent — inactivity timeout', () => {
+  it('reads as disconnected after the 30-minute inactivity disconnect', () => {
+    vi.useFakeTimers()
+    render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+    expect(screen.getByText('Connected')).toBeInTheDocument()
+    // Input arms the timer: the xterm effect re-runs when isConnected flips and
+    // its cleanup clears whatever onOpen armed (separate defect, not this bead).
+    act(() => {
+      capturedTerminal!.input('x', true)
+    })
+    expect(sendSpy).toHaveBeenCalled()
+
+    // 25 min warning + 5 min grace + 60 s countdown.
+    act(() => {
+      vi.advanceTimersByTime((25 * 60 + 5 * 60 + 61) * 1000)
+    })
+
+    expect(disconnectSpy).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: /Reconnect/ })).toBeInTheDocument()
+    expect(screen.queryByText('Connected')).not.toBeInTheDocument()
+  })
+})
+
 describe('TerminalComponent — switching containers', () => {
   it('disconnects the current session and selects the new container', async () => {
     const containers = [makeContainer({ id: 'c1', name: 'web' }), makeContainer({ id: 'c2', name: 'worker' })]

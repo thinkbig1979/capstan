@@ -138,8 +138,13 @@ export function useWebSocket(
     }, 100)
   }, [path, isAuthenticated, authDisabled, skip, wrappedOnMessage, buildEnhancedOptions])
 
+  // WSClient ignores a closed socket's late close event, so no onClose will
+  // report this: the caller that closes owns the state, as the effect cleanup
+  // above does (agent-os-z91e.13).
   const disconnect = useCallback(() => {
     wsClientRef.current?.close()
+    setStatus('disconnected')
+    setWsState('CLOSED')
   }, [])
 
   return {

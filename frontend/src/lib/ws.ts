@@ -98,10 +98,16 @@ export class WSClient {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${protocol}//${window.location.host}/api/v1${path}`
 
-    this.ws = new WebSocket(url)
-    this.ws.binaryType = options.binary ? 'arraybuffer' : 'blob'
+    // Every handler below returns early unless its socket is still the current
+    // one. close() and a redial both replace this.ws while the old socket's
+    // close event is still to come, and that late event must not null the live
+    // socket or schedule another dial (agent-os-z91e.13).
+    const ws = new WebSocket(url)
+    this.ws = ws
+    ws.binaryType = options.binary ? 'arraybuffer' : 'blob'
 
-    this.ws.onopen = () => {
+    ws.onopen = () => {
+      if (this.ws !== ws) return
       // Not a reset yet: see RECONNECT_RESET_AFTER_MS. A close before the timer
       // fires clears it, so an upgrade-then-close still counts as an attempt.
       this.clearResetAttemptsTimer()
@@ -112,12 +118,14 @@ export class WSClient {
       options.onOpen?.()
     }
 
-    this.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
+      if (this.ws !== ws) return
       const data = options.binary ? event.data : event.data as string
       onMessage(data)
     }
 
-    this.ws.onclose = (event) => {
+    ws.onclose = (event) => {
+      if (this.ws !== ws) return
       this.clearResetAttemptsTimer()
       this.ws = null
       options.onClose?.(event)
@@ -133,9 +141,12 @@ export class WSClient {
       }
     }
 
-    this.ws.onerror = (error) => {
+    ws.onerror = (error) => {
+      if (this.ws !== ws) return
+      // An error event is always followed by a close event, so the socket is
+      // still tracked here and onclose owns the teardown and the redial. Nulling
+      // it now would let attemptRecovery dial a second socket beside this one.
       this.clearResetAttemptsTimer()
-      this.ws = null
       options.onError?.(error)
     }
 

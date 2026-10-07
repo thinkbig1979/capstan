@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
-import { render, screen, act, fireEvent } from '@testing-library/react'
+import { render, screen, act, fireEvent, renderHook } from '@testing-library/react'
 
 // Capture the message handler the component registers so the test can feed
 // log lines through it, and spy on the WS `send` calls.
@@ -9,7 +9,7 @@ const sendSpy = vi.fn()
 const reconnectSpy = vi.fn()
 // Mutable so individual tests can simulate a disconnected/reconnecting socket
 // without needing a separate vi.mock per describe block.
-let mockStatus: 'connected' | 'disconnected' | 'reconnecting' = 'connected'
+let mockStatus: 'connecting' | 'connected' | 'disconnected' | 'reconnecting' = 'connected'
 let mockReconnectAttempts = 0
 
 vi.mock('@/hooks/useWebSocket', () => ({
@@ -28,6 +28,7 @@ vi.mock('@/hooks/useWebSocket', () => ({
 }))
 
 import { LogViewer } from '../LogViewer'
+import { useLogStream } from '../logviewer/useLogStream'
 import { useUIStore } from '@/stores/uiStore'
 
 beforeAll(() => {
@@ -344,5 +345,57 @@ describe('LogViewer', () => {
     })
 
     expect(screen.getByText('No errors or warnings match current filters')).toBeInTheDocument()
+  })
+})
+
+// agent-os-z91e.14: the client drops frames sent before the socket is open and
+// the server keeps the filter per connection, so the selection is sent on every
+// open, not once on mount.
+describe('log container filter on connect', () => {
+  const filterFrame = (containers: string[]) => JSON.stringify({ type: 'filter', containers })
+  const filterCalls = () => sendSpy.mock.calls.map((c) => c[0])
+
+  it('sends the initial filter once the socket is open, not while it is connecting', () => {
+    mockStatus = 'connecting'
+    const { rerender } = renderHook(() =>
+      useLogStream({ stackId: 's1', initialContainer: 'web', hasRunningContainers: true }),
+    )
+    expect(filterCalls()).toEqual([])
+
+    mockStatus = 'connected'
+    rerender()
+    expect(filterCalls()).toEqual([filterFrame(['web'])])
+  })
+
+  it('re-sends the current selection after a reconnect', async () => {
+    mockStatus = 'connecting'
+    const { result, rerender } = renderHook(() =>
+      useLogStream({ stackId: 's1', initialContainer: 'web', hasRunningContainers: true }),
+    )
+    mockStatus = 'connected'
+    rerender()
+
+    // The user widens the selection while connected; the reconnect must carry
+    // that, not the initialContainer the hook mounted with.
+    await act(async () => {
+      result.current.toggleContainer('api')
+    })
+    sendSpy.mockClear()
+
+    mockStatus = 'reconnecting'
+    rerender()
+    expect(filterCalls()).toEqual([])
+
+    mockStatus = 'connected'
+    rerender()
+    expect(filterCalls()).toEqual([filterFrame(['web', 'api'])])
+  })
+
+  it('sends nothing on open when no container is selected', () => {
+    mockStatus = 'connecting'
+    const { rerender } = renderHook(() => useLogStream({ stackId: 's1', hasRunningContainers: true }))
+    mockStatus = 'connected'
+    rerender()
+    expect(filterCalls()).toEqual([])
   })
 })
