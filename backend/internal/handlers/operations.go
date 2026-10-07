@@ -103,12 +103,6 @@ func (h *OperationsHandler) handleOperation(jwtSecret string, authDisabled bool)
 			return
 		}
 
-		// Before the lock and the upgrade, so a shared project name gets the
-		// same 409 the REST lifecycle routes answer (agent-os-z91e.38).
-		if refuseSharedProjectName(c, h.db, stack) {
-			return
-		}
-
 		lockToken, err := h.opLock.Acquire(stackID, action)
 		if err != nil {
 			handleError(c, models.NewAppError(http.StatusConflict, models.ErrOperationInProgress, err.Error()))

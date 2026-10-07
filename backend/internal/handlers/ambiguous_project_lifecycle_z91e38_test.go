@@ -2,12 +2,15 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -149,39 +152,146 @@ func TestStackLifecycle_ComposeRefusalRendersAs409(t *testing.T) {
 	assert.Contains(t, body["message"], "/srv/stacks/late")
 }
 
-// The WebSocket operations route refuses before the lock and the upgrade.
-func TestOperations_SharedProjectNameRefuses(t *testing.T) {
+// recordingStreamer forwards to a real DockerService and records each
+// subcommand the handler asked it to run. The refusal itself, and that a
+// refused RunStreaming starts no compose process, is pinned in services
+// (TestRunStreaming_SharedProjectNameIsRefused, exec count 0); this records
+// which phases the handler went on to request.
+type recordingStreamer struct {
+	svc  *services.DockerService
+	mu   sync.Mutex
+	subs []string
+}
+
+func (r *recordingStreamer) RunStreaming(ctx context.Context, stack models.Stack, subcommand string, extraArgs []string) <-chan services.StreamLine {
+	r.mu.Lock()
+	r.subs = append(r.subs, subcommand)
+	r.mu.Unlock()
+	return r.svc.RunStreaming(ctx, stack, subcommand, extraArgs)
+}
+
+func (r *recordingStreamer) reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.subs = nil
+}
+
+func (r *recordingStreamer) requested() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.subs...)
+}
+
+// newZ91e38OperationsFixture serves /ws/operations over a real DockerService
+// with the stack lookup installed, as main.go wires it. The Docker API is a
+// ping-only stub, and the seeded stack directories do not exist, so a run that
+// gets past the refusal fails at chdir before any docker process starts.
+func newZ91e38OperationsFixture(t *testing.T) (*httptest.Server, *recordingStreamer) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
+	dockerAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/_ping") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(dockerAPI.Close)
+	svc := newTestDockerServiceAgainst(t, dockerAPI)
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	seedSharedProjectStacks(t, db)
 	seedStackInDir(t, db, "s-web", "web", "/srv/stacks/web")
-	lock := services.NewOperationLock()
+	svc.SetStackLookup(db)
+	rec := &recordingStreamer{svc: svc}
 	r := gin.New()
-	NewOperationsHandler(&fakeStreamer{}, db, lock, NewConnectionManager(5)).
+	NewOperationsHandler(rec, db, services.NewOperationLock(), NewConnectionManager(5)).
 		RegisterRoutes(r.Group("/api"), "test-secret-key-32-chars-long!!!", true)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	return srv, rec
+}
 
-	for _, action := range []string{"start", "stop", "restart", "pull"} {
-		t.Run(action, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/ws/operations/s-alpha/"+action, nil))
-
-			require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
-			body := decodeBody(t, w)
-			assert.Equal(t, models.ErrAmbiguousStack, body["code"])
-			assert.Contains(t, body["message"], "/srv/stacks/beta")
-			tok, err := lock.Acquire("s-alpha", services.OpKindStart)
-			require.NoError(t, err, "the refusal left s-alpha locked")
-			lock.Release("s-alpha", tok)
-
-			// Other side: the uniquely named stack gets past the check to the
-			// upgrade, which a plain GET then fails.
-			w = httptest.NewRecorder()
-			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/ws/operations/s-web/"+action, nil))
-			assert.NotEqual(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
-		})
+// readOperationFrames dials the operations route and returns every JSON frame
+// until the server closes the socket.
+func readOperationFrames(t *testing.T, srv *httptest.Server, stackID, action string) []map[string]interface{} {
+	t.Helper()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/ws/operations/" + stackID + "/" + action
+	conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	require.NoError(t, err, "dialing %s", url)
+	defer conn.Close()
+	defer resp.Body.Close()
+	require.NoError(t, conn.SetReadDeadline(hangGuardDeadline(t)))
+	var frames []map[string]interface{}
+	for {
+		var f map[string]interface{}
+		if err := conn.ReadJSON(&f); err != nil {
+			break
+		}
+		frames = append(frames, f)
 	}
+	return frames
+}
+
+func framesOfType(frames []map[string]interface{}, typ string) []map[string]interface{} {
+	var out []map[string]interface{}
+	for _, f := range frames {
+		if f["type"] == typ {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// The stack page's own Start/Stop/Restart/Pull buttons use this route
+// (StackPage.tsx useStreamingOperation), so a shared name is refused inside the
+// stream, where the client can read why: a failed done frame naming both
+// stacks. A restart stops after its refused down phase and never starts.
+func TestOperations_SharedProjectName_RestartStopsAtTheRefusedDownPhase(t *testing.T) {
+	srv, rec := newZ91e38OperationsFixture(t)
+
+	frames := readOperationFrames(t, srv, "s-alpha", "restart")
+
+	done := framesOfType(frames, "done")
+	require.Len(t, done, 1, "frames: %v", frames)
+	assert.NotEqual(t, true, done[0]["success"], "frames: %v", frames)
+	assert.Equal(t, "failed", done[0]["outcome"])
+	assert.Contains(t, done[0]["error"], "/srv/stacks/alpha")
+	assert.Contains(t, done[0]["error"], "/srv/stacks/beta")
+	assert.Empty(t, framesOfType(frames, "phase"), "a refused down phase must not go on to start: %v", frames)
+	assert.Equal(t, []string{"down"}, rec.requested())
+
+	// Other side, same route: a uniquely named stack's down phase fails for
+	// an unrelated reason (no directory) without a done frame, and the
+	// handler does go on to start, so the check above is what stopped it.
+	rec.reset()
+	frames = readOperationFrames(t, srv, "s-web", "restart")
+	assert.NotEmpty(t, framesOfType(frames, "phase"), "frames: %v", frames)
+	assert.Equal(t, []string{"down", "up"}, rec.requested())
+	assert.NotContains(t, fmt.Sprint(frames), "/srv/stacks/beta")
+}
+
+func TestOperations_SharedProjectName_StartTellsTheClientWhy(t *testing.T) {
+	srv, rec := newZ91e38OperationsFixture(t)
+
+	frames := readOperationFrames(t, srv, "s-alpha", "start")
+
+	done := framesOfType(frames, "done")
+	require.Len(t, done, 1, "frames: %v", frames)
+	assert.NotEqual(t, true, done[0]["success"])
+	assert.Equal(t, "failed", done[0]["outcome"])
+	for _, key := range []string{"error", "reason"} {
+		assert.Contains(t, done[0][key], "/srv/stacks/alpha", key)
+		assert.Contains(t, done[0][key], "/srv/stacks/beta", key)
+		assert.Contains(t, done[0][key], "give each stack its own compose project name", key)
+	}
+	assert.Equal(t, []string{"up"}, rec.requested())
+
+	// Other side: the uniquely named stack is not refused for its name.
+	frames = readOperationFrames(t, srv, "s-web", "start")
+	assert.NotEmpty(t, frames)
+	assert.NotContains(t, fmt.Sprint(frames), "/srv/stacks/beta")
 }
 
 // A stack update is refused before the lock and the job.

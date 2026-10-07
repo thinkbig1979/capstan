@@ -683,7 +683,12 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 
 		args, err := s.mutatingComposeArgs(stack, subcommand, extraArgs)
 		if err != nil {
-			out <- StreamLine{Type: "error", Error: refusedCompose(err).Reason}
+			// A terminal done frame, like any other failed run, so a restart's
+			// handler stops after its down phase instead of going on to start
+			// (agent-os-z91e.38). Error carries the full reason, hint included:
+			// useStreamingOperation shows a failed done frame's error first.
+			ar := refusedCompose(err)
+			out <- StreamLine{Type: "done", Success: false, Error: ar.Reason, Outcome: ar.Outcome, Reason: ar.Reason}
 			return
 		}
 		//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"

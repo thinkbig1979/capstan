@@ -183,8 +183,11 @@ func TestMutatingCompose_LookupFaultRefuses(t *testing.T) {
 	}
 }
 
-// RunStreaming is the WebSocket operations path. A refusal is one error frame
-// naming both stacks, and no compose process.
+// RunStreaming is the WebSocket operations path, and its refusal is the only
+// gate there: the stack page's own buttons use this route, so a pre-upgrade 409
+// would reach the browser as a bare connection failure. A refusal is one
+// terminal done frame, failed, whose error and reason name both stacks, and no
+// compose process.
 func TestRunStreaming_SharedProjectNameIsRefused(t *testing.T) {
 	for _, sub := range []string{"up", "down", "pull", "restart"} {
 		t.Run(sub, func(t *testing.T) {
@@ -197,10 +200,14 @@ func TestRunStreaming_SharedProjectNameIsRefused(t *testing.T) {
 			}
 
 			require.Len(t, lines, 1, "frames: %+v", lines)
-			assert.Equal(t, "error", lines[0].Type)
-			assert.Contains(t, lines[0].Error, "/srv/stacks/alpha")
-			assert.Contains(t, lines[0].Error, "/srv/stacks/beta")
-			assert.Contains(t, lines[0].Error, "give each stack its own compose project name")
+			assert.Equal(t, "done", lines[0].Type)
+			assert.False(t, lines[0].Success)
+			assert.Equal(t, truth.OutcomeFailed, lines[0].Outcome)
+			for _, text := range []string{lines[0].Error, lines[0].Reason} {
+				assert.Contains(t, text, "/srv/stacks/alpha")
+				assert.Contains(t, text, "/srv/stacks/beta")
+				assert.Contains(t, text, "give each stack its own compose project name")
+			}
 			assert.Equal(t, 0, rec.count(), "a refused command must not start compose")
 
 			// Other side: the uniquely named stack starts compose.
