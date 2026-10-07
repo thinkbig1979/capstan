@@ -78,7 +78,7 @@ func TestStacksHandler_Delete_HoldsScannerLockAcrossFileAndRowRemoval(t *testing
 		case err := <-scanDone:
 			scanInsideWindow = true
 			scanDone <- err
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(200 * time.Millisecond): // wall-clock ok: bounded negative probe; with the lock held the scan cannot finish inside it, so a slow runner cannot turn the fixed code red
 		}
 	}
 
