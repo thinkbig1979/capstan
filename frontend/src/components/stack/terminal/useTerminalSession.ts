@@ -45,7 +45,6 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
   const searchAddonRef = useRef<SearchAddon | null>(null)
   const textEncoderRef = useRef(new TextEncoder())
   const sessionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const reconnectKeyRef = useRef(0)
 
   const runningContainers = stack.containers?.filter((c) => c.state === 'running') || []
 
@@ -255,7 +254,6 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
       clearDisconnectCountdown()
       setIsConnected(false)
       setSelectedContainer(value)
-      reconnectKeyRef.current++
     }
   }, [selectedContainer, isConnected, disconnect, clearDisconnectCountdown])
 
@@ -288,7 +286,6 @@ export function useTerminalSession({ stack, initialContainer }: UseTerminalSessi
     xtermRef,
     fitAddonRef,
     searchAddonRef,
-    reconnectKeyRef,
     fontSize,
     handleTerminalData,
     isConnected,
