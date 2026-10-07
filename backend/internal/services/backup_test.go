@@ -826,11 +826,18 @@ func TestRunBackup_ContextCancel_DefensiveRestart(t *testing.T) {
 	//nolint:gosec // cancel is invoked by the onRun callback below once the backup reaches the restic "backup" invocation; the test's own assertions on run.Status/docker.stopped/docker.started require that path to have executed, and a real leak here is bounded by the test process's lifetime regardless
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Cancel the context as soon as the backup starts running.
+	// Cancel the context once the stack's own backup starts. The first restic
+	// "backup" is the capstan.db snapshot, which runs before any stack: ending
+	// the context there means the stack never starts, is never stopped, and has
+	// nothing to restart (agent-os-z91e.33).
+	backups := 0
 	runner := &fakeRunner{
 		onRun: func(name string, args []string, out chan<- StreamLine) {
 			if name == "restic" && len(args) > 0 && args[0] == "backup" {
-				cancel()
+				backups++
+				if backups == 2 {
+					cancel()
+				}
 			}
 		},
 		runErr: context.Canceled,

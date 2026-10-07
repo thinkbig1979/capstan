@@ -858,8 +858,24 @@ func (s *BackupService) executeBackupRun(
 		totalBytesAdded += dbBytes
 	}
 
+	// Stacks never started because the run's context ended first (the scheduled
+	// cycle's deadline, or the scheduler stopping). Running one would fail at
+	// once on the dead context and count a stack that never started as failed
+	// (agent-os-z91e.33). Only the stack in flight when the context ended is
+	// that failure.
+	var notStarted []string
+
 	for _, policy := range policies {
 		stackID := policy.TargetID
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			notStarted = append(notStarted, stackID)
+			// recordItem and finaliseRun write through the database handle and
+			// take no context, so this write cannot fail on the dead one.
+			s.recordItem(run.ID, stackID, "skipped", "", false, 0,
+				fmt.Sprintf("not started: the run's context ended (%v)", ctxErr))
+			stream(out, "info", fmt.Sprintf("stack %s not started: the run's context ended (%v)", stackID, ctxErr))
+			continue
+		}
 		res, itemErr := s.backupStack(ctx, restic, stackID, policy.StopPolicy, dryRun, run.ID, out)
 		if itemErr != nil {
 			run.StacksFailed++
@@ -935,6 +951,21 @@ func (s *BackupService) executeBackupRun(
 		case run.StacksOK == 0:
 			// Nothing was backed up at all, which is a failed run whatever else
 			// happened — including a database-failure downgrade to "partial" above.
+			run.Status = "failed"
+		case run.Status == "success":
+			run.Status = "partial"
+		}
+		runReasons = append(runReasons, msg)
+	}
+
+	// Same again for stacks the run never reached: StacksFailed does not count
+	// them, so the switch above would call a cut-short run a success.
+	if len(notStarted) > 0 {
+		msg := fmt.Sprintf("%d stack(s) not started because the run's context ended: %s",
+			len(notStarted), strings.Join(notStarted, ", "))
+		stream(out, "error", msg)
+		switch {
+		case run.StacksOK == 0:
 			run.Status = "failed"
 		case run.Status == "success":
 			run.Status = "partial"
