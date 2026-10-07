@@ -173,7 +173,7 @@ export function useXtermLifecycle({
   // initial size (later changes go through terminal.options in
   // handleFontSizeChange), and everything that changes with the connection is
   // read through the Effect Events above.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- created once per mount: the refs are stable, fontSize is only the initial size, and connection state is read through Effect Events
   }, [])
 
   // A new connection starts with the server's default PTY size; the only way it

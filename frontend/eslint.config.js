@@ -5,6 +5,77 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
+// agent-os-z91e.42: a directive that silences react-hooks/exhaustive-deps must
+// say why. That rule is the one that would have flagged a long-lived instance
+// (xterm, CodeMirror) rebuilt by an effect whose deps change during its life,
+// and a bare disable hid exactly that twice (agent-os-z91e.34, z91e.41).
+//
+// A local rule rather than eslint-plugin-eslint-comments: no new dependency,
+// and it rides on `pnpm lint`, which the required Frontend CI check already runs.
+//
+// Covers every directive form ESLint honours (`eslint-disable-next-line`,
+// `eslint-disable-line`, and the block `/* eslint-disable */`, which may be a
+// disable-line/-next-line too), a rule list naming exhaustive-deps among
+// others, and a blanket disable with no rule list (it silences the rule too).
+// The reason follows ESLint's own ` -- ` separator and must hold at least
+// MIN_REASON_CHARS non-space characters, which rejects "-- todo" and
+// "-- reason" but is not a quality check: a reviewer still reads the reason.
+//
+// Known gap: a blanket `/* eslint-disable */` that starts at line 1 column 0
+// cannot be reported, because it silences this rule from the first position
+// on. Mid-file blankets are caught. (Measured with planted files, see the
+// agent-os-z91e.42 close.)
+const MIN_REASON_CHARS = 10
+const EXHAUSTIVE_DEPS = 'react-hooks/exhaustive-deps'
+
+const localPlugin = {
+  rules: {
+    'exhaustive-deps-disable-needs-reason': {
+      meta: {
+        type: 'problem',
+        schema: [],
+        messages: {
+          missingBlanket: `The blanket eslint-disable at line {{line}} silences ${EXHAUSTIVE_DEPS}: name the rules it disables and end it with " -- <reason>" of at least ${MIN_REASON_CHARS} non-space characters.`,
+          missing: `A disable of ${EXHAUSTIVE_DEPS} must end with " -- <reason>" of at least ${MIN_REASON_CHARS} non-space characters saying why the dependency list is correct as written.`,
+        },
+      },
+      create(context) {
+        return {
+          Program() {
+            for (const comment of context.sourceCode.getAllComments()) {
+              const match = /^\s*eslint-disable(-next-line|-line)?(?=\s|$)([\s\S]*)$/.exec(
+                comment.value,
+              )
+              if (!match) continue
+              // `// eslint-disable` (no -line) is not a directive in a line comment.
+              if (comment.type === 'Line' && !match[1]) continue
+              const [head, ...reason] = match[2].split(/(?:^|\s)-{2,}(?:\s|$)/)
+              const rules = head
+                .split(',')
+                .map((r) => r.trim())
+                .filter(Boolean)
+              if (rules.length > 0 && !rules.includes(EXHAUSTIVE_DEPS)) continue
+              if (reason.join(' ').replace(/\s/g, '').length >= MIN_REASON_CHARS) continue
+              // A block disable silences problems from its own position onward,
+              // this rule's included, so a blanket one is reported at the top of
+              // the file instead (before the directive takes effect), naming
+              // its line.
+              const blanket = rules.length === 0
+              context.report({
+                loc: blanket
+                  ? { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } }
+                  : comment.loc,
+                messageId: blanket ? 'missingBlanket' : 'missing',
+                data: { line: String(comment.loc.start.line) },
+              })
+            }
+          },
+        }
+      },
+    },
+  },
+}
+
 export default defineConfig([
   globalIgnores(['dist']),
   {
@@ -27,6 +98,11 @@ export default defineConfig([
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
     },
+  },
+  {
+    files: ['**/*.{ts,tsx}'],
+    plugins: { local: localPlugin },
+    rules: { 'local/exhaustive-deps-disable-needs-reason': 'error' },
   },
   {
     files: ['src/components/ui/*.tsx'],

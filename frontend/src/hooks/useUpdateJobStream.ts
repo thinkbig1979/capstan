@@ -144,7 +144,7 @@ export function useUpdateJobStream(
       }
     },
     // jobId is stable for a given stream instance; store actions are stable references
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the store actions come from getState() and are defined once in create(), so their references never change
     [jobId],
   )
 

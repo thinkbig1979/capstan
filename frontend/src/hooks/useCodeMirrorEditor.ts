@@ -146,7 +146,7 @@ export function useCodeMirrorEditor(
     // The view is rebuilt only when the caller's deps change (a different file,
     // a remounted container); the theme, doc and callbacks reach the live view
     // through the Compartment, the effect below and refs.
-  }, [...(options.deps || [])]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [...(options.deps || [])]) // eslint-disable-line react-hooks/exhaustive-deps -- the deps are the caller's list, spread; doc, theme and callbacks reach the live view without a rebuild
 
   useEffect(() => {
     const view = viewRef.current
