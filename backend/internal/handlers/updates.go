@@ -237,7 +237,8 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 		// ordinary case for a container whose compose project this instance
 		// does not manage. A name two stacks share is refused: taking either
 		// stack's lock would leave the other one unguarded (agent-os-z91e.19).
-		// Any other error is logged and defaulted (agent-os-1gqn).
+		// Any other error is refused too: with no stack ID the update would
+		// run without the stack's lock (agent-os-z91e.37).
 		stack, err := h.db.GetStackByProjectName(projectName)
 		switch {
 		case err == nil:
@@ -249,8 +250,9 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 			refuseAmbiguousStack(c, err)
 			return
 		default:
-			slog.Error("Failed to look up the stack for the update history row",
-				"projectName", projectName, "error", err)
+			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
+				"Failed to look up the stack that owns this container", err))
+			return
 		}
 	}
 
