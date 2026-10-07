@@ -31,19 +31,14 @@ export function useComposeEditorMount({
   setPendingCompose,
 }: UseComposeEditorMountArgs) {
   const editorRef = useRef<HTMLDivElement>(null)
-  const isUpdatingFromEditor = useRef(false)
 
   useCodeMirrorEditor(editorRef, {
     doc: pendingCompose ?? composeContent,
-    onChange: (newContent) => {
-      if (!isUpdatingFromEditor.current) {
-        isUpdatingFromEditor.current = true
-        setComposeContent(newContent)
-        requestAnimationFrame(() => {
-          isUpdatingFromEditor.current = false
-        })
-      }
-    },
+    // Every edit is forwarded: Create submits composeContent, so dropping a
+    // change that lands in the same frame as the previous one loses it. No echo
+    // loop needs breaking here: useCodeMirrorEditor only pushes `doc` into the
+    // view when it differs from the view's text, and an edit makes them equal.
+    onChange: setComposeContent,
     deps: [open, composeTab, editorEpoch],
   })
 
