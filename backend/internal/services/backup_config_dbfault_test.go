@@ -330,7 +330,7 @@ func dbFaultCases() []dbFaultCase {
 			name:    "RunRestore",
 			wantErr: true,
 			call: func(_ *testing.T, svc *BackupService, out chan StreamLine) error {
-				return svc.RunRestore(context.Background(), "stack-1", "snap-1", "", out)
+				return svc.RunRestore(context.Background(), "stack-1", "snap-1", out)
 			},
 		},
 		{

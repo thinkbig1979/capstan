@@ -949,7 +949,7 @@ export const backupApi = {
     return response.data
   },
 
-  restore: async (data: { stackId: string; snapshotId: string; target?: string; confirm?: boolean }) => {
+  restore: async (data: { stackId: string; snapshotId: string; confirm?: boolean }) => {
     const response = await apiClient.post<BackupOperationResult>('/backups/restore', data)
     return response.data
   },

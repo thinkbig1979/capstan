@@ -177,7 +177,7 @@ func TestRunRestore_UnreadablePolicyDoesNotMatter(t *testing.T) {
 	svc, logBuf := bufferedSvc(t, db, docker, runner)
 
 	out := make(chan StreamLine, 128)
-	require.NoError(t, svc.RunRestore(context.Background(), "myapp", "abc123", "", out),
+	require.NoError(t, svc.RunRestore(context.Background(), "myapp", "abc123", out),
 		"an unreadable backup policy must not refuse a restore that never reads it")
 
 	assert.Equal(t, 1, docker.stopped(), "the restore stops the running stack")
@@ -233,7 +233,7 @@ func TestRunRestore_HotPolicyStillStopsRunningStack(t *testing.T) {
 	svc, logBuf := bufferedSvc(t, db, docker, runner)
 
 	out := make(chan StreamLine, 128)
-	require.NoError(t, svc.RunRestore(context.Background(), "myapp", "abc123", "", out))
+	require.NoError(t, svc.RunRestore(context.Background(), "myapp", "abc123", out))
 
 	assert.Equal(t, 1, docker.stopped(), `a stored "hot" backup policy must not keep the stack running through a restore`)
 	require.Equal(t, 1, runner.restoreCalls, "restic restore must have run exactly once")
@@ -260,7 +260,7 @@ func TestRunRestore_HealthyDBNoPolicyRowKeepsStopDefault(t *testing.T) {
 	svc, logBuf := bufferedSvc(t, db, docker, runner)
 
 	out := make(chan StreamLine, 128)
-	require.NoError(t, svc.RunRestore(context.Background(), "myapp", "abc123", "", out))
+	require.NoError(t, svc.RunRestore(context.Background(), "myapp", "abc123", out))
 
 	assert.Equal(t, 1, docker.stopped(), "a stack with no policy row is stopped before the restore")
 	assert.Equal(t, 1, docker.started(), "a running stack that was stopped is restarted after a successful restore")

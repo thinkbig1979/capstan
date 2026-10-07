@@ -484,7 +484,7 @@ func TestRestore_ClientDisconnect_DoesNotAbortRun(t *testing.T) {
 	reg := services.NewBackupRunnerRegistry(db, svc, slog.Default())
 	t.Cleanup(reg.Stop)
 
-	runID, err := reg.LaunchRestore("restore-stack", "abc12345", "")
+	runID, err := reg.LaunchRestore("restore-stack", "abc12345")
 	require.NoError(t, err, "LaunchRestore must succeed")
 	require.NotEmpty(t, runID)
 

@@ -1286,6 +1286,9 @@ func (h *BackupHandler) syncPreflight(c *gin.Context) {
 }
 
 // runRestoreRequest is the POST /backups/restore request body.
+//
+// Target is not used: it is bound only so a caller that still sends one gets a
+// 400 instead of having it silently ignored (agent-os-z91e.48).
 type runRestoreRequest struct {
 	StackID    string `json:"stackId"`
 	SnapshotID string `json:"snapshotId"`
@@ -1314,6 +1317,18 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 			http.StatusBadRequest,
 			models.ErrValidation,
 			"stackId and snapshotId are required",
+		))
+		return
+	}
+
+	// The target parameter is gone: a restore always restores the whole stack
+	// into its own directory. Refuse it rather than ignore it, so a caller that
+	// relied on it learns that now (agent-os-z91e.48).
+	if req.Target != "" {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"The target parameter was removed: a restore always restores the whole stack into its own directory. Remove target from the request.",
 		))
 		return
 	}
@@ -1356,7 +1371,7 @@ func (h *BackupHandler) runRestore(c *gin.Context) {
 		return
 	}
 
-	runID, err := h.registry.LaunchRestore(req.StackID, req.SnapshotID, req.Target)
+	runID, err := h.registry.LaunchRestore(req.StackID, req.SnapshotID)
 	if err != nil {
 		h.respondForLaunchError(c, "restore", err)
 		return

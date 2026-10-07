@@ -405,7 +405,7 @@ func TestLaunchRestore_UnprovenRestartIsInTheRunRecord(t *testing.T) {
 			seedStack(t, db, "myapp", "stop")
 			reg := NewBackupRunnerRegistry(db, svc, slog.Default())
 
-			runID, err := reg.LaunchRestore("myapp", "abc123", "/opt/stacks/myapp")
+			runID, err := reg.LaunchRestore("myapp", "abc123")
 			require.NoError(t, err)
 			reg.Stop()
 
