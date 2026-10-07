@@ -648,9 +648,13 @@ func main() {
 	// handler's interface-typed fields: boxing a typed nil produces a NON-nil
 	// interface value and the handlers' nil checks would then pass. Same trap
 	// NewResourcesHandler documents for schedulerService.
+	//
+	// Declared at main()'s scope so the shutdown sequence can stop it: its
+	// context is its own, so main's cancel() does not reach it (agent-os-z91e.4).
+	var cleanupSched *services.DockerCleanupSchedulerService
 	if dockerService != nil {
 		cleanupSvc := services.NewDockerCleanupService(dockerService, db)
-		cleanupSched := services.NewDockerCleanupScheduler(cleanupSvc, db, slog.Default())
+		cleanupSched = services.NewDockerCleanupScheduler(cleanupSvc, db, slog.Default())
 		resourcesHandler.SetCleanupService(cleanupSvc)
 		resourcesHandler.SetCleanupScheduler(cleanupSched)
 		// Arms only if an operator opted in; logs at ERROR and arms nothing if
@@ -761,6 +765,13 @@ func main() {
 
 	if schedulerService != nil {
 		schedulerService.Stop()
+	}
+
+	// Stopped here, before srv.Shutdown, so no scheduled prune starts during
+	// the shutdown window and an in-flight one is cancelled and awaited
+	// rather than cut off by process exit with no history row.
+	if cleanupSched != nil {
+		cleanupSched.Stop()
 	}
 
 	updateJobManager.Stop()
