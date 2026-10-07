@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/dockerenv"
 )
@@ -91,6 +92,15 @@ func imageRefRepository(ref string) string {
 	return ref
 }
 
+// imagetoolsWaitDelay is how long Output keeps waiting for a killed child's
+// stdout to close. The docker CLI runs buildx as a plugin subprocess, so
+// killing the direct child at the deadline can leave a grandchild holding the
+// pipe, and Output then waits until that grandchild exits on its own: 20s past
+// a 300ms context in imagedigest_deadline_z91e26_test.go before this was set
+// (agent-os-z91e.26). Same value and reason as services.commandWaitDelay, which
+// this package cannot import (services imports truth).
+const imagetoolsWaitDelay = 5 * time.Second
+
 // buildImagetoolsRawCmd and buildImagetoolsVerboseCmd build (without
 // starting) the two `docker buildx imagetools inspect` child processes
 // RemoteRegistryDigest runs. Split out so tests can build and run each
@@ -107,6 +117,7 @@ func buildImagetoolsRawCmd(ctx context.Context, ref string) *exec.Cmd {
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", ref, "--raw")
 	cmd.Env = dockerenv.Env()
+	cmd.WaitDelay = imagetoolsWaitDelay
 	return cmd
 }
 
@@ -114,6 +125,7 @@ func buildImagetoolsVerboseCmd(ctx context.Context, ref string) *exec.Cmd {
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", ref)
 	cmd.Env = dockerenv.Env()
+	cmd.WaitDelay = imagetoolsWaitDelay
 	return cmd
 }
 
