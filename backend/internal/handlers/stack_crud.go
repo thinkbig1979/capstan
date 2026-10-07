@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
+	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
@@ -141,20 +141,12 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	absTargetDir, err := filepath.Abs(targetDir)
-	if err != nil {
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve target directory", err))
-		return
-	}
-
-	absStackDir, err := filepath.Abs(stackDir)
-	if err != nil {
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve stack directory", err))
-		return
-	}
-
-	rel, err := filepath.Rel(absTargetDir, absStackDir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) { //geterrors:ignore fails closed on path traversal: a Rel that errored and one that escaped the target both refuse with ErrPathTraversal, which is the safe direction
+	// Same guard as Delete: stackDir strictly inside targetDir, with symlinks
+	// resolved on its parent (agent-os-qags.2). req.Name is one path component
+	// ("." and ".." fail the project-name check above), so this cannot fire
+	// today; a symlink already AT stackDir was answered 409 by the stat above,
+	// or, dangling, fails MkdirAll below without being followed.
+	if !stackDirIsInsideRoot(stackDir, targetDir) {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
 			models.ErrPathTraversal,
@@ -401,17 +393,24 @@ func (h *StacksHandler) Create(c *gin.Context) {
 // stackDirIsInsideRoot returns true when absStackDir is strictly inside absRoot
 // (i.e. it is a child path, not root itself). This is the path-traversal guard
 // for Delete — we must never remove a directory outside the configured root.
+//
+// Symlinks are resolved on the PARENT of absStackDir, not on absStackDir
+// itself, because that is what the removal follows: os.RemoveAll and os.Remove
+// walk through every symlinked ancestor but remove a final-component symlink as
+// the link. So root/a/app with root/a -> /outside is refused (RemoveAll would
+// delete /outside/app), while a stack directory that is itself a link inside
+// the root stays deletable and loses only the link (agent-os-z91e.22). An error
+// resolving the parent refuses.
 func stackDirIsInsideRoot(absStackDir, absRoot string) bool {
 	if absRoot == "" || absStackDir == "" {
 		return false
 	}
-	// Ensure root ends with a separator so HasPrefix correctly rejects the root
-	// directory itself (e.g. /stacks vs /stacks-evil).
-	root := absRoot
-	if !strings.HasSuffix(root, string(filepath.Separator)) {
-		root += string(filepath.Separator)
+	target := filepath.Clean(absStackDir)
+	if target == filepath.Clean(absRoot) {
+		return false
 	}
-	return strings.HasPrefix(absStackDir, root)
+	inside, err := pathutil.IsContained(absRoot, filepath.Dir(target)) //geterrors:ignore fails closed: a parent that cannot be resolved is not proven inside, and every caller refuses on false
+	return err == nil && inside
 }
 
 func (h *StacksHandler) Delete(c *gin.Context) {
@@ -466,6 +465,9 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// guardRoot is the root the guard matched; removeStackFiles needs it to
+	// check the directory it removes files from.
+	guardRoot := absStacksRoot
 	if !stackDirIsInsideRoot(absStackDir, absStacksRoot) {
 		// Also accept paths inside any extra stacks dir configured by the operator.
 		insideExtra := false
@@ -476,6 +478,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 			}
 			if stackDirIsInsideRoot(absStackDir, absExtra) {
 				insideExtra = true
+				guardRoot = absExtra
 				break
 			}
 		}
@@ -564,7 +567,7 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 	// removing the whole directory would destroy every sibling stack's compose
 	// file while their containers keep running: DeleteVerified composes down only
 	// this stack's project, and their stacks rows survive the delete.
-	if rmErr := h.removeStackFiles(*stack, absStackDir); rmErr != nil {
+	if rmErr := h.removeStackFiles(*stack, absStackDir, guardRoot); rmErr != nil {
 		renderResult(c, truth.Failed("stack compose down succeeded but file removal failed", rmErr,
 			truth.KV("id", id),
 			truth.KV("directory", stack.Directory),
@@ -679,7 +682,7 @@ func collateralEntries(stack models.Stack, absStackDir string) ([]string, error)
 // pre-compose-down capture reintroduces the agent-os-xa7 data loss (destroying a
 // newly-registered sibling's compose file) through a widened race instead of
 // through the logic xa7 already guards against.
-func (h *StacksHandler) removeStackFiles(stack models.Stack, absStackDir string) error {
+func (h *StacksHandler) removeStackFiles(stack models.Stack, absStackDir, absRoot string) error {
 	survivors, err := h.listSurvivors(stack)
 	if err != nil {
 		return err
@@ -687,6 +690,18 @@ func (h *StacksHandler) removeStackFiles(stack models.Stack, absStackDir string)
 
 	if len(survivors) == 0 {
 		return os.RemoveAll(absStackDir)
+	}
+
+	// The per-file removals below go THROUGH absStackDir, so unlike RemoveAll
+	// above they follow it when it is itself a symlink: the directory, resolved,
+	// must be inside the root, or os.Remove deletes a file outside it
+	// (agent-os-z91e.22). An error resolving it refuses.
+	inside, err := pathutil.IsContained(absRoot, absStackDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve stack directory %s against root %s: %w", absStackDir, absRoot, err)
+	}
+	if !inside {
+		return fmt.Errorf("refusing to remove files from %s: it resolves outside the stacks root %s", absStackDir, absRoot)
 	}
 
 	if err := removeStackFile(absStackDir, stack.ComposeFile); err != nil {

@@ -28,6 +28,7 @@ const deleteSiblingCompose = "services:\n  web:\n    image: nginx:1.21\n    rest
 // below drives the real handlers; nothing about the removal path is faked.
 type deleteSiblingFixture struct {
 	tempDir string
+	cfg     *config.Config
 	db      *database.DB
 	scanner *services.ScannerService
 	router  *gin.Engine
@@ -52,7 +53,7 @@ func newDeleteSiblingFixture(t *testing.T) *deleteSiblingFixture {
 	router.POST("/stacks", authContextMiddleware("test-user-id"), handler.Create)
 	router.DELETE("/stacks/:id", authContextMiddleware("test-user-id"), handler.Delete)
 
-	return &deleteSiblingFixture{tempDir: tempDir, db: db, scanner: scanner, router: router}
+	return &deleteSiblingFixture{tempDir: tempDir, cfg: cfg, db: db, scanner: scanner, router: router}
 }
 
 // create posts a real Create request. envContent is written as .env when non-empty.
