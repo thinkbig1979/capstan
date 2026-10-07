@@ -507,6 +507,12 @@ type ScannerService struct {
 // window agent-os-z91e.6's test parks a ScanAll in.
 var pruneAfterWalkHook func()
 
+// scanBeforeUpsertStackHook is TEST-ONLY and nil in production. When set, it
+// runs in scanDirectoryWithRoot after the compose file was globbed and before
+// its row is written, which is the window agent-os-z91e.23's test parks a
+// scan in while a stack is deleted.
+var scanBeforeUpsertStackHook func(stackID string)
+
 func NewScannerService(cfg *config.Config, db *database.DB) *ScannerService {
 	return &ScannerService{
 		config: cfg,
@@ -931,6 +937,25 @@ func collectActiveDirs(path string, maxDepth int, currentDepth int, active map[s
 		}
 	}
 	return nil
+}
+
+// WithLock runs fn while holding mu, so no scan, prune or directory
+// registration can interleave with it. A handler that removes a stack's files
+// and then its row needs this: a scan that globbed the compose file before the
+// removal would otherwise write the row back after the delete, leaving a ghost
+// stack (agent-os-z91e.23). The lock order rule on mu applies to fn: it must
+// not acquire an OperationLock or call back into the scanner.
+//
+// A nil receiver runs fn unlocked. Handler tests build a StacksHandler with no
+// scanner; main.go always passes one (cmd/server/scanner_wiring_test.go).
+func (s *ScannerService) WithLock(fn func()) {
+	if s == nil {
+		fn()
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fn()
 }
 
 func (s *ScannerService) ScanDirectory(path string) error {
@@ -1660,6 +1685,10 @@ func (s *ScannerService) scanDirectoryWithRoot(path string, rootDir string) erro
 				Status:      "unknown",
 				IsGitRepo:   isGitRepo,
 				GitBranch:   gitBranch,
+			}
+
+			if scanBeforeUpsertStackHook != nil {
+				scanBeforeUpsertStackHook(stackID)
 			}
 
 			if err := s.db.UpsertStack(stack); err != nil {

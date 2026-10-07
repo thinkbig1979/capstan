@@ -34,6 +34,11 @@ type EnvRequest struct {
 	Raw     string     `json:"raw"`
 }
 
+// envCreateBeforeRecordHook is TEST-ONLY and nil in production. It runs in
+// Create after the file is on disk and before the stack row records it, which
+// is the window agent-os-z91e.23's tests park a concurrent scan in.
+var envCreateBeforeRecordHook func()
+
 func NewEnvHandler(db *database.DB, config *config.Config) *EnvHandler {
 	return &EnvHandler{
 		db:        db,
@@ -373,10 +378,17 @@ func (h *EnvHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Update the stack record if it had no env file configured.
+	if envCreateBeforeRecordHook != nil {
+		envCreateBeforeRecordHook()
+	}
+
+	// Record the env file if the stack had none configured. One column only:
+	// the row read at the top of this request may be stale by now, because the
+	// scanner does not take the OperationLock held here (agent-os-z91e.23).
+	// Zero rows updated means the scanner pruned the row meanwhile; the file
+	// still exists, and the watcher's rescan records it if the stack is real.
 	if stack.EnvFile == "" {
-		stack.EnvFile = envFileName
-		if err := h.db.UpsertStack(*stack); err != nil {
+		if _, err := h.db.SetStackEnvFileIfUnset(id, envFileName); err != nil {
 			// Non-fatal: file exists, DB update failed. Surface as partial.
 			renderResult(c, truth.Partial("env file created but DB not updated",
 				truth.KV("filename", envFileName),
