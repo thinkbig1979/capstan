@@ -25,6 +25,9 @@ export function useConfirm() {
     },
   ) => {
     return new Promise<boolean>((resolve) => {
+      // A dialog already pending is replaced, not queued: settle its caller as
+      // declined so the code after its await runs instead of hanging for good.
+      resolveRef.current?.(false)
       resolveRef.current = resolve
       stateRef.current = {
         title,
