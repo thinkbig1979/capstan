@@ -3,7 +3,7 @@ import { StackDetail } from '@/components/stack/StackDetail'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { AlertCircle, RefreshCw, Home, Trash2, ChevronDown, ChevronRight, MoreHorizontal, Play, Square, Download } from 'lucide-react'
+import { AlertCircle, AlertTriangle, RefreshCw, Home, Trash2, ChevronDown, ChevronRight, MoreHorizontal, Play, Square, Download } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -373,6 +373,21 @@ export function StackPage() {
       {/* agent-os-xjzr: the live Docker read failed, so the pill below shows the stored status. */}
       {stack.statusStale === true && (
         <StatusStaleNotice subject="This stack's status" className="mb-4" onRetry={() => refetch()} />
+      )}
+      {/* agent-os-z91e.19 (D25): another stack carries this compose project
+          name, so the server refuses container actions and updates on it. */}
+      {stack.projectNameSharedWith && stack.projectNameSharedWith.length > 0 && (
+        <div
+          role="alert"
+          className="mb-4 flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+          <span>
+            {stack.projectNameSharedWith.map((s) => s.directory).join(', ')} also uses the compose project name{' '}
+            <span className="font-mono">{stack.projectName}</span>. Container actions and updates for this project
+            are refused until each stack has its own name.
+          </span>
+        </div>
       )}
       <div className="space-y-6">
         <div className="flex items-start justify-between gap-4 flex-wrap">
