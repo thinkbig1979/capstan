@@ -175,7 +175,7 @@ func (h *ComposeHandler) Put(c *gin.Context) {
 		return
 	}
 
-	if err := os.WriteFile(composePath, []byte(req.Content), 0644); err != nil {
+	if err := writeComposeFileAtomic(composePath, []byte(req.Content)); err != nil {
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "WRITE_ERROR", "Failed to write compose file", err))
 		return
 	}
@@ -261,8 +261,10 @@ func restoreEnv(envPath string, originalBytes []byte) {
 }
 
 // ComposeEnvRequest is the body for the atomic PUT /api/v1/stacks/:id/compose-env
-// endpoint. Both compose content and env entries/raw are written atomically: if
-// either write fails both are rolled back so neither is left partially changed (#11).
+// endpoint. Each file is replaced by temp-file-plus-rename, and if either write
+// fails both are rolled back so neither is left partially changed (#11). The
+// pair is not one atomic step: a crash between the two renames leaves the new
+// env beside the old compose.
 type ComposeEnvRequest struct {
 	ComposeContent string     `json:"composeContent" binding:"required"`
 	EnvEntries     []EnvEntry `json:"envEntries"`
@@ -282,7 +284,7 @@ type ComposeEnvRequest struct {
 // Atomicity guarantee:
 //  1. Validate env entries and lint compose before touching disk.
 //  2. Write .env to a temp file alongside the real path; rename atomically to the real path.
-//  3. Only write compose.yaml after .env rename succeeded.
+//  3. Only write compose.yaml (also temp file plus rename) after .env rename succeeded.
 //  4. On any failure after the .env rename: restore the original compose file from
 //     a pre-write backup byte slice (taken before step 3). If the restore fails,
 //     the response is partial rather than false success.
@@ -425,7 +427,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 	}
 
 	// ── Write compose.yaml ──────────────────────────────────────────────────
-	if err := os.WriteFile(composePath, []byte(req.ComposeContent), 0644); err != nil {
+	if err := writeComposeFileAtomic(composePath, []byte(req.ComposeContent)); err != nil {
 		// Compose write failed after .env was already replaced — restore .env.
 		if hasEnvUpdate && envPath != "" {
 			restoreEnv(envPath, originalEnv)
@@ -441,7 +443,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		rollbackErr := ""
 		if originalCompose != nil {
 			//nolint:gosec // composePath was validated against the configured stacks directories above (validateStackPath, symlink-aware) — see README.md "Command execution and file access"
-			if rErr := os.WriteFile(composePath, originalCompose, 0644); rErr != nil {
+			if rErr := writeComposeFileAtomic(composePath, originalCompose); rErr != nil {
 				rollbackErr = rErr.Error()
 			}
 		}
@@ -458,7 +460,7 @@ func (h *ComposeHandler) PutComposeAndEnv(c *gin.Context) {
 		return
 	}
 
-	h.logAction(c, id, "update_compose_env", "Updated compose and env atomically")
+	h.logAction(c, id, "update_compose_env", "Updated compose and env")
 
 	details := map[string]any{
 		"compose": stack.ComposeFile,
