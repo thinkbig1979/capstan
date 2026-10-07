@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -62,6 +63,14 @@ type BackupHandler struct {
 	// (every existing test constructing a BackupHandler directly) keeps working
 	// unchanged rather than panicking.
 	cm *ConnectionManager
+
+	// schedulerMu makes updateSettings' StopScheduler+StartScheduler one
+	// transition. StartScheduler reads the stored schedule after the stop, so two
+	// saves interleaving as stop, stop, start, start (or one start resolving
+	// before the other save wrote) could leave the running scheduler disagreeing
+	// with the stored setting (agent-os-z91e.30). Taken after the settings are
+	// written, so each pair resolves against its own write or a later one.
+	schedulerMu sync.Mutex
 }
 
 // NewBackupHandler creates a BackupHandler. Call RegisterRoutes and
@@ -601,12 +610,14 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 	}
 
 	if scheduleChanged {
+		h.schedulerMu.Lock()
 		h.svc.StopScheduler()
 		// Unconditionally re-ask the service to start. StartScheduler resolves
 		// the effective mode and interval itself and declines when the config
 		// says so; a second interval check here would wrongly refuse to restart
 		// a scheduled-mode install whose interval is (legitimately) zero.
 		h.svc.StartScheduler()
+		h.schedulerMu.Unlock()
 	}
 
 	h.getSettings(c)

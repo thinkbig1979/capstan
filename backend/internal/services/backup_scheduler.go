@@ -42,6 +42,20 @@ type BackupSchedulerService struct {
 	db     *database.DB
 	logger *slog.Logger
 
+	// lifecycleMu serialises Start, StartScheduled, Stop, Restart and Close, so
+	// Restart's stop-then-start is one transition and no other lands between its
+	// halves (agent-os-z91e.30, the shape agent-os-z91e.5 gave SchedulerService).
+	// Separate from mu on purpose: Stop holds it across its up-to-10s wait for an
+	// in-flight cycle, and the tick, timer and cycle goroutines take mu but never
+	// lifecycleMu, so that wait cannot deadlock against them. Order: lifecycleMu
+	// before mu, never the reverse.
+	lifecycleMu sync.Mutex
+	// closed is the terminal latch set by Close at process shutdown. Once set,
+	// Start, StartScheduled and Restart refuse, so a settings save still being
+	// served during shutdown cannot re-arm the scheduler. Guarded by
+	// lifecycleMu; nothing clears it, it ends with the process.
+	closed bool
+
 	mu     sync.Mutex
 	ticker *time.Ticker
 	timer  *time.Timer // scheduled mode; nil in interval mode
@@ -91,6 +105,26 @@ func NewBackupScheduler(runner backupRunner, db *database.DB, logger *slog.Logge
 // already running it is stopped first (equivalent to Restart). Mirrors
 // SchedulerService.Start exactly.
 func (s *BackupSchedulerService) Start(interval time.Duration) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.refuseIfClosed("Start") {
+		return
+	}
+	s.startLocked(interval)
+}
+
+// refuseIfClosed reports whether Close has latched the scheduler shut, logging
+// the refused call. The caller holds lifecycleMu.
+func (s *BackupSchedulerService) refuseIfClosed(op string) bool {
+	if !s.closed {
+		return false
+	}
+	s.logger.Warn("Backup scheduler is closed for shutdown; ignoring "+op, "op", op)
+	return true
+}
+
+// startLocked arms the interval ticker. The caller holds lifecycleMu.
+func (s *BackupSchedulerService) startLocked(interval time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -144,6 +178,17 @@ func (s *BackupSchedulerService) StartScheduled(sched DailySchedule) {
 // exercise the real timer goroutine within milliseconds instead of waiting for
 // a minute boundary; production always enters through StartScheduled.
 func (s *BackupSchedulerService) startScheduledAt(sched DailySchedule, next time.Time) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.refuseIfClosed("StartScheduled") {
+		return
+	}
+	s.startScheduledLocked(sched, next)
+}
+
+// startScheduledLocked arms the scheduled-mode timer. The caller holds
+// lifecycleMu.
+func (s *BackupSchedulerService) startScheduledLocked(sched DailySchedule, next time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -289,8 +334,27 @@ func (s *BackupSchedulerService) beginCycle(parentCtx context.Context) bool {
 }
 
 // Stop stops the scheduler and waits up to 10 seconds for any in-flight cycle
-// to finish. Mirrors SchedulerService.Stop exactly.
+// to finish. Mirrors SchedulerService.Stop exactly. Unlike Close it does not
+// latch: Start may arm the scheduler again.
 func (s *BackupSchedulerService) Stop() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.stopLocked()
+}
+
+// Close stops the scheduler like Stop and latches it shut, so a settings save
+// that lands after shutdown began cannot re-arm it (agent-os-z91e.30). main.go
+// calls it at shutdown; nothing reopens it.
+func (s *BackupSchedulerService) Close() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.closed = true
+	s.stopLocked()
+}
+
+// stopLocked halts the ticker or timer and waits (bounded) for an in-flight
+// cycle. The caller holds lifecycleMu.
+func (s *BackupSchedulerService) stopLocked() {
 	s.mu.Lock()
 
 	// Commit to shutdown before releasing mu (and long before the s.wg.Wait()
@@ -340,10 +404,17 @@ func (s *BackupSchedulerService) Stop() {
 	}
 }
 
-// Restart stops then starts the scheduler with a new interval.
+// Restart stops then starts the scheduler with a new interval, as one
+// transition under lifecycleMu: no other Start, Stop or Close lands between the
+// halves. It is a no-op once Close has latched the scheduler.
 func (s *BackupSchedulerService) Restart(interval time.Duration) {
-	s.Stop()
-	s.Start(interval)
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.refuseIfClosed("Restart") {
+		return
+	}
+	s.stopLocked()
+	s.startLocked(interval)
 }
 
 // IsRunning reports whether the scheduler is active in either mode: an

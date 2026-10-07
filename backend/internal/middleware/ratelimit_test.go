@@ -22,6 +22,7 @@ func newAuthTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	InitRateLimiters(config.DefaultAPIRateLimitPerMin)
+	t.Cleanup(StopRateLimiters)
 
 	r := gin.New()
 	r.Use(RateLimitAuth())
@@ -285,6 +286,7 @@ func TestPeekLoginUsername_NilRequestAndNilBody(t *testing.T) {
 // wave the request through. Inverting this back to fail-open should fail here.
 func TestCheckFailsClosedOnInvalidKey(t *testing.T) {
 	rl := NewRateLimiter(time.Minute, 100)
+	t.Cleanup(rl.Stop)
 
 	invalid := []string{
 		"",
@@ -423,6 +425,7 @@ func TestAuthLimit_UnparseableClientAddressIsRejectedNotKeyed(t *testing.T) {
 // lifetime and re-created keys are appended twice.
 func TestAccessOrderMirrorsRequestsAfterExpiry(t *testing.T) {
 	rl := NewRateLimiter(40*time.Millisecond, 100)
+	t.Cleanup(rl.Stop)
 
 	for i := 0; i < 50; i++ {
 		key := loginRateLimitKey("203.0.113.9", fmt.Sprintf("user%03d", i))
@@ -475,6 +478,7 @@ func TestAccessOrderMirrorsRequestsAfterExpiry(t *testing.T) {
 // key, and a refreshed key must not be it.
 func TestEvictLRUPicksLeastRecentlyUsed(t *testing.T) {
 	rl := NewRateLimiter(time.Minute, 100)
+	t.Cleanup(rl.Stop)
 	rl.maxEntries = 3
 
 	for _, k := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"} {
@@ -531,6 +535,7 @@ func TestEvictLRUPicksLeastRecentlyUsed(t *testing.T) {
 // code path.
 func TestCheckConcurrentAccessDoesNotRace(t *testing.T) {
 	rl := NewRateLimiter(time.Minute, 1000)
+	t.Cleanup(rl.Stop)
 
 	const goroutines = 50
 	const iterations = 200
@@ -638,6 +643,7 @@ func newAPITestRouter(t *testing.T, apiMaxReqs int) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	InitRateLimiters(apiMaxReqs)
+	t.Cleanup(StopRateLimiters)
 
 	r := gin.New()
 	r.Use(RateLimitByUser())
@@ -747,6 +753,7 @@ func TestInitRateLimiters_PassesPositiveBudgetThrough(t *testing.T) {
 				}
 			}()
 			InitRateLimiters(budget)
+			t.Cleanup(StopRateLimiters)
 
 			if apiRateLimiter.maxReqs != budget {
 				t.Errorf("expected the API limiter to carry budget %d, got %d", budget, apiRateLimiter.maxReqs)
@@ -775,6 +782,7 @@ func newPasswordCheckTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	InitRateLimiters(config.DefaultAPIRateLimitPerMin)
+	t.Cleanup(StopRateLimiters)
 
 	r := gin.New()
 	setUser := func(c *gin.Context) {

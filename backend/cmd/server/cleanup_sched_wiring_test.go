@@ -7,18 +7,20 @@ import (
 	"testing"
 )
 
-// TestMain_CleanupSchedulerIsStoppedAtShutdown is agent-os-z91e.4's wiring
-// check. The Docker cleanup scheduler runs on its own context, so main's
-// cancel() does not reach it: unless shutdown calls its Stop(), a tick can
-// start a prune during the shutdown window and an in-flight one is neither
-// cancelled nor awaited. Every unit test drives Stop() directly, so a missing
-// call in main.go would leave them all green. This asserts that every variable
-// main() assigns from NewDockerCleanupScheduler lives in main()'s own scope
-// (a block-local one cannot be reached by the shutdown sequence) and has a
-// .Stop() call after `<-quit` and before srv.Shutdown. It reads mainSource
-// (go:embed, declared in oplock_wiring_test.go), so a `go test -overlay`
-// mutant of main.go is what it sees.
-func TestMain_CleanupSchedulerIsStoppedAtShutdown(t *testing.T) {
+// TestMain_CleanupSchedulerIsClosedAtShutdown is agent-os-z91e.4's wiring
+// check, tightened by agent-os-z91e.30 from Stop to Close. The Docker cleanup
+// scheduler runs on its own context, so main's cancel() does not reach it:
+// unless shutdown calls its Close(), a tick can start a prune during the
+// shutdown window, an in-flight one is neither cancelled nor awaited, and (with
+// Stop alone) a policy PUT still being served can re-arm the ticker. Every unit
+// test drives Close() directly, so a missing call in main.go would leave them
+// all green. This asserts that every variable main() assigns from
+// NewDockerCleanupScheduler lives in main()'s own scope (a block-local one
+// cannot be reached by the shutdown sequence) and has a .Close() call after
+// `<-quit` and before srv.Shutdown, and no .Stop() call there. It reads
+// mainSource (go:embed, declared in oplock_wiring_test.go), so a
+// `go test -overlay` mutant of main.go is what it sees.
+func TestMain_CleanupSchedulerIsClosedAtShutdown(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "main.go", mainSource, 0)
 	if err != nil {
@@ -71,6 +73,7 @@ func TestMain_CleanupSchedulerIsStoppedAtShutdown(t *testing.T) {
 	}
 
 	var schedVars []string
+	closesAt := map[string][]token.Pos{}
 	stopsAt := map[string][]token.Pos{}
 	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
 		switch n := n.(type) {
@@ -95,6 +98,9 @@ func TestMain_CleanupSchedulerIsStoppedAtShutdown(t *testing.T) {
 			if !ok {
 				return true
 			}
+			if sel.Sel.Name == "Close" {
+				closesAt[recv.Name] = append(closesAt[recv.Name], n.Pos())
+			}
 			if sel.Sel.Name == "Stop" {
 				stopsAt[recv.Name] = append(stopsAt[recv.Name], n.Pos())
 			}
@@ -115,14 +121,19 @@ func TestMain_CleanupSchedulerIsStoppedAtShutdown(t *testing.T) {
 		if !topLevel[v] {
 			t.Errorf("%s (from NewDockerCleanupScheduler) is declared inside a nested block, so the shutdown sequence cannot stop it; declare it in main()'s scope", v)
 		}
-		stopped := false
-		for _, p := range stopsAt[v] {
+		closed := false
+		for _, p := range closesAt[v] {
 			if p > quitPos && p < shutdownPos {
-				stopped = true
+				closed = true
 			}
 		}
-		if !stopped {
-			t.Errorf("%s (from NewDockerCleanupScheduler) is never Stop()ped between `<-quit` and srv.Shutdown, so a scheduled prune can start or be cut off during shutdown (agent-os-z91e.4)", v)
+		if !closed {
+			t.Errorf("%s (from NewDockerCleanupScheduler) is never Close()d between `<-quit` and srv.Shutdown, so a scheduled prune can start or be cut off during shutdown, and a late policy PUT can re-arm it (agent-os-z91e.4, agent-os-z91e.30)", v)
+		}
+		for _, p := range stopsAt[v] {
+			if p > quitPos {
+				t.Errorf("%s: %s.Stop() after `<-quit` does not latch the scheduler; call Close() (agent-os-z91e.30)", fset.Position(p), v)
+			}
 		}
 	}
 }
@@ -206,5 +217,82 @@ func TestMain_UpdateSchedulerIsClosedAtShutdown(t *testing.T) {
 	}
 	for _, p := range stops {
 		t.Errorf("%s: schedulerService.Stop() after `<-quit` does not latch the scheduler; call Close() (agent-os-z91e.5)", fset.Position(p))
+	}
+}
+
+// TestMain_BackupSchedulerIsClosedAtShutdown is agent-os-z91e.30's wiring
+// check for the backup scheduler. Close latches it shut, so a backup settings
+// save still being served before srv.Shutdown cannot re-arm it; that only holds
+// if main.go calls Close, not just backupSvc.StopScheduler (which reaches
+// Stop). Every unit test calls Close directly, so removing the call would leave
+// them all green. It asserts a backupSched.Close() between `<-quit` and
+// srv.Shutdown. It reads mainSource, so a `go test -overlay` mutant of main.go
+// is what it sees.
+func TestMain_BackupSchedulerIsClosedAtShutdown(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", mainSource, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var mainFn *ast.FuncDecl
+	for _, d := range file.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "main" && fn.Recv == nil {
+			mainFn = fn
+		}
+	}
+	if mainFn == nil {
+		t.Fatal("main.go has no func main")
+	}
+
+	var quitPos token.Pos
+	for _, stmt := range mainFn.Body.List {
+		if es, ok := stmt.(*ast.ExprStmt); ok {
+			if u, ok := es.X.(*ast.UnaryExpr); ok && u.Op == token.ARROW {
+				if id, ok := u.X.(*ast.Ident); ok && id.Name == "quit" {
+					quitPos = es.Pos()
+				}
+			}
+		}
+	}
+	if quitPos == token.NoPos {
+		t.Fatal("main() has no top-level `<-quit`; this test can no longer find the shutdown sequence and must be updated")
+	}
+
+	var shutdownPos token.Pos
+	var closes []token.Pos
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || call.Pos() < quitPos {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		switch {
+		case recv.Name == "srv" && sel.Sel.Name == "Shutdown":
+			shutdownPos = call.Pos()
+		case recv.Name == "backupSched" && sel.Sel.Name == "Close":
+			closes = append(closes, call.Pos())
+		}
+		return true
+	})
+	if shutdownPos == token.NoPos {
+		t.Fatal("main() has no srv.Shutdown after `<-quit`; this test can no longer find the shutdown sequence and must be updated")
+	}
+
+	closed := false
+	for _, p := range closes {
+		if p < shutdownPos {
+			closed = true
+		}
+	}
+	if !closed {
+		t.Error("backupSched.Close() is not called between `<-quit` and srv.Shutdown, so a late backup settings save can re-arm the backup scheduler during shutdown (agent-os-z91e.30)")
 	}
 }

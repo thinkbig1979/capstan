@@ -769,15 +769,25 @@ func main() {
 		schedulerService.Close()
 	}
 
-	// Stopped here, before srv.Shutdown, so no scheduled prune starts during
+	// Closed here, before srv.Shutdown, so no scheduled prune starts during
 	// the shutdown window and an in-flight one is cancelled and awaited
-	// rather than cut off by process exit with no history row.
+	// rather than cut off by process exit with no history row. Close, not Stop:
+	// it latches, so a policy PUT still being served cannot re-arm the ticker
+	// (agent-os-z91e.4, agent-os-z91e.30).
 	if cleanupSched != nil {
-		cleanupSched.Stop()
+		cleanupSched.Close()
 	}
 
 	updateJobManager.Stop()
 
+	// Ends the seven rate-limiter cleanup goroutines. The limiters keep
+	// answering, so requests still in flight are unaffected (agent-os-z91e.17).
+	middleware.StopRateLimiters()
+
+	// Close latches the backup scheduler shut, so a settings save still being
+	// served before srv.Shutdown cannot re-arm it (agent-os-z91e.30).
+	// StopScheduler after it only clears the service's schedulerActive flag.
+	backupSched.Close()
 	backupSvc.StopScheduler()
 
 	watcherService.Stop()

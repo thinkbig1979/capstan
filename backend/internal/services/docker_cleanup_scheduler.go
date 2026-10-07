@@ -120,6 +120,20 @@ type DockerCleanupSchedulerService struct {
 	db     *database.DB
 	logger *slog.Logger
 
+	// lifecycleMu serialises Start, StartFromPolicy, Stop and Close, so
+	// StartFromPolicy's stop, policy read and start are one transition and no
+	// other lands between them (agent-os-z91e.30, the shape agent-os-z91e.5 gave
+	// SchedulerService). Separate from mu on purpose: Stop holds it across its
+	// up-to-10s wait for an in-flight cycle, and the tick and cycle goroutines
+	// take mu but never lifecycleMu, so that wait cannot deadlock against them.
+	// Order: lifecycleMu before mu, never the reverse.
+	lifecycleMu sync.Mutex
+	// closed is the terminal latch set by Close at process shutdown. Once set,
+	// Start and StartFromPolicy refuse, so a policy PUT still being served during
+	// shutdown cannot re-arm the ticker. Guarded by lifecycleMu; nothing clears
+	// it, it ends with the process.
+	closed bool
+
 	mu      sync.Mutex
 	ticker  *time.Ticker
 	done    chan struct{}
@@ -155,6 +169,26 @@ func NewDockerCleanupScheduler(runner dockerCleanupRunner, db *database.DB, logg
 // Start starts the ticker at the given interval. Calling it while running is
 // equivalent to Restart.
 func (s *DockerCleanupSchedulerService) Start(interval time.Duration) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.refuseIfClosed("Start") {
+		return
+	}
+	s.startLocked(interval)
+}
+
+// refuseIfClosed reports whether Close has latched the scheduler shut, logging
+// the refused call. The caller holds lifecycleMu.
+func (s *DockerCleanupSchedulerService) refuseIfClosed(op string) bool {
+	if !s.closed {
+		return false
+	}
+	s.logger.Warn("Docker cleanup scheduler is closed for shutdown; ignoring "+op, "op", op)
+	return true
+}
+
+// startLocked arms the ticker. The caller holds lifecycleMu.
+func (s *DockerCleanupSchedulerService) startLocked(interval time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -193,13 +227,19 @@ func (s *DockerCleanupSchedulerService) Start(interval time.Duration) {
 //     logging it would print a line on every boot of every install.
 //   - enabled: arm at the policy interval.
 //
-// It always Stops first, so calling it after an operator disables cleanup tears
+// It always stops first (under lifecycleMu, so stop, policy read and start are
+// one transition and a concurrent call cannot interleave), so calling it after an operator disables cleanup tears
 // the previous ticker down rather than leaving it running. That also means the
 // policy PUT handler's call, when the read-back fails, has just stopped a ticker
 // that was armed: the row is written for both callers, because in both the
 // outcome is the same (no cleanup runs until the policy is readable).
 func (s *DockerCleanupSchedulerService) StartFromPolicy() {
-	s.Stop()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.refuseIfClosed("StartFromPolicy") {
+		return
+	}
+	s.stopLocked()
 
 	policy, err := ResolveDockerCleanupPolicy(s.db)
 	if err != nil {
@@ -211,7 +251,7 @@ func (s *DockerCleanupSchedulerService) StartFromPolicy() {
 	if !policy.Enabled {
 		return
 	}
-	s.Start(time.Duration(clampCleanupIntervalHours(policy.IntervalHours)) * time.Hour)
+	s.startLocked(time.Duration(clampCleanupIntervalHours(policy.IntervalHours)) * time.Hour)
 }
 
 // clampCleanupIntervalHours floors the interval. A ticker built from a
@@ -279,8 +319,27 @@ func (s *DockerCleanupSchedulerService) beginCycle(parentCtx context.Context) bo
 	return true
 }
 
-// Stop stops the ticker and waits up to 10 seconds for an in-flight cycle.
+// Stop stops the ticker and waits up to 10 seconds for an in-flight cycle. It
+// does not latch: Start or StartFromPolicy may arm the ticker again.
 func (s *DockerCleanupSchedulerService) Stop() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.stopLocked()
+}
+
+// Close stops the ticker like Stop and latches the scheduler shut, so a policy
+// PUT that lands after shutdown began cannot re-arm it (agent-os-z91e.30).
+// main.go calls it at shutdown; nothing reopens it.
+func (s *DockerCleanupSchedulerService) Close() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.closed = true
+	s.stopLocked()
+}
+
+// stopLocked halts the ticker and waits (bounded) for an in-flight cycle. The
+// caller holds lifecycleMu.
+func (s *DockerCleanupSchedulerService) stopLocked() {
 	s.mu.Lock()
 
 	// Commit to shutdown before releasing mu and long before Wait below, so a
