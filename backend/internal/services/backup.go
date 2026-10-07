@@ -1560,6 +1560,15 @@ func (s *BackupService) runRestore(
 	}
 	defer s.opLock.Release(stackID, lockToken)
 
+	// agent-os-z91e.8: the restore runs with --delete, so find what the backup
+	// never covered (other filesystems, cache directories) and keep restic off
+	// it. Done before the stop: a scan that cannot finish refuses the restore
+	// with the stack untouched, rather than risk deleting what it could not see.
+	protected, scanErr := restoreProtectedPaths(stackDir, restoreTarget)
+	if scanErr != nil {
+		return fmt.Errorf("restore refused: %w", scanErr)
+	}
+
 	// Determine if the stack was running. As in backupStack, a failed read is a
 	// third answer — "could not find out" — and not a "no".
 	priorState := s.observeRunState(stack, stackID)
@@ -1632,7 +1641,7 @@ func (s *BackupService) runRestore(
 	stream(out, "info", fmt.Sprintf("[%s] restoring snapshot %s to %s", stackID, snapshotID, restoreTarget))
 	// stackDir is the snapshot's stored source path; pass it so restic strips that
 	// prefix and restores contents into restoreTarget rather than nesting them.
-	if err := restic.Restore(ctx, snapshotID, stackDir, restoreTarget, out); err != nil {
+	if err := restic.Restore(ctx, snapshotID, stackDir, restoreTarget, protected, out); err != nil {
 		return fmt.Errorf("restic restore: %w", err)
 	}
 

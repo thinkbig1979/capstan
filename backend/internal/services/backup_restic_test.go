@@ -466,7 +466,7 @@ func TestResticManager_Restore_Args(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.Restore(context.Background(), "abc123", "/orig/src", "/restore/here", out)
+	err := m.Restore(context.Background(), "abc123", "/orig/src", "/restore/here", nil, out)
 	require.NoError(t, err)
 	close(out)
 
@@ -475,6 +475,9 @@ func TestResticManager_Restore_Args(t *testing.T) {
 	// The snapshot ref carries the stored source prefix so restic strips it.
 	assert.Equal(t, "abc123:/orig/src", call.Args[1])
 	assert.True(t, argPairContains(call.Args, "--target", "/restore/here"))
+	// agent-os-z91e.8: --delete makes the target match the snapshot, so files
+	// created after it do not survive next to the restored ones.
+	assert.Contains(t, call.Args, "--delete")
 }
 
 // --- Timeout handling test ---

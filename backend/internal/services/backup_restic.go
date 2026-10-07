@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -719,8 +722,14 @@ func (m *ResticManager) Stats(ctx context.Context) (int64, error) {
 	return int64(out.TotalSize), nil
 }
 
-// Restore restores the given snapshot to targetPath via `restic restore --target`.
-func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, targetPath string, out chan<- StreamLine) error {
+// Restore restores the given snapshot to targetPath via `restic restore --target`
+// with --delete, so targetPath ends up matching the snapshot: files created
+// after it are removed rather than surviving next to the restored ones
+// (agent-os-z91e.8). excludes are paths relative to targetPath that restic must
+// leave untouched, normally restoreProtectedPaths' result: without them,
+// --delete would also remove the live content of mounts and cache directories
+// the backup never covered.
+func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, targetPath string, excludes []string, out chan<- StreamLine) error {
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {
 		return err
@@ -730,11 +739,152 @@ func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, tar
 	// Backups store the stack's absolute path, so a plain `restore <id> --target X`
 	// recreates that absolute tree *under* X (X/home/.../stack/...). Use restic's
 	// `<snapshotID>:<subfolder>` form to strip the stored source prefix so the
-	// snapshot contents land directly in targetPath (true in-place restore).
+	// snapshot contents land directly in targetPath.
 	ref := snapshotID
 	if sourcePath != "" {
 		ref = snapshotID + ":" + sourcePath
 	}
-	args := []string{"restore", ref, "--target", targetPath, "--verbose"}
+	args := []string{"restore", ref, "--target", targetPath, "--delete", "--verbose"}
+	for _, rel := range excludes {
+		args = append(args, "--exclude", restoreExcludePattern(rel))
+	}
 	return m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out)
+}
+
+// cacheDirTagSignature is the header a CACHEDIR.TAG file must start with for
+// restic's --exclude-caches to skip the directory holding it.
+const cacheDirTagSignature = "Signature: 8a477f597d28d172789f06886806bc55"
+
+// restoreProtectedPaths lists, relative to target, the paths under target that
+// Backup() leaves out of a snapshot of stackDir: entries on another filesystem
+// than stackDir (--one-file-system) and directories holding a valid CACHEDIR.TAG
+// (--exclude-caches). No snapshot holds their content, so `restore --delete`
+// would delete it; Restore passes them to restic as excludes instead.
+//
+// It reads the tree as it is now. A directory that was a mount or a cache at
+// backup time but is not one now is not listed, and loses its current content
+// to --delete. A target that is itself a symlink, a cache directory, or on
+// another filesystem than stackDir is refused: the backup never covered it.
+func restoreProtectedPaths(stackDir, target string) ([]string, error) {
+	return scanRestoreProtected(stackDir, target, statDevice)
+}
+
+// statDevice returns the device id of a FileInfo from os.Stat/os.Lstat.
+func statDevice(fi fs.FileInfo) (uint64, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return uint64(st.Dev), true //nolint:unconvert // Dev is uint64 on linux but int32 on darwin
+}
+
+// scanRestoreProtected is restoreProtectedPaths with the device lookup injected,
+// so a test can stand in for a mount without root.
+func scanRestoreProtected(stackDir, target string, deviceOf func(fs.FileInfo) (uint64, bool)) ([]string, error) {
+	stackInfo, err := os.Stat(stackDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		// Nothing on disk, so nothing --delete could remove.
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("stat stack directory: %w", err)
+	}
+	// Backup() is given stackDir as its only root, so its device is the one
+	// --one-file-system kept.
+	stackDev, ok := deviceOf(stackInfo)
+	if !ok {
+		return nil, fmt.Errorf("read device id of %s", stackDir)
+	}
+
+	prefix := target + string(filepath.Separator)
+	var protected []string
+	err = filepath.WalkDir(target, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if path == target && errors.Is(walkErr, fs.ErrNotExist) {
+				return nil // restic creates the target; nothing to protect
+			}
+			return walkErr
+		}
+		isRoot := path == target
+		if isRoot && d.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("restore target %s is a symbolic link", target)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		dev, ok := deviceOf(info)
+		if !ok {
+			return fmt.Errorf("read device id of %s", path)
+		}
+		if dev != stackDev {
+			if isRoot {
+				return fmt.Errorf("restore target %s is on another filesystem than the stack directory %s, which the backup never covered", target, stackDir)
+			}
+			protected = append(protected, strings.TrimPrefix(path, prefix))
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		tagged, err := hasCacheDirTag(path)
+		if err != nil {
+			return err
+		}
+		if !tagged {
+			return nil
+		}
+		if isRoot {
+			return fmt.Errorf("restore target %s is a cache directory (CACHEDIR.TAG), which the backup never covered", target)
+		}
+		protected = append(protected, strings.TrimPrefix(path, prefix))
+		return fs.SkipDir
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan restore target for content the backup never covered: %w", err)
+	}
+	return protected, nil
+}
+
+// hasCacheDirTag reports whether dir holds a CACHEDIR.TAG that starts with
+// cacheDirTagSignature, the test restic's --exclude-caches applies.
+func hasCacheDirTag(dir string) (bool, error) {
+	f, err := os.Open(filepath.Join(dir, "CACHEDIR.TAG"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+	buf := make([]byte, len(cacheDirTagSignature))
+	if _, err := io.ReadFull(f, buf); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return false, nil // too short to carry the signature
+		}
+		return false, err
+	}
+	return string(buf) == cacheDirTagSignature, nil
+}
+
+// restoreExcludePattern turns a path relative to the restore target into a
+// restic pattern matching exactly that path: the leading "/" anchors it to the
+// restore root (an absolute stack path matches nothing under the
+// `<snapshot>:<subfolder>` form), and glob metacharacters are escaped so a
+// directory named "we[i]rd*" protects itself, not "weird" (both measured with
+// restic 0.19.1, agent-os-z91e.8).
+func restoreExcludePattern(rel string) string {
+	var b strings.Builder
+	b.WriteByte('/')
+	for _, r := range filepath.ToSlash(rel) {
+		switch r {
+		case '\\', '*', '?', '[', ']':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

@@ -685,7 +685,7 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
         title="Restore snapshot"
         description={
           pendingSnapshot
-            ? `Restore snapshot ${pendingSnapshot.shortId} (${formatDate(pendingSnapshot.time)})? This will overwrite the current stack data with the snapshot contents. The stack will be stopped during restore.`
+            ? `Restore snapshot ${pendingSnapshot.shortId} (${formatDate(pendingSnapshot.time)})? This replaces the stack directory with the snapshot: files created since the snapshot are deleted. Mounted filesystems and cache directories inside it are left as they are. The stack will be stopped during restore.`
             : 'Restore this snapshot? This operation is destructive and cannot be undone.'
         }
         confirmText="Restore"
