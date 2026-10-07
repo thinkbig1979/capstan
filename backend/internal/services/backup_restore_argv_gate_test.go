@@ -32,7 +32,7 @@ func TestRunRestore_FlagShapedSnapshotIDNeverReachesRestore(t *testing.T) {
 			svc := buildSvc(t, db, &fakeDocker{statusStr: "running"}, runner, runner)
 			seedStack(t, db, "myapp", "stop")
 
-			err := svc.RunRestore(context.Background(), "myapp", id, "", make(chan StreamLine, 128))
+			err := svc.RunRestore(context.Background(), "myapp", id, make(chan StreamLine, 128))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "does not belong to stack")
 			assert.Empty(t, restoreCalls(runner))
@@ -46,7 +46,7 @@ func TestRunRestore_FlagShapedSnapshotIDNeverReachesRestore(t *testing.T) {
 		svc := buildSvc(t, db, &fakeDocker{statusStr: "running"}, runner, runner)
 		seedStack(t, db, "myapp", "stop")
 
-		require.NoError(t, svc.RunRestore(context.Background(), "myapp", "aa1e6e99", "", make(chan StreamLine, 128)))
+		require.NoError(t, svc.RunRestore(context.Background(), "myapp", "aa1e6e99", make(chan StreamLine, 128)))
 		calls := restoreCalls(runner)
 		require.Len(t, calls, 1)
 		assert.Equal(t, "aa1e6e99:/opt/stacks/myapp", calls[0][1])

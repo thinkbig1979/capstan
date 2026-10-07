@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1312,7 +1311,7 @@ func TestRunRestore_ValidatesSnapshotBelongsToStack(t *testing.T) {
 	seedStack(t, db, "myapp", "stop")
 
 	out := make(chan StreamLine, 128)
-	err := svc.RunRestore(context.Background(), "myapp", "abc123", "/tmp/restore", out)
+	err := svc.RunRestore(context.Background(), "myapp", "abc123", out)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "snapshot validation")
 }
@@ -1331,8 +1330,7 @@ func TestRunRestore_StopsAndRestartsRunningStack(t *testing.T) {
 	seedStack(t, db, "myapp", "stop")
 
 	out := make(chan StreamLine, 128)
-	// targetDir must be the stack's own directory (or empty to use it by default).
-	err := svc.RunRestore(context.Background(), "myapp", "abc123", "/opt/stacks/myapp", out)
+	err := svc.RunRestore(context.Background(), "myapp", "abc123", out)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, docker.stopped())
@@ -1375,7 +1373,7 @@ func TestRunRestore_FailedRestoreLeavesStackStopped(t *testing.T) {
 	seedStack(t, db, "myapp", "stop")
 
 	out := make(chan StreamLine, 128)
-	err := svc.RunRestore(context.Background(), "myapp", "abc123", "/opt/stacks/myapp", out)
+	err := svc.RunRestore(context.Background(), "myapp", "abc123", out)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "restic restore")
 
@@ -1428,7 +1426,7 @@ func TestRunRestore_DeliberateStopExplanationSurvivesWithoutAStream(t *testing.T
 			svc := buildSvc(t, db, docker, runner, runner)
 			seedStack(t, db, "myapp", "stop")
 
-			err := svc.RunRestore(context.Background(), "myapp", "abc123", "/opt/stacks/myapp", out)
+			err := svc.RunRestore(context.Background(), "myapp", "abc123", out)
 			require.Error(t, err)
 			require.Equal(t, 0, docker.started(), "N13: a failed restore must not restart the stack")
 			assert.Contains(t, err.Error(), deliberateStopMarker)
@@ -1449,7 +1447,7 @@ func TestLaunchRestore_DeliberateStopIsInTheRunRecord(t *testing.T) {
 	seedStack(t, db, "myapp", "stop")
 	reg := NewBackupRunnerRegistry(db, svc, slog.Default())
 
-	runID, err := reg.LaunchRestore("myapp", "abc123", "/opt/stacks/myapp")
+	runID, err := reg.LaunchRestore("myapp", "abc123")
 	require.NoError(t, err)
 	reg.Stop() // waits for the exec goroutine to finish and finalise the row
 
@@ -1477,7 +1475,7 @@ func TestRunRestore_NoDeliberateStopClaimWhenNothingWasStopped(t *testing.T) {
 		svc := buildSvc(t, db, docker, runner, runner)
 		seedStack(t, db, "myapp", "stop")
 
-		err := svc.RunRestore(context.Background(), "myapp", "zzz999", "/opt/stacks/myapp", nil)
+		err := svc.RunRestore(context.Background(), "myapp", "zzz999", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "snapshot validation")
 		assert.Equal(t, 0, docker.stopped())
@@ -1494,7 +1492,7 @@ func TestRunRestore_NoDeliberateStopClaimWhenNothingWasStopped(t *testing.T) {
 		svc := buildSvc(t, db, docker, runner, runner)
 		seedStack(t, db, "myapp", "stop")
 
-		err := svc.RunRestore(context.Background(), "myapp", "abc123", "/opt/stacks/myapp", nil)
+		err := svc.RunRestore(context.Background(), "myapp", "abc123", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "stop stack")
 		assert.Equal(t, 1, docker.stopped(), "the stop was attempted")
@@ -1546,7 +1544,7 @@ func TestLaunchRestore_IncompleteRestartIsInTheRunRecord(t *testing.T) {
 			seedStack(t, db, "myapp", "stop")
 			reg := NewBackupRunnerRegistry(db, svc, slog.Default())
 
-			runID, err := reg.LaunchRestore("myapp", "abc123", "/opt/stacks/myapp")
+			runID, err := reg.LaunchRestore("myapp", "abc123")
 			require.NoError(t, err)
 			reg.Stop()
 
@@ -1636,7 +1634,7 @@ func TestRunRestore_RunStateDecidesRestart(t *testing.T) {
 			seedStack(t, db, "myapp", "stop")
 
 			out := make(chan StreamLine, 256)
-			err := svc.RunRestore(context.Background(), "myapp", "abc123", "/opt/stacks/myapp", out)
+			err := svc.RunRestore(context.Background(), "myapp", "abc123", out)
 			if tc.failRestore {
 				require.Error(t, err)
 			} else {
@@ -1671,7 +1669,7 @@ func TestRunRestore_BusyReturns409Sentinel(t *testing.T) {
 	svc.busy.Store(1)
 
 	out := make(chan StreamLine, 64)
-	err := svc.RunRestore(context.Background(), "myapp", "snap1", "/tmp", out)
+	err := svc.RunRestore(context.Background(), "myapp", "snap1", out)
 	assert.ErrorIs(t, err, ErrBackupBusy)
 }
 
@@ -1685,7 +1683,7 @@ func TestRunRestore_UnavailableWhenNoRestic(t *testing.T) {
 	svc.resticBin = ""
 
 	out := make(chan StreamLine, 64)
-	err := svc.RunRestore(context.Background(), "myapp", "snap1", "/tmp", out)
+	err := svc.RunRestore(context.Background(), "myapp", "snap1", out)
 	assert.ErrorIs(t, err, ErrBackupUnavailable)
 }
 
@@ -1693,94 +1691,10 @@ func TestRunRestore_UnavailableWhenNoRestic(t *testing.T) {
 // RunRestore — path traversal confinement (P1)
 // ============================================================
 
-// TestRunRestore_RejectsTraversalTarget asserts that a targetDir containing
-// ".." is rejected before restic.Restore is ever invoked.
-func TestRunRestore_RejectsTraversalTarget(t *testing.T) {
-	t.Parallel()
-
-	db := newBackupTestDB(t)
-	docker := &fakeDocker{statusStr: "stopped"}
-
-	// Runner always returns a matching snapshot so snapshot validation passes.
-	runner := &fakeRunner{
-		outputData: snapshotJSON("abc123", "abc123", "myapp"),
-	}
-	svc := buildSvc(t, db, docker, runner, runner)
-	seedStack(t, db, "myapp", "stop")
-
-	out := make(chan StreamLine, 128)
-	// Traversal attempt: "../../etc" must be rejected.
-	err := svc.RunRestore(context.Background(), "myapp", "abc123", "../../etc", out)
-	require.Error(t, err)
-
-	var appErr *models.AppError
-	require.ErrorAs(t, err, &appErr)
-	assert.Equal(t, models.ErrPathTraversal, appErr.Code)
-	assert.Equal(t, http.StatusBadRequest, appErr.Status)
-
-	// restic.Restore must NOT have been invoked (no "restore" call recorded).
-	for _, c := range runner.calls {
-		assert.NotEqual(t, "restore", c.Args[0],
-			"restic restore must not be called when target is rejected")
-	}
-	// Docker must not have been touched.
-	assert.Equal(t, 0, docker.stopped())
-}
-
-// TestRunRestore_RejectsTargetOutsideStackDir asserts that an absolute path
-// that escapes the stack directory is rejected, and restic.Restore is not called.
-func TestRunRestore_RejectsTargetOutsideStackDir(t *testing.T) {
-	t.Parallel()
-
-	db := newBackupTestDB(t)
-	docker := &fakeDocker{statusStr: "stopped"}
-
-	runner := &fakeRunner{
-		outputData: snapshotJSON("abc123", "abc123", "myapp"),
-	}
-	svc := buildSvc(t, db, docker, runner, runner)
-	seedStack(t, db, "myapp", "stop")
-
-	out := make(chan StreamLine, 128)
-	// Absolute path that is not within /opt/stacks/myapp.
-	err := svc.RunRestore(context.Background(), "myapp", "abc123", "/tmp/evil", out)
-	require.Error(t, err)
-
-	var appErr *models.AppError
-	require.ErrorAs(t, err, &appErr)
-	assert.Equal(t, models.ErrPathTraversal, appErr.Code)
-	assert.Equal(t, http.StatusBadRequest, appErr.Status)
-
-	for _, c := range runner.calls {
-		assert.NotEqual(t, "restore", c.Args[0],
-			"restic restore must not be called when target is rejected")
-	}
-	assert.Equal(t, 0, docker.stopped())
-}
-
-// TestRunRestore_AcceptsStackDirAsTarget asserts that passing the stack's
-// own directory as targetDir succeeds and invokes restic.Restore.
-func TestRunRestore_AcceptsStackDirAsTarget(t *testing.T) {
-	t.Parallel()
-
-	db := newBackupTestDB(t)
-	docker := &fakeDocker{statusStr: "stopped"}
-
-	runner := &fakeRunner{
-		outputData: snapshotJSON("abc123", "abc123", "myapp"),
-	}
-	svc := buildSvc(t, db, docker, runner, runner)
-	seedStack(t, db, "myapp", "hot") // restore ignores the backup policy
-
-	out := make(chan StreamLine, 128)
-	// Pass the exact stack directory — must be accepted.
-	err := svc.RunRestore(context.Background(), "myapp", "abc123", "/opt/stacks/myapp", out)
-	require.NoError(t, err)
-}
-
-// TestRunRestore_EmptyTargetUsesStackDir asserts that an empty targetDir
-// defaults to the stack's directory and the restore succeeds.
-func TestRunRestore_EmptyTargetUsesStackDir(t *testing.T) {
+// TestRunRestore_UsesStackDir asserts that a restore derives its destination
+// from the stack record and succeeds (there is no caller-supplied target,
+// agent-os-z91e.48).
+func TestRunRestore_UsesStackDir(t *testing.T) {
 	t.Parallel()
 
 	db := newBackupTestDB(t)
@@ -1793,8 +1707,7 @@ func TestRunRestore_EmptyTargetUsesStackDir(t *testing.T) {
 	seedStack(t, db, "myapp", "hot")
 
 	out := make(chan StreamLine, 128)
-	// Empty targetDir — RunRestore must derive the target from the stack record.
-	err := svc.RunRestore(context.Background(), "myapp", "abc123", "", out)
+	err := svc.RunRestore(context.Background(), "myapp", "abc123", out)
 	require.NoError(t, err)
 }
 
@@ -2615,105 +2528,43 @@ func (m *multiCallRunner) Output(ctx context.Context, name string, args []string
 }
 
 // ============================================================
-// RunRestore — happy-path confinement (Parked Follow-up 1)
+// RunRestore — happy-path destination
 // ============================================================
 
-// TestRunRestore_HappyPathConfinesTarget asserts that on a successful restore
-// the --target passed to restic equals the stack directory (when targetDir is
-// empty or the stack dir itself), and that a sub-directory within the stack dir
-// is accepted with the correct target. The injected resticMgrFactory seam makes
-// this assertion possible without a real restic binary.
-func TestRunRestore_HappyPathConfinesTarget(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		targetDir  string // input from caller
-		wantTarget string // expected --target passed to restic
-	}{
-		{
-			name:       "empty target defaults to stack dir",
-			targetDir:  "",
-			wantTarget: "/opt/stacks/myapp",
-		},
-		{
-			name:       "exact stack dir is accepted",
-			targetDir:  "/opt/stacks/myapp",
-			wantTarget: "/opt/stacks/myapp",
-		},
-		{
-			name:       "subdirectory within stack dir is accepted",
-			targetDir:  "/opt/stacks/myapp/data",
-			wantTarget: "/opt/stacks/myapp/data",
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			db := newBackupTestDB(t)
-			docker := &fakeDocker{statusStr: "stopped"}
-
-			// The runner returns the snapshot in Output (for ListSnapshots / snapshot
-			// validation) and succeeds silently on Run (for restic restore).
-			runner := &fakeRunner{
-				outputData: snapshotJSON("snap001", "snap001", "myapp"),
-			}
-			svc := buildSvc(t, db, docker, runner, runner)
-			seedStack(t, db, "myapp", "hot") // restore ignores the backup policy
-
-			out := make(chan StreamLine, 128)
-			err := svc.RunRestore(context.Background(), "myapp", "snap001", tc.targetDir, out)
-			require.NoError(t, err, "RunRestore must succeed for target %q", tc.targetDir)
-
-			// Find the "restore" call in the recorded runner calls and assert
-			// that --target equals the expected confined path.
-			var restoreCall *fakeCall
-			for i := range runner.calls {
-				if runner.calls[i].Binary == "restic" && len(runner.calls[i].Args) > 0 && runner.calls[i].Args[0] == "restore" {
-					restoreCall = &runner.calls[i]
-					break
-				}
-			}
-			require.NotNil(t, restoreCall, "restic restore must have been invoked")
-			assert.True(t, argPairContains(restoreCall.Args, "--target", tc.wantTarget),
-				"--target must be %q in restic restore args %v", tc.wantTarget, restoreCall.Args)
-			// The snapshot ref must strip the stored source prefix (the stack dir)
-			// so contents land in the target instead of nesting under it. The strip
-			// source is always the stack dir, independent of the (confined) target.
-			assert.Equal(t, "snap001:/opt/stacks/myapp", restoreCall.Args[1],
-				"restic restore ref must carry the source-prefix strip in args %v", restoreCall.Args)
-		})
-	}
-}
-
-// TestRunRestore_HappyPath_EscapingSubdirIsRejected asserts that a sub-path
-// that appears to be inside the stack dir but escapes via ".." is rejected
-// before restic is invoked. (Complements the happy-path test above.)
-func TestRunRestore_HappyPath_EscapingSubdirIsRejected(t *testing.T) {
+// TestRunRestore_RestoresIntoTheStackDir asserts that a successful restore hands
+// restic the stack directory as --target, strips the stored source prefix so
+// contents land in it rather than nested under it, and passes --delete so the
+// directory ends up matching the snapshot. The injected resticMgrFactory seam
+// makes this assertion possible without a real restic binary.
+func TestRunRestore_RestoresIntoTheStackDir(t *testing.T) {
 	t.Parallel()
 
 	db := newBackupTestDB(t)
 	docker := &fakeDocker{statusStr: "stopped"}
+	// The runner returns the snapshot in Output (for ListSnapshots / snapshot
+	// validation) and succeeds silently on Run (for restic restore).
 	runner := &fakeRunner{
 		outputData: snapshotJSON("snap001", "snap001", "myapp"),
 	}
 	svc := buildSvc(t, db, docker, runner, runner)
-	seedStack(t, db, "myapp", "hot")
+	seedStack(t, db, "myapp", "hot") // restore ignores the backup policy
 
 	out := make(chan StreamLine, 128)
-	// Looks like a sub-path but escapes via "..".
-	err := svc.RunRestore(context.Background(), "myapp", "snap001", "/opt/stacks/myapp/../other", out)
-	require.Error(t, err, "escape via .. must be rejected")
+	require.NoError(t, svc.RunRestore(context.Background(), "myapp", "snap001", out))
 
-	// restic restore must NOT have been invoked.
-	for _, c := range runner.calls {
-		if c.Binary == "restic" && len(c.Args) > 0 {
-			assert.NotEqual(t, "restore", c.Args[0], "restic restore must not be called on path escape")
+	var restoreCall *fakeCall
+	for i := range runner.calls {
+		if runner.calls[i].Binary == "restic" && len(runner.calls[i].Args) > 0 && runner.calls[i].Args[0] == "restore" {
+			restoreCall = &runner.calls[i]
+			break
 		}
 	}
+	require.NotNil(t, restoreCall, "restic restore must have been invoked")
+	assert.True(t, argPairContains(restoreCall.Args, "--target", "/opt/stacks/myapp"),
+		"--target must be the stack directory in restic restore args %v", restoreCall.Args)
+	assert.Equal(t, "snap001:/opt/stacks/myapp", restoreCall.Args[1],
+		"restic restore ref must carry the source-prefix strip in args %v", restoreCall.Args)
+	assert.Contains(t, restoreCall.Args, "--delete", "the restore matches the snapshot")
 }
 
 // ============================================================

@@ -453,7 +453,7 @@ func (reg *BackupRunnerRegistry) execBackup(dr *durableRun, stackIDs []string, d
 // LaunchRestore pre-creates a running BackupRun row, starts the restore on a
 // detached goroutine, and returns the runID. A WS client disconnect does NOT
 // cancel the restore — it runs to completion regardless.
-func (reg *BackupRunnerRegistry) LaunchRestore(stackID, snapshotID, target string) (string, error) {
+func (reg *BackupRunnerRegistry) LaunchRestore(stackID, snapshotID string) (string, error) {
 	runID := uuid.New().String()
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -472,11 +472,11 @@ func (reg *BackupRunnerRegistry) LaunchRestore(stackID, snapshotID, target strin
 	if err := reg.registerAndAdd(dr); err != nil {
 		return "", err
 	}
-	go reg.execRestore(dr, stackID, snapshotID, target)
+	go reg.execRestore(dr, stackID, snapshotID)
 	return runID, nil
 }
 
-func (reg *BackupRunnerRegistry) execRestore(dr *durableRun, stackID, snapshotID, target string) {
+func (reg *BackupRunnerRegistry) execRestore(dr *durableRun, stackID, snapshotID string) {
 	// See execBackup's defer ordering comment: declared first so it runs last.
 	defer reg.wg.Done()
 	defer close(dr.done)
@@ -489,7 +489,7 @@ func (reg *BackupRunnerRegistry) execRestore(dr *durableRun, stackID, snapshotID
 	// notes carries warnings a successful restore still owes the run record,
 	// such as a restart on an unproven premise (agent-os-gokn).
 	var notes []string
-	err := reg.svc.runRestore(ctx, stackID, snapshotID, target, out, &notes)
+	err := reg.svc.runRestore(ctx, stackID, snapshotID, out, &notes)
 	finish()
 
 	// The restore landed but the stack did not fully restart: not a failed

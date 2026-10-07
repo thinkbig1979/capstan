@@ -1175,7 +1175,6 @@ func TestRunRestore_Kickoff_Returns202(t *testing.T) {
 	req := jsonReq(t, http.MethodPost, "/api/backups/restore", map[string]interface{}{
 		"stackId":    "myapp",
 		"snapshotId": "abc12345",
-		"target":     "/opt/stacks/myapp",
 		"confirm":    true,
 	})
 	w := httptest.NewRecorder()
@@ -1199,6 +1198,59 @@ func TestRunRestore_Kickoff_Returns202(t *testing.T) {
 	// scheduler-dependent, not an invariant. Asserting it flaked in CI twice.
 	// Matches TestRunBackup_Kickoff_PersistsDurableRunRecord. See agent-os-icp.
 	assert.NotEmpty(t, run.Status)
+}
+
+// TestRunRestore_Target_Returns400 pins the removal of the restore `target`
+// parameter (agent-os-z91e.48): a caller that still sends one learns it is gone
+// instead of having it silently ignored, and no run is started for it. An empty
+// string is "no target" and still launches, on the same router and the same
+// instrument, so the 400s cannot be a broken fixture.
+func TestRunRestore_Target_Returns400(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		target     string
+		wantStatus int
+	}{
+		{"the stack directory", "/opt/stacks/myapp", http.StatusBadRequest},
+		{"a subdirectory", "/opt/stacks/myapp/data", http.StatusBadRequest},
+		{"outside the stack", "/tmp/evil", http.StatusBadRequest},
+		{"traversal", "../../etc", http.StatusBadRequest},
+		{"empty string is no target", "", http.StatusAccepted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := newBackupHandlerDB(t)
+			seedHandlerStack(t, db, "myapp")
+			svc := buildBackupSvc(t, db, true, false)
+			h := NewBackupHandler(svc, db, slog.Default())
+			t.Cleanup(h.Stop) // before db.Close(): see agent-os-80n
+			r := newBackupRouter(h)
+
+			req := jsonReq(t, http.MethodPost, "/api/backups/restore", map[string]interface{}{
+				"stackId":    "myapp",
+				"snapshotId": "abc12345",
+				"target":     tc.target,
+				"confirm":    true,
+			})
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			require.Equal(t, tc.wantStatus, w.Code, "body: %s", w.Body.String())
+			runs, err := db.GetBackupRuns(10)
+			require.NoError(t, err)
+			if tc.wantStatus == http.StatusAccepted {
+				assert.Len(t, runs, 1, "the empty-target control must start a run")
+				return
+			}
+			body := decodeBody(t, w)
+			assert.Equal(t, models.ErrValidation, body["code"])
+			assert.Contains(t, body["message"], "target parameter was removed")
+			assert.Empty(t, runs, "a rejected request must not start a run")
+		})
+	}
 }
 
 func TestRunRestore_StackNotFound_Returns404(t *testing.T) {

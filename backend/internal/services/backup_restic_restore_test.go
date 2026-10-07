@@ -252,7 +252,7 @@ func TestRunRestore_PassesProtectedPathsToRestic(t *testing.T) {
 	seedStackAt(t, db, "myapp", stack)
 
 	out, closeOut := drainStream()
-	err := svc.RunRestore(context.Background(), "myapp", "abc123", "", out)
+	err := svc.RunRestore(context.Background(), "myapp", "abc123", out)
 	closeOut()
 	require.NoError(t, err)
 
@@ -277,7 +277,7 @@ func TestRunRestore_ScanFailureRefusesBeforeStopping(t *testing.T) {
 	seedStackAt(t, db, "myapp", stack)
 
 	out, closeOut := drainStream()
-	err := svc.RunRestore(context.Background(), "myapp", "abc123", "", out)
+	err := svc.RunRestore(context.Background(), "myapp", "abc123", out)
 	closeOut()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "restore refused")
@@ -287,42 +287,28 @@ func TestRunRestore_ScanFailureRefusesBeforeStopping(t *testing.T) {
 	}
 }
 
-// TestRunRestore_SubdirectoryTargetMergesWithoutDelete: a subdirectory target
-// receives the whole stack nested inside it, so --delete there would remove the
-// subdirectory's own backed-up files. It keeps today's merge behaviour, and the
-// stack-directory target on the same fixture does get --delete.
-func TestRunRestore_SubdirectoryTargetMergesWithoutDelete(t *testing.T) {
+// TestRunRestore_DeletesWhatTheSnapshotLacks: a restore of the stack directory
+// passes --delete so files created after the snapshot do not survive it
+// (agent-os-z91e.8). There is no subdirectory target any more (agent-os-z91e.48).
+func TestRunRestore_DeletesWhatTheSnapshotLacks(t *testing.T) {
 	t.Parallel()
 
 	stack := filepath.Join(t.TempDir(), "myapp")
-	sub := filepath.Join(stack, "data")
-	require.NoError(t, os.MkdirAll(sub, 0o755))
+	require.NoError(t, os.MkdirAll(stack, 0o755))
 
-	for _, tc := range []struct {
-		target     string
-		wantDelete bool
-	}{
-		{target: sub, wantDelete: false},
-		{target: stack, wantDelete: true},
-	} {
-		db := newBackupTestDB(t)
-		docker := &fakeDocker{statusStr: "running"}
-		runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")}
-		svc := buildSvc(t, db, docker, runner, runner)
-		seedStackAt(t, db, "myapp", stack)
+	db := newBackupTestDB(t)
+	docker := &fakeDocker{statusStr: "running"}
+	runner := &fakeRunner{outputData: snapshotJSON("abc123", "abc123", "myapp")}
+	svc := buildSvc(t, db, docker, runner, runner)
+	seedStackAt(t, db, "myapp", stack)
 
-		out, closeOut := drainStream()
-		err := svc.RunRestore(context.Background(), "myapp", "abc123", tc.target, out)
-		closeOut()
-		require.NoError(t, err)
+	out, closeOut := drainStream()
+	err := svc.RunRestore(context.Background(), "myapp", "abc123", out)
+	closeOut()
+	require.NoError(t, err)
 
-		call := runner.lastCall()
-		require.Equal(t, "restore", call.Args[0])
-		require.True(t, argPairContains(call.Args, "--target", tc.target))
-		if tc.wantDelete {
-			assert.Contains(t, call.Args, "--delete", "the stack-directory restore matches the snapshot")
-		} else {
-			assert.NotContains(t, call.Args, "--delete", "a subdirectory restore merges and deletes nothing: %v", call.Args)
-		}
-	}
+	call := runner.lastCall()
+	require.Equal(t, "restore", call.Args[0])
+	require.True(t, argPairContains(call.Args, "--target", stack))
+	assert.Contains(t, call.Args, "--delete", "the stack-directory restore matches the snapshot")
 }

@@ -150,7 +150,7 @@ export function useRunBackup() {
 export function useRestore() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: { stackId: string; snapshotId: string; target?: string }) =>
+    mutationFn: (data: { stackId: string; snapshotId: string }) =>
       // Restore is destructive; the server requires an explicit confirm flag
       // (the user has already confirmed via the ConfirmDialog before we get here).
       backupApi.restore({ ...data, confirm: true }),

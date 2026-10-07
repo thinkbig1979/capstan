@@ -481,14 +481,18 @@ history. It never reached `restic restore`: the run only restores an id that
 restic lists for the stack, and still fails for a well-formed id it does not
 list.
 
-A restore into the stack directory (no `target`, or `target` equal to it)
-deletes files that are not in the snapshot, except mounted filesystems and
-`CACHEDIR.TAG` directories, which backups never include (see
+A restore always goes into the stack's own directory. It deletes files that
+are not in the snapshot, except mounted filesystems and `CACHEDIR.TAG`
+directories, which backups never include (see
 [Restoring a backup](../how-to/restore-a-backup.md#restore)). If part of the
 directory cannot be read for that check, the run fails with "restore refused"
-before the stack is stopped. A `target` that is a subdirectory of the stack
-receives the whole stack's snapshot inside it, merged with what is there, and
-nothing in it is deleted.
+before the stack is stopped.
+
+The request has no `target` field. A request that sends a non-empty `target`
+answers **400 `VALIDATION_ERROR`** ("The target parameter was removed") and
+starts no run (agent-os-z91e.48). Before 2026-10-07 it restored the whole
+stack's snapshot into a subdirectory of the stack, merged with what was there,
+and deleted nothing.
 
 ## Keeping this page honest
 

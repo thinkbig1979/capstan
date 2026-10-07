@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,7 +18,6 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
-	"github.com/thinkbig1979/capstan/backend/internal/pathutil"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
 
@@ -1479,10 +1477,9 @@ func (s *BackupService) RunRestore(
 	ctx context.Context,
 	stackID string,
 	snapshotID string,
-	targetDir string,
 	out chan<- StreamLine,
 ) error {
-	return s.runRestore(ctx, stackID, snapshotID, targetDir, out, nil)
+	return s.runRestore(ctx, stackID, snapshotID, out, nil)
 }
 
 // runRestore is RunRestore that also appends, to notes when non-nil, the
@@ -1491,7 +1488,6 @@ func (s *BackupService) runRestore(
 	ctx context.Context,
 	stackID string,
 	snapshotID string,
-	targetDir string,
 	out chan<- StreamLine,
 	notes *[]string,
 ) (err error) {
@@ -1523,35 +1519,9 @@ func (s *BackupService) runRestore(
 	}
 	stack := *stackRecord
 
-	// P1: confinement — the restore target must be the stack's own directory.
-	// If the caller supplied a targetDir we validate it is identical to (or
-	// contained within) the stack's directory. Any path that escapes the stack
-	// directory is rejected as a path traversal attempt.
+	// A restore always goes into the stack's own directory; there is no
+	// caller-supplied target (agent-os-z91e.48).
 	stackDir := filepath.Clean(stack.Directory)
-	restoreTarget := stackDir // default: always restore into the stack directory
-
-	if targetDir != "" {
-		cleaned := filepath.Clean(targetDir)
-		// Reject relative paths that contain ".." components before cleaning.
-		if strings.Contains(targetDir, "..") {
-			return models.NewAppError(
-				http.StatusBadRequest,
-				models.ErrPathTraversal,
-				fmt.Sprintf("restore target %q contains path traversal", targetDir),
-			)
-		}
-		// Symlink-aware containment: a symlink inside the stack dir pointing
-		// elsewhere must not let `restic restore --target` write outside it (H1).
-		contained, err := pathutil.IsContained(stackDir, cleaned)
-		if err != nil || !contained { //geterrors:ignore fails closed on path traversal: a containment check that errored and one that returned false both refuse the restore target, which is the safe direction
-			return models.NewAppError(
-				http.StatusBadRequest,
-				models.ErrPathTraversal,
-				fmt.Sprintf("restore target %q is outside stack directory %q", targetDir, stackDir),
-			)
-		}
-		restoreTarget = cleaned
-	}
 
 	// Acquire per-stack lock.
 	lockToken, lockErr := s.opLock.Acquire(stackID, OpKindRestore)
@@ -1560,23 +1530,16 @@ func (s *BackupService) runRestore(
 	}
 	defer s.opLock.Release(stackID, lockToken)
 
-	// agent-os-z91e.8: a restore of the stack directory runs with --delete, so
-	// it ends up matching the snapshot. A subdirectory target receives the whole
-	// stack nested inside it (see the Restore call below), so deleting there
-	// would remove the subdirectory's own files: it keeps merging instead.
+	// agent-os-z91e.8: the restore runs with --delete, so the directory ends up
+	// matching the snapshot.
 	//
-	// Before a --delete restore, find what the backup never covered (other
-	// filesystems, cache directories) and keep restic off it. Done before the
-	// stop: a scan that cannot finish refuses the restore with the stack
-	// untouched, rather than risk deleting what it could not see.
-	deleteExtra := restoreTarget == stackDir
-	var protected []string
-	if deleteExtra {
-		var scanErr error
-		protected, scanErr = restoreProtectedPaths(stackDir, restoreTarget)
-		if scanErr != nil {
-			return fmt.Errorf("restore refused: %w", scanErr)
-		}
+	// Before it, find what the backup never covered (other filesystems, cache
+	// directories) and keep restic off it. Done before the stop: a scan that
+	// cannot finish refuses the restore with the stack untouched, rather than
+	// risk deleting what it could not see.
+	protected, scanErr := restoreProtectedPaths(stackDir, stackDir)
+	if scanErr != nil {
+		return fmt.Errorf("restore refused: %w", scanErr)
 	}
 
 	// Determine if the stack was running. As in backupStack, a failed read is a
@@ -1607,10 +1570,10 @@ func (s *BackupService) runRestore(
 		if err != nil {
 			explanation := fmt.Sprintf(
 				"stack left stopped deliberately so you can inspect %s and retry (not auto-restarting over a possibly partial restore)",
-				restoreTarget)
+				stackDir)
 			stream(out, "error", fmt.Sprintf("[%s] restore failed; %s", stackID, explanation))
 			s.logger.Error("restore failed; stack left stopped deliberately",
-				"stack", stackID, "target", restoreTarget, "error", err)
+				"stack", stackID, "target", stackDir, "error", err)
 			err = fmt.Errorf("%w; %s", err, explanation)
 			return
 		}
@@ -1648,10 +1611,10 @@ func (s *BackupService) runRestore(
 	}
 	stopApplied = true
 
-	stream(out, "info", fmt.Sprintf("[%s] restoring snapshot %s to %s", stackID, snapshotID, restoreTarget))
+	stream(out, "info", fmt.Sprintf("[%s] restoring snapshot %s to %s", stackID, snapshotID, stackDir))
 	// stackDir is the snapshot's stored source path; pass it so restic strips that
-	// prefix and restores contents into restoreTarget rather than nesting them.
-	if err := restic.Restore(ctx, snapshotID, stackDir, restoreTarget, deleteExtra, protected, out); err != nil {
+	// prefix and restores contents into stackDir rather than nesting them.
+	if err := restic.Restore(ctx, snapshotID, stackDir, stackDir, true, protected, out); err != nil {
 		return fmt.Errorf("restic restore: %w", err)
 	}
 
@@ -1659,7 +1622,7 @@ func (s *BackupService) runRestore(
 
 	s.actions.Log("system", &stackID, ActionRestore, map[string]interface{}{
 		"snapshot_id": snapshotID,
-		"target_dir":  restoreTarget,
+		"target_dir":  stackDir,
 	})
 
 	return nil
