@@ -45,6 +45,7 @@ fix: file them.
 6. **Path containment** uses `IsContained` (`backend/internal/pathutil/pathutil.go`)
    or `MatchStacksRoot` (`backend/internal/config/config.go`), never
    `strings.HasPrefix` or a lexical `filepath.Rel` check on paths.
+   (CI-guarded: `scripts/check-path-containment.sh`.)
 7. **Files under a stack directory** are written by temp file plus rename, as
    `writeEnvFileAtomic` (`backend/internal/handlers/env.go`) does, never by a
    bare `os.WriteFile`.
@@ -62,6 +63,7 @@ fix: file them.
 12. **Network position is not identity.** A bypass keyed on the peer address
     also checks the Host header. Trusted-proxy lists name the proxy, and
     templates and examples ship the narrow value, not all of RFC 1918.
+    (CI-guarded: `scripts/check-trusted-networks.sh`.)
 13. **A setting that holds or can embed a credential** is encrypted in the PR
     that adds it, by joining `sensitiveSettingKeys`
     (`backend/internal/database/settings.go`).

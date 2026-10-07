@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -821,6 +821,38 @@ check_path_containment() {
   return 1
 }
 
+# check_trusted_networks delegates to scripts/check-trusted-networks.sh: no
+# template or doc recommends all of RFC 1918 as TRUSTED_NETWORKS or
+# AUTH_DISABLED_ALLOWED_NETWORKS (agent-os-qags.10, safe-defaults rule 12).
+# Self-test first, same reasoning as ws-registration.
+check_trusted_networks() {
+  local script="$SCRIPT_DIR/check-trusted-networks.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: trusted-networks - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: trusted-networks - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: trusted-networks - ${self#trusted-networks }; ${out#check-trusted-networks: }"
+    return 0
+  fi
+  echo "FAIL: trusted-networks - a template or doc recommends all of RFC 1918 as a trusted network (ship the narrow value):"
+  echo "$out"
+  return 1
+}
+
 # check_ws_read_deadline delegates to scripts/check-ws-read-deadline.sh: no
 # *_test.go under backend/internal/handlers/ bounds a wait with a fixed
 # wall-clock duration; test waits use the absolute hangGuardDeadline(t)
@@ -985,6 +1017,7 @@ Valid check names:
   getter-errors  backend/tools/geterrors exists and backend.yml still runs it as a vettool
   ws-read-deadline no handlers test bounds a wait with a fixed wall-clock duration instead of hangGuardDeadline(t)
   path-containment no lexical path containment check outside backend/internal/pathutil/
+  trusted-networks no template or doc recommends all of RFC 1918 as TRUSTED_NETWORKS
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -1007,6 +1040,7 @@ run_check() {
     getter-errors) check_getter_errors ;;
     ws-read-deadline) check_ws_read_deadline ;;
     path-containment) check_path_containment ;;
+    trusted-networks) check_trusted_networks ;;
     *) return 2 ;;
   esac
 }
