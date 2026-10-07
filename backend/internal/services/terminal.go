@@ -143,10 +143,14 @@ func (s *TerminalService) ResizeSession(sessionID string, cols, rows uint16) err
 }
 
 func (s *TerminalService) CloseSession(sessionID string) {
+	// Claimed and removed under the lock, terminated after it: the lookup and
+	// the delete share one critical section, so a racing reaper either claims
+	// the session first or never sees it, and only one caller terminates it.
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	session := s.sessions[sessionID]
+	delete(s.sessions, sessionID)
+	s.mu.Unlock()
+
 	if session == nil {
 		return
 	}
@@ -155,13 +159,15 @@ func (s *TerminalService) CloseSession(sessionID string) {
 	// `defer h.terminal.CloseSession(session.ID)`), so this is the natural
 	// origination point for one; reapExpiredSessions instead threads through
 	// the context StartReaper was given.
-	s.terminateSession(context.Background(), sessionID, session)
+	s.terminateSession(context.Background(), session)
 }
 
 // terminateSession kills a session's local `docker exec` CLI process and pty,
-// reaps the shell (and any descendants) running INSIDE the container, and
-// removes it from the map. Callers must hold s.mu.
-func (s *TerminalService) terminateSession(ctx context.Context, sessionID string, session *TerminalSession) {
+// and reaps the shell (and any descendants) running INSIDE the container.
+// Callers must already have removed the session from the map, and must NOT
+// hold s.mu: the in-container reap can take up to 5s, and every other
+// session's UpdateActivity waits on s.mu (agent-os-z91e.7).
+func (s *TerminalService) terminateSession(ctx context.Context, session *TerminalSession) {
 	if session.Cmd != nil && session.Cmd.Process != nil {
 		// Best-effort; the session is being torn down regardless, and a
 		// failed kill here (process already exited) isn't actionable. This
@@ -174,7 +180,6 @@ func (s *TerminalService) terminateSession(ctx context.Context, sessionID string
 		session.Pty.Close()
 	}
 	s.reapContainerShell(ctx, session.ContainerName, session.ID)
-	delete(s.sessions, sessionID)
 }
 
 // reapContainerShell SIGKILLs the shell CreateSession spawned inside
@@ -260,15 +265,22 @@ func (s *TerminalService) StartReaper(ctx context.Context) {
 }
 
 func (s *TerminalService) reapExpiredSessions(ctx context.Context) {
+	// Collected and removed under the lock, terminated after it, for the
+	// same reason as CloseSession.
+	var expired []*TerminalSession
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	now := time.Now()
 	for id, session := range s.sessions {
 		if now.Sub(session.lastActivity) > SessionTimeout {
-			slog.Info("Reaping inactive terminal session", "session_id", id, "stack_id", session.StackID)
-			s.terminateSession(ctx, id, session)
+			expired = append(expired, session)
+			delete(s.sessions, id)
 		}
+	}
+	s.mu.Unlock()
+
+	for _, session := range expired {
+		slog.Info("Reaping inactive terminal session", "session_id", session.ID, "stack_id", session.StackID)
+		s.terminateSession(ctx, session)
 	}
 }
 
