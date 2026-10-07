@@ -19,7 +19,9 @@
 # followed by a comparison: =, !=, <>, IN, LIKE or IS (any case), in any
 # string form. The check is line-based, so a multi-line query
 # (`WHERE\n  project_name = ?`) is seen on the line that holds the filter.
-# The enclosing function is the last `func` line above the hit.
+# The enclosing function is the last `func` line above the hit, until that
+# function's closing `}` at column 0 (gofmt layout); a line after it, such as
+# a package-level var, is in no function.
 #
 # LIMIT. It cannot see:
 #   - a column name built at runtime ("project_" + col, fmt.Sprintf("%s = ?", c));
@@ -73,6 +75,10 @@ scan_files() {
         bad = 1
       }
     }
+    # gofmt puts a top-level func'"'"'s closing brace at column 0. Ending the
+    # attribution there keeps a package-level var or const after the allowed
+    # function from inheriting its name.
+    /^}/ { fn = "" }
     END { exit bad ? 1 : 0 }
   ' "$@"
 }
@@ -179,6 +185,11 @@ selftest() {
   d=$(fresh); plant "$d" backend/internal/database/stacks.go '	_ = `SELECT id FROM stacks WHERE project_name = ?`'
   selftest_case "second lookup in stacks.go" 1 "backend/internal/database/stacks.go:[0-9]+:.*project_name = \?" "$d"
 
+  # RED: a package-level query after the allowed function's closing brace
+  # is not inside it (the attribution must end at the brace).
+  d=$(fresh); printf '\nvar stackByNameQuery = `SELECT id FROM stacks WHERE project_name = ?`\n' >> "$d/backend/internal/database/stacks.go"
+  selftest_case "top-level var after the allowed func" 1 "stacks.go:[0-9]+:var stackByNameQuery" "$d"
+
   # RED: an interpreted string in another file, no spaces around =.
   d=$(fresh); mkdir -p "$d/backend/internal/handlers"
   printf 'package handlers\n' > "$d/backend/internal/handlers/x.go"
@@ -219,7 +230,7 @@ selftest() {
     echo "FAIL: project-name-lookup self-test - $ST_FAILS of $ST_RUN control(s) failed"
     return 1
   fi
-  echo "project-name-lookup self-test: $ST_RUN control(s) passed (2 green, 6 red, 2 error)"
+  echo "project-name-lookup self-test: $ST_RUN control(s) passed (2 green, 7 red, 2 error)"
   return 0
 }
 
