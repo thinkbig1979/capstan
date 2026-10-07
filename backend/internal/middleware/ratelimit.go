@@ -29,6 +29,14 @@ type RateLimiter struct {
 	// check() can refresh or evictLRU can pop in O(1) instead of scanning.
 	accessOrder *list.List
 	accessIndex map[string]*list.Element
+
+	// stop ends the cleanup goroutine NewRateLimiter starts (safe-defaults
+	// rule 3: a boot-time goroutine exits when told to). Closed once, by Stop.
+	// cleanupDone is closed by that goroutine as it returns; it is the seam a
+	// test waits on to prove the goroutine is gone (agent-os-z91e.17).
+	stop        chan struct{}
+	stopOnce    sync.Once
+	cleanupDone chan struct{}
 }
 
 type userRequests struct {
@@ -78,6 +86,8 @@ func NewRateLimiter(window time.Duration, maxReqs int) *RateLimiter {
 		maxEntries:  10000,
 		accessOrder: list.New(),
 		accessIndex: make(map[string]*list.Element, 100),
+		stop:        make(chan struct{}),
+		cleanupDone: make(chan struct{}),
 	}
 
 	go rl.cleanup()
@@ -208,11 +218,24 @@ func evictLRU(rl *RateLimiter) {
 	}
 }
 
+// Stop ends the limiter's cleanup goroutine. It is idempotent and does not
+// disable the limiter: check() keeps counting and evicting by LRU, expired
+// entries just stop being pruned in the background.
+func (rl *RateLimiter) Stop() {
+	rl.stopOnce.Do(func() { close(rl.stop) })
+}
+
 func (rl *RateLimiter) cleanup() {
+	defer close(rl.cleanupDone)
 	ticker := time.NewTicker(rl.window)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-ticker.C:
+		case <-rl.stop:
+			return
+		}
 		rl.mu.Lock()
 		for key, ur := range rl.requests {
 			now := time.Now()
@@ -342,6 +365,17 @@ func newCredentialLimiters() *credentialLimiters {
 	}
 }
 
+// stop ends the cleanup goroutine of all three layers. Nil-safe, so it can run
+// before InitRateLimiters has.
+func (cl *credentialLimiters) stop() {
+	if cl == nil {
+		return
+	}
+	cl.perIP.Stop()
+	cl.perIPAccount.Stop()
+	cl.perAccount.Stop()
+}
+
 // authLimiters serves login and setup, keyed on the submitted username.
 // passwordCheckLimiters serves the authenticated routes that re-check the
 // current password, keyed on the session's userID (agent-os-n4ca.3). They are
@@ -420,6 +454,9 @@ func InitRateLimiters(apiMaxReqs int) {
 			strconv.Itoa(apiMaxReqs) + " (check RATE_LIMIT_API_PER_MIN and config.DefaultAPIRateLimitPerMin)")
 	}
 
+	// A second call (tests do this) replaces the set; stop the old goroutines
+	// first so they are not orphaned (agent-os-z91e.17).
+	StopRateLimiters()
 	authLimiters = newCredentialLimiters()
 	passwordCheckLimiters = newCredentialLimiters()
 	apiRateLimiter = NewRateLimiter(1*time.Minute, apiMaxReqs)
@@ -430,6 +467,19 @@ func InitRateLimiters(apiMaxReqs int) {
 		"password_check", "same budgets as auth, separate buckets",
 		"api", strconv.Itoa(apiMaxReqs)+"/min",
 	)
+}
+
+// StopRateLimiters ends the cleanup goroutines of every process-wide limiter:
+// the three login layers, the three password-check layers and the API limiter.
+// main.go calls it at shutdown. It is idempotent, and the limiters keep
+// answering afterwards (see RateLimiter.Stop), so a request still in flight
+// during shutdown is not affected.
+func StopRateLimiters() {
+	authLimiters.stop()
+	passwordCheckLimiters.stop()
+	if apiRateLimiter != nil {
+		apiRateLimiter.Stop()
+	}
 }
 
 // RateLimitAuth limits the auth endpoints in three layers: per (client IP,

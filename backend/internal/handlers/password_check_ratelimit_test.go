@@ -36,6 +36,7 @@ func newPasswordCheckRouter(t *testing.T, db *database.DB) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	middleware.InitRateLimiters(config.DefaultAPIRateLimitPerMin)
+	t.Cleanup(middleware.StopRateLimiters)
 
 	const secret = "test-secret-key-32-chars-long!!!"
 	router := gin.New()

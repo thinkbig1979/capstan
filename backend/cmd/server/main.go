@@ -778,6 +778,10 @@ func main() {
 
 	updateJobManager.Stop()
 
+	// Ends the seven rate-limiter cleanup goroutines. The limiters keep
+	// answering, so requests still in flight are unaffected (agent-os-z91e.17).
+	middleware.StopRateLimiters()
+
 	backupSvc.StopScheduler()
 
 	watcherService.Stop()

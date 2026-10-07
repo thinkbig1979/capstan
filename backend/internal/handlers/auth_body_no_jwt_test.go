@@ -105,6 +105,7 @@ func newAuthBodyEnv(t *testing.T) *authBodyEnv {
 	// so repeated -count runs never see a 429 from the previous run. This run
 	// spends 4 of the 5 password-check attempts one account may make in a minute.
 	middleware.InitRateLimiters(config.DefaultAPIRateLimitPerMin)
+	t.Cleanup(middleware.StopRateLimiters)
 
 	db, err := database.NewWithMigrations(":memory:")
 	require.NoError(t, err)
