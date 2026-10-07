@@ -216,6 +216,23 @@ func (m *ResticManager) resticEnv(passwordFile string) []string {
 	}
 }
 
+// runDrained runs a command whose output nobody reads and throws the lines
+// away. It owns the channel: the drain goroutine exits when out is closed, and
+// the close is deferred so a failed or panicking Run cannot strand it. Three
+// probes used to start the drain by hand and close out only after Run
+// succeeded, so every failed probe leaked one goroutine (agent-os-z91e.2).
+// Every drain-and-discard call in this package goes through here; a guard test
+// fails on a hand-written one.
+func runDrained(ctx context.Context, runner commandRunner, name string, args, env []string) error {
+	out := make(chan StreamLine, 32)
+	defer close(out)
+	go func() {
+		for range out {
+		}
+	}()
+	return runner.Run(ctx, name, args, env, out)
+}
+
 // CheckRepository runs `restic snapshots --quiet` to verify the repository
 // is accessible. Returns nil on success.
 func (m *ResticManager) CheckRepository(ctx context.Context) error {
@@ -228,16 +245,9 @@ func (m *ResticManager) CheckRepository(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	out := make(chan StreamLine, 32)
-	go func() {
-		for range out {
-		}
-	}()
-
-	if err := m.runner.Run(ctx, "restic", []string{"snapshots", "--quiet"}, m.resticEnv(pwFile), out); err != nil {
+	if err := runDrained(ctx, m.runner, "restic", []string{"snapshots", "--quiet"}, m.resticEnv(pwFile)); err != nil {
 		return fmt.Errorf("cannot access restic repository: %w", err)
 	}
-	close(out)
 	return nil
 }
 
@@ -336,16 +346,9 @@ func (m *ResticManager) EnsureRepository(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	out := make(chan StreamLine, 32)
-	go func() {
-		for range out {
-		}
-	}()
-
-	if err := m.runner.Run(ctx, "restic", []string{"init"}, m.resticEnv(pwFile), out); err != nil {
+	if err := runDrained(ctx, m.runner, "restic", []string{"init"}, m.resticEnv(pwFile)); err != nil {
 		return fmt.Errorf("restic init failed: %w", err)
 	}
-	close(out)
 	return nil
 }
 
