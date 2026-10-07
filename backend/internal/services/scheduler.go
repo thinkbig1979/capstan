@@ -914,8 +914,16 @@ func (s *SchedulerService) applyNow(ctx context.Context) bool {
 	}
 
 	s.logger.Info("Scheduled auto-update apply starting", "cached_updates", len(updates))
-	s.RunAutoUpdates(applyCtx, s.pruneVanishedTargets(applyCtx, updates))
+	live, unresolved := s.pruneVanishedTargets(applyCtx, updates)
+	s.runAutoUpdates(applyCtx, live, unresolved)
 	return true
+}
+
+// unresolvedUpdate is a cached update pruneVanishedTargets left out of a pass
+// because its container could not be inspected, with the inspect error.
+type unresolvedUpdate struct {
+	update models.CachedUpdate
+	err    error
 }
 
 // pruneVanishedTargets drops cached rows whose container no longer exists, and
@@ -938,18 +946,22 @@ func (s *SchedulerService) applyNow(ctx context.Context) bool {
 // A container we cannot resolve for any OTHER reason (daemon unreachable,
 // timeout) is neither applied nor evicted: it is left in the cache for the next
 // run, because evicting on a daemon outage would empty the cache wholesale.
-func (s *SchedulerService) pruneVanishedTargets(ctx context.Context, updates []models.CachedUpdate) []models.CachedUpdate {
+// Those are returned as unresolved, so the pass can give each one with a
+// policy a 'skipped' history row (agent-os-z91e.47); policies are not read
+// here, so this function cannot tell which of them would have run.
+func (s *SchedulerService) pruneVanishedTargets(ctx context.Context, updates []models.CachedUpdate) ([]models.CachedUpdate, []unresolvedUpdate) {
 	inspector, ok := s.docker.(containerInspector)
 	if !ok {
 		// Cannot happen in production: the compile-time assertion above pins
 		// *DockerService as a containerInspector, and it is the only checker
 		// main.go builds a scheduler with. Reachable only from a test double.
 		s.logger.Warn("Update checker cannot inspect containers; applying cached updates without a freshness check")
-		return updates
+		return updates, nil
 	}
 
 	live := make([]models.CachedUpdate, 0, len(updates))
-	evicted, unresolved := 0, 0
+	var unresolved []unresolvedUpdate
+	evicted := 0
 
 	for _, update := range updates {
 		_, err := inspector.InspectContainer(ctx, update.ContainerID)
@@ -967,18 +979,18 @@ func (s *SchedulerService) pruneVanishedTargets(ctx context.Context, updates []m
 			}
 
 		default:
-			unresolved++
+			unresolved = append(unresolved, unresolvedUpdate{update: update, err: err})
 			s.logger.Warn("Skipping cached update: container could not be inspected",
 				"container", update.ContainerName, "containerID", update.ContainerID, "error", err)
 		}
 	}
 
-	if evicted > 0 || unresolved > 0 {
+	if evicted > 0 || len(unresolved) > 0 {
 		s.logger.Info("Scheduled auto-update apply: cache re-resolved",
-			"live", len(live), "evicted", evicted, "unresolved", unresolved)
+			"live", len(live), "evicted", evicted, "unresolved", len(unresolved))
 	}
 
-	return live
+	return live, unresolved
 }
 
 // notStartedCause names why a pass's ended ctx left items unstarted: its own
@@ -990,24 +1002,32 @@ func notStartedCause(ctx context.Context) string {
 	return "shutdown"
 }
 
+// NewSkippedUpdateEntry builds a 'skipped' update_history row for an update
+// the app decided not to run, with reason as its error_message; the caller
+// fills in which container, image and stack it is. completed_at is set, equal
+// to started_at, because retention and the manual clear both delete by
+// completed_at: a row without one would never age out. Shared by the
+// auto-update pass and the manual stack update (agent-os-z91e.47).
+func NewSkippedUpdateEntry(trigger, reason string) *models.UpdateHistoryEntry {
+	now := time.Now().Format(time.RFC3339)
+	return &models.UpdateHistoryEntry{
+		ID:           uuid.New().String(),
+		Status:       "skipped",
+		Trigger:      trigger,
+		StartedAt:    now,
+		CompletedAt:  &now,
+		ErrorMessage: &reason,
+	}
+}
+
 // recordSkippedUpdate writes the 'skipped' update_history row for an item
-// RunAutoUpdates did not run (agent-os-z91e.32). completed_at is set, equal to
-// started_at, because retention and the manual clear both delete by
-// completed_at: a row without one would never age out. A failed insert is only
+// RunAutoUpdates did not run (agent-os-z91e.32). A failed insert is only
 // logged; the skip itself has already been decided and counted.
 func (s *SchedulerService) recordSkippedUpdate(update models.CachedUpdate, reason string) {
-	now := time.Now().Format(time.RFC3339)
-	entry := &models.UpdateHistoryEntry{
-		ID:            uuid.New().String(),
-		ContainerID:   update.ContainerID,
-		ContainerName: update.ContainerName,
-		Image:         update.ImageRef,
-		Status:        "skipped",
-		Trigger:       "auto",
-		StartedAt:     now,
-		CompletedAt:   &now,
-		ErrorMessage:  &reason,
-	}
+	entry := NewSkippedUpdateEntry("auto", reason)
+	entry.ContainerID = update.ContainerID
+	entry.ContainerName = update.ContainerName
+	entry.Image = update.ImageRef
 	if update.StackID != "" {
 		entry.StackID = &update.StackID
 	}
@@ -1028,6 +1048,14 @@ func (s *SchedulerService) recordSkippedUpdate(update models.CachedUpdate, reaso
 // Eviction (finding #4): on success or no_change, the cached_updates row is
 // deleted so the frontend list converges without waiting for the next scan.
 func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.CachedUpdate) {
+	s.runAutoUpdates(ctx, updates, nil)
+}
+
+// runAutoUpdates is RunAutoUpdates plus the items the scheduled path's
+// freshness check could not inspect. Those are not applied; each one that has
+// a policy, so would otherwise have run, gets a 'skipped' row once the
+// policies are read (agent-os-z91e.47).
+func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.CachedUpdate, unresolved []unresolvedUpdate) {
 	// Bounded here rather than by each caller, so no path can apply without a
 	// deadline: the immediate path used to pass the scheduler's cancel-only
 	// context, and a hung pull then held the stack's lock until restart
@@ -1088,6 +1116,23 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 		}
 	}
 
+	policyFor := func(update models.CachedUpdate) (*models.AutoUpdatePolicy, bool) {
+		if p, ok := containerPolicies[update.ContainerID]; ok {
+			return p, true
+		}
+		if update.StackID != "" {
+			p, ok := stackPolicies[update.StackID]
+			return p, ok
+		}
+		return nil, false
+	}
+
+	for _, u := range unresolved {
+		if _, ok := policyFor(u.update); ok {
+			s.recordSkippedUpdate(u.update, "skipped: the container could not be inspected ("+u.err.Error()+"); retried next pass")
+		}
+	}
+
 	succeeded := 0
 	failed := 0
 	skipped := 0
@@ -1101,13 +1146,7 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 	lookupSkipped := 0
 
 	for _, update := range updates {
-		policy, hasPolicy := containerPolicies[update.ContainerID]
-		if !hasPolicy {
-			if update.StackID != "" {
-				policy, hasPolicy = stackPolicies[update.StackID]
-			}
-		}
-
+		policy, hasPolicy := policyFor(update)
 		if !hasPolicy {
 			skipped++
 			continue

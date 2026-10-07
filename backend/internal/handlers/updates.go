@@ -562,6 +562,20 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 
 				// Fail-fast: surface exactly which services were left un-updated.
 				skipped := serviceNames[i+1:]
+				// Each also gets a 'skipped' history row, so the Updates
+				// history shows them and not only the job result
+				// (agent-os-z91e.47).
+				for _, rest := range outdatedCopy[i+1:] {
+					skip := services.NewSkippedUpdateEntry("manual",
+						fmt.Sprintf("not started: service %q failed earlier in this stack update", svc.ServiceName))
+					skip.ContainerName = rest.ServiceName
+					skip.Image = rest.Image
+					skip.StackID = &stackIDStr
+					skip.StackName = &stackNameStr
+					if histErr := db.InsertUpdateHistory(skip); histErr != nil {
+						slog.Warn("Failed to insert skipped update history", "service", rest.ServiceName, "error", histErr)
+					}
+				}
 				emit(services.LogLine{Ts: time.Now().UTC(), Stream: services.StreamStderr,
 					Text: fmt.Sprintf("✗ Service %q failed to update: %v", svc.ServiceName, ar.Reason)})
 				if len(skipped) > 0 {
