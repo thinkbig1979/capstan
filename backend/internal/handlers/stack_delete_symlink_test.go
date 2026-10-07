@@ -98,3 +98,27 @@ func TestStacksHandler_Delete_PerFileRemovalRefusesStackDirLinkedOutsideRoot(t *
 	assert.GreaterOrEqual(t, w.Code, 400, "body=%s", w.Body.String())
 	assert.FileExists(t, filepath.Join(target, "compose.api.yaml"), "nothing outside the stacks root may be deleted")
 }
+
+// A stack in an EXTRA stacks dir with a surviving sibling takes the per-file
+// branch, which checks the stack dir against the root Delete's guard matched.
+// That root must be the extra dir, not the main one, or every such delete is
+// refused (agent-os-z91e.22).
+func TestStacksHandler_Delete_PerFileRemovalInExtraStacksDir(t *testing.T) {
+	f := newDeleteSiblingFixture(t)
+	extra := t.TempDir()
+	f.cfg.ExtraStacksDirs = []string{extra}
+
+	stackDir := filepath.Join(extra, "shared")
+	require.NoError(t, os.MkdirAll(stackDir, 0o755))
+	for _, name := range []string{"compose.yaml", "compose.api.yaml"} {
+		require.NoError(t, os.WriteFile(filepath.Join(stackDir, name), []byte(deleteSiblingCompose), 0o644))
+	}
+	require.NoError(t, f.scanner.ScanDirectoryWithRoot(stackDir, extra))
+	id := f.stackIDFor(t, stackDir, "compose.api.yaml")
+
+	w := f.delete(t, id)
+
+	assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.NoFileExists(t, filepath.Join(stackDir, "compose.api.yaml"), "the deleted stack's own compose file goes")
+	assert.FileExists(t, filepath.Join(stackDir, "compose.yaml"), "the surviving sibling's compose file stays")
+}
