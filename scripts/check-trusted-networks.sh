@@ -26,8 +26,9 @@
 # LIMIT. Same line only. A YAML block value or a continued line with the
 # ranges on the line after the variable name is invisible to this check.
 #
-# SCOPE. docker-compose*.yaml, .env.example, README.md and docs/ under the
-# scanned directory. A single narrow range (e.g. 172.18.0.0/16) is fine.
+# SCOPE. docker-compose*.yaml, README.md, docs/ and every env template
+# (.env.example, */.env.example, *.env.example at any depth: backend/.env.example
+# is what the dev compose copies to backend/.env) under the scanned directory. A single narrow range (e.g. 172.18.0.0/16) is fine.
 #
 # USAGE
 #   check-trusted-networks.sh              scan this repo
@@ -49,15 +50,33 @@ usage() {
   echo "Usage: $(basename "$0") [DIR | --self-test]" >&2
 }
 
+# env_templates DIR prints every env template under DIR, relative to DIR: the
+# tracked ones when DIR is the root of a git tree (so node_modules is never
+# walked), otherwise a find that prunes node_modules and .git. Both arms match
+# .env.example, */.env.example and *.env.example at any depth.
+env_templates() {
+  local dir="$1" top
+  top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "$top" ] && [ "$(cd "$top" && pwd -P)" = "$(cd "$dir" && pwd -P)" ]; then
+    git -C "$dir" ls-files -- '.env.example' '*/.env.example' '*.env.example'
+  else
+    (cd "$dir" && command find . \( -name node_modules -o -name .git \) -prune -o \
+      -type f \( -name '.env.example' -o -name '*.env.example' \) -print | sed 's|^\./||')
+  fi
+}
+
 check_dir() {
   local dir="$1" f
   [ -d "$dir" ] || { echo "check-trusted-networks: $dir is not a directory" >&2; return 2; }
 
   local files=()
-  for f in "$dir"/docker-compose*.yaml "$dir/.env.example" "$dir/README.md"; do
-    [ -f "$f" ] && files+=("$f")
+  for f in "$dir"/docker-compose*.yaml "$dir/README.md"; do
+    [ -f "$f" ] && files+=("${f#"$dir"/}")
   done
-  [ -d "$dir/docs" ] && files+=("$dir/docs")
+  while IFS= read -r f; do
+    [ -n "$f" ] && files+=("$f")
+  done < <(env_templates "$dir")
+  [ -d "$dir/docs" ] && files+=("docs")
   if [ "${#files[@]}" -eq 0 ]; then
     echo "check-trusted-networks: no scoped files under $dir" >&2
     return 2
@@ -65,7 +84,7 @@ check_dir() {
 
   local out
   out=$(cd "$dir" && command grep -rnE -e "$NAMES.*$RANGES" -e "$RANGES.*$NAMES" \
-    -- $(for f in "${files[@]}"; do echo "${f#"$dir"/}"; done) 2>&1)
+    -- "${files[@]}" 2>&1)
   local status=$?
   case "$status" in
     0)
@@ -151,6 +170,19 @@ selftest() {
   echo "Use 10.0.0.0/8 for TRUSTED_NETWORKS on a LAN." >> "$d/README.md"
   selftest_case "range before name" 1 "README.md:[0-9]+:Use 10" "$d"
 
+  # RED: a nested env template (backend/.env.example, which the dev compose copies).
+  d=$(fresh)
+  mkdir -p "$d/backend"
+  echo "# TRUSTED_NETWORKS=172.18.0.0/16" > "$d/backend/.env.example"
+  selftest_case "clean nested env template" 0 "0 violations" "$d"
+  echo "# TRUSTED_NETWORKS=10.0.0.0/8" >> "$d/backend/.env.example"
+  selftest_case "nested env template" 1 "backend/\.env\.example:[0-9]+:# TRUSTED_NETWORKS=10" "$d"
+
+  # RED: a prefixed template name.
+  d=$(fresh)
+  echo "TRUSTED_NETWORKS=192.168.0.0/16" > "$d/prod.env.example"
+  selftest_case "*.env.example" 1 "prod\.env\.example:[0-9]+:" "$d"
+
   # RED: a docs page below a subdirectory (the recursive arm).
   d=$(fresh)
   echo "TRUSTED_NETWORKS=192.168.0.0/16" >> "$d/docs/how-to/deploy-production.md"
@@ -169,7 +201,7 @@ selftest() {
     echo "FAIL: trusted-networks self-test - $ST_FAILS of $ST_RUN control(s) failed"
     return 1
   fi
-  echo "trusted-networks self-test: $ST_RUN control(s) passed (1 green, 7 red, 1 error)"
+  echo "trusted-networks self-test: $ST_RUN control(s) passed (2 green, 9 red, 1 error)"
   return 0
 }
 
