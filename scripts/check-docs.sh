@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -853,6 +853,39 @@ check_trusted_networks() {
   return 1
 }
 
+# check_compose_parity delegates to scripts/check-compose-parity.sh: dev and
+# prod compose agree on init, the identical-path stacks mount and the env keys
+# (agent-os-qags.6, safe-defaults rule 17). Self-test first, same reasoning as
+# ws-registration. Needs the docker compose plugin (no daemon): when it is
+# missing the script FAILS, it does not skip.
+check_compose_parity() {
+  local script="$SCRIPT_DIR/check-compose-parity.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: compose-parity - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: compose-parity - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: compose-parity - ${self#compose-parity }; ${out#check-compose-parity: }"
+    return 0
+  fi
+  echo "FAIL: compose-parity - docker-compose.yaml and docker-compose.prod.yaml disagree on init, the identical-path stacks mount or env keys:"
+  echo "$out"
+  return 1
+}
+
 # check_ws_read_deadline delegates to scripts/check-ws-read-deadline.sh: no
 # *_test.go under backend/internal/handlers/ bounds a wait with a fixed
 # wall-clock duration; test waits use the absolute hangGuardDeadline(t)
@@ -1018,6 +1051,7 @@ Valid check names:
   ws-read-deadline no handlers test bounds a wait with a fixed wall-clock duration instead of hangGuardDeadline(t)
   path-containment no lexical path containment check outside backend/internal/pathutil/
   trusted-networks no template or doc recommends all of RFC 1918 as TRUSTED_NETWORKS
+  compose-parity dev and prod compose agree on init, the identical-path stacks mount and env keys
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -1041,6 +1075,7 @@ run_check() {
     ws-read-deadline) check_ws_read_deadline ;;
     path-containment) check_path_containment ;;
     trusted-networks) check_trusted_networks ;;
+    compose-parity) check_compose_parity ;;
     *) return 2 ;;
   esac
 }
