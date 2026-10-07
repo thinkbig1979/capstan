@@ -173,12 +173,20 @@ func (h *LogsHandler) StreamLogs(c *gin.Context) {
 
 	logChan := make(chan string, 100)
 
+	// The send selects on ctx: once the read loop below stops draining, a
+	// full logChan would otherwise park this goroutine forever, and closing
+	// the pipe at cleanup cannot reach a goroutine blocked on a send. Every
+	// exit from the read loop goes through cleanup's cancel() (agent-os-z91e.1).
 	go func() {
+		defer close(logChan)
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
-			logChan <- scanner.Text()
+			select {
+			case logChan <- scanner.Text():
+			case <-ctx.Done():
+				return
+			}
 		}
-		close(logChan)
 	}()
 
 	// Through wsConn.WriteMutex via safePingLoop, not the private mutex this
