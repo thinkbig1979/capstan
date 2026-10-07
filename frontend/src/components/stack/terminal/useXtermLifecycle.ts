@@ -144,8 +144,14 @@ export function useXtermLifecycle({
       setHasSelection(terminal.hasSelection())
     })
 
+    // One pending timer: a burst of ResizeObserver callbacks collapses into a
+    // single fit, and the cleanup below cancels it so it cannot fire against a
+    // disposed terminal. (The callback's return value is ignored by the
+    // observer, so a clearTimeout returned from it never ran.)
+    let resizeTimeout: ReturnType<typeof setTimeout> | undefined
     const handleResize = () => {
-      setTimeout(() => onFitRequested(), 100)
+      clearTimeout(resizeTimeout)
+      resizeTimeout = setTimeout(() => onFitRequested(), 100)
     }
 
     fitAddon.fit()
@@ -160,6 +166,7 @@ export function useXtermLifecycle({
       handleData.dispose()
       handleSelectionChange.dispose()
       resizeObserver.disconnect()
+      clearTimeout(resizeTimeout)
       terminal.dispose()
     }
   // Runs once per mount on purpose: the refs are stable, `fontSize` is only the

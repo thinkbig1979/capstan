@@ -813,6 +813,47 @@ describe('TerminalComponent — resize', () => {
     globalThis.ResizeObserver = realResizeObserver
   })
 
+  it('arms no resize timer that outlives the terminal', () => {
+    const { unmount } = render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    sendSpy.mockClear()
+    fitSpy.mockClear()
+
+    act(() => {
+      FakeResizeObserver.fire()
+    })
+    unmount()
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+
+    expect(fitSpy).not.toHaveBeenCalled()
+    expect(sentResizes()).toEqual([])
+  })
+
+  it('collapses a burst of resize callbacks into one fit and one resize message', () => {
+    render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    sendSpy.mockClear()
+    fitSpy.mockClear()
+
+    act(() => {
+      FakeResizeObserver.fire()
+      FakeResizeObserver.fire()
+      FakeResizeObserver.fire()
+      vi.advanceTimersByTime(100)
+    })
+
+    expect(fitSpy).toHaveBeenCalledTimes(1)
+    expect(sentResizes()).toHaveLength(1)
+  })
+
   it('tells the server the terminal size on every connect, including a reconnect', () => {
     render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
     act(() => {
