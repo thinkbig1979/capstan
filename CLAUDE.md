@@ -80,7 +80,7 @@ Every bug bead's close reason states five fields:
    or the bead filed for one, or why none is possible. A class that recurs after
    its fix is almost always a helper that existed and was opt-in; the rules that
    name Capstan's helpers are in `.claude/rules/safe-defaults.md`. The close hook
-   checks fields 1-4 today; agent-os-qags.8 makes it check this one.
+   checks all five fields (agent-os-qags.8).
 
 A count in any of these fields is pinned to the SHA it was measured on.
 Re-measure at close time and name the SHA: `agent-os-nho7`'s brief carried
