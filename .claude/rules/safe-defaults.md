@@ -29,7 +29,8 @@ fix: file them.
 3. **Boot-time goroutines** exit only when their context ends. A `return` on a
    transient error inside such a loop is a defect: reconnect with backoff, as
    `ListenEvents` in `backend/internal/services/monitor.go` does. A channel send
-   in a producer selects on `ctx.Done()`.
+   in a producer selects on `ctx.Done()`. (CI-guarded:
+   `scripts/check-ticker-stop.sh`, a ticker or timer wait with no stop case.)
 
 ## Guards that must be taken
 

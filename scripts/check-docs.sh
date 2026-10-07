@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -853,6 +853,38 @@ check_trusted_networks() {
   return 1
 }
 
+# check_ticker_stop delegates to scripts/check-ticker-stop.sh: no non-test Go
+# file under backend/internal or backend/cmd waits on a ticker or timer channel
+# with no stop case (agent-os-z91e.31, safe-defaults rule 3; the class
+# agent-os-z91e.17 fixed). Self-test first, same reasoning as ws-registration.
+check_ticker_stop() {
+  local script="$SCRIPT_DIR/check-ticker-stop.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: ticker-stop - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: ticker-stop - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: ticker-stop - ${self#ticker-stop }; ${out#check-ticker-stop: }"
+    return 0
+  fi
+  echo "FAIL: ticker-stop - a backend loop waits on a ticker or timer with no stop case (select on ctx.Done() beside it):"
+  echo "$out"
+  return 1
+}
+
 # check_compose_parity delegates to scripts/check-compose-parity.sh: dev and
 # prod compose agree on init, the identical-path stacks mount and the env keys
 # (agent-os-qags.6, safe-defaults rule 17). Self-test first, same reasoning as
@@ -1052,6 +1084,7 @@ Valid check names:
   path-containment no lexical path containment check outside backend/internal/pathutil/
   trusted-networks no template or doc recommends all of RFC 1918 as TRUSTED_NETWORKS
   compose-parity dev and prod compose agree on init, the identical-path stacks mount and env keys
+  ticker-stop    no backend ticker or timer wait without a stop case (for range t.C, time.Tick, bare <-t.C)
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -1076,6 +1109,7 @@ run_check() {
     path-containment) check_path_containment ;;
     trusted-networks) check_trusted_networks ;;
     compose-parity) check_compose_parity ;;
+    ticker-stop) check_ticker_stop ;;
     *) return 2 ;;
   esac
 }
