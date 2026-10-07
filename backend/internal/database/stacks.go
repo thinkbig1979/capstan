@@ -139,6 +139,23 @@ func (d *DB) ClearStacks() error {
 	return err
 }
 
+// SetStackEnvFileIfUnset records envFile on the stack row, but only when the
+// row has none yet. It touches that one column, so a scan that rewrote the rest
+// of the row meanwhile keeps its values, and a row pruned meanwhile stays gone
+// (0 rows, set false), where a whole-row UpsertStack would write it back
+// (agent-os-z91e.23).
+func (d *DB) SetStackEnvFileIfUnset(id, envFile string) (set bool, err error) {
+	res, err := d.db.Exec(`UPDATE stacks SET env_file = ? WHERE id = ? AND COALESCE(env_file, '') = ''`, envFile, id)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 func (d *DB) UpdateStackStatus(id, status string) error {
 	query := `UPDATE stacks SET status = ? WHERE id = ?`
 	_, err := d.db.Exec(query, status, id)

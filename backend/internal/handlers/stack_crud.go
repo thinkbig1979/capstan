@@ -568,42 +568,57 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// Remove the stack's files from disk. One directory legitimately holds
-	// several stacks (one per compose file — IDs are root~path:project), so
-	// removing the whole directory would destroy every sibling stack's compose
-	// file while their containers keep running: DeleteVerified composes down only
-	// this stack's project, and their stacks rows survive the delete.
-	if rmErr := h.removeStackFiles(*stack, absStackDir, guardRoot); rmErr != nil {
+	// Remove the stack's files, then its row, then the orphaned directory row,
+	// all under the scanner's lock. A scan that globbed the compose file before
+	// the removal would otherwise write the row back after DeleteStack, and
+	// when a sibling keeps the directory alive nothing ever prunes that ghost
+	// (agent-os-z91e.23). The lock also keeps removeStackFiles' survivor check
+	// fresh against a scan registering a sibling mid-delete.
+	var rmErr, dbErr error
+	h.scanner.WithLock(func() {
+		// Remove the stack's files from disk. One directory legitimately holds
+		// several stacks (one per compose file — IDs are root~path:project), so
+		// removing the whole directory would destroy every sibling stack's compose
+		// file while their containers keep running: DeleteVerified composes down only
+		// this stack's project, and their stacks rows survive the delete.
+		if rmErr = h.removeStackFiles(*stack, absStackDir, guardRoot); rmErr != nil {
+			return
+		}
+
+		// Remove the DB row. Surface any error rather than silently dropping it.
+		if dbErr = h.db.DeleteStack(id); dbErr != nil {
+			return
+		}
+
+		// Clean up the directories row too, but only once it is actually orphaned:
+		// this MUST run after DeleteStack above, never before — otherwise the
+		// stack row being deleted is itself still counted as a reference and the
+		// guard can never fire. DeleteDirectoryIfOrphaned re-checks for surviving
+		// siblings atomically in SQL (see its doc comment), so it is safe even
+		// though a concurrent Create could have registered a new sibling here
+		// since removeStackFiles' own survivor check above.
+		//
+		// This is best-effort: the stack itself is already fully deleted (files,
+		// containers, and its own row) by this point, so a failure here must not
+		// fail the request — it would just leave the orphan for the next Rescan
+		// (pruneStaleStacks) to clean up, same as before this fix existed.
+		if _, dirErr := h.db.DeleteDirectoryIfOrphaned(stack.Directory); dirErr != nil {
+			slog.Warn("failed to clean up orphaned directory row after stack delete",
+				"directory", stack.Directory, "error", dirErr)
+		}
+	})
+	if rmErr != nil {
 		renderResult(c, truth.Failed("stack compose down succeeded but file removal failed", rmErr,
 			truth.KV("id", id),
 			truth.KV("directory", stack.Directory),
 		))
 		return
 	}
-
-	// Remove the DB row. Surface any error rather than silently dropping it.
-	if dbErr := h.db.DeleteStack(id); dbErr != nil {
+	if dbErr != nil {
 		renderResult(c, truth.Failed("stack directory removed but DB delete failed", dbErr,
 			truth.KV("id", id),
 		))
 		return
-	}
-
-	// Clean up the directories row too, but only once it is actually orphaned:
-	// this MUST run after DeleteStack above, never before — otherwise the
-	// stack row being deleted is itself still counted as a reference and the
-	// guard can never fire. DeleteDirectoryIfOrphaned re-checks for surviving
-	// siblings atomically in SQL (see its doc comment), so it is safe even
-	// though a concurrent Create could have registered a new sibling here
-	// since removeStackFiles' own survivor check above.
-	//
-	// This is best-effort: the stack itself is already fully deleted (files,
-	// containers, and its own row) by this point, so a failure here must not
-	// fail the request — it would just leave the orphan for the next Rescan
-	// (pruneStaleStacks) to clean up, same as before this fix existed.
-	if _, dirErr := h.db.DeleteDirectoryIfOrphaned(stack.Directory); dirErr != nil {
-		slog.Warn("failed to clean up orphaned directory row after stack delete",
-			"directory", stack.Directory, "error", dirErr)
 	}
 
 	renderResult(c, truth.Success("stack deleted",
