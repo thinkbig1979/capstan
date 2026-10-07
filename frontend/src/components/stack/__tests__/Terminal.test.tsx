@@ -53,6 +53,7 @@ vi.mock('@/hooks/useWebSocket', () => ({
 import { TerminalComponent } from '../Terminal'
 import { toast } from 'sonner'
 import { Terminal as XTerm } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
 
 // Capture the real xterm instance the component constructs so tests can
 // drive genuine selection state via its public select() API — the same
@@ -311,7 +312,7 @@ describe('TerminalComponent — inactivity timeout', () => {
     act(() => {
       capturedTerminal!.input('x', true)
     })
-    expect(sendSpy).toHaveBeenCalled()
+    expect(sentKeystrokes()).toEqual(['x'])
 
     // 25 min warning + 5 min grace + 60 s countdown.
     act(() => {
@@ -486,9 +487,8 @@ describe('TerminalComponent — keyboard shortcuts', () => {
     })
 
     expect(readText).toHaveBeenCalled()
-    expect(sendSpy).toHaveBeenCalled()
-    const sentBuffer = sendSpy.mock.calls[0][0] as ArrayBuffer
-    expect(new TextDecoder().decode(sentBuffer)).toBe('pasted text')
+    // Connecting also sends a resize message; only the binary frames are keystrokes.
+    expect(sentKeystrokes()).toEqual(['pasted text'])
   })
 
   it('enables the Copy button once a selection exists and copies it to the clipboard', async () => {
@@ -665,4 +665,220 @@ describe('TerminalComponent — session duration', () => {
     expect(toast.error).not.toHaveBeenCalled()
   })
 
+})
+
+// agent-os-z91e.34: the xterm instance is created once per mount. It used to be
+// disposed and rebuilt on every isConnected flip (the creation effect listed
+// isConnected and the callbacks derived from it), so each connect and
+// disconnect wiped the scrollback and the "Disconnected" line written a moment
+// earlier.
+//
+// Test-author trap: the useWebSocketBinary mock above must hand back STABLE
+// send/disconnect/reconnect functions. A mock that returns fresh ones per render
+// makes handleTerminalData change every render, and the creation effect then
+// re-runs forever (setSearchAddonInstance -> render -> re-run) until the worker
+// dies with a heap OOM.
+async function bufferText(terminal: XTerm): Promise<string> {
+  // An empty write resolves only once xterm has parsed everything queued before it.
+  await act(async () => {
+    await new Promise<void>((resolve) => terminal.write('', resolve))
+  })
+  const buffer = terminal.buffer.active
+  const lines: string[] = []
+  for (let i = 0; i < buffer.length; i++) {
+    lines.push(buffer.getLine(i)?.translateToString(true) ?? '')
+  }
+  return lines.join('\n')
+}
+
+// Typed input as the user produces it: input(data, true) goes through xterm's
+// onData, the same event a keystroke fires.
+function typeKey(terminal: XTerm, key: string) {
+  act(() => {
+    terminal.input(key, true)
+  })
+}
+
+function sentKeystrokes(): string[] {
+  return sendSpy.mock.calls
+    .map(([data]) => data)
+    .filter((data): data is ArrayBuffer => typeof data !== 'string')
+    .map((data) => new TextDecoder().decode(data))
+}
+
+function sentResizes(): string[] {
+  return sendSpy.mock.calls
+    .map(([data]) => data)
+    .filter((data): data is string => typeof data === 'string')
+}
+
+describe('TerminalComponent — one xterm per mount', () => {
+  it('does not dispose or reopen the terminal across a connect and a disconnect', () => {
+    const disposeSpy = vi.spyOn(XTerm.prototype, 'dispose')
+    const openSpy = vi.mocked(XTerm.prototype.open)
+    const opensBefore = openSpy.mock.calls.length
+
+    const { unmount } = render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+    act(() => {
+      capturedOptions?.onClose?.(new CloseEvent('close', { code: 1006 }))
+    })
+
+    expect(disposeSpy).toHaveBeenCalledTimes(0)
+    expect(openSpy.mock.calls.length - opensBefore).toBe(1)
+
+    unmount()
+    expect(disposeSpy).toHaveBeenCalledTimes(1)
+    disposeSpy.mockRestore()
+  })
+
+  it('keeps the Disconnected line in the live terminal after a close', async () => {
+    render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+    act(() => {
+      capturedOnMessage?.(new TextEncoder().encode('OUTPUT-BEFORE-CLOSE\r\n').buffer)
+    })
+    act(() => {
+      capturedOptions?.onClose?.(new CloseEvent('close', { code: 1006 }))
+    })
+
+    const terminal = capturedTerminal
+    expect(terminal).not.toBeNull()
+    const text = await bufferText(terminal as XTerm)
+    expect(text).toContain('OUTPUT-BEFORE-CLOSE')
+    expect(text).toContain('Disconnected. Press Reconnect to continue.')
+  })
+
+  it('sends typed input only while connected, once per keystroke, across reconnects', () => {
+    render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    // Re-read the live instance each time: this test pins typing, not instance identity
+    // (the first test owns that).
+    const live = () => capturedTerminal as XTerm
+
+    typeKey(live(), 'n')
+    expect(sentKeystrokes()).toEqual([])
+
+    connect()
+    typeKey(live(), 'a')
+    expect(sentKeystrokes()).toEqual(['a'])
+
+    act(() => {
+      capturedOptions?.onClose?.(new CloseEvent('close', { code: 1006 }))
+    })
+    typeKey(live(), 'b')
+    expect(sentKeystrokes()).toEqual(['a'])
+
+    connect()
+    typeKey(live(), 'c')
+    expect(sentKeystrokes()).toEqual(['a', 'c'])
+  })
+})
+
+// A ResizeObserver that behaves like the browser's for the two facts these
+// tests rely on: observe() delivers an initial callback, and a disconnected
+// observer delivers nothing. The shared setup stub is a no-op, so it can show
+// neither.
+class FakeResizeObserver {
+  static live: FakeResizeObserver[] = []
+  private readonly callback: () => void
+  constructor(callback: () => void) {
+    this.callback = callback
+  }
+  observe() {
+    FakeResizeObserver.live.push(this)
+    this.callback()
+  }
+  unobserve() {}
+  disconnect() {
+    FakeResizeObserver.live = FakeResizeObserver.live.filter((o) => o !== this)
+  }
+  static fire() {
+    FakeResizeObserver.live.forEach((o) => o.callback())
+  }
+}
+
+describe('TerminalComponent — resize', () => {
+  const realResizeObserver = globalThis.ResizeObserver
+  let fitSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    FakeResizeObserver.live = []
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
+    fitSpy = vi.spyOn(FitAddon.prototype, 'fit').mockImplementation(() => {})
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    fitSpy.mockRestore()
+    globalThis.ResizeObserver = realResizeObserver
+  })
+
+  it('arms no resize timer that outlives the terminal', () => {
+    const { unmount } = render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    sendSpy.mockClear()
+    fitSpy.mockClear()
+
+    act(() => {
+      FakeResizeObserver.fire()
+    })
+    unmount()
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+
+    expect(fitSpy).not.toHaveBeenCalled()
+    expect(sentResizes()).toEqual([])
+  })
+
+  it('collapses a burst of resize callbacks into one fit and one resize message', () => {
+    render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    connect()
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    sendSpy.mockClear()
+    fitSpy.mockClear()
+
+    act(() => {
+      FakeResizeObserver.fire()
+      FakeResizeObserver.fire()
+      FakeResizeObserver.fire()
+      vi.advanceTimersByTime(100)
+    })
+
+    expect(fitSpy).toHaveBeenCalledTimes(1)
+    expect(sentResizes()).toHaveLength(1)
+  })
+
+  it('tells the server the terminal size on every connect, including a reconnect', () => {
+    render(<TerminalComponent stack={makeStack()} initialContainer="c1" />)
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    expect(sentResizes()).toEqual([])
+    sendSpy.mockClear()
+
+    connect()
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    expect(sentResizes()).toHaveLength(1)
+    expect(JSON.parse(sentResizes()[0])).toMatchObject({ type: 'resize' })
+
+    act(() => {
+      capturedOptions?.onClose?.(new CloseEvent('close', { code: 1006 }))
+      vi.advanceTimersByTime(100)
+    })
+    sendSpy.mockClear()
+
+    connect()
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    expect(sentResizes()).toHaveLength(1)
+  })
 })

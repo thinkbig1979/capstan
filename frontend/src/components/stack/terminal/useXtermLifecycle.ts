@@ -11,10 +11,6 @@ export interface UseXtermLifecycleParams {
   xtermRef: RefObject<XTerm | null>
   fitAddonRef: RefObject<FitAddon | null>
   searchAddonRef: RefObject<SearchAddon | null>
-  // Included in the creation effect's own dependency array below purely to
-  // mirror the original component's dependency list — see the quirk note on
-  // that array for why bumping `.current` does not actually retrigger it.
-  reconnectKeyRef: RefObject<number>
   fontSize: number
   handleTerminalData: (data: string) => void
   isConnected: boolean
@@ -29,7 +25,10 @@ export interface UseXtermLifecycleResult {
 }
 
 // Owns xterm's imperative lifecycle: instance creation/teardown, addon
-// wiring, and the window-resize/document-keydown listeners. The refs are
+// wiring, and the window-resize/document-keydown listeners. The terminal is
+// created once per mount: connecting and disconnecting must not rebuild it, or
+// the scrollback and the "Disconnected" line written into it are lost
+// (agent-os-z91e.34). The refs are
 // created by the caller (useTerminalSession) rather than here, because
 // several handlers there (copy/paste/font-size/disconnect messages) also
 // need direct access to the same terminal/addon instances.
@@ -38,7 +37,6 @@ export function useXtermLifecycle({
   xtermRef,
   fitAddonRef,
   searchAddonRef,
-  reconnectKeyRef,
   fontSize,
   handleTerminalData,
   isConnected,
@@ -48,6 +46,34 @@ export function useXtermLifecycle({
 }: UseXtermLifecycleParams): UseXtermLifecycleResult {
   const [hasSelection, setHasSelection] = useState(false)
   const [searchAddonInstance, setSearchAddonInstance] = useState<SearchAddon | null>(null)
+
+  // The creation effect below runs once, so its handlers read the latest
+  // connection state, `send` and `handleTerminalData` through Effect Events
+  // instead of closing over the values from the render that created the terminal.
+  const onTerminalData = useEffectEvent((data: string) => {
+    handleTerminalData(data)
+  })
+
+  const fitTerminal = useCallback(() => {
+    const fitAddon = fitAddonRef.current
+    const terminal = xtermRef.current
+    if (fitAddon && terminal) {
+      fitAddon.fit()
+      const cols = terminal.cols
+      const rows = terminal.rows
+      if (isConnected) {
+        send(JSON.stringify({ type: 'resize', cols, rows }))
+      }
+    }
+  }, [fitAddonRef, xtermRef, isConnected, send])
+
+  // `fitTerminal` is only ever read from the resize/connect handlers below, so
+  // wrapping it in an Effect Event keeps those effects from re-running whenever
+  // `isConnected`/`send` (fitTerminal's own deps) change — see
+  // https://react.dev/reference/react/useEffectEvent
+  const onFitRequested = useEffectEvent(() => {
+    fitTerminal()
+  })
 
   useEffect(() => {
     if (!terminalRef.current) return
@@ -113,21 +139,19 @@ export function useXtermLifecycle({
     fitAddonRef.current = fitAddon
     searchAddonRef.current = searchAddon
     setSearchAddonInstance(searchAddon)
-    const handleData = terminal.onData(handleTerminalData)
+    const handleData = terminal.onData((data) => onTerminalData(data))
     const handleSelectionChange = terminal.onSelectionChange(() => {
       setHasSelection(terminal.hasSelection())
     })
 
+    // One pending timer: a burst of ResizeObserver callbacks collapses into a
+    // single fit, and the cleanup below cancels it so it cannot fire against a
+    // disposed terminal. (The callback's return value is ignored by the
+    // observer, so a clearTimeout returned from it never ran.)
+    let resizeTimeout: ReturnType<typeof setTimeout> | undefined
     const handleResize = () => {
-      const timeout = setTimeout(() => {
-        fitAddon.fit()
-        const cols = terminal.cols
-        const rows = terminal.rows
-        if (isConnected) {
-          send(JSON.stringify({ type: 'resize', cols, rows }))
-        }
-      }, 100)
-      return () => clearTimeout(timeout)
+      clearTimeout(resizeTimeout)
+      resizeTimeout = setTimeout(() => onFitRequested(), 100)
     }
 
     fitAddon.fit()
@@ -142,10 +166,23 @@ export function useXtermLifecycle({
       handleData.dispose()
       handleSelectionChange.dispose()
       resizeObserver.disconnect()
+      clearTimeout(resizeTimeout)
       terminal.dispose()
     }
+  // Runs once per mount on purpose: the refs are stable, `fontSize` is only the
+  // initial size (later changes go through terminal.options in
+  // handleFontSizeChange), and everything that changes with the connection is
+  // read through the Effect Events above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handleTerminalData, isConnected, send, clearInactivityTimers, reconnectKeyRef])
+  }, [])
+
+  // A new connection starts with the server's default PTY size; the only way it
+  // learns ours is a resize message. The terminal used to be rebuilt on connect,
+  // and the new ResizeObserver's initial callback sent that message as a side
+  // effect. Now that the terminal outlives the connection, send it explicitly.
+  useEffect(() => {
+    if (isConnected) onFitRequested()
+  }, [isConnected])
 
   // Stops the inactivity timers when the session ends or the terminal unmounts,
   // and only then. They used to be cleared in the xterm effect's cleanup, which
@@ -157,30 +194,9 @@ export function useXtermLifecycle({
     return () => clearInactivityTimers()
   }, [isConnected, clearInactivityTimers])
 
-  const fitTerminal = useCallback(() => {
-    const fitAddon = fitAddonRef.current
-    const terminal = xtermRef.current
-    if (fitAddon && terminal) {
-      fitAddon.fit()
-      const cols = terminal.cols
-      const rows = terminal.rows
-      if (isConnected) {
-        send(JSON.stringify({ type: 'resize', cols, rows }))
-      }
-    }
-  }, [fitAddonRef, xtermRef, isConnected, send])
-
-  // `fitTerminal` is only ever read inside the resize sub-handler below, so
-  // wrapping it in an Effect Event keeps this effect from re-subscribing the
-  // resize/keydown listeners on every render that changes `isConnected`/`send`
-  // (fitTerminal's own deps) — see https://react.dev/reference/react/useEffectEvent
-  const onWindowResize = useEffectEvent(() => {
-    fitTerminal()
-  })
-
   useEffect(() => {
     const handleWindowResize = () => {
-      onWindowResize()
+      onFitRequested()
     }
 
     window.addEventListener('resize', handleWindowResize)
