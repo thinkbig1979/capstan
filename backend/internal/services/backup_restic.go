@@ -722,14 +722,14 @@ func (m *ResticManager) Stats(ctx context.Context) (int64, error) {
 	return int64(out.TotalSize), nil
 }
 
-// Restore restores the given snapshot to targetPath via `restic restore --target`
-// with --delete, so targetPath ends up matching the snapshot: files created
-// after it are removed rather than surviving next to the restored ones
-// (agent-os-z91e.8). excludes are paths relative to targetPath that restic must
-// leave untouched, normally restoreProtectedPaths' result: without them,
-// --delete would also remove the live content of mounts and cache directories
-// the backup never covered.
-func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, targetPath string, excludes []string, out chan<- StreamLine) error {
+// Restore restores the given snapshot to targetPath via `restic restore --target`.
+// With deleteExtra it also passes --delete, so targetPath ends up matching the
+// snapshot: files created after it are removed rather than surviving next to
+// the restored ones (agent-os-z91e.8). excludes are paths relative to targetPath
+// that restic must leave untouched, normally restoreProtectedPaths' result:
+// without them, --delete would also remove the live content of mounts and cache
+// directories the backup never covered.
+func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, targetPath string, deleteExtra bool, excludes []string, out chan<- StreamLine) error {
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {
 		return err
@@ -744,7 +744,10 @@ func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, tar
 	if sourcePath != "" {
 		ref = snapshotID + ":" + sourcePath
 	}
-	args := []string{"restore", ref, "--target", targetPath, "--delete", "--verbose"}
+	args := []string{"restore", ref, "--target", targetPath, "--verbose"}
+	if deleteExtra {
+		args = append(args, "--delete")
+	}
 	for _, rel := range excludes {
 		args = append(args, "--exclude", restoreExcludePattern(rel))
 	}

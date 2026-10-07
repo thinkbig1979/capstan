@@ -1560,13 +1560,23 @@ func (s *BackupService) runRestore(
 	}
 	defer s.opLock.Release(stackID, lockToken)
 
-	// agent-os-z91e.8: the restore runs with --delete, so find what the backup
-	// never covered (other filesystems, cache directories) and keep restic off
-	// it. Done before the stop: a scan that cannot finish refuses the restore
-	// with the stack untouched, rather than risk deleting what it could not see.
-	protected, scanErr := restoreProtectedPaths(stackDir, restoreTarget)
-	if scanErr != nil {
-		return fmt.Errorf("restore refused: %w", scanErr)
+	// agent-os-z91e.8: a restore of the stack directory runs with --delete, so
+	// it ends up matching the snapshot. A subdirectory target receives the whole
+	// stack nested inside it (see the Restore call below), so deleting there
+	// would remove the subdirectory's own files: it keeps merging instead.
+	//
+	// Before a --delete restore, find what the backup never covered (other
+	// filesystems, cache directories) and keep restic off it. Done before the
+	// stop: a scan that cannot finish refuses the restore with the stack
+	// untouched, rather than risk deleting what it could not see.
+	deleteExtra := restoreTarget == stackDir
+	var protected []string
+	if deleteExtra {
+		var scanErr error
+		protected, scanErr = restoreProtectedPaths(stackDir, restoreTarget)
+		if scanErr != nil {
+			return fmt.Errorf("restore refused: %w", scanErr)
+		}
 	}
 
 	// Determine if the stack was running. As in backupStack, a failed read is a
@@ -1641,7 +1651,7 @@ func (s *BackupService) runRestore(
 	stream(out, "info", fmt.Sprintf("[%s] restoring snapshot %s to %s", stackID, snapshotID, restoreTarget))
 	// stackDir is the snapshot's stored source path; pass it so restic strips that
 	// prefix and restores contents into restoreTarget rather than nesting them.
-	if err := restic.Restore(ctx, snapshotID, stackDir, restoreTarget, protected, out); err != nil {
+	if err := restic.Restore(ctx, snapshotID, stackDir, restoreTarget, deleteExtra, protected, out); err != nil {
 		return fmt.Errorf("restic restore: %w", err)
 	}
 
