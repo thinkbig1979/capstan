@@ -333,3 +333,16 @@ func TestSync_PostBackupSyncCannotCarryAConfirmedDelete(t *testing.T) {
 		assert.True(t, argPairContains(calls[0].Args, "--max-delete", "150"))
 	})
 }
+
+func TestRcloneManager_PreflightSync_KeysASymlinkAsRcloneStoresIt(t *testing.T) {
+	t.Parallel()
+
+	// --links (syncOptions) stores a local symlink on the remote as
+	// "<name>.rclonelink", so that remote file is not remote-only.
+	repo, keys := makeLocalRepo(t, 1)
+	require.NoError(t, os.Symlink(keys[0], filepath.Join(repo, "data/00/link")))
+	runner := &fakeRunner{outputData: remoteListing(append(keys, "data/00/link.rclonelink"), 0)}
+	pf, err := testRcloneManager(runner).PreflightSync(context.Background(), repo, "", "")
+	require.NoError(t, err)
+	assert.Equal(t, 0, pf.RemoteOnly)
+}

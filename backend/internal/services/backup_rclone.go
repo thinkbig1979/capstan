@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -153,9 +152,11 @@ func (e *SyncDeleteCapError) Error() string {
 // delete; any other walk error is returned.
 func localRepoFiles(repoPath string) (map[string]struct{}, error) {
 	files := make(map[string]struct{})
-	err := filepath.WalkDir(repoPath, func(p string, d fs.DirEntry, err error) error {
+	// fs.WalkDir over os.DirFS yields slash-separated paths relative to
+	// repoPath, which is exactly the key rclone lists.
+	err := fs.WalkDir(os.DirFS(repoPath), ".", func(key string, d fs.DirEntry, err error) error {
 		if err != nil {
-			if p == repoPath && errors.Is(err, fs.ErrNotExist) {
+			if key == "." && errors.Is(err, fs.ErrNotExist) {
 				return fs.SkipAll
 			}
 			return err
@@ -163,11 +164,6 @@ func localRepoFiles(repoPath string) (map[string]struct{}, error) {
 		if d.IsDir() {
 			return nil
 		}
-		rel, err := filepath.Rel(repoPath, p)
-		if err != nil {
-			return err
-		}
-		key := filepath.ToSlash(rel)
 		if d.Type()&fs.ModeSymlink != 0 {
 			key += ".rclonelink"
 		}
