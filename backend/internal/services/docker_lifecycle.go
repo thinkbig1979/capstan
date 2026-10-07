@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"time"
@@ -665,16 +666,16 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 		cmd.Dir = stack.Directory
 		cmd.Env = dockerEnv()
 
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			out <- StreamLine{Type: "error", Error: fmt.Sprintf("Failed to create pipe: %v", err)}
-			return
-		}
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			out <- StreamLine{Type: "error", Error: fmt.Sprintf("Failed to create stderr pipe: %v", err)}
-			return
-		}
+		// io.Pipe writers rather than StdoutPipe/StderrPipe (agent-os-z91e.24):
+		// exec then runs its own copy goroutines, which cmd.Wait bounds with
+		// WaitDelay, so Wait can run before the scanners finish. With
+		// StdoutPipe the scanners had to end first, and a grandchild holding
+		// the pipe open after the kill kept them, and this call, running until
+		// it exited on its own.
+		stdoutR, stdoutW := io.Pipe()
+		stderrR, stderrW := io.Pipe()
+		cmd.Stdout = stdoutW
+		cmd.Stderr = stderrW
 
 		if err := cmd.Start(); err != nil {
 			out <- StreamLine{Type: "error", Error: fmt.Sprintf("Failed to start command: %v", err)}
@@ -687,37 +688,36 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 		secrets := s.composeSecrets(stack)
 
 		scanDone := make(chan struct{}, 2)
-		go func() {
-			scanner := bufio.NewScanner(stdout)
-			for scanner.Scan() {
-				line := scanner.Text()
-				if strings.TrimSpace(line) != "" {
-					out <- StreamLine{Type: "data", Line: redactComposeOutput(line, secrets)}
+		scanPipe := func(r io.Reader) {
+			go func() {
+				scanner := bufio.NewScanner(r)
+				for scanner.Scan() {
+					line := scanner.Text()
+					if strings.TrimSpace(line) != "" {
+						out <- StreamLine{Type: "data", Line: redactComposeOutput(line, secrets)}
+					}
 				}
-			}
-			if err := scanner.Err(); err != nil {
-				out <- StreamLine{Type: "error", Error: err.Error()}
-			}
-			scanDone <- struct{}{}
-		}()
-		go func() {
-			scanner := bufio.NewScanner(stderr)
-			for scanner.Scan() {
-				line := scanner.Text()
-				if strings.TrimSpace(line) != "" {
-					out <- StreamLine{Type: "data", Line: redactComposeOutput(line, secrets)}
+				if err := scanner.Err(); err != nil {
+					out <- StreamLine{Type: "error", Error: err.Error()}
 				}
-			}
-			if err := scanner.Err(); err != nil {
-				out <- StreamLine{Type: "error", Error: err.Error()}
-			}
-			scanDone <- struct{}{}
-		}()
+				// Keep draining after a scan error (a line over the scanner's
+				// limit): exec's copy goroutine blocks on a writer nobody reads.
+				_, _ = io.Copy(io.Discard, r) //nolint:errcheck // Drain only: the pipe reader's only error is the writer closing, which is the end of the stream.
+				scanDone <- struct{}{}
+			}()
+		}
+		scanPipe(stdoutR)
+		scanPipe(stderrR)
 
+		waitErr := cmd.Wait()
+		// Wait has returned, so exec's copy goroutines are done writing: closing
+		// the writers is what ends the scanners.
+		_ = stdoutW.Close()
+		_ = stderrW.Close()
 		<-scanDone
 		<-scanDone
 
-		cmdErr := timeoutError(cmdCtx, cmd.Wait(), "docker compose "+subcommand)
+		cmdErr := timeoutError(cmdCtx, waitErr, "docker compose "+subcommand)
 
 		// Verify end state before emitting the terminal done frame.
 		// For pull: classify from exit code.
