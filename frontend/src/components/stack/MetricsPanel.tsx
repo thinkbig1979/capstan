@@ -45,7 +45,7 @@ function useThresholdChartColor(percent: number): string {
     return cs.getPropertyValue(varName).trim() || '#22c55e'
     // `isDark` is intentionally part of the dep set even though it isn't read directly —
     // it forces the memo to re-compute when the theme class flips.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isDark is a trigger-only dep: the memo reads CSS variables through getComputedStyle, which change when the theme class flips
   }, [percent, isDark])
 }
 

@@ -34,7 +34,7 @@ function useResolvedColor(thresholdPercent: number | undefined, override: string
     const varName = pct >= 80 ? '--destructive' : pct >= 60 ? '--warning' : '--success'
     return cs.getPropertyValue(varName).trim() || '#22c55e'
     // isDark is intentionally listed to force re-compute on theme flip.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isDark is a trigger-only dep: the memo reads CSS variables through getComputedStyle, which change when the theme class flips
   }, [override, thresholdPercent, isDark])
 }
 

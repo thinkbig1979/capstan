@@ -13,6 +13,14 @@ vi.mock('codemirror', () => {
   return { basicSetup: [], EditorView: MockEditorView }
 })
 vi.mock('@codemirror/state', () => ({
+  Compartment: class {
+    of(ext: unknown) {
+      return ext
+    }
+    reconfigure() {
+      return {}
+    }
+  },
   EditorState: { create: () => ({ doc: { toString: () => '', length: 0 } }) },
 }))
 vi.mock('@codemirror/view', () => {

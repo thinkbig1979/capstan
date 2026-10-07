@@ -19,7 +19,7 @@ import { useEffect, useRef, useMemo } from 'react'
 // nothing on purpose, plus the family-declared-together convention recorded in
 // knip.jsonc's ignoreDependencies entry.
 import { EditorView, basicSetup } from 'codemirror'
-import { EditorState } from '@codemirror/state'
+import { Compartment, EditorState, type Extension } from '@codemirror/state'
 import { yaml } from '@codemirror/lang-yaml'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { keymap } from '@codemirror/view'
@@ -35,6 +35,10 @@ interface UseCodeMirrorEditorOptions {
   deps?: React.DependencyList
 }
 
+function themeExtension(isDark: boolean): Extension {
+  return isDark ? oneDark : []
+}
+
 export function useCodeMirrorEditor(
   containerRef: React.RefObject<HTMLDivElement | null>,
   options: UseCodeMirrorEditorOptions,
@@ -44,6 +48,15 @@ export function useCodeMirrorEditor(
   const onSaveRef = useRef(options.onSave)
   const onChangeRef = useRef(options.onChange)
   const onSelectRef = useRef(options.onSelect)
+  // The theme lives in a Compartment so a theme change reconfigures the live
+  // view instead of rebuilding it: a rebuild starts from `options.doc` and
+  // loses unsaved edits, the cursor and the undo history (agent-os-z91e.41).
+  // One Compartment per view, created with it.
+  const themeCompartmentRef = useRef<Compartment | null>(null)
+  const isDarkRef = useRef(false)
+  // The theme the live view was last given, so the reconfigure effect below
+  // stays silent on mount and after a rebuild, when the view is already right.
+  const appliedDarkRef = useRef(false)
 
   useEffect(() => {
     onSaveRef.current = options.onSave
@@ -61,7 +74,14 @@ export function useCodeMirrorEditor(
   )
 
   useEffect(() => {
+    isDarkRef.current = isDark
+  })
+
+  useEffect(() => {
     if (!containerRef.current) return
+
+    const themeCompartment = new Compartment()
+    themeCompartmentRef.current = themeCompartment
 
     const extensions = [
       basicSetup,
@@ -83,9 +103,8 @@ export function useCodeMirrorEditor(
       }),
     ]
 
-    if (isDark) {
-      extensions.push(oneDark)
-    }
+    appliedDarkRef.current = isDarkRef.current
+    extensions.push(themeCompartment.of(themeExtension(appliedDarkRef.current)))
 
     if (onChangeRef.current || onSelectRef.current) {
       extensions.push(
@@ -122,8 +141,20 @@ export function useCodeMirrorEditor(
     return () => {
       view.destroy()
       viewRef.current = null
+      themeCompartmentRef.current = null
     }
-  }, [isDark, ...(options.deps || [])]) // eslint-disable-line react-hooks/exhaustive-deps
+    // The view is rebuilt only when the caller's deps change (a different file,
+    // a remounted container); the theme, doc and callbacks reach the live view
+    // through the Compartment, the effect below and refs.
+  }, [...(options.deps || [])]) // eslint-disable-line react-hooks/exhaustive-deps -- the deps are the caller's list, spread; doc, theme and callbacks reach the live view without a rebuild
+
+  useEffect(() => {
+    const view = viewRef.current
+    const compartment = themeCompartmentRef.current
+    if (!view || !compartment || appliedDarkRef.current === isDark) return
+    appliedDarkRef.current = isDark
+    view.dispatch({ effects: compartment.reconfigure(themeExtension(isDark)) })
+  }, [isDark])
 
   useEffect(() => {
     const view = viewRef.current
