@@ -50,7 +50,7 @@ ALLOWLIST='
 internal/config/config.go|inspectStacksMount|parses /proc/self/mountinfo text to find which mount holds STACKS_DIR; not a containment decision
 internal/services/scanner.go|rootContainsPath|chooses WHICH configured root a scanned path is filed under (StackID naming); gates no I/O, and must stay lexical to agree with the lexical StackID and isValidStacksDir
 internal/services/scanner.go|expectedStackID|filepath.Rel derives the stack ID path segment, not a containment verdict
-internal/services/scanner.go|ScanDirectoryWithRoot|filepath.Rel derives the stack ID path segment, not a containment verdict
+internal/services/scanner.go|scanDirectoryWithRoot|filepath.Rel derives the stack ID path segment, not a containment verdict
 internal/handlers/git.go|isValidLogFile|validates a git pathspec passed after "--"; no filesystem I/O, and git itself refuses paths outside the repository
 '
 
@@ -193,7 +193,7 @@ func (s *ScannerService) expectedStackID(dirPath, effectiveRoot string) string {
 	return rel
 }
 
-func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) error {
+func (s *ScannerService) scanDirectoryWithRoot(path string, rootDir string) error {
 	rel, err := filepath.Rel(rootDir, path) // a trailing comment
 	_ = rel
 	return err

@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/loader"
@@ -483,7 +484,28 @@ func canonicalRoot(root string) string {
 type ScannerService struct {
 	config *config.Config
 	db     *database.DB
+
+	// mu serialises every entry point that reads or writes the directories and
+	// stacks rows the scanner owns: ScanAll (walk + prune), ScanDirectory,
+	// ScanDirectoryWithRoot, RegisterDirectory and UnregisterDirectory.
+	// pruneStaleStacks deletes every row whose path is missing from a disk walk
+	// taken BEFORE it reads the DB, so a directory registered between that walk
+	// and ListDirectories was deleted with its stacks (by cascade) and their
+	// git credentials (agent-os-z91e.6). Holding mu across the whole ScanAll
+	// makes a concurrent registration wait until the prune is done.
+	//
+	// Lock order: a caller may hold a per-stack OperationLock while taking mu
+	// (StacksHandler.Create does). Code holding mu never takes an
+	// OperationLock, and OperationLock.Acquire is a try-lock that never waits,
+	// so the two cannot deadlock. Keep it that way: never acquire an
+	// OperationLock, or call back into a handler, while holding mu.
+	mu sync.Mutex
 }
+
+// pruneAfterWalkHook is TEST-ONLY and nil in production. When set, it runs in
+// pruneStaleStacks after the disk walk and before the DB reads, which is the
+// window agent-os-z91e.6's test parks a ScanAll in.
+var pruneAfterWalkHook func()
 
 func NewScannerService(cfg *config.Config, db *database.DB) *ScannerService {
 	return &ScannerService{
@@ -493,6 +515,9 @@ func NewScannerService(cfg *config.Config, db *database.DB) *ScannerService {
 }
 
 func (s *ScannerService) ScanAll() (hasGlobalEnv bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	allDirs := s.config.GetAllStacksDirs()
 	slog.Info("Starting directory scan", "stacksDirs", allDirs)
 
@@ -585,7 +610,7 @@ func (s *ScannerService) scanDirectoryRecursive(path string, rootDir string, max
 
 		dirPath := filepath.Join(path, entry.Name())
 
-		if err := s.ScanDirectoryWithRoot(dirPath, rootDir); err != nil {
+		if err := s.scanDirectoryWithRoot(dirPath, rootDir); err != nil {
 			slog.Warn("Failed to scan directory", "path", dirPath, "error", err)
 			continue
 		}
@@ -688,6 +713,10 @@ func (s *ScannerService) pruneStaleStacks() error {
 			slog.Error("Refusing to prune stale stacks: a configured stacks directory could not be walked, and pruning against an incomplete directory listing would delete the directory row of every stack under it, taking its stacks by cascade and its git credentials permanently", "stacksDir", stacksDir, "cause", walkErr)
 			return walkErr
 		}
+	}
+
+	if pruneAfterWalkHook != nil {
+		pruneAfterWalkHook()
 	}
 
 	directories, err := s.db.ListDirectories()
@@ -1479,6 +1508,9 @@ func (s *ScannerService) buildDirectoryRecord(path string, rootDir string) direc
 // already there. That distinction matters because UnregisterDirectory cascades:
 // see its doc comment.
 func (s *ScannerService) RegisterDirectory(path string, rootDir string) (created bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, err := os.ReadDir(path); err != nil {
 		return false, err
 	}
@@ -1499,10 +1531,22 @@ func (s *ScannerService) RegisterDirectory(path string, rootDir string) (created
 // directory equals path — and one directory legitimately holds several stacks,
 // one per compose file (agent-os-w8o).
 func (s *ScannerService) UnregisterDirectory(path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return s.db.DeleteDirectory(path)
 }
 
 func (s *ScannerService) ScanDirectoryWithRoot(path string, rootDir string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.scanDirectoryWithRoot(path, rootDir)
+}
+
+// scanDirectoryWithRoot is ScanDirectoryWithRoot without taking mu, for
+// ScanAll's walk, which already holds it.
+func (s *ScannerService) scanDirectoryWithRoot(path string, rootDir string) error {
 	_, err := os.ReadDir(path)
 	if err != nil {
 		return err
