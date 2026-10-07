@@ -331,3 +331,56 @@ describe('StackUpdatesTab — a failed REFETCH must not discard data', () => {
     expect(screen.getByText(/Could not refresh the update history/)).toBeInTheDocument()
   })
 })
+
+// agent-os-z91e.32: the same skipped status and reason as UpdateLogTab, which
+// carries its own copy of the tone map and filter.
+describe('StackUpdatesTab — skipped rows and reasons', () => {
+  const reason = 'skipped: stack stack-1 is busy (backup in progress since 2026-10-07T10:00:00Z); retried next pass'
+
+  it('renders a skipped row with the neutral tone, not the unknown-status fallback', async () => {
+    mockGetUpdateHistory.mockResolvedValue(page([entry({ status: 'skipped', trigger: 'auto', errorMessage: reason })]))
+    renderWithProviders(<StackUpdatesTab stackId="stack-1" />)
+
+    const badge = await screen.findByText('skipped')
+    expect(badge).toHaveAttribute('data-tone', 'neutral')
+  })
+
+  it.each([
+    ['skipped', reason],
+    ['failed', 'docker pull failed: manifest unknown'],
+  ] as const)('shows a %s row\'s reason on its status badge', async (status, message) => {
+    mockGetUpdateHistory.mockResolvedValue(page([entry({ status, trigger: 'auto', errorMessage: message })]))
+    renderWithProviders(<StackUpdatesTab stackId="stack-1" />)
+
+    const badge = await screen.findByText(status)
+    expect(badge).toHaveAttribute('title', message)
+    expect(screen.getByText(message)).toHaveClass('sr-only')
+  })
+
+  it('adds no reason to a row without one', async () => {
+    mockGetUpdateHistory.mockResolvedValue(page([entry()]))
+    renderWithProviders(<StackUpdatesTab stackId="stack-1" />)
+
+    const badge = await screen.findByText('success')
+    expect(badge).not.toHaveAttribute('title')
+  })
+
+  it('sends the Skipped status filter to the server', async () => {
+    const user = userEvent.setup()
+    mockGetUpdateHistory.mockResolvedValue(page([entry()]))
+    renderWithProviders(<StackUpdatesTab stackId="stack-1" />)
+
+    await screen.findByText('web')
+    await user.click(screen.getAllByRole('combobox')[0])
+    await user.click(await screen.findByRole('option', { name: 'Skipped' }))
+
+    await waitFor(() =>
+      expect(mockGetUpdateHistory).toHaveBeenCalledWith({
+        page: 1,
+        limit: 100,
+        stackId: 'stack-1',
+        status: 'skipped',
+      }),
+    )
+  })
+})

@@ -100,12 +100,33 @@ func z91e21Rows(t *testing.T, svc *SchedulerService, stackID string) []models.Up
 	return rows
 }
 
+// assertSkippedRow requires rows to be exactly one 'skipped' auto-update row
+// for the given container, carrying reason as its error_message and a
+// completed_at, so retention and the manual clear (both keyed on
+// completed_at) age it out like any finished row (agent-os-z91e.32).
+func assertSkippedRow(t *testing.T, rows []models.UpdateHistoryEntry, containerID, containerName, image, reason string) {
+	t.Helper()
+	require.Len(t, rows, 1, "a skipped item records exactly one history row")
+	r := rows[0]
+	assert.Equal(t, "skipped", r.Status)
+	assert.Equal(t, "auto", r.Trigger)
+	assert.Equal(t, containerID, r.ContainerID)
+	assert.Equal(t, containerName, r.ContainerName)
+	assert.Equal(t, image, r.Image)
+	require.NotNil(t, r.ErrorMessage, "a skipped row carries its reason")
+	assert.Equal(t, reason, *r.ErrorMessage)
+	require.NotNil(t, r.CompletedAt, "a skipped row is complete, so retention can age it out")
+	assert.Equal(t, r.StartedAt, *r.CompletedAt)
+	assert.Nil(t, r.DurationMs, "nothing ran, so there is no duration")
+}
+
 // TestAutoUpdateDeadline_UnstartedItemIsNotCountedAsFailed is agent-os-z91e.21's
 // acceptance. Once a pass's deadline fires, every later item used to run on the
 // ended context, record a failed run and add to its policy's
 // ConsecutiveFailures, so one hung container paused unrelated policies after
 // three passes. An item the pass never started must leave its policy and the
-// history alone, and be reported as not started; the item that hung still
+// history's existing rows alone, and be reported as not started, with one
+// 'skipped' row saying so (agent-os-z91e.32); the item that hung still
 // records a failed run naming the timeout.
 func TestAutoUpdateDeadline_UnstartedItemIsNotCountedAsFailed(t *testing.T) {
 	svc, checker := z91e21Fixture(t)
@@ -120,7 +141,8 @@ func TestAutoUpdateDeadline_UnstartedItemIsNotCountedAsFailed(t *testing.T) {
 	p2 := z91e21PolicyFor(t, svc, "c2")
 	assert.Equal(t, 2, p2.ConsecutiveFailures, "an item the pass never started must not count as a failure")
 	assert.False(t, p2.Paused)
-	assert.Empty(t, z91e21Rows(t, svc, "s2"), "an unstarted item leaves no history row (update_history has no 'skipped' status)")
+	assertSkippedRow(t, z91e21Rows(t, svc, "s2"), "c2", "api", "api:latest",
+		"not started: pass deadline reached; retried next pass")
 
 	hung := z91e21Rows(t, svc, "s1")
 	require.Len(t, hung, 1)
@@ -153,7 +175,8 @@ func TestAutoUpdateDeadline_ShutdownMidPassIsNotCountedAsFailed(t *testing.T) {
 	p2 := z91e21PolicyFor(t, svc, "c2")
 	assert.Equal(t, 2, p2.ConsecutiveFailures)
 	assert.False(t, p2.Paused)
-	assert.Empty(t, z91e21Rows(t, svc, "s2"))
+	assertSkippedRow(t, z91e21Rows(t, svc, "s2"), "c2", "api", "api:latest",
+		"not started: shutdown; retried next pass")
 
 	msg, err := svc.db.GetSetting(applyLastErrorKey)
 	require.NoError(t, err)

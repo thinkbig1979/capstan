@@ -981,6 +981,42 @@ func (s *SchedulerService) pruneVanishedTargets(ctx context.Context, updates []m
 	return live
 }
 
+// notStartedCause names why a pass's ended ctx left items unstarted: its own
+// deadline, or Stop() cancelling the parent.
+func notStartedCause(ctx context.Context) string {
+	if commandTimedOut(ctx) {
+		return "pass deadline reached"
+	}
+	return "shutdown"
+}
+
+// recordSkippedUpdate writes the 'skipped' update_history row for an item
+// RunAutoUpdates did not run (agent-os-z91e.32). completed_at is set, equal to
+// started_at, because retention and the manual clear both delete by
+// completed_at: a row without one would never age out. A failed insert is only
+// logged; the skip itself has already been decided and counted.
+func (s *SchedulerService) recordSkippedUpdate(update models.CachedUpdate, reason string) {
+	now := time.Now().Format(time.RFC3339)
+	entry := &models.UpdateHistoryEntry{
+		ID:            uuid.New().String(),
+		ContainerID:   update.ContainerID,
+		ContainerName: update.ContainerName,
+		Image:         update.ImageRef,
+		Status:        "skipped",
+		Trigger:       "auto",
+		StartedAt:     now,
+		CompletedAt:   &now,
+		ErrorMessage:  &reason,
+	}
+	if update.StackID != "" {
+		entry.StackID = &update.StackID
+	}
+	if err := s.db.InsertUpdateHistory(entry); err != nil {
+		s.logger.Error("Failed to insert skipped update history",
+			"container", update.ContainerName, "error", err)
+	}
+}
+
 // RunAutoUpdates applies auto-update policies to the given update candidates.
 //
 // Finding #8 fix: uses typed truth.ActionResult so that:
@@ -1081,20 +1117,20 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 		// ConsecutiveFailures, so one hung container paused unrelated policies
 		// after three passes (agent-os-z91e.21). Only the item that was in
 		// flight when the context ended is that failure. This one leaves its
-		// policy and update_history alone (update_history has no 'skipped'
-		// status), keeps its cached row so the next pass retries it, and is
-		// reported through update_apply_last_error after the loop.
+		// policy alone, keeps its cached row so the next pass retries it, and
+		// is reported twice: a 'skipped' history row naming why
+		// (agent-os-z91e.32), and update_apply_last_error after the loop.
 		if ctx.Err() != nil {
 			skipped++
 			notStarted++
+			s.recordSkippedUpdate(update, "not started: "+notStartedCause(ctx)+"; retried next pass")
 			continue
 		}
 
-		// Taken before the history insert, so a skipped update leaves no
-		// pending row, and held across UpdateContainer and its verification.
-		// update_history cannot record a 'skipped' status (its CHECK allows
-		// pending/success/failed/paused), so the skip is reported through
-		// update_apply_last_error after the loop.
+		// Taken before the history insert, so a skipped update leaves a
+		// 'skipped' row rather than a pending one, and held across
+		// UpdateContainer and its verification. The skip is also reported
+		// through update_apply_last_error after the loop.
 		releaseLock := func() {}
 		if s.opLock != nil && update.StackID != "" {
 			token, lockErr := s.opLock.Acquire(update.StackID, OpKindUpdate)
@@ -1103,6 +1139,8 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 					"container", update.ContainerName, "stack_id", update.StackID, "holder", lockErr.Error())
 				skipped++
 				busySkipped++
+				s.recordSkippedUpdate(update, fmt.Sprintf("skipped: stack %s is busy (%s); retried next pass",
+					update.StackID, lockErr.Error()))
 				if !slices.Contains(busyStacks, update.StackID) {
 					busyStacks = append(busyStacks, update.StackID)
 				}
@@ -1246,12 +1284,8 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 			busySkipped, strings.Join(busyStacks, ", ")))
 	}
 	if notStarted > 0 {
-		cause := "shutdown"
-		if commandTimedOut(ctx) {
-			cause = "pass deadline reached"
-		}
 		applyNotes = append(applyNotes, fmt.Sprintf(
-			"%d auto-update(s) not started: %s; retried next pass", notStarted, cause))
+			"%d auto-update(s) not started: %s; retried next pass", notStarted, notStartedCause(ctx)))
 	}
 	if len(applyNotes) > 0 {
 		s.recordApplyError(applyLastErrorKey, strings.Join(applyNotes, "; "))

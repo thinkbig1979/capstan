@@ -383,3 +383,58 @@ describe('UpdateLogTab — a failed REFETCH must not discard data', () => {
     expect(screen.getByText(/Could not refresh the update history/)).toBeInTheDocument()
   })
 })
+
+// agent-os-z91e.32: auto-update items a pass never started, or skipped because
+// the stack was busy, now leave a 'skipped' row whose reason is in
+// errorMessage. Before this, no table rendered errorMessage at all, so a
+// failed row's error was invisible too.
+describe('UpdateLogTab — skipped rows and reasons', () => {
+  const reason = 'not started: pass deadline reached; retried next pass'
+
+  it('renders a skipped row with the neutral tone, not the unknown-status fallback', async () => {
+    mockGetUpdateHistory.mockResolvedValue(
+      historyPage({ entries: [entry({ status: 'skipped', trigger: 'auto', errorMessage: reason })] }),
+    )
+    renderTab()
+
+    const badge = await screen.findByText('skipped')
+    expect(badge).toHaveAttribute('data-tone', 'neutral')
+  })
+
+  it.each([
+    ['skipped', reason],
+    ['failed', 'docker pull failed: manifest unknown'],
+  ] as const)('shows a %s row\'s reason on its status badge', async (status, message) => {
+    mockGetUpdateHistory.mockResolvedValue(
+      historyPage({ entries: [entry({ status, trigger: 'auto', errorMessage: message })] }),
+    )
+    renderTab()
+
+    const badge = await screen.findByText(status)
+    expect(badge).toHaveAttribute('title', message)
+    // Readable without hovering, by assistive tech and by this query.
+    expect(screen.getByText(message)).toHaveClass('sr-only')
+  })
+
+  it('adds no reason to a row without one', async () => {
+    renderTab()
+
+    const badge = await screen.findByText('success')
+    expect(badge).not.toHaveAttribute('title')
+  })
+
+  it('sends the Skipped status filter to the server', async () => {
+    const user = userEvent.setup()
+    renderTab()
+
+    await screen.findByText('web-1')
+    await user.click(statusSelect())
+    await user.click(await screen.findByRole('option', { name: 'Skipped' }))
+
+    await waitFor(() =>
+      expect(mockGetUpdateHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: 'skipped', page: 1 }),
+      ),
+    )
+  })
+})
