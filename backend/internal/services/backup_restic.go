@@ -5,10 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"syscall"
@@ -51,9 +52,16 @@ type execRunner struct{}
 
 // Run starts the process in its own process group (Setpgid) so that a context
 // cancellation can kill the entire process tree, not just the parent PID.
+//
+// A grandchild that leaves the group (setsid) survives that kill and keeps the
+// output pipes open. Output therefore goes through io.Pipe writers, so exec's
+// own copy goroutines are bounded by WaitDelay, and Wait runs before the
+// scanners finish. With StdoutPipe the scanners had to end first, and Wait (the
+// only place WaitDelay acts) was never reached: Run outlived its context until
+// the grandchild exited on its own (agent-os-z91e.25, same shape as
+// agent-os-z91e.24).
 func (r *execRunner) Run(ctx context.Context, name string, args []string, env []string, out chan<- StreamLine) error {
-	//nolint:gosec // name is always a hardcoded literal ("restic"/"rclone") at every call site, args is explicit argv — see README.md "Command execution and file access"
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := boundCommand(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// stripCapstanSecrets removes Capstan's own secrets (JWT_SECRET,
 	// STORAGE_KEY, GIT_HTTPS_TOKEN, RESTIC_PASSWORD) before the rest of the
@@ -62,14 +70,10 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 	// used for docker/compose.
 	cmd.Env = append(stripCapstanSecrets(os.Environ()), env...)
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("stderr pipe: %w", err)
-	}
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %w", name, err)
@@ -84,40 +88,55 @@ func (r *execRunner) Run(ctx context.Context, name string, args []string, env []
 	}()
 
 	scanDone := make(chan struct{}, 2)
-	scan := func(r *bufio.Scanner) {
-		for r.Scan() {
-			line := r.Text()
+	scan := func(r io.Reader) {
+		sc := bufio.NewScanner(r)
+		for sc.Scan() {
+			line := sc.Text()
 			if line != "" {
 				out <- StreamLine{Type: "data", Line: line}
 			}
 		}
+		// Keep draining after a scan error (a line over the scanner's limit):
+		// exec's copy goroutine blocks on a writer nobody reads.
+		_, _ = io.Copy(io.Discard, r) //nolint:errcheck // Drain only: the pipe reader's only error is the writer closing, which is the end of the stream.
 		scanDone <- struct{}{}
 	}
-	go scan(bufio.NewScanner(stdout))
-	go scan(bufio.NewScanner(stderr))
+	go scan(stdoutR)
+	go scan(stderrR)
+
+	waitErr := cmd.Wait()
+	// Wait has returned, so exec's copy goroutines are done writing: closing
+	// the writers is what ends the scanners.
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
 	<-scanDone
 	<-scanDone
 
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("%s exited: %w", name, err)
+	if waitErr != nil {
+		return fmt.Errorf("%s exited: %w", name, waitErr)
 	}
 	return nil
 }
 
-// Output runs the process and captures stdout only.
+// Output runs the process and captures stdout only. The group kill is
+// cmd.Cancel, which exec runs once ctx ends: the goroutine this used to start
+// read a pgid that was never assigned, so only the direct child was ever
+// killed, and WaitDelay (via boundCommand) releases the caller if a grandchild
+// that left the group still holds the pipe (agent-os-z91e.25).
 func (r *execRunner) Output(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
-	//nolint:gosec // name is always a hardcoded literal ("restic"/"rclone") at every call site, args is explicit argv — see README.md "Command execution and file access"
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := boundCommand(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = append(stripCapstanSecrets(os.Environ()), env...)
-
-	pgid := -1
-	go func() {
-		<-ctx.Done()
-		if pgid > 0 {
-			_ = syscall.Kill(-pgid, syscall.SIGKILL) //nolint:errcheck // Best-effort teardown: the process is already gone or unkillable, and neither outcome is actionable here.
+	cmd.Cancel = func() error {
+		// Negative PID signals the process group.
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
 		}
-	}()
+		return nil
+	}
 
 	out, err := cmd.Output()
 	if err != nil {
