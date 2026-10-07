@@ -353,6 +353,97 @@ describe('useBackupStreaming — reset', () => {
   })
 })
 
+// ─── Caller-closed incomplete run (agent-os-z91e.28) ─────────────────────────
+//
+// WSClient ignores the late close event of a socket the caller closed, so the
+// onClose -> reconcileOnClose refetch never runs for reset(), a replacing
+// connect() or an unmount. The code that closes refetches the history itself.
+// Two-sided: a run that already finished, or no run at all, must not refetch.
+
+const HISTORY_KEY = ['backup', 'history']
+const STATUS_KEY = ['backup', 'status']
+
+function invalidatedKeys() {
+  return mockInvalidateQueries.mock.calls.map((c) => (c[0] as { queryKey: unknown }).queryKey)
+}
+
+describe('useBackupStreaming — caller-closed incomplete run refreshes history', () => {
+  it('reset() before a done frame invalidates history and status', () => {
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper: createWrapper() })
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    expect(mockInvalidateQueries).not.toHaveBeenCalled()
+
+    act(() => { result.current.reset() })
+
+    expect(invalidatedKeys()).toEqual([HISTORY_KEY, STATUS_KEY])
+  })
+
+  it('a replacing connect() invalidates for the run it replaced, not for the first connect', () => {
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper: createWrapper() })
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    expect(mockInvalidateQueries).not.toHaveBeenCalled()
+
+    act(() => { result.current.connect('/ws/backups/run/def') })
+
+    expect(invalidatedKeys()).toEqual([HISTORY_KEY, STATUS_KEY])
+  })
+
+  it('unmounting mid-run invalidates history and status', () => {
+    const { result, unmount } = renderHook(() => useBackupStreaming(), { wrapper: createWrapper() })
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+
+    unmount()
+
+    expect(invalidatedKeys()).toEqual([HISTORY_KEY, STATUS_KEY])
+  })
+
+  it('CONTROL: reset() after a done frame adds no invalidation beyond the done frame\'s own', () => {
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper: createWrapper() })
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    act(() => { send({ type: 'done', outcome: 'success' }) })
+    expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+
+    act(() => { result.current.reset() })
+
+    expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+  })
+
+  it('CONTROL: reset() with no run, and a replacing connect() after a done frame, invalidate nothing extra', () => {
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper: createWrapper() })
+    act(() => { result.current.reset() })
+    expect(mockInvalidateQueries).not.toHaveBeenCalled()
+
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    act(() => { send({ type: 'done', outcome: 'success' }) })
+    expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+    act(() => { result.current.connect('/ws/backups/run/def') })
+
+    expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+  })
+
+  it('CONTROL: reset() after the server closed the socket does not refetch twice', () => {
+    const { result } = renderHook(() => useBackupStreaming(), { wrapper: createWrapper() })
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    act(() => { simulateClose() })
+    expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+
+    act(() => { result.current.reset() })
+
+    expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+  })
+
+  it('CONTROL: unmounting after a done frame adds no invalidation', () => {
+    const { result, unmount } = renderHook(() => useBackupStreaming(), { wrapper: createWrapper() })
+    act(() => { result.current.connect('/ws/backups/run/abc') })
+    act(() => { send({ type: 'done', outcome: 'success' }) })
+    expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+
+    unmount()
+
+    expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+  })
+})
+
 // ─── Refused attach (agent-os-mjrl) ──────────────────────────────────────────
 //
 // Attach refuses the 25th live viewer of one run (services/backup_runner.go,

@@ -354,24 +354,48 @@ export function useBackupStreaming(): BackupStreamState {
   const clientRef = useRef<WSClient | null>(null)
   const completedRef = useRef(false)
 
+  // Refetch helper: invalidate backup history + status so the UI reflects the
+  // persisted server run record rather than the transient WS state.
+  const refetchHistory = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
+    queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+  }, [queryClient])
+
+  // WSClient ignores the late close event of a socket the caller closed, so
+  // onClose never reports a run we cancelled, replaced or abandoned. The backend
+  // run outlives the socket, so the code that closes an incomplete run refetches
+  // for it (agent-os-z91e.28). clientRef is null once a run finished or the
+  // socket closed on its own, which is what keeps this from refetching twice.
+  const closeIncompleteRun = useCallback(() => {
+    const client = clientRef.current
+    clientRef.current = null
+    if (!client) return
+    client.close()
+    if (!completedRef.current) refetchHistory()
+  }, [refetchHistory])
+
+  // Unmount only: read through a ref so a new queryClient identity cannot re-run
+  // this cleanup and close a live run.
+  const closeIncompleteRunRef = useRef(closeIncompleteRun)
+  useEffect(() => {
+    closeIncompleteRunRef.current = closeIncompleteRun
+  }, [closeIncompleteRun])
   useEffect(() => {
     return () => {
-      clientRef.current?.close()
-      clientRef.current = null
+      closeIncompleteRunRef.current()
     }
   }, [])
 
   const reset = useCallback(() => {
-    clientRef.current?.close()
-    clientRef.current = null
+    closeIncompleteRun()
     setStatus('idle')
     setLines([])
     setError(null)
     completedRef.current = false
-  }, [])
+  }, [closeIncompleteRun])
 
   const connect = useCallback((wsPath: string, onDone?: (status: BackupStreamStatus) => void) => {
-    clientRef.current?.close()
+    closeIncompleteRun()
     setLines([])
     setError(null)
     setStatus('running')
@@ -379,13 +403,6 @@ export function useBackupStreaming(): BackupStreamState {
 
     const client = new WSClient()
     clientRef.current = client
-
-    // Refetch helper: invalidate backup history + status so the UI reflects
-    // the persisted server run record rather than the transient WS state.
-    const refetchHistory = () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
-    }
 
     client.connect(
       wsPath,
@@ -517,7 +534,7 @@ export function useBackupStreaming(): BackupStreamState {
         },
       },
     )
-  }, [queryClient])
+  }, [closeIncompleteRun, refetchHistory])
 
   return { status, lines, error, connect, reset }
 }

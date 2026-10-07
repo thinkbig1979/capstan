@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
@@ -284,5 +284,90 @@ describe('useUpdateJobStream — frame validation (agent-os-r4kf)', () => {
     expect(useUpdateJobStore.getState().jobs['job-1'].lines).toEqual([
       { ts: '2026-09-23T10:00:01Z', text: 'pulling', stream: 'stdout' },
     ])
+  })
+})
+
+// agent-os-z91e.28: WSClient ignores the late close event of a socket the
+// caller closed, so handleClose never reports a run this hook closed itself (a
+// skip flip, a job change or an unmount). The hook invalidates for it.
+// Two-sided: a run that finished, or a hook that never streamed, does not.
+describe('useUpdateJobStream — caller-closed incomplete run refreshes the updates queries', () => {
+  const JOBS_KEY = ['resources', 'update-jobs']
+  const UPDATES_KEY = ['resources', 'updates']
+
+  function setup(initial: { id: string | null; enabled?: boolean }) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const spy = vi.spyOn(queryClient, 'invalidateQueries')
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+    const hook = renderHook(
+      (p: { id: string | null; enabled?: boolean }) =>
+        useUpdateJobStream(p.id, { enabled: p.enabled }),
+      { wrapper, initialProps: initial },
+    )
+    const keys = () => spy.mock.calls.map((c) => (c[0] as { queryKey: unknown }).queryKey)
+    return { ...hook, keys }
+  }
+
+  it('invalidates when skip flips on mid-run', async () => {
+    const { rerender, keys } = setup({ id: 'job-1' })
+    await openSocket()
+    expect(keys()).toEqual([])
+
+    rerender({ id: 'job-1', enabled: false })
+
+    expect(keys()).toEqual([JOBS_KEY, UPDATES_KEY])
+  })
+
+  it('invalidates when the hook unmounts mid-run', async () => {
+    const { unmount, keys } = setup({ id: 'job-1' })
+    await openSocket()
+
+    unmount()
+
+    expect(keys()).toEqual([JOBS_KEY, UPDATES_KEY])
+  })
+
+  it('invalidates for the run it leaves when the job id changes mid-run', async () => {
+    const { rerender, keys } = setup({ id: 'job-1' })
+    await openSocket()
+
+    rerender({ id: 'job-2' })
+
+    expect(keys()).toEqual([JOBS_KEY, UPDATES_KEY])
+  })
+
+  it('CONTROL: skip after a done frame invalidates nothing', async () => {
+    const { rerender, keys } = setup({ id: 'job-1' })
+    await openSocket()
+    frame({ type: 'done', status: 'success', outcome: 'success' })
+
+    rerender({ id: 'job-1', enabled: false })
+
+    expect(keys()).toEqual([])
+  })
+
+  it('a done frame from the previous job does not hide an incomplete next one', async () => {
+    const { rerender, unmount, keys } = setup({ id: 'job-1' })
+    await openSocket()
+    frame({ type: 'done', status: 'success', outcome: 'success' })
+
+    rerender({ id: 'job-2' })
+    expect(keys()).toEqual([])
+    await waitFor(() => expect(MockWebSocket.instance!.url).toContain('job-2'))
+    unmount()
+
+    expect(keys()).toEqual([JOBS_KEY, UPDATES_KEY])
+  })
+
+  it('CONTROL: a hook that never streamed invalidates nothing on unmount', () => {
+    const { unmount, keys } = setup({ id: null })
+
+    unmount()
+
+    expect(keys()).toEqual([])
   })
 })
