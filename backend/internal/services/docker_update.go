@@ -526,19 +526,23 @@ func (s *DockerService) findComposeContainer(ctx context.Context, projectName, s
 func (s *DockerService) updateComposeContainer(ctx context.Context, stack models.Stack, serviceName string, wasRunning bool) error {
 	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	pullCmd := execCommandContext(ctx, "docker", pullArgs...)
+	pullCmd, pullCtx, cancelPull := commandWithDeadline(ctx, s.composeTimeout(), "docker", pullArgs...)
+	defer cancelPull()
 	pullCmd.Dir = stack.Directory
 	pullCmd.Env = dockerEnv()
 	if output, err := pullCmd.CombinedOutput(); err != nil {
+		err = timeoutError(pullCtx, err, "docker compose pull")
 		return fmt.Errorf("compose pull failed: %s: %w", strings.TrimSpace(s.redactComposeOutputFor(stack, string(output))), err)
 	}
 
 	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	upCmd := execCommandContext(ctx, "docker", upArgs...)
+	upCmd, upCtx, cancelUp := commandWithDeadline(ctx, s.composeTimeout(), "docker", upArgs...)
+	defer cancelUp()
 	upCmd.Dir = stack.Directory
 	upCmd.Env = dockerEnv()
 	if output, err := upCmd.CombinedOutput(); err != nil {
+		err = timeoutError(upCtx, err, "docker compose up")
 		return fmt.Errorf("compose up failed: %s: %w", strings.TrimSpace(s.redactComposeOutputFor(stack, string(output))), err)
 	}
 
@@ -622,23 +626,27 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect c
 // success, or an error wrapping cmd.Wait's exit status; the output itself only
 // reaches the caller through emit.
 //
+// The command is bounded by timeout as well as ctx (agent-os-z91e.20). Its
+// output goes through io.Pipe writers rather than StdoutPipe/StderrPipe: exec
+// then runs its own copy goroutines, which cmd.Wait bounds with WaitDelay, so
+// Wait can be called first. With StdoutPipe the scanners had to finish before
+// Wait, and a grandchild holding the pipe open after the kill kept them, and so
+// the update job, running until it exited on its own.
+//
 // Each line passes redactComposeOutput with secrets, which the caller reads once
 // with composeSecrets for the whole update (agent-os-sdbr): the lines reach the
 // update job's log, which the API serves.
-func streamComposeCmd(ctx context.Context, args []string, dir string, secrets []string, emit func(LogLine)) error {
+func streamComposeCmd(ctx context.Context, timeout time.Duration, args []string, dir string, secrets []string, emit func(LogLine)) error {
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
-	cmd := execCommandContext(ctx, "docker", args...)
+	cmd, cmdCtx, cancel := commandWithDeadline(ctx, timeout, "docker", args...)
+	defer cancel()
 	cmd.Dir = dir
 	cmd.Env = dockerEnv()
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("stderr pipe: %w", err)
-	}
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start: %w", err)
@@ -654,14 +662,23 @@ func streamComposeCmd(ctx context.Context, args []string, dir string, secrets []
 				text := scanner.Text()
 				emit(LogLine{Ts: time.Now().UTC(), Text: redactComposeOutput(text, secrets), Stream: s})
 			}
+			// Keep draining after a scan error (a line over the scanner's limit):
+			// exec's copy goroutine blocks on a writer nobody reads.
+			_, _ = io.Copy(io.Discard, r) //nolint:errcheck // Drain only: the pipe reader's only error is the writer closing, which is the end of the stream.
 		}()
 	}
-	scanPipe(stdout, StreamStdout)
-	scanPipe(stderr, StreamStderr)
+	scanPipe(stdoutR, StreamStdout)
+	scanPipe(stderrR, StreamStderr)
+
+	waitErr := cmd.Wait()
+	// Wait has returned, so exec's copy goroutines are done writing: closing the
+	// writers is what ends the scanners.
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
 	wg.Wait()
 
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("command failed: %w", err)
+	if waitErr != nil {
+		return fmt.Errorf("command failed: %w", timeoutError(cmdCtx, waitErr, "docker compose"))
 	}
 	return nil
 }
@@ -789,7 +806,7 @@ func (s *DockerService) updateComposeContainerStreaming(
 
 	secrets := s.composeSecrets(stack)
 	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
-	if err := streamComposeCmd(ctx, pullArgs, stack.Directory, secrets, emit); err != nil {
+	if err := streamComposeCmd(ctx, s.composeTimeout(), pullArgs, stack.Directory, secrets, emit); err != nil {
 		return fmt.Errorf("compose pull failed: %w", err)
 	}
 
@@ -797,7 +814,7 @@ func (s *DockerService) updateComposeContainerStreaming(
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + serviceName, Stream: StreamStatus})
 
 	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
-	if err := streamComposeCmd(ctx, upArgs, stack.Directory, secrets, emit); err != nil {
+	if err := streamComposeCmd(ctx, s.composeTimeout(), upArgs, stack.Directory, secrets, emit); err != nil {
 		return fmt.Errorf("compose up failed: %w", err)
 	}
 
@@ -951,7 +968,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 
 	secrets := s.composeSecrets(stack)
 	pullArgs := s.buildComposeArgs(stack, "pull", []string{"--", serviceName})
-	if pullErr := streamComposeCmd(ctx, pullArgs, stack.Directory, secrets, emit); pullErr != nil {
+	if pullErr := streamComposeCmd(ctx, s.composeTimeout(), pullArgs, stack.Directory, secrets, emit); pullErr != nil {
 		durationMs = time.Since(start).Milliseconds()
 		ar = truth.Failed("compose pull failed", pullErr)
 		return
@@ -961,7 +978,7 @@ func (s *DockerService) UpdateComposeServiceStreaming(
 	emit(LogLine{Ts: time.Now().UTC(), Text: "==> Recreating " + serviceName, Stream: StreamStatus})
 
 	upArgs := s.buildComposeArgs(stack, "up", []string{"-d", "--force-recreate", "--no-deps", "--", serviceName})
-	if upErr := streamComposeCmd(ctx, upArgs, stack.Directory, secrets, emit); upErr != nil {
+	if upErr := streamComposeCmd(ctx, s.composeTimeout(), upArgs, stack.Directory, secrets, emit); upErr != nil {
 		durationMs = time.Since(start).Milliseconds()
 		ar = truth.Failed("compose up failed", upErr)
 		return
