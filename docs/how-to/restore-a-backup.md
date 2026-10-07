@@ -20,6 +20,23 @@ A restore always stops the stack first, even when its backup policy is set to
 back up live, and restarts it after a successful restore. If the restore fails,
 the stack is left stopped so you can inspect the directory and retry.
 
+A restore makes the stack directory match the snapshot. Files that are in the
+snapshot get their snapshot content back, and files created after it are
+deleted. Two kinds of content are left alone, because backups never include
+them: filesystems mounted inside the stack directory, and directories marked
+with a `CACHEDIR.TAG` file. Capstan checks the directory as it is when you
+restore, which has two consequences:
+
+- A directory that was a mount point or a cache directory when the backup ran,
+  but is not one now, loses its current content. That includes files sitting
+  under a mount point on the stack's own filesystem, which the mount hid from
+  the backup.
+- Files restic could not read during the backup are missing from the snapshot,
+  so the restore deletes them.
+
+If Capstan cannot read part of the stack directory to make that check, it
+refuses the restore and leaves the stack running.
+
 ## Disaster recovery
 
 Follow this in order. **The database is restored before the stacks** — restoring

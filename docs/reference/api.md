@@ -481,6 +481,15 @@ history. It never reached `restic restore`: the run only restores an id that
 restic lists for the stack, and still fails for a well-formed id it does not
 list.
 
+A restore into the stack directory (no `target`, or `target` equal to it)
+deletes files that are not in the snapshot, except mounted filesystems and
+`CACHEDIR.TAG` directories, which backups never include (see
+[Restoring a backup](../how-to/restore-a-backup.md#restore)). If part of the
+directory cannot be read for that check, the run fails with "restore refused"
+before the stack is stopped. A `target` that is a subdirectory of the stack
+receives the whole stack's snapshot inside it, merged with what is there, and
+nothing in it is deleted.
+
 ## Keeping this page honest
 
 `scripts/check-api-docs.sh` extracts every `group.METHOD("path", ...)` call

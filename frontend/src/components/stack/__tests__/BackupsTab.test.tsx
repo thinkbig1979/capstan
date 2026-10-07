@@ -488,6 +488,20 @@ describe('BackupsTab — restore flow', () => {
     })
   })
 
+  // agent-os-z91e.8: the restore runs with --delete, so the dialog must say that
+  // files created since the snapshot are deleted, not only "overwritten".
+  it('warns that files created since the snapshot are deleted', async () => {
+    const wrapper = createWrapper()
+    render(<BackupsTab stackId={STACK_ID} />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: /restore snapshot abc12345/i }))
+
+    expect(
+      await screen.findByText(/files created since the snapshot are deleted/i),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/mounted filesystems and cache directories inside it are left as they are/i)).toBeInTheDocument()
+  })
+
   it('does not call restore mutation when Cancel is clicked in ConfirmDialog', async () => {
     const wrapper = createWrapper()
     render(<BackupsTab stackId={STACK_ID} />, { wrapper })
