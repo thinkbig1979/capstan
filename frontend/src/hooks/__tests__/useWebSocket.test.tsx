@@ -543,6 +543,30 @@ describe('useWebSocket auth-disabled behavior', () => {
 
       expect(closeSpy).toHaveBeenCalled()
     })
+
+    // agent-os-z91e.13: WSClient ignores a closed socket's late close event, so
+    // the caller that closes owns the state, as the effect cleanup does.
+    it('disconnect leaves status disconnected and wsState CLOSED', async () => {
+      useAuthStore.setState({ authDisabled: true, isAuthenticated: false, token: null })
+
+      const { result } = renderHook(() =>
+        useWebSocket('/containers', vi.fn(), stableOptions)
+      )
+      await waitFor(() => {
+        expect(result.current.wsState).toBe('CONNECTING')
+      })
+      act(() => {
+        MockWebSocket.instance!.onopen!()
+      })
+      expect(result.current.status).toBe('connected')
+
+      act(() => {
+        result.current.disconnect()
+      })
+
+      expect(result.current.status).toBe('disconnected')
+      expect(result.current.wsState).toBe('CLOSED')
+    })
   })
 })
 
