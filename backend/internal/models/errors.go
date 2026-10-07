@@ -59,6 +59,10 @@ const (
 	ErrRateLimited           = "RATE_LIMITED"
 	ErrEncryptionUnavailable = "ENCRYPTION_KEY_MISSING"
 	ErrOperationInProgress   = "OPERATION_IN_PROGRESS"
+	// ErrAmbiguousStack refuses an action on a container whose compose project
+	// name is shared by more than one stack, so which stack it belongs to (and
+	// so which stack's lock to take) cannot be told (agent-os-z91e.19).
+	ErrAmbiguousStack = "AMBIGUOUS_STACK"
 	// ErrBackupRepoUnreachable is a configured backup repository that could not
 	// be read: it may exist and hold every snapshot the user has, but this
 	// request could not see it. It is deliberately NOT ErrNotFound — the

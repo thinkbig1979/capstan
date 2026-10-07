@@ -449,6 +449,12 @@ export const ErrEncryptionUnavailable = "ENCRYPTION_KEY_MISSING";
  */
 export const ErrOperationInProgress = "OPERATION_IN_PROGRESS";
 /**
+ * ErrAmbiguousStack refuses an action on a container whose compose project
+ * name is shared by more than one stack, so which stack it belongs to (and
+ * so which stack's lock to take) cannot be told (agent-os-z91e.19).
+ */
+export const ErrAmbiguousStack = "AMBIGUOUS_STACK";
+/**
  * ErrBackupRepoUnreachable is a configured backup repository that could not
  * be read: it may exist and hold every snapshot the user has, but this
  * request could not see it. It is deliberately NOT ErrNotFound — the
@@ -544,6 +550,21 @@ export interface Stack {
   gitDirty: boolean;
   gitAhead: number /* int */;
   gitBehind: number /* int */;
+  /**
+   * ProjectNameSharedWith lists the OTHER stacks that carry this stack's
+   * compose project name. Non-empty means container actions and updates on
+   * that project are refused, because a container's project label cannot say
+   * which stack it belongs to (agent-os-z91e.19, D25). Filled only by the
+   * single-stack read; omitempty so every other response is unchanged.
+   */
+  projectNameSharedWith?: StackRef[];
+}
+/**
+ * StackRef names a stack without its live state.
+ */
+export interface StackRef {
+  id: string;
+  directory: string;
 }
 export interface Container {
   id: string;

@@ -232,13 +232,12 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 		projectName = inspect.Config.Labels["com.docker.compose.project"]
 	}
 	if projectName != "" {
-		// Logged and defaulted rather than refused (agent-os-1gqn): this lookup
-		// only decorates the history row written below, and the update it
-		// records has ALREADY run by this point — refusing would drop the
-		// record of an action that happened, which is worse than recording it
-		// with empty stack fields. An absent row is the ordinary case for a
-		// container whose compose project this instance does not manage, so
-		// only a non-not-found error is worth a line.
+		// This lookup decides whose lock the update takes and decorates the
+		// history row; nothing has run or been queued yet. An absent row is the
+		// ordinary case for a container whose compose project this instance
+		// does not manage. A name two stacks share is refused: taking either
+		// stack's lock would leave the other one unguarded (agent-os-z91e.19).
+		// Any other error is logged and defaulted (agent-os-1gqn).
 		stack, err := h.db.GetStackByProjectName(projectName)
 		switch {
 		case err == nil:
@@ -246,6 +245,9 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 			stackName = stack.ProjectName
 		case errors.Is(err, errdefs.ErrNotFound):
 			// Not managed here; the history row carries empty stack fields.
+		case errors.Is(err, errdefs.ErrAmbiguous):
+			refuseAmbiguousStack(c, err)
+			return
 		default:
 			slog.Error("Failed to look up the stack for the update history row",
 				"projectName", projectName, "error", err)

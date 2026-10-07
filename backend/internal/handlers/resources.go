@@ -222,12 +222,24 @@ func (h *ResourcesHandler) lockContainerStack(c *gin.Context, id string, dockerF
 	switch {
 	case errors.Is(err, errdefs.ErrNotFound):
 		return func() {}, true
+	case errors.Is(err, errdefs.ErrAmbiguous):
+		refuseAmbiguousStack(c, err)
+		return nil, false
 	case err != nil:
 		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
 			"Failed to look up the stack that owns this container", err))
 		return nil, false
 	}
 	return acquireStackLock(c, h.opLock, stack.ID, services.OpKindContainer)
+}
+
+// refuseAmbiguousStack answers 409 AMBIGUOUS_STACK for a container whose
+// compose project name more than one stack carries: whose lock to take, and
+// which stack an update goes through, cannot be told, so nothing is done
+// (agent-os-z91e.19, owner decision D25). err's text names every stack.
+func refuseAmbiguousStack(c *gin.Context, err error) {
+	handleError(c, models.NewAppErrorWithCause(http.StatusConflict, models.ErrAmbiguousStack,
+		err.Error()+"; give each stack its own compose project name", err))
 }
 
 func (h *ResourcesHandler) startContainer(c *gin.Context) {

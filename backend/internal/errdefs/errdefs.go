@@ -62,3 +62,8 @@ func (e *NotFoundError) Error() string {
 // hand-written discrimination silently working, which is the thing
 // agent-os-ymyc removes.
 func (e *NotFoundError) Is(target error) bool { return target == ErrNotFound }
+
+// ErrAmbiguous means a lookup key matched more than one row, so no single
+// answer exists. A lookup that has to pick one (lock a stack, update through
+// it) refuses instead of taking the first row (agent-os-z91e.19).
+var ErrAmbiguous = errors.New("ambiguous")

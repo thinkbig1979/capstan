@@ -284,6 +284,13 @@ func (s *MonitorService) stackEventFor(action, containerID, projectName string, 
 			slog.Debug("No stack row for compose project; emitting the container event without a stack association",
 				"project", projectName)
 			return unassociatedStackEvent(action, containerID, ts)
+		case errors.Is(err, errdefs.ErrAmbiguous):
+			// Two stacks carry this project name, so the event belongs to
+			// neither by name. The database is fine, hence WARN and not the
+			// fault arm's ERROR (agent-os-z91e.19).
+			slog.Warn("Compose project name is shared by more than one stack; emitting the container event without a stack association",
+				"project", projectName, "error", err)
+			return unassociatedStackEvent(action, containerID, ts)
 		default:
 			slog.Error("Failed to read the stack for a compose project; emitting the container event without a stack association, so this container's events are no longer attributed to its stack",
 				"project", projectName, "error", err)

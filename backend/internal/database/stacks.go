@@ -2,7 +2,9 @@ package database
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
@@ -143,16 +145,58 @@ func (d *DB) UpdateStackStatus(id, status string) error {
 	return err
 }
 
+// AmbiguousProjectNameError is what GetStackByProjectName returns when more
+// than one stack carries the compose project name. Nothing stops that: the
+// column has no UNIQUE, and two directories resolve to one name whenever their
+// compose files share a top-level `name:` (agent-os-z91e.19, owner decision
+// D25: both stay listed, every lookup by project name refuses). Stacks holds
+// every match, ordered by id, so a caller can name them all.
+type AmbiguousProjectNameError struct {
+	ProjectName string
+	Stacks      []models.Stack
+}
+
+func (e *AmbiguousProjectNameError) Error() string {
+	names := make([]string, 0, len(e.Stacks))
+	for _, s := range e.Stacks {
+		names = append(names, fmt.Sprintf("%s (%s)", s.ID, s.Directory))
+	}
+	return fmt.Sprintf("compose project name %q is shared by %d stacks: %s",
+		e.ProjectName, len(e.Stacks), strings.Join(names, ", "))
+}
+
+func (e *AmbiguousProjectNameError) Is(target error) bool { return target == errdefs.ErrAmbiguous }
+
 func (d *DB) GetStackByProjectName(projectName string) (*models.Stack, error) {
-	stack := emptyStack()
+	// Every match, not QueryRow's first: a second row is the ambiguity this
+	// lookup must report rather than resolve (agent-os-z91e.19).
 	query := `SELECT id, directory, compose_file, COALESCE(env_file, ''), project_name, status,
 	           is_git_repo, COALESCE(git_branch, ''), COALESCE(git_commit, ''), git_dirty, git_ahead, git_behind
-	          FROM stacks WHERE project_name = ?`
-	err := d.db.QueryRow(query, projectName).Scan(&stack.ID, &stack.Directory, &stack.ComposeFile, &stack.EnvFile,
-		&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
-		&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind)
+	          FROM stacks WHERE project_name = ? ORDER BY id`
+	rows, err := d.db.Query(query, projectName)
 	if err != nil {
-		return nil, notFound(err, "stack", projectName)
+		return nil, err
 	}
-	return &stack, nil
+	defer rows.Close()
+
+	var matches []models.Stack
+	for rows.Next() {
+		stack := emptyStack()
+		if err := rows.Scan(&stack.ID, &stack.Directory, &stack.ComposeFile, &stack.EnvFile,
+			&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
+			&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind); err != nil {
+			return nil, err
+		}
+		matches = append(matches, stack)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading stacks for compose project %q: %w", projectName, err)
+	}
+	switch len(matches) {
+	case 0:
+		return nil, &errdefs.NotFoundError{Kind: "stack", Key: projectName}
+	case 1:
+		return &matches[0], nil
+	}
+	return nil, &AmbiguousProjectNameError{ProjectName: projectName, Stacks: matches}
 }
