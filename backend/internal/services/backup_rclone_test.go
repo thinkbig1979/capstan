@@ -73,7 +73,7 @@ func TestRcloneManager_Sync_Args(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.Sync(context.Background(), "/var/restic-repo", "myremote", "backups/capstan", 8, 2, out)
+	err := m.Sync(context.Background(), "/var/restic-repo", "myremote", "backups/capstan", 8, 2, 0, out)
 	require.NoError(t, err)
 	close(out)
 
@@ -103,7 +103,7 @@ func TestRcloneManager_Sync_UsesConfigDefaults(t *testing.T) {
 		}
 	}()
 	// Pass empty remote/path/transfers to trigger config fallback.
-	err := m.Sync(context.Background(), "/repo", "", "", 0, 1, out)
+	err := m.Sync(context.Background(), "/repo", "", "", 0, 1, 0, out)
 	require.NoError(t, err)
 	close(out)
 
@@ -143,7 +143,7 @@ func TestRcloneManager_Sync_DefaultRetries(t *testing.T) {
 	defer cancel()
 
 	// Override the backoff wait to zero for test speed by using context.
-	err := m.Sync(ctx, "/repo", "r", "p", 4, 0, out)
+	err := m.Sync(ctx, "/repo", "r", "p", 4, 0, 0, out)
 	close(out)
 
 	assert.Error(t, err)
@@ -432,7 +432,7 @@ func TestRcloneManager_Sync_ContextCancel(t *testing.T) {
 		for range out {
 		}
 	}()
-	err := m.Sync(ctx, "/repo", "r", "p", 4, 1, out)
+	err := m.Sync(ctx, "/repo", "r", "p", 4, 1, 0, out)
 	close(out)
 
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
@@ -474,7 +474,7 @@ func TestRcloneManager_Sync_StatsFlag(t *testing.T) {
 		for range out {
 		}
 	}()
-	_ = m.Sync(context.Background(), "/r", "remote", "path", 4, 1, out) //nolint:errcheck // Called for its side-effect; the assertion for this case is below, not on this return value.
+	_ = m.Sync(context.Background(), "/r", "remote", "path", 4, 1, 0, out) //nolint:errcheck // Called for its side-effect; the assertion for this case is below, not on this return value.
 	close(out)
 
 	call := runner.lastCall()

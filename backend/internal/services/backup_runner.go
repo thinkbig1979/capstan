@@ -518,7 +518,8 @@ func (reg *BackupRunnerRegistry) execRestore(dr *durableRun, stackID, snapshotID
 }
 
 // LaunchSync pre-creates a running BackupRun row and starts the rclone sync.
-func (reg *BackupRunnerRegistry) LaunchSync() (string, error) {
+// allowDeleteCount is passed through to RunSync (0 for none).
+func (reg *BackupRunnerRegistry) LaunchSync(allowDeleteCount int) (string, error) {
 	runID := uuid.New().String()
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -537,11 +538,11 @@ func (reg *BackupRunnerRegistry) LaunchSync() (string, error) {
 	if err := reg.registerAndAdd(dr); err != nil {
 		return "", err
 	}
-	go reg.execSync(dr)
+	go reg.execSync(dr, allowDeleteCount)
 	return runID, nil
 }
 
-func (reg *BackupRunnerRegistry) execSync(dr *durableRun) {
+func (reg *BackupRunnerRegistry) execSync(dr *durableRun, allowDeleteCount int) {
 	// See execBackup's defer ordering comment: declared first so it runs last.
 	defer reg.wg.Done()
 	defer close(dr.done)
@@ -551,7 +552,7 @@ func (reg *BackupRunnerRegistry) execSync(dr *durableRun) {
 	defer finish()
 	ctx := context.Background()
 
-	err := reg.svc.RunSync(ctx, out)
+	err := reg.svc.RunSync(ctx, allowDeleteCount, out)
 	finish()
 
 	if err != nil {

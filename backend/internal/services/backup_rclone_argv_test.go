@@ -49,15 +49,19 @@ func TestRcloneManager_PositionalsFollowEndOfOptions(t *testing.T) {
 		assert.Equal(t, []string{"lsd", "--max-depth", "1"}, runner.lastCall().Args[:3])
 	})
 
-	t.Run("sync (Sync)", func(t *testing.T) {
+	t.Run("lsf pre-flight + sync (Sync)", func(t *testing.T) {
 		t.Parallel()
 		runner := &fakeRunner{}
 		out := drain()
-		require.NoError(t, testRcloneManager(runner).Sync(context.Background(), repo, remote, "p", 4, 1, out))
+		require.NoError(t, testRcloneManager(runner).Sync(context.Background(), repo, remote, "p", 4, 1, 0, out))
 		close(out)
-		args := runner.lastCall().Args
+		require.Len(t, runner.calls, 2, "the delete-cap pre-flight listing, then the sync (agent-os-z91e.9)")
+		check(t, runner.calls[0].Args, remote+":p")
+		args := runner.calls[1].Args
 		check(t, args, repo, remote+":p")
-		assert.Equal(t, append([]string{"sync"}, syncOptions(4)...), args[:len(args)-3], "every flag precedes --")
+		want := append([]string{"sync"}, syncOptions(4)...)
+		want = append(want, "--max-delete", "100")
+		assert.Equal(t, want, args[:len(args)-3], "every flag precedes --")
 	})
 
 	t.Run("lsf probe + sync (RestoreRepo)", func(t *testing.T) {

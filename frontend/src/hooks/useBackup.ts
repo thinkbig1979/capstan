@@ -175,6 +175,25 @@ export function useInitRepo() {
   })
 }
 
+// A mutation, not a query: the count is taken on demand when the operator
+// presses Sync now, and must never be served from a cache.
+export function useSyncPreflight() {
+  return useMutation({
+    mutationFn: () => backupApi.syncPreflight(),
+  })
+}
+
+export function useRunSync() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (allowDeleteCount?: number) => backupApi.runSync(allowDeleteCount),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
+    },
+  })
+}
+
 export function useTestCloud() {
   return useMutation({
     mutationFn: () => backupApi.testCloud(),

@@ -48,7 +48,7 @@ func TestStopWithTimeout_ExpiresWhileRunInFlight(t *testing.T) {
 
 	reg := NewBackupRunnerRegistry(db, svc, slog.Default())
 
-	_, err := reg.LaunchSync()
+	_, err := reg.LaunchSync(0)
 	require.NoError(t, err)
 
 	select {
@@ -90,7 +90,7 @@ func TestLaunchSync_AfterStopHasBegun_ReturnsErrorNotOrphanedRun(t *testing.T) {
 
 	reg.Stop() // nothing in flight, returns immediately; commits reg.stopped = true
 
-	runID, err := reg.LaunchSync()
+	runID, err := reg.LaunchSync(0)
 	assert.Empty(t, runID, "a refused launch must not return a runID")
 	require.ErrorIs(t, err, ErrRegistryStopping)
 }
@@ -134,7 +134,7 @@ func TestLaunchSync_DuringStopWithTimeout_ReturnsErrorNotPanic(t *testing.T) {
 
 	reg := NewBackupRunnerRegistry(db, svc, slog.Default())
 
-	_, err := reg.LaunchSync()
+	_, err := reg.LaunchSync(0)
 	require.NoError(t, err)
 
 	select {
@@ -153,7 +153,7 @@ func TestLaunchSync_DuringStopWithTimeout_ReturnsErrorNotPanic(t *testing.T) {
 	// correctness dependency — the guard itself has no timing window.
 	time.Sleep(20 * time.Millisecond)
 
-	runID, err := reg.LaunchSync()
+	runID, err := reg.LaunchSync(0)
 	assert.Empty(t, runID, "a launch arriving during the drain must not start a new run")
 	require.ErrorIs(t, err, ErrRegistryStopping)
 

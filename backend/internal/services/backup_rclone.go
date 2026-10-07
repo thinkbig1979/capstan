@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -101,10 +104,155 @@ func syncOptions(transfers int) []string {
 	}
 }
 
-// Sync copies the local restic repository at repoPath to the rclone destination
-// remote:path. It retries up to retries times with linear backoff (30s * attempt).
-// If retries <= 0 the engine default of 3 is used. Output is streamed to out.
-func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string, transfers, retries int, out chan<- StreamLine) error {
+// The delete cap for the off-site sync (agent-os-z91e.9): one run may delete
+// at most max(syncDeleteCapFloor, syncDeleteCapPercent% of the local
+// repository's files) remote files. A routine `restic forget --prune` deletes
+// a few percent of the packs; a local repository that lost files (partial
+// disk loss, a bad prune) would otherwise mirror that loss onto the only
+// off-site copy.
+const (
+	syncDeleteCapFloor   = 100
+	syncDeleteCapPercent = 20
+
+	// syncPreflightTimeout bounds the recursive remote listing. Sync lists the
+	// whole remote anyway; this only keeps a hung backend from holding the
+	// global backup guard (or an HTTP request) forever.
+	syncPreflightTimeout = 10 * time.Minute
+)
+
+// SyncPreflight is what a sync from the local repository would do to the
+// remote: RemoteOnly files exist only on the remote, so the sync would
+// delete them, and Cap is how many one run may delete without an explicit
+// confirmation.
+type SyncPreflight struct {
+	RemoteOnly int
+	Cap        int
+}
+
+// SyncDeleteCapError refuses a sync before it starts, so the refusal deletes
+// nothing. Allowed is the count the operator confirmed for this run (0 when
+// none was).
+type SyncDeleteCapError struct {
+	RemoteOnly int
+	Cap        int
+	Allowed    int
+}
+
+func (e *SyncDeleteCapError) Error() string {
+	if e.Allowed > 0 {
+		return fmt.Sprintf("refusing rclone sync: it would delete %d remote files, more than the %d confirmed for this run (cap is %d). Run Sync now again and confirm the new count", e.RemoteOnly, e.Allowed, e.Cap)
+	}
+	return fmt.Sprintf("refusing rclone sync: it would delete %d remote files, cap is %d (the larger of %d and %d%% of the local repository's files). If you just ran forget/prune, use Sync now in the cloud backup settings and confirm the delete. Otherwise the local repository may have lost files: check it with `restic check` before syncing", e.RemoteOnly, e.Cap, syncDeleteCapFloor, syncDeleteCapPercent)
+}
+
+// localRepoFiles returns the files under repoPath as the slash-separated keys
+// `rclone lsf -R --files-only` prints for the same tree on the remote. A
+// symlink is keyed with rclone's ".rclonelink" suffix, which is how --links
+// (syncOptions) stores it. A repoPath that does not exist has no files, so
+// every remote file counts as remote-only, which is what the sync would
+// delete; any other walk error is returned.
+func localRepoFiles(repoPath string) (map[string]struct{}, error) {
+	files := make(map[string]struct{})
+	err := filepath.WalkDir(repoPath, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == repoPath && errors.Is(err, fs.ErrNotExist) {
+				return fs.SkipAll
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(repoPath, p)
+		if err != nil {
+			return err
+		}
+		key := filepath.ToSlash(rel)
+		if d.Type()&fs.ModeSymlink != 0 {
+			key += ".rclonelink"
+		}
+		files[key] = struct{}{}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("could not list the local repository %s: %w", RedactURLUserinfo(repoPath), err)
+	}
+	return files, nil
+}
+
+// syncPreflight counts the remote files a sync from repoPath to
+// remote:path would delete, by listing the remote recursively and comparing
+// it with the local tree. rclone's own exit 3 ("directory not found", see
+// remoteHasSnapshots) means a remote that was never synced to: nothing to
+// delete. Any other listing error is returned: this guards a mirror-delete,
+// so a remote that cannot be listed cannot be shown to be within the cap.
+func (m *RcloneManager) syncPreflight(ctx context.Context, repoPath, remote, path string) (SyncPreflight, error) {
+	local, err := localRepoFiles(repoPath)
+	if err != nil {
+		return SyncPreflight{}, err
+	}
+	pf := SyncPreflight{Cap: max(syncDeleteCapFloor, len(local)*syncDeleteCapPercent/100)}
+
+	target := fmt.Sprintf("%s:%s", remote, path)
+	ctx, cancel := withCommandDeadline(ctx, syncPreflightTimeout)
+	defer cancel()
+	raw, err := m.runner.Output(ctx, "rclone", []string{"lsf", "-R", "--files-only", "--", target}, nil)
+	if err != nil {
+		if isExitCode(err, 3) {
+			return pf, nil
+		}
+		return SyncPreflight{}, fmt.Errorf("could not list %s to count the files a sync would delete: %w", target, timeoutError(ctx, err, "rclone lsf"))
+	}
+	for _, key := range strings.Split(string(raw), "\n") {
+		if key == "" {
+			continue
+		}
+		if _, ok := local[key]; !ok {
+			pf.RemoteOnly++
+		}
+	}
+	return pf, nil
+}
+
+// PreflightSync reports what Sync would delete from remote:path, without
+// syncing. The UI asks it before a manual sync so an over-cap delete can be
+// confirmed with its count; Sync runs it again itself, so this answer is
+// advisory and never a permission.
+func (m *RcloneManager) PreflightSync(ctx context.Context, repoPath, remote, path string) (SyncPreflight, error) {
+	if remote == "" {
+		remote = m.cfg.RcloneRemote
+	}
+	if path == "" {
+		path = m.cfg.RclonePath
+	}
+	return m.syncPreflight(ctx, repoPath, remote, path)
+}
+
+// Sync mirrors the local restic repository at repoPath onto the rclone
+// destination remote:path, deleting remote files absent locally, with a cap
+// on how many it may delete (agent-os-z91e.9):
+//
+//  1. syncPreflight counts the remote-only files first. Above the cap, or
+//     above allowDeleteCount when the operator confirmed a larger delete for
+//     this one manual run, Sync refuses with a *SyncDeleteCapError before
+//     rclone runs, so a refusal deletes nothing. allowDeleteCount is a
+//     count, not a switch: if the remote changed after the confirmation and
+//     now holds more remote-only files, this run still refuses.
+//  2. `--max-delete` carries the same limit as a backstop for files that
+//     appear between the count and the sync. rclone does not apply it
+//     all-or-nothing: OBSERVED (rclone v1.60.1 and v1.75.1, a local sync
+//     with 5 remote-only files and --max-delete 2) it deleted 2, then exited
+//     7, "--max-delete threshold reached".
+//  3. Exit 7 is rclone's "fatal error, retries won't fix it" and is never
+//     retried here. The cap is per rclone process: OBSERVED in the same run,
+//     each rerun deleted 2 more and the third exited 0, so retrying a
+//     tripped backstop would delete up to retries x the cap and could end in
+//     a success.
+//
+// Other failures are retried up to retries times with linear backoff
+// (30s * attempt). If retries <= 0 the engine default of 3 is used. Output
+// is streamed to out.
+func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string, transfers, retries, allowDeleteCount int, out chan<- StreamLine) error {
 	if remote == "" {
 		remote = m.cfg.RcloneRemote
 	}
@@ -118,16 +266,31 @@ func (m *RcloneManager) Sync(ctx context.Context, repoPath, remote, path string,
 		retries = 3
 	}
 
+	pf, err := m.syncPreflight(ctx, repoPath, remote, path)
+	if err != nil {
+		return fmt.Errorf("refusing rclone sync: %w", err)
+	}
+	limit := max(pf.Cap, allowDeleteCount)
+	if pf.RemoteOnly > limit {
+		capErr := &SyncDeleteCapError{RemoteOnly: pf.RemoteOnly, Cap: pf.Cap, Allowed: allowDeleteCount}
+		m.logger.Warn("Refusing rclone sync: delete cap", "remote_only", pf.RemoteOnly, "cap", pf.Cap, "allowed", allowDeleteCount)
+		return capErr
+	}
+
 	destination := fmt.Sprintf("%s:%s", remote, path)
-	m.logger.Info("Starting rclone sync", "source", RedactURLUserinfo(repoPath), "destination", destination, "transfers", transfers)
+	m.logger.Info("Starting rclone sync", "source", RedactURLUserinfo(repoPath), "destination", destination, "transfers", transfers, "remote_only", pf.RemoteOnly, "max_delete", limit)
 
 	args := append([]string{"sync"}, syncOptions(transfers)...)
+	args = append(args, "--max-delete", strconv.Itoa(limit))
 	args = append(args, "--", repoPath, destination)
 
 	var lastErr error
 	for attempt := 1; attempt <= retries; attempt++ {
 		m.logger.Info("Sync attempt", "attempt", attempt, "of", retries)
 		if err := m.runner.Run(ctx, "rclone", args, nil, out); err != nil {
+			if isExitCode(err, 7) {
+				return fmt.Errorf("rclone sync stopped on a fatal error and was not retried (exit 7; the --max-delete %d backstop stops a sync this way when the remote changed after the pre-flight count, see the run log): %w", limit, err)
+			}
 			lastErr = err
 			m.logger.Warn("Sync attempt failed", "attempt", attempt, "error", err)
 			if attempt < retries {
@@ -345,12 +508,15 @@ func (m *RcloneManager) remoteHasSnapshots(ctx context.Context, remote, path str
 //     warning that it has opted out.
 //
 // RcloneManager.Sync (the upload direction, local -> remote) intentionally
-// keeps sync with no such caller-supplied backup-dir: there the local repo is
-// authoritative, and mirror-with-delete is how retention (forgotten/pruned
-// snapshots) propagates offsite. Do not "fix" this asymmetry back to a
+// keeps sync with no backup-dir: there the local repo is authoritative, and
+// mirror-with-delete is how retention (forgotten/pruned snapshots) propagates
+// offsite. Its invariant is a mirror with a delete cap instead (agent-os-z91e.9):
+// one run deletes at most the cap, or the count the operator confirmed for a
+// manual run, and refuses before deleting anything when the pre-flight count
+// is higher -- see Sync's doc comment. Do not "fix" this asymmetry back to a
 // single shared verb; the two directions differ because which side is
-// authoritative differs. (BackupService.runSyncInternal guards that
-// direction its own way -- see its doc comment.)
+// authoritative differs. (BackupService.runSyncInternal adds its own guards
+// for that direction -- see its doc comment.)
 //
 // It retries with the same backoff as Sync.
 func (m *RcloneManager) RestoreRepo(ctx context.Context, remote, path, localPath, backupDir string, retries int, out chan<- StreamLine) error {

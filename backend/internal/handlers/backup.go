@@ -139,6 +139,7 @@ func (h *BackupHandler) RegisterRoutes(group *gin.RouterGroup) {
 
 	// Operations — kick off durable runs; WS streaming wired in RegisterWSRoutes.
 	group.POST("/backups/run", h.runBackup)
+	group.GET("/backups/sync/preflight", h.syncPreflight)
 	group.POST("/backups/sync", h.runSync)
 	group.POST("/backups/restore", h.runRestore)
 	group.POST("/backups/dr-restore", h.runDRRestore)
@@ -1203,12 +1204,30 @@ func (h *BackupHandler) runBackup(c *gin.Context) {
 	})
 }
 
+// runSyncRequest is the optional POST /backups/sync request body.
+// AllowDeleteCount is the remote delete count the operator confirmed after
+// GET /backups/sync/preflight showed it above the cap (agent-os-z91e.9); 0 or
+// an absent body means no confirmation, so the sync stops at the cap.
+type runSyncRequest struct {
+	AllowDeleteCount int `json:"allowDeleteCount"`
+}
+
 func (h *BackupHandler) runSync(c *gin.Context) {
+	var req runSyncRequest
+	if err := c.ShouldBindJSON(&req); (err != nil && !errors.Is(err, io.EOF)) || req.AllowDeleteCount < 0 {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"Invalid request body",
+		))
+		return
+	}
+
 	if err := h.requireAvailable(c); err != nil {
 		return
 	}
 
-	runID, err := h.registry.LaunchSync()
+	runID, err := h.registry.LaunchSync(req.AllowDeleteCount)
 	if err != nil {
 		h.respondForLaunchError(c, "sync", err)
 		return
@@ -1218,6 +1237,41 @@ func (h *BackupHandler) runSync(c *gin.Context) {
 		"runId": runID,
 		"wsUrl": "/ws/backups/sync/" + runID,
 	})
+}
+
+// syncPreflight handles GET /backups/sync/preflight: it counts the remote
+// files a sync would delete, without syncing. It refuses while another backup
+// operation runs (requireAvailable), like POST /backups/sync, so it never
+// counts a repository that a backup or prune is changing; the sync counts
+// again under the global guard regardless.
+func (h *BackupHandler) syncPreflight(c *gin.Context) {
+	if err := h.requireAvailable(c); err != nil {
+		return
+	}
+	if av := h.svc.Available(); !av.RclonePresent {
+		c.JSON(http.StatusConflict, engineUnavailable(av))
+		return
+	}
+
+	pf, err := h.svc.SyncPreflight(c.Request.Context())
+	if errors.Is(err, services.ErrRcloneRemoteNotConfigured) {
+		c.JSON(http.StatusBadRequest, models.NewAppError(
+			http.StatusBadRequest,
+			models.ErrValidation,
+			"rclone remote is not configured",
+		))
+		return
+	}
+	if err != nil {
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusBadGateway,
+			"SYNC_PREFLIGHT_FAILED",
+			"Could not count the remote files a sync would delete: "+err.Error(),
+			err,
+		))
+		return
+	}
+	c.JSON(http.StatusOK, SyncPreflightResponse{RemoteOnly: pf.RemoteOnly, Cap: pf.Cap})
 }
 
 // runRestoreRequest is the POST /backups/restore request body.

@@ -4,6 +4,8 @@ import { NumericField } from '../NumericField'
 import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
 import { HelpHint } from '@/components/ui/help-hint'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import type { SyncPreflightResponse } from '@/types'
 import type { Draft } from './types'
 
 interface CloudSectionProps {
@@ -12,9 +14,37 @@ interface CloudSectionProps {
   rcloneAvailable: boolean
   onTestCloud: () => void
   isTestingCloud: boolean
+  onSyncNow: () => void
+  isSyncing: boolean
+  /** The form has unsaved edits; a sync runs on the SAVED settings. */
+  isDirty: boolean
+  /** A pre-flight count above the cap, awaiting confirmation (agent-os-z91e.9). */
+  pendingLargeDelete: SyncPreflightResponse | null
+  onConfirmLargeDelete: () => void
+  onLargeDeleteOpenChange: (open: boolean) => void
 }
 
-export function CloudSection({ draft, onChange, rcloneAvailable, onTestCloud, isTestingCloud }: CloudSectionProps) {
+function syncBlockedReason(rcloneAvailable: boolean, remote: string, isDirty: boolean): string | undefined {
+  if (!rcloneAvailable) return 'rclone not available'
+  if (!remote) return 'Set and save a remote first'
+  if (isDirty) return 'Save your changes first: a sync uses the saved settings'
+  return undefined
+}
+
+export function CloudSection({
+  draft,
+  onChange,
+  rcloneAvailable,
+  onTestCloud,
+  isTestingCloud,
+  onSyncNow,
+  isSyncing,
+  isDirty,
+  pendingLargeDelete,
+  onConfirmLargeDelete,
+  onLargeDeleteOpenChange,
+}: CloudSectionProps) {
+  const syncBlocked = syncBlockedReason(rcloneAvailable, draft.rcloneRemote, isDirty)
   return (
     <div className="space-y-4 pt-4 border-t">
       <div className="flex items-center gap-1.5">
@@ -92,6 +122,40 @@ export function CloudSection({ draft, onChange, rcloneAvailable, onTestCloud, is
           'Test connectivity'
         )}
       </Button>
+
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="ml-2"
+        onClick={onSyncNow}
+        disabled={isSyncing || syncBlocked !== undefined}
+        title={syncBlocked}
+      >
+        {isSyncing ? (
+          <>
+            <span className="mr-2"><LoadingSpinner size="small" /></span>
+            Syncing…
+          </>
+        ) : (
+          'Sync now'
+        )}
+      </Button>
+
+      <ConfirmDialog
+        open={pendingLargeDelete !== null}
+        onOpenChange={onLargeDeleteOpenChange}
+        title="Delete files from the remote?"
+        description={
+          pendingLargeDelete
+            ? `This sync would delete ${pendingLargeDelete.remoteOnly} files from the remote, more than the ${pendingLargeDelete.cap} a sync deletes without asking. ` +
+              'That is expected right after a forget/prune. If you have not pruned, the local repository may have lost files: cancel and check it with restic check.'
+            : ''
+        }
+        confirmText={pendingLargeDelete ? `Sync and delete ${pendingLargeDelete.remoteOnly} files` : 'Sync'}
+        onConfirm={onConfirmLargeDelete}
+        isDangerous
+      />
     </div>
   )
 }

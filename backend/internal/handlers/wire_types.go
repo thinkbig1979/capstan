@@ -115,3 +115,13 @@ type LintResponse struct {
 	Valid       bool                `json:"valid"`
 	LintResults []models.LintResult `json:"lintResults"`
 }
+
+// SyncPreflightResponse is the wire shape of GET /backups/sync/preflight
+// (agent-os-z91e.9): how many remote files a sync would delete now, and how
+// many one run may delete without a confirmation. When RemoteOnly exceeds
+// Cap, the UI asks the operator to confirm RemoteOnly and sends it as
+// allowDeleteCount on POST /backups/sync.
+type SyncPreflightResponse struct {
+	RemoteOnly int `json:"remoteOnly"`
+	Cap        int `json:"cap"`
+}

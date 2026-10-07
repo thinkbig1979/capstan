@@ -69,6 +69,7 @@ import type {
   EnvEntry,
   EnvResponse,
   LintResponse as WireLintResponse,
+  SyncPreflightResponse,
 } from './generated-handlers'
 import type {
   DiskUsageBreakdown,
@@ -106,6 +107,7 @@ export type {
   PortBinding,
   Session,
   StackEvent,
+  SyncPreflightResponse,
   UpdateResult,
   User,
   VersionInfo,
