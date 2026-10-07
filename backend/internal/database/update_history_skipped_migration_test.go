@@ -67,6 +67,15 @@ INSERT INTO update_history (id, container_id, container_name, stack_id, stack_na
 	require.NoError(t, db.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&stamped))
 	require.Equal(t, migrations[len(migrations)-1].Version, stamped)
 
+	// RunMigrations also applies migration 22, which backfills completed_at
+	// on h-paused (agent-os-z91e.46); every other value must be unchanged.
+	// Columns 12 and 13 of SELECT * are started_at and completed_at.
+	for _, r := range rowsBefore {
+		if r[0] == "h-paused" {
+			require.Equal(t, "<NULL>", r[13])
+			r[13] = r[12]
+		}
+	}
 	assert.Equal(t, rowsBefore, dumpRows(t, db, rowsQ), "update_history rows must survive the rebuild unchanged")
 	assert.Equal(t, schemaBefore, dumpRows(t, db, schemaQ), "every index and trigger must be recreated as it was")
 

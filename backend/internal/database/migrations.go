@@ -880,6 +880,20 @@ CREATE INDEX IF NOT EXISTS idx_update_history_started_at ON update_history(start
 CREATE INDEX IF NOT EXISTS idx_update_history_completed_at ON update_history(completed_at);
 `,
 	},
+	{
+		Version: 22,
+		Name:    "update_history_paused_completed_at",
+		SQL: `
+-- A 'paused' row (a policy paused after three failed auto-updates) was
+-- written with no completed_at (agent-os-z91e.46). Retention and the manual
+-- clear both delete by completed_at, so those rows could never be deleted.
+-- The scheduler now writes completed_at = started_at, as on a 'skipped' row;
+-- this gives existing paused rows the same value. Only 'paused': a 'pending'
+-- row with no completed_at is a run in flight and must stay incomplete.
+UPDATE update_history SET completed_at = started_at
+ WHERE status = 'paused' AND completed_at IS NULL;
+`,
+	},
 }
 
 // ReencryptSecrets rewrites every stored secret that is not yet in the v2

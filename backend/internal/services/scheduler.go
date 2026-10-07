@@ -1262,6 +1262,10 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 					s.logger.Error("Failed to update paused policy", "error", err)
 				}
 
+				// completed_at = started_at, as on a skipped row: retention
+				// and the manual clear both delete by completed_at, so a row
+				// without one would never go (agent-os-z91e.46).
+				pausedAt := time.Now().Format(time.RFC3339)
 				pausedHistory := &models.UpdateHistoryEntry{
 					ID:            uuid.New().String(),
 					ContainerID:   update.ContainerID,
@@ -1269,7 +1273,8 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 					Image:         update.ImageRef,
 					Status:        "paused",
 					Trigger:       "auto",
-					StartedAt:     time.Now().Format(time.RFC3339),
+					StartedAt:     pausedAt,
+					CompletedAt:   &pausedAt,
 				}
 				if update.StackID != "" {
 					pausedHistory.StackID = &update.StackID
