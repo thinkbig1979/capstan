@@ -200,7 +200,7 @@ own verdict, or whose membership rule has never been shown to stop where it
 claims, is not a sweep. It is an assumption with a command line attached.
 
 <!-- BEGIN AGENT OS — managed by install-agent-os.sh, do not hand-edit -->
-## Agent OS (7.12.2) — the six commands, and which one to use
+## Agent OS (7.12.3) — the six commands, and which one to use
 
 **There is no auto-discovery. This table is the routing.**
 
