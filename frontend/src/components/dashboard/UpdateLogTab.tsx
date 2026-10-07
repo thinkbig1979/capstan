@@ -42,11 +42,19 @@ const updateStatusTone: Record<string, StatusTone> = {
   failed: 'error',
   pending: 'warning',
   paused: 'warning',
+  skipped: 'neutral',
 }
 
-function StatusBadgeComponent({ status }: { status: string }) {
+// reason is the row's errorMessage: a failed update's error or a skipped one's
+// cause. Hover shows it; the sr-only copy reads it without hovering.
+function StatusBadgeComponent({ status, reason }: { status: string; reason?: string }) {
   const tone = updateStatusTone[status] || 'warning'
-  return <Status tone={tone} className="text-xs">{status}</Status>
+  return (
+    <>
+      <Status tone={tone} className="text-xs" title={reason || undefined}>{status}</Status>
+      {reason && <span className="sr-only">{reason}</span>}
+    </>
+  )
 }
 
 function TriggerBadgeComponent({ trigger }: { trigger: string }) {
@@ -188,6 +196,7 @@ export function UpdateLogTab() {
             <SelectItem value="failed">Failed</SelectItem>
             <SelectItem value="pending">Pending</SelectItem>
             <SelectItem value="paused">Paused</SelectItem>
+            <SelectItem value="skipped">Skipped</SelectItem>
           </SelectContent>
         </Select>
 
@@ -263,7 +272,7 @@ export function UpdateLogTab() {
                   {truncateDigest(entry.oldDigest)} → {truncateDigest(entry.newDigest)}
                 </TableCell>
                 <TableCell>
-                  <StatusBadgeComponent status={entry.status} />
+                  <StatusBadgeComponent status={entry.status} reason={entry.errorMessage} />
                 </TableCell>
                 <TableCell>
                   <TriggerBadgeComponent trigger={entry.trigger} />

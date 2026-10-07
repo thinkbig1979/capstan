@@ -41,10 +41,20 @@ const updateStatusTone: Record<string, StatusTone> = {
   failed: 'error',
   pending: 'warning',
   paused: 'warning',
+  skipped: 'neutral',
 }
 
-function StatusBadge({ status }: { status: string }) {
-  return <Status tone={updateStatusTone[status] || 'warning'} className="text-xs">{status}</Status>
+// reason is the row's errorMessage: a failed update's error or a skipped one's
+// cause. Hover shows it; the sr-only copy reads it without hovering.
+function StatusBadge({ status, reason }: { status: string; reason?: string }) {
+  return (
+    <>
+      <Status tone={updateStatusTone[status] || 'warning'} className="text-xs" title={reason || undefined}>
+        {status}
+      </Status>
+      {reason && <span className="sr-only">{reason}</span>}
+    </>
+  )
 }
 
 function TriggerBadge({ trigger }: { trigger: string }) {
@@ -168,6 +178,7 @@ export function StackUpdatesTab({ stackId }: { stackId: string }) {
             <SelectItem value="failed">Failed</SelectItem>
             <SelectItem value="pending">Pending</SelectItem>
             <SelectItem value="paused">Paused</SelectItem>
+            <SelectItem value="skipped">Skipped</SelectItem>
           </SelectContent>
         </Select>
 
@@ -218,7 +229,7 @@ export function StackUpdatesTab({ stackId }: { stackId: string }) {
                   {truncateDigest(entry.oldDigest)} → {truncateDigest(entry.newDigest)}
                 </TableCell>
                 <TableCell>
-                  <StatusBadge status={entry.status} />
+                  <StatusBadge status={entry.status} reason={entry.errorMessage} />
                 </TableCell>
                 <TableCell>
                   <TriggerBadge trigger={entry.trigger} />

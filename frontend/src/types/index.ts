@@ -199,7 +199,9 @@ export type BackupRunItem = Omit<WireBackupRunItem, 'status'> & {
 
 // narrows models.UpdateHistoryEntry.Status and .Trigger, both Go strings
 export type UpdateHistoryEntry = Omit<WireUpdateHistoryEntry, 'status' | 'trigger'> & {
-  status: 'pending' | 'success' | 'failed' | 'paused'
+  // 'skipped' (agent-os-z91e.32): an auto-update a pass never started or
+  // skipped because its stack was busy; errorMessage says which.
+  status: 'pending' | 'success' | 'failed' | 'paused' | 'skipped'
   trigger: 'manual' | 'auto'
 }
 
