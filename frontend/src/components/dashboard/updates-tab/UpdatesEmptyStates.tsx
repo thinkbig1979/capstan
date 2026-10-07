@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -89,10 +90,10 @@ export function NeverScannedCard({ onCheck }: RetryCardProps) {
             Check for Updates
           </Button>
           <Button variant="outline" asChild>
-            <a href="/settings">
+            <Link to="/settings">
               <Settings className="mr-2 h-4 w-4" />
               Settings
-            </a>
+            </Link>
           </Button>
         </div>
       </CardContent>

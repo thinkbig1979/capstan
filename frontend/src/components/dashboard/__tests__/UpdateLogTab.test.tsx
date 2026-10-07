@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+import { BrowserRouter } from 'react-router'
 import { UpdateLogTab } from '../UpdateLogTab'
 import type { UpdateHistoryEntry } from '@/types'
 
@@ -58,7 +59,9 @@ function createWrapper() {
     defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
   })
   return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <BrowserRouter>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    </BrowserRouter>
   )
 }
 
@@ -72,6 +75,7 @@ const dateSelect = () => screen.getAllByRole('combobox')[2]
 
 beforeEach(() => {
   vi.clearAllMocks()
+  window.history.pushState({}, '', '/')
   mockGetUpdateHistory.mockResolvedValue(historyPage())
 })
 
@@ -120,6 +124,15 @@ describe('UpdateLogTab — the table', () => {
     expect(await screen.findByText('web-1')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'web' })).toHaveAttribute('href', '/stacks/stack-1')
     expect(screen.getByText('nginx:latest')).toBeInTheDocument()
+  })
+
+  it('the stack link navigates inside the SPA (agent-os-z91e.12)', async () => {
+    renderTab()
+
+    await userEvent.click(await screen.findByRole('link', { name: 'web' }))
+
+    // A raw <a href> leaves the router location at '/'; a <Link> pushes it.
+    expect(window.location.pathname).toBe('/stacks/stack-1')
   })
 
   it('marks an entry with no stack as standalone', async () => {
@@ -334,9 +347,11 @@ function renderTabWithClient() {
     defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
   })
   const view = render(
-    <QueryClientProvider client={queryClient}>
-      <UpdateLogTab />
-    </QueryClientProvider>,
+    <BrowserRouter>
+      <QueryClientProvider client={queryClient}>
+        <UpdateLogTab />
+      </QueryClientProvider>
+    </BrowserRouter>,
   )
   return { ...view, queryClient }
 }

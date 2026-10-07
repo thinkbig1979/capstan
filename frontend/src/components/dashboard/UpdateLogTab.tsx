@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { Link } from 'react-router'
 import { useUpdateHistory } from '@/hooks/useResources'
 import { useTextFilter } from '@/hooks/useTextFilter'
 import { TableSearch } from '@/components/ui/table-search'
@@ -243,12 +244,12 @@ export function UpdateLogTab() {
                 </TableCell>
                 <TableCell>
                   {entry.stackName ? (
-                    <a
-                      href={`/stacks/${entry.stackId}`}
+                    <Link
+                      to={`/stacks/${entry.stackId}`}
                       className="text-sm text-info hover:underline"
                     >
                       {entry.stackName}
-                    </a>
+                    </Link>
                   ) : (
                     <span className="text-xs text-muted-foreground italic">standalone</span>
                   )}

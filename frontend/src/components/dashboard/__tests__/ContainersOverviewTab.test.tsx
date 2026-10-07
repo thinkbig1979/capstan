@@ -614,3 +614,15 @@ describe('ContainersOverviewTab — a 207 partial lifecycle outcome is not a gre
     expect(invalidatedStacks(spy)).toBe(false)
   })
 })
+
+describe('ContainersOverviewTab — the stack link stays inside the SPA (agent-os-z91e.12)', () => {
+  it('clicking the project name moves the router location to the stack page', () => {
+    renderTab(makeContainer({ stackId: 'stack-1', projectName: 'myproject' }))
+
+    fireEvent.click(screen.getByRole('link', { name: 'myproject' }))
+
+    // A raw <a href> is a document navigation: jsdom does not follow it, so the
+    // router location stays '/'. A <Link> pushes through history.
+    expect(window.location.pathname).toBe('/stacks/stack-1')
+  })
+})

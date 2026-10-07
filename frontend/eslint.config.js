@@ -185,6 +185,31 @@ export default defineConfig([
           message:
             'An empty numeric field must not become a number. Use NumericField (components/settings/NumericField.tsx) and hold number | null in the draft, or parseWholeNumber, and block Save while it is null.',
         },
+        // agent-os-z91e.12: a raw <a> with a same-origin path is a full document
+        // navigation: the SPA unloads, taking the query cache, every open
+        // WebSocket and the in-memory env-unlock state with it. Internal links
+        // use react-router's <Link to>. Keyed on the href's FIRST character so an
+        // external https: link (docs, releases, published ports) never matches;
+        // the three spellings are a string literal, a braced literal and a
+        // template literal, which is how all four fixed sites were written.
+        {
+          selector:
+            "JSXOpeningElement[name.name='a'] > JSXAttribute[name.name='href'][value.type='Literal'][value.value=/^\\//]",
+          message:
+            "A same-origin href on a raw <a> reloads the SPA and drops the query cache, sockets and env-unlock state. Use <Link to> from 'react-router'.",
+        },
+        {
+          selector:
+            "JSXOpeningElement[name.name='a'] > JSXAttribute[name.name='href'] > JSXExpressionContainer > Literal[value=/^\\//]",
+          message:
+            "A same-origin href on a raw <a> reloads the SPA and drops the query cache, sockets and env-unlock state. Use <Link to> from 'react-router'.",
+        },
+        {
+          selector:
+            "JSXOpeningElement[name.name='a'] > JSXAttribute[name.name='href'] > JSXExpressionContainer > TemplateLiteral[quasis.0.value.raw=/^\\//]",
+          message:
+            "A same-origin href on a raw <a> reloads the SPA and drops the query cache, sockets and env-unlock state. Use <Link to> from 'react-router'.",
+        },
       ],
     },
   },

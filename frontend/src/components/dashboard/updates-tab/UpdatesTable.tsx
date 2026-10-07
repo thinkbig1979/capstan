@@ -1,4 +1,5 @@
 import { Fragment } from 'react'
+import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -160,12 +161,12 @@ export function UpdatesTable({
                   </TableCell>
                   <TableCell>
                     {container.stackId ? (
-                      <a
-                        href={`/stacks/${container.stackId}`}
+                      <Link
+                        to={`/stacks/${container.stackId}`}
                         className="text-sm text-info hover:underline"
                       >
                         {container.projectName}
-                      </a>
+                      </Link>
                     ) : isUnmanagedCompose(container) ? (
                       <UnmanagedComposeNote c={container} />
                     ) : container.projectName ? (
