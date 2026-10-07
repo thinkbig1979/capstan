@@ -1097,6 +1097,8 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 	busySkipped := 0
 	// Items never started because ctx had already ended; see the loop.
 	notStarted := 0
+	// Items whose stack the scan could not look up; see the loop.
+	lookupSkipped := 0
 
 	for _, update := range updates {
 		policy, hasPolicy := containerPolicies[update.ContainerID]
@@ -1124,6 +1126,19 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 			skipped++
 			notStarted++
 			s.recordSkippedUpdate(update, "not started: "+notStartedCause(ctx)+"; retried next pass")
+			continue
+		}
+
+		// The scan could not look this container's stack up, so StackID is
+		// empty and the lock below would be skipped. UpdateContainer looks the
+		// stack up again, and a fault that cleared in between would run
+		// compose for that stack without its lock (agent-os-z91e.40). Like a
+		// busy stack: not a failure, policy untouched, cached row kept so the
+		// next pass retries it with a fresh scan.
+		if update.StackLookupFailed {
+			skipped++
+			lookupSkipped++
+			s.recordSkippedUpdate(update, "skipped: the stack for this container could not be looked up during the scan; retried next pass")
 			continue
 		}
 
@@ -1282,6 +1297,10 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 		applyNotes = append(applyNotes, fmt.Sprintf(
 			"%d auto-update(s) skipped: another operation in progress on stack %s; retried next pass",
 			busySkipped, strings.Join(busyStacks, ", ")))
+	}
+	if lookupSkipped > 0 {
+		applyNotes = append(applyNotes, fmt.Sprintf(
+			"%d auto-update(s) skipped: their stack could not be looked up during the scan; retried next pass", lookupSkipped))
 	}
 	if notStarted > 0 {
 		applyNotes = append(applyNotes, fmt.Sprintf(
