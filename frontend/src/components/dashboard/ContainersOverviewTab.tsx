@@ -131,7 +131,6 @@ export const NO_STACK_FOR_PULL =
   'Capstan has no stack record for this compose project, so its images cannot be pulled.'
 
 function ContainerActions({ mode, stackId, containerId, containerName, containerState, onDelete, deletePending }: ContainerActionsProps) {
-  const queryClient = useQueryClient()
   const isRunning = containerState === 'running'
   // `label` names the ROW's context and feeds the button titles and aria-labels
   // only. It stays keyed on `mode` deliberately: the docblock at the top of
@@ -212,28 +211,20 @@ function ContainerActions({ mode, stackId, containerId, containerName, container
     errorTitle: `Failed to restart ${actioned}`,
   })
 
-  const pullMutation = useMutation({
-    mutationFn: async (): Promise<void> => {
-      if (mode !== 'stack') return
-      // agent-os-yke1: throw rather than resolve. The old `if (mode === 'stack'
-      // && stackId)` resolved undefined for a stack row with no stackId, which
-      // React Query reads as success, so onSuccess announced "Images pulled" for
-      // a request never sent. Failing here routes it to the onError arm below
-      // instead of making onSuccess re-derive the same guard.
-      if (!stackId) throw new Error(NO_STACK_FOR_PULL)
-      await stacksApi.pull(stackId)
+  // The pull button only renders in stack mode, so a missing stackId is the one
+  // way to get here without a request to send. agent-os-yke1: throw rather than
+  // resolve. Resolving undefined reads as success to React Query, and the toast
+  // announced "Images pulled" for a request never sent; a throw lands on the
+  // errorTitle arm instead. Reads the ActionResult through useActionMutation like
+  // start/stop/restart above (agent-os-z91e.29).
+  const pullMutation = useActionMutation({
+    mutationFn: async (): Promise<ActionResult> => {
+      if (mode !== 'stack' || !stackId) throw new Error(NO_STACK_FOR_PULL)
+      return stacksApi.pull(stackId)
     },
-    onSuccess: () => {
-      if (mode === 'stack') {
-        toast.success('Images pulled')
-        queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
-      }
-    },
-    // Same presenter as startMutation above.
-    onError: (err) => {
-      if (mode !== 'stack') return
-      presentError(err, { fallback: 'Failed to pull images' })
-    },
+    successTitle: 'Images pulled',
+    invalidate: [queryKeys.dashboardStats()],
+    errorTitle: 'Failed to pull images',
   })
 
   const anyPending = startMutation.isPending || stopMutation.isPending || restartMutation.isPending || (mode === 'stack' && pullMutation.isPending) || deletePending
