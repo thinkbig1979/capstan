@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
+	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/truth"
 )
@@ -343,6 +345,17 @@ func (s *DockerService) composeTimeout() time.Duration {
 	return config.OrDefault(s.config.ComposeTimeout, config.DefaultComposeTimeout)
 }
 
+// refusedCompose is the outcome of a compose command mutatingComposeArgs
+// refused. Err keeps the cause, so a shared name still matches
+// errdefs.ErrAmbiguous and the HTTP layer answers it with 409 AMBIGUOUS_STACK.
+func refusedCompose(err error) truth.ActionResult {
+	reason := err.Error()
+	if errors.Is(err, errdefs.ErrAmbiguous) {
+		reason += "; give each stack its own compose project name"
+	}
+	return truth.Failed(reason, err)
+}
+
 // trimOutput returns a truncated copy of output for use in ActionResult.Details.
 func trimOutput(s string) string {
 	const maxLen = 500
@@ -361,7 +374,10 @@ func (s *DockerService) StartVerified(stack models.Stack) (truth.ActionResult, s
 		return truth.Failed(dockerUnavailableReason, ErrDockerUnavailable), ""
 	}
 
-	args := s.buildComposeArgs(stack, "up", []string{"-d"})
+	args, err := s.mutatingComposeArgs(stack, "up", []string{"-d"})
+	if err != nil {
+		return refusedCompose(err), ""
+	}
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
 	defer cancel()
@@ -389,7 +405,10 @@ func (s *DockerService) StopVerified(stack models.Stack) (truth.ActionResult, st
 		return truth.Failed(dockerUnavailableReason, ErrDockerUnavailable), ""
 	}
 
-	args := s.buildComposeArgs(stack, "down", nil)
+	args, err := s.mutatingComposeArgs(stack, "down", nil)
+	if err != nil {
+		return refusedCompose(err), ""
+	}
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
 	defer cancel()
@@ -458,7 +477,10 @@ func (s *DockerService) PullVerified(stack models.Stack) (truth.ActionResult, st
 		return truth.Failed(dockerUnavailableReason, ErrDockerUnavailable), ""
 	}
 
-	args := s.buildComposeArgs(stack, "pull", nil)
+	args, err := s.mutatingComposeArgs(stack, "pull", nil)
+	if err != nil {
+		return refusedCompose(err), ""
+	}
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
 	defer cancel()
@@ -484,7 +506,10 @@ func (s *DockerService) DeleteVerified(stack models.Stack) (truth.ActionResult, 
 		return truth.Failed(dockerUnavailableReason, ErrDockerUnavailable), ""
 	}
 
-	args := s.buildComposeArgs(stack, "down", []string{"-v"})
+	args, err := s.mutatingComposeArgs(stack, "down", []string{"-v"})
+	if err != nil {
+		return refusedCompose(err), ""
+	}
 	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 	cmd, ctx, cancel := commandWithDeadline(context.Background(), s.composeTimeout(), "docker", args...)
 	defer cancel()
@@ -656,7 +681,16 @@ func (s *DockerService) RunStreaming(ctx context.Context, stack models.Stack, su
 	go func() {
 		defer close(out)
 
-		args := s.buildComposeArgs(stack, subcommand, extraArgs)
+		args, err := s.mutatingComposeArgs(stack, subcommand, extraArgs)
+		if err != nil {
+			// A terminal done frame, like any other failed run, so a restart's
+			// handler stops after its down phase instead of going on to start
+			// (agent-os-z91e.38). Error carries the full reason, hint included:
+			// useStreamingOperation shows a failed done frame's error first.
+			ar := refusedCompose(err)
+			out <- StreamLine{Type: "done", Success: false, Error: ar.Reason, Outcome: ar.Outcome, Reason: ar.Reason}
+			return
+		}
 		//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
 		// The deadline is applied here, not by the caller, so a caller that
 		// hands in a context that never ends (operations.go does, so a closed

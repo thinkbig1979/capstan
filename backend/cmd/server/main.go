@@ -387,6 +387,10 @@ func main() {
 	if err != nil {
 		slog.Warn("Docker service unavailable", "error", err)
 	}
+	// Every compose command that changes containers refuses a stack whose
+	// project name another stack also carries (agent-os-z91e.38). Nil-safe.
+	// stacklookup_wiring_test.go checks this call.
+	dockerService.SetStackLookup(db)
 
 	var schedulerService *services.SchedulerService
 	if dockerService != nil {

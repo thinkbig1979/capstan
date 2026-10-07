@@ -434,6 +434,12 @@ func (h *StacksHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// Delete runs `compose down -v`, which would remove the other stack's
+	// containers and volumes too (agent-os-z91e.38).
+	if refuseSharedProjectName(c, h.db, stack) {
+		return
+	}
+
 	lockToken, lockErr := h.opLock.Acquire(id, services.OpKindDelete)
 	if lockErr != nil {
 		c.JSON(http.StatusConflict, models.NewAppError(
