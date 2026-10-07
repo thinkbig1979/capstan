@@ -72,16 +72,9 @@ func (m *RcloneManager) TestConnectivity(ctx context.Context, remote string) err
 	// "--" it did not (agent-os-tyl6).
 	args := []string{"lsd", "--max-depth", "1", "--", remote + ":"}
 
-	out := make(chan StreamLine, 32)
-	go func() {
-		for range out {
-		}
-	}()
-
-	if err := m.runner.Run(ctx, "rclone", args, nil, out); err != nil {
+	if err := runDrained(ctx, m.runner, "rclone", args, nil); err != nil {
 		return fmt.Errorf("cannot connect to remote %q: %w", remote, err)
 	}
-	close(out)
 	return nil
 }
 
