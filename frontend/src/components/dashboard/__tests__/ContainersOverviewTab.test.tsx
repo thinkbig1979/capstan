@@ -324,7 +324,7 @@ describe('ContainersOverviewTab — a stack-mode row with no stackId', () => {
   })
 
   it('still reports success for a row that does have a stackId', async () => {
-    stacksMock.pull.mockResolvedValue(undefined)
+    stacksMock.pull.mockResolvedValue({ outcome: 'success', reason: 'images pulled', details: {} })
     renderTab(makeContainer({ stackId: 'stack-1' }))
 
     fireEvent.click(screen.getByLabelText('Pull images for stack'))
@@ -612,6 +612,42 @@ describe('ContainersOverviewTab — a 207 partial lifecycle outcome is not a gre
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(title))
     expect(toast.success).toHaveBeenCalledTimes(1)
     expect(invalidatedStacks(spy)).toBe(false)
+  })
+})
+
+describe('ContainersOverviewTab — pull reads the ActionResult outcome (agent-os-z91e.29)', () => {
+  /**
+   * Pull was the one lifecycle action left on a bare useMutation that discarded
+   * the result and toasted green (safe-defaults rule 8). The backend cannot
+   * answer a plain pull as `partial` today (verifyLifecycle classifies a pull
+   * from the command error alone; only ?restart=true reaches the partial arms,
+   * and the UI never sends it), so this pins the rule, not a live symptom.
+   */
+  const PARTIAL_REASON = 'images pulled, restart left web unhealthy'
+
+  it('warns with the reason on a partial outcome and never toasts success', async () => {
+    stacksMock.pull.mockResolvedValue({ outcome: 'partial', reason: PARTIAL_REASON, details: {} })
+    renderTab(makeContainer())
+
+    fireEvent.click(screen.getByLabelText('Pull images for stack'))
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(PARTIAL_REASON))
+    expect(toast.warning).toHaveBeenCalledTimes(1)
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('keeps the "Images pulled" title and refreshes dashboard stats on a success outcome', async () => {
+    stacksMock.pull.mockResolvedValue({ outcome: 'success', reason: 'images pulled', details: {} })
+    const { queryClient } = renderTab(makeContainer())
+    const spy = spyOnInvalidations(queryClient)
+
+    fireEvent.click(screen.getByLabelText('Pull images for stack'))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Images pulled'))
+    expect(toast.success).toHaveBeenCalledTimes(1)
+    expect(toast.warning).not.toHaveBeenCalled()
+    expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.dashboardStats() })
   })
 })
 

@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useWebSocketJSON } from './useWebSocket'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
@@ -148,17 +148,33 @@ export function useUpdateJobStream(
     [jobId],
   )
 
+  // Refetch both the job detail and the updates list so the UI converges to
+  // server truth on an unexpected close (finding 17 / reconcileOnClose pattern).
+  const refetchUpdates = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.resources.updateJobs() })
+    queryClient.invalidateQueries({ queryKey: queryKeys.resources.updates() })
+  }, [queryClient])
+
   const handleClose = useCallback(() => {
     reconcileOnClose({
       completed: receivedDoneRef.current,
-      refetch: () => {
-        // Refetch both the job detail and the updates list so the UI converges
-        // to server truth on an unexpected close (finding 17 / reconcileOnClose pattern).
-        queryClient.invalidateQueries({ queryKey: queryKeys.resources.updateJobs() })
-        queryClient.invalidateQueries({ queryKey: queryKeys.resources.updates() })
-      },
+      refetch: refetchUpdates,
     })
-  }, [queryClient])
+  }, [refetchUpdates])
+
+  // WSClient ignores the late close event of a socket this hook closed (a skip
+  // flip, a job change, an unmount), so handleClose never reports those. The
+  // job outlives the socket, so the cleanup that ends an incomplete stream
+  // refetches for it (agent-os-z91e.28). The done flag belongs to one stream:
+  // it is reset when a stream starts, or a finished job's flag would hide the
+  // next, incomplete one.
+  useEffect(() => {
+    if (skip) return
+    receivedDoneRef.current = false
+    return () => {
+      reconcileOnClose({ completed: receivedDoneRef.current, refetch: refetchUpdates })
+    }
+  }, [skip, jobId, refetchUpdates])
 
   // This used to pass a '/ws/updates/jobs/_noop' sentinel when jobId was null,
   // because `skip` was not a dependency of useWebSocket's connect effect —

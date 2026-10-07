@@ -143,10 +143,19 @@ export function useXtermLifecycle({
       handleSelectionChange.dispose()
       resizeObserver.disconnect()
       terminal.dispose()
-      clearInactivityTimers()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleTerminalData, isConnected, send, clearInactivityTimers, reconnectKeyRef])
+
+  // Stops the inactivity timers when the session ends or the terminal unmounts,
+  // and only then. They used to be cleared in the xterm effect's cleanup, which
+  // also runs when isConnected flips false -> true, so it wiped the timer onOpen
+  // had just armed and an idle session never timed out (agent-os-z91e.27). The
+  // disconnected render registers no cleanup, so connecting leaves the timer alone.
+  useEffect(() => {
+    if (!isConnected) return
+    return () => clearInactivityTimers()
+  }, [isConnected, clearInactivityTimers])
 
   const fitTerminal = useCallback(() => {
     const fitAddon = fitAddonRef.current
