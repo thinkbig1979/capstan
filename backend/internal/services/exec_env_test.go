@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -158,7 +159,7 @@ func TestStreamComposeCmd_DoesNotLeakCapstanSecrets(t *testing.T) {
 	var lines []string
 	emit := func(l LogLine) { lines = append(lines, l.Text) }
 
-	err := streamComposeCmd(context.Background(), []string{"compose", "up", "-d"}, t.TempDir(), nil, emit)
+	err := streamComposeCmd(context.Background(), time.Minute, []string{"compose", "up", "-d"}, t.TempDir(), nil, emit)
 	require.NoError(t, err)
 
 	joined := strings.Join(lines, "\n")
