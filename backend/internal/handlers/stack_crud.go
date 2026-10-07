@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
@@ -142,20 +141,12 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		return
 	}
 
-	absTargetDir, err := filepath.Abs(targetDir)
-	if err != nil {
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve target directory", err))
-		return
-	}
-
-	absStackDir, err := filepath.Abs(stackDir)
-	if err != nil {
-		handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to resolve stack directory", err))
-		return
-	}
-
-	rel, err := filepath.Rel(absTargetDir, absStackDir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) { //geterrors:ignore fails closed on path traversal: a Rel that errored and one that escaped the target both refuse with ErrPathTraversal, which is the safe direction
+	// Same guard as Delete: stackDir strictly inside targetDir, with symlinks
+	// resolved on its parent (agent-os-qags.2). req.Name is one path component
+	// ("." and ".." fail the project-name check above), so this cannot fire
+	// today; a symlink already AT stackDir was answered 409 by the stat above,
+	// or, dangling, fails MkdirAll below without being followed.
+	if !stackDirIsInsideRoot(stackDir, targetDir) {
 		c.JSON(http.StatusBadRequest, models.NewAppError(
 			http.StatusBadRequest,
 			models.ErrPathTraversal,

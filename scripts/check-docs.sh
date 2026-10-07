@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -789,6 +789,38 @@ check_ws_registration() {
   return 1
 }
 
+# check_path_containment delegates to scripts/check-path-containment.sh: no Go
+# code outside backend/internal/pathutil/ decides path containment with a
+# lexical prefix test (agent-os-qags.2; the escape it prevents is
+# agent-os-z91e.22). Self-test first, same reasoning as ws-registration.
+check_path_containment() {
+  local script="$SCRIPT_DIR/check-path-containment.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: path-containment - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: path-containment - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: path-containment - ${self#path-containment }; ${out#path-containment: }"
+    return 0
+  fi
+  echo "FAIL: path-containment - lexical path containment outside pathutil (use pathutil.IsContained, which resolves symlinks):"
+  echo "$out"
+  return 1
+}
+
 # check_ws_read_deadline delegates to scripts/check-ws-read-deadline.sh: no
 # *_test.go under backend/internal/handlers/ bounds a wait with a fixed
 # wall-clock duration; test waits use the absolute hangGuardDeadline(t)
@@ -952,6 +984,7 @@ Valid check names:
   close-reason   the bug-bead close-reason checker's self-test (the checker itself needs the tracker)
   getter-errors  backend/tools/geterrors exists and backend.yml still runs it as a vettool
   ws-read-deadline no handlers test bounds a wait with a fixed wall-clock duration instead of hangGuardDeadline(t)
+  path-containment no lexical path containment check outside backend/internal/pathutil/
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -973,6 +1006,7 @@ run_check() {
     close-reason) check_close_reason ;;
     getter-errors) check_getter_errors ;;
     ws-read-deadline) check_ws_read_deadline ;;
+    path-containment) check_path_containment ;;
     *) return 2 ;;
   esac
 }
