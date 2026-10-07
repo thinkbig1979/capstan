@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
 // agent-os-z91e.6: pruneStaleStacks deletes every row whose path is missing
@@ -47,6 +48,44 @@ func registerAndScan(s *ScannerService, dir, root string) error {
 	return s.ScanDirectoryWithRoot(dir, root)
 }
 
+// Operator-set git credentials for the directory created mid-scan. A rescan
+// cannot restore them: UpsertDirectory's ON CONFLICT leaves the credential
+// columns alone, so they are lost only when the prune deletes the row.
+// SSH rather than HTTPS because the test DB has no encryption key, so it
+// refuses to store an HTTPS token.
+const (
+	midScanAuthType   = "ssh"
+	midScanSSHKeyPath = "/data/keys/operator-key"
+)
+
+// createLikeHandler mirrors StacksHandler.Create once the directory and its
+// compose file exist on disk: RegisterDirectory, the handler's own
+// UpsertStack, then the scan. Between the two scanner calls it also stores
+// the git credentials an operator would set on the directory, which is the
+// state a rescan cannot rebuild and the prune's cascade destroys. With
+// RegisterDirectory alone unlocked, the final ScanDirectoryWithRoot would
+// re-create the directory and stack rows after the prune, so asserting only
+// that rows exist cannot see the loss (orch-dm-15, PR #546).
+func createLikeHandler(s *ScannerService, db *database.DB, dir, root string) error {
+	if _, err := s.RegisterDirectory(dir, root); err != nil {
+		return err
+	}
+	stack := models.Stack{
+		ID:          s.expectedStackID(dir, root, "compose.yaml"),
+		Directory:   dir,
+		ComposeFile: "compose.yaml",
+		ProjectName: filepath.Base(dir),
+		Status:      "stopped",
+	}
+	if err := db.UpsertStack(stack); err != nil {
+		return err
+	}
+	if err := db.UpdateDirectoryCredentials(dir, midScanAuthType, midScanSSHKeyPath, "", ""); err != nil {
+		return err
+	}
+	return s.ScanDirectoryWithRoot(dir, root)
+}
+
 func waitOrFail(t *testing.T, ch <-chan error, what string) {
 	t.Helper()
 	select {
@@ -57,27 +96,28 @@ func waitOrFail(t *testing.T, ch <-chan error, what string) {
 	}
 }
 
-// No t.Parallel: pruneAfterWalkHook is a package variable.
-func TestScannerService_ScanAll_PruneKeepsDirectoryRegisteredMidScan(t *testing.T) {
-	s, db, root := newSerialiseTestScanner(t)
-
+// parkScanAll starts ScanAll and returns once its prune has walked the disk
+// and is parked before the DB reads. Callers must not use t.Parallel:
+// pruneAfterWalkHook is a package variable. It is set before the ScanAll
+// goroutine starts and cleared after the test, so the production read never
+// races the test's writes.
+func parkScanAll(t *testing.T, s *ScannerService) (release func(), scanDone <-chan error) {
+	t.Helper()
 	walked := make(chan struct{})
-	release := make(chan struct{})
+	released := make(chan struct{})
 	var once sync.Once
-	// Set before the ScanAll goroutine starts and cleared after it has
-	// returned, so the production read never races the test's writes.
 	pruneAfterWalkHook = func() {
 		once.Do(func() {
 			close(walked)
-			<-release
+			<-released
 		})
 	}
 	t.Cleanup(func() { pruneAfterWalkHook = nil })
 
-	scanDone := make(chan error, 1)
+	done := make(chan error, 1)
 	go func() {
 		_, err := s.ScanAll()
-		scanDone <- err
+		done <- err
 	}()
 
 	select {
@@ -85,39 +125,76 @@ func TestScannerService_ScanAll_PruneKeepsDirectoryRegisteredMidScan(t *testing.
 	case <-time.After(10 * time.Second):
 		t.Fatal("ScanAll never reached the prune")
 	}
+	return func() { close(released) }, done
+}
+
+// runWhileParked runs op while ScanAll is parked, then releases the prune and
+// waits for both. Unserialised, op completes while the prune is parked and the
+// prune then deletes what it wrote. Serialised, op waits on the scanner lock
+// and the 1s wait times out. The wait only decides how long the prune stays
+// parked; on the fix the caller's assertions hold either way.
+func runWhileParked(t *testing.T, release func(), scanDone <-chan error, what string, op func() error) {
+	t.Helper()
+	opDone := make(chan error, 1)
+	go func() { opDone <- op() }()
+
+	finishedWhileParked := false
+	select {
+	case err := <-opDone:
+		require.NoError(t, err, what)
+		finishedWhileParked = true
+	case <-time.After(time.Second):
+	}
+	release()
+
+	waitOrFail(t, scanDone, "ScanAll")
+	if !finishedWhileParked {
+		waitOrFail(t, opDone, what)
+	}
+}
+
+// StacksHandler.Create's path.
+func TestScannerService_ScanAll_PruneKeepsDirectoryRegisteredMidScan(t *testing.T) {
+	s, db, root := newSerialiseTestScanner(t)
+	release, scanDone := parkScanAll(t, s)
 
 	// The prune's disk walk is over, so this directory is not in it.
 	newDir := filepath.Join(root, "created-mid-scan")
 	require.NoError(t, writeComposeStackDir(newDir))
 
-	registerDone := make(chan error, 1)
-	go func() { registerDone <- registerAndScan(s, newDir, root) }()
+	runWhileParked(t, release, scanDone, "the Create-shaped registration", func() error {
+		return createLikeHandler(s, db, newDir, root)
+	})
 
-	// Unserialised, the registration completes while the prune is parked and
-	// the prune then deletes it. Serialised, it waits on the scanner lock and
-	// this times out. The wait only decides how long the prune stays parked;
-	// the assertions below hold either way on the fix.
-	registeredWhileParked := false
-	select {
-	case err := <-registerDone:
-		require.NoError(t, err)
-		registeredWhileParked = true
-	case <-time.After(time.Second):
-	}
-	close(release)
-
-	waitOrFail(t, scanDone, "ScanAll")
-	if !registeredWhileParked {
-		waitOrFail(t, registerDone, "RegisterDirectory + ScanDirectoryWithRoot")
-	}
-
-	dir, err := db.GetDirectory(newDir)
+	creds, err := db.GetDirectoryCredentials(newDir)
 	require.NoError(t, err, "the directory registered while ScanAll ran must survive its prune")
-	assert.Equal(t, newDir, dir.Path)
+	assert.Equal(t, midScanAuthType, creds.GitAuthType, "git credentials stored while ScanAll ran must survive its prune")
+	assert.Equal(t, midScanSSHKeyPath, creds.GitSSHKeyPath, "git credentials stored while ScanAll ran must survive its prune")
 
 	stacks, err := db.ListStacksByDirectory(newDir)
 	require.NoError(t, err)
 	assert.Len(t, stacks, 1, "the stack created while ScanAll ran must survive its prune")
+}
+
+// The watcher's path: ScanDirectory with no RegisterDirectory first. Nothing
+// re-scans the directory after the prune, so a row the prune deleted stays
+// gone until the next full scan or file change.
+func TestScannerService_ScanAll_PruneKeepsDirectoryRescannedMidScan(t *testing.T) {
+	s, db, root := newSerialiseTestScanner(t)
+	release, scanDone := parkScanAll(t, s)
+
+	newDir := filepath.Join(root, "rescanned-mid-scan")
+	require.NoError(t, writeComposeStackDir(newDir))
+
+	runWhileParked(t, release, scanDone, "the watcher-shaped rescan", func() error {
+		return s.ScanDirectory(newDir)
+	})
+
+	_, err := db.GetDirectory(newDir)
+	require.NoError(t, err, "the directory rescanned while ScanAll ran must survive its prune")
+	stacks, err := db.ListStacksByDirectory(newDir)
+	require.NoError(t, err)
+	assert.Len(t, stacks, 1, "the stack rescanned while ScanAll ran must survive its prune")
 }
 
 // Run with -race. Full scans and registrations of new directories interleave
