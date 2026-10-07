@@ -1059,6 +1059,8 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 	// update rows are left in place, so the next pass tries them again.
 	var busyStacks []string
 	busySkipped := 0
+	// Items never started because ctx had already ended; see the loop.
+	notStarted := 0
 
 	for _, update := range updates {
 		policy, hasPolicy := containerPolicies[update.ContainerID]
@@ -1070,6 +1072,21 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 
 		if !hasPolicy {
 			skipped++
+			continue
+		}
+
+		// The pass's context ended before this item began (the pass deadline,
+		// or Stop() cancelling the parent). Running it would fail at once on
+		// the ended context, record a failed run and add to its policy's
+		// ConsecutiveFailures, so one hung container paused unrelated policies
+		// after three passes (agent-os-z91e.21). Only the item that was in
+		// flight when the context ended is that failure. This one leaves its
+		// policy and update_history alone (update_history has no 'skipped'
+		// status), keeps its cached row so the next pass retries it, and is
+		// reported through update_apply_last_error after the loop.
+		if ctx.Err() != nil {
+			skipped++
+			notStarted++
 			continue
 		}
 
@@ -1222,10 +1239,22 @@ func (s *SchedulerService) RunAutoUpdates(ctx context.Context, updates []models.
 		releaseLock()
 	}
 
+	var applyNotes []string
 	if len(busyStacks) > 0 {
-		s.recordApplyError(applyLastErrorKey, fmt.Sprintf(
+		applyNotes = append(applyNotes, fmt.Sprintf(
 			"%d auto-update(s) skipped: another operation in progress on stack %s; retried next pass",
 			busySkipped, strings.Join(busyStacks, ", ")))
+	}
+	if notStarted > 0 {
+		cause := "shutdown"
+		if commandTimedOut(ctx) {
+			cause = "pass deadline reached"
+		}
+		applyNotes = append(applyNotes, fmt.Sprintf(
+			"%d auto-update(s) not started: %s; retried next pass", notStarted, cause))
+	}
+	if len(applyNotes) > 0 {
+		s.recordApplyError(applyLastErrorKey, strings.Join(applyNotes, "; "))
 	}
 
 	s.logger.Info("Auto-update cycle completed",
