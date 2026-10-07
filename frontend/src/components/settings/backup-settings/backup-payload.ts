@@ -37,7 +37,8 @@ export function hasInvalidFields(draft: Draft): boolean {
     draft.keepWeekly === null ||
     draft.keepMonthly === null ||
     draft.keepYearly === null ||
-    draft.scheduleIntervalMinutes === null
+    draft.scheduleIntervalMinutes === null ||
+    draft.rcloneTransfers === null
   )
 }
 
@@ -68,7 +69,8 @@ export function buildPayload(
   if (draft.syncAfterBackup !== remote.syncAfterBackup) payload.syncAfterBackup = draft.syncAfterBackup
   if (draft.rcloneRemote !== remote.rcloneRemote) payload.rcloneRemote = draft.rcloneRemote
   if (draft.rclonePath !== remote.rclonePath) payload.rclonePath = draft.rclonePath
-  if (draft.rcloneTransfers !== remote.rcloneTransfers) payload.rcloneTransfers = draft.rcloneTransfers
+  if (draft.rcloneTransfers !== null && draft.rcloneTransfers !== remote.rcloneTransfers)
+    payload.rcloneTransfers = draft.rcloneTransfers
 
   return payload
 }

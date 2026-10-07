@@ -264,3 +264,60 @@ describe('HistoryRetentionSection — a failed REFETCH must not discard the form
     ).toBeInTheDocument()
   })
 })
+
+/**
+ * agent-os-qags.4. `parseInt('') || 0` turned a cleared box into 0, which sits
+ * below the floor, so the box showed a "0" the operator never typed. The draft
+ * holds number | null: undefined = untouched (show the saved value), null =
+ * cleared (show an empty box). `draft ?? saved` would collapse null back into the
+ * saved value, so each arm asserts the box STAYS empty as well as that Save is off.
+ */
+describe('HistoryRetentionSection — a cleared field is empty, not 0 (agent-os-qags.4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetRetention.mockResolvedValue(SETTINGS)
+    mockUpdateRetention.mockResolvedValue(undefined)
+  })
+
+  it.each(['Audit log', 'Update history', 'Backup history', 'Cleanup history'])(
+    '%s: clearing keeps the box empty and blocks Save',
+    async (label) => {
+      renderSection()
+      const input = await screen.findByLabelText(label)
+
+      fireEvent.change(input, { target: { value: '120' } })
+      fireEvent.change(input, { target: { value: '' } })
+
+      expect(input).toHaveValue(null)
+      expect(screen.getByText('Enter a number')).toBeInTheDocument()
+      const save = screen.getByRole('button', { name: /save retention/i })
+      expect(save).toBeDisabled()
+      fireEvent.click(save)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(mockUpdateRetention).not.toHaveBeenCalled()
+    },
+  )
+
+  it('a cleared field blocks Save even when another field has a valid edit', async () => {
+    renderSection()
+    fireEvent.change(await screen.findByLabelText('Audit log'), { target: { value: '120' } })
+    fireEvent.change(screen.getByLabelText('Update history'), { target: { value: '' } })
+
+    expect(screen.getByRole('button', { name: /save retention/i })).toBeDisabled()
+    expect(screen.getByLabelText('Audit log')).toHaveValue(120)
+  })
+
+  it('refilling the field re-enables Save and sends only the typed value', async () => {
+    renderSection()
+    const input = await screen.findByLabelText('Update history')
+
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.change(input, { target: { value: '60' } })
+
+    expect(screen.queryByText('Enter a number')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save retention/i }))
+    await waitFor(() =>
+      expect(mockUpdateRetention).toHaveBeenCalledWith({ updateHistoryRetentionDays: 60 }),
+    )
+  })
+})

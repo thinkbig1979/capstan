@@ -1,7 +1,7 @@
 export type Source = 'env' | 'db' | 'default'
 
 /**
- * The five numeric fields below are null while their input is empty. Empty is
+ * The six numeric fields below are null while their input is empty. Empty is
  * not 0 (0 disables the schedule / keeps no snapshots): useBackupForm blocks
  * Save until they are filled (agent-os-z91e.15).
  */
@@ -28,5 +28,5 @@ export interface Draft {
   syncAfterBackup: boolean
   rcloneRemote: string
   rclonePath: string
-  rcloneTransfers: number
+  rcloneTransfers: number | null
 }
