@@ -30,7 +30,9 @@ fix: file them.
    transient error inside such a loop is a defect: reconnect with backoff, as
    `ListenEvents` in `backend/internal/services/monitor.go` does. A channel send
    in a producer selects on `ctx.Done()`. (CI-guarded:
-   `scripts/check-ticker-stop.sh`, a ticker or timer wait with no stop case.)
+   `scripts/check-ticker-stop.sh`, a ticker or timer wait with no stop case,
+   and `scripts/check-goroutine-sends.sh`, a bare channel send inside a
+   goroutine body.)
 
 ## Guards that must be taken
 
