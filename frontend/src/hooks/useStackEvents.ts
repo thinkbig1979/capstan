@@ -322,15 +322,11 @@ export function useStackEvents() {
       queryKeys.dashboardStats(),
       queryKeys.stacks(),
     ]
-    // On success or no_change, the backend evicts the row from cached_updates and
-    // broadcasts an updates-changed signal; we also force a refetch here so the
-    // UI converges and the row disappears even if the WS signal races/misses.
-    if (event.outcome === 'success' || event.outcome === 'no_change') {
-      keys.push(queryKeys.resources.updates())
-    } else {
-      // For failed/unknown outcomes still invalidate so the list stays fresh.
-      keys.push(queryKeys.resources.updates())
-    }
+    // Whatever the outcome: on success or no_change the backend evicts the row
+    // from cached_updates and broadcasts an updates-changed signal, and a failed
+    // job leaves the list worth refreshing too. Forcing the refetch here also
+    // means the row disappears even if the WS signal races or misses.
+    keys.push(queryKeys.resources.updates())
     scheduleInvalidations(keys)
   }, [scheduleInvalidations])
 

@@ -169,6 +169,27 @@ describe('useStackEvents update-completion invalidation', () => {
     ])
   })
 
+  // agent-os-mgly: the handler once branched on the outcome and did the same in
+  // both arms. This pins the whole flushed SET per outcome, so collapsing the
+  // branch (or ever making it real) cannot change what is invalidated unseen.
+  // 'unknown' is an outcome string the type does not name.
+  it.each(['success', 'no_change', 'failed', 'unknown'])(
+    'invalidates the identical key set on update_job_complete with outcome %s',
+    (outcome) => {
+      renderHook(() => useStackEvents())
+
+      capturedOnMessage!(jobCompleteEvent(outcome as UpdateJobOutcome))
+
+      expect(flushInvalidations()).toEqual([
+        queryKeys.updateHistory.all(),
+        queryKeys.settings.updates(),
+        queryKeys.dashboardStats(),
+        queryKeys.stacks(),
+        queryKeys.resources.updates(),
+      ])
+    },
+  )
+
   it('invalidates the update-settings query on a failed update_job_complete too', () => {
     renderHook(() => useStackEvents())
 
