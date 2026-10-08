@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -574,6 +575,26 @@ func (s *DockerService) updateComposeContainer(ctx context.Context, stack models
 	return nil
 }
 
+// removeAfterOwnStop removes the container a standalone update is about to
+// recreate. A standalone container has no stack and so no operation lock, which
+// leaves a window between the update's stop and its remove in which a container
+// prune can remove the stopped container first (agent-os-qags.20). That
+// not-found means the container is already removed, so it is not an error and
+// the recreate from the captured inspect must still run.
+//
+// It is forgiven only when this update's own stop succeeded (stoppedByUs): that
+// stop proves the container existed a moment ago, and a prune only removes
+// stopped containers. For a container that was not running nothing proves it was
+// not deleted on purpose, and recreating it would bring it back, so that
+// not-found stays an error, as does any other remove failure.
+func removeAfterOwnStop(ctx context.Context, api containerUpdateAPI, containerID string, stoppedByUs bool) error {
+	err := api.ContainerRemove(ctx, containerID, container.RemoveOptions{})
+	if err == nil || (stoppedByUs && cerrdefs.IsNotFound(err)) {
+		return nil
+	}
+	return fmt.Errorf("removing container: %w", err)
+}
+
 // updateStandaloneContainer pulls the image, decoding the stream via
 // truth.DrainPullStream so that auth/manifest errors are surfaced (finding #3).
 // It returns the id of the container it created. That return value is load-bearing:
@@ -601,8 +622,8 @@ func (s *DockerService) updateStandaloneContainer(ctx context.Context, inspect c
 		}
 	}
 
-	if err := s.updateAPI().ContainerRemove(ctx, inspect.ID, container.RemoveOptions{}); err != nil {
-		return "", fmt.Errorf("removing container: %w", err)
+	if err := removeAfterOwnStop(ctx, s.updateAPI(), inspect.ID, wasRunning); err != nil {
+		return "", err
 	}
 
 	name := strings.TrimPrefix(inspect.Name, "/")
@@ -898,8 +919,8 @@ func (s *DockerService) updateStandaloneContainerStreaming(
 		emit(LogLine{Ts: time.Now().UTC(), Text: "Container stopped", Stream: StreamStdout})
 	}
 
-	if err := s.updateAPI().ContainerRemove(ctx, inspect.ID, container.RemoveOptions{}); err != nil {
-		return "", fmt.Errorf("removing container: %w", err)
+	if err := removeAfterOwnStop(ctx, s.updateAPI(), inspect.ID, wasRunning); err != nil {
+		return "", err
 	}
 	emit(LogLine{Ts: time.Now().UTC(), Text: "Old container removed", Stream: StreamStdout})
 

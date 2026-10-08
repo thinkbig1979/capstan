@@ -729,13 +729,13 @@ func (m *ResticManager) Stats(ctx context.Context) (int64, error) {
 }
 
 // Restore restores the given snapshot to targetPath via `restic restore --target`.
-// With deleteExtra it also passes --delete, so targetPath ends up matching the
-// snapshot: files created after it are removed rather than surviving next to
-// the restored ones (agent-os-z91e.8). excludes are paths relative to targetPath
-// that restic must leave untouched, normally restoreProtectedPaths' result:
-// without them, --delete would also remove the live content of mounts and cache
-// directories the backup never covered.
-func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, targetPath string, deleteExtra bool, excludes []string, out chan<- StreamLine) error {
+// It always passes --delete, so targetPath ends up matching the snapshot: files
+// created after it are removed rather than surviving next to the restored ones
+// (agent-os-z91e.8). excludes are paths relative to targetPath that restic must
+// leave untouched, normally restoreProtectedPaths' result: without them,
+// --delete would also remove the live content of mounts and cache directories
+// the backup never covered.
+func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, targetPath string, excludes []string, out chan<- StreamLine) error {
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {
 		return err
@@ -750,10 +750,7 @@ func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, tar
 	if sourcePath != "" {
 		ref = snapshotID + ":" + sourcePath
 	}
-	args := []string{"restore", ref, "--target", targetPath, "--verbose"}
-	if deleteExtra {
-		args = append(args, "--delete")
-	}
+	args := []string{"restore", ref, "--target", targetPath, "--verbose", "--delete"}
 	for _, rel := range excludes {
 		args = append(args, "--exclude", restoreExcludePattern(rel))
 	}
@@ -764,7 +761,7 @@ func (m *ResticManager) Restore(ctx context.Context, snapshotID, sourcePath, tar
 // restic's --exclude-caches to skip the directory holding it.
 const cacheDirTagSignature = "Signature: 8a477f597d28d172789f06886806bc55"
 
-// restoreProtectedPaths lists, relative to target, the paths under target that
+// restoreProtectedPaths lists, relative to stackDir, the paths under it that
 // Backup() leaves out of a snapshot of stackDir: entries on another filesystem
 // than stackDir (--one-file-system) and directories holding a valid CACHEDIR.TAG
 // (--exclude-caches). No snapshot holds their content, so `restore --delete`
@@ -772,10 +769,10 @@ const cacheDirTagSignature = "Signature: 8a477f597d28d172789f06886806bc55"
 //
 // It reads the tree as it is now. A directory that was a mount or a cache at
 // backup time but is not one now is not listed, and loses its current content
-// to --delete. A target that is itself a symlink, a cache directory, or on
-// another filesystem than stackDir is refused: the backup never covered it.
-func restoreProtectedPaths(stackDir, target string) ([]string, error) {
-	return scanRestoreProtected(stackDir, target, statDevice)
+// to --delete. A stackDir that is itself a symlink or a cache directory is
+// refused: the backup never covered it.
+func restoreProtectedPaths(stackDir string) ([]string, error) {
+	return scanRestoreProtected(stackDir, statDevice)
 }
 
 // statDevice returns the device id of a FileInfo from os.Stat/os.Lstat.
@@ -789,7 +786,7 @@ func statDevice(fi fs.FileInfo) (uint64, bool) {
 
 // scanRestoreProtected is restoreProtectedPaths with the device lookup injected,
 // so a test can stand in for a mount without root.
-func scanRestoreProtected(stackDir, target string, deviceOf func(fs.FileInfo) (uint64, bool)) ([]string, error) {
+func scanRestoreProtected(stackDir string, deviceOf func(fs.FileInfo) (uint64, bool)) ([]string, error) {
 	stackInfo, err := os.Stat(stackDir)
 	if errors.Is(err, fs.ErrNotExist) {
 		// Nothing on disk, so nothing --delete could remove.
@@ -805,18 +802,18 @@ func scanRestoreProtected(stackDir, target string, deviceOf func(fs.FileInfo) (u
 		return nil, fmt.Errorf("read device id of %s", stackDir)
 	}
 
-	prefix := target + string(filepath.Separator)
+	prefix := stackDir + string(filepath.Separator)
 	var protected []string
-	err = filepath.WalkDir(target, func(path string, d fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(stackDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			if path == target && errors.Is(walkErr, fs.ErrNotExist) {
+			if path == stackDir && errors.Is(walkErr, fs.ErrNotExist) {
 				return nil // restic creates the target; nothing to protect
 			}
 			return walkErr
 		}
-		isRoot := path == target
+		isRoot := path == stackDir
 		if isRoot && d.Type()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("restore target %s is a symbolic link", target)
+			return fmt.Errorf("restore target %s is a symbolic link", stackDir)
 		}
 		info, err := d.Info()
 		if err != nil {
@@ -826,10 +823,9 @@ func scanRestoreProtected(stackDir, target string, deviceOf func(fs.FileInfo) (u
 		if !ok {
 			return fmt.Errorf("read device id of %s", path)
 		}
+		// The root cannot differ from stackDev: it is the directory stackDev was
+		// read from, so only entries below it can sit on another filesystem.
 		if dev != stackDev {
-			if isRoot {
-				return fmt.Errorf("restore target %s is on another filesystem than the stack directory %s, which the backup never covered", target, stackDir)
-			}
 			protected = append(protected, strings.TrimPrefix(path, prefix))
 			if d.IsDir() {
 				return fs.SkipDir
@@ -847,7 +843,7 @@ func scanRestoreProtected(stackDir, target string, deviceOf func(fs.FileInfo) (u
 			return nil
 		}
 		if isRoot {
-			return fmt.Errorf("restore target %s is a cache directory (CACHEDIR.TAG), which the backup never covered", target)
+			return fmt.Errorf("restore target %s is a cache directory (CACHEDIR.TAG), which the backup never covered", stackDir)
 		}
 		protected = append(protected, strings.TrimPrefix(path, prefix))
 		return fs.SkipDir

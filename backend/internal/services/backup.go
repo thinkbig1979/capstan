@@ -1537,7 +1537,7 @@ func (s *BackupService) runRestore(
 	// directories) and keep restic off it. Done before the stop: a scan that
 	// cannot finish refuses the restore with the stack untouched, rather than
 	// risk deleting what it could not see.
-	protected, scanErr := restoreProtectedPaths(stackDir, stackDir)
+	protected, scanErr := restoreProtectedPaths(stackDir)
 	if scanErr != nil {
 		return fmt.Errorf("restore refused: %w", scanErr)
 	}
@@ -1614,7 +1614,7 @@ func (s *BackupService) runRestore(
 	stream(out, "info", fmt.Sprintf("[%s] restoring snapshot %s to %s", stackID, snapshotID, stackDir))
 	// stackDir is the snapshot's stored source path; pass it so restic strips that
 	// prefix and restores contents into stackDir rather than nesting them.
-	if err := restic.Restore(ctx, snapshotID, stackDir, stackDir, true, protected, out); err != nil {
+	if err := restic.Restore(ctx, snapshotID, stackDir, stackDir, protected, out); err != nil {
 		return fmt.Errorf("restic restore: %w", err)
 	}
 

@@ -68,10 +68,10 @@ func TestResticManager_Restore_RealRestic_MatchesSnapshot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(stack, "a.txt"), []byte("changed"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "after.bin"), []byte("cache"), 0o600))
 
-	excludes, err := restoreProtectedPaths(stack, stack)
+	excludes, err := restoreProtectedPaths(stack)
 	require.NoError(t, err)
 	out, closeOut = drainStream()
-	err = m.Restore(ctx, summary.SnapshotID, stack, stack, true, excludes, out)
+	err = m.Restore(ctx, summary.SnapshotID, stack, stack, excludes, out)
 	closeOut()
 	require.NoError(t, err)
 
@@ -124,43 +124,32 @@ func TestScanRestoreProtected_ListsWhatTheBackupSkipped(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(stack, "mnt", "inner"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(stack, "filemount"), []byte("f"), 0o600))
 
-	got, err := scanRestoreProtected(stack, stack, foreignDevice("mnt", "filemount"))
+	got, err := scanRestoreProtected(stack, foreignDevice("mnt", "filemount"))
 	require.NoError(t, err)
 	sort.Strings(got)
 	assert.Equal(t, []string{"cache", "filemount", "mnt", filepath.Join("sub", "cache2")}, got)
 }
 
-func TestScanRestoreProtected_RelativeToSubdirectoryTarget(t *testing.T) {
+func TestScanRestoreProtected_RefusesAStackDirTheBackupNeverCovered(t *testing.T) {
 	t.Parallel()
 
-	stack := filepath.Join(t.TempDir(), "stack")
-	writeCacheDir(t, filepath.Join(stack, "sub", "cache"), cacheDirTagSignature)
-	writeCacheDir(t, filepath.Join(stack, "outside"), cacheDirTagSignature)
+	root := t.TempDir()
+	cacheStack := filepath.Join(root, "cache")
+	writeCacheDir(t, cacheStack, cacheDirTagSignature)
+	realStack := filepath.Join(root, "real")
+	require.NoError(t, os.MkdirAll(realStack, 0o755))
+	linkStack := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink("real", linkStack))
 
-	got, err := scanRestoreProtected(stack, filepath.Join(stack, "sub"), foreignDevice())
-	require.NoError(t, err)
-	assert.Equal(t, []string{"cache"}, got, "paths are relative to the restore target, and nothing outside it is scanned")
-}
-
-func TestScanRestoreProtected_RefusesATargetTheBackupNeverCovered(t *testing.T) {
-	t.Parallel()
-
-	stack := filepath.Join(t.TempDir(), "stack")
-	require.NoError(t, os.MkdirAll(filepath.Join(stack, "mnt"), 0o755))
-	writeCacheDir(t, filepath.Join(stack, "cache"), cacheDirTagSignature)
-	require.NoError(t, os.MkdirAll(filepath.Join(stack, "real"), 0o755))
-	require.NoError(t, os.Symlink("real", filepath.Join(stack, "link")))
-
-	for name, target := range map[string]string{
-		"another filesystem": filepath.Join(stack, "mnt"),
-		"cache directory":    filepath.Join(stack, "cache"),
-		"symbolic link":      filepath.Join(stack, "link"),
+	for name, stack := range map[string]string{
+		"cache directory": cacheStack,
+		"symbolic link":   linkStack,
 	} {
-		_, err := scanRestoreProtected(stack, target, foreignDevice("mnt"))
+		_, err := scanRestoreProtected(stack, foreignDevice())
 		assert.Error(t, err, name)
 	}
-	// The same instrument passes on a target the backup did cover.
-	_, err := scanRestoreProtected(stack, filepath.Join(stack, "real"), foreignDevice("mnt"))
+	// The same instrument passes on a stack directory the backup did cover.
+	_, err := scanRestoreProtected(realStack, foreignDevice())
 	assert.NoError(t, err)
 }
 
@@ -168,13 +157,7 @@ func TestScanRestoreProtected_MissingDirectoriesProtectNothing(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	got, err := scanRestoreProtected(filepath.Join(root, "gone"), filepath.Join(root, "gone"), statDevice)
-	require.NoError(t, err)
-	assert.Empty(t, got)
-
-	stack := filepath.Join(root, "stack")
-	require.NoError(t, os.MkdirAll(stack, 0o755))
-	got, err = scanRestoreProtected(stack, filepath.Join(stack, "new"), statDevice)
+	got, err := scanRestoreProtected(filepath.Join(root, "gone"), statDevice)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
@@ -203,11 +186,11 @@ func TestScanRestoreProtected_UnreadableDirectoryFailsClosed(t *testing.T) {
 		stack := filepath.Join(t.TempDir(), "stack")
 		locked := filepath.Join(stack, "locked")
 		require.NoError(t, os.MkdirAll(locked, 0o755))
-		_, err := scanRestoreProtected(stack, stack, statDevice)
+		_, err := scanRestoreProtected(stack, statDevice)
 		require.NoError(t, err, "the same tree scans cleanly while the directory is readable")
 
 		lockDir(t, locked, mode)
-		_, err = scanRestoreProtected(stack, stack, statDevice)
+		_, err = scanRestoreProtected(stack, statDevice)
 		require.Error(t, err, "mode %o: a directory the scan cannot read might hold a mount or cache, so the restore is refused", mode)
 	}
 }
@@ -218,7 +201,7 @@ func TestResticManager_Restore_ExcludesAreAnchoredAndEscaped(t *testing.T) {
 	runner := &fakeRunner{}
 	m := newResticManagerWithRunner(testBackupConfig(), runner, nil)
 	out, closeOut := drainStream()
-	err := m.Restore(context.Background(), "abc123", "/orig/src", "/orig/src", true,
+	err := m.Restore(context.Background(), "abc123", "/orig/src", "/orig/src",
 		[]string{"mnt", filepath.Join("sub", "cache"), `c[1]*?\x`}, out)
 	closeOut()
 	require.NoError(t, err)
