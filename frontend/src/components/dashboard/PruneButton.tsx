@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
-import { Scissors, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
+import { Scissors, CheckCircle2, XCircle, Loader2, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { presentError } from '@/lib/error-handler'
@@ -170,11 +170,16 @@ export function PruneButton({
     }
 
     const { count, spaceReclaimed, tagsRemoved } = extractPruneMetrics(result)
+    // A partial prune removed some resources and failed on others; the inline
+    // indicator must agree with the warning toast, not read as full success.
+    const partial = result.outcome === 'partial'
+    const Icon = partial ? AlertTriangle : CheckCircle2
+    const tone = partial ? 'text-warning' : 'text-success'
     return (
       <div className="flex items-center gap-2 animate-in fade-in duration-150">
-        <CheckCircle2 className="h-3.5 w-3.5 text-success" />
-        <span className="text-xs text-success">
-          Pruned {count} {resourceType}{count !== 1 ? 's' : ''}
+        <Icon className={cn('h-3.5 w-3.5', tone)} />
+        <span className={cn('text-xs', tone)}>
+          {partial ? 'Partly pruned' : 'Pruned'} {count} {resourceType}{count !== 1 ? 's' : ''}
           {tagsRemoved > 0 ? `, ${tagsRemoved} tag${tagsRemoved !== 1 ? 's' : ''}` : ''}
           {spaceReclaimed ? ` (${formatBytes(spaceReclaimed)})` : ''}
         </span>
