@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
-import { LayoutDashboard, Layers, Settings } from 'lucide-react'
+import { LayoutDashboard, Layers, Loader2, Settings } from 'lucide-react'
 import { stacksApi } from '@/lib/api'
 import {
   CommandDialog,
@@ -19,7 +19,7 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false)
   const navigate = useNavigate()
 
-  const { data, isError, refetch } = useQuery({
+  const { data, isPending, isError, refetch } = useQuery({
     queryKey: queryKeys.stacks(),
     queryFn: stacksApi.list,
   })
@@ -27,6 +27,10 @@ export function CommandPalette() {
   // Without this a failed load leaves only "No results found." for a stack
   // search, as if the stack did not exist (agent-os-kdqm).
   const stacksLoadFailed = isError && !data
+  // No `enabled` on this query, so plain isPending is the whole answer: it is
+  // true while the first fetch runs AND while it is paused offline, which
+  // isLoading is not (agent-os-hzjh, agent-os-7nqa).
+  const stacksLoading = isPending
 
   const handleClose = useCallback(() => setOpen(false), [])
 
@@ -58,7 +62,16 @@ export function CommandPalette() {
         {stacksLoadFailed && (
           <LoadFailedNotice what="the stack list" onRetry={() => void refetch()} className="m-2" />
         )}
-        <CommandEmpty>No results found.</CommandEmpty>
+        {stacksLoading ? (
+          // "No results found." would claim the stack does not exist when the
+          // list has not been read yet, so it is not rendered until it has.
+          <div role="status" className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            Loading stacks...
+          </div>
+        ) : (
+          <CommandEmpty>No results found.</CommandEmpty>
+        )}
 
         {stacks.length > 0 && (
           <>

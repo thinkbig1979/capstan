@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import { CommandPalette } from '../CommandPalette'
 import { stacksApi } from '@/lib/api'
@@ -183,5 +183,62 @@ describe('CommandPalette', () => {
     fireEvent.keyDown(document, { key: 'k', ctrlKey: true })
     expect(await screen.findByText('nginx-proxy')).toBeInTheDocument()
     expect(screen.queryByText('Could not load the stack list.')).not.toBeInTheDocument()
+  })
+
+  // agent-os-hzjh: the stack search had no first-load gate, so while the first
+  // fetch was running (online) or paused (offline) a search answered
+  // "No results found." about a list that had not been read yet.
+  describe('first load of the stack list (agent-os-hzjh)', () => {
+    const search = (value: string) =>
+      fireEvent.change(screen.getByPlaceholderText('Search stacks, navigate...'), {
+        target: { value },
+      })
+
+    afterEach(() => {
+      onlineManager.setOnline(true)
+    })
+
+    it('online, first fetch pending: a search shows a loading row, not "No results found."', async () => {
+      vi.mocked(stacksApi.list).mockReturnValueOnce(new Promise(() => {}))
+      renderPalette()
+      fireEvent.keyDown(document, { key: 'k', ctrlKey: true })
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+
+      search('nginx')
+
+      expect(screen.queryByText('No results found.')).not.toBeInTheDocument()
+      expect(await screen.findByRole('status')).toHaveTextContent('Loading stacks')
+    })
+
+    it('offline, first fetch paused: a search shows a loading row, not "No results found."', async () => {
+      onlineManager.setOnline(false)
+      renderPalette()
+      fireEvent.keyDown(document, { key: 'k', ctrlKey: true })
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+
+      search('nginx')
+
+      expect(screen.queryByText('No results found.')).not.toBeInTheDocument()
+      expect(await screen.findByRole('status')).toHaveTextContent('Loading stacks')
+    })
+
+    it('a loaded empty list still says "No results found." and shows no loading row (control)', async () => {
+      vi.mocked(stacksApi.list).mockResolvedValueOnce([])
+      renderPalette()
+      fireEvent.keyDown(document, { key: 'k', ctrlKey: true })
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+
+      search('nginx')
+
+      expect(await screen.findByText('No results found.')).toBeInTheDocument()
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    })
+
+    it('the loading row goes away once the list loads', async () => {
+      renderPalette()
+      fireEvent.keyDown(document, { key: 'k', ctrlKey: true })
+      expect(await screen.findByText('nginx-proxy')).toBeInTheDocument()
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    })
   })
 })
