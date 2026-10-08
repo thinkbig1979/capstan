@@ -20,9 +20,11 @@ function displayOrDash(value: string | undefined): string {
 }
 
 export function AboutContent() {
-  const { data, isLoading, isError, refetch } = useVersion()
+  const { data, isPending, isError, refetch } = useVersion()
 
-  if (isLoading) {
+  // isPending, not isLoading: offline the first fetch is paused, isLoading is false
+  // with no data yet, and the branch below would fire (agent-os-cg26).
+  if (isPending) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <LoadingSpinner size="small" />

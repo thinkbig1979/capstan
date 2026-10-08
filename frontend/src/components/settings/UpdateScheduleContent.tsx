@@ -29,7 +29,7 @@ const DEFAULT_APPLY_TIME = '03:00'
 const DEFAULT_APPLY_DAYS = [0, 1, 2, 3, 4, 5, 6]
 
 export function UpdateScheduleContent() {
-  const { data: settings, isLoading, isError, error, refetch } = useUpdateSettings()
+  const { data: settings, isPending, isError, error, refetch } = useUpdateSettings()
   const updateSettingsMutation = useUpdateUpdateSettings()
 
   const [initialized, setInitialized] = useState(false)
@@ -77,7 +77,9 @@ export function UpdateScheduleContent() {
   const effectiveScanMinutes =
     effectivePreset === 'custom' ? (effectiveCustom ?? scanInterval) : parseInt(effectivePreset, 10)
 
-  if (isLoading) {
+  // isPending, not isLoading: offline the first fetch is paused, isLoading is false
+  // with no data yet, and the branch below would fire (agent-os-cg26).
+  if (isPending) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <LoadingSpinner size="small" />

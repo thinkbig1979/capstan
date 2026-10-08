@@ -126,13 +126,15 @@ function AuditLogTable() {
     setDateTo('')
   }
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isPending, error, refetch } = useQuery({
     queryKey: queryKeys.auditLog({ page, pageSize, action, search, dateFrom, dateTo }),
     queryFn: () => settingsApi.getAuditLog(page, pageSize, { action, search, dateFrom, dateTo }),
     placeholderData: keepPreviousData,
   })
 
-  if (isLoading) {
+  // isPending, not isLoading: offline the first fetch is paused, isLoading is false
+  // with no data yet, and the branch below would fire (agent-os-cg26).
+  if (isPending) {
     return (
       <div className="flex items-center justify-center py-8">
         <LoadingSpinner size="large" />

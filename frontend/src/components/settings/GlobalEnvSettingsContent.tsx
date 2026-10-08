@@ -29,7 +29,7 @@ export function GlobalEnvSettingsContent() {
   } = useGlobalEnvReveal(authDisabled, isUnlocked, unlockedUntil)
 
   const {
-    isLoading,
+    isPending,
     isLoadingError,
     isRefetchError,
     refetch,
@@ -46,7 +46,9 @@ export function GlobalEnvSettingsContent() {
     isSaving,
   } = useGlobalEnvVars(setVisible)
 
-  if (isLoading) {
+  // isPending, not isLoading: offline the first fetch is paused, isLoading is false
+  // with no data yet, and the branch below would fire (agent-os-cg26).
+  if (isPending) {
     return <div className="py-4"><LoadingSpinner /></div>
   }
 

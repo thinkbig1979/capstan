@@ -18,7 +18,7 @@ const ENV_SEARCH_FIELDS = [
  * indices without owning that state themselves.
  */
 export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<number, boolean>>>) {
-  const { data, isLoading, isLoadingError, isRefetchError, refetch } = useGlobalEnv()
+  const { data, isPending, isLoadingError, isRefetchError, refetch } = useGlobalEnv()
   const updateGlobalEnv = useUpdateGlobalEnv()
 
   const [vars, setVars] = useState<EnvVar[]>([])
@@ -82,7 +82,7 @@ export function useGlobalEnvVars(setVisible: Dispatch<SetStateAction<Record<numb
   }
 
   return {
-    isLoading,
+    isPending,
     // agent-os-wczm: the two halves of `isError`, not `isError` itself. The
     // call site has no `data` to pair a bare isError with — `data` is not on
     // this hook's return surface and putting it there would widen it for one

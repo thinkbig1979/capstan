@@ -62,13 +62,15 @@ interface PolicyPayload {
  *  remove. The schedule is off until an operator turns it on: a prune is
  *  irreversible, so nothing here is opt-out. */
 export function DockerCleanupCard() {
-  const { data, isLoading, isError, refetch } = useDockerCleanupPolicy()
+  const { data, isPending, isError, refetch } = useDockerCleanupPolicy()
   const updatePolicy = useUpdateDockerCleanupPolicy()
   const preview = usePreviewDockerCleanup()
   const history = useDockerCleanupHistory()
   const [draft, setDraft] = useState<PolicyDraft>({})
 
-  if (isLoading) {
+  // isPending, not isLoading: offline the first fetch is paused, isLoading is false
+  // with no data yet, and the branch below would fire (agent-os-cg26).
+  if (isPending) {
     return <div className="py-4"><LoadingSpinner /></div>
   }
 
@@ -324,7 +326,7 @@ export function DockerCleanupCard() {
             onRetry={() => history.refetch()}
           />
         )}
-        {history.isLoading ? (
+        {history.isPending ? (
           <LoadingSpinner />
         ) : !history.data ? (
           <p className="text-sm text-destructive">Run history is unavailable.</p>
