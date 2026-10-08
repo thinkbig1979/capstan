@@ -450,7 +450,7 @@ test.describe.serial('Backup flow E2E', () => {
     // This positive assertion depends on execBackup leaving dr.reason empty
     // on success: useBackup.ts:359's `msg.reason || 'Backup completed
     // successfully.'` falls through to the literal string only then, unlike
-    // its restore/sync/dr-restore/prune siblings, which all set dr.reason on
+    // its restore/sync/dr-restore/prune/verify siblings, which all set dr.reason on
     // their own success path (backend/internal/services/backup_runner.go).
     // The runId-correlated history check below is what keeps this test
     // honest if that asymmetry is ever "tidied up" — it checks the
