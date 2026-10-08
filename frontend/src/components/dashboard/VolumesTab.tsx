@@ -35,7 +35,7 @@ const VOL_SEARCH_FIELDS = [
 
 export function VolumesTab() {
   const { confirm, ConfirmComponent } = useConfirm()
-  const { data: volumes, isLoading, isError, refetch } = useVolumes()
+  const { data: volumes, isPending, isError, refetch } = useVolumes()
   const [sortBy, setSortBy] = useState<SortKey>('name')
   const [deletingName, setDeletingName] = useState<string | null>(null)
 
@@ -76,7 +76,7 @@ export function VolumesTab() {
 
   const { page, setPage, totalPages, pageItems } = usePagination(sortedVolumes, PAGE_SIZE)
 
-  if (isLoading) {
+  if (isPending) {
     return (
       <div className="space-y-4">
         {Array.from({ length: 5 }).map((_, i) => (

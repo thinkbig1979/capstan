@@ -31,7 +31,7 @@ const CACHE_SEARCH_FIELDS = [
 ]
 
 export function BuildCacheTab() {
-  const { data: entries, isLoading, isError, refetch } = useBuildCache()
+  const { data: entries, isPending, isError, refetch } = useBuildCache()
   const [sortBy, setSortBy] = useState<SortKey>('size')
 
   const { query, setQuery, filtered } = useTextFilter(entries ?? [], CACHE_SEARCH_FIELDS)
@@ -64,7 +64,7 @@ export function BuildCacheTab() {
 
   const pruneDescription = `Removes unused build cache${totalSize > 0 ? ` (up to ${formatBytes(totalSize)})` : ''}. Enable 'all' to also remove cache that could still be reused. This cannot be undone.`
 
-  if (isLoading) {
+  if (isPending) {
     return (
       <div className="space-y-4">
         {Array.from({ length: 5 }).map((_, i) => (

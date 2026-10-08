@@ -16,7 +16,7 @@ interface UseSidebarDataParams {
 export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks }: UseSidebarDataParams) {
   const {
     data: stacksData,
-    isLoading,
+    isPending,
     isError: stacksError,
     refetch: refetchStacks,
   } = useQuery({
@@ -120,7 +120,7 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
 
   return {
     stacks,
-    isLoading,
+    isPending,
     stacksLoadFailed,
     stacksRefreshFailed,
     refetchStacks,

@@ -15,6 +15,7 @@ import { stacksApi } from '@/lib/api'
 import { classifyError, presentError, toastInvalid } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 import { StatusStaleNotice } from '@/components/StatusStaleNotice'
+import { isFirstLoad } from '@/lib/query-state'
 import { deleteStackWithCollateralConfirm, StackDeleteCancelledError } from '@/lib/stack-delete'
 import { useParams, useNavigate, useLocation } from 'react-router'
 import { toast } from 'sonner'
@@ -88,7 +89,7 @@ export function StackPage() {
     navigate(`/stacks/${id}/${newTab}`, { replace: true })
   }
 
-  const { data: stack, isLoading, error, refetch } = useQuery({
+  const { data: stack, isPending, fetchStatus, error, refetch } = useQuery({
     // `id` is optional in the route params; the query is gated by `enabled`
     // below, so the '' key is only ever registered for a disabled query. Matches
     // the same coercion queryFn already applies.
@@ -235,7 +236,9 @@ export function StackPage() {
     })
   }
 
-  if (isLoading) {
+  // isFirstLoad, not isLoading: the query is gated by `enabled: !!id`, and
+  // offline the first fetch is paused (agent-os-7nqa). See lib/query-state.ts.
+  if (isFirstLoad({ isPending, fetchStatus })) {
     return (
       <div className="space-y-6">
         <div>

@@ -22,7 +22,7 @@ interface AvailableUpdatesPanelProps {
  */
 export function AvailableUpdatesPanel({ data }: AvailableUpdatesPanelProps) {
   const {
-    isRefreshing, isLoading, isError, error, updateData, neverScanned, hasData,
+    isRefreshing, isPending, isError, error, updateData, neverScanned, hasData,
     handleCheck, sortBy, setSortBy, query, setQuery, scannedAt, sortedUpdates,
     updates, policies, globalAutoUpdateState, jobForContainer, expandedIds, toggleExpand, handleUpdate,
     updatePending, refetchUpdates,
@@ -32,7 +32,7 @@ export function AvailableUpdatesPanel({ data }: AvailableUpdatesPanelProps) {
     return <CheckingUpdatesCard />
   }
 
-  if (isLoading) {
+  if (isPending) {
     return <LoadingSkeletons />
   }
 

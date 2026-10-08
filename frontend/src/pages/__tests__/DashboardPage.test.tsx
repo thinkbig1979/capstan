@@ -141,6 +141,7 @@ vi.mock('@/components/dashboard/HostStrip', () => ({
 }))
 
 import { DashboardPage } from '../DashboardPage'
+import { onlineManager } from '@tanstack/react-query'
 import { queryKeys } from '@/lib/query-keys'
 
 function makeStack(overrides: Partial<Stack>): Stack {
@@ -312,6 +313,23 @@ describe('DashboardPage', () => {
       expect(screen.getByText('Loading...')).toBeInTheDocument()
       expect(screen.queryByTestId('tab-stacks')).not.toBeInTheDocument()
       expect(screen.queryByTestId('dashboard-header')).not.toBeInTheDocument()
+    })
+
+    // agent-os-7nqa: a first fetch started offline is 'paused', so isLoading
+    // (isPending && isFetching) is false with no data and the page used to fall
+    // through to the dashboard, built from undefined lists.
+    it('offline on first render: shows the loading view, not the dashboard', async () => {
+      onlineManager.setOnline(false)
+      try {
+        renderPage('/')
+
+        expect(screen.getByText('Loading...')).toBeInTheDocument()
+        expect(screen.queryByTestId('dashboard-header')).not.toBeInTheDocument()
+        expect(screen.queryByText('Failed to load dashboard')).not.toBeInTheDocument()
+        expect(listStacks).not.toHaveBeenCalled()
+      } finally {
+        onlineManager.setOnline(true)
+      }
     })
   })
 

@@ -154,7 +154,7 @@ function LastRunBadge({
 }
 
 export function BackupStatusCard() {
-  const { data: statusData, isLoading } = useBackupStatus()
+  const { data: statusData, isPending } = useBackupStatus()
   const runBackupMutation = useRunBackup()
   const streaming = useBackupStreaming()
   const queryClient = useQueryClient()
@@ -193,7 +193,7 @@ export function BackupStatusCard() {
     })
   }
 
-  if (isLoading) {
+  if (isPending) {
     return (
       <Card>
         <CardHeader className="pb-3">

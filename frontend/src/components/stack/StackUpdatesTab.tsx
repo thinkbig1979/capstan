@@ -96,7 +96,7 @@ export function StackUpdatesTab({ stackId }: { stackId: string }) {
     return f
   }, [page, statusFilter, triggerFilter, stackId])
 
-  const { data, isLoading, isError, refetch } = useUpdateHistory(filters)
+  const { data, isPending, isError, refetch } = useUpdateHistory(filters)
 
   const entries = useMemo(() => data?.entries ?? [], [data])
   const { query, setQuery, filtered } = useTextFilter(entries, UPDATE_SEARCH_FIELDS)
@@ -109,7 +109,7 @@ export function StackUpdatesTab({ stackId }: { stackId: string }) {
     setPage(1)
   }
 
-  if (isLoading && !data) {
+  if (isPending && !data) {
     return (
       <div className="space-y-2">
         <div className="flex gap-2">

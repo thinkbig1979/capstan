@@ -39,7 +39,7 @@ const IMAGE_SEARCH_FIELDS = [
 
 export function ImagesTab() {
   const { confirm, ConfirmComponent } = useConfirm()
-  const { data: images, isLoading, isError, refetch } = useImages()
+  const { data: images, isPending, isError, refetch } = useImages()
   const [sortBy, setSortBy] = useState<SortKey>('size')
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
@@ -86,7 +86,7 @@ export function ImagesTab() {
 
   const { page, setPage, totalPages, pageItems } = usePagination(sortedImages, PAGE_SIZE)
 
-  if (isLoading) {
+  if (isPending) {
     return (
       <div className="space-y-4">
         {Array.from({ length: 5 }).map((_, i) => (

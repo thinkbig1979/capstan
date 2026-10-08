@@ -6,6 +6,7 @@ import { reconcileOnClose } from '@/lib/ws-reconcile'
 import { queryKeys } from '@/lib/query-keys'
 import type { BackupPolicy, BackupOperationResult, BackupHistoryFilters } from '@/types'
 import { messageOrNull } from '@/lib/narrow'
+import { isFirstLoad } from '@/lib/query-state'
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -247,7 +248,10 @@ export function useStackBackupRuns(stackId: string, limit = 20) {
   // (agent-os-kdqm).
   return {
     runs: result.data?.runs ?? [],
-    isLoading: result.isLoading,
+    // Not `isLoading`: the query is `enabled: !!stackId`, and offline the first
+    // fetch is paused, so isLoading is false with no runs and the tab said
+    // "No backup runs yet" (agent-os-7nqa).
+    isFirstLoad: isFirstLoad(result),
     isError: result.isError,
     loadFailed: result.isError && !result.data,
     refreshFailed: result.isError && !!result.data,

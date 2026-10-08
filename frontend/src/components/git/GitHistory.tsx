@@ -27,7 +27,7 @@ export function GitHistory({ stackId }: GitHistoryProps) {
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null)
   const limit = 50
 
-  const { data: logData, isLoading, error, refetch } = useGitLog(stackId, limit, offset)
+  const { data: logData, isPending, error, refetch } = useGitLog(stackId, limit, offset)
 
   const filteredCommits = useMemo(() => {
     if (!logData?.commits) return []
@@ -61,10 +61,10 @@ export function GitHistory({ stackId }: GitHistoryProps) {
   // component rendered the count line below -- which is ungated -- as
   // "Showing 0 commits" for a repository whose commits were still on the wire.
   // MEASURED, not assumed: the empty-state sentence further down is NOT
-  // reachable in that window, because it is gated on `!isLoading` and
-  // `isLoading` is true for exactly that window. The count line was the one
+  // reachable in that window, because it is gated on `!isPending` and
+  // `isPending` is true for exactly that window. The count line was the one
   // that lied.
-  if (isLoading && !logData) {
+  if (isPending && !logData) {
     return <div className="flex items-center justify-center py-8">Loading git history...</div>
   }
 
@@ -212,13 +212,13 @@ export function GitHistory({ stackId }: GitHistoryProps) {
 
       {logData?.hasMore && !searchQuery && (
         <div className="flex justify-center">
-          <Button variant="outline" onClick={handleLoadMore} disabled={isLoading}>
-            {isLoading ? 'Loading...' : 'Load More'}
+          <Button variant="outline" onClick={handleLoadMore} disabled={isPending}>
+            {isPending ? 'Loading...' : 'Load More'}
           </Button>
         </div>
       )}
 
-      {filteredCommits.length === 0 && !isLoading && (
+      {filteredCommits.length === 0 && !isPending && (
         <div className="flex items-center justify-center py-8 text-muted-foreground">
           {searchQuery ? `No commits found matching '${searchQuery}'` : 'No commits in this repository'}
         </div>

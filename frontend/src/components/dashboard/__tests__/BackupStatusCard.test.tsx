@@ -89,7 +89,7 @@ describe('BackupStatusCard — zero-stack backup badge', () => {
   it('does NOT show a green Success badge for a backup run that backed up zero stacks', () => {
     ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
       data: makeStatus(makeRun({ kind: 'backup', status: 'success', stacksTotal: 0, stacksOk: 0 })),
-      isLoading: false,
+      isPending: false,
     })
     renderCard()
 
@@ -102,7 +102,7 @@ describe('BackupStatusCard — zero-stack backup badge', () => {
   it('shows a grey Skipped badge when the last run was skipped', () => {
     ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
       data: makeStatus(makeRun({ status: 'skipped', stacksTotal: 0, stacksOk: 0 })),
-      isLoading: false,
+      isPending: false,
     })
     renderCard()
 
@@ -114,7 +114,7 @@ describe('BackupStatusCard — zero-stack backup badge', () => {
   it('still shows the green Success badge for a backup run that backed up stacks', () => {
     ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
       data: makeStatus(makeRun({ kind: 'backup', status: 'success', stacksTotal: 2, stacksOk: 2 })),
-      isLoading: false,
+      isPending: false,
     })
     renderCard()
 
@@ -131,7 +131,7 @@ describe('BackupStatusCard — zero-stack backup badge', () => {
     (kind) => {
       ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
         data: makeStatus(makeRun({ kind, status: 'success', stacksTotal: 0, stacksOk: 0 })),
-        isLoading: false,
+        isPending: false,
       })
       renderCard()
 
@@ -150,7 +150,7 @@ describe('BackupStatusCard — engine availability', () => {
   function renderWithState(overrides: Partial<BackupStatus>) {
     ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
       data: makeStatus(null, overrides),
-      isLoading: false,
+      isPending: false,
     })
     renderCard()
     return screen.getByRole('button', { name: /back up now/i }) as HTMLButtonElement
@@ -186,7 +186,7 @@ describe('BackupStatusCard — the unavailable banner names the fault the server
   function bannerText(overrides: Partial<BackupStatus>) {
     ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
       data: makeStatus(null, overrides),
-      isLoading: false,
+      isPending: false,
     })
     renderCard()
     return screen.getByText(/Backup engine unavailable/i).parentElement?.textContent ?? ''
@@ -259,7 +259,7 @@ describe('BackupStatusCard — a failed verify is not masked by a later successf
   function renderWith(overrides: Partial<BackupStatus>, lastRun: BackupRun | null = null) {
     ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
       data: makeStatus(lastRun, overrides),
-      isLoading: false,
+      isPending: false,
     })
     renderCard()
   }
@@ -305,7 +305,7 @@ describe('BackupStatusCard — the "Last check" readout', () => {
   function renderWith(overrides: Partial<BackupStatus>) {
     ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
       data: makeStatus(null, overrides),
-      isLoading: false,
+      isPending: false,
     })
     renderCard()
   }
