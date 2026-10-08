@@ -45,6 +45,47 @@ The specs split across *two* backends, which cannot be the same one:
 | `network-settle-guard.spec.ts` | None — no backend, no frontend, no browser. Its eight tests drive a stub page object to assert the settle guard in `helpers/network-settle.ts` still refuses the orders that defeated an earlier revision of it. Runs in the backup-flow CI job because that job selects everything except `auth-session`, not because it needs that job's backend |
 | `terminal-flow.spec.ts` | `AUTH_DISABLED=true` and a Docker daemon — it starts the `test-app` stack itself and opens a real shell into its container. Runs in the backup-flow CI job (same backend) |
 
+## Browser checks against the production bundle
+
+To check the built frontend in a browser (instead of the `vite` dev server), build
+it and serve it with `vite preview` **from `frontend/`**, with a backend on `:5001`:
+
+```bash
+cd frontend
+./node_modules/.bin/vite build
+./node_modules/.bin/vite preview --port 3002 --strictPort
+```
+
+Run it from `frontend/` because that is where `vite.config.ts` lives. From any
+other directory vite loads no config at all, `/api` stops proxying, and the SPA
+fallback answers it with `index.html` and a 200, not an error.
+
+`vite preview` inherits `server.proxy` from the config: vite resolves the preview
+proxy as `preview?.proxy ?? server.proxy` (checked in vite 8.3.1; first observed
+on 8.2.1). So `frontend/vite.config.ts` has no `preview` block and must not get
+one: it would duplicate the `:5001` target in two places. A missing proxy under
+`vite preview` means the wrong working directory, not missing preview support.
+
+Both outcomes on one URL, with a backend on `:5001` (observed 2026-10-08):
+
+```bash
+# From frontend/: backend JSON
+$ curl -si http://localhost:3002/api/v1/version | grep -iE '^HTTP|^content-type'; curl -s http://localhost:3002/api/v1/version
+HTTP/1.1 200 OK
+content-type: application/json; charset=utf-8
+{"version":"dev","commit":"unknown","buildDate":"unknown"}
+
+# From the repo root (./frontend/node_modules/.bin/vite preview --port 3002 --strictPort --outDir frontend/dist): index.html
+$ curl -si http://localhost:3002/api/v1/version | grep -iE '^HTTP|^content-type'; curl -s http://localhost:3002/api/v1/version | head -2
+HTTP/1.1 200 OK
+Content-Type: text/html
+<!doctype html>
+<html lang="en">
+```
+
+The status is 200 in both cases, so check `Content-Type`. Any `/api/v1/...` route
+that returns JSON works for this check; `/api/v1/version` needs no login.
+
 ## Running in CI
 
 `.github/workflows/e2e-backup.yml` runs the suite on every pull request, on push
