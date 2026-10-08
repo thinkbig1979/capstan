@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { BackupHistoryTab } from '../BackupHistoryTab'
 import type { BackupRun, BackupRunItem } from '@/types'
+import { expectSpansItsHeader } from '@/test/tableSpan'
 
 /**
  * The tab is rendered for real with only the API layer mocked, so the query
@@ -453,6 +454,16 @@ describe('BackupHistoryTab — the filters', () => {
     expect(screen.queryByText('run-1')).not.toBeInTheDocument()
     expect(screen.getByText('1 of 2 records')).toBeInTheDocument()
   })
+
+  it('spans the no-match row across every column (agent-os-o9fx)', async () => {
+    renderTab()
+
+    fireEvent.change(await screen.findByPlaceholderText('Filter runs…'), {
+      target: { value: 'zzz' },
+    })
+
+    expectSpansItsHeader(screen.getByText('No runs match "zzz".'))
+  })
 })
 
 describe('BackupHistoryTab — the pager', () => {
@@ -488,6 +499,16 @@ describe('BackupHistoryTab — the pager', () => {
 })
 
 describe('BackupHistoryTab — expandable run rows', () => {
+  it('spans the expanded detail row across every column (agent-os-o9fx)', async () => {
+    const user = userEvent.setup()
+    renderTab()
+
+    await screen.findByText('run-1')
+    await user.click(screen.getByRole('button', { name: /Show details for run run-1/ }))
+
+    expectSpansItsHeader(await screen.findByText('stack-alpha'))
+  })
+
   it('caches a terminal run: fetches once, and re-expanding does not fetch again', async () => {
     // The default run() fixture is status 'success' — a terminal run.
     const user = userEvent.setup()

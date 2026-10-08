@@ -71,6 +71,16 @@ function AuditedEventsNote() {
   )
 }
 
+/** The single source of truth for this table's width: the header cells and the
+ * spanning row's colSpan both derive from it, so adding a column cannot leave
+ * the spanning row under-spanning the body (agent-os-o9fx). */
+const AUDIT_LOG_COLUMNS: readonly { label: string; className?: string }[] = [
+  { label: 'Timestamp' },
+  { label: 'User' },
+  { label: 'Action' },
+  { label: 'Detail' },
+]
+
 function AuditLogTable() {
   const [page, setPage] = useState(1)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -246,10 +256,9 @@ function AuditLogTable() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Timestamp</TableHead>
-              <TableHead>User</TableHead>
-              <TableHead>Action</TableHead>
-              <TableHead>Detail</TableHead>
+              {AUDIT_LOG_COLUMNS.map((column) => (
+                <TableHead key={column.label} className={column.className}>{column.label}</TableHead>
+              ))}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -293,7 +302,7 @@ function AuditLogTable() {
                   </TableRow>
                   {isExpanded && raw && (
                     <TableRow>
-                      <TableCell colSpan={4} className="bg-muted/30">
+                      <TableCell colSpan={AUDIT_LOG_COLUMNS.length} className="bg-muted/30">
                         <pre className="overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground">
                           {raw}
                         </pre>

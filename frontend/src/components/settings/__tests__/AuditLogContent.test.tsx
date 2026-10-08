@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { AuditLogContent } from '../AuditLogContent'
+import { expectSpansItsHeader } from '@/test/tableSpan'
 
 /**
  * SettingsPage.test.tsx:49 replaces this panel with an empty div, so nothing
@@ -196,6 +197,17 @@ describe('AuditLogContent — the table', () => {
 
     fireEvent.click(collapse)
     expect(screen.queryByText(/"stack_name": "web"/)).not.toBeInTheDocument()
+  })
+
+  it('spans the raw-detail row across every column (agent-os-o9fx)', async () => {
+    mockGetAuditLog.mockResolvedValue(
+      page({ entries: [entry({ detail: '{"stack_name":"web"}' })] }),
+    )
+    renderPanel()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'View raw detail' }))
+
+    expectSpansItsHeader(screen.getByText(/"stack_name": "web"/))
   })
 
   it('expands one row without expanding its neighbour', async () => {

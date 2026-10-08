@@ -265,6 +265,18 @@ function RestoreProgress({
 
 // ─── Snapshot row ─────────────────────────────────────────────────────────────
 
+/** The single source of truth for the snapshot table's width: the header cells
+ *  and the preview row's colSpan both derive from it, so adding a column cannot
+ *  leave the preview row under-spanning the body (agent-os-o9fx). The "Recent
+ *  runs" table below has its own headers and no spanning row. */
+const SNAPSHOT_TABLE_COLUMNS: readonly { label: string; align?: 'right' }[] = [
+  { label: 'ID' },
+  { label: 'Time' },
+  { label: 'Tags' },
+  { label: 'Size' },
+  { label: 'Actions', align: 'right' },
+]
+
 function SnapshotRow({
   snapshot,
   onRestore,
@@ -331,7 +343,7 @@ function SnapshotRow({
       </tr>
       {previewOpen && (
         <tr>
-          <td colSpan={5} className="px-4 pb-3">
+          <td colSpan={SNAPSHOT_TABLE_COLUMNS.length} className="px-4 pb-3">
             <PreviewPanel snapshotId={snapshot.id} onClose={() => setPreviewOpen(false)} />
           </td>
         </tr>
@@ -561,11 +573,14 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">ID</th>
-                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">Time</th>
-                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">Tags</th>
-                    <th className="py-2 px-4 text-left font-medium text-muted-foreground">Size</th>
-                    <th className="py-2 px-4 text-right font-medium text-muted-foreground">Actions</th>
+                    {SNAPSHOT_TABLE_COLUMNS.map((column) => (
+                      <th
+                        key={column.label}
+                        className={cn('py-2 px-4 font-medium text-muted-foreground', column.align === 'right' ? 'text-right' : 'text-left')}
+                      >
+                        {column.label}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>

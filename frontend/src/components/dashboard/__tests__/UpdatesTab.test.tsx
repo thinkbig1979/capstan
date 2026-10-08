@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router'
 import { render as rtlRender, screen, fireEvent } from '@testing-library/react'
 import { UpdatesTab } from '../UpdatesTab'
 import type { ContainerUpdateInfo, CachedUpdate, AutoUpdatePolicy } from '@/types'
+import { expectSpansItsHeader } from '@/test/tableSpan'
 
 // UpdatesTable and UpdatesEmptyStates link into the SPA with react-router's
 // <Link> (agent-os-z91e.12), which needs a Router. Every render here gets a real
@@ -652,6 +653,17 @@ describe('UpdatesTab — expandable job log row', () => {
     fireEvent.click(screen.getByRole('button', { name: /expand log/i }))
 
     expect(screen.getByTestId('update-job-log-job1')).toBeInTheDocument()
+  })
+
+  it('spans the job-log row across every column (agent-os-o9fx)', () => {
+    const containers = [makeContainer({ containerId: 'c1' })]
+    setCheckUpdates({ data: { updates: containers, fromCache: false } })
+    mockJobForContainer = (id: string) => (id === 'c1' ? { id: 'job1', status: 'pulling' } : undefined)
+    render(<UpdatesTab />)
+
+    fireEvent.click(screen.getByRole('button', { name: /expand log/i }))
+
+    expectSpansItsHeader(screen.getByTestId('update-job-log-job1'))
   })
 
   it('does not render an expand control when there is no job for the container', () => {

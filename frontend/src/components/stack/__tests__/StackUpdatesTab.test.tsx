@@ -12,6 +12,7 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../../test/utils'
 import type { UpdateHistoryEntry } from '@/types'
+import { expectSpansItsHeader } from '@/test/tableSpan'
 
 const mockGetUpdateHistory = vi.fn()
 
@@ -183,6 +184,17 @@ describe('StackUpdatesTab — filtering', () => {
     expect(await screen.findByText(/No events match/)).toBeInTheDocument()
     // The count switches to "of" form while filtering.
     expect(screen.getByText('0 of 1')).toBeInTheDocument()
+  })
+
+  it('spans the no-match row across every column (agent-os-o9fx)', async () => {
+    const user = userEvent.setup()
+    mockGetUpdateHistory.mockResolvedValue(page([entry({ containerName: 'web' })]))
+    renderWithProviders(<StackUpdatesTab stackId="stack-1" />)
+
+    await screen.findByText('web')
+    await user.type(screen.getByPlaceholderText('Filter events…'), 'zzz')
+
+    expectSpansItsHeader(await screen.findByText(/No events match/))
   })
 
   it('sends the status filter to the server', async () => {
