@@ -37,6 +37,13 @@ const (
 	OpKindVolumePrune  = "volume prune"
 	OpKindNetworkPrune = "network prune"
 	OpKindImagePrune   = "image prune"
+	// The single network, volume and image deletes take it too
+	// (agent-os-qags.33): one named object, but the same windows the prunes
+	// broke, so every manual remove on the Resources page takes turns with stack
+	// operations.
+	OpKindNetworkDelete = "network delete"
+	OpKindVolumeDelete  = "volume delete"
+	OpKindImageDelete   = "image delete"
 )
 
 // OperationLock is a per-stack try-lock: Acquire fails fast instead of waiting

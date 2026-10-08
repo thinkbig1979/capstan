@@ -62,6 +62,20 @@ type resourcePruner interface {
 	PruneImages(ctx context.Context, opts services.PruneOptions) (image.PruneReport, error)
 }
 
+// resourceDeleter is the slice of *services.DockerService the single network,
+// volume and image delete routes need (agent-os-qags.33). Probed against a real
+// daemon: a Created container does not hold its network, a volume compose has
+// created and not yet attached is deletable, and an unused image is deletable
+// between a pull and the up that needs it. Like resourcePruner, the exclusive-gate
+// guard derives its method set from this interface, so a delete added here that
+// is called without the gate fails it. DeleteContainer is not here: it is a
+// single-container action behind lockContainerStack.
+type resourceDeleter interface {
+	DeleteImage(ctx context.Context, imageID string, force bool) ([]image.DeleteResponse, error)
+	DeleteVolume(ctx context.Context, volumeName string, force bool) error
+	DeleteNetwork(ctx context.Context, networkID string) error
+}
+
 // containerActionDocker is the slice of *services.DockerService the
 // single-container action routes need: the inspect that finds the container's
 // stack, and the four mutations. Declared on the consumer side so the lock
@@ -84,7 +98,9 @@ type ResourcesHandler struct {
 	containerOps containerActionDocker
 	// pruner is docker, seen through resourcePruner; nil (handlers built as
 	// struct literals) means use docker.
-	pruner     resourcePruner
+	pruner resourcePruner
+	// deleter is docker, seen through resourceDeleter; nil means use docker.
+	deleter    resourceDeleter
 	db         *database.DB
 	scheduler  updateScanner
 	jobManager *services.UpdateJobManager
@@ -140,7 +156,7 @@ func NewResourcesHandler(docker *services.DockerService, db *database.DB, schedu
 }
 
 func NewResourcesHandlerWithJobManager(docker *services.DockerService, db *database.DB, scheduler *services.SchedulerService, jobManager *services.UpdateJobManager) *ResourcesHandler {
-	h := &ResourcesHandler{docker: docker, containerOps: docker, pruner: docker, db: db, jobManager: jobManager, actionLog: services.NewActionLogger(db)}
+	h := &ResourcesHandler{docker: docker, containerOps: docker, pruner: docker, deleter: docker, db: db, jobManager: jobManager, actionLog: services.NewActionLogger(db)}
 	if scheduler != nil {
 		h.scheduler = scheduler
 	}
