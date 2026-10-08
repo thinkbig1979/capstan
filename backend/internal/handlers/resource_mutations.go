@@ -123,8 +123,25 @@ func classifyImagePruneReport(deleted []image.DeleteResponse, spaceReclaimed uin
 	)
 }
 
+// prunerSeam is the Docker service the prune routes call: the injected fake in
+// tests, else docker. A nil *DockerService boxed here is fine, every prune
+// method guards a nil receiver and returns services.ErrDockerUnavailable.
+func (h *ResourcesHandler) prunerSeam() resourcePruner {
+	if h.pruner != nil {
+		return h.pruner
+	}
+	return h.docker
+}
+
 func (h *ResourcesHandler) pruneImages(c *gin.Context) {
-	report, err := h.docker.PruneImages(c.Request.Context(), parsePruneOptions(c))
+	// An image a stack operation has pulled and not yet used is prunable, so a prune between the pull and the up removes it (agent-os-qags.30). It takes every stack's turn, before Docker is touched.
+	release, ok := acquireExclusiveLock(c, h.opLock, services.OpKindImagePrune)
+	if !ok {
+		return
+	}
+	defer release()
+
+	report, err := h.prunerSeam().PruneImages(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune images", "error", err)
 		renderDockerResult(c, err, truth.Failed("failed to prune images", err))
@@ -147,11 +164,7 @@ func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
 	}
 	defer release()
 
-	var pruner containerPruner = h.docker
-	if h.pruner != nil {
-		pruner = h.pruner
-	}
-	report, err := pruner.PruneContainers(c.Request.Context(), parsePruneOptions(c))
+	report, err := h.prunerSeam().PruneContainers(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune containers", "error", err)
 		renderDockerResult(c, err, truth.Failed("failed to prune containers", err))
@@ -228,7 +241,14 @@ func (h *ResourcesHandler) deleteVolume(c *gin.Context) {
 }
 
 func (h *ResourcesHandler) pruneVolumes(c *gin.Context) {
-	report, err := h.docker.PruneVolumes(c.Request.Context(), parsePruneOptions(c))
+	// A volume compose has created and not yet attached is prunable, and the daemon then recreates it unlabelled (agent-os-qags.30). It takes every stack's turn, before Docker is touched.
+	release, ok := acquireExclusiveLock(c, h.opLock, services.OpKindVolumePrune)
+	if !ok {
+		return
+	}
+	defer release()
+
+	report, err := h.prunerSeam().PruneVolumes(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune volumes", "error", err)
 		renderDockerResult(c, err, truth.Failed("failed to prune volumes", err))
@@ -327,7 +347,14 @@ func (h *ResourcesHandler) deleteNetwork(c *gin.Context) {
 }
 
 func (h *ResourcesHandler) pruneNetworks(c *gin.Context) {
-	report, err := h.docker.PruneNetworks(c.Request.Context(), parsePruneOptions(c))
+	// A created container does not hold its network, so a prune during compose up's health wait removes it and the start fails (agent-os-qags.30). It takes every stack's turn, before Docker is touched.
+	release, ok := acquireExclusiveLock(c, h.opLock, services.OpKindNetworkPrune)
+	if !ok {
+		return
+	}
+	defer release()
+
+	report, err := h.prunerSeam().PruneNetworks(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune networks", "error", err)
 		renderDockerResult(c, err, truth.Failed("failed to prune networks", err))

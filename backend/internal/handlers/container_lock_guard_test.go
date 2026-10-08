@@ -331,7 +331,7 @@ type containerActionDocker interface {
 const exclusiveGateHelper = "acquireExclusiveLock"
 
 // exclusiveGateViolations is containerLockViolations for the cross-stack
-// container prune: the method set comes from the containerPruner interface
+// container prune: the method set comes from the resourcePruner interface
 // (every method on it removes containers of any stack, so there is no read-only
 // list), and a use is violated unless an acquireExclusiveLock call precedes it,
 // by the same ancestor-block rule (containerLockPrecedes). The same blind spots
@@ -364,11 +364,11 @@ func exclusiveGateViolations(t *testing.T, sources map[string]string) (violation
 			}
 			for _, spec := range gd.Specs {
 				ts, ok := spec.(*ast.TypeSpec)
-				if !ok || ts.Name.Name != "containerPruner" {
+				if !ok || ts.Name.Name != "resourcePruner" {
 					continue
 				}
 				it, ok := ts.Type.(*ast.InterfaceType)
-				require.Truef(t, ok, "containerPruner in %s is no longer an interface type", name)
+				require.Truef(t, ok, "resourcePruner in %s is no longer an interface type", name)
 				foundInterface = true
 				for _, m := range it.Methods.List {
 					for _, n := range m.Names {
@@ -378,7 +378,7 @@ func exclusiveGateViolations(t *testing.T, sources map[string]string) (violation
 			}
 		}
 	}
-	require.True(t, foundInterface, "type containerPruner not found in the handler sources; the guard has nothing to derive the prune set from")
+	require.True(t, foundInterface, "type resourcePruner not found in the handler sources; the guard has nothing to derive the prune set from")
 	for m := range set {
 		pruneMethods = append(pruneMethods, m)
 	}
@@ -469,7 +469,7 @@ func TestContainerLockGuard_EveryContainerPruneTakesTheExclusiveTurnFirst(t *tes
 	}
 
 	violations, methods, sites := exclusiveGateViolations(t, sources)
-	require.NotEmpty(t, methods, "the containerPruner method set came out empty")
+	require.NotEmpty(t, methods, "the resourcePruner method set came out empty")
 	require.Positive(t, sites, "no use of %v found in the handler sources; the guard is blind", methods)
 	t.Logf("checked %d use(s) of %v", sites, methods)
 	require.Emptyf(t, violations, "container prune without the exclusive stack turn (agent-os-qags.27):\n  %s",
@@ -481,7 +481,7 @@ func TestContainerLockGuard_EveryContainerPruneTakesTheExclusiveTurnFirst(t *tes
 // on the same instrument.
 func TestContainerLockGuard_ExclusiveGateCheckerSeesTheShapes(t *testing.T) {
 	const iface = `package handlers
-type containerPruner interface {
+type resourcePruner interface {
 	PruneContainers(id string) error
 }
 `

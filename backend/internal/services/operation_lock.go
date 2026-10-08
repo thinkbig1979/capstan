@@ -31,6 +31,12 @@ const (
 	// OpKindContainerPrune is the cross-stack container prune. It is the one
 	// operation that takes every stack's turn at once (AcquireExclusive).
 	OpKindContainerPrune = "container prune"
+	// The volume, network and image prunes take the same exclusive turn
+	// (agent-os-qags.30): each removes objects a stack operation has created
+	// and not yet attached.
+	OpKindVolumePrune  = "volume prune"
+	OpKindNetworkPrune = "network prune"
+	OpKindImagePrune   = "image prune"
 )
 
 // OperationLock is a per-stack try-lock: Acquire fails fast instead of waiting

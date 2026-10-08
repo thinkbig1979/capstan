@@ -1138,7 +1138,7 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 	skipped := 0
 	// Stacks whose lock was held when their update came up. Their cached
 	// update rows are left in place, so the next pass tries them again.
-	var busyStacks []string
+	var busyStacks []string // "stack <id>" or "container <name>", the turn that was held
 	busySkipped := 0
 	// Items never started because ctx had already ended; see the loop.
 	notStarted := 0
@@ -1185,22 +1185,31 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 		// 'skipped' row rather than a pending one, and held across
 		// UpdateContainer and its verification. The skip is also reported
 		// through update_apply_last_error after the loop.
+		//
+		// A container no managed stack owns has no stack to lock, so it takes its
+		// own turn keyed on the container ID: its update removes the old container
+		// and then creates and starts the new one, and a container prune between
+		// the create and the start leaves no container (agent-os-qags.30).
 		releaseLock := func() {}
-		if s.opLock != nil && update.StackID != "" {
-			token, lockErr := s.opLock.Acquire(update.StackID, OpKindUpdate)
+		if s.opLock != nil {
+			lockKey, subject := update.StackID, "stack "+update.StackID
+			if lockKey == "" {
+				lockKey, subject = update.ContainerID, "container "+update.ContainerName
+			}
+			token, lockErr := s.opLock.Acquire(lockKey, OpKindUpdate)
 			if lockErr != nil {
-				s.logger.Warn("Auto-update skipped: another operation holds the stack; retried next pass",
-					"container", update.ContainerName, "stack_id", update.StackID, "holder", lockErr.Error())
+				s.logger.Warn("Auto-update skipped: another operation holds its turn; retried next pass",
+					"container", update.ContainerName, "lock_key", lockKey, "holder", lockErr.Error())
 				skipped++
 				busySkipped++
-				s.recordSkippedUpdate(update, fmt.Sprintf("skipped: stack %s is busy (%s); retried next pass",
-					update.StackID, lockErr.Error()))
-				if !slices.Contains(busyStacks, update.StackID) {
-					busyStacks = append(busyStacks, update.StackID)
+				s.recordSkippedUpdate(update, fmt.Sprintf("skipped: %s is busy (%s); retried next pass",
+					subject, lockErr.Error()))
+				if !slices.Contains(busyStacks, subject) {
+					busyStacks = append(busyStacks, subject)
 				}
 				continue
 			}
-			releaseLock = func() { s.opLock.Release(update.StackID, token) }
+			releaseLock = func() { s.opLock.Release(lockKey, token) }
 		}
 
 		historyID := uuid.New().String()
@@ -1339,7 +1348,7 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 	var applyNotes []string
 	if len(busyStacks) > 0 {
 		applyNotes = append(applyNotes, fmt.Sprintf(
-			"%d auto-update(s) skipped: another operation in progress on stack %s; retried next pass",
+			"%d auto-update(s) skipped: another operation in progress on %s; retried next pass",
 			busySkipped, strings.Join(busyStacks, ", ")))
 	}
 	if lookupSkipped > 0 {

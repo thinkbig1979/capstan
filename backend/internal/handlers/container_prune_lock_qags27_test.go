@@ -9,20 +9,48 @@ import (
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
 
-// fakePruner stands in for the Docker daemon behind the container prune route.
+// fakePruner stands in for the Docker daemon behind the four prune routes. All
+// four methods count into calls and share err and during, so a test drives one
+// route at a time (agent-os-qags.30 added the volume, network and image ones).
 type fakePruner struct {
 	mu     sync.Mutex
 	calls  int
 	err    error
 	report container.PruneReport
-	// during runs inside PruneContainers, while the handler holds its turn.
+	// during runs inside a prune method, while the handler holds its turn.
 	during func()
+}
+
+func (f *fakePruner) enter() error {
+	f.mu.Lock()
+	f.calls++
+	during, err := f.during, f.err
+	f.mu.Unlock()
+	if during != nil {
+		during()
+	}
+	return err
+}
+
+func (f *fakePruner) PruneVolumes(_ context.Context, _ services.PruneOptions) (volume.PruneReport, error) {
+	return volume.PruneReport{VolumesDeleted: []string{"v1"}, SpaceReclaimed: 5}, f.enter()
+}
+
+func (f *fakePruner) PruneNetworks(_ context.Context, _ services.PruneOptions) (network.PruneReport, error) {
+	return network.PruneReport{NetworksDeleted: []string{"n1"}}, f.enter()
+}
+
+func (f *fakePruner) PruneImages(_ context.Context, _ services.PruneOptions) (image.PruneReport, error) {
+	return image.PruneReport{ImagesDeleted: []image.DeleteResponse{{Deleted: "sha256:aaa"}}, SpaceReclaimed: 5}, f.enter()
 }
 
 func (f *fakePruner) PruneContainers(_ context.Context, _ services.PruneOptions) (container.PruneReport, error) {
