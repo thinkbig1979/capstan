@@ -8,7 +8,7 @@ import { PruneButton, type PruneOptionConfig } from '../PruneButton'
 type PruneFnProp = ComponentProps<typeof PruneButton>['pruneFn']
 
 vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }))
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -75,5 +75,55 @@ describe('PruneButton', () => {
 
     expect(screen.queryByRole('switch')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '7d' })).toBeInTheDocument()
+  })
+
+  describe('done-state indicator', () => {
+    async function pruneWith(result: unknown) {
+      const user = userEvent.setup()
+      const pruneFn = vi.fn().mockResolvedValue(result)
+      const view = renderButton(pruneFn)
+      await user.click(screen.getByRole('button', { name: /prune/i }))
+      await screen.findByText('Prune Unused Images?')
+      await user.click(screen.getAllByRole('button', { name: /^prune$/i }).at(-1)!)
+      await waitFor(() => expect(pruneFn).toHaveBeenCalledTimes(1))
+      return view
+    }
+
+    it('shows a warning indicator, not the green check, for a partial prune', async () => {
+      const { container } = await pruneWith({
+        outcome: 'partial',
+        reason: 'removed 2, 1 failed',
+        details: { deleted: ['a', 'b'], spaceReclaimed: 10 },
+      })
+
+      expect(await screen.findByText(/partly pruned 2 images/i)).toBeInTheDocument()
+      expect(container.querySelector('svg.text-warning')).not.toBeNull()
+      expect(container.querySelector('.text-success')).toBeNull()
+      expect(screen.queryByText(/^pruned/i)).not.toBeInTheDocument()
+    })
+
+    it('keeps the green check for a full success', async () => {
+      const { container } = await pruneWith({
+        outcome: 'success',
+        reason: 'pruned',
+        details: { deleted: ['a', 'b'], spaceReclaimed: 10 },
+      })
+
+      expect(await screen.findByText(/pruned 2 images/i)).toBeInTheDocument()
+      expect(container.querySelector('svg.text-success')).not.toBeNull()
+      expect(container.querySelector('.text-warning')).toBeNull()
+    })
+
+    it('keeps the muted indicator for no_change', async () => {
+      const { container } = await pruneWith({
+        outcome: 'no_change',
+        reason: 'nothing to prune',
+        details: { deleted: [] },
+      })
+
+      expect(await screen.findByText('nothing to prune')).toBeInTheDocument()
+      expect(container.querySelector('.text-success')).toBeNull()
+      expect(container.querySelector('.text-warning')).toBeNull()
+    })
   })
 })
