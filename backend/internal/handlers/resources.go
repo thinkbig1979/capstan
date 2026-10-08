@@ -10,6 +10,9 @@ import (
 
 	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/gin-gonic/gin"
 	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/errdefs"
@@ -45,11 +48,18 @@ type dockerCleanupArmer interface {
 	StartFromPolicy()
 }
 
-// containerPruner is the slice of *services.DockerService the container prune
-// route needs, so the lock it takes can be tested without a Docker daemon. Kept
-// apart from containerActionDocker: the prune is not a single-container action.
-type containerPruner interface {
+// resourcePruner is the slice of *services.DockerService the four cross-stack
+// prune routes need, so the stack turn they take can be tested without a Docker
+// daemon. Kept apart from containerActionDocker: a prune is not a
+// single-container action. Every method on it removes objects of any stack, so
+// the guard (TestContainerLockGuard_EveryContainerPruneTakesTheExclusiveTurnFirst)
+// derives its method set from this interface: a prune added here that
+// is called without the gate fails that test.
+type resourcePruner interface {
 	PruneContainers(ctx context.Context, opts services.PruneOptions) (container.PruneReport, error)
+	PruneVolumes(ctx context.Context, opts services.PruneOptions) (volume.PruneReport, error)
+	PruneNetworks(ctx context.Context, opts services.PruneOptions) (network.PruneReport, error)
+	PruneImages(ctx context.Context, opts services.PruneOptions) (image.PruneReport, error)
 }
 
 // containerActionDocker is the slice of *services.DockerService the
@@ -72,9 +82,9 @@ type ResourcesHandler struct {
 	// containerOps is docker, seen through containerActionDocker. Set by the
 	// constructor; tests replace it with a fake.
 	containerOps containerActionDocker
-	// pruner is docker, seen through containerPruner; nil (handlers built as
+	// pruner is docker, seen through resourcePruner; nil (handlers built as
 	// struct literals) means use docker.
-	pruner     containerPruner
+	pruner     resourcePruner
 	db         *database.DB
 	scheduler  updateScanner
 	jobManager *services.UpdateJobManager
