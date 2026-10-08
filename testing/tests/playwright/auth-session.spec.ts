@@ -55,12 +55,13 @@ const BASE_URL = process.env.CAPSTAN_BASE_URL ?? 'http://localhost:3001'
 const API_URL = process.env.CAPSTAN_API_URL ?? 'http://localhost:5001'
 
 // Deliberately distinct env var names from backup-flow.spec.ts's
-// CAPSTAN_TEST_USER/CAPSTAN_TEST_PASSWORD: that spec's default TEST_USER is
-// an email ('testadmin@example.com'), which the backend rejects with 400
-// VALIDATION_ERROR (middleware/validation.go's username rule allows only
-// letters, numbers, underscores, hyphens — see handlers/auth.go:449-451).
-// A plain username avoids that entirely and keeps the two specs' env
-// surfaces from colliding if either ever gets a shared default.
+// CAPSTAN_TEST_USER/CAPSTAN_TEST_PASSWORD: those specs log in as a user that
+// already exists, while this one creates the only account on a virgin
+// DATA_DIR, so the two must not share a default. The username must be a plain
+// one: the backend rejects anything else with 400 VALIDATION_ERROR
+// (middleware/validation.go's username rule allows only letters, numbers,
+// underscores, hyphens — see handlers/auth.go:449-451), which is why an email
+// as the login name never worked (agent-os-r7ix).
 const TEST_USER = process.env.CAPSTAN_AUTH_TEST_USER ?? 'testadmin'
 const TEST_PASSWORD = process.env.CAPSTAN_AUTH_TEST_PASSWORD ?? 'CapstanE2eAuth1!'
 

@@ -44,7 +44,7 @@ import { test, expect, Page, BrowserContext, APIRequestContext } from 'playwrigh
 
 const BASE_URL = process.env.CAPSTAN_BASE_URL ?? 'http://localhost:3001'
 const API_URL = process.env.CAPSTAN_API_URL ?? 'http://localhost:5001'
-const TEST_USER = process.env.CAPSTAN_TEST_USER ?? 'testadmin@example.com'
+const TEST_USER = process.env.CAPSTAN_TEST_USER ?? 'testadmin'
 const TEST_PASSWORD = process.env.CAPSTAN_TEST_PASSWORD ?? 'TestPass123!'
 const AUTH_DISABLED = (process.env.AUTH_DISABLED ?? 'false') === 'true'
 const TEST_STACK_NAME = process.env.CAPSTAN_TEST_STACK ?? 'test-app'
@@ -80,8 +80,8 @@ async function loginIfNeeded(page: Page): Promise<void> {
   await page.goto(`${BASE_URL}/login`)
   await page.waitForLoadState('networkidle')
   if (!page.url().includes('login')) return
-  await page.getByLabel(/email/i).fill(TEST_USER)
-  await page.getByLabel(/password/i).fill(TEST_PASSWORD)
+  await page.getByLabel('Username', { exact: true }).fill(TEST_USER)
+  await page.getByLabel('Password', { exact: true }).fill(TEST_PASSWORD)
   await page.getByRole('button', { name: /login|sign in/i }).click()
   await page.waitForURL((u) => !u.href.includes('login'), { timeout: 15_000 })
 }

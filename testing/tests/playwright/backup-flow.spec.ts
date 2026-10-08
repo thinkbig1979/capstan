@@ -36,7 +36,7 @@ import { test, expect, Page, APIRequestContext } from 'playwright/test'
 
 const BASE_URL = process.env.CAPSTAN_BASE_URL ?? 'http://localhost:3001'
 const API_URL = process.env.CAPSTAN_API_URL ?? 'http://localhost:5001'
-const TEST_USER = process.env.CAPSTAN_TEST_USER ?? 'testadmin@example.com'
+const TEST_USER = process.env.CAPSTAN_TEST_USER ?? 'testadmin'
 const TEST_PASSWORD = process.env.CAPSTAN_TEST_PASSWORD ?? 'TestPass123!'
 const AUTH_DISABLED = (process.env.AUTH_DISABLED ?? 'false') === 'true'
 const TEST_STACK_NAME = process.env.CAPSTAN_TEST_STACK ?? 'test-app'
@@ -48,6 +48,10 @@ const BACKUP_PASSPHRASE = process.env.CAPSTAN_BACKUP_PASSPHRASE ?? 'capstan-e2e-
 let authToken = ''
 let testStackId = ''
 let firstSnapshotId = ''
+// The test-app stack's backup policy as it was BEFORE BACKUP-PW-003 enabled it:
+// null means the stack had none, undefined means 003 never got that far. The
+// afterAll restores it so later specs do not inherit enabled:true (agent-os-kc3z).
+let priorPolicy: { enabled: boolean; stopPolicy: string } | null | undefined
 // CSRF double-submit token. The backend (middleware/csrf.go) sets a
 // `capstan_csrf` cookie on any GET and requires the same value echoed in the
 // `X-CSRF-Token` header on every mutating request. The real UI (axios) does
@@ -111,8 +115,8 @@ async function loginIfNeeded(page: Page, target = '/dashboard'): Promise<void> {
 
   // A session cookie may have skipped the form entirely.
   if (page.url().includes('login')) {
-    await page.getByLabel(/email/i).fill(TEST_USER)
-    await page.getByLabel(/password/i).fill(TEST_PASSWORD)
+    await page.getByLabel('Username', { exact: true }).fill(TEST_USER)
+    await page.getByLabel('Password', { exact: true }).fill(TEST_PASSWORD)
     await page.getByRole('button', { name: /login|sign in/i }).click()
     await page.waitForURL((u) => !u.href.includes('login'), { timeout: 15_000 })
   }
@@ -160,6 +164,19 @@ async function apiMutate(
   return request.post(`${API_URL}${path}`, { headers, data })
 }
 
+/** The stack's backup policy, or null when it has none. */
+async function readPolicy(
+  request: APIRequestContext,
+  stackId: string,
+): Promise<{ enabled: boolean; stopPolicy: string } | null> {
+  const resp = await apiGet(request, '/api/v1/backups/policies')
+  expect(resp.status(), 'GET /backups/policies').toBe(200)
+  const body: { policies?: Array<{ targetId: string; enabled: boolean; stopPolicy: string }> } =
+    await resp.json()
+  const found = body.policies?.find((p) => p.targetId === stackId)
+  return found ? { enabled: found.enabled, stopPolicy: found.stopPolicy } : null
+}
+
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
 // .serial, not plain describe. playwright.config.ts already pins workers: 1 and
@@ -169,6 +186,36 @@ async function apiMutate(
 // earlier tests in this block set, so the retry runs against a half-built
 // world. .serial replays the whole block instead.
 test.describe.serial('Backup flow E2E', () => {
+  // Put the stack's backup policy back as BACKUP-PW-003 found it: PUT the prior
+  // values, or DELETE when there was no policy. Without this the policy stays
+  // enabled:true and any spec sorting after this one inherits it. Runs after a
+  // failed test too, since the policy may already be enabled by then. A fresh
+  // request context, because the test-scoped `request` fixture is not available
+  // in afterAll. The GET at the end is what makes this a check and not a hope.
+  test.afterAll(async ({ playwright }) => {
+    if (priorPolicy === undefined) return
+    const request = await playwright.request.newContext()
+    try {
+      await ensureCsrf(request)
+      const path = `/api/v1/backups/policies/stack/${testStackId}`
+      const restored = priorPolicy
+        ? await apiMutate(request, 'PUT', path, priorPolicy)
+        : await request.delete(`${API_URL}${path}`, {
+            headers: {
+              ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+              'X-CSRF-Token': csrfToken,
+            },
+          })
+      expect(restored.status(), `restore of ${path}`).toBe(priorPolicy ? 200 : 204)
+      expect(await readPolicy(request, testStackId), 'policy after restore').toEqual(priorPolicy)
+      console.log(
+        `[backup-flow afterAll] restored ${testStackId} policy to ${JSON.stringify(priorPolicy)}`,
+      )
+    } finally {
+      await request.dispose()
+    }
+  })
+
   // ── 001: Configure backup settings ─────────────────────────────────────────
 
   test('BACKUP-PW-001: configure backup repository and password', async ({
@@ -178,15 +225,17 @@ test.describe.serial('Backup flow E2E', () => {
     // ── Obtain auth token for subsequent API calls ─────────────────────────
     if (!AUTH_DISABLED) {
       const loginResp = await request.post(`${API_URL}/api/v1/auth/login`, {
-        data: { email: TEST_USER, password: TEST_PASSWORD },
+        data: { username: TEST_USER, password: TEST_PASSWORD },
       })
-      if (loginResp.ok()) {
-        // Login sets the session only as the capstan_token cookie, with no
-        // token in the body (agent-os-n4ca.2). Read it from this context's
-        // jar so later tests, each with a fresh jar, can send it as Bearer.
-        const state = await request.storageState()
-        authToken = state.cookies.find((c) => c.name === 'capstan_token')?.value ?? ''
-      }
+      // A failed login must fail here, not later as an unrelated 401: the old
+      // `if (loginResp.ok())` skip is how a login that never worked (agent-os-r7ix)
+      // went unseen.
+      expect(loginResp.status(), `POST /auth/login as '${TEST_USER}'`).toBe(200)
+      // Login sets the session only as the capstan_token cookie, with no
+      // token in the body (agent-os-n4ca.2). Read it from this context's
+      // jar so later tests, each with a fresh jar, can send it as Bearer.
+      const state = await request.storageState()
+      authToken = state.cookies.find((c) => c.name === 'capstan_token')?.value ?? ''
     }
 
     // ── Configure via API ──────────────────────────────────────────────────
@@ -259,6 +308,9 @@ test.describe.serial('Backup flow E2E', () => {
     const testStack = stacks.find((s) => (s.name ?? s.id ?? '').includes(TEST_STACK_NAME))
     expect(testStack, `Stack '${TEST_STACK_NAME}' not found`).toBeTruthy()
     testStackId = testStack!.id ?? testStack!.name
+
+    // ── Remember the policy this stack has now, to restore it in afterAll ──
+    priorPolicy = await readPolicy(request, testStackId)
 
     // ── Enable via API ────────────────────────────────────────────────────
     const policyResp = await apiMutate(
