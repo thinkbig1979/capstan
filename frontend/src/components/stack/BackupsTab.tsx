@@ -36,6 +36,7 @@ import { cn } from '@/lib/utils'
 import { repoFaultFrom, type RepoFault } from '@/lib/backup-repo-fault'
 import type { BackupSnapshot, BackupRun } from '@/types'
 import { useTextFilter } from '@/hooks/useTextFilter'
+import { isFirstLoad } from '@/lib/query-state'
 import { TableSearch } from '@/components/ui/table-search'
 
 // tags and paths are `string[] | null` on the wire, not `string[]`: restic
@@ -108,7 +109,7 @@ function RepoFaultNotice({ fault }: { fault: RepoFault }) {
 // ─── Preview panel ────────────────────────────────────────────────────────────
 
 function PreviewPanel({ snapshotId, onClose }: { snapshotId: string; onClose: () => void }) {
-  const { data, isLoading, isError, error, refetch } = usePreviewSnapshot(snapshotId)
+  const { data, isPending, fetchStatus, isError, error, refetch } = usePreviewSnapshot(snapshotId)
   // Reached only when the snapshot list ALREADY loaded — the fault panel below
   // replaces the table, and the button that opens this panel lives in a row of
   // it. So this is the repository dying under an open tab: a mount dropping, a
@@ -126,7 +127,9 @@ function PreviewPanel({ snapshotId, onClose }: { snapshotId: string; onClose: ()
         </Button>
       </div>
       <div className="max-h-64 overflow-y-auto p-3 font-mono text-xs leading-relaxed">
-        {isLoading && (
+        {/* isFirstLoad: the query is `enabled: !!snapshotId`, and offline the first
+            fetch is paused (agent-os-7nqa). */}
+        {isFirstLoad({ isPending, fetchStatus }) && (
           <div className="flex items-center gap-2 text-muted-foreground">
             <LoadingSpinner size="small" />
             Loading preview…
@@ -375,17 +378,21 @@ export function BackupsTab({ stackId }: BackupsTabProps) {
   // Snapshots
   const {
     data: snapshots,
-    isLoading: snapshotsLoading,
+    isPending: snapshotsPending,
+    fetchStatus: snapshotsFetchStatus,
     isError: snapshotsError,
     error: snapshotsErrorCause,
     refetch: refetchSnapshots,
   } = useBackupSnapshots(stackId)
+  // isFirstLoad: useBackupSnapshots is `enabled: !!stackId`, and offline the first
+  // fetch is paused (agent-os-7nqa).
+  const snapshotsLoading = isFirstLoad({ isPending: snapshotsPending, fetchStatus: snapshotsFetchStatus })
   const repoFault = repoFaultFrom(snapshotsErrorCause)
 
   // Recent runs (global history — all runs are relevant when backup is enabled)
   const {
     runs,
-    isLoading: runsLoading,
+    isFirstLoad: runsLoading,
     loadFailed: runsLoadFailed,
     refreshFailed: runsRefreshFailed,
     refetch: refetchRuns,

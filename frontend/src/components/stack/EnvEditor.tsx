@@ -70,7 +70,7 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   // would swallow both and render them as "no env file", hiding a real fault
   // behind an empty editor. Only the no-env-file 404 stopped existing; those
   // two belong in isError.
-  const { data: envData, isLoading, isError, error } = useQuery({
+  const { data: envData, isPending, isError, error } = useQuery({
     queryKey: queryKeys.stack.env(stackId),
     queryFn: () => stacksApi.getEnv(stackId),
   })
@@ -135,12 +135,11 @@ export function EnvEditor({ stackId }: EnvEditorProps) {
   //
   // The `&& !envData` on the LOADING guard is belt-and-braces and cannot change
   // the result today: query-core sets status "pending" only while `data` is
-  // undefined, and `isLoading = isPending && isFetching`, so `isLoading` already
-  // implies `!envData` for this query — it declares no placeholderData,
+  // undefined, so `isPending` implies `!envData` for this query — it declares no placeholderData,
   // initialData or select. It is written out so the two guards read as a pair,
   // and so the day someone adds placeholderData here the loading branch does not
   // quietly start hiding a populated editor.
-  if (isLoading && !envData) {
+  if (isPending && !envData) {
     return <EnvLoadingState />
   }
 

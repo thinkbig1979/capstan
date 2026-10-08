@@ -96,7 +96,7 @@ export function DashboardPage() {
 
   const {
     data: directories,
-    isLoading: isLoadingDirectories,
+    isPending: isPendingDirectories,
     error: directoriesError,
     refetch: refetchDirectories,
   } = useQuery({
@@ -106,7 +106,7 @@ export function DashboardPage() {
 
   const {
     data: stacks,
-    isLoading: isLoadingStacks,
+    isPending: isPendingStacks,
     error: stacksError,
     refetch: refetchStacks,
   } = useQuery({
@@ -154,7 +154,10 @@ export function DashboardPage() {
   const stoppedCount = stacks?.filter((s) => s.status === 'stopped').length || 0
   const containerCount = stacks?.reduce((sum, s) => sum + (s.containers?.length || 0), 0) || 0
 
-  const isLoading = isLoadingDirectories || isLoadingStacks
+  // isPending, not isLoading: offline the first fetch is paused and isLoading is
+  // false with no data, so the page fell through to a dashboard built from
+  // undefined lists (agent-os-7nqa).
+  const isPending = isPendingDirectories || isPendingStacks
 
   const sortStacks = (items: typeof stacks) => {
     if (!items) return []
@@ -227,7 +230,7 @@ export function DashboardPage() {
     }
   }
 
-  if (isLoading) {
+  if (isPending) {
     return (
       <div className="space-y-6">
         <p className="text-sm text-muted-foreground">Loading...</p>

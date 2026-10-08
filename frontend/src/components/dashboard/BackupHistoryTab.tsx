@@ -169,9 +169,9 @@ function RunMessage({ run }: { run: BackupRun }) {
 
 function RunDetail({ run }: { run: BackupRun }) {
   const { id: runId, status } = run
-  const { data, isLoading, isError, error, refetch } = useBackupRunDetail(runId, status)
+  const { data, isPending, isError, error, refetch } = useBackupRunDetail(runId, status)
 
-  if (isLoading) {
+  if (isPending) {
     return (
       <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" />
@@ -345,7 +345,7 @@ export function BackupHistoryTab() {
     return f
   }, [page, statusFilter, kindFilter, triggerFilter, dateRange])
 
-  const { data, isLoading, isError, refetch } = useBackupHistory(filters)
+  const { data, isPending, isError, refetch } = useBackupHistory(filters)
 
   // The handler guarantees an array, so this default only covers the
   // pre-first-response render, never a null payload.
@@ -357,7 +357,7 @@ export function BackupHistoryTab() {
     setPage(1)
   }
 
-  if (isLoading && !data) {
+  if (isPending && !data) {
     return (
       <div className="space-y-2">
         <div className="flex gap-2">
@@ -408,7 +408,7 @@ export function BackupHistoryTab() {
     <RefreshFailedNotice what="the backup history" onRetry={() => refetch()} />
   )
 
-  if (runs.length === 0 && !isLoading) {
+  if (runs.length === 0 && !isPending) {
     return (
       <div className="space-y-4">
         {refreshNotice}

@@ -261,6 +261,51 @@ export default defineConfig([
           message:
             'An empty numeric field must not become a number. Use NumericField (components/settings/NumericField.tsx) and hold number | null in the draft, or parseWholeNumber, and block Save while it is null.',
         },
+        // agent-os-7nqa: a first-load gate keyed on `isLoading`. TanStack's
+        // isLoading is `isPending && isFetching`, and a first fetch started
+        // while the browser is offline is 'paused', so isLoading is false with
+        // no data and the component falls through to an error, "not found" or
+        // empty-state claim about a read that never ran (the settings pages,
+        // agent-os-cg26; every dashboard and stack tab, this bead). Use
+        // `isPending`, or `isFirstLoad({ isPending, fetchStatus })`
+        // (lib/query-state.ts) for a query with `enabled: ...`, which plain
+        // isPending would spin on forever while it is disabled.
+        //
+        // Keyed on the DESTRUCTURE of a call result (`const { isLoading } =
+        // useX()`, renamed or not) and on a member read of it
+        // (`result.isLoading`). Props destructuring (`({ isLoading })`, a
+        // presentational flag) and the useState pair are different shapes and do
+        // not match. KNOWN GAP: a destructure from something that is not a call
+        // (`const { isLoading } = data`, where the query result arrives as a
+        // prop) is invisible here; the call that produced it is the site.
+        {
+          selector:
+            "VariableDeclarator[init.type='CallExpression'] > ObjectPattern > Property[key.name='isLoading']",
+          message:
+            'isLoading is false while a first fetch is paused offline, so this gate falls through to an error or empty state. Use isPending, or isFirstLoad({ isPending, fetchStatus }) from lib/query-state for a query with `enabled`.',
+        },
+        {
+          selector: "MemberExpression[computed=false][property.name='isLoading']",
+          message:
+            'isLoading is false while a first fetch is paused offline, so this gate falls through to an error or empty state. Read isPending, or isFirstLoad({ isPending, fetchStatus }) from lib/query-state for a query with `enabled`.',
+        },
+        // agent-os-zree (the o9fx class): a spanning row's colSpan is the
+        // table's column count, and a hand-typed number is legal and silent when
+        // a column is added. Derive it from the table's own column list
+        // (`colSpan={SOME_COLUMNS.length}`, pinned by test/tableSpan.ts). A
+        // headerless table with a fixed shape (DiffViewer's two-column diff
+        // grid) carries a per-site disable that says so.
+        {
+          selector:
+            "JSXAttribute[name.name='colSpan'] > JSXExpressionContainer > Literal[value=type(number)]",
+          message:
+            'A hand-typed colSpan drifts when a column is added. Derive it from the table\'s column list, e.g. colSpan={COLUMNS.length}, as StacksTab and BackupHistoryTab do.',
+        },
+        {
+          selector: "JSXAttribute[name.name='colSpan'] > Literal",
+          message:
+            'A hand-typed colSpan drifts when a column is added. Derive it from the table\'s column list, e.g. colSpan={COLUMNS.length}, as StacksTab and BackupHistoryTab do.',
+        },
         // agent-os-z91e.12: a raw <a> with a same-origin path is a full document
         // navigation: the SPA unloads, taking the query cache, every open
         // WebSocket and the in-memory env-unlock state with it. Internal links

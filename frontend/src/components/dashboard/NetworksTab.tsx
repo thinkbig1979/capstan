@@ -43,7 +43,7 @@ function networkDeleteBlock(net: DockerNetwork): string | null {
 
 export function NetworksTab() {
   const { confirm, ConfirmComponent } = useConfirm()
-  const { data: networks, isLoading, isError, refetch } = useNetworks()
+  const { data: networks, isPending, isError, refetch } = useNetworks()
   const [sortBy, setSortBy] = useState<SortKey>('name')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
@@ -82,7 +82,7 @@ export function NetworksTab() {
     }
   }, [filtered, sortBy])
 
-  if (isLoading) {
+  if (isPending) {
     return (
       <div className="space-y-4">
         {Array.from({ length: 5 }).map((_, i) => (

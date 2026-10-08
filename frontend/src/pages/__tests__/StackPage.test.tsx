@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query'
 import { BrowserRouter, Routes, Route } from 'react-router'
 import type { Stack } from '@/types'
 import { useStackStore } from '@/stores/stackStore'
@@ -397,6 +397,24 @@ describe('StackPage', () => {
 
       expect(screen.queryByTestId('stack-detail')).not.toBeInTheDocument()
       expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0)
+    })
+
+    // agent-os-7nqa: offline, the first fetch is 'paused', isLoading is false
+    // with no stack, and the page used to print "Stack Not Found" for a stack
+    // nobody asked the server about.
+    it('offline on first render: shows skeletons, not "Stack Not Found"', async () => {
+      onlineManager.setOnline(false)
+      try {
+        const { container } = renderPage('/stacks/s1')
+        await act(async () => {})
+
+        expect(screen.queryByText('Stack Not Found')).not.toBeInTheDocument()
+        expect(screen.queryByTestId('stack-detail')).not.toBeInTheDocument()
+        expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0)
+        expect(getStack).not.toHaveBeenCalled()
+      } finally {
+        onlineManager.setOnline(true)
+      }
     })
   })
 

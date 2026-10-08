@@ -18,7 +18,7 @@ import { UPDATE_SEARCH_FIELDS, type SortKey, type UpdateItem } from './types'
  * toast wording depends on the same container data the table renders.
  */
 export function useUpdatesData() {
-  const { data: updateData, isLoading, isError, error, refetch: refetchUpdates } = useCheckUpdates()
+  const { data: updateData, isPending, isError, error, refetch: refetchUpdates } = useCheckUpdates()
   const refreshMutation = useCheckUpdatesRefresh()
   const updateMutation = useUpdateContainer()
   const policiesQuery = useAutoUpdatePolicies()
@@ -102,10 +102,10 @@ export function useUpdatesData() {
 
   const hasData = updates.length > 0
   const isRefreshing = isScanning
-  const neverScanned = !updateData && !isLoading && !isError && !isScanning
+  const neverScanned = !updateData && !isPending && !isError && !isScanning
 
   return {
-    isLoading,
+    isPending,
     isError,
     // agent-os-4gve: the RAW query payload, exposed so the error guard can ask
     // "did the server ever answer" instead of reading a field OFF that answer.

@@ -115,7 +115,7 @@ export function UpdateLogTab() {
     return f
   }, [page, statusFilter, triggerFilter, dateRange])
 
-  const { data, isLoading, isError, refetch } = useUpdateHistory(filters)
+  const { data, isPending, isError, refetch } = useUpdateHistory(filters)
 
   const entries = useMemo(() => data?.entries ?? [], [data])
   const { query, setQuery, filtered } = useTextFilter(entries, UPDATE_SEARCH_FIELDS)
@@ -125,7 +125,7 @@ export function UpdateLogTab() {
     setPage(1)
   }
 
-  if (isLoading && !data) {
+  if (isPending && !data) {
     return (
       <div className="space-y-2">
         <div className="flex gap-2">
@@ -172,7 +172,7 @@ export function UpdateLogTab() {
     <RefreshFailedNotice what="the update history" onRetry={() => refetch()} />
   )
 
-  if (entries.length === 0 && !isLoading) {
+  if (entries.length === 0 && !isPending) {
     return (
       <div className="space-y-4">
         {refreshNotice}

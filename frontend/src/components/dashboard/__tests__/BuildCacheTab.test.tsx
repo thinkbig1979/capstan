@@ -33,7 +33,7 @@ const mockEntries: BuildCacheEntry[] = [
 
 const { buildCache } = vi.hoisted(() => ({
   buildCache: {
-    current: {} as { data: unknown; isLoading: boolean; isError: boolean; refetch: () => void },
+    current: {} as { data: unknown; isPending: boolean; isError: boolean; refetch: () => void },
   },
 }))
 
@@ -42,7 +42,7 @@ vi.mock('@/hooks/useResources', () => ({
 }))
 
 beforeEach(() => {
-  buildCache.current = { data: mockEntries, isLoading: false, isError: false, refetch: vi.fn() }
+  buildCache.current = { data: mockEntries, isPending: false, isError: false, refetch: vi.fn() }
 })
 
 vi.mock('@/lib/api', () => ({
@@ -91,7 +91,7 @@ describe('BuildCacheTab', () => {
 describe('BuildCacheTab — a failed Docker read is not an empty cache (agent-os-v824)', () => {
   it('first load fails: an error with Retry, NOT "No Build Cache"', () => {
     const refetch = vi.fn()
-    buildCache.current = { data: undefined, isLoading: false, isError: true, refetch }
+    buildCache.current = { data: undefined, isPending: false, isError: true, refetch }
     render(<BuildCacheTab />)
 
     // Pre-fix this read "No Build Cache - Build cache is empty".
@@ -102,7 +102,7 @@ describe('BuildCacheTab — a failed Docker read is not an empty cache (agent-os
   })
 
   it('a refetch fails over loaded entries: keeps them AND says so', () => {
-    buildCache.current = { data: mockEntries, isLoading: false, isError: true, refetch: vi.fn() }
+    buildCache.current = { data: mockEntries, isPending: false, isError: true, refetch: vi.fn() }
     render(<BuildCacheTab />)
 
     expect(screen.getByText('layer cache')).toBeInTheDocument()
@@ -112,7 +112,7 @@ describe('BuildCacheTab — a failed Docker read is not an empty cache (agent-os
   })
 
   it('a genuinely empty cache still shows the empty state, with no error', () => {
-    buildCache.current = { data: [], isLoading: false, isError: false, refetch: vi.fn() }
+    buildCache.current = { data: [], isPending: false, isError: false, refetch: vi.fn() }
     render(<BuildCacheTab />)
 
     expect(screen.getByText('No Build Cache')).toBeInTheDocument()

@@ -29,7 +29,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
   const [selectedText, setSelectedText] = useState('')
   const selectedTextRef = useRef('')
 
-  const { isLoading, data } = useQuery({
+  const { isPending, data } = useQuery({
     queryKey: queryKeys.stack.compose(stackId),
     queryFn: async () => {
       const compose = await stacksApi.getCompose(stackId)
@@ -94,7 +94,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
         onSave={() => handleSave()}
         onLint={handleLint}
         onExtract={handleExtractToEnv}
-        isLoading={isLoading}
+        isLoading={isPending}
         isSaving={saveMutation.isPending}
         isLintingBeforeSave={isLintingBeforeSave}
         isLinting={lintMutation.isPending}
@@ -104,7 +104,7 @@ export function ComposeEditor({ stackId }: ComposeEditorProps) {
       />
 
       <div className="relative">
-        {isLoading && (
+        {isPending && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 rounded-md border">
             <div className="flex items-center gap-2">
               <LoadingSpinner size="default" />

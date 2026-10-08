@@ -41,7 +41,7 @@ export function Sidebar() {
 
   const {
     stacks,
-    isLoading,
+    isPending,
     stacksLoadFailed,
     stacksRefreshFailed,
     refetchStacks,
@@ -78,7 +78,8 @@ export function Sidebar() {
 
   const bodyProps = {
     stacks,
-    isLoading,
+    // isPending, not isLoading: offline the first fetch is paused (agent-os-7nqa).
+    isLoading: isPending,
     stacksLoadFailed,
     stacksRefreshFailed,
     onRetryStacks: () => void refetchStacks(),

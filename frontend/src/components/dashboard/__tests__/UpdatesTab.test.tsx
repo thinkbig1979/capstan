@@ -152,11 +152,11 @@ function makePolicy(overrides: Partial<AutoUpdatePolicy> = {}): AutoUpdatePolicy
 }
 
 function setCheckUpdates(
-  overrides: Partial<{ data: unknown; isLoading: boolean; isError: boolean; error: unknown }> = {},
+  overrides: Partial<{ data: unknown; isPending: boolean; isError: boolean; error: unknown }> = {},
 ) {
   mockCheckUpdates.mockReturnValue({
     data: undefined,
-    isLoading: false,
+    isPending: false,
     isError: false,
     // agent-os-rtn8: deliberately absent by default. Every pre-existing caller
     // of this helper sets isError WITHOUT an error object, and those callers are
@@ -196,7 +196,7 @@ describe('UpdatesTab — Available Updates state machine', () => {
   })
 
   it('shows loading skeletons when the query is loading and no scan is running', () => {
-    setCheckUpdates({ isLoading: true })
+    setCheckUpdates({ isPending: true })
     render(<UpdatesTab />)
 
     expect(screen.queryByText('Checking for Updates')).not.toBeInTheDocument()
