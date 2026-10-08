@@ -16,8 +16,8 @@ type ActionOutcome = 'success' | 'no_change' | 'partial' | 'failed'
  * Rename or add a truth.Outcome constant and this line is a TS2344 naming both
  * unions, not a silent widening discovered in a browser.
  */
-type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
-type AssertTrue<T extends true> = T
+export type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+export type AssertTrue<T extends true> = T
 export type ActionOutcomeMatchesWire = AssertTrue<Exact<ActionOutcome, Outcome>>
 
 export interface ActionResult<D = Record<string, unknown>> {

@@ -5,6 +5,8 @@ import { useUpdateJobStore } from '@/stores/updateJobStore'
 import { reconcileOnClose } from '@/lib/ws-reconcile'
 import type { UpdateJob, JobLine, UpdateJobStatus, UpdateJobOutcome } from '@/stores/updateJobStore'
 import { queryKeys } from '@/lib/query-keys'
+import type { AssertTrue, Exact } from '@/lib/action-result'
+import type { Outcome } from '@/types'
 import { arrayOf, frameValidator, oneOf, optOneOf, optStr, record, str } from '@/lib/wsFrames'
 
 // ── WS frame shapes (per api-contract.md) ────────────────────────────────────
@@ -48,6 +50,12 @@ type JobStreamFrame = SnapshotFrame | LineFrame | StatusFrame | DoneFrame | Erro
 
 export const JOB_STATUSES = ['queued', 'pulling', 'recreating', 'success', 'error'] as const satisfies readonly UpdateJobStatus[]
 export const JOB_OUTCOMES = ['success', 'no_change', 'partial', 'failed'] as const satisfies readonly UpdateJobOutcome[]
+// Both outcome copies are proved equal to the generated Outcome at compile time
+// (agent-os-m61t). `satisfies` above only says each listed value is valid, not
+// that every valid value is listed; a new Go outcome must fail tsc -b here, in
+// the same way action-result.ts's ActionOutcomeMatchesWire does.
+export type JobOutcomesMatchWire = AssertTrue<Exact<(typeof JOB_OUTCOMES)[number], Outcome>>
+export type UpdateJobOutcomeMatchesWire = AssertTrue<Exact<UpdateJobOutcome, Outcome>>
 export const JOB_TARGET_TYPES = ['container', 'stack'] as const
 const LINE_STREAMS = ['stdout', 'stderr', 'status'] as const satisfies readonly JobLine['stream'][]
 
