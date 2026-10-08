@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -8,12 +9,14 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/thinkbig1979/capstan/backend/internal/database"
+	"github.com/thinkbig1979/capstan/backend/internal/execx"
 	"github.com/thinkbig1979/capstan/backend/internal/middleware"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
@@ -187,6 +190,68 @@ func TestBuildLogsCmd_DoesNotLeakCapstanSecrets(t *testing.T) {
 	assert.NotContains(t, output, "sentinel-value-storage-handler")
 	assert.NotContains(t, output, "sentinel-value-git-handler")
 	assert.Contains(t, output, "PATH=")
+}
+
+// TestBuildLogsCmd_IsBuiltByExecx: StreamLogs' child comes from execx.Command
+// like every other non-interactive child, so it carries execx.WaitDelay
+// (agent-os-qags.29). Before the move it was a raw exec.CommandContext with
+// WaitDelay 0.
+func TestBuildLogsCmd_IsBuiltByExecx(t *testing.T) {
+	h := &LogsHandler{}
+	stack := models.Stack{Directory: t.TempDir(), ComposeFile: "compose.yaml", ProjectName: "p"}
+
+	cmd := h.buildLogsCmd(context.Background(), stack)
+
+	assert.Equal(t, execx.WaitDelay, cmd.WaitDelay)
+}
+
+// TestStreamLogsTeardown_GrandchildHoldingThePipeDoesNotHoldTheFollow is a PIN,
+// green both sides by construction; it guards against a future change to the
+// teardown shape. It replays StreamLogs' teardown (StdoutPipe read by a
+// scanner goroutine, then cancel, Kill, Wait) on buildLogsCmd's child, whose
+// grandchild keeps stdout open the way the compose plugin can. With StdoutPipe
+// there is no exec copy goroutine, so Wait returns at the direct child's exit
+// and closes the read end, which ends the scanner. WaitDelay plays no part:
+// probed with WaitDelay 0 and 5s, both returned in 0s (agent-os-qags.29). A
+// change to io.Pipe or cmd.Stdout = <writer> would make Wait wait on the
+// grandchild, and this test then needs WaitDelay to stay under its bound.
+func TestStreamLogsTeardown_GrandchildHoldingThePipeDoesNotHoldTheFollow(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	require.NoError(t, err)
+	h := &LogsHandler{}
+	stack := models.Stack{Directory: t.TempDir(), ComposeFile: "compose.yaml", ProjectName: "p"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := h.buildLogsCmd(ctx, stack)
+	cmd.Path = sh
+	cmd.Args = []string{"sh", "-c", "echo line; sleep 20"}
+
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	scanned := make(chan struct{})
+	go func() {
+		defer close(scanned)
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cancel()
+		_ = cmd.Process.Kill() //nolint:errcheck // as in StreamLogs: the process may already be gone
+		_ = cmd.Wait()         //nolint:errcheck // as in StreamLogs: the kill's non-zero exit
+		<-scanned
+	}()
+	const bound = 2 * time.Second
+	select {
+	case <-done:
+	case <-time.After(bound): // wall-clock ok: the teardown returns at once; the sleep grandchild runs 20s
+		t.Fatalf("StreamLogs' teardown still waiting %s after cancel: the grandchild holding stdout holds the follow", bound)
+	}
 }
 
 func TestParseLogLine(t *testing.T) {

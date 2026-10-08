@@ -45,7 +45,7 @@ func TestImagetoolsCmds_GrandchildHoldingThePipeEndsAtTheContext(t *testing.T) {
 					done <- err
 				}()
 
-				// imagetoolsWaitDelay (5s) plus slack, as a literal so this
+				// execx.WaitDelay (5s) plus slack, as a literal so this
 				// test builds against the pre-fix code and fails on the assertion.
 				const bound = 8 * time.Second
 				select {
