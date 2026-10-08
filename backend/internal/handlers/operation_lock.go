@@ -27,6 +27,22 @@ func acquireStackLock(c *gin.Context, lock *services.OperationLock, stackID, kin
 	return sync.OnceFunc(func() { lock.Release(stackID, token) }), true
 }
 
+// acquireExclusiveLock is acquireStackLock for an operation that takes every
+// stack's turn at once (a container prune): it answers 409 OPERATION_IN_PROGRESS
+// naming the stack operation in the way, or the other exclusive holder, and
+// returns ok=false. With no lock wired it takes nothing.
+func acquireExclusiveLock(c *gin.Context, lock *services.OperationLock, kind string) (release func(), ok bool) {
+	if lock == nil {
+		return func() {}, true
+	}
+	token, err := lock.AcquireExclusive(kind)
+	if err != nil {
+		handleError(c, models.NewAppError(http.StatusConflict, models.ErrOperationInProgress, err.Error()))
+		return nil, false
+	}
+	return sync.OnceFunc(func() { lock.ReleaseExclusive(token) }), true
+}
+
 // projectNameLookup is the one stacks-table read refuseSharedProjectName needs.
 type projectNameLookup interface {
 	GetStackByProjectName(projectName string) (*models.Stack, error)

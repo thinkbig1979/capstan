@@ -137,7 +137,21 @@ func (h *ResourcesHandler) pruneImages(c *gin.Context) {
 }
 
 func (h *ResourcesHandler) pruneContainers(c *gin.Context) {
-	report, err := h.docker.PruneContainers(c.Request.Context(), parsePruneOptions(c))
+	// A prune removes every stopped OR created container, and a stack operation
+	// holds containers in `created` while it waits (compose up on a health
+	// check), so a prune during one fails it with "No such container"
+	// (agent-os-qags.27). It takes every stack's turn, before Docker is touched.
+	release, ok := acquireExclusiveLock(c, h.opLock, services.OpKindContainerPrune)
+	if !ok {
+		return
+	}
+	defer release()
+
+	var pruner containerPruner = h.docker
+	if h.pruner != nil {
+		pruner = h.pruner
+	}
+	report, err := pruner.PruneContainers(c.Request.Context(), parsePruneOptions(c))
 	if err != nil {
 		slog.Error("Failed to prune containers", "error", err)
 		renderDockerResult(c, err, truth.Failed("failed to prune containers", err))

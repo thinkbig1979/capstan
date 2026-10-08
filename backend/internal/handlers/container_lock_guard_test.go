@@ -324,3 +324,246 @@ type containerActionDocker interface {
 		})
 	}
 }
+
+// exclusiveGateHelper is the handler-side call a container prune must make
+// first (agent-os-qags.27). acquireStackLock does not count: it takes one
+// stack's turn, and a prune removes containers of every stack.
+const exclusiveGateHelper = "acquireExclusiveLock"
+
+// exclusiveGateViolations is containerLockViolations for the cross-stack
+// container prune: the method set comes from the containerPruner interface
+// (every method on it removes containers of any stack, so there is no read-only
+// list), and a use is violated unless an acquireExclusiveLock call precedes it,
+// by the same ancestor-block rule (containerLockPrecedes). The same blind spots
+// apply, and one more: it sees handler code only. A caller outside the handlers
+// package would not be seen, and today there is none
+// (`command grep -rn PruneContainers backend/internal backend/cmd` outside
+// _test.go: the handler and the DockerService definition).
+func exclusiveGateViolations(t *testing.T, sources map[string]string) (violations, pruneMethods []string, sites int) {
+	t.Helper()
+	fset := token.NewFileSet()
+	files := map[string]*ast.File{}
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		f, err := parser.ParseFile(fset, name, sources[name], 0)
+		require.NoErrorf(t, err, "parse %s", name)
+		files[name] = f
+	}
+
+	set := map[string]bool{}
+	foundInterface := false
+	for _, name := range names {
+		for _, decl := range files[name].Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok || ts.Name.Name != "containerPruner" {
+					continue
+				}
+				it, ok := ts.Type.(*ast.InterfaceType)
+				require.Truef(t, ok, "containerPruner in %s is no longer an interface type", name)
+				foundInterface = true
+				for _, m := range it.Methods.List {
+					for _, n := range m.Names {
+						set[n.Name] = true
+					}
+				}
+			}
+		}
+	}
+	require.True(t, foundInterface, "type containerPruner not found in the handler sources; the guard has nothing to derive the prune set from")
+	for m := range set {
+		pruneMethods = append(pruneMethods, m)
+	}
+	sort.Strings(pruneMethods)
+
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		for _, decl := range files[name].Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			label := fn.Name.Name
+			if fn.Recv != nil && len(fn.Recv.List) == 1 {
+				recv := fn.Recv.List[0].Type
+				ptr := ""
+				if star, ok := recv.(*ast.StarExpr); ok {
+					recv, ptr = star.X, "*"
+				}
+				if id, ok := recv.(*ast.Ident); ok {
+					label = fmt.Sprintf("(%s%s).%s", ptr, id.Name, fn.Name.Name)
+				}
+			}
+
+			var uses, gates []containerLock
+			var stack []ast.Node
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if n == nil {
+					stack = stack[:len(stack)-1]
+					return true
+				}
+				stack = append(stack, n)
+				switch n := n.(type) {
+				case *ast.SelectorExpr:
+					if set[n.Sel.Name] {
+						uses = append(uses, containerLock{n, append([]ast.Node(nil), stack...)})
+					}
+				case *ast.CallExpr:
+					var callee string
+					switch f := n.Fun.(type) {
+					case *ast.SelectorExpr:
+						callee = f.Sel.Name
+					case *ast.Ident:
+						callee = f.Name
+					}
+					if callee == exclusiveGateHelper {
+						gates = append(gates, containerLock{n, append([]ast.Node(nil), stack...)})
+					}
+				}
+				return true
+			})
+
+			for _, use := range uses {
+				sites++
+				if !containerLockPrecedes(gates, use.node, use.stack) {
+					sel := use.node.(*ast.SelectorExpr)
+					violations = append(violations, fmt.Sprintf("%s: %s at %s has no %s call before it in an enclosing block",
+						label, sel.Sel.Name, fset.Position(sel.Pos()), exclusiveGateHelper))
+				}
+			}
+		}
+	}
+	return violations, pruneMethods, sites
+}
+
+// TestContainerLockGuard_EveryContainerPruneTakesTheExclusiveTurnFirst is
+// agent-os-qags.27's guard. A container prune removes `created` containers, and
+// a stack operation holds some in `created` while it waits (compose up on a
+// health check), so a prune during one fails it with "No such container"
+// (probed against a real daemon, 3 of 3). pruneContainers takes the exclusive
+// turn before Docker is touched; this keeps the next prune route, or a second
+// call in the same handler, from skipping it. Sources come from go:embed, as in
+// the guard above, so a `go test -overlay` mutant of a handler file is what it
+// reads.
+func TestContainerLockGuard_EveryContainerPruneTakesTheExclusiveTurnFirst(t *testing.T) {
+	entries, err := handlerSources.ReadDir(".")
+	require.NoError(t, err)
+	sources := map[string]string{}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		b, err := handlerSources.ReadFile(e.Name())
+		require.NoError(t, err)
+		sources[e.Name()] = string(b)
+	}
+
+	violations, methods, sites := exclusiveGateViolations(t, sources)
+	require.NotEmpty(t, methods, "the containerPruner method set came out empty")
+	require.Positive(t, sites, "no use of %v found in the handler sources; the guard is blind", methods)
+	t.Logf("checked %d use(s) of %v", sites, methods)
+	require.Emptyf(t, violations, "container prune without the exclusive stack turn (agent-os-qags.27):\n  %s",
+		strings.Join(violations, "\n  "))
+}
+
+// TestContainerLockGuard_ExclusiveGateCheckerSeesTheShapes runs the checker on
+// small sources: each row that must fail does, and the rows that must pass do,
+// on the same instrument.
+func TestContainerLockGuard_ExclusiveGateCheckerSeesTheShapes(t *testing.T) {
+	const iface = `package handlers
+type containerPruner interface {
+	PruneContainers(id string) error
+}
+`
+	cases := []struct {
+		name string
+		body string
+		want []string // substrings of the violations, in order; nil = clean
+	}{
+		{"gated first", `func (h *H) prune(c int) {
+	release, ok := acquireExclusiveLock(c, h.opLock, "container prune")
+	if !ok { return }
+	defer release()
+	h.pruner.PruneContainers("x")
+}`, nil},
+		{"gate in an if-init", `func (h *H) prune(c int) {
+	if release, ok := acquireExclusiveLock(c, h.opLock, "k"); !ok { return } else { defer release() }
+	h.pruner.PruneContainers("x")
+}`, nil},
+		{"use inside a closure after the gate", `func (h *H) prune(c int) {
+	release, _ := acquireExclusiveLock(c, h.opLock, "k")
+	defer release()
+	func() { h.pruner.PruneContainers("x") }()
+}`, nil},
+		{"no gate", `func (h *H) prune(c int) {
+	h.pruner.PruneContainers("x")
+}`, []string{"(*H).prune: PruneContainers"}},
+		{"a single-stack lock is not the exclusive turn", `func (h *H) prune(c int) {
+	release, _ := acquireStackLock(c, h.opLock, "s1", "k")
+	defer release()
+	h.pruner.PruneContainers("x")
+}`, []string{"(*H).prune: PruneContainers"}},
+		{"gate after the use", `func (h *H) prune(c int) {
+	h.pruner.PruneContainers("x")
+	release, _ := acquireExclusiveLock(c, h.opLock, "k")
+	defer release()
+}`, []string{"(*H).prune: PruneContainers"}},
+		{"conditional gate", `func (h *H) prune(c int) {
+	if c > 0 {
+		release, _ := acquireExclusiveLock(c, h.opLock, "k")
+		defer release()
+	}
+	h.pruner.PruneContainers("x")
+}`, []string{"(*H).prune: PruneContainers"}},
+		{"gate only in an earlier closure", `func (h *H) prune(c int) {
+	func() { release, _ := acquireExclusiveLock(c, h.opLock, "k"); defer release() }()
+	h.pruner.PruneContainers("x")
+}`, []string{"(*H).prune: PruneContainers"}},
+		{"use inside the gate call's own arguments", `func (h *H) prune(c int) {
+	acquireExclusiveLock(c, h.opLock, h.pruner.PruneContainers)
+}`, []string{"(*H).prune: PruneContainers"}},
+		{"a second prune in the same handler, gate before only the first", `func (h *H) prune(c int) {
+	if c > 0 {
+		release, _ := acquireExclusiveLock(c, h.opLock, "k")
+		defer release()
+		h.pruner.PruneContainers("x")
+	}
+	h.docker.PruneContainers("y")
+}`, []string{"(*H).prune: PruneContainers"}},
+		{"method value", `func (h *H) prune(c int) {
+	f := h.pruner.PruneContainers
+	f("x")
+}`, []string{"(*H).prune: PruneContainers"}},
+		{"direct docker call bypassing pruner", `func (h *H) prune(c int) {
+	h.docker.PruneContainers("x")
+}`, []string{"(*H).prune: PruneContainers"}},
+		{"plain function, not a method", `func pruneIt(h *H) {
+	h.pruner.PruneContainers("x")
+}`, []string{"pruneIt: PruneContainers"}},
+		{"another prune needs no gate", `func (h *H) prune(c int) {
+	h.docker.PruneVolumes("x")
+}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _, sites := exclusiveGateViolations(t, map[string]string{
+				"iface.go": iface,
+				"h.go":     "package handlers\n" + tc.body + "\n",
+			})
+			require.Len(t, got, len(tc.want), "violations: %v (sites %d)", got, sites)
+			for i, w := range tc.want {
+				require.Contains(t, got[i], w)
+			}
+		})
+	}
+}
