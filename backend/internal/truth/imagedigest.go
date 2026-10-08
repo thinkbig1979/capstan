@@ -114,7 +114,7 @@ var imagetoolsWaitDelay = 5 * time.Second // a var, not a const: tygo emits an e
 // reason, which is the class of leak agent-os-iey and this bead both close
 // (agent-os-3ux).
 func buildImagetoolsRawCmd(ctx context.Context, ref string) *exec.Cmd {
-	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
+	//nolint:gosec,forbidigo // gosec: explicit argv, not a shell string, see README.md "Command execution and file access". forbidigo: services imports truth, so commandWithDeadline is unreachable (import cycle); the ctx comes from the caller and WaitDelay is set below. Move to the shared helper: agent-os-qags.29
 	cmd := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", ref, "--raw")
 	cmd.Env = dockerenv.Env()
 	cmd.WaitDelay = imagetoolsWaitDelay
@@ -122,7 +122,7 @@ func buildImagetoolsRawCmd(ctx context.Context, ref string) *exec.Cmd {
 }
 
 func buildImagetoolsVerboseCmd(ctx context.Context, ref string) *exec.Cmd {
-	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
+	//nolint:gosec,forbidigo // gosec: explicit argv, not a shell string, see README.md "Command execution and file access". forbidigo: services imports truth, so commandWithDeadline is unreachable (import cycle); the ctx comes from the caller and WaitDelay is set below. Move to the shared helper: agent-os-qags.29
 	cmd := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect", ref)
 	cmd.Env = dockerenv.Env()
 	cmd.WaitDelay = imagetoolsWaitDelay

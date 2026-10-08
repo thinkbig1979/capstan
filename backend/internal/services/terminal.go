@@ -91,7 +91,7 @@ func (s *TerminalService) CreateSession(stackID, containerName string) (*Termina
 		// container's own /proc — see reapContainerShell. session.ID is a
 		// uuid.New() value, never attacker-controlled, so no shell-metachar
 		// concerns even though it flows into a script string downstream.
-		//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
+		//nolint:gosec,forbidigo // gosec: explicit argv, not a shell string, see README.md "Command execution and file access". forbidigo: interactive docker exec -it, whose lifetime is the user's session; the documented exception to safe-defaults rule 1
 		cmd := execCommand("docker", "exec", "-it", "-e", sessionEnvVar+"="+session.ID, "--", containerName, shell)
 		cmd.Env = dockerEnv()
 

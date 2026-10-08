@@ -22,6 +22,10 @@ fix: file them.
    error through `timeoutError`, so a timeout reads as one. The context needs a
    deadline from the operation, not only a cancel. The interactive `docker exec`
    in `handlers/terminal.go` is the one documented exception.
+   (CI-guarded: the `forbidigo` rule in `backend/.golangci.yml` forbids
+   `exec.Command`, `exec.CommandContext`, `execCommand` and `execCommandContext`
+   outside `exec_env.go`; the four allowed raw sites (terminal.go, logs.go, two in truth) carry a per-site
+   `//nolint:forbidigo` with the reason.)
 2. **WebSockets**: every socket comes from `upgradeConnection`
    (`backend/internal/handlers/ws.go`), which sets the read limit. A frame kind
    that needs bigger frames sets `wsRegistration.readLimit`; it never bypasses
@@ -48,8 +52,11 @@ fix: file them.
    `strings.HasPrefix` or a lexical `filepath.Rel` check on paths.
    (CI-guarded: `scripts/check-path-containment.sh`.)
 7. **Files under a stack directory** are written by temp file plus rename, as
-   `writeEnvFileAtomic` (`backend/internal/handlers/env.go`) does, never by a
-   bare `os.WriteFile`.
+   `writeFileAtomic` and its `writeComposeFileAtomic`/`writeEnvFileAtomic`
+   wrappers (`backend/internal/handlers/atomic_write.go`) do, never by a bare
+   `os.WriteFile`. (CI-guarded: the `forbidigo` rule in `backend/.golangci.yml`
+   forbids `os.WriteFile`, `os.Create`, `os.OpenFile` and `ioutil.WriteFile`
+   outside `atomic_write.go`.)
 8. **Frontend mutations** that return an `ActionResult` go through
    `useActionMutation` (`frontend/src/hooks/useActionMutation.ts`). A `toast.success`
    that doesn't read the outcome is a defect.
