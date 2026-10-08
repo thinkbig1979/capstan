@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -183,18 +184,19 @@ func (h *ResourcesHandler) checkUpdates(c *gin.Context) {
 	})
 }
 
-// lockStackForUpdate takes stackID's operation lock for an update job, or
-// answers 409 OPERATION_IN_PROGRESS (the lifecycle routes' code) and returns
-// ok=false. The lock is taken here, at request time, so a busy stack is
-// refused before anything is queued; the job's run closure defers the
-// returned release, so the lock covers the queue wait, the compose/docker
-// subprocesses and the post-update verification. release is a no-op when no
-// lock is wired or stackID is empty (a container no managed stack owns).
-func (h *ResourcesHandler) lockStackForUpdate(c *gin.Context, stackID string) (release func(), ok bool) {
-	if stackID == "" {
-		return func() {}, true
-	}
-	return acquireStackLock(c, h.opLock, stackID, services.OpKindUpdate)
+// lockStackForUpdate takes key's operation lock for an update job, or answers
+// 409 OPERATION_IN_PROGRESS (the lifecycle routes' code) and returns ok=false.
+// key is the owning stack's ID, or, for a container no managed stack owns, the
+// container's own ID: a standalone update stops and removes the old container
+// and then creates and starts the new one, and a prune that lands between the
+// create and the start removes the `created` container (agent-os-qags.30).
+// A container prune takes every key, so holding this one makes it wait. The lock
+// is taken here, at request time, so a busy key is refused before anything is
+// queued; the job's run closure defers the returned release, so the lock covers
+// the queue wait, the compose/docker subprocesses and the post-update
+// verification. release is a no-op when no lock is wired.
+func (h *ResourcesHandler) lockStackForUpdate(c *gin.Context, key string) (release func(), ok bool) {
+	return acquireStackLock(c, h.opLock, key, services.OpKindUpdate)
 }
 
 func (h *ResourcesHandler) updateContainer(c *gin.Context) {
@@ -257,7 +259,13 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	}
 
 	// Before the history insert, so a refused update leaves no pending row.
-	releaseLock, ok := h.lockStackForUpdate(c, stackID)
+	// An unmanaged container is keyed on its own ID (inspect.ID is the full ID
+	// whatever form the route named it in).
+	lockKey := stackID
+	if lockKey == "" {
+		lockKey = cmp.Or(inspect.ID, id)
+	}
+	releaseLock, ok := h.lockStackForUpdate(c, lockKey)
 	if !ok {
 		return
 	}
