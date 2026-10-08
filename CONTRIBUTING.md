@@ -385,12 +385,18 @@ Runs in CI via `.github/workflows/frontend.yml` (lint, unit tests, build).
 
 #### End-to-end (Playwright)
 
-A single backup/restore flow spec lives at
-`testing/tests/playwright/backup-flow.spec.ts`, driven by the root
-`playwright.config.ts`:
+The Playwright specs live in `testing/tests/playwright/`, driven by the root
+`playwright.config.ts`. `testing/README.md` lists each spec and what it needs
+to run.
+
+The specs do not all run against the same backend. `auth-session.spec.ts`
+needs `AUTH_DISABLED=false` and a virgin `DATA_DIR`; the rest run against an
+`AUTH_DISABLED=true` backend (or need none). So a bare `npx playwright test`
+against one backend fails part of the suite. Run one group at a time:
 
 ```bash
-npx playwright test
+npx playwright test --grep-invert "auth-session"   # AUTH_DISABLED=true backend
+npx playwright test --grep "auth-session"          # AUTH_DISABLED=false backend
 ```
 
 See the header comment in `playwright.config.ts` for the environment
