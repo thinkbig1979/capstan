@@ -115,7 +115,7 @@ func (d *DB) UpdateUserPassword(id, password string, updatedAt time.Time) error 
 func (d *DB) CreateSession(session models.Session) error {
 	query := `INSERT INTO sessions (id, user_id, expires_at, created_at)
 	          VALUES (?, ?, ?, ?)`
-	_, err := d.db.Exec(query, session.ID, session.UserID, session.ExpiresAt, session.CreatedAt)
+	_, err := d.db.Exec(query, session.ID, session.UserID, storedInstant(session.ExpiresAt), storedInstant(session.CreatedAt))
 	return err
 }
 
@@ -152,7 +152,14 @@ func (d *DB) CountSessionsForUser(userID string) (int, error) {
 }
 
 func (d *DB) DeleteExpiredSessions() error {
+	return d.deleteExpiredSessionsAt(time.Now())
+}
+
+// deleteExpiredSessionsAt takes the clock as an argument so a test can stand
+// on either side of a DST change. expires_at is compared as text, so now is
+// bound in the same spelling CreateSession writes (agent-os-6exk).
+func (d *DB) deleteExpiredSessionsAt(now time.Time) error {
 	query := `DELETE FROM sessions WHERE expires_at < ?`
-	_, err := d.db.Exec(query, time.Now())
+	_, err := d.db.Exec(query, storedInstant(now))
 	return err
 }

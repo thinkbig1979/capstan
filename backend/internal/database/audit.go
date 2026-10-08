@@ -23,7 +23,8 @@ func (d *DB) LogAction(log models.ActionLog) error {
 	}
 	query := `INSERT INTO action_log (id, user_id, stack_id, action, detail, request_id, created_at)
 	          VALUES (?, ?, ?, ?, ?, ?, ?)`
-	_, err := d.db.Exec(query, log.ID, log.UserID, stackID, log.Action, log.Detail, log.RequestID, log.CreatedAt)
+	// created_at is ORDERed and compared as text: see storedInstant.
+	_, err := d.db.Exec(query, log.ID, log.UserID, stackID, log.Action, log.Detail, log.RequestID, storedInstant(log.CreatedAt))
 	return err
 }
 
@@ -89,21 +90,20 @@ func (d *DB) GetRecentActions(limit int) ([]models.ActionLog, error) {
 // siblings in retention.go: the floor guard's negative control runs this exact
 // statement unguarded, and must not drift away from what production issues.
 //
-// Unlike its siblings it takes a cutoff computed in Go, not a SQL clock.
-// LogAction binds a time.Time, which the driver stores as t.String() in the
-// process's local zone ("2026-06-26 19:02:30.59 -0400 EDT m=..."). A UTC
-// datetime('now', ...) cutoff compared as text against that was off by the zone
-// offset: west of UTC it deleted rows still inside the retention window, east of
-// UTC it kept expired ones (agent-os-h8qa, OBSERVED with TZ=America/New_York and
-// Europe/Amsterdam). Binding a time.Time cutoff makes the driver spell it the
-// same way, in the same zone.
+// Unlike its siblings it takes a cutoff computed in Go, not a SQL clock: a
+// datetime('now', ...) cutoff is space-separated and would be decided at the
+// separator against the stored 'T'. The cutoff is bound in the same spelling
+// LogAction writes (storedInstant). Before agent-os-6exk LogAction bound a raw
+// time.Time, which the driver stored as t.String() in the value's own zone, so
+// a row and a cutoff spelled in different zones compared wrong (agent-os-h8qa
+// fixed the SQL-clock half of that).
 const deleteOldActionLogsStmt = `DELETE FROM action_log WHERE created_at < ?`
 
-// actionLogCutoff is the instant before which action_log rows are pruned. It is
-// a function, not inline, so the floor guard's negative control binds exactly
-// what production binds.
-func actionLogCutoff(retentionDays int) time.Time {
-	return time.Now().AddDate(0, 0, -retentionDays)
+// actionLogCutoff is the bound value before which action_log rows are pruned.
+// It is a function, not inline, so the floor guard's negative control binds
+// exactly what production binds.
+func actionLogCutoff(retentionDays int) string {
+	return storedInstant(time.Now().AddDate(0, 0, -retentionDays))
 }
 
 // DeleteOldActionLogs removes action_log rows older than retentionDays.
@@ -123,8 +123,21 @@ func (d *DB) DeleteOldActionLogs(retentionDays int) error {
 type ActionLogFilter struct {
 	Action   string // exact action match
 	Search   string // substring match on detail or action
-	DateFrom string // inclusive lower bound, "YYYY-MM-DD" (compared on the server-local date created_at is stored in)
-	DateTo   string // inclusive upper bound, "YYYY-MM-DD"
+	DateFrom string // inclusive lower bound, "YYYY-MM-DD", a date in the server's local zone (time.Local)
+	DateTo   string // inclusive upper bound, "YYYY-MM-DD", same zone
+}
+
+// localDayStart is the instant local midnight of a "YYYY-MM-DD" date begins,
+// offset days later, in the spelling created_at is stored in. created_at is
+// UTC (storedInstant), so the server-local date the filter is documented to
+// match becomes a range of instants rather than a prefix of the text.
+// time.Date normalises across a DST change, so a 23- or 25-hour day is right.
+func localDayStart(date string, offsetDays int) (string, error) {
+	d, err := time.ParseInLocation("2006-01-02", date, time.Local)
+	if err != nil {
+		return "", fmt.Errorf("invalid date %q: %w", date, err)
+	}
+	return storedInstant(time.Date(d.Year(), d.Month(), d.Day()+offsetDays, 0, 0, 0, 0, time.Local)), nil
 }
 
 func (d *DB) ListActionLogsPaginated(limit, offset int) ([]models.ActionLog, int, error) {
@@ -145,15 +158,22 @@ func (d *DB) ListActionLogsFiltered(limit, offset int, f ActionLogFilter) ([]mod
 		like := "%" + f.Search + "%"
 		args = append(args, like, like)
 	}
-	// Compare on the leading date portion ("YYYY-MM-DD") of the stored timestamp;
-	// this is independent of the driver's time format and SQLite's date() parsing.
+	// [local midnight of DateFrom, local midnight of the day after DateTo).
 	if f.DateFrom != "" {
-		where = append(where, "substr(created_at, 1, 10) >= ?")
-		args = append(args, f.DateFrom)
+		from, err := localDayStart(f.DateFrom, 0)
+		if err != nil {
+			return nil, 0, err
+		}
+		where = append(where, "created_at >= ?")
+		args = append(args, from)
 	}
 	if f.DateTo != "" {
-		where = append(where, "substr(created_at, 1, 10) <= ?")
-		args = append(args, f.DateTo)
+		until, err := localDayStart(f.DateTo, 1)
+		if err != nil {
+			return nil, 0, err
+		}
+		where = append(where, "created_at < ?")
+		args = append(args, until)
 	}
 	whereClause := ""
 	if len(where) > 0 {

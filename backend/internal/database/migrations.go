@@ -894,6 +894,21 @@ UPDATE update_history SET completed_at = started_at
  WHERE status = 'paused' AND completed_at IS NULL;
 `,
 	},
+	{
+		Version: 23,
+		Name:    "sessions_action_log_utc_instants",
+		// Data only, no schema change (agent-os-6exk). Rows written before
+		// the fix hold the driver's t.String() spelling in the server's local
+		// zone; new writes use storedInstant's fixed-width UTC spelling. These
+		// columns are compared and ORDERed as text, so a mixed table
+		// mis-sorts until every old row is rewritten. See
+		// tStringToStoredInstantSQL for the guards. sessions.created_at is
+		// not compared anywhere, and is rewritten only so one table holds one
+		// spelling.
+		SQL: tStringToStoredInstantSQL("sessions", "expires_at") +
+			tStringToStoredInstantSQL("sessions", "created_at") +
+			tStringToStoredInstantSQL("action_log", "created_at"),
+	},
 }
 
 // ReencryptSecrets rewrites every stored secret that is not yet in the v2

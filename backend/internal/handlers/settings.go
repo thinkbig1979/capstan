@@ -1196,6 +1196,18 @@ func (h *SettingsHandler) GetAuditLog(c *gin.Context) {
 		DateFrom: c.Query("dateFrom"),
 		DateTo:   c.Query("dateTo"),
 	}
+	// ListActionLogsFiltered turns each date into an instant range and rejects
+	// one it cannot read (agent-os-6exk). That is the client's error, so it is
+	// answered here as a 400 rather than surfacing below as a 500.
+	for _, date := range []struct{ name, value string }{{"dateFrom", filter.DateFrom}, {"dateTo", filter.DateTo}} {
+		if date.value == "" {
+			continue
+		}
+		if _, err := time.Parse("2006-01-02", date.value); err != nil {
+			handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, date.name+" must be a date in YYYY-MM-DD form"))
+			return
+		}
+	}
 
 	actions, total, err := h.db.ListActionLogsFiltered(pageSize, offset, filter)
 	if err != nil {
