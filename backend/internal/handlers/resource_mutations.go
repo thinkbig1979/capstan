@@ -74,10 +74,17 @@ func classifyImageDeleteResponse(resp []image.DeleteResponse) truth.ActionResult
 }
 
 func (h *ResourcesHandler) deleteImage(c *gin.Context) {
+	// An unused image is deletable between a pull and the up that needs it, and the create then fails with No such image (agent-os-qags.33). It takes every stack's turn, before Docker is touched.
+	release, ok := acquireExclusiveLock(c, h.opLock, services.OpKindImageDelete)
+	if !ok {
+		return
+	}
+	defer release()
+
 	id := c.Param("id")
 	force := c.Query("force") == "true"
 
-	resp, err := h.docker.DeleteImage(c.Request.Context(), id, force)
+	resp, err := h.deleterSeam().DeleteImage(c.Request.Context(), id, force)
 	if err != nil {
 		slog.Error("Failed to delete image", "id", id, "error", err)
 		renderDockerResult(c, err, truth.Failed("failed to delete image", err,
@@ -129,6 +136,16 @@ func classifyImagePruneReport(deleted []image.DeleteResponse, spaceReclaimed uin
 func (h *ResourcesHandler) prunerSeam() resourcePruner {
 	if h.pruner != nil {
 		return h.pruner
+	}
+	return h.docker
+}
+
+// deleterSeam is prunerSeam for the single-object deletes: the injected fake in
+// tests, else docker. A nil *DockerService boxed here is fine, every delete
+// method guards a nil receiver and returns services.ErrDockerUnavailable.
+func (h *ResourcesHandler) deleterSeam() resourceDeleter {
+	if h.deleter != nil {
+		return h.deleter
 	}
 	return h.docker
 }
@@ -222,10 +239,17 @@ func (h *ResourcesHandler) deleteContainer(c *gin.Context) {
 }
 
 func (h *ResourcesHandler) deleteVolume(c *gin.Context) {
+	// A volume compose has created and not yet attached is deletable, and the daemon then recreates it unlabelled (agent-os-qags.33). It takes every stack's turn, before Docker is touched.
+	release, ok := acquireExclusiveLock(c, h.opLock, services.OpKindVolumeDelete)
+	if !ok {
+		return
+	}
+	defer release()
+
 	name := c.Param("name")
 	force := c.Query("force") == "true"
 
-	if err := h.docker.DeleteVolume(c.Request.Context(), name, force); err != nil {
+	if err := h.deleterSeam().DeleteVolume(c.Request.Context(), name, force); err != nil {
 		slog.Error("Failed to delete volume", "name", name, "error", err)
 		renderDockerResult(c, err, truth.Failed("failed to delete volume", err,
 			truth.KV("name", name),
@@ -329,9 +353,16 @@ func (h *ResourcesHandler) createNetwork(c *gin.Context) {
 }
 
 func (h *ResourcesHandler) deleteNetwork(c *gin.Context) {
+	// A created container does not hold its network, so a delete during compose up's health wait removes it and the start fails (agent-os-qags.33). It takes every stack's turn, before Docker is touched.
+	release, ok := acquireExclusiveLock(c, h.opLock, services.OpKindNetworkDelete)
+	if !ok {
+		return
+	}
+	defer release()
+
 	id := c.Param("id")
 
-	if err := h.docker.DeleteNetwork(c.Request.Context(), id); err != nil {
+	if err := h.deleterSeam().DeleteNetwork(c.Request.Context(), id); err != nil {
 		slog.Error("Failed to delete network", "id", id, "error", err)
 		renderDockerResult(c, err, truth.Failed("failed to delete network", err,
 			truth.KV("id", id),

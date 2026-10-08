@@ -330,15 +330,22 @@ type containerActionDocker interface {
 // stack's turn, and a prune removes containers of every stack.
 const exclusiveGateHelper = "acquireExclusiveLock"
 
+// exclusiveGatedInterfaces are the handler-side interfaces whose every method
+// takes the exclusive turn first: resourcePruner (the four prunes,
+// agent-os-qags.27/.30) and resourceDeleter (the single network, volume and
+// image deletes, agent-os-qags.33). Both must exist, so a rename cannot empty
+// the guard.
+var exclusiveGatedInterfaces = map[string]bool{"resourcePruner": true, "resourceDeleter": true}
+
 // exclusiveGateViolations is containerLockViolations for the cross-stack
-// container prune: the method set comes from the resourcePruner interface
-// (every method on it removes containers of any stack, so there is no read-only
-// list), and a use is violated unless an acquireExclusiveLock call precedes it,
-// by the same ancestor-block rule (containerLockPrecedes). The same blind spots
-// apply, and one more: it sees handler code only. A caller outside the handlers
-// package would not be seen, and today there is none
-// (`command grep -rn PruneContainers backend/internal backend/cmd` outside
-// _test.go: the handler and the DockerService definition).
+// removals: the method set comes from the resourcePruner and resourceDeleter
+// interfaces (every method on them removes objects of any stack, so there is no
+// read-only list), and a use is violated unless an acquireExclusiveLock call
+// precedes it, by the same ancestor-block rule (containerLockPrecedes). The same
+// blind spots apply, and one more: it sees handler code only. A caller outside
+// the handlers package would not be seen, and today there is none
+// (`command grep -rnE "\.(Prune(Containers|Images|Volumes|Networks)|Delete(Image|Volume|Network))\(" backend/internal backend/cmd`
+// outside _test.go: the handlers and the DockerService definitions).
 func exclusiveGateViolations(t *testing.T, sources map[string]string) (violations, pruneMethods []string, sites int) {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -355,7 +362,7 @@ func exclusiveGateViolations(t *testing.T, sources map[string]string) (violation
 	}
 
 	set := map[string]bool{}
-	foundInterface := false
+	found := map[string]bool{}
 	for _, name := range names {
 		for _, decl := range files[name].Decls {
 			gd, ok := decl.(*ast.GenDecl)
@@ -364,12 +371,12 @@ func exclusiveGateViolations(t *testing.T, sources map[string]string) (violation
 			}
 			for _, spec := range gd.Specs {
 				ts, ok := spec.(*ast.TypeSpec)
-				if !ok || ts.Name.Name != "resourcePruner" {
+				if !ok || !exclusiveGatedInterfaces[ts.Name.Name] {
 					continue
 				}
 				it, ok := ts.Type.(*ast.InterfaceType)
-				require.Truef(t, ok, "resourcePruner in %s is no longer an interface type", name)
-				foundInterface = true
+				require.Truef(t, ok, "%s in %s is no longer an interface type", ts.Name.Name, name)
+				found[ts.Name.Name] = true
 				for _, m := range it.Methods.List {
 					for _, n := range m.Names {
 						set[n.Name] = true
@@ -378,7 +385,9 @@ func exclusiveGateViolations(t *testing.T, sources map[string]string) (violation
 			}
 		}
 	}
-	require.True(t, foundInterface, "type resourcePruner not found in the handler sources; the guard has nothing to derive the prune set from")
+	for iface := range exclusiveGatedInterfaces {
+		require.Truef(t, found[iface], "type %s not found in the handler sources; the guard has nothing to derive its method set from", iface)
+	}
 	for m := range set {
 		pruneMethods = append(pruneMethods, m)
 	}
@@ -469,10 +478,10 @@ func TestContainerLockGuard_EveryContainerPruneTakesTheExclusiveTurnFirst(t *tes
 	}
 
 	violations, methods, sites := exclusiveGateViolations(t, sources)
-	require.NotEmpty(t, methods, "the resourcePruner method set came out empty")
+	require.NotEmpty(t, methods, "the resourcePruner / resourceDeleter method set came out empty")
 	require.Positive(t, sites, "no use of %v found in the handler sources; the guard is blind", methods)
 	t.Logf("checked %d use(s) of %v", sites, methods)
-	require.Emptyf(t, violations, "container prune without the exclusive stack turn (agent-os-qags.27):\n  %s",
+	require.Emptyf(t, violations, "prune or single-object delete without the exclusive stack turn (agent-os-qags.27, agent-os-qags.33):\n  %s",
 		strings.Join(violations, "\n  "))
 }
 
@@ -483,6 +492,9 @@ func TestContainerLockGuard_ExclusiveGateCheckerSeesTheShapes(t *testing.T) {
 	const iface = `package handlers
 type resourcePruner interface {
 	PruneContainers(id string) error
+}
+type resourceDeleter interface {
+	DeleteNetwork(id string) error
 }
 `
 	cases := []struct {
@@ -552,6 +564,26 @@ type resourcePruner interface {
 }`, []string{"pruneIt: PruneContainers"}},
 		{"another prune needs no gate", `func (h *H) prune(c int) {
 	h.docker.PruneVolumes("x")
+}`, nil},
+		{"a delete gated first", `func (h *H) del(c int) {
+	release, ok := acquireExclusiveLock(c, h.opLock, "network delete")
+	if !ok { return }
+	defer release()
+	h.deleterSeam().DeleteNetwork("x")
+}`, nil},
+		{"a delete with no gate", `func (h *H) del(c int) {
+	h.deleterSeam().DeleteNetwork("x")
+}`, []string{"(*H).del: DeleteNetwork"}},
+		{"a delete directly on docker, no gate", `func (h *H) del(c int) {
+	h.docker.DeleteNetwork("x")
+}`, []string{"(*H).del: DeleteNetwork"}},
+		{"a single-stack lock is not the exclusive turn for a delete", `func (h *H) del(c int) {
+	release, _ := acquireStackLock(c, h.opLock, "s1", "k")
+	defer release()
+	h.deleterSeam().DeleteNetwork("x")
+}`, []string{"(*H).del: DeleteNetwork"}},
+		{"a delete not on the interface needs no gate", `func (h *H) del(c int) {
+	h.docker.DeleteContainer("x")
 }`, nil},
 	}
 	for _, tc := range cases {
