@@ -53,6 +53,7 @@ fix: file them.
 8. **Frontend mutations** that return an `ActionResult` go through
    `useActionMutation` (`frontend/src/hooks/useActionMutation.ts`). A `toast.success`
    that doesn't read the outcome is a defect.
+   (CI-guarded: `frontend/src/lib/__tests__/actionResultConsumers.test.ts`.)
 
 ## Trust and secrets
 
