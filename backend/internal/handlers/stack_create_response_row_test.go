@@ -33,11 +33,14 @@ import (
 // inside the stack's OWN directory, and Create always makes a brand-new
 // subdirectory — an existing one is a 409 — so at scan time there is never a
 // `.git` in it and BOTH the literal and the row carry false/"". They agree, for
-// a reason that has nothing to do with the handler being correct. What actually
-// diverges on this tree is Status: the literal says "stopped" and the scanner
-// writes "unknown" (services/scanner.go, the models.Stack it upserts). Pinning
-// the whole row rather than one field catches the divergence that exists today,
-// catches the git fields the day a git-backed create becomes reachable, and
+// a reason that has nothing to do with the handler being correct. What diverged
+// on this tree was Status: the literal said "stopped" and the scanner wrote
+// "unknown" (services/scanner.go, the models.Stack it upserts). Since
+// agent-os-qags.23 UpsertStack keeps an existing row's status, so that
+// divergence is gone; see
+// TestStacksHandler_Create_RowKeepsTheStatusCreateWrote. Pinning the whole row
+// rather than one field catches a divergence the day one appears, including
+// the git fields the day a git-backed create becomes reachable, and
 // does not have to be rewritten in between.
 //
 // ALL THREE RESPONSE PATHS ARE COVERED. The stale local was rendered at the
@@ -172,13 +175,17 @@ func TestStacksHandler_CreateDeployFails_ResponseMatchesPersistedRow(t *testing.
 	hgtbAssertResponseMatchesRow(t, db, w.Body.Bytes(), "created but not deployed")
 }
 
-// TestStacksHandler_Create_ScannerIsTheOneThatChangesTheRow is the premise
-// control. The three tests above are only meaningful if the scan actually
-// rewrites something — if the literal and the row happened to agree on every
-// field, they would pass against the unfixed handler and prove nothing. This
-// names the divergence explicitly and fails if it ever disappears, which is the
-// signal that those three have stopped discriminating.
-func TestStacksHandler_Create_ScannerIsTheOneThatChangesTheRow(t *testing.T) {
+// TestStacksHandler_Create_RowKeepsTheStatusCreateWrote is the premise control
+// for the three tests above, rewritten by agent-os-qags.23. Until then the
+// scanner's upsert replaced the whole row, so Status was the one field that
+// differed between Create's literal ("stopped") and the scanned row
+// ("unknown"), and this test pinned that divergence. UpsertStack now keeps the
+// stored status of an existing row, so the scan leaves "stopped" in place and
+// the literal and the row agree on every field on this tree. The three tests
+// above are regression guards from here on, not discriminators of agent-os-hgtb:
+// they arm again the day a scanner-written field diverges (a git-backed create).
+// What this asserts instead is the qags.23 behaviour at the Create seam.
+func TestStacksHandler_Create_RowKeepsTheStatusCreateWrote(t *testing.T) {
 	const name = "hgtb-premise"
 	db, router := hgtbFixture(t, &recordingStackDocker{}, name)
 
@@ -189,10 +196,6 @@ func TestStacksHandler_Create_ScannerIsTheOneThatChangesTheRow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, stacks, 1)
 
-	// stack_crud.go's literal sets Status "stopped"; the scanner's upsert sets
-	// "unknown". If this ever matches, the tests above can no longer tell a
-	// re-read from the stale local and need a new field to discriminate on.
-	assert.Equal(t, "unknown", stacks[0].Status,
-		"the scan must still overwrite the status the create literal wrote, or the "+
-			"response-matches-row tests above no longer discriminate")
+	assert.Equal(t, "stopped", stacks[0].Status,
+		"Create writes \"stopped\" and the synchronous scan after it must not reset it to \"unknown\" (agent-os-qags.23)")
 }
