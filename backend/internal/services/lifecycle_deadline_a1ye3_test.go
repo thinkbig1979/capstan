@@ -35,7 +35,9 @@ func stubHangingChild(t *testing.T, script string) {
 // acceptance (a). The child never exits on its own. The lock is taken and
 // released exactly as handlers/stack_lifecycle.go's StartStack does (Acquire,
 // then a deferred Release around StartVerified), so "free afterwards" means
-// the call came back, which is what a hung child used to prevent.
+// the call came back, which is what a hung child used to prevent. The result
+// is sent only after that deferred Release has run, as the handler's caller
+// would see it.
 //
 // Two shapes, because they fail differently: `exec sleep` is killed directly
 // at the deadline; plain `sleep` is a GRANDCHILD that keeps the output pipe
@@ -61,15 +63,20 @@ func TestStartVerified_HungChildTimesOutAndFreesTheLock(t *testing.T) {
 
 			done := make(chan truth.ActionResult, 1)
 			start := time.Now()
-			go func() {
+			// The handler shape runs in its own func so its deferred Release has
+			// run before the result is sent. Sending from inside it let the
+			// Acquire below race the Release (CI run 37737097105,
+			// agent-os-qags.28).
+			startStack := func() truth.ActionResult {
 				token, err := lock.Acquire(stack.ID, OpKindStart)
 				if err != nil {
 					t.Errorf("first Acquire: %v", err)
 				}
 				defer lock.Release(stack.ID, token)
 				ar, _ := svc.StartVerified(stack)
-				done <- ar
-			}()
+				return ar
+			}
+			go func() { done <- startStack() }()
 
 			var ar truth.ActionResult
 			select {
