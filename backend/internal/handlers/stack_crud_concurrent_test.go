@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 
@@ -248,24 +247,22 @@ func TestStacksHandler_Create_ConcurrentDifferentNames_BothSucceed(t *testing.T)
 // passing or confusingly-failing ordering check rather than "I stopped
 // finding what I was looking for").
 //
-// File resolution: srcPath is built from runtime.Caller(0), i.e. this test
-// file's own path as recorded in the compiled binary — not the process's
-// working directory, so it is unaffected by where `go test` is invoked from.
-// If stack_crud.go is ever renamed, parser.ParseFile fails to open it and
-// require.NoError below fails loudly with that filesystem error — it does
-// not silently stop finding its subject. If Create is ever split so the
+// File resolution: stack_crud.go comes from handlerSources (go:embed), not a
+// path on disk, so a `go test -overlay` mutant of it is what this parses
+// (agent-os-qags.14). If stack_crud.go is ever renamed the embed read fails and
+// require.NoError below fails loudly with that error; it does not silently stop
+// finding its subject. If Create is ever split so the
 // Acquire/Stat calls move into a helper function, ast.Inspect only walks
 // Create's own body, so this test would fail with the same "did not find"
 // messages above and need a human to point it at the new location — a loud
 // break on refactor, not a silent one, which is the failure mode this test
 // is designed to avoid.
 func TestCreate_LockAcquiredBeforeDuplicateStat(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	require.True(t, ok, "runtime.Caller must resolve this test file's own path")
-	srcPath := filepath.Join(filepath.Dir(thisFile), "stack_crud.go")
+	src, err := handlerSources.ReadFile("stack_crud.go")
+	require.NoError(t, err, "stack_crud.go must be embedded in handlerSources")
 
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, srcPath, nil, 0)
+	file, err := parser.ParseFile(fset, "stack_crud.go", src, 0)
 	require.NoError(t, err, "stack_crud.go must parse as valid Go")
 
 	var createFn *ast.FuncDecl
