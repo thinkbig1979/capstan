@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -953,6 +953,39 @@ check_stack_write_callers() {
   return 1
 }
 
+# check_rclone_delete_argv delegates to scripts/check-rclone-delete-argv.sh: no
+# non-test Go file builds an rclone delete-capable argv (sync, move, delete,
+# purge, ...) outside RcloneManager.Sync and RestoreRepo, so the z91e.9 delete
+# cap cannot be bypassed by a new call site (agent-os-qags.17). Self-test first,
+# same reasoning as ws-registration.
+check_rclone_delete_argv() {
+  local script="$SCRIPT_DIR/check-rclone-delete-argv.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: rclone-delete-argv - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: rclone-delete-argv - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: rclone-delete-argv - ${self#rclone-delete-argv }; ${out#rclone-delete-argv: }"
+    return 0
+  fi
+  echo "FAIL: rclone-delete-argv - an rclone delete-capable argv sits outside Sync/RestoreRepo (route it through RcloneManager.Sync, which enforces the delete cap):"
+  echo "$out"
+  return 1
+}
+
 # check_compose_parity delegates to scripts/check-compose-parity.sh: dev and
 # prod compose agree on init, the identical-path stacks mount and the env keys
 # (agent-os-qags.6, safe-defaults rule 17). Self-test first, same reasoning as
@@ -1155,6 +1188,7 @@ Valid check names:
   ticker-stop    no backend ticker or timer wait without a stop case (for range t.C, time.Tick, bare <-t.C)
   project-name-lookup no backend query filters on project_name outside GetStackByProjectName
   stack-write-callers no handler calls UpsertStack outside StacksHandler.Create or DeleteStack outside a scanner WithLock
+  rclone-delete-argv no rclone delete-capable argv (sync, move, purge, ...) outside RcloneManager.Sync and RestoreRepo
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -1182,6 +1216,7 @@ run_check() {
     ticker-stop) check_ticker_stop ;;
     project-name-lookup) check_project_name_lookup ;;
     stack-write-callers) check_stack_write_callers ;;
+    rclone-delete-argv) check_rclone_delete_argv ;;
     *) return 2 ;;
   esac
 }
