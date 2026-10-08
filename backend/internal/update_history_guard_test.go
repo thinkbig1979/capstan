@@ -33,9 +33,10 @@ const skippedEntryBuilder = "NewSkippedUpdateEntry"
 //     DeleteUpdateHistoryOlderThan, so it never ages out. PRODUCERS checked: a
 //     models.UpdateHistoryEntry composite literal (arm 1), and a map literal
 //     passed straight to UpdateUpdateHistory (arm 1b). Each must carry a
-//     completed_at unless its Status is the constant "pending". A Status that is
-//     not a string literal (a const, a variable, no Status at all) is treated as
-//     final.
+//     completed_at unless its Status is the constant "pending". A completed_at
+//     whose value is the literal nil counts as absent (it writes NULL). A Status
+//     that is not a string literal (a const, a variable, no Status at all) is
+//     treated as final.
 //  2. A 'skipped' row built by hand skips the reason and completed_at that
 //     NewSkippedUpdateEntry (services/scheduler.go) sets. The constant
 //     "skipped" as an UpdateHistoryEntry Status, or as a "status" value in an
@@ -103,6 +104,8 @@ func TestUpdateHistoryRowsAreWrittenSafely_CheckerSeesTheShapes(t *testing.T) {
 		{"arm 1: non-constant Status", `func f(s string) { _ = models.UpdateHistoryEntry{Status: s} }`, []string{"completed_at"}},
 		{"arm 1: elided element of a slice", `func f() { _ = []models.UpdateHistoryEntry{{Status: "failed"}} }`, []string{"completed_at"}},
 		{"arm 1: unkeyed literal", `func f() { _ = models.UpdateHistoryEntry{"a"} }`, []string{"unkeyed"}},
+		{"arm 1: CompletedAt explicitly nil", `func f() { _ = &models.UpdateHistoryEntry{Status: "paused", CompletedAt: nil} }`, []string{"completed_at"}},
+		{"arm 1b: completed_at explicitly nil", `func f(d D) { d.UpdateUpdateHistory("id", map[string]interface{}{"status": "failed", "completed_at": nil}) }`, []string{"completed_at"}},
 		{"arm 1b: map with final status and no completed_at", `func f(d D) { d.UpdateUpdateHistory("id", map[string]interface{}{"status": "failed"}) }`, []string{"completed_at"}},
 		{"arm 2: hand-built skipped with completed_at", `func f(c *string) { _ = models.UpdateHistoryEntry{Status: "skipped", CompletedAt: c} }`, []string{"NewSkippedUpdateEntry"}},
 		{"arm 2: skipped in an UpdateUpdateHistory map", `func f(d D) { d.UpdateUpdateHistory("id", map[string]interface{}{"status": "skipped", "completed_at": "t"}) }`, []string{"NewSkippedUpdateEntry"}},
@@ -200,7 +203,7 @@ func (s *updateHistoryScan) checkEntry(fset *token.FileSet, lit *ast.CompositeLi
 			fields[id.Name] = kv.Value
 		}
 	}
-	_, hasCompleted := fields["CompletedAt"]
+	hasCompleted := isSet(fields["CompletedAt"])
 	s.judge(fset, lit.Pos(), fields["Status"], hasCompleted, fn)
 }
 
@@ -217,7 +220,7 @@ func (s *updateHistoryScan) checkMap(fset *token.FileSet, lit *ast.CompositeLit,
 		case "status":
 			hasStatus, status = true, kv.Value
 		case "completed_at":
-			hasCompleted = true
+			hasCompleted = isSet(kv.Value)
 		}
 	}
 	if !hasStatus {
@@ -235,6 +238,17 @@ func (s *updateHistoryScan) judge(fset *token.FileSet, pos token.Pos, status ast
 	if val != "pending" && !hasCompleted {
 		s.violations = append(s.violations, fmt.Sprintf("%s: an update_history write with a final or non-constant status has no completed_at, so retention (completed_at IS NOT NULL) never deletes it (agent-os-z91e.46, agent-os-qags.19)", fset.Position(pos)))
 	}
+}
+
+// isSet reports whether a completed_at value is present and not the literal
+// nil: `CompletedAt: nil` and `"completed_at": nil` write NULL, which retention
+// skips exactly as if the key were missing. A nil-valued variable is not seen.
+func isSet(e ast.Expr) bool {
+	if e == nil {
+		return false
+	}
+	id, ok := e.(*ast.Ident)
+	return !ok || id.Name != "nil"
 }
 
 // stringLiteral returns the value of a string literal, or "" for anything else
