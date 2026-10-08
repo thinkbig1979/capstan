@@ -270,7 +270,7 @@ func TestPull_ZeroExitStderrDoesNotRefuseACleanRepo(t *testing.T) {
 	vwi7FsmonitorFault(t, faulted)
 	vwi7StatusPrecondition(t, faulted, "", true)
 
-	_, err := svc.Pull(faulted)
+	_, err := svc.pullCLI(faulted)
 	if err == nil {
 		t.Fatalf("precondition: this fixture has no remote, so the pull cannot succeed; err=nil means the test is measuring something else")
 	}
@@ -285,7 +285,7 @@ func TestPull_ZeroExitStderrDoesNotRefuseACleanRepo(t *testing.T) {
 	dirty := vwi7Repo(t, true)
 	vwi7StatusPrecondition(t, dirty, " M f.txt", false)
 
-	_, err = svc.Pull(dirty)
+	_, err = svc.pullCLI(dirty)
 	if err == nil {
 		t.Fatalf("control: a dirty worktree must still be refused, got err=nil")
 	}

@@ -514,10 +514,6 @@ func gitDiagnostic(stdout, stderr string) string {
 	}
 }
 
-func (s *GitService) Pull(dirPath string) (*models.PullResult, error) {
-	return s.pullCLI(dirPath)
-}
-
 func (s *GitService) pullCLI(dirPath string) (*models.PullResult, error) {
 	slog.Debug("Pulling git changes (CLI)", "path", dirPath)
 

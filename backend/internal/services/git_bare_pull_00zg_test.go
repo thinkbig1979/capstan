@@ -22,17 +22,17 @@ func TestPull_BareRepoIsAClientError(t *testing.T) {
 	mustGit(t, src, "remote", "add", "origin", bare)
 	mustGit(t, src, "push", "-q", "origin", "HEAD")
 
-	_, err := svc.Pull(bare)
+	_, err := svc.pullCLI(bare)
 	if got, code := statusFor(err); got != http.StatusConflict || code != models.ErrGitBareRepo {
-		t.Fatalf("Pull(bare) = HTTP %d (%s): %v, want 409 %s", got, code, err, models.ErrGitBareRepo)
+		t.Fatalf("pullCLI(bare) = HTTP %d (%s): %v, want 409 %s", got, code, err, models.ErrGitBareRepo)
 	}
 
 	// Control on the same instrument: a clean clone with a work tree pulls
 	// (up to date), so a guard that refused every repository fails here.
 	clone := t.TempDir()
 	mustGit(t, clone, "clone", "-q", bare, ".")
-	if _, err := svc.Pull(clone); err != nil {
+	if _, err := svc.pullCLI(clone); err != nil {
 		got, code := statusFor(err)
-		t.Fatalf("Pull(clone of bare) = HTTP %d (%s): %v, want success", got, code, err)
+		t.Fatalf("pullCLI(clone of bare) = HTTP %d (%s): %v, want success", got, code, err)
 	}
 }

@@ -110,7 +110,7 @@ func TestManualRemote(t *testing.T) {
 			}
 
 			// 4. PULL refuses to run on a dirty worktree.
-			if _, err := s.Pull(local); err == nil {
+			if _, err := s.pullCLI(local); err == nil {
 				t.Error("Pull on a dirty worktree should fail, got nil")
 			} else {
 				t.Logf("pull on dirty tree correctly rejected: %v", err)
@@ -142,7 +142,7 @@ func TestManualRemote(t *testing.T) {
 			t.Logf("status after rewind: ahead=%d behind=%d", behindSt.Ahead, behindSt.Behind)
 
 			// 6. PULL fast-forwards back to the remote tip against a real remote.
-			pr, err := s.Pull(local)
+			pr, err := s.pullCLI(local)
 			if err != nil {
 				t.Fatalf("Pull failed: %v", err)
 			}
@@ -159,7 +159,7 @@ func TestManualRemote(t *testing.T) {
 				pr.PreviousCommit[:7], pr.CurrentCommit[:7], len(pr.ChangedFiles))
 
 			// 7. PULL is a no-op when already at the tip.
-			pr2, err := s.Pull(local)
+			pr2, err := s.pullCLI(local)
 			if err != nil {
 				t.Fatalf("second Pull failed: %v", err)
 			}

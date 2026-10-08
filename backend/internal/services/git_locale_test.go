@@ -13,7 +13,7 @@ import (
 
 // writeFakeGit installs a stand-in `git` executable in a fresh directory and
 // returns that directory (to be prepended to PATH). It answers the subcommands
-// GitService.Pull -> pullCLI issues on the failure path:
+// GitService.pullCLI issues on the failure path:
 //
 //   - status --porcelain -> success, no output (clean working tree)
 //   - rev-parse HEAD     -> success, a fixed fake hash
@@ -243,7 +243,7 @@ func TestPullCLI_ClassificationIsLocaleIndependent(t *testing.T) {
 			for _, kv := range arm.env {
 				t.Setenv(kv[0], kv[1])
 			}
-			result, err := svc.Pull(dir)
+			result, err := svc.pullCLI(dir)
 			if err == nil {
 				t.Fatalf("under %s: Pull reported success (%+v) although the fake git exited 1; "+
 					"a failed pull must never be turned into a no-change result", arm.name, result)
