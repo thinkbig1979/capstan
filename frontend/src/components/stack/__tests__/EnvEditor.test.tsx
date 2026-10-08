@@ -312,6 +312,33 @@ describe('EnvEditor', () => {
       expect(toast.error).toHaveBeenCalledWith('No permission')
     })
   })
+
+  // agent-os-mt33. A PIN, not a regression test: it passes on the code before
+  // and after that bead, so it cannot catch a revert of anything. POST
+  // /stacks/:id/env CAN answer partial (handlers/env.go Create: the file is on
+  // disk but SetStackEnvFileIfUnset failed, HTTP 207), and useActionMutation
+  // already turns that into an orange warning. The editor stays hidden on
+  // purpose: GET /env answers hasEnvFile:false until the DB row is recorded.
+  it('Create Environment File partial → warning with the reason, editor stays hidden (pin)', async () => {
+    mockGetEnv.mockResolvedValue({ hasEnvFile: false })
+    mockCreateEnv.mockResolvedValue({ outcome: 'partial', reason: 'env file created but DB not updated' })
+
+    const user = userEvent.setup()
+    renderWithProviders(<EnvEditor stackId="test-stack" />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Create Environment File')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByText('Create Environment File'))
+
+    await waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith('env file created but DB not updated')
+    })
+    expect(toast.error).not.toHaveBeenCalled()
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(screen.queryByText('Add Entry')).not.toBeInTheDocument()
+  })
 })
 
 /**

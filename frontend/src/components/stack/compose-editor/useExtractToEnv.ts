@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { presentError, toastInvalid } from '@/lib/error-handler'
+import { toastForResult } from '@/lib/action-result'
 import type { useCodeMirrorEditor } from '@/hooks/useCodeMirrorEditor'
 import { inferVarName } from './inferVarName'
 import { queryKeys } from '@/lib/query-keys'
@@ -92,6 +93,14 @@ export function useExtractToEnv({
       // Atomic write — body: { composeContent, envRaw } per ComposeEnvRequest
       try {
         const result = await stacksApi.updateComposeAndEnv(stackId, updatedCompose, updatedEnv)
+        if (result.outcome === 'partial') {
+          // HTTP 207, which axios resolves, so it lands here and not in the
+          // catch below (agent-os-mt33). The reason names the failed rollback.
+          // Warn rather than error (qags.21/.26/.31), and leave the editor as
+          // it is: the compose file on disk is no longer known to match it.
+          toastForResult(result)
+          return
+        }
         if (result.outcome !== 'success' && result.outcome !== 'no_change') {
           // Behaviour unchanged (agent-os-5g8a): this site already rendered
           // the reason and keeps it as the TITLE, the same call
@@ -102,9 +111,10 @@ export function useExtractToEnv({
       } catch (e: unknown) {
         // agent-os-yre8. Not in the bead's own SPEC, which quotes only the
         // outer catch, but this is the site a rejected atomic write lands
-        // on: PutComposeAndEnv answers truth.Failed/truth.Partial at 5xx,
-        // so axios rejects and the ActionResult reason -- which names WHICH
-        // write failed and whether a rollback happened -- arrives HERE.
+        // on: PutComposeAndEnv answers truth.Failed at 5xx, so axios rejects
+        // and the ActionResult reason -- which names WHICH write failed and
+        // whether a rollback happened -- arrives HERE. truth.Partial is 207 and
+        // does not: it resolves and is handled above (agent-os-mt33).
         presentError(e, { fallback: 'Failed to extract variable to .env' })
         return
       }
