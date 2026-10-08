@@ -45,6 +45,13 @@ type dockerCleanupArmer interface {
 	StartFromPolicy()
 }
 
+// containerPruner is the slice of *services.DockerService the container prune
+// route needs, so the lock it takes can be tested without a Docker daemon. Kept
+// apart from containerActionDocker: the prune is not a single-container action.
+type containerPruner interface {
+	PruneContainers(ctx context.Context, opts services.PruneOptions) (container.PruneReport, error)
+}
+
 // containerActionDocker is the slice of *services.DockerService the
 // single-container action routes need: the inspect that finds the container's
 // stack, and the four mutations. Declared on the consumer side so the lock
@@ -65,10 +72,13 @@ type ResourcesHandler struct {
 	// containerOps is docker, seen through containerActionDocker. Set by the
 	// constructor; tests replace it with a fake.
 	containerOps containerActionDocker
-	db           *database.DB
-	scheduler    updateScanner
-	jobManager   *services.UpdateJobManager
-	actionLog    *services.ActionLogger
+	// pruner is docker, seen through containerPruner; nil (handlers built as
+	// struct literals) means use docker.
+	pruner     containerPruner
+	db         *database.DB
+	scheduler  updateScanner
+	jobManager *services.UpdateJobManager
+	actionLog  *services.ActionLogger
 	// cleanup and cleanupArmer are injected by setters rather than through a
 	// constructor parameter: both are nil on a Docker-less host (see
 	// cmd/server/main.go), every cleanup handler nil-checks them, and adding
@@ -120,7 +130,7 @@ func NewResourcesHandler(docker *services.DockerService, db *database.DB, schedu
 }
 
 func NewResourcesHandlerWithJobManager(docker *services.DockerService, db *database.DB, scheduler *services.SchedulerService, jobManager *services.UpdateJobManager) *ResourcesHandler {
-	h := &ResourcesHandler{docker: docker, containerOps: docker, db: db, jobManager: jobManager, actionLog: services.NewActionLogger(db)}
+	h := &ResourcesHandler{docker: docker, containerOps: docker, pruner: docker, db: db, jobManager: jobManager, actionLog: services.NewActionLogger(db)}
 	if scheduler != nil {
 		h.scheduler = scheduler
 	}
