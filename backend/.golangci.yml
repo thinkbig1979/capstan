@@ -89,6 +89,17 @@ linters:
         # through them skips the deadline exactly like a raw exec.Command does.
         - pattern: '^(exec\.Command|exec\.CommandContext|execCommand|execCommandContext)$'
           msg: 'build non-interactive child processes with commandWithDeadline (services/exec_env.go), safe-defaults rule 1 (agent-os-qags.1)'
+        # agent-os-qags.3 (safe-defaults rule 7): a file under a stack directory
+        # is written by temp file plus rename (writeFileAtomic and its
+        # writeComposeFileAtomic/writeEnvFileAtomic wrappers in
+        # handlers/atomic_write.go), so a crash or full disk never leaves a
+        # truncated compose.yaml. Global, not handlers-only: forbidigo cannot
+        # scope a pattern to a directory, and no non-test file outside the
+        # exclusions below calls any of these today, so the superset costs
+        # nothing. os.OpenFile is forbidden as a whole because its write flags
+        # are not visible to a name match.
+        - pattern: '^(os\.WriteFile|os\.Create|os\.OpenFile|ioutil\.WriteFile)$'
+          msg: 'write files through writeFileAtomic (handlers/atomic_write.go), safe-defaults rule 7 (agent-os-qags.3)'
       analyze-types: true
   enable:
     - errcheck
@@ -131,9 +142,10 @@ linters:
       # disabled in-file so a NEW site anywhere else still gates.
       - path: 'internal/database/'
         linters: [forbidigo]
-      # Exclusions for the child-process rule (agent-os-qags.1). `text` pins
-      # each one to that rule's message, so none of them blinds the
-      # sql.ErrNoRows rule in the same file. Sites that are allowed one raw
+      # Exclusions for the child-process rule (agent-os-qags.1) and the
+      # stack-file write rule (agent-os-qags.3). `text` pins each one to its
+      # own rule's message, so none of them blinds the sql.ErrNoRows rule or the
+      # other new rule in the same file. Sites that are allowed one raw
       # call (terminal.go, truth, logs) are NOT listed here: each carries a
       # per-site //nolint:forbidigo with its reason, so a second raw call in
       # the same file still gates.
@@ -146,16 +158,23 @@ linters:
       # Tests substitute execCommand/execCommandContext to point a call site at
       # a stand-in binary and spawn fixtures (git init, sleep) directly; none of
       # that is a production child process, so it needs no deadline helper.
+      # Tests also write fixtures into t.TempDir() with os.WriteFile.
       - path: '_test\.go'
         linters: [forbidigo]
-        text: 'commandWithDeadline'
+        text: 'commandWithDeadline|writeFileAtomic'
       # Build-tagged (//go:build integration) test harness that shells out to
       # docker. golangci does not compile it without build-tags (none are set),
       # so this is inert today and records the decision for the day someone
-      # adds the tag.
+      # adds the tag. It also writes its compose fixture into a temp dir.
       - path: 'internal/integrationtest/'
         linters: [forbidigo]
-        text: 'commandWithDeadline'
+        text: 'commandWithDeadline|writeFileAtomic'
+      # atomic_write.go IS the stack-file write helper: os.CreateTemp plus
+      # os.Rename, and one os.OpenFile(O_WRONLY) that tests write permission on
+      # an existing compose file and closes at once, writing nothing.
+      - path: 'internal/handlers/atomic_write\.go'
+        linters: [forbidigo]
+        text: 'writeFileAtomic'
       # SA1019 (deprecated Docker SDK types) had a blanket per-file exclusion
       # here; agent-os-9zi migrated every site instead of excluding them, so
       # this rule is gone. Two things worth recording for whoever reads this
