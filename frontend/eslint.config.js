@@ -289,6 +289,23 @@ export default defineConfig([
           message:
             'isLoading is false while a first fetch is paused offline, so this gate falls through to an error or empty state. Read isPending, or isFirstLoad({ isPending, fetchStatus }) from lib/query-state for a query with `enabled`.',
         },
+        // agent-os-zree (the o9fx class): a spanning row's colSpan is the
+        // table's column count, and a hand-typed number is legal and silent when
+        // a column is added. Derive it from the table's own column list
+        // (`colSpan={SOME_COLUMNS.length}`, pinned by test/tableSpan.ts). A
+        // headerless table with a fixed shape (DiffViewer's two-column diff
+        // grid) carries a per-site disable that says so.
+        {
+          selector:
+            "JSXAttribute[name.name='colSpan'] > JSXExpressionContainer > Literal[value=type(number)]",
+          message:
+            'A hand-typed colSpan drifts when a column is added. Derive it from the table\'s column list, e.g. colSpan={COLUMNS.length}, as StacksTab and BackupHistoryTab do.',
+        },
+        {
+          selector: "JSXAttribute[name.name='colSpan'] > Literal",
+          message:
+            'A hand-typed colSpan drifts when a column is added. Derive it from the table\'s column list, e.g. colSpan={COLUMNS.length}, as StacksTab and BackupHistoryTab do.',
+        },
         // agent-os-z91e.12: a raw <a> with a same-origin path is a full document
         // navigation: the SPA unloads, taking the query cache, every open
         // WebSocket and the in-memory env-unlock state with it. Internal links

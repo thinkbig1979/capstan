@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/select'
 import { parseDiff } from '@/lib/diff-parser'
 import { classifyError } from '@/lib/error-handler'
+import { isFirstLoad } from '@/lib/query-state'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
 
 type DiffView = 'unified' | 'split'
@@ -30,7 +31,7 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
     return 'unified'
   })
 
-  const { data: diffData, isLoading, error, refetch } = useGitDiff(stackId, commitHash)
+  const { data: diffData, isPending, fetchStatus, error, refetch } = useGitDiff(stackId, commitHash)
 
   useEffect(() => {
     localStorage.setItem('diff-view-preference', viewMode)
@@ -54,7 +55,9 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
     })
   }
 
-  if (isLoading) {
+  // isFirstLoad: useGitDiff is `enabled: !!hash`, and offline the first fetch is
+  // paused (agent-os-7nqa).
+  if (isFirstLoad({ isPending, fetchStatus })) {
     return <div className="flex items-center justify-center py-4">Loading diff...</div>
   }
 
@@ -184,6 +187,7 @@ export function DiffViewer({ stackId, commitHash }: DiffViewerProps) {
                       <tbody>
                         {file.hunks.map((hunk, hunkIndex) => (
                           <tr key={hunkIndex}>
+                            {/* eslint-disable-next-line no-restricted-syntax -- headerless table: the split view's two code columns are fixed by the layout, there is no column list to derive the span from (agent-os-zree) */}
                             <td colSpan={2} className="p-0">
                               <div className="bg-muted/50 px-4 py-1 text-xs text-muted-foreground">
                                 {hunk.header}
