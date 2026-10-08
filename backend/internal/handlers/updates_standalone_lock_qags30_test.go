@@ -82,7 +82,7 @@ func TestUpdateContainer_StandaloneUpdateTakesATurnPrunesWaitFor(t *testing.T) {
 
 	select {
 	case <-entered:
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Until(hangGuardDeadline(t))):
 		t.Fatal("the update job never reached Docker")
 	}
 
