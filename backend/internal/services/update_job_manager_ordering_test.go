@@ -37,7 +37,13 @@ import (
 // lock-before-stat ordering the same way.
 func TestEnqueueSnapshotsBeforePublishing(t *testing.T) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "update_job_manager.go", nil, parser.AllErrors)
+	// From go:embed (packageSources), so a `go test -overlay` mutant of
+	// update_job_manager.go is what this parses (agent-os-qags.14).
+	src, err := packageSources.ReadFile("update_job_manager.go")
+	if err != nil {
+		t.Fatalf("update_job_manager.go must be embedded in packageSources: %v", err)
+	}
+	file, err := parser.ParseFile(fset, "update_job_manager.go", src, parser.AllErrors)
 	if err != nil {
 		t.Fatalf("failed to parse update_job_manager.go: %v", err)
 	}
