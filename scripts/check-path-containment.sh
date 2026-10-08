@@ -24,8 +24,23 @@
 #      form is what hid stackDirIsInsideRoot from the single-line grep the
 #      bead was filed with.
 #
-# TrimPrefix is not a candidate: it returns no verdict, so it cannot BE a
-# containment check (docker.go trims "/" off container names).
+#   4. strings.HasPrefix / CutPrefix / TrimPrefix whose two arguments are both
+#      non-literal and both path-named (path, dir, root or file, any case):
+#      strings.HasPrefix(absPath, absRoot). With no separator suffix and no
+#      "..", arms 2 and 3 never see it, and it is the classic sibling-prefix
+#      bug (/stacks-evil passes a /stacks check) (agent-os-qags.15). TrimPrefix
+#      counts here because the trimmed-or-not result is a verdict in disguise
+#      (`if trimmed != path`).
+#
+# TrimPrefix on its own (arm 2's separator form) is not a candidate: it returns
+# no verdict, so it cannot BE a containment check (docker.go trims "/" off
+# container names).
+#
+# LIMIT of arm 4. It reads one line, and it needs a path name on BOTH sides. A
+# call split across lines, and a test whose operand is named otherwise
+# (HasPrefix(realTarget, prefix), HasPrefix(p, base)), are invisible to it.
+# pathutil is excluded wholesale, and the other unmatched shapes are the
+# reviewed residue: safe-defaults rule 6 still governs them.
 #
 # ALLOWLIST BY FUNCTION, never by line. A candidate is excused only when its
 # enclosing func (file + name, derived from the `^func` line above it) is
@@ -64,6 +79,32 @@ candidates() {
   while IFS= read -r f; do
     rel=${f#"$dir"/}
     awk -v rel="$rel" '
+      # pathVsPath(line): 1 when the line holds a strings.HasPrefix, CutPrefix
+      # or TrimPrefix call whose two arguments both carry no string literal and
+      # both name a path (path, dir, root or file, any case). Arguments are
+      # split at the top-level comma by paren depth, so a nested call such as
+      # filepath.Clean(absDir) stays inside its argument. A call that does not
+      # close on the line is skipped (see LIMIT in the header).
+      function pathVsPath(l,   rest, i, c, depth, a1, a2, comma, done) {
+        while (match(l, /strings\.(HasPrefix|CutPrefix|TrimPrefix)\(/)) {
+          rest = substr(l, RSTART + RLENGTH)
+          l = rest
+          depth = 0; comma = 0; done = 0; a1 = ""; a2 = ""
+          for (i = 1; i <= length(rest); i++) {
+            c = substr(rest, i, 1)
+            if (c == "(") depth++
+            else if (c == ")") {
+              if (depth == 0) { done = 1; break }
+              depth--
+            } else if (c == "," && depth == 0 && !comma) { comma = 1; continue }
+            if (comma) a2 = a2 c; else a1 = a1 c
+          }
+          if (!done || !comma) continue
+          if (a1 ~ /["`]/ || a2 ~ /["`]/) continue
+          if (tolower(a1) ~ /(path|dir|root|file)/ && tolower(a2) ~ /(path|dir|root|file)/) return 1
+        }
+        return 0
+      }
       /^func / {
         s = $0
         sub(/^func[ \t]+/, "", s)
@@ -81,6 +122,7 @@ candidates() {
         if (line ~ /filepath\.(Rel|HasPrefix)\(/) hit = 1
         if (line ~ /strings\.(HasPrefix|CutPrefix)\(/ && line ~ sep) hit = 1
         if (line ~ /strings\.HasSuffix\(/ && line ~ sep) hit = 1
+        if (pathVsPath(line)) hit = 1
         if (hit) printf "%s|%s|%d|%s\n", rel, (fn == "" ? "<top-level>" : fn), NR, line
         if (fn_end) { fn = ""; fn_end = 0 }
       }
@@ -279,6 +321,50 @@ func twoStep(absDir, absRoot string) bool {
 GO
   selftest_case "HasSuffix separator two-step" 1 "stacks.go:[0-9]+ \(twoStep\)" "$d"
 
+  # RED: the bare path-vs-path prefix test, no separator and no "..": the
+  # sibling-prefix bug (/stacks-evil passes a /stacks check) (agent-os-qags.15).
+  d=$(fresh)
+  cat >> "$d/internal/handlers/stacks.go" <<'GO'
+
+func plantedBare(absPath, absRoot string) bool {
+	return strings.HasPrefix(absPath, absRoot)
+}
+GO
+  selftest_case "bare HasPrefix(absPath, absRoot)" 1 "stacks.go:[0-9]+ \(plantedBare\)" "$d"
+
+  # RED: the same shape through CutPrefix and TrimPrefix, nested call arguments.
+  d=$(fresh)
+  cat >> "$d/internal/handlers/stacks.go" <<'GO'
+
+func plantedCut(absStackDir, absRoot string) bool {
+	_, ok := strings.CutPrefix(filepath.Clean(absStackDir), absRoot)
+	return ok
+}
+
+func plantedTrim(filePath, rootDir string) string {
+	return strings.TrimPrefix(filePath, filepath.Clean(rootDir))
+}
+GO
+  selftest_case "bare CutPrefix with a nested call" 1 "stacks.go:[0-9]+ \(plantedCut\)" "$d"
+  selftest_case "bare TrimPrefix with a nested call" 1 "stacks.go:[0-9]+ \(plantedTrim\)" "$d"
+
+  # GREEN: a literal as either argument is not a path-vs-path test, and a
+  # non-path name on one side is out of the arm's reach (it is a reviewed limit).
+  d=$(fresh)
+  cat >> "$d/internal/handlers/stacks.go" <<'GO'
+
+func literalControls(name, dirName, loginKeyPrefix string, c *gin.Context) bool {
+	return strings.HasPrefix(name, ".") ||
+		strings.HasPrefix(dirName, ".") ||
+		strings.HasPrefix(c.Request.URL.Path, "/api/")
+}
+
+func oneSidedNames(path, loginKeyPrefix string) bool {
+	return strings.HasPrefix(path, loginKeyPrefix)
+}
+GO
+  selftest_case "literal-prefix controls" 0 "0 violations" "$d"
+
   # RED: an allowlisted NAME in the wrong file is not excused.
   d=$(fresh)
   cat >> "$d/internal/handlers/stacks.go" <<'GO'
@@ -302,7 +388,7 @@ GO
     echo "FAIL: path-containment self-test - $ST_FAILS of $ST_RUN control(s) failed"
     return 1
   fi
-  echo "path-containment self-test: $ST_RUN control(s) passed (1 green, 5 red, 1 error)"
+  echo "path-containment self-test: $ST_RUN control(s) passed (2 green, 8 red, 1 error)"
   return 0
 }
 
