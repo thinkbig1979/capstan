@@ -469,6 +469,40 @@ describe('StackPage', () => {
       expect(getStack).not.toHaveBeenCalled()
     })
   })
+  describe('delete reads the outcome (agent-os-qags.21)', () => {
+    async function requestDelete(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(await screen.findByRole('button', { name: 'More stack actions' }))
+      await user.click(await screen.findByText('Delete Stack'))
+      await user.type(await screen.findByLabelText('Type my-stack to confirm'), 'my-stack')
+      await user.click(screen.getByRole('button', { name: 'Delete' }))
+    }
+
+    it('a partial result warns, stays on the page and never toasts success', async () => {
+      deleteStack.mockResolvedValue({ outcome: 'partial', reason: '2 containers could not be removed', details: {} })
+      renderPage()
+      await screen.findByTestId('stack-detail')
+
+      await requestDelete(userEvent.setup())
+
+      const { toast } = await import('sonner')
+      await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('2 containers could not be removed'))
+      expect(toast.success).not.toHaveBeenCalled()
+      expect(window.location.pathname).toBe('/stacks/s1')
+    })
+
+    it('a success result still says "Stack deleted successfully" and leaves the page', async () => {
+      deleteStack.mockResolvedValue({ outcome: 'success', reason: 'stack deleted', details: { id: 's1' } })
+      renderPage()
+      await screen.findByTestId('stack-detail')
+
+      await requestDelete(userEvent.setup())
+
+      const { toast } = await import('sonner')
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Stack deleted successfully'))
+      await waitFor(() => expect(window.location.pathname).toBe('/'))
+      expect(toast.warning).not.toHaveBeenCalled()
+    })
+  })
   describe('delete failures (agent-os-5obt)', () => {
     // Copied verbatim from handlers/respond.go:186 DockerUnavailableMessage,
     // which renderDockerResult puts in the 503 ActionResult when the socket is

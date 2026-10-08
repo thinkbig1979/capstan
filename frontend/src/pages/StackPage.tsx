@@ -10,7 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { stacksApi } from '@/lib/api'
 import { classifyError, presentError, toastInvalid } from '@/lib/error-handler'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
@@ -19,6 +19,7 @@ import { deleteStackWithCollateralConfirm, StackDeleteCancelledError } from '@/l
 import { useParams, useNavigate, useLocation } from 'react-router'
 import { toast } from 'sonner'
 import { useConfirm } from '@/hooks/useConfirm'
+import { useActionMutation } from '@/hooks/useActionMutation'
 import { useStackStore } from '@/stores/stackStore'
 import { useCheckUpdates, useUpdateStack, useUpdateJobs } from '@/hooks/useResources'
 import { useUpdateJobStore, type UpdateJob } from '@/stores/updateJobStore'
@@ -58,7 +59,6 @@ export function StackPage() {
   const location = useLocation()
   const queryClient = useQueryClient()
   const { confirm, ConfirmComponent } = useConfirm()
-  const [isDeleting, setIsDeleting] = useState(false)
   const { setSelectedStack } = useStackStore()
 
   const activeTab = location.pathname.split('/').slice(3).join('/') || 'overview'
@@ -97,45 +97,23 @@ export function StackPage() {
     enabled: !!id,
   })
 
-  const deleteMutation = useMutation({
+  const deleteMutation = useActionMutation({
     // Re-confirms with `confirm` (the same dialog as the initial delete
     // confirmation) when the backend refuses with 428 STACK_DELETE_COLLATERAL.
     // See deleteStackWithCollateralConfirm.
     mutationFn: (stackId: string) => deleteStackWithCollateralConfirm(stackId, confirm),
-    onSuccess: () => {
-      toast.success('Stack deleted successfully')
-      queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
-      navigate('/')
-    },
-    onError: (err) => {
-      // A declined collateral confirmation is a user cancel, not a failure —
-      // no error toast, just re-enable the Delete button.
-      if (!(err instanceof StackDeleteCancelledError)) {
-        // The delete endpoint answers a truth.ActionResult, so the cause was
-        // being dropped whole (agent-os-5obt): classifyError cannot read that
-        // body — it looks for data.error / data.message / err.message and an
-        // ActionResult carries none of them — and this site never called it
-        // anyway. Worst case was the Docker outage, whose reason IS the
-        // recovery instruction.
-        //
-        // The reason is the DESCRIPTION, not the title: it can be a paragraph,
-        // and the fixed title is what carries the action context.
-        //
-        // `err.reason` is checked, not just the type, because an empty reason
-        // would render an empty description — worse than the generic sentence
-        // on its own. Both arms are pinned: the empty-reason fall-through has
-        // its own test, because dropping this conjunct is a one-token mutation
-        // that nothing else in the suite notices.
-        //
-        // Branch rather than pass a conditional second argument: sonner renders
-        // toast.error(t) and toast.error(t, undefined) identically but a vitest
-        // spy does not, so the no-cause path stays a single-argument call. The
-        // full argument is at UpdateScheduleContent.tsx:116-137 — the sibling
-        // sites, HistoryRetentionSection.tsx among them, repeat the shape but
-        // not the reason, so that is the one worth reading.
-        presentError(err, { fallback: 'Failed to delete stack' })
-      }
-      setIsDeleting(false)
+    successTitle: 'Stack deleted successfully',
+    // The delete endpoint answers a truth.ActionResult, so a failure's cause is
+    // its reason, rendered as the DESCRIPTION under this title (agent-os-5obt).
+    errorTitle: 'Failed to delete stack',
+    invalidate: [queryKeys.stacks()],
+    // A declined collateral confirmation is a user cancel, not a failure: no
+    // error toast, and isPending going false re-enables the Delete button.
+    silentWhen: (err) => err instanceof StackDeleteCancelledError,
+    // Leave the page only when the stack is gone. A partial delete keeps the
+    // user here with the warning toast (agent-os-qags.21).
+    onResult: (r) => {
+      if (r.outcome === 'success' || r.outcome === 'no_change') navigate('/')
     },
   })
 
@@ -351,7 +329,6 @@ export function StackPage() {
       { confirmText: 'Delete', isDangerous: true, requireConfirmationText: stack.projectName }
     )
     if (confirmed) {
-      setIsDeleting(true)
       deleteMutation.mutate(stack.id)
     }
   }
@@ -460,7 +437,7 @@ export function StackPage() {
             <DropdownMenuContent align="end">
               <DropdownMenuItem
                 className="text-destructive focus:text-destructive"
-                disabled={isDeleting || deleteMutation.isPending}
+                disabled={deleteMutation.isPending}
                 onClick={handleDelete}
               >
                 <Trash2 className="h-4 w-4" />

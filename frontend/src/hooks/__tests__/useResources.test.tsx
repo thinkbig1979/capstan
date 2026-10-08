@@ -18,7 +18,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 vi.mock('sonner', () => ({
-  toast: { loading: vi.fn(), success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
+  toast: { loading: vi.fn(), success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), dismiss: vi.fn() },
 }))
 
 import {
@@ -286,6 +286,25 @@ describe('useCreateNetwork — details.name is asserted, not validated', () => {
     act(() => result.current.mutate({ name: 'bridge-1' }))
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Network "bridge-1" created'))
+  })
+})
+
+// agent-os-qags.21. createNetwork answers an ActionResult; the toast level has to
+// follow its outcome, and only a success may carry the "created" wording.
+describe('useCreateNetwork — reads the outcome (agent-os-qags.21)', () => {
+  it('a partial result warns with its reason and never toasts success', async () => {
+    mockCreateNetwork.mockResolvedValue({
+      outcome: 'partial',
+      reason: 'Network created but could not be attached',
+      details: { name: 'bridge-1' },
+    })
+
+    const { wrapper } = createWrapper()
+    const { result } = renderHook(() => useCreateNetwork(), { wrapper })
+    act(() => result.current.mutate({ name: 'bridge-1' }))
+
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('Network created but could not be attached'))
+    expect(toast.success).not.toHaveBeenCalled()
   })
 })
 

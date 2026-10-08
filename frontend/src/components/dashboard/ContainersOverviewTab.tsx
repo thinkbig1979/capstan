@@ -1,6 +1,6 @@
 import { useState, useMemo, Suspense, lazy } from 'react'
 import { Link } from 'react-router'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { stacksApi, resourcesApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -20,8 +20,6 @@ import {
   Play, Square, RefreshCw, Download, Trash2, HelpCircle, AlertCircle,
   Info,
 } from 'lucide-react'
-import { toast } from 'sonner'
-import { presentError } from '@/lib/error-handler'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import type { ActionResult } from '@/lib/action-result'
 import { DialogLoadingFallback } from '@/components/LoadingSkeleton'
@@ -494,7 +492,6 @@ interface ContainersOverviewTabProps {
 }
 
 export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: ContainersOverviewTabProps) {
-  const queryClient = useQueryClient()
   const { confirm, ConfirmComponent } = useConfirm()
   const [sortBy, setSortBy] = useState<SortKey>('name')
   const [activeTab, setActiveTab] = useState<string>('stack')
@@ -524,19 +521,14 @@ export function ContainersOverviewTab({ stats, latestMetrics, metricsStatus }: C
     return map
   }, [stacks])
 
-  const deleteContainerMutation = useMutation({
+  // Same presenter as startMutation above, but via a different route:
+  // deleteContainer answers renderDockerResult at resource_mutations.go:172 in
+  // both modes, so this site was never covered by the AppError repair.
+  const deleteContainerMutation = useActionMutation({
     mutationFn: ({ id, isRunning }: { id: string; isRunning: boolean }) => resourcesApi.deleteContainer(id, isRunning),
-    onSuccess: () => {
-      toast.success('Container removed')
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.stacks() })
-    },
-    // Same presenter as startMutation above, but via a different route:
-    // deleteContainer answers renderDockerResult at resource_mutations.go:172 in
-    // both modes, so this site was never covered by the AppError repair.
-    onError: (err) => {
-      presentError(err, { fallback: 'Failed to remove container' })
-    },
+    successTitle: 'Container removed',
+    errorTitle: 'Failed to remove container',
+    invalidate: [queryKeys.dashboardStats(), queryKeys.stacks()],
   })
 
   const handleDeleteContainer = async (containerId: string, containerName: string, isRunning: boolean) => {

@@ -6,6 +6,7 @@ import { useUpdateScanStore } from '@/stores/updateScanStore'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
 import { isActionResult, toastForResult, type ActionResult } from '@/lib/action-result'
 import { presentError, presentFault } from '@/lib/error-handler'
+import { useActionMutation } from '@/hooks/useActionMutation'
 import type { UpdateHistoryFilters } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
 import { messageOrNull, stringOr } from '@/lib/narrow'
@@ -193,25 +194,20 @@ export function useDeleteNetwork() {
 }
 
 export function useCreateNetwork() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (input: { name: string; driver?: string; internal?: boolean; attachable?: boolean }) =>
-      resourcesApi.createNetwork(input),
-    onSuccess: (data) => {
+  return useActionMutation({
+    mutationFn: async (input: { name: string; driver?: string; internal?: boolean; attachable?: boolean }) => {
+      const result = await resourcesApi.createNetwork(input)
+      // Only a success carries the "created" wording; a partial or no_change keeps
+      // the backend's own reason, which toastForResult renders at its own level.
+      if (result.outcome !== 'success') return result
       // details.name is set by the backend (createNetwork returns {id, name} in details)
       // agent-os-06c1: narrowed, not asserted. `?? 'unknown'` only ever
       // caught an ABSENT name; a non-string one rendered as [object Object].
-      const networkName = stringOr((data.details as { name?: unknown } | undefined)?.name, 'unknown')
-      toast.success(`Network "${networkName}" created`)
-      queryClient.invalidateQueries({ queryKey: queryKeys.resources.networks() })
+      const networkName = stringOr((result.details as { name?: unknown } | undefined)?.name, 'unknown')
+      return { ...result, reason: `Network "${networkName}" created` }
     },
-    onError: (err) => {
-      if (isActionResult(err)) {
-        toastForResult(err)
-      } else {
-        presentError(err, { fallback: 'Failed to create network' })
-      }
-    },
+    errorTitle: 'Failed to create network',
+    invalidate: [queryKeys.resources.networks()],
   })
 }
 

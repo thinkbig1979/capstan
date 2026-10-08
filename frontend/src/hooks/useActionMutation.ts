@@ -17,6 +17,11 @@ export interface UseActionMutationOptions<TVars, TData extends ActionResult> {
   errorTitle?: string
   /** Called after toastForResult and invalidations on success. */
   onResult?: (r: TData) => void
+  /**
+   * A rejection the caller handles itself (a user cancel is not a failure):
+   * when this returns true, onError toasts nothing. Unset, every rejection toasts.
+   */
+  silentWhen?: (err: unknown) => boolean
 }
 
 /**
@@ -45,6 +50,7 @@ export function useActionMutation<TVars, TData extends ActionResult = ActionResu
       opts.onResult?.(data)
     },
     onError: (err) => {
+      if (opts.silentWhen?.(err)) return
       // A FAILED action answers 5xx, so axios rejects and api.ts's interceptor
       // hands us {...body, status} — the ActionResult itself. classifyError
       // cannot read it: it looks for data.error / data.message / err.message
