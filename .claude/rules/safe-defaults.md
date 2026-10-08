@@ -20,12 +20,14 @@ fix: file them.
 1. **Child processes**: build every non-interactive one with
    `commandWithDeadline` (`backend/internal/services/exec_env.go`) and pass its
    error through `timeoutError`, so a timeout reads as one. The context needs a
-   deadline from the operation, not only a cancel. The interactive `docker exec`
-   in `handlers/terminal.go` is the one documented exception.
+   deadline from the operation, not only a cancel. Outside package services,
+   build it with `execx.Command` (`backend/internal/execx`), which bounds the
+   wait once the caller's context ends. The interactive `docker exec` in
+   `services/terminal.go` is the one documented exception.
    (CI-guarded: the `forbidigo` rule in `backend/.golangci.yml` forbids
    `exec.Command`, `exec.CommandContext`, `execCommand` and `execCommandContext`
-   outside `exec_env.go`; the four allowed raw sites (terminal.go, logs.go, two in truth) carry a per-site
-   `//nolint:forbidigo` with the reason.)
+   outside `exec_env.go` and `execx`; the one allowed raw site (terminal.go)
+   carries a per-site `//nolint:forbidigo` with the reason.)
 2. **WebSockets**: every socket comes from `upgradeConnection`
    (`backend/internal/handlers/ws.go`), which sets the read limit. A frame kind
    that needs bigger frames sets `wsRegistration.readLimit`; it never bypasses

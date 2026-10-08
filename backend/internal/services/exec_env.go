@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/thinkbig1979/capstan/backend/internal/dockerenv"
+	"github.com/thinkbig1979/capstan/backend/internal/execx"
 )
 
 // execCommand and execCommandContext are indirections over exec.Command and
@@ -26,14 +27,11 @@ var (
 	execCommandContext = exec.CommandContext
 )
 
-// commandWaitDelay is how long Wait keeps waiting for a killed child's output
-// pipes to close. The docker CLI runs compose as a plugin subprocess, and git
-// spawns helpers, so killing the direct child can leave a grandchild holding
-// stdout open; without a WaitDelay, CombinedOutput then blocks until the
-// grandchild exits on its own, which is the unbounded wait the deadline exists
-// to prevent. OBSERVED in lifecycle_deadline_a1ye3_test.go's "grandchild holds
-// the pipe" case: without it, StartVerified outlived the 300ms deadline by 8s+.
-const commandWaitDelay = 5 * time.Second
+// commandWaitDelay is execx.WaitDelay under this package's existing name: how
+// long Wait keeps waiting for a killed child's output pipes to close. See
+// execx.WaitDelay for why (agent-os-qags.29 moved it there so internal/truth
+// and internal/handlers share it).
+const commandWaitDelay = execx.WaitDelay
 
 // commandTimeoutError is the cause attached to a commandWithDeadline context.
 // Using it as the context's cause (rather than checking DeadlineExceeded) means
@@ -51,12 +49,11 @@ func withCommandDeadline(parent context.Context, timeout time.Duration) (context
 	return context.WithTimeoutCause(parent, timeout, &commandTimeoutError{timeout: timeout})
 }
 
-// boundCommand builds the child under ctx, with commandWaitDelay so a killed
-// child's pipes are reaped.
+// boundCommand builds the child under ctx, with execx's WaitDelay so a killed
+// child's pipes are reaped. It is execx.Command built through this package's
+// execCommandContext seam, which tests redirect at a stand-in binary.
 func boundCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
-	cmd := execCommandContext(ctx, name, args...)
-	cmd.WaitDelay = commandWaitDelay
-	return cmd
+	return execx.Bound(execCommandContext(ctx, name, args...))
 }
 
 // commandWithDeadline is the one constructor for a non-interactive child

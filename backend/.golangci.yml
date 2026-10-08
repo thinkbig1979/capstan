@@ -87,8 +87,11 @@ linters:
         # lock until restart. execCommand and execCommandContext are the package
         # vars over exec.Command/CommandContext in services/exec_env.go: a call
         # through them skips the deadline exactly like a raw exec.Command does.
+        # Outside services (truth, handlers) the constructor is execx.Command,
+        # whose caller owns the context (agent-os-qags.29). The exclusions below
+        # key on the `commandWithDeadline` substring of this message.
         - pattern: '^(exec\.Command|exec\.CommandContext|execCommand|execCommandContext)$'
-          msg: 'build non-interactive child processes with commandWithDeadline (services/exec_env.go), safe-defaults rule 1 (agent-os-qags.1)'
+          msg: 'build non-interactive child processes with commandWithDeadline (services/exec_env.go) or execx.Command outside services, safe-defaults rule 1 (agent-os-qags.1)'
         # agent-os-qags.3 (safe-defaults rule 7): a file under a stack directory
         # is written by temp file plus rename (writeFileAtomic and its
         # writeComposeFileAtomic/writeEnvFileAtomic wrappers in
@@ -145,14 +148,18 @@ linters:
       # Exclusions for the child-process rule (agent-os-qags.1) and the
       # stack-file write rule (agent-os-qags.3). `text` pins each one to its
       # own rule's message, so none of them blinds the sql.ErrNoRows rule or the
-      # other new rule in the same file. Sites that are allowed one raw
-      # call (terminal.go, truth, logs) are NOT listed here: each carries a
-      # per-site //nolint:forbidigo with its reason, so a second raw call in
+      # other new rule in the same file. The one site allowed a raw call
+      # (terminal.go's interactive docker exec) is NOT listed here: it carries
+      # a per-site //nolint:forbidigo with its reason, so a second raw call in
       # the same file still gates.
       #
-      # exec_env.go defines the helper and the seam vars, so it names every
-      # forbidden identifier by construction.
+      # exec_env.go defines the helper and the seam vars, and execx is the
+      # leaf constructor every package can import (agent-os-qags.29), so each
+      # names a forbidden identifier by construction.
       - path: 'internal/services/exec_env\.go'
+        linters: [forbidigo]
+        text: 'commandWithDeadline'
+      - path: 'internal/execx/'
         linters: [forbidigo]
         text: 'commandWithDeadline'
       # Tests substitute execCommand/execCommandContext to point a call site at
