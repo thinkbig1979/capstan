@@ -420,3 +420,48 @@ describe('useActionMutation — mutationFn throws', () => {
     expect(invalidateSpy).not.toHaveBeenCalled()
   })
 })
+
+// ─── silentWhen ──────────────────────────────────────────────────────────────
+
+describe('useActionMutation — silentWhen', () => {
+  class Cancelled extends Error {}
+
+  function setup(silentWhen?: (err: unknown) => boolean) {
+    const { result: hook } = renderHook(
+      () =>
+        useActionMutation({
+          mutationFn: vi.fn().mockRejectedValue(new Cancelled('declined')),
+          errorTitle: 'Failed to delete',
+          silentWhen,
+        }),
+      { wrapper: wrapper(makeClient()) },
+    )
+    return hook
+  }
+
+  it('toasts nothing for a rejection it names', async () => {
+    const hook = setup((err) => err instanceof Cancelled)
+    await act(async () => {
+      hook.current.mutate(undefined as unknown as never)
+    })
+    await waitFor(() => expect(hook.current.isError).toBe(true))
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('still toasts every rejection it does not name, and by default', async () => {
+    const hook = setup((err) => !(err instanceof Cancelled))
+    await act(async () => {
+      hook.current.mutate(undefined as unknown as never)
+    })
+    await waitFor(() => expect(hook.current.isError).toBe(true))
+    expect(toast.error).toHaveBeenCalledTimes(1)
+
+    vi.clearAllMocks()
+    const bare = setup()
+    await act(async () => {
+      bare.current.mutate(undefined as unknown as never)
+    })
+    await waitFor(() => expect(bare.current.isError).toBe(true))
+    expect(toast.error).toHaveBeenCalledTimes(1)
+  })
+})

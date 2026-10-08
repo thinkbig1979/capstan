@@ -227,6 +227,37 @@ describe('ContainersOverviewTab — ActionResult reasons reach the operator', ()
   })
 })
 
+// agent-os-qags.21. deleteContainer answers an ActionResult, so the toast level
+// follows its outcome: a 2xx `partial` must not announce a green "removed".
+describe('ContainersOverviewTab — delete container reads the outcome', () => {
+  async function removeContainer() {
+    renderTab()
+    fireEvent.click(screen.getByLabelText('Remove stack'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }))
+  }
+
+  it('a partial result warns with its reason and never toasts success', async () => {
+    resourcesMock.deleteContainer.mockResolvedValue({
+      outcome: 'partial',
+      reason: 'Container stopped but could not be removed',
+    })
+    await removeContainer()
+
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith('Container stopped but could not be removed'),
+    )
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('a success result still says "Container removed"', async () => {
+    resourcesMock.deleteContainer.mockResolvedValue({ outcome: 'success', reason: 'container deleted' })
+    await removeContainer()
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Container removed'))
+    expect(toast.warning).not.toHaveBeenCalled()
+  })
+})
+
 describe('ContainersOverviewTab — non-ActionResult errors keep the classifier sentence', () => {
   // The other side of the same instrument: an AppError body must NOT be read as
   // an ActionResult reason. agent-os-5g8a moved the branch into presentError,
