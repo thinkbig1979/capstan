@@ -272,7 +272,7 @@ cleanup:
 func (h *LogsHandler) buildLogsCmd(ctx context.Context, stack models.Stack) *exec.Cmd {
 	args := h.buildComposeArgs(stack, "logs", []string{"-f", "--tail=100", "--timestamps"})
 
-	//nolint:gosec // explicit argv, not a shell string — see README.md "Command execution and file access"
+	//nolint:gosec,forbidigo // gosec: explicit argv, not a shell string, see README.md "Command execution and file access". forbidigo: `docker compose logs -f` runs for the life of the websocket and is killed when its ctx ends, so a fixed deadline would cut a live stream. Move to the shared helper: agent-os-qags.29
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = stack.Directory
 	// Scrub Capstan's own secrets (JWT_SECRET, STORAGE_KEY, GIT_HTTPS_TOKEN)

@@ -82,6 +82,13 @@ linters:
       forbid:
         - pattern: 'sql\.ErrNoRows'
           msg: 'discriminate on errdefs.ErrNotFound; only internal/database may see sql.ErrNoRows (agent-os-ymyc)'
+        # agent-os-qags.1 (safe-defaults rule 1): a child process is built with
+        # commandWithDeadline, so a hung docker/git/compose cannot hold a stack
+        # lock until restart. execCommand and execCommandContext are the package
+        # vars over exec.Command/CommandContext in services/exec_env.go: a call
+        # through them skips the deadline exactly like a raw exec.Command does.
+        - pattern: '^(exec\.Command|exec\.CommandContext|execCommand|execCommandContext)$'
+          msg: 'build non-interactive child processes with commandWithDeadline (services/exec_env.go), safe-defaults rule 1 (agent-os-qags.1)'
       analyze-types: true
   enable:
     - errcheck
@@ -124,6 +131,31 @@ linters:
       # disabled in-file so a NEW site anywhere else still gates.
       - path: 'internal/database/'
         linters: [forbidigo]
+      # Exclusions for the child-process rule (agent-os-qags.1). `text` pins
+      # each one to that rule's message, so none of them blinds the
+      # sql.ErrNoRows rule in the same file. Sites that are allowed one raw
+      # call (terminal.go, truth, logs) are NOT listed here: each carries a
+      # per-site //nolint:forbidigo with its reason, so a second raw call in
+      # the same file still gates.
+      #
+      # exec_env.go defines the helper and the seam vars, so it names every
+      # forbidden identifier by construction.
+      - path: 'internal/services/exec_env\.go'
+        linters: [forbidigo]
+        text: 'commandWithDeadline'
+      # Tests substitute execCommand/execCommandContext to point a call site at
+      # a stand-in binary and spawn fixtures (git init, sleep) directly; none of
+      # that is a production child process, so it needs no deadline helper.
+      - path: '_test\.go'
+        linters: [forbidigo]
+        text: 'commandWithDeadline'
+      # Build-tagged (//go:build integration) test harness that shells out to
+      # docker. golangci does not compile it without build-tags (none are set),
+      # so this is inert today and records the decision for the day someone
+      # adds the tag.
+      - path: 'internal/integrationtest/'
+        linters: [forbidigo]
+        text: 'commandWithDeadline'
       # SA1019 (deprecated Docker SDK types) had a blanket per-file exclusion
       # here; agent-os-9zi migrated every site instead of excluding them, so
       # this rule is gone. Two things worth recording for whoever reads this
