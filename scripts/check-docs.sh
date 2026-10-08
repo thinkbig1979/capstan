@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -986,6 +986,38 @@ check_rclone_delete_argv() {
   return 1
 }
 
+# check_goroutine_sends delegates to scripts/check-goroutine-sends.sh: a channel
+# send inside a goroutine body is a select case or an allowlisted, reasoned
+# exception (agent-os-qags.18, safe-defaults rule 3; the class agent-os-z91e.1
+# fixed in logs.go). Self-test first, same reasoning as ws-registration.
+check_goroutine_sends() {
+  local script="$SCRIPT_DIR/check-goroutine-sends.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: goroutine-sends - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: goroutine-sends - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: goroutine-sends - ${self#goroutine-sends }; ${out#goroutine-sends: }"
+    return 0
+  fi
+  echo "FAIL: goroutine-sends - a goroutine sends on a channel with a bare statement (make it a select case beside ctx.Done(), or allowlist it with a reason):"
+  echo "$out"
+  return 1
+}
+
 # check_compose_parity delegates to scripts/check-compose-parity.sh: dev and
 # prod compose agree on init, the identical-path stacks mount and the env keys
 # (agent-os-qags.6, safe-defaults rule 17). Self-test first, same reasoning as
@@ -1189,6 +1221,7 @@ Valid check names:
   project-name-lookup no backend query filters on project_name outside GetStackByProjectName
   stack-write-callers no handler calls UpsertStack outside StacksHandler.Create or DeleteStack outside a scanner WithLock
   rclone-delete-argv no rclone delete-capable argv (sync, move, purge, ...) outside RcloneManager.Sync and RestoreRepo
+  goroutine-sends no bare channel send inside a goroutine body (a select case, or an allowlisted reason)
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -1217,6 +1250,7 @@ run_check() {
     project-name-lookup) check_project_name_lookup ;;
     stack-write-callers) check_stack_write_callers ;;
     rclone-delete-argv) check_rclone_delete_argv ;;
+    goroutine-sends) check_goroutine_sends ;;
     *) return 2 ;;
   esac
 }
