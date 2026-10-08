@@ -283,11 +283,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # The lint job's caches are per run (agent-os-p01q). On these self-hosted
+      # runners HOME persists between jobs, so the default GOCACHE and
+      # golangci-lint cache are runner-local state that every job on that runner
+      # shares, on top of the copy restored from the Actions cache. On 2026-10-02
+      # runner capstan-3 produced 6 false staticcheck SA5011 findings (job
+      # 110747541323, a real 10s analysis) and replayed them from cache on the
+      # next job (110747561972, "Ran golangci-lint in 571ms"), while capstan-2
+      # restored the same cache keys and passed. So setup-go does not restore
+      # its build cache here, the action skips its cache, and both caches live
+      # under RUNNER_TEMP, which GitHub documents as emptied at the start and end
+      # of every job (not tested here; the PR run shows the cold start). The module
+      # cache stays shared: it is content-addressed and checked against go.sum.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
+          cache: false
+
+      - name: Per-run Go and golangci-lint caches
+        run: |
+          echo "GOCACHE=$RUNNER_TEMP/go-build" >> "$GITHUB_ENV"
+          echo "GOLANGCI_LINT_CACHE=$RUNNER_TEMP/golangci-lint" >> "$GITHUB_ENV"
 
       # Pin the golangci-lint version so a new release can't turn `main` red
       # without a code change — the same reasoning as the pnpm 11.5.1 pin in
@@ -322,3 +339,4 @@ jobs:
         with:
           version: v2.14.0
           working-directory: backend
+          skip-cache: true

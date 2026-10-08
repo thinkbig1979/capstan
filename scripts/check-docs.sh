@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends pipefail-grep-q"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -1191,6 +1191,63 @@ check_close_reason() {
   return 0
 }
 
+# A pipe into `grep -q` in a script that sets pipefail. grep -q exits on its
+# first match; the writer still writing gets SIGPIPE, pipefail reports 141,
+# and a line that IS present reads as absent. OBSERVED (agent-os-ufof): on
+# the real ALLOWLISTs the pipe form falsely missed 3/4900 lookups in
+# check-goroutine-sends.sh and 4/5000 in check-path-containment.sh, the
+# here-string form 0, and that is what made check-docs.sh report 21/22 on a
+# first run and 22/22 on a rerun. agent-os-7dkt hit the same trap in
+# check-close-reason.sh. Use a here-string: command grep -q PAT <<<"$x".
+PIPE_GREP_Q='(^|[^|])\|[[:space:]]*(command[[:space:]]+)?grep[[:space:]]+([^|;&]*[[:space:]])?(-[A-Za-z]*q[A-Za-z]*|--quiet|--silent)([[:space:]]|$)'
+
+# pipefail_grep_q_sites FILE...: print file:line:text for every non-comment
+# pipe into grep -q in a FILE that sets pipefail.
+pipefail_grep_q_sites() {
+  local f
+  for f in "$@"; do
+    command grep -qE '^[^#]*set[[:space:]]+-[A-Za-z]*o[[:space:]]+pipefail' "$f" || continue
+    command grep -nHE "$PIPE_GREP_Q" "$f" | command grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
+  done
+}
+
+check_pipefail_grep_q() {
+  # Controls first, so a zero over scripts/ means the scanner can still see a
+  # site: a planted pipe must be found, a here-string and a pipefail-free file
+  # must not.
+  # The fixture text is assembled from $pf and $bar so this file's own source
+  # never holds the shape it scans for.
+  local tmp hits pf='pipe''fail' bar='|'
+  tmp=$(mktemp -d) || { echo "FAIL: pipefail-grep-q - could not create a temp directory"; return 1; }
+  printf '%s\n' "set -uo $pf" "if printf x $bar command grep -qF k; then :; fi" > "$tmp/planted.sh"
+  printf '%s\n' "set -uo $pf" 'if command grep -qF k <<<x; then :; fi' 'a || grep -q b c' > "$tmp/herestring.sh"
+  printf '%s\n' 'set -u' "echo x $bar grep -q y" > "$tmp/no-pipefail.sh"
+  hits=$(pipefail_grep_q_sites "$tmp/planted.sh" "$tmp/herestring.sh" "$tmp/no-pipefail.sh")
+  rm -rf "$tmp"
+  if [ "$(printf '%s' "$hits" | command grep -c .)" -ne 1 ] || [[ "$hits" != *planted.sh:2:* ]]; then
+    echo "FAIL: pipefail-grep-q - controls: want exactly the planted pipe (planted.sh:2), got:"
+    echo "${hits:-<nothing>}"
+    return 1
+  fi
+
+  local files=("$SCRIPT_DIR"/*.sh) n=0 f
+  for f in "${files[@]}"; do
+    command grep -qE '^[^#]*set[[:space:]]+-[A-Za-z]*o[[:space:]]+pipefail' "$f" && n=$((n + 1))
+  done
+  if [ "$n" -eq 0 ]; then
+    echo "FAIL: pipefail-grep-q - no script under scripts/ sets pipefail; the scan reached nothing"
+    return 1
+  fi
+  hits=$(pipefail_grep_q_sites "${files[@]}")
+  if [ -n "$hits" ]; then
+    echo "FAIL: pipefail-grep-q - a pipe into grep -q under pipefail reads a present line as absent when the writer gets SIGPIPE. Use a here-string (command grep -q PAT <<<\"\$x\"):"
+    echo "${hits//$REPO_ROOT\//}"
+    return 1
+  fi
+  echo "PASS: pipefail-grep-q - controls passed (1 planted pipe found, 0 false hits); $n pipefail script(s) scanned, 0 pipes into grep -q"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # dispatch
 # ---------------------------------------------------------------------------
@@ -1222,6 +1279,7 @@ Valid check names:
   stack-write-callers no handler calls UpsertStack outside StacksHandler.Create or DeleteStack outside a scanner WithLock
   rclone-delete-argv no rclone delete-capable argv (sync, move, purge, ...) outside RcloneManager.Sync and RestoreRepo
   goroutine-sends no bare channel send inside a goroutine body (a select case, or an allowlisted reason)
+  pipefail-grep-q no pipe into grep -q in a script that sets pipefail (a here-string instead)
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -1251,6 +1309,7 @@ run_check() {
     stack-write-callers) check_stack_write_callers ;;
     rclone-delete-argv) check_rclone_delete_argv ;;
     goroutine-sends) check_goroutine_sends ;;
+    pipefail-grep-q) check_pipefail_grep_q ;;
     *) return 2 ;;
   esac
 }

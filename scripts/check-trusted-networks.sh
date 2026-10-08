@@ -106,7 +106,7 @@ selftest_case() {
   ST_RUN=$((ST_RUN + 1))
   out=$(check_dir "$dir" 2>&1)
   status=$?
-  if [ "$status" -ne "$want" ] || ! echo "$out" | command grep -qE -- "$pat"; then
+  if [ "$status" -ne "$want" ] || ! command grep -qE -- "$pat" <<<"$out"; then
     ST_FAILS=$((ST_FAILS + 1))
     echo "FAIL: trusted-networks self-test case \"$name\": want exit $want matching /$pat/, got exit $status:"
     echo "$out"

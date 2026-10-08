@@ -189,7 +189,7 @@ check_dir() {
   while IFS='|' read -r file fn ln ch text; do
     [ -z "$file" ] && continue
     key="$file|$fn|$ch|"
-    if printf '%s\n' "$ALLOWLIST" | command grep -qF "$key"; then
+    if command grep -qF "$key" <<<"$ALLOWLIST"; then
       used+="$key"$'\n'
     else
       bad+="  $file:$ln ($fn, chan $ch): $(echo "$text" | sed 's/^[ \t]*//')"$'\n'
@@ -200,7 +200,7 @@ check_dir() {
   while IFS= read -r entry; do
     [ -z "$entry" ] && continue
     key="$(echo "$entry" | cut -d'|' -f1-3)|"
-    if ! printf '%s' "$used" | command grep -qF "$key"; then
+    if ! command grep -qF "$key" <<<"$used"; then
       stale+="  stale allowlist entry: $(echo "$entry" | cut -d'|' -f1) ($(echo "$entry" | cut -d'|' -f2), chan $(echo "$entry" | cut -d'|' -f3))"$'\n'
     fi
   done <<< "$ALLOWLIST"
@@ -235,7 +235,7 @@ selftest_case() {
   ST_RUN=$((ST_RUN + 1))
   out=$(check_dir "$dir" 2>&1)
   rc=$?
-  if [ "$rc" -ne "$want" ] || ! echo "$out" | command grep -qE -- "$pat"; then
+  if [ "$rc" -ne "$want" ] || ! command grep -qE -- "$pat" <<<"$out"; then
     ST_FAILS=$((ST_FAILS + 1))
     echo "FAIL: goroutine-sends self-test case \"$name\": want exit $want matching /$pat/, got exit $rc:"
     echo "$out"

@@ -165,7 +165,7 @@ check_one() {
   [ "$host_env" = "$expected" ] ||
     violation "$file" "env HOST_STACKS_DIR resolves to '${host_env:-unset}', want '$expected' (it must default to STACKS_DIR) ($label)"
 
-  if ! printf '%s\n' "$facts_out" | command grep -qxF "mount=$expected|$expected"; then
+  if ! command grep -qxF "mount=$expected|$expected" <<<"$facts_out"; then
     violation "$file" "no stacks mount with source == target == STACKS_DIR '$expected' ($label); mounts: $(printf '%s\n' "$facts_out" | sed -n 's/^mount=//p' | tr '\n' ' ')"
   fi
 
@@ -262,7 +262,7 @@ selftest_case() {
     out=$(check_dir "$dir" 2>&1)
   fi
   status=$?
-  if [ "$status" -ne "$want" ] || ! echo "$out" | command grep -qE -- "$pat"; then
+  if [ "$status" -ne "$want" ] || ! command grep -qE -- "$pat" <<<"$out"; then
     ST_FAILS=$((ST_FAILS + 1))
     echo "FAIL: compose-parity self-test case \"$name\": want exit $want matching /$pat/, got exit $status:"
     echo "$out"
