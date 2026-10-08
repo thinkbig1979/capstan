@@ -47,7 +47,7 @@ type JobStreamFrame = SnapshotFrame | LineFrame | StatusFrame | DoneFrame | Erro
 // requiring it rejects no frame the server sends (agent-os-onmw).
 
 export const JOB_STATUSES = ['queued', 'pulling', 'recreating', 'success', 'error'] as const satisfies readonly UpdateJobStatus[]
-export const JOB_OUTCOMES = ['success', 'no_change', 'failed'] as const satisfies readonly UpdateJobOutcome[]
+export const JOB_OUTCOMES = ['success', 'no_change', 'partial', 'failed'] as const satisfies readonly UpdateJobOutcome[]
 export const JOB_TARGET_TYPES = ['container', 'stack'] as const
 const LINE_STREAMS = ['stdout', 'stderr', 'status'] as const satisfies readonly JobLine['stream'][]
 

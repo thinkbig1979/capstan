@@ -4,6 +4,7 @@
  * Key contract:
  *  - outcome='success'   → green "Updated"
  *  - outcome='no_change' → blue "Already up to date" (NOT "Updated")
+ *  - outcome='partial'   → amber "Partly updated" (NOT "Updated")
  *  - outcome='failed'    → red "Failed" + retry button
  *  - non-terminal status → progress label (Queued/Pulling/Recreating)
  *  - no job             → Update/Update & Restart button
@@ -121,6 +122,47 @@ describe('UpdateJobStatusCell — outcome=no_change', () => {
     const job = makeJob({ status: 'success', outcome: 'no_change' })
     renderWithProviders(<UpdateJobStatusCell {...defaultProps} job={job} />)
     expect(screen.queryByRole('button', { name: /Retry/i })).not.toBeInTheDocument()
+  })
+})
+
+// ─── Terminal: outcome=partial ────────────────────────────────────────────────
+
+describe('UpdateJobStatusCell — outcome=partial (agent-os-qags.31)', () => {
+  // A partial update advanced some targets and failed others. The job's coarse
+  // status is 'success', so without an explicit arm the cell fell through to
+  // status and read as a plain "Updated".
+  it.each([
+    ['collapsed', false],
+    ['expanded', true],
+  ])('renders a warning, not "Updated", for a partial outcome (%s)', (_label, expanded) => {
+    const job = makeJob({ status: 'success', outcome: 'partial', reason: '1 of 2 services updated' })
+    renderWithProviders(<UpdateJobStatusCell {...defaultProps} expanded={expanded} job={job} />)
+    const label = screen.getByText('Partly updated')
+    expect(label).toHaveClass('text-warning')
+    expect(screen.queryByText('Updated')).not.toBeInTheDocument()
+    expect(screen.queryByText('Already up to date')).not.toBeInTheDocument()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
+  })
+
+  it('does not offer a retry button for partial (the failed arm owns Retry)', () => {
+    const job = makeJob({ status: 'success', outcome: 'partial' })
+    renderWithProviders(<UpdateJobStatusCell {...defaultProps} job={job} />)
+    expect(screen.queryByRole('button', { name: /Retry/i })).not.toBeInTheDocument()
+  })
+
+  // Two-sided control on the same instrument: the neighbours still read as before.
+  it('still renders success as "Updated" and no_change as "Already up to date"', () => {
+    const { unmount } = renderWithProviders(
+      <UpdateJobStatusCell {...defaultProps} job={makeJob({ status: 'success', outcome: 'success' })} />,
+    )
+    expect(screen.getByText('Updated')).toBeInTheDocument()
+    expect(screen.queryByText('Partly updated')).not.toBeInTheDocument()
+    unmount()
+    renderWithProviders(
+      <UpdateJobStatusCell {...defaultProps} job={makeJob({ status: 'success', outcome: 'no_change' })} />,
+    )
+    expect(screen.getByText('Already up to date')).toBeInTheDocument()
+    expect(screen.queryByText('Partly updated')).not.toBeInTheDocument()
   })
 })
 

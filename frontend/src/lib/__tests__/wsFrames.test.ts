@@ -118,6 +118,14 @@ describe('parseStackEvent (models.StackEvent)', () => {
     expect(parseStackEvent(base)).toMatchObject({ status: 'success', outcome: undefined })
   })
 
+  it("keeps a 'partial' update_job_complete outcome (agent-os-qags.31)", () => {
+    // truth.Outcome has four members; the job's outcome is forwarded from an
+    // ActionResult unfiltered (handlers/updates.go), so partial must not be dropped.
+    const base = { type: 'update_job_complete', jobId: 'j1', targetType: 'stack', targetId: 's1', stackId: 's1', name: 'app', status: 'success', timestamp: ts }
+    expect(parseStackEvent({ ...base, outcome: 'partial', reason: '1 of 2 updated' }))
+      .toMatchObject({ outcome: 'partial', reason: '1 of 2 updated' })
+  })
+
   // agent-os-9kp2: models.StackEvent no longer tags status/targetType
   // omitempty, so every frame type carries them, as "" where unused. The frame
   // types that do not read them must still be accepted.

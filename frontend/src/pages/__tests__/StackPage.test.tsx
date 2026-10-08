@@ -469,6 +469,42 @@ describe('StackPage', () => {
       expect(getStack).not.toHaveBeenCalled()
     })
   })
+  describe('stack update job toast reads the outcome (agent-os-qags.31)', () => {
+    // The page treats a job that is already terminal on arrival as reported, so
+    // the job lands after the first render, as it does when a stream finishes it.
+    async function finishJob(outcome: string | undefined, extra: Record<string, unknown> = {}) {
+      renderPage()
+      await screen.findByTestId('stack-detail')
+      act(() => {
+        useUpdateJobStore.setState({
+          jobs: {
+            'job-1': {
+              id: 'job-1', targetType: 'stack', targetId: 's1', name: 'my-stack', stackId: 's1',
+              status: 'success', lines: [], createdAt: '2024-01-01T00:00:00Z',
+              outcome, reason: '1 of 2 services updated', ...extra,
+            } as never,
+          },
+        })
+      })
+    }
+
+    it('a partial outcome warns with the reason and is neither a success nor an error', async () => {
+      await finishJob('partial')
+      const { toast } = await import('sonner')
+      await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('1 of 2 services updated'))
+      expect(toast.success).not.toHaveBeenCalled()
+      expect(toast.error).not.toHaveBeenCalled()
+    })
+
+    // Control on the same instrument: the success arm still toasts success.
+    it('a success outcome still toasts success and does not warn', async () => {
+      await finishJob('success', { reason: 'Stack updated and restarted' })
+      const { toast } = await import('sonner')
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Stack updated and restarted'))
+      expect(toast.warning).not.toHaveBeenCalled()
+    })
+  })
+
   describe('delete reads the outcome (agent-os-qags.21)', () => {
     async function requestDelete(user: ReturnType<typeof userEvent.setup>) {
       await user.click(await screen.findByRole('button', { name: 'More stack actions' }))

@@ -186,6 +186,21 @@ describe('useUpdateJobStream — frames', () => {
     expect(stored.outcome).toBe('no_change')
   })
 
+  it("keeps a 'partial' outcome on a done frame and on a snapshot (agent-os-qags.31)", async () => {
+    // truth.Outcome has four members; handlers/updates.go forwards any
+    // ActionResult outcome to SetOutcome, so partial must survive the parser.
+    renderStream('job-1')
+    await openSocket()
+
+    frame({ type: 'snapshot', job: { ...job, status: 'success', outcome: 'partial', reason: '1 of 2 updated' } })
+    expect(useUpdateJobStore.getState().jobs['job-1'].outcome).toBe('partial')
+
+    frame({ type: 'done', status: 'success', outcome: 'partial', reason: '1 of 2 updated' })
+    const stored = useUpdateJobStore.getState().jobs['job-1']
+    expect(stored.outcome).toBe('partial')
+    expect(stored.reason).toBe('1 of 2 updated')
+  })
+
   it('leaves the outcome alone when a done frame carries none', async () => {
     renderStream('job-1')
     await openSocket()

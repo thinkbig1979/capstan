@@ -1,4 +1,4 @@
-import { RefreshCw, CheckCircle, AlertCircle, Info, ChevronDown, ChevronRight } from 'lucide-react'
+import { RefreshCw, CheckCircle, AlertCircle, AlertTriangle, Info, ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 import type { UpdateJob } from '@/stores/updateJobStore'
@@ -30,14 +30,16 @@ const TERMINAL_STATUSES = new Set(['success', 'error'])
  * Important distinction:
  *   outcome='success'   → image digest genuinely advanced  → show green "Updated"
  *   outcome='no_change' → image already up to date, no-op  → show blue "Already up to date"
+ *   outcome='partial'   → some targets advanced, some not  → show amber "Partly updated"
  *   outcome='failed'    → update failed                    → show red "Failed"
  *   outcome=undefined   → backend not yet migrated; fall back to status
  */
-function resolveDisplayOutcome(job: UpdateJob): 'success' | 'no_change' | 'failed' | null {
+function resolveDisplayOutcome(job: UpdateJob): 'success' | 'no_change' | 'partial' | 'failed' | null {
   if (!TERMINAL_STATUSES.has(job.status)) return null
   // Prefer the explicit outcome when it has arrived.
   if (job.outcome === 'success') return 'success'
   if (job.outcome === 'no_change') return 'no_change'
+  if (job.outcome === 'partial') return 'partial'
   if (job.outcome === 'failed') return 'failed'
   // Fallback for backends that have not yet shipped the outcome field.
   if (job.status === 'success') return 'success'
@@ -94,6 +96,26 @@ export function UpdateJobStatusCell({
               {job?.reason && (
                 <TooltipContent>
                   <p className="max-w-xs">{job.reason}</p>
+                </TooltipContent>
+              )}
+            </Tooltip>
+          </TooltipProvider>
+        )
+      }
+
+      if (displayOutcome === 'partial') {
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-1">
+                  <AlertTriangle className="h-3.5 w-3.5 text-warning" />
+                  <span className="text-xs text-warning">Partly updated</span>
+                </div>
+              </TooltipTrigger>
+              {job?.reason && (
+                <TooltipContent>
+                  <p className="max-w-xs">{job?.reason}</p>
                 </TooltipContent>
               )}
             </Tooltip>
@@ -194,6 +216,26 @@ export function UpdateJobStatusCell({
               <div className="flex items-center gap-1">
                 <Info className="h-3.5 w-3.5 text-info" />
                 <span className="text-xs text-info">Already up to date</span>
+              </div>
+            </TooltipTrigger>
+            {job.reason && (
+              <TooltipContent>
+                <p className="max-w-xs">{job.reason}</p>
+              </TooltipContent>
+            )}
+          </Tooltip>
+        </TooltipProvider>
+      )
+    }
+
+    if (displayOutcome === 'partial') {
+      return (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-1">
+                <AlertTriangle className="h-3.5 w-3.5 text-warning" />
+                <span className="text-xs text-warning">Partly updated</span>
               </div>
             </TooltipTrigger>
             {job.reason && (

@@ -60,7 +60,7 @@ type Job struct {
 	Lines      []LogLine `json:"lines"`
 	Error      string    `json:"error,omitempty"`
 	// Outcome and Reason are set when the job reaches a terminal state.
-	// outcome ∈ {"success","no_change","failed"} — matches truth.Outcome.
+	// outcome ∈ {"success","no_change","partial","failed"} — matches truth.Outcome.
 	// omitempty so they are absent from JSON until the job is terminal.
 	Outcome    string    `json:"outcome,omitempty"`
 	Reason     string    `json:"reason,omitempty"`
