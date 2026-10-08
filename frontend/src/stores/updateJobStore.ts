@@ -3,7 +3,7 @@ import { create } from 'zustand'
 export type UpdateJobStatus = 'queued' | 'pulling' | 'recreating' | 'success' | 'error'
 
 /** Typed outcome from the backend job — present once the job reaches a terminal state. */
-export type UpdateJobOutcome = 'success' | 'no_change' | 'failed'
+export type UpdateJobOutcome = 'success' | 'no_change' | 'partial' | 'failed'
 
 export interface JobLine {
   ts: string
@@ -20,7 +20,7 @@ export interface UpdateJob {
   status: UpdateJobStatus
   lines: JobLine[]
   error?: string
-  /** Typed outcome: 'success' (image advanced), 'no_change' (already up to date), 'failed'. Present only when terminal. */
+  /** Typed outcome: 'success' (image advanced), 'no_change' (already up to date), 'partial' (some targets advanced, others did not), 'failed'. Present only when terminal. */
   outcome?: UpdateJobOutcome
   /** Human-readable reason accompanying the outcome. */
   reason?: string
