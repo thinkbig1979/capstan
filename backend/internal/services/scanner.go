@@ -1682,9 +1682,11 @@ func (s *ScannerService) scanDirectoryWithRoot(path string, rootDir string) erro
 				ComposeFile: filename,
 				EnvFile:     envFile,
 				ProjectName: projectName,
-				Status:      "unknown",
-				IsGitRepo:   isGitRepo,
-				GitBranch:   gitBranch,
+				// Only a NEW row takes this: UpsertStack keeps the stored
+				// status of an existing one (agent-os-qags.23).
+				Status:    "unknown",
+				IsGitRepo: isGitRepo,
+				GitBranch: gitBranch,
 			}
 
 			if scanBeforeUpsertStackHook != nil {

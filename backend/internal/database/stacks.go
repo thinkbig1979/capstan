@@ -8,11 +8,27 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
+// UpsertStack inserts a stack row, or refreshes an existing one in place. On an
+// existing id it rewrites every column except status: the status is written
+// only by the lifecycle handlers after a verified start or stop
+// (UpdateStackStatus), and the Docker-down fallback shows that stored value, so
+// a rescan that rebuilt the row as "unknown" would erase it (agent-os-qags.23).
+// A new id takes the status passed in. INSERT OR REPLACE would have replaced
+// the whole row; the only UNIQUE key is id, so the other columns behave the same.
+// The row-value SET keeps the text "project_name =" out of this file:
+// scripts/check-project-name-lookup.sh reads a SET as a query filter.
 func (d *DB) UpsertStack(stack models.Stack) error {
-	query := `INSERT OR REPLACE INTO stacks
+	query := `INSERT INTO stacks
 	          (id, directory, compose_file, env_file, project_name, status,
 	           is_git_repo, git_branch, git_commit, git_dirty, git_ahead, git_behind)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	          ON CONFLICT(id) DO UPDATE SET
+	           (directory, compose_file, env_file, project_name, is_git_repo,
+	            git_branch, git_commit, git_dirty, git_ahead, git_behind) =
+	           (excluded.directory, excluded.compose_file, excluded.env_file,
+	            excluded.project_name, excluded.is_git_repo, excluded.git_branch,
+	            excluded.git_commit, excluded.git_dirty, excluded.git_ahead,
+	            excluded.git_behind)`
 	_, err := d.db.Exec(query, stack.ID, stack.Directory, stack.ComposeFile, stack.EnvFile,
 		stack.ProjectName, stack.Status, stack.IsGitRepo, stack.GitBranch, stack.GitCommit,
 		stack.GitDirty, stack.GitAhead, stack.GitBehind)

@@ -956,7 +956,7 @@ func TestComposeProjectName_MatchesComposeNormalisation(t *testing.T) {
 }
 
 // TestScannerService_ScanAll_RewritesALegacyProjectName pins the migration
-// story: UpsertStack is INSERT OR REPLACE keyed on the stack ID, and the ID
+// story: UpsertStack is an upsert keyed on the stack ID, and the ID
 // carries no project_name, so the first scan after the fix rewrites an
 // existing "MyStack" row in place. No migration, no new row.
 func TestScannerService_ScanAll_RewritesALegacyProjectName(t *testing.T) {

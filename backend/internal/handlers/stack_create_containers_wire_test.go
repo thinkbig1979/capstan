@@ -24,7 +24,9 @@ import (
 //
 // GetStack is made to fail with a trigger rather than a fake: the handler
 // holds a concrete *database.DB. The trigger fires only on the scanner's
-// upsert (status "unknown"; the Create literal writes "stopped") and stores
+// upsert, which since agent-os-qags.23 is an UPDATE of the row Create just
+// inserted (it was an INSERT OR REPLACE, so the trigger sat on INSERT and keyed
+// on status "unknown"; that no longer fires and the test passed vacuously), and stores
 // text in the INTEGER git_ahead column, so the handler's own insert and the
 // scan both succeed and only the re-read's Scan fails.
 func TestStacksHandler_Create_RereadFailureSendsEmptyContainers(t *testing.T) {
@@ -39,8 +41,7 @@ func TestStacksHandler_Create_RereadFailureSendsEmptyContainers(t *testing.T) {
 	raw, err := sql.Open("sqlite", filepath.Join(dataDir, "capstan.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = raw.Close() })
-	_, err = raw.Exec(`CREATE TRIGGER e5pr_poison_reread AFTER INSERT ON stacks
-		WHEN NEW.status = 'unknown'
+	_, err = raw.Exec(`CREATE TRIGGER e5pr_poison_reread AFTER UPDATE ON stacks
 		BEGIN UPDATE stacks SET git_ahead = 'not-an-int' WHERE id = NEW.id; END`)
 	require.NoError(t, err)
 
@@ -65,9 +66,12 @@ func TestStacksHandler_Create_RereadFailureSendsEmptyContainers(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 
 	// Premise: the re-read really failed, so the response is the literal. The
-	// literal says "stopped"; a successful re-read would say "unknown".
-	require.JSONEq(t, `"stopped"`, string(resp.Details.Stack["status"]),
-		"re-read did not fail, so this test is not on the fallback branch: %s", w.Body.String())
+	// literal and the stored row agree on status now (agent-os-qags.23), so the
+	// proof is the read itself: the poisoned row must not scan.
+	var stored string
+	require.NoError(t, raw.QueryRow(`SELECT id FROM stacks`).Scan(&stored))
+	_, getErr := db.GetStack(stored)
+	require.Error(t, getErr, "re-read did not fail, so this test is not on the fallback branch: %s", w.Body.String())
 
 	require.JSONEq(t, `[]`, string(resp.Details.Stack["containers"]),
 		"Create's fallback literal sent containers as %s", resp.Details.Stack["containers"])
