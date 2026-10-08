@@ -47,14 +47,16 @@ const FIELDS: { key: FieldKey; label: string; id: string; hint: string }[] = [
  *  Before this existed the retention endpoint had no caller in the UI at all,
  *  so the only way to change it was to edit the settings row by hand. */
 export function HistoryRetentionSection() {
-  const { data, isLoading, isError, refetch } = useRetentionSettings()
+  const { data, isPending, isError, refetch } = useRetentionSettings()
   const updateRetention = useUpdateRetentionSettings()
   // A key is absent while untouched (the saved value shows) and null once the
   // operator has emptied the box (agent-os-qags.4): empty is not a number, so
   // Save stays off instead of the box turning into a 0 they never typed.
   const [draft, setDraft] = useState<Partial<Record<FieldKey, number | null>>>({})
 
-  if (isLoading) {
+  // isPending, not isLoading: offline the first fetch is paused, isLoading is false
+  // with no data yet, and the branch below would fire (agent-os-cg26).
+  if (isPending) {
     return <div className="py-4"><LoadingSpinner /></div>
   }
 

@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { BackupsTab } from '../BackupsTab'
+import { expectSpansItsHeader } from '@/test/tableSpan'
 
 /**
  * The snapshot PREVIEW half of agent-os-nhiv. Kept in its own file rather than
@@ -150,6 +151,16 @@ beforeEach(() => {
 })
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
+
+describe('BackupsTab — the preview row spans the snapshot table (agent-os-o9fx)', () => {
+  it('spans the preview row across every column of the snapshot table, and not the runs table', async () => {
+    mockPreviewSnapshot.mockResolvedValue({ entries: ['/etc/app.conf'] })
+
+    await openPreview()
+
+    expectSpansItsHeader(await screen.findByRole('button', { name: 'Close preview' }))
+  })
+})
 
 describe('BackupsTab — preview panel names the repository fault', () => {
   it('names an unreachable repository instead of "Failed to load preview."', async () => {

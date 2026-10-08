@@ -27,13 +27,13 @@ const DIR_SEARCH_FIELDS = [
 ]
 
 export function DirectoriesSettingsContent() {
-  const { data: config, isLoading, isError: configError, refetch: refetchConfig } = useQuery({
+  const { data: config, isPending, isError: configError, refetch: refetchConfig } = useQuery({
     queryKey: queryKeys.config(),
     queryFn: () => settingsApi.getConfig(),
   })
   const {
     data: scanDepthData,
-    isLoading: isLoadingDepth,
+    isPending: isPendingDepth,
     isError: depthError,
     refetch: refetchDepth,
   } = useQuery({
@@ -44,7 +44,7 @@ export function DirectoriesSettingsContent() {
   // is the saved choice; `active` is what the running server still uses.
   const {
     data: dirSettings,
-    isLoading: isLoadingDirSettings,
+    isPending: isPendingDirSettings,
     isError: dirSettingsError,
     refetch: refetchDirSettings,
   } = useQuery({
@@ -82,7 +82,9 @@ export function DirectoriesSettingsContent() {
   const allDirs = useMemo(() => config?.stacksDirectories ?? [], [config])
   const { query, setQuery, filtered: filteredDirs } = useTextFilter(allDirs, DIR_SEARCH_FIELDS)
 
-  if (isLoading || isLoadingDepth || isLoadingDirSettings) {
+  // isPending, not isLoading: offline the first fetch is paused, isLoading is false
+  // with no data yet, and the branch below would fire (agent-os-cg26).
+  if (isPending || isPendingDepth || isPendingDirSettings) {
     return <div className="py-4"><LoadingSpinner /></div>
   }
 

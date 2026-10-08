@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { backupApi } from '@/lib/api'
 import { queryKeys } from '@/lib/query-keys'
@@ -37,7 +37,27 @@ const RUN_SEARCH_FIELDS = [
   (r: BackupRun) => r.startedAt,
 ]
 
-const COLUMN_COUNT = 8
+/** The single source of truth for this table's width: the header cells and the
+ * spanning rows' colSpan both derive from it, so adding a column cannot leave a
+ * spanning row under-spanning the body (agent-os-o9fx). It used to be a bare
+ * COLUMN_COUNT = 8 that nothing tied to the headers. */
+const RUN_TABLE_COLUMNS: readonly { id: string; header: ReactNode; className?: string }[] = [
+  { id: 'expand', header: <span className="sr-only">Expand</span>, className: 'w-[40px]' },
+  { id: 'started', header: 'Started', className: 'w-[120px]' },
+  { id: 'kind', header: 'Kind' },
+  { id: 'trigger', header: 'Trigger' },
+  { id: 'status', header: 'Status' },
+  { id: 'stacks', header: 'Stacks' },
+  {
+    id: 'new-data',
+    header: (
+      <span title="New data written to the repository. restic deduplicates, so an unchanged backup adds little or nothing.">
+        New data
+      </span>
+    ),
+  },
+  { id: 'duration', header: 'Duration', className: 'w-[80px]' },
+]
 
 /**
  * BackupRun carries no duration field, only the two timestamps, so the column
@@ -287,7 +307,7 @@ function RunRow({ run }: { run: BackupRun }) {
       </TableRow>
       {expanded && (
         <TableRow>
-          <TableCell colSpan={COLUMN_COUNT} className="bg-muted/30 p-0">
+          <TableCell colSpan={RUN_TABLE_COLUMNS.length} className="bg-muted/30 p-0">
             <RunDetail run={run} />
           </TableCell>
         </TableRow>
@@ -479,18 +499,9 @@ export function BackupHistoryTab() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[40px]"><span className="sr-only">Expand</span></TableHead>
-              <TableHead className="w-[120px]">Started</TableHead>
-              <TableHead>Kind</TableHead>
-              <TableHead>Trigger</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Stacks</TableHead>
-              <TableHead>
-                <span title="New data written to the repository. restic deduplicates, so an unchanged backup adds little or nothing.">
-                  New data
-                </span>
-              </TableHead>
-              <TableHead className="w-[80px]">Duration</TableHead>
+              {RUN_TABLE_COLUMNS.map((column) => (
+                <TableHead key={column.id} className={column.className}>{column.header}</TableHead>
+              ))}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -499,7 +510,7 @@ export function BackupHistoryTab() {
             ))}
             {query && filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={COLUMN_COUNT} className="py-8 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={RUN_TABLE_COLUMNS.length} className="py-8 text-center text-sm text-muted-foreground">
                   No runs match &quot;{query}&quot;.
                 </TableCell>
               </TableRow>

@@ -6,6 +6,7 @@ import type { ReactNode } from 'react'
 import { BrowserRouter } from 'react-router'
 import { UpdateLogTab } from '../UpdateLogTab'
 import type { UpdateHistoryEntry } from '@/types'
+import { expectSpansItsHeader } from '@/test/tableSpan'
 
 /**
  * UpdatesTab.test.tsx:67 replaces this tab with an empty div (0/60 statements,
@@ -236,6 +237,16 @@ describe('UpdateLogTab — filters', () => {
     })
 
     expect(screen.getByText('No events match "zzz".')).toBeInTheDocument()
+  })
+
+  it('spans the no-match row across every column (agent-os-o9fx)', async () => {
+    renderTab()
+
+    fireEvent.change(await screen.findByPlaceholderText('Filter events…'), {
+      target: { value: 'zzz' },
+    })
+
+    expectSpansItsHeader(screen.getByText('No events match "zzz".'))
   })
 
   it('sends the status filter to the server', async () => {

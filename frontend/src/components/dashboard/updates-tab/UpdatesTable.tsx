@@ -22,6 +22,18 @@ import type { UpdateJob } from '@/stores/updateJobStore'
 import { formatRelativeTime } from '@/lib/format'
 import { isCachedUpdate, type SortKey, type UpdateItem } from './types'
 
+/** The single source of truth for this table's width: the header cells and the
+ * spanning row's colSpan both derive from it, so adding a column cannot leave
+ * the spanning row under-spanning the body (agent-os-o9fx). */
+const UPDATES_TABLE_COLUMNS: readonly { label: string; className?: string }[] = [
+  { label: 'Container' },
+  { label: 'Image' },
+  { label: 'Stack' },
+  { label: 'State' },
+  { label: 'Auto-Update' },
+  { label: 'Actions' },
+]
+
 interface UpdatesTableProps {
   sortedUpdates: UpdateItem[]
   totalCount: number
@@ -120,12 +132,9 @@ export function UpdatesTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Container</TableHead>
-              <TableHead>Image</TableHead>
-              <TableHead>Stack</TableHead>
-              <TableHead>State</TableHead>
-              <TableHead>Auto-Update</TableHead>
-              <TableHead>Actions</TableHead>
+              {UPDATES_TABLE_COLUMNS.map((column) => (
+                <TableHead key={column.label} className={column.className}>{column.label}</TableHead>
+              ))}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -217,7 +226,7 @@ export function UpdatesTable({
                 </TableRow>
                 {expanded && job && (
                   <TableRow>
-                    <TableCell colSpan={6} className="bg-muted/30 p-3">
+                    <TableCell colSpan={UPDATES_TABLE_COLUMNS.length} className="bg-muted/30 p-3">
                       <UpdateJobLog job={job} enabled={expanded} />
                     </TableCell>
                   </TableRow>

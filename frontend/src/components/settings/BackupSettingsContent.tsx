@@ -19,7 +19,7 @@ import { useBackupForm } from './backup-settings/useBackupForm'
 import { usePasswordReveal } from './backup-settings/usePasswordReveal'
 
 export function BackupSettingsContent() {
-  const { data: settings, isLoading, isError, error, refetch } = useBackupSettings()
+  const { data: settings, isPending, isError, error, refetch } = useBackupSettings()
   const { authDisabled } = useAuth()
   const isUnlocked = useEnvUnlockStore((s) => s.isUnlocked)
   const unlockedUntil = useEnvUnlockStore((s) => s.unlockedUntil)
@@ -57,7 +57,9 @@ export function BackupSettingsContent() {
     handleLargeDeleteOpenChange,
   } = useBackupActions()
 
-  if (isLoading) {
+  // isPending, not isLoading: offline the first fetch is paused, isLoading is false
+  // with no data yet, and the branch below would fire (agent-os-cg26).
+  if (isPending) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
         <LoadingSpinner size="small" />

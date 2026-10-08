@@ -5,6 +5,15 @@ import { Eye, EyeOff, Trash2 } from 'lucide-react'
 import { isSensitiveKey } from './sensitiveKey'
 import type { EnvVar, IndexedEnvVar } from './types'
 
+/** The single source of truth for this table's width: the header cells and the
+ * spanning row's colSpan both derive from it, so adding a column cannot leave
+ * the spanning row under-spanning the body (agent-os-o9fx). */
+const GLOBAL_ENV_COLUMNS: readonly { label: string; className?: string }[] = [
+  { label: 'Key', className: 'w-[260px]' },
+  { label: 'Value' },
+  { label: 'Actions', className: 'w-[80px] text-right' },
+]
+
 interface GlobalEnvTableProps {
   hasVars: boolean
   filtered: IndexedEnvVar[]
@@ -29,21 +38,21 @@ export function GlobalEnvTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[260px]">Key</TableHead>
-            <TableHead>Value</TableHead>
-            <TableHead className="w-[80px] text-right">Actions</TableHead>
+            {GLOBAL_ENV_COLUMNS.map((column) => (
+              <TableHead key={column.label} className={column.className}>{column.label}</TableHead>
+            ))}
           </TableRow>
         </TableHeader>
         <TableBody>
           {!hasVars ? (
             <TableRow>
-              <TableCell colSpan={3} className="text-center text-sm text-muted-foreground py-6">
+              <TableCell colSpan={GLOBAL_ENV_COLUMNS.length} className="text-center text-sm text-muted-foreground py-6">
                 No global variables yet. Add one to get started.
               </TableCell>
             </TableRow>
           ) : filtered.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={3} className="text-center text-sm text-muted-foreground py-6">
+              <TableCell colSpan={GLOBAL_ENV_COLUMNS.length} className="text-center text-sm text-muted-foreground py-6">
                 No variables match &quot;{query}&quot;.
               </TableCell>
             </TableRow>

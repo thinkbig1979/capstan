@@ -12,7 +12,7 @@ import { settingsSaveFault } from '@/lib/settings-save-fault'
 import { presentFault } from '@/lib/error-handler'
 
 export function GitSettingsContent() {
-  const { data: gitSettings, isLoading, isError, refetch } = useGitSettings()
+  const { data: gitSettings, isPending, isError, refetch } = useGitSettings()
   const updateGitSettings = useUpdateGitSettings()
 
   const [sshKey, setSshKey] = useState<string | undefined>(undefined)
@@ -28,7 +28,9 @@ export function GitSettingsContent() {
   const tokenUnreadable = gitSettings?.httpsTokenUnreadable === true
   const tokenReadable = Boolean(gitSettings?.hasHttpsToken) && !tokenUnreadable
 
-  if (isLoading) {
+  // isPending, not isLoading: offline the first fetch is paused, isLoading is false
+  // with no data yet, and the branch below would fire (agent-os-cg26).
+  if (isPending) {
     return <div className="py-4"><LoadingSpinner /></div>
   }
 

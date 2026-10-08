@@ -65,6 +65,19 @@ function TriggerBadge({ trigger }: { trigger: string }) {
   )
 }
 
+/** The single source of truth for this table's width: the header cells and the
+ * spanning row's colSpan both derive from it, so adding a column cannot leave
+ * the spanning row under-spanning the body (agent-os-o9fx). */
+const STACK_UPDATES_COLUMNS: readonly { label: string; className?: string }[] = [
+  { label: 'Time', className: 'w-[140px]' },
+  { label: 'Container' },
+  { label: 'Image' },
+  { label: 'Version Change' },
+  { label: 'Status' },
+  { label: 'Trigger' },
+  { label: 'Duration', className: 'w-[80px]' },
+]
+
 export function StackUpdatesTab({ stackId }: { stackId: string }) {
   const [page, setPage] = useState(1)
   const [statusFilter, setStatusFilter] = useState<string>('all')
@@ -202,13 +215,9 @@ export function StackUpdatesTab({ stackId }: { stackId: string }) {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[140px]">Time</TableHead>
-              <TableHead>Container</TableHead>
-              <TableHead>Image</TableHead>
-              <TableHead>Version Change</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Trigger</TableHead>
-              <TableHead className="w-[80px]">Duration</TableHead>
+              {STACK_UPDATES_COLUMNS.map((column) => (
+                <TableHead key={column.label} className={column.className}>{column.label}</TableHead>
+              ))}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -241,7 +250,7 @@ export function StackUpdatesTab({ stackId }: { stackId: string }) {
             ))}
             {query && filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={STACK_UPDATES_COLUMNS.length} className="py-8 text-center text-sm text-muted-foreground">
                   No events match “{query}”.
                 </TableCell>
               </TableRow>
