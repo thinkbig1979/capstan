@@ -54,6 +54,18 @@ let sharedPage: Page
 let testStackId = ''
 let csrfToken = ''
 
+// When the page last sent a `resize` frame on a terminal socket (ms epoch);
+// 0 until one has been seen. Fed by trackTerminalResizes().
+let lastResizeFrameAt = 0
+
+// The app sends a resize frame on connect and another ~100ms-debounced one
+// after the layout settles (handleResize in
+// frontend/src/components/stack/terminal/useXtermLifecycle.ts). The window is
+// well past that debounce because the backend can apply a frame late: under a
+// CPU-starved backend, lines typed 54-357ms after the last frame were lost
+// (6 of 40 runs) and none typed >=833ms after it (0 of 14), agent-os-nwpj.
+const RESIZE_QUIET_MS = 1_000
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // Every `waitForLoadState('networkidle')` below is a RENDER wait, which is a
@@ -110,12 +122,72 @@ async function fetchStack(request: APIRequestContext): Promise<{ id: string; sta
   return { id: stack!.id, status: stack!.status }
 }
 
+/**
+ * Record every `resize` frame the page sends on a terminal socket. Call it
+ * BEFORE the page navigates: a listener attached after the socket opens never
+ * sees the connect-time frames, which are the ones waitForTerminalReady()
+ * has to wait out.
+ */
+function trackTerminalResizes(page: Page): void {
+  page.on('websocket', (ws) => {
+    if (!ws.url().includes('/ws/terminal/')) return
+    ws.on('framesent', ({ payload }) => {
+      if (typeof payload === 'string' && payload.includes('"type":"resize"')) {
+        lastResizeFrameAt = Date.now()
+      }
+    })
+  })
+}
+
+/**
+ * Wait until the connected terminal will keep what is typed into it.
+ *
+ * The "/ #" prompt is painted BEFORE the PTY has settled: the connect sends a
+ * resize frame and the layout change that follows sends a second one (observed
+ * 2026-10-08: two frames 10-150ms apart, the first ~100ms after the socket
+ * opens). Typing too soon after the prompt makes the shell run the line minus
+ * its first ~10 characters ("an-e2e-42: not found"), which failed TERM-PW-002
+ * on CI run 37492489607 and reproduces locally with the backend CPU-capped.
+ * The link to the resize frames is a correlation (losses sat 54-357ms after
+ * the last frame, see RESIZE_QUIET_MS), not a traced cause. Three conditions,
+ * in order:
+ *   1. the prompt is painted,
+ *   2. a resize frame has been sent and none for RESIZE_QUIET_MS,
+ *   3. a probe typed through the PTY comes back executed, which shows the
+ *      shell is reading input. Each attempt uses its own sentinel so a retry
+ *      cannot match an earlier attempt's echo, and the typed text spells
+ *      `$((1+1))` while only execution prints `-2`.
+ */
+async function waitForTerminalReady(page: Page): Promise<void> {
+  const rows = page.locator('.xterm-rows')
+  await expect(rows).toContainText('/ #', { timeout: 15_000 })
+
+  await expect
+    .poll(() => lastResizeFrameAt > 0 && Date.now() - lastResizeFrameAt >= RESIZE_QUIET_MS, {
+      message: 'terminal resize frames did not settle',
+      timeout: 15_000,
+    })
+    .toBe(true)
+
+  let attempt = 0
+  await expect(async () => {
+    attempt += 1
+    const sentinel = `ready-${Date.now()}-${attempt}`
+    await page.getByRole('textbox', { name: 'Terminal input' }).click()
+    await page.keyboard.type(`echo ${sentinel}-$((1+1))`)
+    await page.keyboard.press('Enter')
+    await expect(rows).toContainText(`${sentinel}-2`, { timeout: 2_000 })
+  }).toPass({ timeout: 15_000 })
+}
+
 // ─── Suite ───────────────────────────────────────────────────────────────────
 
 test.describe.serial('Terminal flow E2E', () => {
   test.beforeAll(async ({ browser }) => {
     sharedContext = await browser.newContext()
     sharedPage = await sharedContext.newPage()
+    lastResizeFrameAt = 0 // module state: a --repeat-each rerun must not inherit the last run's frames
+    trackTerminalResizes(sharedPage)
     await loginIfNeeded(sharedPage)
     await ensureCsrf(sharedPage.request)
 
@@ -168,10 +240,13 @@ test.describe.serial('Terminal flow E2E', () => {
   })
 
   test('TERM-PW-002: the shell is a real duplex PTY (command output round-trip)', async () => {
-    // Still on the connected terminal from 001 (serial block, shared page).
+    // Still on the connected terminal from 001 (serial block, shared page), so
+    // run it alone with --grep 'TERM-PW-00[12]': --grep TERM-PW-002 skips 001 and
+    // leaves no terminal to type into.
     // $((21+21)) proves execution: the typed line contains the arithmetic
     // expression, but "capstan-e2e-42" only ever appears if the shell ran it —
     // a dead session echoing keystrokes back could not produce it.
+    await waitForTerminalReady(sharedPage)
     await sharedPage.getByRole('textbox', { name: 'Terminal input' }).click()
     await sharedPage.keyboard.type('echo capstan-e2e-$((21+21))')
     await sharedPage.keyboard.press('Enter')
