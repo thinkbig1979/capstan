@@ -13,7 +13,7 @@ import { defineConfig, devices } from 'playwright/test'
  * Environment variables:
  *   CAPSTAN_BASE_URL       Frontend URL  (default: http://localhost:3001)
  *   CAPSTAN_API_URL        Backend URL   (default: http://localhost:5001)
- *   CAPSTAN_TEST_USER      Email         (default: testadmin@example.com)
+ *   CAPSTAN_TEST_USER      Username      (default: testadmin)
  *   CAPSTAN_TEST_PASSWORD  Password      (default: TestPass123!)
  *   AUTH_DISABLED          Skip login    (default: false)
  *   CAPSTAN_TEST_STACK     Stack name    (default: test-app)

@@ -74,7 +74,7 @@ import { test, expect, Page, APIRequestContext } from 'playwright/test'
 
 const BASE_URL = process.env.CAPSTAN_BASE_URL ?? 'http://localhost:3001'
 const API_URL = process.env.CAPSTAN_API_URL ?? 'http://localhost:5001'
-const TEST_USER = process.env.CAPSTAN_TEST_USER ?? 'testadmin@example.com'
+const TEST_USER = process.env.CAPSTAN_TEST_USER ?? 'testadmin'
 const TEST_PASSWORD = process.env.CAPSTAN_TEST_PASSWORD ?? 'TestPass123!'
 const AUTH_DISABLED = (process.env.AUTH_DISABLED ?? 'false') === 'true'
 const TEST_STACK_NAME = process.env.CAPSTAN_TEST_STACK ?? 'test-app'
@@ -219,8 +219,8 @@ async function loginIfNeeded(page: Page, target = '/'): Promise<void> {
     await page.goto(`${BASE_URL}/login`)
     // A session cookie may have skipped the form entirely.
     if (page.url().includes('login')) {
-      await page.getByLabel(/email/i).fill(TEST_USER)
-      await page.getByLabel(/password/i).fill(TEST_PASSWORD)
+      await page.getByLabel('Username', { exact: true }).fill(TEST_USER)
+      await page.getByLabel('Password', { exact: true }).fill(TEST_PASSWORD)
       await page.getByRole('button', { name: /login|sign in/i }).click()
       await page.waitForURL((u) => !u.href.includes('login'), { timeout: 15_000 })
     }
@@ -258,15 +258,17 @@ test.describe('Dashboard backups tab and stack toggles E2E', () => {
   test.beforeEach(async ({ request }) => {
     if (!AUTH_DISABLED) {
       const loginResp = await request.post(`${API_URL}/api/v1/auth/login`, {
-        data: { email: TEST_USER, password: TEST_PASSWORD },
+        data: { username: TEST_USER, password: TEST_PASSWORD },
       })
-      if (loginResp.ok()) {
-        // Login sets the session only as the capstan_token cookie, with no
-        // token in the body (agent-os-n4ca.2). Read it from this context's
-        // jar so later tests, each with a fresh jar, can send it as Bearer.
-        const state = await request.storageState()
-        authToken = state.cookies.find((c) => c.name === 'capstan_token')?.value ?? ''
-      }
+      // A failed login must fail here, not later as an unrelated 401: the old
+      // `if (loginResp.ok())` skip is how a login that never worked (agent-os-r7ix)
+      // went unseen.
+      expect(loginResp.status(), `POST /auth/login as '${TEST_USER}'`).toBe(200)
+      // Login sets the session only as the capstan_token cookie, with no
+      // token in the body (agent-os-n4ca.2). Read it from this context's
+      // jar so later tests, each with a fresh jar, can send it as Bearer.
+      const state = await request.storageState()
+      authToken = state.cookies.find((c) => c.name === 'capstan_token')?.value ?? ''
     }
     await ensureCsrf(request)
 
