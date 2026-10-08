@@ -240,12 +240,31 @@ func (d *DB) GetUpdateHistory(filters models.UpdateHistoryFilters) ([]models.Upd
 // invariant on the VALUE rather than relying on a property of the layout
 // constant, so the guarantee survives someone changing the layout later. Read
 // it as documentation with teeth, not as the mechanism.
+//
+// Two edge inputs are DEFENDED, not accepted (agent-os-bp68). Both are latent:
+// no current writer produces them.
+//
+//   - Lowercase 't' and 'z' are valid RFC 3339 (section 5.6) but Go's layout
+//     rejects them, so such a value used to be stored as given and never
+//     normalised. The parse runs on an upper-cased copy: T and Z are the only
+//     letters RFC 3339 allows, so upper-casing cannot change what a valid
+//     value means. A value that still does not parse is returned as the
+//     ORIGINAL bytes, never the upper-cased copy.
+//   - An offset that carries the UTC year past 9999, such as
+//     "9999-12-31T23:59:59-12:00", formats as "10000-01-01T11:59:59Z": five
+//     year digits, not RFC 3339, unreadable by this function, and sorted
+//     below every 2xxx row. Such a value is returned unchanged, the same rule
+//     as any other value this function cannot store canonically.
 func canonicalTimestamp(value string) string {
-	parsed, err := time.Parse(time.RFC3339, value)
+	parsed, err := time.Parse(time.RFC3339, strings.ToUpper(value))
 	if err != nil {
 		return value
 	}
-	return parsed.UTC().Truncate(time.Second).Format(time.RFC3339)
+	utc := parsed.UTC().Truncate(time.Second)
+	if utc.Year() < 0 || utc.Year() > 9999 {
+		return value
+	}
+	return utc.Format(time.RFC3339)
 }
 
 func (d *DB) InsertUpdateHistory(entry *models.UpdateHistoryEntry) error {
