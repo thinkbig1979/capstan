@@ -153,7 +153,7 @@ check_dir() {
   while IFS='|' read -r file fn ln text; do
     [ -z "$file" ] && continue
     key="$file|$fn|"
-    if printf '%s\n' "$ALLOWLIST" | command grep -qF "$key"; then
+    if command grep -qF "$key" <<<"$ALLOWLIST"; then
       used+="$key"$'\n'
     else
       bad+="  $file:$ln ($fn): $(echo "$text" | sed 's/^[ \t]*//')"$'\n'
@@ -164,7 +164,7 @@ check_dir() {
   while IFS= read -r entry; do
     [ -z "$entry" ] && continue
     key="$(echo "$entry" | cut -d'|' -f1-2)|"
-    if ! printf '%s' "$used" | command grep -qF "$key"; then
+    if ! command grep -qF "$key" <<<"$used"; then
       stale+="  stale allowlist entry: $(echo "$entry" | cut -d'|' -f1) ($(echo "$entry" | cut -d'|' -f2))"$'\n'
     fi
   done <<< "$ALLOWLIST"
@@ -203,7 +203,7 @@ selftest_case() {
     echo "FAIL: path-containment self-test - '$name' expected exit $want, got $rc:"
     echo "$out"
     ST_FAILS=$((ST_FAILS + 1))
-  elif ! echo "$out" | command grep -qE "$want_msg"; then
+  elif ! command grep -qE "$want_msg" <<<"$out"; then
     echo "FAIL: path-containment self-test - '$name' exited $want but output does not match /$want_msg/:"
     echo "$out"
     ST_FAILS=$((ST_FAILS + 1))
