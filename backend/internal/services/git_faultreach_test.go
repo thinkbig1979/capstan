@@ -219,7 +219,7 @@ func TestPullCLI_UnreadableStatusIsReported(t *testing.T) {
 	faultingGitOnPath(t, "*\" status --porcelain\"")
 
 	svc := NewGitService(&config.Config{}, nil)
-	_, err := svc.Pull(dir)
+	_, err := svc.pullCLI(dir)
 	if err == nil {
 		t.Fatal("Pull succeeded while `status --porcelain` was faulted")
 	}
@@ -241,7 +241,7 @@ func TestPullCLI_UnreadableStatusIsReported(t *testing.T) {
 func TestPullCLI_UnreadableBareProbeIsReported(t *testing.T) {
 	svc := NewGitService(&config.Config{}, nil)
 
-	_, err := svc.Pull(t.TempDir())
+	_, err := svc.pullCLI(t.TempDir())
 	if err == nil {
 		t.Fatal("Pull succeeded on a directory that is not a git repository")
 	}
@@ -266,7 +266,7 @@ func TestPullCLI_UnreadableBareProbeIsReported(t *testing.T) {
 func TestPullCLI_UnreadableHeadIsReported(t *testing.T) {
 	svc := NewGitService(&config.Config{}, nil)
 
-	_, err := svc.Pull(emptyGitRepo(t))
+	_, err := svc.pullCLI(emptyGitRepo(t))
 	if err == nil {
 		t.Fatal("Pull succeeded on a repository with no commits")
 	}

@@ -195,7 +195,7 @@ func TestPull_UsesDirectoryHTTPSToken(t *testing.T) {
 
 	svc := gitServiceWithDirectoryCredential(t, local, "https", testGitUser, testGitToken)
 
-	result, err := svc.Pull(local)
+	result, err := svc.pullCLI(local)
 	if err != nil {
 		t.Fatalf("Pull with a directory-scoped HTTPS token failed: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestPull_DirectoryHTTPSAuthType_EmptyTokenDoesNotFallBackToGlobal(t *testin
 		t.Fatalf("store git_https_user: %v", err)
 	}
 
-	if _, err := svc.Pull(local); err == nil {
+	if _, err := svc.pullCLI(local); err == nil {
 		t.Fatal("expected the pull to fail: authType=https with no stored token must not fall back to the global one")
 	}
 }
@@ -264,7 +264,7 @@ func TestPull_DirectoryInheritAuthType_UsesGlobalToken(t *testing.T) {
 	}
 	svc := NewGitService(&config.Config{}, db)
 
-	result, err := svc.Pull(local)
+	result, err := svc.pullCLI(local)
 	if err != nil {
 		t.Fatalf("Pull with authType=inherit and a stored global token failed: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestPull_UsesStoredHTTPSToken(t *testing.T) {
 
 	svc := gitServiceWithStoredToken(t)
 
-	result, err := svc.Pull(local)
+	result, err := svc.pullCLI(local)
 	if err != nil {
 		t.Fatalf("Pull with a stored HTTPS token failed: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestPull_WithoutStoredTokenStillFails(t *testing.T) {
 
 	svc := NewGitService(&config.Config{}, newTestDBWithEncryptor(t))
 
-	if _, err := svc.Pull(local); err == nil {
+	if _, err := svc.pullCLI(local); err == nil {
 		t.Fatal("expected the pull to fail without credentials, but it succeeded")
 	}
 }
@@ -435,7 +435,7 @@ func TestPull_TokenNeverPersistsToGitConfig(t *testing.T) {
 	advance()
 
 	svc := gitServiceWithStoredToken(t)
-	if _, err := svc.Pull(local); err != nil {
+	if _, err := svc.pullCLI(local); err != nil {
 		t.Fatalf("Pull with a stored HTTPS token failed: %v", err)
 	}
 
