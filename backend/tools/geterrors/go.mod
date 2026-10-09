@@ -18,7 +18,7 @@ module github.com/thinkbig1979/capstan/backend/tools/geterrors
 
 go 1.25.0
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require golang.org/x/tools v0.47.0
 

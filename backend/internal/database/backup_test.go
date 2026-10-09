@@ -426,3 +426,46 @@ func TestBackupRunTimestampCanonicalUnchanged(t *testing.T) {
 	).Scan(&finished))
 	assert.Nil(t, finished, "a nil FinishedAt must be stored as NULL")
 }
+
+// TestBackupRunReaders_ReturnEveryColumnInItsOwnField writes one run whose
+// columns all hold DIFFERENT values and reads it back through each full-row
+// reader. The three readers share one column list (backupRunColumns), whose
+// order has to match each Scan's target order; columns of the same type
+// (kind/trigger/status, the three counters, the two timestamps) would swap
+// silently, so every field is asserted, not just the ones a reader filters on
+// (agent-os-13xd).
+func TestBackupRunReaders_ReturnEveryColumnInItsOwnField(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+
+	finished := "2026-02-03T05:06:07Z"
+	bytesAdded := int64(4096)
+	want := models.BackupRun{
+		ID:           "run-fields",
+		Kind:         "backup",
+		Trigger:      "manual",
+		Status:       "success",
+		StartedAt:    "2026-02-03T04:05:06Z",
+		FinishedAt:   &finished,
+		StacksTotal:  7,
+		StacksOK:     5,
+		StacksFailed: 2,
+		BytesAdded:   &bytesAdded,
+		ErrorMessage: "one stack failed",
+	}
+	require.NoError(t, db.CreateBackupRun(&want))
+
+	runs, err := db.GetBackupRuns(10)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, want, runs[0], "GetBackupRuns")
+
+	filtered, _, err := db.GetBackupRunsFiltered(models.BackupHistoryFilters{})
+	require.NoError(t, err)
+	require.Len(t, filtered, 1)
+	assert.Equal(t, want, filtered[0], "GetBackupRunsFiltered")
+
+	byID, err := db.GetBackupRunByID("run-fields")
+	require.NoError(t, err)
+	assert.Equal(t, want, *byID, "GetBackupRunByID")
+}

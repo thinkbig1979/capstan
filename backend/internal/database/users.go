@@ -17,6 +17,7 @@ func (d *DB) UserCount() (int, error) {
 func (d *DB) CreateUser(user models.User) error {
 	query := `INSERT INTO users (id, username, password, created_at, updated_at)
 	          VALUES (?, ?, ?, ?, ?)`
+	//timebind:ignore no text consumer; read back only via Scan; converting = a migration (agent-os-omkb R6)
 	_, err := d.db.Exec(query, user.ID, user.Username, user.Password, user.CreatedAt, user.UpdatedAt)
 	return err
 }
@@ -33,6 +34,7 @@ func (d *DB) CreateFirstUser(user models.User) (bool, error) {
 	query := `INSERT INTO users (id, username, password, created_at, updated_at)
 	          SELECT ?, ?, ?, ?, ?
 	          WHERE NOT EXISTS (SELECT 1 FROM users)`
+	//timebind:ignore no text consumer; read back only via Scan; converting = a migration (agent-os-omkb R6)
 	res, err := d.db.Exec(query, user.ID, user.Username, user.Password, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
 		return false, err
@@ -108,6 +110,7 @@ func (d *DB) GetSoleUser() (*models.User, error) {
 
 func (d *DB) UpdateUserPassword(id, password string, updatedAt time.Time) error {
 	query := `UPDATE users SET password = ?, updated_at = ? WHERE id = ?`
+	//timebind:ignore no text consumer; read back only via Scan; converting = a migration (agent-os-omkb R6)
 	_, err := d.db.Exec(query, password, updatedAt, id)
 	return err
 }
