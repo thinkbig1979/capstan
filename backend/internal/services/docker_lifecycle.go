@@ -61,7 +61,7 @@ func classifyContainers(
 
 	switch action {
 	case actionStop:
-		if status == "stopped" || len(containers) == 0 {
+		if status == string(StackStatusStopped) || len(containers) == 0 {
 			return truth.Success("stack stopped", truth.KV("status", status))
 		}
 		running := countRunning(containers)
@@ -456,7 +456,7 @@ waitLoop:
 		}
 		// Use Status so a real docker error breaks the loop (same as "stopped").
 		status, _, sErr := s.Status(stack)
-		if sErr != nil || status == "stopped" { //geterrors:ignore the comment above states it: this is a bounded wait, and StartVerified below produces the returned outcome independently, so a Status error can only shorten the wait and never becomes the reported result
+		if sErr != nil || status == string(StackStatusStopped) { //geterrors:ignore the comment above states it: this is a bounded wait, and StartVerified below produces the returned outcome independently, so a Status error can only shorten the wait and never becomes the reported result
 			break waitLoop
 		}
 		time.Sleep(backoff)
@@ -642,13 +642,13 @@ func parseComposePSOutput(output []byte) (string, []models.Container, error) {
 		containers = append(containers, c)
 	}
 
-	status := "running"
+	status := string(StackStatusRunning)
 	if len(containers) == 0 {
-		status = "stopped"
+		status = string(StackStatusStopped)
 	} else {
 		for _, c := range containers {
 			if c.State != "running" {
-				status = "partial"
+				status = string(StackStatusPartial)
 				break
 			}
 		}

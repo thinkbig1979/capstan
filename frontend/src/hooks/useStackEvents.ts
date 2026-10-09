@@ -15,7 +15,8 @@ import type {
 import { queryKeys } from '@/lib/query-keys'
 import { frameValidator, omitemptyStr, oneOf, optOneOf, optStr, record, str } from '@/lib/wsFrames'
 import { JOB_OUTCOMES, JOB_STATUSES, JOB_TARGET_TYPES } from './useUpdateJobStream'
-import type { StackStatus } from '@/types'
+import type { StackStatus, WireStackStatus } from '@/types'
+import type { AssertTrue, Exact } from '@/lib/action-result'
 
 export interface StackStatusEvent {
   type: 'stack_status'
@@ -129,6 +130,9 @@ export type StackEvent =
 // container. Reading it back as "" is the value Go held.
 
 const STACK_EVENT_STATUSES = ['running', 'stopped', 'partial', 'paused', 'unknown', 'error'] as const satisfies readonly StackStatus[]
+// `satisfies` only says each listed value is valid; Exact also fails when
+// services.StackStatus grows a value this list does not parse (agent-os-rc69).
+export type StackEventStatusesMatchWire = AssertTrue<Exact<(typeof STACK_EVENT_STATUSES)[number], WireStackStatus>>
 
 const readJobEvent = (f: Record<string, unknown>) => ({
   jobId: omitemptyStr(f.jobId),

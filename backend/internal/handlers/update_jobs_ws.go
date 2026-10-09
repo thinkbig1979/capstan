@@ -65,11 +65,11 @@ type jobStatusFrame struct {
 }
 
 type jobDoneFrame struct {
-	Type    string          `json:"type"`
-	Status  services.Status `json:"status"`
-	Error   string          `json:"error,omitempty"`
-	Outcome string          `json:"outcome,omitempty"`
-	Reason  string          `json:"reason,omitempty"`
+	Type    string              `json:"type"`
+	Status  services.DoneStatus `json:"status"`
+	Error   string              `json:"error,omitempty"`
+	Outcome string              `json:"outcome,omitempty"`
+	Reason  string              `json:"reason,omitempty"`
 }
 
 type jobErrorFrame struct {
@@ -90,7 +90,7 @@ func statusFrame(status services.Status) jobStatusFrame {
 }
 
 func doneFrame(status services.Status, errMsg, outcome, reason string) jobDoneFrame {
-	return jobDoneFrame{Type: "done", Status: status, Error: errMsg, Outcome: outcome, Reason: reason}
+	return jobDoneFrame{Type: "done", Status: services.DoneStatus(status), Error: errMsg, Outcome: outcome, Reason: reason}
 }
 
 func errorFrame(msg string) jobErrorFrame {

@@ -808,11 +808,20 @@ func (h *ResourcesHandler) listAutoUpdatePolicies(c *gin.Context) {
 	})
 }
 
+// isAutoUpdateTargetType is the one gate a policy's target type passes through.
+// A policy target IS a job target (the policy is applied by enqueuing a job for
+// it), so it checks against services.JobTargetType, the Go source the frontend's
+// AutoUpdatePolicy.targetType is asserted equal to (agent-os-rc69).
+// models.AutoUpdatePolicy.TargetType stays a string: models cannot import services.
+func isAutoUpdateTargetType(t string) bool {
+	return t == string(services.JobTargetTypeContainer) || t == string(services.JobTargetTypeStack)
+}
+
 func (h *ResourcesHandler) upsertAutoUpdatePolicy(c *gin.Context) {
 	targetType := c.Param("targetType")
 	targetId := c.Param("targetId")
 
-	if targetType != "container" && targetType != "stack" {
+	if !isAutoUpdateTargetType(targetType) {
 		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "targetType must be 'container' or 'stack'"))
 		return
 	}
@@ -893,7 +902,7 @@ func (h *ResourcesHandler) deleteAutoUpdatePolicy(c *gin.Context) {
 	targetType := c.Param("targetType")
 	targetId := c.Param("targetId")
 
-	if targetType != "container" && targetType != "stack" {
+	if !isAutoUpdateTargetType(targetType) {
 		handleError(c, models.NewAppError(http.StatusBadRequest, models.ErrValidation, "targetType must be 'container' or 'stack'"))
 		return
 	}
