@@ -175,9 +175,10 @@ describe('useStackActions — 500 ActionResult body surfaces reason in toast.err
     await act(async () => { hook.current.start.mutate('my-stack') })
     await waitFor(() => expect(hook.current.start.isError).toBe(true))
 
-    expect(toast.error).toHaveBeenCalledWith(
-      'docker: Error response from daemon — container exited with code 137',
-    )
+    // R7/R8: the action is the title, the server-authored reason the description.
+    expect(toast.error).toHaveBeenCalledWith('Failed to start stack', {
+      description: 'docker: Error response from daemon — container exited with code 137',
+    })
     expect(toast.success).not.toHaveBeenCalled()
   })
 
@@ -191,8 +192,10 @@ describe('useStackActions — 500 ActionResult body surfaces reason in toast.err
     await act(async () => { hook.current.stop.mutate('my-stack') })
     await waitFor(() => expect(hook.current.stop.isError).toBe(true))
 
-    // classifyError maps ERR_NETWORK to this message
-    expect(toast.error).toHaveBeenCalledWith('Check your connection and try again')
+    // classifyError maps ERR_NETWORK to this message, under the action's title
+    expect(toast.error).toHaveBeenCalledWith('Failed to stop stack', {
+      description: 'Check your connection and try again',
+    })
     expect(toast.success).not.toHaveBeenCalled()
   })
 
@@ -240,7 +243,9 @@ describe('useStackActions — delete routes through toastForResult', () => {
     await act(async () => { hook.current.delete.mutate('my-stack') })
     await waitFor(() => expect(hook.current.delete.isError).toBe(true))
 
-    expect(toast.error).toHaveBeenCalledWith('failed to run compose down')
+    expect(toast.error).toHaveBeenCalledWith('Failed to delete stack', {
+      description: 'failed to run compose down',
+    })
     expect(toast.success).not.toHaveBeenCalled()
   })
 })
@@ -315,5 +320,71 @@ describe('useStackActions — onSuccess callback', () => {
     await waitFor(() => expect(hook.current.stop.isSuccess).toBe(true))
 
     expect(onSuccess).toHaveBeenCalledWith('stop', 'my-stack')
+  })
+})
+
+// ─── useActionMutation parity (agent-os-cdsh) ─────────────────────────────────
+//
+// The four mutations moved from a raw useMutation onto useActionMutation.
+// These rows pin what the move had to keep.
+
+describe('useStackActions — on useActionMutation', () => {
+  it('passes (action, id) to onSuccess and onResult, in that order, after the invalidations', async () => {
+    const qc = makeClient()
+    const order: string[] = []
+    vi.spyOn(qc, 'invalidateQueries').mockImplementation(() => {
+      order.push('invalidate')
+      return Promise.resolve()
+    })
+    const onSuccess = vi.fn(() => order.push('onSuccess'))
+    const onResult = vi.fn(() => order.push('onResult'))
+    mockRestart.mockResolvedValue({ outcome: 'success', reason: 'ok' })
+
+    const { result: hook } = renderHook(
+      () => useStackActions({ onSuccess, onResult }),
+      { wrapper: wrapper(qc) },
+    )
+    await act(async () => { hook.current.restart.mutate('my-stack') })
+    await waitFor(() => expect(hook.current.restart.isSuccess).toBe(true))
+
+    expect(onSuccess).toHaveBeenCalledWith('restart', 'my-stack')
+    expect(onResult).toHaveBeenCalledWith('restart', 'my-stack')
+    expect(order).toEqual(['invalidate', 'invalidate', 'invalidate', 'onSuccess', 'onResult'])
+  })
+
+  it('calls onError(action, id) after a rejected failed result', async () => {
+    const qc = makeClient()
+    const onError = vi.fn()
+    mockStart.mockRejectedValue({ outcome: 'failed', reason: 'boom' })
+
+    const { result: hook } = renderHook(() => useStackActions({ onError }), { wrapper: wrapper(qc) })
+    await act(async () => { hook.current.start.mutate('my-stack') })
+    await waitFor(() => expect(hook.current.start.isError).toBe(true))
+
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onError).toHaveBeenCalledWith('start', 'my-stack')
+  })
+
+  it('keeps a rejected partial at warning level, not an error', async () => {
+    const qc = makeClient()
+    mockStop.mockRejectedValue({ outcome: 'partial', reason: '1 of 2 services stopped' })
+
+    const { result: hook } = renderHook(() => useStackActions(), { wrapper: wrapper(qc) })
+    await act(async () => { hook.current.stop.mutate('my-stack') })
+    await waitFor(() => expect(hook.current.stop.isError).toBe(true))
+
+    expect(toast.warning).toHaveBeenCalledWith('1 of 2 services stopped')
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('never toasts an empty error for a 2xx failed result with no reason', async () => {
+    const qc = makeClient()
+    mockStart.mockResolvedValue({ outcome: 'failed', reason: '' })
+
+    const { result: hook } = renderHook(() => useStackActions(), { wrapper: wrapper(qc) })
+    await act(async () => { hook.current.start.mutate('my-stack') })
+    await waitFor(() => expect(hook.current.start.isSuccess).toBe(true))
+
+    expect(toast.error).toHaveBeenCalledWith('Failed to start stack')
   })
 })
