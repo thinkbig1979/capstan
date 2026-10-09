@@ -26,13 +26,9 @@
  *     caller's contract, not the server's.
  */
 
-import type {
-  ActionResult as WireActionResult,
-  Outcome,
-} from './generated-truth'
+import type { Outcome } from './generated-truth'
 import type {
   ActionLog,
-  AppError,
   AutoUpdatePolicy as WireAutoUpdatePolicy,
   BackupPolicy as WireBackupPolicy,
   BackupRun as WireBackupRun,
@@ -40,25 +36,17 @@ import type {
   BackupSnapshot,
   CachedUpdate,
   Container as WireContainer,
-  ContainerMetrics,
   ContainerUpdateInfo,
   DashboardContainerInfo as WireDashboardContainerInfo,
   DiffResult,
-  Directory,
   DockerCleanupRun as WireDockerCleanupRun,
   DockerImage,
   DockerNetwork,
   DockerVolume,
   GitCommit,
-  GitStatusResult,
   LintResult as WireLintResult,
-  LogResult,
-  PortBinding,
-  Session,
   Stack as WireStack,
-  StackEvent,
   UpdateHistoryEntry as WireUpdateHistoryEntry,
-  UpdateResult,
   UpdateSettingsResponse,
   User,
 } from './generated'
@@ -90,38 +78,26 @@ import type { AssertTrue, Exact } from '@/lib/action-result'
 
 export type {
   ActionLog,
-  AppError,
   BackupSnapshot,
   BuildCacheEntry,
   CachedUpdate,
   ComposeResponse,
-  ContainerMetrics,
   ContainerUpdateInfo,
   DiffResult,
-  Directory,
-  DiskUsageBreakdown,
   DockerCleanupCandidate,
   DockerCleanupPreview,
   DockerImage,
   DockerNetwork,
   DockerVolume,
-  EnvEntry,
   GitCommit,
-  GitStatusResult,
-  LogResult,
   Outcome,
-  PortBinding,
-  Session,
-  StackEvent,
   SyncPreflightResponse,
-  UpdateResult,
   UpdateJobWireDoneStatus,
   UpdateJobWireStatus,
   UpdateJobWireStream,
   UpdateJobWireTargetType,
   User,
   VersionInfo,
-  WireActionResult,
   WireStackStatus,
 }
 
@@ -136,6 +112,7 @@ type ContainerState = 'created' | 'running' | 'paused' | 'restarting' | 'removin
 // stacks API (BuildStackStatuses). Proved equal to services.StackStatus
 // (agent-os-rc69): a status added in Go fails tsc -b at the assertion below.
 export type StackStatus = 'running' | 'stopped' | 'partial' | 'paused' | 'unknown' | 'error'
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type StackStatusMatchesWire = AssertTrue<Exact<StackStatus, WireStackStatus>>
 
 /**
@@ -189,6 +166,7 @@ export type LintResponse = Omit<WireLintResponse, 'lintResults'> & {
 // which checks services.JobTargetType, so the union is proved equal to that
 // generated type (agent-os-rc69).
 export type AutoUpdateTargetType = 'container' | 'stack'
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type AutoUpdateTargetTypeMatchesWire = AssertTrue<Exact<AutoUpdateTargetType, UpdateJobWireTargetType>>
 export type AutoUpdatePolicy = Omit<WireAutoUpdatePolicy, 'targetType'> & {
   targetType: AutoUpdateTargetType
@@ -290,7 +268,7 @@ export interface DashboardStats {
   containers?: DashboardContainerInfo[]
 }
 
-export interface GitRepoStatus {
+interface GitRepoStatus {
   isRepo: true
   hasCommits: true
   isBare: false
@@ -307,11 +285,11 @@ export interface GitRepoStatus {
   remote: string
 }
 
-export interface GitNotRepoStatus {
+interface GitNotRepoStatus {
   isRepo: false
 }
 
-export interface GitEmptyRepoStatus {
+interface GitEmptyRepoStatus {
   isRepo: true
   hasCommits: false
 }
@@ -319,7 +297,7 @@ export interface GitEmptyRepoStatus {
 // agent-os-m2g8: a repository with no work tree. The work-tree fields are
 // absent on the wire, not zero, so they are absent here and reading one is a
 // compile error rather than a rendered "clean".
-export interface GitBareRepoStatus {
+interface GitBareRepoStatus {
   isRepo: true
   hasCommits: true
   isBare: true
@@ -338,7 +316,7 @@ export type GitStatus = GitRepoStatus | GitBareRepoStatus | GitEmptyRepoStatus |
 // present branch always carries. Entries stays the generated EnvEntry, whose
 // `line` is required: every row on this path comes from parseEnvFile and is
 // 1-based.
-export type EnvFilePresent = Omit<EnvResponse, 'hasEnvFile'> & { hasEnvFile: true }
+type EnvFilePresent = Omit<EnvResponse, 'hasEnvFile'> & { hasEnvFile: true }
 
 /**
  * A REQUEST row for PUT /:id/env, and the editor's draft row
@@ -352,7 +330,7 @@ export type EnvFilePresent = Omit<EnvResponse, 'hasEnvFile'> & { hasEnvFile: tru
  */
 export type EnvEntryDraft = Omit<EnvEntry, 'line'> & { line?: number }
 
-export interface EnvFileAbsent {
+interface EnvFileAbsent {
   hasEnvFile: false
 }
 

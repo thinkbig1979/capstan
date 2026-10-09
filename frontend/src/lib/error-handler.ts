@@ -410,6 +410,7 @@ function summarizeLintResults(value: unknown): string | null {
  * say anything at all?". `null` is the load-bearing value: every classifyError
  * arm ends in a sentence, so `AppError.message` can never express silence.
  */
+/** @knipignore exported for lib/__tests__/error-presenter.test.ts, which pins the cause extraction */
 export function backendCauseOf(error: unknown): string | null {
   if (!error) return null
   const err = error as {

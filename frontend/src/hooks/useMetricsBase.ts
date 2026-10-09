@@ -21,7 +21,7 @@ export interface ContainerMetricHistory {
   metrics: ContainerMetric[]
 }
 
-export interface MetricsContainerFrame {
+interface MetricsContainerFrame {
   containerId: string
   name: string
   cpuPercent: number
@@ -66,6 +66,7 @@ const parseContainerFrame = (raw: unknown): MetricsContainerFrame => {
 
 // Mirrors handlers.MetricsFrame and models.ContainerMetrics (agent-os-r4kf).
 // `containers` keeps its null: see the MetricsMessage comment above.
+/** @knipignore exported for lib/__tests__/wsFrames.test.ts, which drives the validator directly */
 export const parseMetricsMessage = frameValidator((raw): MetricsMessage => {
   const f = record(raw)
   return {

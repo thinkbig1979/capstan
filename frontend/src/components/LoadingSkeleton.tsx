@@ -46,30 +46,6 @@ export function StackCardSkeleton() {
   )
 }
 
-export function ContainerTableSkeleton() {
-  return (
-    <div className="rounded-lg border bg-card">
-      <div className="grid grid-cols-4 gap-4 p-4 border-b font-medium text-sm">
-        <div>Name</div>
-        <div>Status</div>
-        <div>Ports</div>
-        <div className="text-right">Actions</div>
-      </div>
-      {Array.from({ length: 3 }).map((_, i) => (
-        <div key={i} className="grid grid-cols-4 gap-4 p-4 border-b last:border-0">
-          <Skeleton className="h-5 w-40" />
-          <Skeleton className="h-6 w-20 rounded-full" />
-          <Skeleton className="h-5 w-32" />
-          <div className="flex justify-end gap-2">
-            <Skeleton className="h-8 w-20" />
-            <Skeleton className="h-8 w-16" />
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
 export function EditorSkeleton() {
   return (
     <div className="rounded-lg border bg-card">
@@ -87,27 +63,6 @@ export function EditorSkeleton() {
           ))}
         </div>
       </div>
-    </div>
-  )
-}
-
-export function GitHistorySkeleton() {
-  return (
-    <div className="rounded-lg border bg-card">
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="flex items-start gap-4 p-4 border-b last:border-0">
-          <Skeleton className="h-8 w-8 rounded-full shrink-0" />
-          <div className="flex-1 min-w-0">
-            <Skeleton className="h-5 w-64 mb-2" />
-            <Skeleton className="h-4 w-96 mb-1" />
-            <Skeleton className="h-4 w-32" />
-          </div>
-          <div className="flex gap-2 shrink-0">
-            <Skeleton className="h-8 w-16" />
-            <Skeleton className="h-8 w-16" />
-          </div>
-        </div>
-      ))}
     </div>
   )
 }

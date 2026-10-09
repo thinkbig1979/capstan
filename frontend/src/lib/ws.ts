@@ -35,6 +35,7 @@ export interface WSClientOptions {
 
 // Cap on the exponential backoff base so a long-dead connection doesn't end up
 // waiting minutes between attempts.
+/** @knipignore exported for lib/__tests__/ws.test.ts, which asserts the backoff cap */
 export const MAX_RECONNECT_DELAY_MS = 30000
 
 /** How long a socket must stay OPEN before its reconnect ladder is forgiven.
@@ -54,6 +55,7 @@ export const MAX_RECONNECT_DELAY_MS = 30000
  *  inside its docker-event loop, so a quiet host sends NOTHING after open. A
  *  message-gated reset would count every genuine reconnect there as a failed
  *  attempt and give up after five in one page lifetime. */
+/** @knipignore exported for lib/__tests__/ws-close-policy.test.ts, which asserts the reset window */
 export const RECONNECT_RESET_AFTER_MS = 5000
 
 export class WSClient {

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // Production-mode dead-export gate (agent-os-w9qw), run by the "Dead exports
+  // (knip --production)" job in .github/workflows/frontend.yml via
+  // `pnpm knip:production`. Plain knip (knip.jsonc) counts a test file's import
+  // as a use, so an export kept alive only by its own test passes it
+  // (agent-os-ws7d: five dead EmptyState wrappers, plain knip exit 0, 0 hits;
+  // --production listed all five). Here test files are not entries, so such an
+  // export is reported, and unused exports and types are errors.
+  //
+  // The job is NOT a required check (branch protection is a separate decision);
+  // the advisory plain-knip job in knip.jsonc is unchanged.
+  //
+  // Every entry below carries a reviewed reason; do not add one without it.
+  "ignore": [
+    // Served verbatim by Vite and referenced by URL; knip cannot see that.
+    "public/**",
+    // Vendored shadcn-style primitives keep their canonical export surface
+    // (reviewed agent-os-693).
+    "src/components/ui/**",
+    // Test support. Production mode drops test files from the entry set, so
+    // the vitest setup file and helpers read as unused files.
+    "src/test/**",
+    // tygo output (cd backend && go run github.com/gzuidhof/tygo generate).
+    // Never hand-edited; the exports are the whole wire vocabulary, of which
+    // the frontend names only the part it uses.
+    "src/types/generated.ts",
+    "src/types/generated-services.ts",
+    "src/types/generated-truth.ts"
+  ],
+  "ignoreDependencies": [
+    // Same reason as knip.jsonc: declared with the other @codemirror/*
+    // packages so the resolver keeps a single @codemirror/state instance.
+    "@codemirror/lint"
+  ],
+  // An export that production code never imports is a failure unless the
+  // declaration carries a JSDoc `@knipignore <reason>` tag. The tag is for
+  // exports with a live in-file use that a test drives directly, and for
+  // compile-time wire assertions; dead code is deleted instead (agent-os-ws7d).
+  "tags": ["-knipignore"],
+  "ignoreIssues": {
+    // owner: another worker holds these two files (fenced 2026-10-09), so the
+    // tag cannot be added there yet. apiClient is imported by 11 test files and
+    // UPDATE_SCAN_TOAST_ID by two, both as a seam. Replace each entry with a
+    // `@knipignore` tag on the declaration when the owner is done.
+    "src/lib/api.ts": ["exports"],
+    "src/hooks/useResources.ts": ["exports"]
+  },
+  "rules": {
+    "exports": "error",
+    "types": "error"
+  }
+}

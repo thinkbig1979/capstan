@@ -5,6 +5,8 @@
   // deliberately NOT a required check — same posture as react-doctor — so a
   // red run flags new dead code without blocking merges. Exit-code-relevant
   // findings below each carry a reviewed reason; do not add entries without one.
+  // Plain mode counts a test's import as a use; the separate "Dead exports
+  // (knip --production)" job (knip.production.jsonc, agent-os-w9qw) does not.
   //
   // public/ is served verbatim by Vite and referenced by URL, not by import —
   // knip cannot see index.html's <link href="/fonts/fonts.css">, so anything

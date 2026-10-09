@@ -8,7 +8,7 @@ import { Status as StatusPill, StatusDot, type StatusTone } from '@/components/u
 import { cn } from '@/lib/utils'
 import type { StackStatus } from '@/types'
 
-export type Status = StackStatus
+type Status = StackStatus
 
 const statusConfig: Record<Status, { label: string; tone: StatusTone }> = {
   running: { label: 'Running', tone: 'success' },

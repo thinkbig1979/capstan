@@ -19,6 +19,7 @@ interface ParsedUptime {
 // Docker status strings look like "Up 2 hours", "Up About a minute" or
 // "Up 6 days (healthy)". Anything else (including "Up Less than a second")
 // yields null and simply produces no uptime chip.
+/** @knipignore exported for lib/__tests__/uptime.test.ts, which pins the parse */
 export function parseContainerUptime(status: string): ParsedUptime | null {
   const m = /^Up\s+((?:About\s+)?(?:(\d+)|an?)\s+(second|minute|hour|day|week|month|year)s?)\b/i.exec(status)
   if (!m) return null

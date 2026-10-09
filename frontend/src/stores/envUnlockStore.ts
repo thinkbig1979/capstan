@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { toast } from 'sonner'
 
+/** @knipignore exported for the envUnlockStore and EnvEditor.unlock tests, which advance fake time by it */
 export const UNLOCK_DURATION_MS = 5 * 60 * 1000
 const WARNING_BEFORE_EXPIRY_MS = 15 * 1000
 

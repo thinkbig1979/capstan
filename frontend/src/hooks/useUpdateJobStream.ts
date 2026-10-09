@@ -70,9 +70,11 @@ export const JOB_OUTCOMES = ['success', 'no_change', 'partial', 'failed'] as con
 // (agent-os-m61t). `satisfies` above only says each listed value is valid, not
 // that every valid value is listed; a new Go outcome must fail tsc -b here, in
 // the same way action-result.ts's ActionOutcomeMatchesWire does.
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type JobOutcomesMatchWire = AssertTrue<Exact<(typeof JOB_OUTCOMES)[number], Outcome>>
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type UpdateJobOutcomeMatchesWire = AssertTrue<Exact<UpdateJobOutcome, Outcome>>
-export const JOB_DONE_STATUSES = ['success', 'error'] as const satisfies readonly JobDoneStatus[]
+const JOB_DONE_STATUSES = ['success', 'error'] as const satisfies readonly JobDoneStatus[]
 export const JOB_TARGET_TYPES = ['container', 'stack'] as const satisfies readonly UpdateJobTargetType[]
 const LINE_STREAMS = ['stdout', 'stderr', 'status'] as const satisfies readonly JobLineStream[]
 // Status, stream and target type are Go consts (services.Status, services.Stream,
@@ -80,18 +82,27 @@ const LINE_STREAMS = ['stdout', 'stderr', 'status'] as const satisfies readonly 
 // hand-written unions and the runtime arrays above are each proved equal to
 // them (agent-os-th4h). `satisfies` only says every listed value is valid; Exact
 // also fails when the backend grows a value the frontend does not list.
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type UpdateJobStatusMatchesWire = AssertTrue<Exact<UpdateJobStatus, UpdateJobWireStatus>>
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type JobStatusesMatchWire = AssertTrue<Exact<(typeof JOB_STATUSES)[number], UpdateJobWireStatus>>
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type JobLineStreamMatchesWire = AssertTrue<Exact<JobLineStream, UpdateJobWireStream>>
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type LineStreamsMatchWire = AssertTrue<Exact<(typeof LINE_STREAMS)[number], UpdateJobWireStream>>
 // A done frame carries services.DoneStatus, the terminal subset of Status. Exact
 // pins the set to the generated type; the Extends assertion pins "subset of
 // UpdateJobStatus" so a done status that is not a job status cannot be added on
 // the TS side alone (the Go side is pinned by TestDoneStatusIsTheTerminalSubsetOfStatus).
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type JobDoneStatusMatchesWire = AssertTrue<Exact<JobDoneStatus, UpdateJobWireDoneStatus>>
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type JobDoneStatusesMatchWire = AssertTrue<Exact<(typeof JOB_DONE_STATUSES)[number], UpdateJobWireDoneStatus>>
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type JobDoneStatusIsJobStatus = AssertTrue<JobDoneStatus extends UpdateJobStatus ? true : false>
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type UpdateJobTargetTypeMatchesWire = AssertTrue<Exact<UpdateJobTargetType, UpdateJobWireTargetType>>
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type JobTargetTypesMatchWire = AssertTrue<Exact<(typeof JOB_TARGET_TYPES)[number], UpdateJobWireTargetType>>
 
 const readLine = (raw: unknown): JobLine => {
@@ -118,6 +129,7 @@ const readJob = (raw: unknown): UpdateJob => {
   }
 }
 
+/** @knipignore exported for lib/__tests__/wsFrames.test.ts, which drives the validator directly */
 export const parseJobStreamFrame = frameValidator((raw): JobStreamFrame | null => {
   const f = record(raw)
   switch (f.type) {

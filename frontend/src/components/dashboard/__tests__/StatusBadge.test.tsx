@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { screen } from '@testing-library/react'
 import { renderWithProviders } from '../../../test/utils'
-import { StatusBadge, type Status } from '../StatusBadge'
+import { StatusBadge } from '../StatusBadge'
+import type { StackStatus } from '@/types'
 
 function getStatusByText(text: string) {
   return screen.getByText(text).closest('[data-slot="status"]') as HTMLElement
@@ -20,7 +21,7 @@ describe('StatusBadge', () => {
       ['paused', 'Paused'],
       ['error', 'Error'],
       ['unknown', 'Unknown'],
-    ] as [Status, string][])('renders label "%s" for status "%s"', (status, label) => {
+    ] as [StackStatus, string][])('renders label "%s" for status "%s"', (status, label) => {
       renderWithProviders(<StatusBadge status={status} pulse={false} />)
       expect(screen.getByText(label)).toBeInTheDocument()
     })
@@ -129,19 +130,19 @@ describe('StatusBadge', () => {
 
   describe('falls back to unknown for invalid status values', () => {
     it('renders Unknown label for an unrecognized status', () => {
-      renderWithProviders(<StatusBadge status={'bogus' as Status} pulse={false} />)
+      renderWithProviders(<StatusBadge status={'bogus' as StackStatus} pulse={false} />)
       expect(screen.getByText('Unknown')).toBeInTheDocument()
     })
 
     it('applies neutral tone for an unrecognized status', () => {
-      renderWithProviders(<StatusBadge status={'bogus' as Status} pulse={false} />)
+      renderWithProviders(<StatusBadge status={'bogus' as StackStatus} pulse={false} />)
       const badge = getStatusByText('Unknown')
       expect(badge.getAttribute('data-tone')).toBe('neutral')
       expect(badge.className).toContain('text-muted-foreground')
     })
 
     it('does not render a dot for an unrecognized status', () => {
-      renderWithProviders(<StatusBadge status={'bogus' as Status} pulse />)
+      renderWithProviders(<StatusBadge status={'bogus' as StackStatus} pulse />)
       expect(getDot(getStatusByText('Unknown'))).not.toBeInTheDocument()
     })
   })

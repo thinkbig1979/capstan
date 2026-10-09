@@ -18,6 +18,7 @@ type ActionOutcome = 'success' | 'no_change' | 'partial' | 'failed'
  */
 export type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 export type AssertTrue<T extends true> = T
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type ActionOutcomeMatchesWire = AssertTrue<Exact<ActionOutcome, Outcome>>
 
 export interface ActionResult<D = Record<string, unknown>> {
