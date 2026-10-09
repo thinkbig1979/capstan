@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"reflect"
 	"testing"
 	"time"
 
@@ -376,4 +377,129 @@ func TestDockerCleanupReclaimedBytesNeverNegative(t *testing.T) {
 	require.Len(t, store.runs, 1)
 	assert.GreaterOrEqual(t, store.runs[0].CacheBytesReclaimed, int64(0), "a history row must never report negative bytes reclaimed")
 	assert.Equal(t, int64(math.MaxInt64), store.runs[0].CacheBytesReclaimed)
+}
+
+// agent-os-q1kh: every figure Execute reports has a Preview counterpart.
+//
+// agent-os-nacp found Preview summing dangling images while Execute also pruned
+// build cache, so the forecast under-reported by exactly the cache. The fix
+// pinned only that half. This is the class guard: Execute's report row is
+// models.DockerCleanupRun, Preview's is DockerCleanupPreview, and the table
+// below is the single place that says which Preview field forecasts which
+// Execute figure.
+//
+// THE RULE. Every field of models.DockerCleanupRun is in exactly one of two
+// maps: runToPreview (a reclaim figure, paired with the Preview field that
+// forecasts it) or notReclaimFigures (with the reason it needs no forecast). A
+// new Execute report field fails TestDockerCleanupEveryRunFieldIsClassified
+// until someone classifies it; a pairing is then proven on a live fixture by
+// TestDockerCleanupPreviewForecastsEveryReclaimFigure, where Execute and
+// Preview run over the same fake daemon and each pair must be non-zero on BOTH
+// sides (a pair that is zero on both sides agrees by emptiness).
+//
+// WHAT IT CANNOT SEE.
+//   - A new prune step whose bytes are added into an EXISTING field (a third
+//     prune summed into bytesReclaimed) leaves the field set unchanged, so the
+//     classification arm is silent. INFERRED, not tested: such a step needs a
+//     new dockerCleanupPruner method, which breaks fn7x2FakeDocker's compile and
+//     forces an edit to this file.
+//   - A reclaim figure reported outside models.DockerCleanupRun (an extra field
+//     in the handler's response) is invisible.
+//   - A reclaim figure wrongly filed under notReclaimFigures passes.
+//   - Cache bytes are asserted non-zero on both sides but not equal: the fake's
+//     cache figure is hand-set, so equality would be circular. Image count and
+//     image bytes ARE compared, because the fake derives them from the same
+//     images the preview lists.
+//   - Whether Preview's estimate matches what a real daemon would prune is out
+//     of scope (cacheReclaimableBytes documents it as an estimate).
+var runToPreview = map[string]string{
+	"ImagesDeleted":       "Candidates",
+	"BytesReclaimed":      "ReclaimableBytes",
+	"CacheBytesReclaimed": "CacheReclaimableBytes",
+}
+
+var notReclaimFigures = map[string]string{
+	"ID":           "run identity",
+	"Trigger":      "who started the run",
+	"Status":       "outcome of the run",
+	"StartedAt":    "timestamp",
+	"FinishedAt":   "timestamp",
+	"MinAgeHours":  "the floor applied, echoed by Preview as MinAgeHours; not an amount reclaimed",
+	"ErrorMessage": "failure text",
+}
+
+func TestDockerCleanupEveryRunFieldIsClassified(t *testing.T) {
+	runType := reflect.TypeOf(models.DockerCleanupRun{})
+	previewType := reflect.TypeOf(DockerCleanupPreview{})
+
+	seen := map[string]bool{}
+	for i := 0; i < runType.NumField(); i++ {
+		name := runType.Field(i).Name
+		seen[name] = true
+		_, paired := runToPreview[name]
+		_, excluded := notReclaimFigures[name]
+		assert.True(t, paired != excluded,
+			"DockerCleanupRun.%s must be in exactly one of runToPreview / notReclaimFigures: "+
+				"if Execute reports it as a reclaim figure, Preview needs a counterpart (agent-os-q1kh)", name)
+	}
+
+	// A table entry for a field that no longer exists would let a rename
+	// silently drop a pairing.
+	for name, previewField := range runToPreview {
+		assert.True(t, seen[name], "runToPreview names DockerCleanupRun.%s, which does not exist", name)
+		_, ok := previewType.FieldByName(previewField)
+		assert.True(t, ok, "runToPreview pairs %s with DockerCleanupPreview.%s, which does not exist", name, previewField)
+	}
+	for name := range notReclaimFigures {
+		assert.True(t, seen[name], "notReclaimFigures names DockerCleanupRun.%s, which does not exist", name)
+	}
+}
+
+// reclaimAmount reads one figure as a number: an integer field is its value, a
+// slice is its length (Candidates forecasts ImagesDeleted by count).
+func reclaimAmount(t *testing.T, v reflect.Value) int64 {
+	t.Helper()
+	switch v.Kind() {
+	case reflect.Slice:
+		return int64(v.Len())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int()
+	default:
+		t.Fatalf("cannot read %s as a reclaim amount", v.Kind())
+		return 0
+	}
+}
+
+func TestDockerCleanupPreviewForecastsEveryReclaimFigure(t *testing.T) {
+	ago := func(h int) time.Time { return time.Now().Add(-time.Duration(h) * time.Hour) }
+	const cacheBytes = 4096
+	docker := &fn7x2FakeDocker{
+		images: []models.DockerImage{
+			{ID: "sha256:old-a", Size: 1000, Created: hoursAgo(100)},
+			{ID: "sha256:old-b", Size: 2000, Created: hoursAgo(100)},
+			{ID: "sha256:recent", Size: 5555, Created: hoursAgo(1)},
+			{ID: "sha256:tagged", RepoTags: []string{"app:1"}, Size: 7777, Created: hoursAgo(100)},
+		},
+		cacheRecords:   []*build.CacheRecord{{ID: "old-unused", Size: cacheBytes, CreatedAt: ago(100)}},
+		cacheReclaimed: cacheBytes,
+	}
+	svc := NewDockerCleanupService(docker, &fn7x2FakeStore{})
+
+	run, err := svc.Execute(context.Background(), TriggerManual, 24)
+	require.NoError(t, err)
+	preview, err := svc.Preview(context.Background(), 24)
+	require.NoError(t, err)
+
+	// A table of nothing passes every loop below, so its size is asserted first.
+	require.Len(t, runToPreview, 3)
+	runValue, previewValue := reflect.ValueOf(*run), reflect.ValueOf(*preview)
+	for runField, previewField := range runToPreview {
+		executed := reclaimAmount(t, runValue.FieldByName(runField))
+		forecast := reclaimAmount(t, previewValue.FieldByName(previewField))
+		assert.Positive(t, executed, "fixture must make Execute reclaim something for %s", runField)
+		assert.Positive(t, forecast, "Preview.%s forecasts nothing while Execute reported %s=%d", previewField, runField, executed)
+	}
+
+	assert.Equal(t, int64(run.ImagesDeleted), int64(len(preview.Candidates)))
+	assert.Equal(t, run.BytesReclaimed, preview.ReclaimableBytes)
 }
