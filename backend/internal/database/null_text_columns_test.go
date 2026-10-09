@@ -24,7 +24,7 @@ func TestActionLogReaders_SurviveNullDetail(t *testing.T) {
 	require.NoError(t, db.LogAction(models.ActionLog{ID: "a-real", UserID: "u", StackID: "s1",
 		Action: "stack.start", Detail: `{"k":"v"}`, CreatedAt: base.Add(time.Hour)}))
 	_, err := db.db.Exec(`INSERT INTO action_log (id, user_id, stack_id, action, created_at) VALUES (?, ?, ?, ?, ?)`,
-		"a-null", "u", "s1", "stack.stop", base)
+		"a-null", "u", "s1", "stack.stop", storedInstant(base))
 	require.NoError(t, err)
 
 	assertEntries := func(t *testing.T, got []models.ActionLog) {

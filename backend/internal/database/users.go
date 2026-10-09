@@ -46,15 +46,27 @@ func (d *DB) CreateFirstUser(user models.User) (bool, error) {
 	return n == 1, nil
 }
 
+// userColumns is the one column list every full-row users reader selects, in
+// scanUser's target order. Three readers used to carry their own copies, which
+// agreed only by convention (agent-os-rh7m, as agent-os-13xd did for
+// backup_runs).
+const userColumns = `id, username, password, created_at, updated_at`
+
+// scanUser reads one row selected with userColumns, from *sql.Row or
+// *sql.Rows.
+func scanUser(row interface{ Scan(dest ...any) error }) (models.User, error) {
+	var user models.User
+	err := row.Scan(&user.ID, &user.Username, &user.Password, &user.CreatedAt, &user.UpdatedAt)
+	return user, err
+}
+
 // GetUserByUsername looks up a user case-insensitively (agent-os-tmo): the
 // COLLATE NOCASE predicate matches the unique index migration 13 creates
 // (idx_users_username_nocase), so "Admin" and "admin" resolve to the same
 // row here the same way the index treats them as the same value on insert.
 func (d *DB) GetUserByUsername(username string) (*models.User, error) {
-	var user models.User
-	query := `SELECT id, username, password, created_at, updated_at
-	          FROM users WHERE username = ? COLLATE NOCASE`
-	err := d.db.QueryRow(query, username).Scan(&user.ID, &user.Username, &user.Password, &user.CreatedAt, &user.UpdatedAt)
+	query := `SELECT ` + userColumns + ` FROM users WHERE username = ? COLLATE NOCASE`
+	user, err := scanUser(d.db.QueryRow(query, username))
 	if err != nil {
 		return nil, notFound(err, "user", username)
 	}
@@ -62,10 +74,8 @@ func (d *DB) GetUserByUsername(username string) (*models.User, error) {
 }
 
 func (d *DB) GetUserByID(id string) (*models.User, error) {
-	var user models.User
-	query := `SELECT id, username, password, created_at, updated_at
-	          FROM users WHERE id = ?`
-	err := d.db.QueryRow(query, id).Scan(&user.ID, &user.Username, &user.Password, &user.CreatedAt, &user.UpdatedAt)
+	query := `SELECT ` + userColumns + ` FROM users WHERE id = ?`
+	user, err := scanUser(d.db.QueryRow(query, id))
 	if err != nil {
 		return nil, notFound(err, "user", id)
 	}
@@ -95,11 +105,9 @@ func (d *DB) GetSoleUser() (*models.User, error) {
 		return nil, fmt.Errorf("%w: found %d", ErrNoSoleUser, count)
 	}
 
-	var user models.User
-	query := `SELECT id, username, password, created_at, updated_at FROM users LIMIT 1`
-	if err := d.db.QueryRow(query).Scan(
-		&user.ID, &user.Username, &user.Password, &user.CreatedAt, &user.UpdatedAt,
-	); err != nil {
+	query := `SELECT ` + userColumns + ` FROM users LIMIT 1`
+	user, err := scanUser(d.db.QueryRow(query))
+	if err != nil {
 		// count == 1 was true a moment ago, so sql.ErrNoRows here is a race
 		// (the row was deleted between the two queries), not the ordinary
 		// "no user configured" answer — that is ErrNoSoleUser above.
