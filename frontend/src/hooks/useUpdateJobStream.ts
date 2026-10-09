@@ -13,7 +13,13 @@ import type {
 } from '@/stores/updateJobStore'
 import { queryKeys } from '@/lib/query-keys'
 import type { AssertTrue, Exact } from '@/lib/action-result'
-import type { Outcome, UpdateJobWireStatus, UpdateJobWireStream, UpdateJobWireTargetType } from '@/types'
+import type {
+  Outcome,
+  UpdateJobWireDoneStatus,
+  UpdateJobWireStatus,
+  UpdateJobWireStream,
+  UpdateJobWireTargetType,
+} from '@/types'
 import { arrayOf, frameValidator, oneOf, optOneOf, optStr, record, str } from '@/lib/wsFrames'
 
 // ── WS frame shapes (per api-contract.md) ────────────────────────────────────
@@ -34,9 +40,12 @@ interface StatusFrame {
   error?: string
 }
 
+// The terminal subset of UpdateJobStatus. Tied to services.DoneStatus below.
+type JobDoneStatus = 'success' | 'error'
+
 interface DoneFrame {
   type: 'done'
-  status: 'success' | 'error'
+  status: JobDoneStatus
   outcome?: UpdateJobOutcome
   reason?: string
   error?: string
@@ -63,6 +72,7 @@ export const JOB_OUTCOMES = ['success', 'no_change', 'partial', 'failed'] as con
 // the same way action-result.ts's ActionOutcomeMatchesWire does.
 export type JobOutcomesMatchWire = AssertTrue<Exact<(typeof JOB_OUTCOMES)[number], Outcome>>
 export type UpdateJobOutcomeMatchesWire = AssertTrue<Exact<UpdateJobOutcome, Outcome>>
+export const JOB_DONE_STATUSES = ['success', 'error'] as const satisfies readonly JobDoneStatus[]
 export const JOB_TARGET_TYPES = ['container', 'stack'] as const satisfies readonly UpdateJobTargetType[]
 const LINE_STREAMS = ['stdout', 'stderr', 'status'] as const satisfies readonly JobLineStream[]
 // Status, stream and target type are Go consts (services.Status, services.Stream,
@@ -74,6 +84,13 @@ export type UpdateJobStatusMatchesWire = AssertTrue<Exact<UpdateJobStatus, Updat
 export type JobStatusesMatchWire = AssertTrue<Exact<(typeof JOB_STATUSES)[number], UpdateJobWireStatus>>
 export type JobLineStreamMatchesWire = AssertTrue<Exact<JobLineStream, UpdateJobWireStream>>
 export type LineStreamsMatchWire = AssertTrue<Exact<(typeof LINE_STREAMS)[number], UpdateJobWireStream>>
+// A done frame carries services.DoneStatus, the terminal subset of Status. Exact
+// pins the set to the generated type; the Extends assertion pins "subset of
+// UpdateJobStatus" so a done status that is not a job status cannot be added on
+// the TS side alone (the Go side is pinned by TestDoneStatusIsTheTerminalSubsetOfStatus).
+export type JobDoneStatusMatchesWire = AssertTrue<Exact<JobDoneStatus, UpdateJobWireDoneStatus>>
+export type JobDoneStatusesMatchWire = AssertTrue<Exact<(typeof JOB_DONE_STATUSES)[number], UpdateJobWireDoneStatus>>
+export type JobDoneStatusIsJobStatus = AssertTrue<JobDoneStatus extends UpdateJobStatus ? true : false>
 export type UpdateJobTargetTypeMatchesWire = AssertTrue<Exact<UpdateJobTargetType, UpdateJobWireTargetType>>
 export type JobTargetTypesMatchWire = AssertTrue<Exact<(typeof JOB_TARGET_TYPES)[number], UpdateJobWireTargetType>>
 
@@ -113,7 +130,7 @@ export const parseJobStreamFrame = frameValidator((raw): JobStreamFrame | null =
     case 'done':
       return {
         type: 'done',
-        status: oneOf(f.status, ['success', 'error'] as const),
+        status: oneOf(f.status, JOB_DONE_STATUSES),
         outcome: optOneOf(f.outcome, JOB_OUTCOMES),
         reason: optStr(f.reason),
         error: optStr(f.error),
