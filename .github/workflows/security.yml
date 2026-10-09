@@ -94,6 +94,13 @@ jobs:
         working-directory: backend
         run: go version
 
+      # This job keeps the default Go caches on purpose (agent-os-ldtp): govulncheck
+      # keeps no per-package verdict cache, its verdict comes from the
+      # vulnerability database fetched on every run, so a stale build cache has
+      # nothing to replay. INFERRED, not tested. If that stops being true, the
+      # step needs a per-run GOCACHE like backend.yml's lint and Vet steps, and
+      # scripts/check-analysis-caches.sh should list govulncheck.
+      #
       # Deliberately @latest rather than a pin. Pinning the scanner would not
       # make the scan reproducible anyway — the vulnerability database is
       # fetched at run time — and an old analyzer is strictly worse at finding
@@ -422,13 +429,21 @@ jobs:
       # so its one run-time network dependency, the vulnerability DB, is
       # fetched HERE first, by a script that retries only on a recognised
       # registry stall, and the scan then runs with TRIVY_SKIP_DB_UPDATE so it
-      # never fetches at all. setup-trivy is the same action, SHA and version
-      # that trivy-action@v0.36.0 resolves internally (its action.yaml pins
-      # aquasecurity/setup-trivy@3fb12ec1... "v0.2.6" with version v0.70.0),
-      # invoked one step earlier: no new third-party code runs in this job.
-      # Keep the two versions in lockstep when bumping either. Signatures and
-      # sizing are measured and documented in the script header. See
-      # agent-os-pvta.
+      # never fetches at all. setup-trivy is the same ACTION that
+      # trivy-action@v0.36.0 resolves internally, invoked one step earlier, but
+      # NOT the same pin: trivy-action's action.yaml pins
+      # setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 (v0.2.6), and this
+      # step pins 81e514348e19b6112ce2a7e3ecbafe19c1e1f567 (v0.3.1), which
+      # Dependabot bumped in #358 for two upstream fixes (script injection in
+      # run blocks, setup-trivy#33; a literal runner.temp that broke action
+      # loading, #38). Both receive `version: v0.70.0` explicitly, so the trivy
+      # BINARY is the same either way; only the installer wrapper differs.
+      # Re-check the pair with these two commands; on 2026-10-09 they printed
+      # 3fb12ec12f41... "# v0.2.6" (line 129) and the v0.3.1 SHA above:
+      #   gh api 'repos/aquasecurity/trivy-action/contents/action.yaml?ref=v0.36.0' --jq .content | base64 -d | grep -n 'setup-trivy@'
+      #   gh api repos/aquasecurity/setup-trivy/git/ref/tags/v0.3.1 --jq .object.sha
+      # Signatures and sizing of the retry are measured and documented in the
+      # script header. See agent-os-pvta, agent-os-ya30.
       - name: Install Trivy
         uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:

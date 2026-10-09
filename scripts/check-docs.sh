@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes full-row-selects arm-refusal pipefail-grep-q"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes full-row-selects arm-refusal pipefail-grep-q awk-portability analysis-caches"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -1346,6 +1346,117 @@ check_pipefail_grep_q() {
   return 0
 }
 
+# awk-portability: every awk-using scripts/check-*.sh runs its --self-test under
+# mawk, the awk on the CI runners (agent-os-55re). A script that passes under
+# gawk, the awk on most dev boxes, can fail under mawk: PR #613's
+# check-full-row-selects.sh passed 11/11 locally and failed 4/11 on CI because
+# mawk creates `a[k]` before it evaluates `(k in a ? ...)` on the right-hand
+# side (fixed in 81ecfd0). Each check below already runs its own self-test under
+# the default awk; this one repeats the awk-using ones under mawk, so the next
+# gawk-only construct fails here and not on a red CI run.
+#
+# MECHANISM: a temp dir holding `awk -> mawk`, put first on PATH for the child
+# only. The scripts call `command awk`, which is a PATH lookup. The shim is
+# proven first (the shimmed `awk -W version` must say mawk); a shim that did
+# not take effect would re-run the default awk and read as a pass.
+# SELECTION: scripts/check-*.sh with a non-comment `awk` and a --self-test.
+# Awk users with no --self-test are named in the PASS line, not hidden.
+# SKIP (rc 3) when mawk is not installed: loud, counted, never a silent pass.
+# BLIND SPOT: self-tests only. An awk path that only a scan of the real tree
+# reaches is not run under mawk here.
+check_awk_portability() {
+  local mawk=""
+  if [ -x /usr/bin/mawk ]; then
+    mawk=/usr/bin/mawk
+  else
+    mawk=$(command -v mawk 2>/dev/null || true)
+  fi
+  if [ -z "$mawk" ]; then
+    echo "SKIP: awk-portability - no mawk on this box, so the awk self-tests ran under the default awk only; CI runs mawk"
+    return 3
+  fi
+
+  local shim
+  shim=$(mktemp -d) || { echo "FAIL: awk-portability - could not create a temp directory"; return 1; }
+  ln -s "$mawk" "$shim/awk"
+  local shimmed default
+  shimmed=$(PATH="$shim:$PATH" awk -W version 2>&1 | head -n 1)
+  default=$(awk -W version 2>&1 | head -n 1)
+  case "$shimmed" in
+    mawk*) ;;
+    *)
+      rm -rf "$shim"
+      echo "FAIL: awk-portability - the PATH shim did not make awk resolve to mawk (awk -W version said: ${shimmed:-<nothing>}); a self-test run through it would still use the default awk"
+      return 1
+      ;;
+  esac
+
+  local f name body ran=0 failed="" out status skipped_names=""
+  for f in "$SCRIPT_DIR"/check-*.sh; do
+    name=$(basename "$f")
+    [ "$name" = "check-docs.sh" ] && continue
+    body=$(command grep -vE '^[[:space:]]*#' "$f")
+    command grep -qE '(^|[^A-Za-z_./-])awk([[:space:]]|$)' <<<"$body" || continue
+    if ! command grep -qF -- '--self-test' <<<"$body"; then
+      skipped_names="$skipped_names $name"
+      continue
+    fi
+    out=$(PATH="$shim:$PATH" bash "$f" --self-test 2>&1)
+    status=$?
+    ran=$((ran + 1))
+    if [ "$status" -ne 0 ]; then
+      failed="$failed $name"
+      echo "FAIL: awk-portability - $name --self-test failed under $shimmed (exit $status):"
+      echo "$out"
+    fi
+  done
+  rm -rf "$shim"
+
+  if [ "$ran" -eq 0 ]; then
+    echo "FAIL: awk-portability - no scripts/check-*.sh combines awk with a --self-test; the scan reached nothing"
+    return 1
+  fi
+  if [ -n "$failed" ]; then
+    echo "FAIL: awk-portability - self-test failed under mawk, the awk on CI, for:$failed (gawk-only awk construct; see 81ecfd0)"
+    return 1
+  fi
+  echo "PASS: awk-portability - $ran awk self-test(s) passed under $shimmed (default awk: ${default:-unknown})${skipped_names:+; awk users with no --self-test, not run:$skipped_names}"
+  return 0
+}
+
+# check_analysis_caches delegates to scripts/check-analysis-caches.sh: on a
+# self-hosted runner every golangci-lint, go vet and staticcheck step runs over
+# a per-run GOCACHE under RUNNER_TEMP, so an analyzer verdict never comes from
+# a cache an earlier job left on the runner (agent-os-p01q, agent-os-ldtp).
+# Self-test first, same reasoning as ws-registration.
+check_analysis_caches() {
+  local script="$SCRIPT_DIR/check-analysis-caches.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: analysis-caches - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: analysis-caches - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: analysis-caches - ${self#analysis-caches }; ${out#check-analysis-caches: }"
+    return 0
+  fi
+  echo "FAIL: analysis-caches - a self-hosted analysis step has no per-run cache:"
+  echo "$out"
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # dispatch
 # ---------------------------------------------------------------------------
@@ -1381,6 +1492,8 @@ Valid check names:
   full-row-selects no database reader hand-copies a full-row column or Scan list (<x>Columns / scan<X> instead)
   arm-refusal     no scheduler arm function refuses with only a log line (a record...() call, or a reasoned marker)
   pipefail-grep-q no pipe into grep -q in a script that sets pipefail (a here-string instead)
+  awk-portability every awk-using check-*.sh --self-test also passes under mawk, the awk on CI
+  analysis-caches every golangci-lint, go vet and staticcheck step on a self-hosted job runs over a per-run GOCACHE
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -1414,6 +1527,8 @@ run_check() {
     full-row-selects) check_full_row_selects ;;
     arm-refusal) check_arm_refusal ;;
     pipefail-grep-q) check_pipefail_grep_q ;;
+    awk-portability) check_awk_portability ;;
+    analysis-caches) check_analysis_caches ;;
     *) return 2 ;;
   esac
 }
