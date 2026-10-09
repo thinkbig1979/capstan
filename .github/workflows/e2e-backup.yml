@@ -172,6 +172,13 @@ jobs:
         working-directory: frontend
         run: pnpm install --frozen-lockfile
 
+      # Nothing else type-checks the Playwright config or specs: frontend's `tsc -b`
+      # only covers frontend/, which is how an option Playwright does not have
+      # (screenshotsPath) sat in playwright.config.ts unnoticed (agent-os-jzw6).
+      # typescript comes from the frontend install; tsconfig.e2e.json says why.
+      - name: Typecheck Playwright config and specs
+        run: ./frontend/node_modules/.bin/tsc -p tsconfig.e2e.json
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 

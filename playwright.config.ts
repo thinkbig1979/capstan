@@ -48,7 +48,6 @@ export default defineConfig({
     baseURL: process.env.CAPSTAN_BASE_URL ?? 'http://localhost:3001',
     headless: true,
     screenshot: 'only-on-failure',
-    screenshotsPath: './testing/reports/screenshots',
     video: 'off',
     // Give real backup operations room to breathe.
     actionTimeout: 30_000,
