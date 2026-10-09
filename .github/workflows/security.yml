@@ -94,6 +94,13 @@ jobs:
         working-directory: backend
         run: go version
 
+      # This job keeps the default Go caches on purpose (agent-os-ldtp): govulncheck
+      # keeps no per-package verdict cache, its verdict comes from the
+      # vulnerability database fetched on every run, so a stale build cache has
+      # nothing to replay. INFERRED, not tested. If that stops being true, the
+      # step needs a per-run GOCACHE like backend.yml's lint and Vet steps, and
+      # scripts/check-analysis-caches.sh should list govulncheck.
+      #
       # Deliberately @latest rather than a pin. Pinning the scanner would not
       # make the scan reproducible anyway — the vulnerability database is
       # fetched at run time — and an old analyzer is strictly worse at finding

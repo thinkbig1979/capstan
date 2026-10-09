@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes full-row-selects arm-refusal pipefail-grep-q awk-portability"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes full-row-selects arm-refusal pipefail-grep-q awk-portability analysis-caches"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -1424,6 +1424,39 @@ check_awk_portability() {
   return 0
 }
 
+# check_analysis_caches delegates to scripts/check-analysis-caches.sh: on a
+# self-hosted runner every golangci-lint, go vet and staticcheck step runs over
+# a per-run GOCACHE under RUNNER_TEMP, so an analyzer verdict never comes from
+# a cache an earlier job left on the runner (agent-os-p01q, agent-os-ldtp).
+# Self-test first, same reasoning as ws-registration.
+check_analysis_caches() {
+  local script="$SCRIPT_DIR/check-analysis-caches.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: analysis-caches - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: analysis-caches - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: analysis-caches - ${self#analysis-caches }; ${out#check-analysis-caches: }"
+    return 0
+  fi
+  echo "FAIL: analysis-caches - a self-hosted analysis step has no per-run cache:"
+  echo "$out"
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # dispatch
 # ---------------------------------------------------------------------------
@@ -1460,6 +1493,7 @@ Valid check names:
   arm-refusal     no scheduler arm function refuses with only a log line (a record...() call, or a reasoned marker)
   pipefail-grep-q no pipe into grep -q in a script that sets pipefail (a here-string instead)
   awk-portability every awk-using check-*.sh --self-test also passes under mawk, the awk on CI
+  analysis-caches every golangci-lint, go vet and staticcheck step on a self-hosted job runs over a per-run GOCACHE
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -1494,6 +1528,7 @@ run_check() {
     arm-refusal) check_arm_refusal ;;
     pipefail-grep-q) check_pipefail_grep_q ;;
     awk-portability) check_awk_portability ;;
+    analysis-caches) check_analysis_caches ;;
     *) return 2 ;;
   esac
 }

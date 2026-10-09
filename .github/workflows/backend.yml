@@ -121,9 +121,27 @@ jobs:
         working-directory: backend
         run: go build ./...
 
+      # The three analysis steps (this one, the build-tagged vet and the
+      # getter-errors vettool) run over a per-run GOCACHE under runner.temp, one
+      # directory shared by the three so only the first compiles cold
+      # (agent-os-ldtp, the unit-job sibling of the lint job's agent-os-p01q).
+      # On these self-hosted runners HOME persists between jobs, so the default
+      # GOCACHE is runner-local state every job shares; on 2026-10-02 a shared
+      # cache gave capstan-3 six false staticcheck findings that capstan-2 did
+      # not see. A vet verdict is the output that must not come from state an
+      # earlier job left behind. runner.temp is emptied at the start and end of
+      # every job per GitHub's docs (not tested here; the `go env GOCACHE` line
+      # below shows the path in the log and the first run shows the cold start).
+      # Build and Unit tests keep the warm cache: -count=1 turns result caching
+      # off and the build cache is content-addressed. scripts/check-analysis-
+      # caches.sh keeps every analysis step on a per-run cache.
       - name: Vet
         working-directory: backend
-        run: go vet ./...
+        env:
+          GOCACHE: ${{ runner.temp }}/go-build-vet
+        run: |
+          go env GOCACHE
+          go vet ./...
 
       # Build-tagged files are invisible to the step above, so a tag nothing
       # compiles rots silently: `manualremote` accumulated a duplicate runGit
@@ -135,6 +153,8 @@ jobs:
       # standing between that tag and the next silent rot.
       - name: Vet (build-tagged files)
         working-directory: backend
+        env:
+          GOCACHE: ${{ runner.temp }}/go-build-vet
         run: go vet -tags=manualremote ./...
 
       # -count=1 disables the test cache, so a green run always reflects this
@@ -183,6 +203,8 @@ jobs:
       # test run and vet run, so it has no step of its own.
       - name: Getter-errors analyzer
         working-directory: backend
+        env:
+          GOCACHE: ${{ runner.temp }}/go-build-vet
         run: |
           go test -C tools/geterrors ./... -count=1
           go build -C tools/geterrors -o "$RUNNER_TEMP/geterrors" ./cmd/geterrors
