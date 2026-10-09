@@ -491,18 +491,23 @@ func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {
 		{req.CleanupHistoryRetentionDays, database.SettingCleanupHistoryRetentionDays, "cleanup_history_retention"},
 	}
 
-	applied := gin.H{}
+	// Every field is validated before any is written, so a rejected request
+	// changes nothing (agent-os-tnjq).
 	for _, u := range updates {
-		if u.value == nil {
-			continue
-		}
-		if *u.value < database.MinRetentionDays {
+		if u.value != nil && *u.value < database.MinRetentionDays {
 			c.JSON(http.StatusBadRequest, models.NewAppError(
 				http.StatusBadRequest,
 				"VALIDATION_ERROR",
 				fmt.Sprintf("Retention days must be at least %d", database.MinRetentionDays),
 			))
 			return
+		}
+	}
+
+	applied := gin.H{}
+	for _, u := range updates {
+		if u.value == nil {
+			continue
 		}
 		if err := h.db.SetSetting(u.key, strconv.Itoa(*u.value)); err != nil {
 			slog.Error("Failed to update retention setting", "setting", u.label, "error", err)
