@@ -73,3 +73,29 @@ const (
 	JobTargetTypeContainer JobTargetType = "container"
 	JobTargetTypeStack     JobTargetType = "stack"
 )
+
+// DoneStatus is the status a `done` frame on /ws/jobs carries: the terminal
+// subset of Status. Values are literals, not DoneStatus(StatusSuccess), because
+// tygo cannot evaluate a conversion and emits `unknown` for it; a test ties the
+// set to Status instead (agent-os-rc69).
+type DoneStatus string
+
+const (
+	DoneStatusSuccess DoneStatus = "success"
+	DoneStatusError   DoneStatus = "error"
+)
+
+// StackStatus is a stack's status as the stacks API and the stack_status frame
+// on /ws/events report it. models.Stack.Status and models.StackEvent.Status
+// stay plain strings (models cannot import services); producers convert with
+// string(StackStatusX) (agent-os-rc69).
+type StackStatus string
+
+const (
+	StackStatusRunning StackStatus = "running"
+	StackStatusStopped StackStatus = "stopped"
+	StackStatusPartial StackStatus = "partial"
+	StackStatusPaused  StackStatus = "paused"
+	StackStatusUnknown StackStatus = "unknown"
+	StackStatusError   StackStatus = "error"
+)

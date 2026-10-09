@@ -6,6 +6,7 @@ import { useToggleAutoUpdate } from '@/hooks/useResources'
 import { presentError } from '@/lib/error-handler'
 
 import type { GlobalAutoUpdateState } from '@/components/dashboard/auto-update-state'
+import type { AutoUpdateTargetType } from '@/types'
 
 /** Why the toggle is locked, in the words the operator needs. */
 const LOCK_REASON: Record<
@@ -30,7 +31,7 @@ const LOCK_REASON: Record<
 }
 
 interface AutoUpdateToggleProps {
-  targetType: 'container' | 'stack'
+  targetType: AutoUpdateTargetType
   targetId: string
   enabled: boolean
   paused: boolean

@@ -75,11 +75,14 @@ import type {
   DiskUsageBreakdown,
   DockerCleanupCandidate,
   DockerCleanupPreview,
+  DoneStatus as UpdateJobWireDoneStatus,
   JobTargetType as UpdateJobWireTargetType,
+  StackStatus as WireStackStatus,
   Status as UpdateJobWireStatus,
   Stream as UpdateJobWireStream,
 } from './generated-services'
 import type { Info as VersionInfo } from './generated-version'
+import type { AssertTrue, Exact } from '@/lib/action-result'
 
 /* ------------------------------------------------------------------ *
  * Generated wire types, re-exported unchanged.
@@ -112,12 +115,14 @@ export type {
   StackEvent,
   SyncPreflightResponse,
   UpdateResult,
+  UpdateJobWireDoneStatus,
   UpdateJobWireStatus,
   UpdateJobWireStream,
   UpdateJobWireTargetType,
   User,
   VersionInfo,
   WireActionResult,
+  WireStackStatus,
 }
 
 /* ------------------------------------------------------------------ *
@@ -126,9 +131,12 @@ export type {
 
 type ContainerState = 'created' | 'running' | 'paused' | 'restarting' | 'removing' | 'exited' | 'dead'
 
-// 'paused' is never computed by the stacks API; it arrives on /ws/events as a
-// stack_status frame for a Docker pause (MonitorService.stackEventFor).
+// 'paused' arrives on /ws/events as a stack_status frame for a Docker pause
+// (MonitorService.stackEventFor) and, when every container is paused, on the
+// stacks API (BuildStackStatuses). Proved equal to services.StackStatus
+// (agent-os-rc69): a status added in Go fails tsc -b at the assertion below.
 export type StackStatus = 'running' | 'stopped' | 'partial' | 'paused' | 'unknown' | 'error'
+export type StackStatusMatchesWire = AssertTrue<Exact<StackStatus, WireStackStatus>>
 
 /**
  * Re-points a generated array field at this file's narrowed element type while
@@ -176,9 +184,14 @@ export type LintResponse = Omit<WireLintResponse, 'lintResults'> & {
   lintResults: NarrowedArray<WireLintResponse['lintResults'], LintResult>
 }
 
-// narrows models.AutoUpdatePolicy.TargetType, a Go string
+// narrows models.AutoUpdatePolicy.TargetType, a Go string (models cannot import
+// services). The only gate a policy target passes is handlers.isAutoUpdateTargetType,
+// which checks services.JobTargetType, so the union is proved equal to that
+// generated type (agent-os-rc69).
+export type AutoUpdateTargetType = 'container' | 'stack'
+export type AutoUpdateTargetTypeMatchesWire = AssertTrue<Exact<AutoUpdateTargetType, UpdateJobWireTargetType>>
 export type AutoUpdatePolicy = Omit<WireAutoUpdatePolicy, 'targetType'> & {
-  targetType: 'container' | 'stack'
+  targetType: AutoUpdateTargetType
 }
 
 // narrows models.BackupPolicy.TargetType and .StopPolicy, both Go strings

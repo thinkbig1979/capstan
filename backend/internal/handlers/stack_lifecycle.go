@@ -253,11 +253,11 @@ func lifecycleStatus(ar truth.ActionResult) string {
 	}
 	switch ar.Outcome {
 	case truth.OutcomeSuccess, truth.OutcomeNoChange:
-		return "running"
+		return string(services.StackStatusRunning)
 	case truth.OutcomePartial:
-		return "partial"
+		return string(services.StackStatusPartial)
 	default:
-		return "error"
+		return string(services.StackStatusError)
 	}
 }
 
