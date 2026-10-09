@@ -1112,9 +1112,9 @@ func (s *SchedulerService) runAutoUpdates(ctx context.Context, updates []models.
 	for i := range policies {
 		p := &policies[i]
 		switch p.TargetType {
-		case "container":
+		case string(JobTargetTypeContainer):
 			containerPolicies[p.TargetID] = p
-		case "stack":
+		case string(JobTargetTypeStack):
 			stackPolicies[p.TargetID] = p
 		}
 	}

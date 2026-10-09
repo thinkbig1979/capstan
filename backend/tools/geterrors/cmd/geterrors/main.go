@@ -1,6 +1,5 @@
-// The geterrors command is the go vet driver for the geterrors and timebind
-// analyzers. Both run by default; -geterrors=false or -timebind=false runs
-// one alone.
+// The geterrors command is the go vet driver for the geterrors, timebind and
+// wirevalue analyzers. All run by default; -<name>=false turns one off.
 //
 //	go build -C tools/geterrors -o "$TMPDIR/geterrors" ./cmd/geterrors
 //	go vet -vettool="$TMPDIR/geterrors" ./...      # run from backend/
@@ -21,11 +20,12 @@ import (
 
 	"github.com/thinkbig1979/capstan/backend/tools/geterrors"
 	"github.com/thinkbig1979/capstan/backend/tools/geterrors/timebind"
+	"github.com/thinkbig1979/capstan/backend/tools/geterrors/wirevalue"
 )
 
 // analyzers is what CI's `go vet -vettool` runs; main_test.go pins its
 // members, because dropping one leaves the vet step green and the class
 // unwatched.
-var analyzers = []*analysis.Analyzer{geterrors.Analyzer, timebind.Analyzer}
+var analyzers = []*analysis.Analyzer{geterrors.Analyzer, timebind.Analyzer, wirevalue.Analyzer}
 
 func main() { unitchecker.Main(analyzers...) }
