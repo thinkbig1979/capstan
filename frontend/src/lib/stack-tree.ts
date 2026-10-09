@@ -37,12 +37,6 @@ export function countTreeNodeStacks(node: TreeNode): number {
   return node.stacks.length + node.children.reduce((sum, c) => sum + countTreeNodeStacks(c), 0)
 }
 
-export function hasTreeNesting(nodes: TreeNode[]): boolean {
-  return nodes.some(
-    (n) => n.children.length > 0 || n.stacks.length > 1,
-  )
-}
-
 export function buildDirectoryTree(
   stacks: Stack[],
   configuredDirs: string[],
