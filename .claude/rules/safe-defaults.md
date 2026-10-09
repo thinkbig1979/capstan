@@ -65,6 +65,12 @@ fix: file them.
    `useActionMutation` (`frontend/src/hooks/useActionMutation.ts`). A `toast.success`
    that doesn't read the outcome is a defect.
    (CI-guarded: `frontend/src/lib/__tests__/actionResultConsumers.test.ts`.)
+21. **An instant bound into SQL** goes through `storedInstant`
+   (`backend/internal/database/stored_instant.go`), never a raw `time.Time`:
+   the driver stores that as `t.String()` in the local zone, which does not
+   sort or compare as the instant does. A site that must stay raw carries
+   `//timebind:ignore <reason>`. (CI-guarded: the timebind analyzer in the
+   geterrors vettool.)
 
 ## Trust and secrets
 
