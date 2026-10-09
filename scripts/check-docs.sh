@@ -1019,8 +1019,9 @@ check_goroutine_sends() {
 }
 
 # check_settings_writes delegates to scripts/check-settings-writes.sh: no
-# handler func writes several settings through raw SetSetting calls, which
-# half-applies a form on a storage fault (agent-os-u0nd). Self-test first, same
+# handler or services func writes several settings through raw SetSetting
+# calls, which half-applies a form or a scan result on a storage fault
+# (agent-os-u0nd, agent-os-qz9b). Self-test first, same
 # reasoning as ws-registration.
 check_settings_writes() {
   local script="$SCRIPT_DIR/check-settings-writes.sh"
@@ -1045,7 +1046,7 @@ check_settings_writes() {
     echo "PASS: settings-writes - ${self#settings-writes }; ${out#check-settings-writes: }"
     return 0
   fi
-  echo "FAIL: settings-writes - a handler writes several settings one key at a time (collect them and call SetSettings once):"
+  echo "FAIL: settings-writes - a function writes several settings one key at a time (collect them and call SetSettings once):"
   echo "$out"
   return 1
 }

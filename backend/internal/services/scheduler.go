@@ -504,11 +504,14 @@ func (s *SchedulerService) performScan(ctx context.Context) ([]models.CachedUpda
 		s.logger.Error("Failed to cache updates", "error", err)
 	}
 
-	if err := s.db.SetSetting("update_scan_last_run", now); err != nil {
-		s.logger.Error("Failed to record scan time", "error", err)
-	}
-	if err := s.db.SetSetting("update_scan_last_error", ""); err != nil {
-		s.logger.Error("Failed to clear scan error", "error", err)
+	// One write: the scan time and the cleared error describe the same scan,
+	// so a failed clear must not leave a fresh time next to a stale error
+	// (agent-os-qz9b).
+	if err := s.db.SetSettings([]database.SettingValue{
+		{Key: "update_scan_last_run", Value: now},
+		{Key: "update_scan_last_error", Value: ""},
+	}); err != nil {
+		s.logger.Error("Failed to record scan result", "error", err)
 	}
 
 	s.logger.Info("Scan completed", "updates_found", len(cachedUpdates))
