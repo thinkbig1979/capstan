@@ -257,7 +257,7 @@ func startUpdateScheduler(sched updateScheduler, db schedulerSettings, log *slog
 	}
 
 	applyMode, err := db.GetSetting("update_apply_mode")
-	if err != nil {
+	if err != nil { // arm-refusal-ok: the scan interval is 0, so the scheduler is off by configuration and nothing would apply either way; a "last scan error" here would report a fault in a scheduler the operator turned off
 		log.Error("The update apply mode could not be read, so it is unknown whether a scheduled apply is "+
 			"configured; the update scan interval is 0, so nothing will be applied either way",
 			"error", err)

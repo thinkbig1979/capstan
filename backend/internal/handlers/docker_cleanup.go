@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/thinkbig1979/capstan/backend/internal/database"
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 	"github.com/thinkbig1979/capstan/backend/internal/services"
 )
@@ -147,26 +148,24 @@ func (h *ResourcesHandler) updateCleanupPolicy(c *gin.Context) {
 	}
 
 	applied := gin.H{}
+	var values []database.SettingValue
 	if req.Enabled != nil {
-		if err := h.db.SetSetting(services.SettingDockerCleanupEnabled, strconv.FormatBool(*req.Enabled)); err != nil {
-			h.cleanupSettingWriteFailed(c, services.SettingDockerCleanupEnabled, err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: services.SettingDockerCleanupEnabled, Value: strconv.FormatBool(*req.Enabled)})
 		applied["enabled"] = *req.Enabled
 	}
 	if req.MinAgeHours != nil {
-		if err := h.db.SetSetting(services.SettingDockerCleanupMinAgeHours, strconv.Itoa(*req.MinAgeHours)); err != nil {
-			h.cleanupSettingWriteFailed(c, services.SettingDockerCleanupMinAgeHours, err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: services.SettingDockerCleanupMinAgeHours, Value: strconv.Itoa(*req.MinAgeHours)})
 		applied["minAgeHours"] = *req.MinAgeHours
 	}
 	if req.IntervalHours != nil {
-		if err := h.db.SetSetting(services.SettingDockerCleanupIntervalHours, strconv.Itoa(*req.IntervalHours)); err != nil {
-			h.cleanupSettingWriteFailed(c, services.SettingDockerCleanupIntervalHours, err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: services.SettingDockerCleanupIntervalHours, Value: strconv.Itoa(*req.IntervalHours)})
 		applied["intervalHours"] = *req.IntervalHours
+	}
+	// One transaction, so a storage fault cannot store half a policy
+	// (agent-os-u0nd).
+	if err := h.db.SetSettings(values); err != nil {
+		h.cleanupSettingWriteFailed(c, err)
+		return
 	}
 
 	logActionFromContext(h.actionLog, c, nil, services.ActionUpdateSettings, applied)
@@ -199,10 +198,11 @@ func (h *ResourcesHandler) updateCleanupPolicy(c *gin.Context) {
 	c.JSON(http.StatusOK, newCleanupPolicyResponse(policy))
 }
 
-func (h *ResourcesHandler) cleanupSettingWriteFailed(c *gin.Context, key string, err error) {
-	// Setting KEYS are not secret and naming the one that failed is what makes
-	// the failure actionable; the value never reaches the message.
-	slog.Error("Failed to store a Docker cleanup setting", "key", key, "error", err)
+func (h *ResourcesHandler) cleanupSettingWriteFailed(c *gin.Context, err error) {
+	// The error names the setting KEY that failed (SetSettings wraps it), which
+	// is what makes the failure actionable; keys are not secret and the value
+	// never reaches the message.
+	slog.Error("Failed to store the Docker cleanup policy", "error", err)
 	handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR",
 		"Failed to store the Docker cleanup policy", err))
 }
