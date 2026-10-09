@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+
+    /* The repo root installs only playwright, so node's types come from the
+       frontend install. CI runs both installs before the typecheck step. */
+    "types": ["node"],
+    "typeRoots": ["./frontend/node_modules/@types"]
+  },
+  "include": ["playwright.config.ts", "testing/tests/playwright/**/*.ts"]
+}

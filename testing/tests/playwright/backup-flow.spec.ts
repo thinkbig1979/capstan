@@ -30,7 +30,7 @@
  *       text "Initialize repository", text "Initialized"
  */
 
-import { test, expect, Page, APIRequestContext } from 'playwright/test'
+import { test, expect, Page, APIRequestContext, BrowserContext } from 'playwright/test'
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -46,6 +46,12 @@ const BACKUP_PASSPHRASE = process.env.CAPSTAN_BACKUP_PASSPHRASE ?? 'capstan-e2e-
 
 // Shared state across tests in the describe block
 let authToken = ''
+// The session cookie BACKUP-PW-001's one API login received. Each test's `page` is a
+// fresh browser context, so loginIfNeeded() plants this instead of logging in through
+// the form again: the login bucket is 5/min per (IP, account) and is shared by
+// /auth/login and the UI form, so seven form logins stopped a local auth-on run at
+// BACKUP-PW-003 with a 429 (agent-os-wtw6). Empty when AUTH_DISABLED.
+let sessionCookies: Parameters<BrowserContext['addCookies']>[0] = []
 let testStackId = ''
 let firstSnapshotId = ''
 // The test-app stack's backup policy as it was BEFORE BACKUP-PW-003 enabled it:
@@ -92,7 +98,12 @@ async function expandBackupSection(page: Page): Promise<void> {
 }
 
 /**
- * Log in via the UI if auth is on, then land on `target`.
+ * Land on `target`, signed in if auth is on.
+ *
+ * With auth on, the session from BACKUP-PW-001's API login is planted in this page's
+ * context, so no form login (and no login-bucket request) happens. The form is the
+ * fallback for when that cookie is not accepted, e.g. the API and the UI are on
+ * different hosts, so the cookie jar does not carry over.
  *
  * `target` exists so this is the caller's ONE page load. Every `page.goto` here
  * re-bootstraps the whole app — the auth probe, settings/config,
@@ -109,6 +120,12 @@ async function loginIfNeeded(page: Page, target = '/dashboard'): Promise<void> {
     await page.goto(`${BASE_URL}${target}`)
     await page.waitForLoadState('networkidle')
     return
+  }
+  if (sessionCookies.length > 0) {
+    await page.context().addCookies(sessionCookies)
+    await page.goto(`${BASE_URL}${target}`)
+    await page.waitForLoadState('networkidle')
+    if (!page.url().includes('login')) return
   }
   await page.goto(`${BASE_URL}/login`)
   await page.waitForLoadState('networkidle')
@@ -235,7 +252,8 @@ test.describe.serial('Backup flow E2E', () => {
       // token in the body (agent-os-n4ca.2). Read it from this context's
       // jar so later tests, each with a fresh jar, can send it as Bearer.
       const state = await request.storageState()
-      authToken = state.cookies.find((c) => c.name === 'capstan_token')?.value ?? ''
+      sessionCookies = state.cookies.filter((c) => c.name === 'capstan_token')
+      authToken = sessionCookies[0]?.value ?? ''
     }
 
     // ── Configure via API ──────────────────────────────────────────────────
