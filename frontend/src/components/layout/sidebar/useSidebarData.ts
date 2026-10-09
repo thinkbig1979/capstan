@@ -53,6 +53,7 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
   })
 
   const filteredStacks = useMemo(() => {
+    const pinnedSet = new Set(pinnedStacks)
     let result = [...stacks]
     if (searchQuery) {
       const q = searchQuery.toLowerCase()
@@ -61,7 +62,12 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
     if (statusFilter !== 'all') {
       result = result.filter((s) => s.status === statusFilter)
     }
+    // Pinned stacks move to the top of the one list; the name/status sort
+    // applies inside each group. Sorting after the filters means a pinned stack
+    // that fails them is hidden, not floated.
     result.sort((a, b) => {
+      const pinDiff = Number(pinnedSet.has(b.id)) - Number(pinnedSet.has(a.id))
+      if (pinDiff !== 0) return pinDiff
       if (sortBy === 'status')
         return (
           a.status.localeCompare(b.status) ||
@@ -70,12 +76,7 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
       return a.projectName.localeCompare(b.projectName)
     })
     return result
-  }, [stacks, searchQuery, statusFilter, sortBy])
-
-  const pinnedVisible = useMemo(
-    () => filteredStacks.filter((s) => pinnedStacks.includes(s.id)),
-    [filteredStacks, pinnedStacks],
-  )
+  }, [stacks, searchQuery, statusFilter, sortBy, pinnedStacks])
 
   return {
     stacks,
@@ -86,6 +87,5 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
     updateCount,
     backupStatus,
     filteredStacks,
-    pinnedVisible,
   }
 }

@@ -86,6 +86,19 @@ function renderSidebar() {
   return { ...rendered, queryClient }
 }
 
+const row = (id: string, projectName: string, directory: string, containers: unknown[] = []) =>
+  ({ id, projectName, status: 'running', containers, directory, isGitRepo: false, gitDirty: false })
+
+// Sidebar renders its body twice (mobile overlay + desktop aside); scope to one.
+const desktopAside = (container: HTMLElement) => {
+  const aside = container.querySelector<HTMLElement>('aside.hidden')
+  if (!aside) throw new Error('desktop aside not rendered')
+  return aside
+}
+const stackLinks = (aside: HTMLElement) =>
+  within(aside).getAllByRole('link', { name: /^[a-z]+ - (running|stopped)$/ })
+const names = (links: HTMLElement[]) => links.map((l) => l.getAttribute('aria-label')?.split(' - ')[0])
+
 describe('Sidebar', () => {
   it('renders the stack list', async () => {
     renderSidebar()
@@ -129,19 +142,6 @@ describe('Sidebar', () => {
     await waitFor(() => expect(screen.getAllByText(/next in/).length).toBeGreaterThan(0))
     // The footer names the run's kind (agent-os-4zx0).
     expect(screen.getAllByText(/Last backup .* ago/).length).toBeGreaterThan(0)
-  })
-
-  it('pins a stack into a Pinned section when its star is clicked', async () => {
-    renderSidebar()
-    await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
-    expect(screen.queryByText('Pinned')).not.toBeInTheDocument()
-
-    await act(async () => {
-      fireEvent.click(screen.getAllByLabelText('Pin alpha')[0])
-    })
-
-    expect(useUIStore.getState().pinnedStacks).toContain('s1')
-    expect(screen.getAllByText('Pinned').length).toBeGreaterThan(0)
   })
 
   it('runs a bulk start on selected stacks', async () => {
@@ -273,21 +273,8 @@ describe('Sidebar', () => {
   // agent-os-uxhe: the folder tree is gone. More than one configured directory
   // is the case that used to force grouping (useSidebarData's useGroups).
   describe('flat list, with the directory as a tooltip', () => {
-    const row = (id: string, projectName: string, directory: string, containers: unknown[] = []) =>
-      ({ id, projectName, status: 'running', containers, directory, isGitRepo: false, gitDirty: false })
-
     const twoDirs = () =>
       getConfigMock.mockResolvedValueOnce({ stacksDir: '/srv/a', stacksDirectories: ['/srv/a', '/srv/b'] } as never)
-
-    // Sidebar renders its body twice (mobile overlay + desktop aside); scope to one.
-    const desktopAside = (container: HTMLElement) => {
-      const aside = container.querySelector<HTMLElement>('aside.hidden')
-      if (!aside) throw new Error('desktop aside not rendered')
-      return aside
-    }
-    const stackLinks = (aside: HTMLElement) =>
-      within(aside).getAllByRole('link', { name: /^[a-z]+ - (running|stopped)$/ })
-    const names = (links: HTMLElement[]) => links.map((l) => l.getAttribute('aria-label')?.split(' - ')[0])
 
     it('renders one alphabetical row per stack and no folder rows with two configured directories', async () => {
       twoDirs()
@@ -342,6 +329,79 @@ describe('Sidebar', () => {
     expect(screen.getByLabelText('Dashboard')).toBeInTheDocument()
     expect(screen.getByLabelText('Settings')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByLabelText('Stacks (2)')).toBeInTheDocument())
+  })
+})
+
+// agent-os-eldv: pinning MOVES a stack to the top of the one list. It used to
+// render the stack in a "Pinned" block AND again in the main list.
+describe('Sidebar — pinned stacks move to the top', () => {
+  const five = (statuses: Record<string, string> = {}) =>
+    ['alpha', 'bravo', 'charlie', 'delta', 'echo'].map((n, i) => ({
+      ...row(`s${i + 1}`, n, '/stacks'),
+      status: statuses[n] ?? 'running',
+    })) as never
+
+  it('pinning a stack leaves exactly one row for it, and no Pinned section', async () => {
+    const { container } = renderSidebar()
+    const aside = desktopAside(container)
+    await waitFor(() => expect(stackLinks(aside)).toHaveLength(2))
+
+    await act(async () => {
+      fireEvent.click(within(aside).getByLabelText('Pin alpha'))
+    })
+
+    expect(useUIStore.getState().pinnedStacks).toContain('s1')
+    expect(within(aside).getAllByRole('link', { name: /^alpha - / })).toHaveLength(1)
+    expect(stackLinks(aside)).toHaveLength(2)
+    expect(within(aside).queryByText('Pinned')).not.toBeInTheDocument()
+  })
+
+  it('sorts pinned stacks above every unpinned one, name order inside each group', async () => {
+    useUIStore.setState({ pinnedStacks: ['s4', 's2'] })
+    listMock.mockResolvedValueOnce(five())
+    const { container } = renderSidebar()
+    const aside = desktopAside(container)
+    await waitFor(() => expect(stackLinks(aside).length).toBeGreaterThan(0))
+
+    expect(names(stackLinks(aside))).toEqual(['bravo', 'delta', 'alpha', 'charlie', 'echo'])
+    // The filled pin icon is the only marker: one pin control per row, no section glyph.
+    expect(aside.querySelectorAll('.lucide-pin')).toHaveLength(5)
+    expect(aside.querySelector('.lucide-star')).toBeNull()
+    expect(within(aside).queryByText('Pinned')).not.toBeInTheDocument()
+  })
+
+  it('keeps the status sort inside each group when sorting by status', async () => {
+    localStorage.setItem('sidebar-sort', 'status')
+    useUIStore.setState({ pinnedStacks: ['s4', 's2'] })
+    listMock.mockResolvedValueOnce(five({ alpha: 'stopped', bravo: 'stopped' }))
+    const { container } = renderSidebar()
+    const aside = desktopAside(container)
+    await waitFor(() => expect(stackLinks(aside).length).toBeGreaterThan(0))
+
+    // pinned: delta (running) before bravo (stopped); unpinned: charlie, echo (running) before alpha (stopped)
+    expect(names(stackLinks(aside))).toEqual(['delta', 'bravo', 'charlie', 'echo', 'alpha'])
+  })
+
+  it('hides a pinned stack that fails the search filter instead of floating it to the top', async () => {
+    localStorage.setItem('sidebar-search', 'alp')
+    useUIStore.setState({ pinnedStacks: ['s4'] })
+    listMock.mockResolvedValueOnce(five())
+    const { container } = renderSidebar()
+    const aside = desktopAside(container)
+    await waitFor(() => expect(stackLinks(aside).length).toBeGreaterThan(0))
+
+    expect(names(stackLinks(aside))).toEqual(['alpha'])
+  })
+
+  it('hides a pinned stack that fails the status filter', async () => {
+    localStorage.setItem('sidebar-filter', 'stopped')
+    useUIStore.setState({ pinnedStacks: ['s4'] })
+    listMock.mockResolvedValueOnce(five({ alpha: 'stopped' }))
+    const { container } = renderSidebar()
+    const aside = desktopAside(container)
+    await waitFor(() => expect(stackLinks(aside).length).toBeGreaterThan(0))
+
+    expect(names(stackLinks(aside))).toEqual(['alpha'])
   })
 })
 

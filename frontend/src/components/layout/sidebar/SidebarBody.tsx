@@ -29,7 +29,6 @@ interface SidebarBodyProps {
   onRunBulk: (action: BulkAction) => void
   onToggleSelect: (id: string) => void
   filteredStacks: Stack[]
-  pinnedVisible: Stack[]
   pinnedStacks: string[]
   onTogglePin: (id: string) => void
 }
@@ -57,7 +56,6 @@ export function SidebarBody({
   onRunBulk,
   onToggleSelect,
   filteredStacks,
-  pinnedVisible,
   pinnedStacks,
   onTogglePin,
 }: SidebarBodyProps) {
@@ -101,7 +99,6 @@ export function SidebarBody({
         onRetry={onRetryStacks}
         hasFilters={hasFilters}
         filteredStacks={filteredStacks}
-        pinnedVisible={pinnedVisible}
         selecting={selecting}
         selectedIds={selectedIds}
         onToggleSelect={onToggleSelect}

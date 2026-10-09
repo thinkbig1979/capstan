@@ -1,7 +1,6 @@
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { LoadFailedNotice } from '@/components/LoadFailedNotice'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
-import { Pin } from 'lucide-react'
 import type { Stack } from '@/types'
 import { StackRow } from './StackRow'
 
@@ -14,7 +13,6 @@ interface StackListBodyProps {
   onRetry: () => void
   hasFilters: boolean
   filteredStacks: Stack[]
-  pinnedVisible: Stack[]
   selecting: boolean
   selectedIds: Set<string>
   onToggleSelect: (id: string) => void
@@ -29,7 +27,6 @@ export function StackListBody({
   onRetry,
   hasFilters,
   filteredStacks,
-  pinnedVisible,
   selecting,
   selectedIds,
   onToggleSelect,
@@ -41,26 +38,6 @@ export function StackListBody({
       <div className="p-2 space-y-0.5">
         {refreshFailed && (
           <RefreshFailedNotice what="the stack list" onRetry={onRetry} className="mb-1" />
-        )}
-        {!selecting && pinnedVisible.length > 0 && (
-          <div className="mb-1">
-            <div className="flex items-center gap-1 px-2 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              <Pin className="h-2.5 w-2.5 fill-current text-warning" />
-              Pinned
-            </div>
-            {pinnedVisible.map((stack) => (
-              <StackRow
-                key={stack.id}
-                stack={stack}
-                selecting={selecting}
-                selected={selectedIds.has(stack.id)}
-                onToggleSelect={() => onToggleSelect(stack.id)}
-                pinned={pinnedStacks.includes(stack.id)}
-                onTogglePin={() => onTogglePin(stack.id)}
-              />
-            ))}
-            <div className="h-px bg-sidebar-border my-1" />
-          </div>
         )}
         {isLoading ? (
           <div className="px-2 py-4 text-sm text-muted-foreground">

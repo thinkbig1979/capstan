@@ -45,7 +45,6 @@ export function Sidebar() {
     updateCount,
     backupStatus,
     filteredStacks,
-    pinnedVisible,
   } = useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks });
 
   const {
@@ -93,7 +92,6 @@ export function Sidebar() {
     onRunBulk: runBulk,
     onToggleSelect: toggleSelected,
     filteredStacks,
-    pinnedVisible,
     pinnedStacks,
     onTogglePin: togglePinnedStack,
   };
