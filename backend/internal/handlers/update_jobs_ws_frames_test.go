@@ -52,3 +52,23 @@ func TestUpdateJobsWS_FramesCarryRequiredKeys(t *testing.T) {
 		})
 	}
 }
+
+// jobDoneFrame.Status is services.DoneStatus; its JSON must stay the bare
+// status string parseJobStreamFrame reads (agent-os-rc69).
+func TestUpdateJobsWS_DoneFrameStatusWireValue(t *testing.T) {
+	for _, st := range []services.Status{services.StatusSuccess, services.StatusError} {
+		raw, err := json.Marshal(doneFrame(st, "", "", ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != string(st) {
+			t.Errorf("done frame %s: status = %q, want %q", raw, got.Status, st)
+		}
+	}
+}

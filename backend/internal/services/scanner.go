@@ -1684,7 +1684,7 @@ func (s *ScannerService) scanDirectoryWithRoot(path string, rootDir string) erro
 				ProjectName: projectName,
 				// Only a NEW row takes this: UpsertStack keeps the stored
 				// status of an existing one (agent-os-qags.23).
-				Status:    "unknown",
+				Status:    string(StackStatusUnknown),
 				IsGitRepo: isGitRepo,
 				GitBranch: gitBranch,
 			}

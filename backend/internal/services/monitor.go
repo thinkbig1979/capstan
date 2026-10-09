@@ -309,13 +309,13 @@ func (s *MonitorService) stackEventFor(action, containerID, projectName string, 
 	switch action {
 	case "start", "restart", "unpause":
 		stackEvent.Type = "stack_status"
-		stackEvent.Status = "running"
+		stackEvent.Status = string(StackStatusRunning)
 	case "stop", "die", "kill":
 		stackEvent.Type = "stack_status"
-		stackEvent.Status = "stopped"
+		stackEvent.Status = string(StackStatusStopped)
 	case "pause":
 		stackEvent.Type = "stack_status"
-		stackEvent.Status = "paused"
+		stackEvent.Status = string(StackStatusPaused)
 	}
 
 	return stackEvent, true
