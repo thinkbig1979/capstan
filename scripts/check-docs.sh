@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes arm-refusal pipefail-grep-q"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes full-row-selects arm-refusal pipefail-grep-q"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -1051,6 +1051,39 @@ check_settings_writes() {
   return 1
 }
 
+# check_full_row_selects delegates to scripts/check-full-row-selects.sh: in
+# package database a full-row column list or Scan target list for a table with
+# a column constant appears only in that constant and its scan function, so a
+# new reader cannot drift from the row (agent-os-rh7m, agent-os-w068).
+# Self-test first, same reasoning as ws-registration.
+check_full_row_selects() {
+  local script="$SCRIPT_DIR/check-full-row-selects.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: full-row-selects - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: full-row-selects - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: full-row-selects - ${self#full-row-selects }; ${out#check-full-row-selects: }"
+    return 0
+  fi
+  echo "FAIL: full-row-selects - a database reader copies a full-row column or Scan list (use the table's <x>Columns constant and scan<X> function):"
+  echo "$out"
+  return 1
+}
+
 # check_arm_refusal delegates to scripts/check-arm-refusal.sh: a scheduler arm
 # function that refuses to arm on an error calls a recorder the UI reads, not
 # only a log line (agent-os-n8b4; the class agent-os-awfh and agent-os-7yjx
@@ -1345,6 +1378,7 @@ Valid check names:
   rclone-delete-argv no rclone delete-capable argv (sync, move, purge, ...) outside RcloneManager.Sync and RestoreRepo
   goroutine-sends no bare channel send inside a goroutine body (a select case, or an allowlisted reason)
   settings-writes no handler func with more than one raw SetSetting, or one inside a loop (SetSettings instead)
+  full-row-selects no database reader hand-copies a full-row column or Scan list (<x>Columns / scan<X> instead)
   arm-refusal     no scheduler arm function refuses with only a log line (a record...() call, or a reasoned marker)
   pipefail-grep-q no pipe into grep -q in a script that sets pipefail (a here-string instead)
 
@@ -1377,6 +1411,7 @@ run_check() {
     rclone-delete-argv) check_rclone_delete_argv ;;
     goroutine-sends) check_goroutine_sends ;;
     settings-writes) check_settings_writes ;;
+    full-row-selects) check_full_row_selects ;;
     arm-refusal) check_arm_refusal ;;
     pipefail-grep-q) check_pipefail_grep_q ;;
     *) return 2 ;;
