@@ -20,6 +20,9 @@ export function StackRow({ stack, selecting, selected, onToggleSelect, pinned, o
   // dot and names the stored status as a record, not a live reading (agent-os-eqif).
   const stale = stack.statusStale === true
   const staleTitle = stale ? `Status may be out of date (last recorded: ${stack.status})` : undefined
+  // The list is flat, so the directory is what tells two stacks with the same
+  // projectName apart. It shares the title with the stale note.
+  const rowTitle = [staleTitle, stack.directory].filter(Boolean).join('\n')
   const dotColor = stale
     ? statusDotColor.unknown
     : statusDotColor[stack.status] || statusDotColor.unknown
@@ -31,7 +34,7 @@ export function StackRow({ stack, selecting, selected, onToggleSelect, pinned, o
         type="button"
         onClick={onToggleSelect}
         aria-pressed={selected}
-        title={staleTitle}
+        title={rowTitle}
         className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm w-full text-left transition-colors ${
           selected
             ? 'bg-sidebar-accent text-sidebar-accent-foreground'
@@ -63,7 +66,7 @@ export function StackRow({ stack, selecting, selected, onToggleSelect, pinned, o
           ? `${stack.projectName} - status may be out of date (last recorded: ${stack.status})`
           : `${stack.projectName} - ${stack.status}`
       }
-      title={staleTitle}
+      title={rowTitle}
     >
       <span className={`h-2 w-2 rounded-full shrink-0 ${dotColor}`} aria-hidden="true" />
       <span className="flex-1 truncate font-mono text-[12.5px]">{stack.projectName}</span>

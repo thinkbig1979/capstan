@@ -101,7 +101,10 @@ describe('StackRow — a stale status', () => {
     const link = screen.getByRole('link', {
       name: 'web - status may be out of date (last recorded: running)',
     })
-    expect(link).toHaveAttribute('title', 'Status may be out of date (last recorded: running)')
+    expect(link).toHaveAttribute(
+      'title',
+      'Status may be out of date (last recorded: running)\n/srv/stacks/web',
+    )
     expect(dotOf(link)?.className).toContain('bg-muted-foreground')
     expect(dotOf(link)?.className).not.toContain('bg-success')
   })
@@ -121,7 +124,10 @@ describe('StackRow — a stale status', () => {
     )
 
     const row = screen.getByRole('button', { pressed: false })
-    expect(row).toHaveAttribute('title', 'Status may be out of date (last recorded: running)')
+    expect(row).toHaveAttribute(
+      'title',
+      'Status may be out of date (last recorded: running)\n/srv/stacks/web',
+    )
     const dot = row.querySelector('span.rounded-full')
     expect(dot?.className).toContain('bg-muted-foreground')
     expect(dot?.className).not.toContain('bg-success')
@@ -132,7 +138,7 @@ describe('StackRow — a stale status', () => {
     renderRow(stack({ status: 'running', statusStale }))
 
     const link = screen.getByRole('link', { name: 'web - running' })
-    expect(link).not.toHaveAttribute('title')
+    expect(link).toHaveAttribute('title', '/srv/stacks/web')
     expect(dotOf(link)?.className).toContain('bg-success')
   })
 })
@@ -155,5 +161,49 @@ describe('StackRow — the pin control draws a pin', () => {
     const svg = button.querySelector('svg')
     expect(svg?.classList.contains('lucide-pin')).toBe(true)
     expect(svg?.classList.contains('lucide-star')).toBe(false)
+  })
+})
+
+/**
+ * agent-os-uxhe. The sidebar is a flat list, so the directory is the only thing
+ * that tells two stacks with the same projectName apart. It is the row's hover
+ * tooltip, in both modes, and it shares the title attribute with the stale note.
+ */
+describe('StackRow — the directory tooltip', () => {
+  it('titles the navigating row with the stack directory', () => {
+    renderRow(stack({ directory: '/srv/a/web' }))
+
+    expect(screen.getByRole('link', { name: 'web - running' })).toHaveAttribute('title', '/srv/a/web')
+  })
+
+  it('titles the selection-mode row with the stack directory', () => {
+    render(
+      <MemoryRouter>
+        <StackRow
+          stack={stack({ directory: '/srv/a/web' })}
+          selecting
+          selected={false}
+          onToggleSelect={vi.fn()}
+          pinned={false}
+          onTogglePin={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('button', { pressed: false })).toHaveAttribute('title', '/srv/a/web')
+  })
+})
+
+describe('StackRow — the container-count badge', () => {
+  it('shows the count when the stack has containers', () => {
+    renderRow(stack({ containers: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }] as Stack['containers'] }))
+
+    expect(screen.getByRole('link', { name: 'web - running' })).toHaveTextContent('3')
+  })
+
+  it('shows no badge when the stack has none', () => {
+    renderRow(stack({ containers: [] }))
+
+    expect(screen.getByRole('link', { name: 'web - running' }).textContent).toBe('web')
   })
 })

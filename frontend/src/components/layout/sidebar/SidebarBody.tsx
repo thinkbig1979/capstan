@@ -1,17 +1,10 @@
 import type { BackupStatus, Stack, StackStatus } from '@/types'
-import type { TreeNode } from '@/lib/stack-tree'
 import type { BulkAction } from './constants'
 import { SidebarHeader } from './SidebarHeader'
 import { BulkActionBar } from './BulkActionBar'
 import { FilterSummaryBar } from './FilterSummaryBar'
 import { StackListBody } from './StackListBody'
 import { BackupStatusFooter } from './BackupStatusFooter'
-
-interface RootGroup {
-  rootPath: string
-  rootName: string
-  nodes: TreeNode[]
-}
 
 interface SidebarBodyProps {
   stacks: Stack[]
@@ -36,15 +29,8 @@ interface SidebarBodyProps {
   onRunBulk: (action: BulkAction) => void
   onToggleSelect: (id: string) => void
   filteredStacks: Stack[]
-  pinnedVisible: Stack[]
   pinnedStacks: string[]
   onTogglePin: (id: string) => void
-  useGroups: boolean
-  configuredDirs: { path: string; name: string }[]
-  tree: TreeNode[]
-  treeByRoot: RootGroup[]
-  collapsedGroups: Set<string>
-  toggleGroup: (dirPath: string) => void
 }
 
 export function SidebarBody({
@@ -70,15 +56,8 @@ export function SidebarBody({
   onRunBulk,
   onToggleSelect,
   filteredStacks,
-  pinnedVisible,
   pinnedStacks,
   onTogglePin,
-  useGroups,
-  configuredDirs,
-  tree,
-  treeByRoot,
-  collapsedGroups,
-  toggleGroup,
 }: SidebarBodyProps) {
   return (
     <>
@@ -120,18 +99,11 @@ export function SidebarBody({
         onRetry={onRetryStacks}
         hasFilters={hasFilters}
         filteredStacks={filteredStacks}
-        pinnedVisible={pinnedVisible}
         selecting={selecting}
         selectedIds={selectedIds}
         onToggleSelect={onToggleSelect}
         pinnedStacks={pinnedStacks}
         onTogglePin={onTogglePin}
-        useGroups={useGroups}
-        configuredDirs={configuredDirs}
-        tree={tree}
-        treeByRoot={treeByRoot}
-        collapsedGroups={collapsedGroups}
-        toggleGroup={toggleGroup}
       />
 
       <BackupStatusFooter backupStatus={backupStatus} />

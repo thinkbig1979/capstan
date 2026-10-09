@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { backupApi, resourcesApi, settingsApi, stacksApi } from '@/lib/api'
-import { buildDirectoryTree, hasTreeNesting } from '@/lib/stack-tree'
+import { backupApi, resourcesApi, stacksApi } from '@/lib/api'
 import type { StackStatus } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
 import { STACKS_LIST_POLLING } from '@/lib/query-client'
@@ -31,12 +30,6 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
   const stacksLoadFailed = stacksError && !stacksData
   const stacksRefreshFailed = stacksError && !!stacksData
 
-  const { data: config } = useQuery({
-    queryKey: queryKeys.config(),
-    queryFn: settingsApi.getConfig,
-    staleTime: Infinity,
-  })
-
   // Cached update scan — drives the aggregate "N updates" badge. refresh=false
   // never kicks off a heavy scan, it just reads whatever the backend has.
   // Shares the canonical ['resources','updates'] key so update mutations and the
@@ -59,15 +52,8 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
     retry: false,
   })
 
-  const configuredDirs = useMemo(() => {
-    if (!config?.stacksDirectories) return []
-    return config.stacksDirectories.map((p: string) => ({
-      path: p,
-      name: p.split('/').filter(Boolean).pop() || p,
-    }))
-  }, [config])
-
   const filteredStacks = useMemo(() => {
+    const pinnedSet = new Set(pinnedStacks)
     let result = [...stacks]
     if (searchQuery) {
       const q = searchQuery.toLowerCase()
@@ -76,7 +62,12 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
     if (statusFilter !== 'all') {
       result = result.filter((s) => s.status === statusFilter)
     }
+    // Pinned stacks move to the top of the one list; the name/status sort
+    // applies inside each group. Sorting after the filters means a pinned stack
+    // that fails them is hidden, not floated.
     result.sort((a, b) => {
+      const pinDiff = Number(pinnedSet.has(b.id)) - Number(pinnedSet.has(a.id))
+      if (pinDiff !== 0) return pinDiff
       if (sortBy === 'status')
         return (
           a.status.localeCompare(b.status) ||
@@ -85,38 +76,7 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
       return a.projectName.localeCompare(b.projectName)
     })
     return result
-  }, [stacks, searchQuery, statusFilter, sortBy])
-
-  const pinnedVisible = useMemo(
-    () => filteredStacks.filter((s) => pinnedStacks.includes(s.id)),
-    [filteredStacks, pinnedStacks],
-  )
-
-  const tree = useMemo(() => {
-    if (configuredDirs.length === 0) return []
-    return buildDirectoryTree(filteredStacks, configuredDirs.map((d) => d.path))
-  }, [filteredStacks, configuredDirs])
-
-  const treeByRoot = useMemo(() => {
-    return configuredDirs
-      .map((cd) => {
-        const rootStacks = filteredStacks.filter(
-          (s) => s.directory === cd.path || s.directory.startsWith(cd.path + '/'),
-        )
-        return {
-          rootPath: cd.path,
-          rootName: cd.name,
-          nodes: buildDirectoryTree(rootStacks, [cd.path]),
-        }
-      })
-      .filter((g) => g.nodes.length > 0)
-  }, [filteredStacks, configuredDirs])
-
-  const useGroups = useMemo(() => {
-    if (stacks.length === 0) return false
-    const allTree = buildDirectoryTree(stacks, configuredDirs.map((d) => d.path))
-    return configuredDirs.length > 1 || allTree.length > 1 || hasTreeNesting(allTree)
-  }, [stacks, configuredDirs])
+  }, [stacks, searchQuery, statusFilter, sortBy, pinnedStacks])
 
   return {
     stacks,
@@ -126,11 +86,6 @@ export function useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks
     refetchStacks,
     updateCount,
     backupStatus,
-    configuredDirs,
     filteredStacks,
-    pinnedVisible,
-    tree,
-    treeByRoot,
-    useGroups,
   }
 }

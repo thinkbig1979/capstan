@@ -6,7 +6,6 @@ import { SidebarBody } from "./sidebar/SidebarBody";
 import { ResizeHandle } from "./sidebar/ResizeHandle";
 import { useSidebarData } from "./sidebar/useSidebarData";
 import { useSidebarFilters } from "./sidebar/useSidebarFilters";
-import { useCollapsedGroups } from "./sidebar/useCollapsedGroups";
 import { useSidebarSelection } from "./sidebar/useSidebarSelection";
 
 export function Sidebar() {
@@ -37,8 +36,6 @@ export function Sidebar() {
     clearFilters,
   } = useSidebarFilters();
 
-  const { collapsedGroups, toggleGroup } = useCollapsedGroups();
-
   const {
     stacks,
     isPending,
@@ -47,12 +44,7 @@ export function Sidebar() {
     refetchStacks,
     updateCount,
     backupStatus,
-    configuredDirs,
     filteredStacks,
-    pinnedVisible,
-    tree,
-    treeByRoot,
-    useGroups,
   } = useSidebarData({ searchQuery, statusFilter, sortBy, pinnedStacks });
 
   const {
@@ -100,15 +92,8 @@ export function Sidebar() {
     onRunBulk: runBulk,
     onToggleSelect: toggleSelected,
     filteredStacks,
-    pinnedVisible,
     pinnedStacks,
     onTogglePin: togglePinnedStack,
-    useGroups,
-    configuredDirs,
-    tree,
-    treeByRoot,
-    collapsedGroups,
-    toggleGroup,
   };
 
   return (

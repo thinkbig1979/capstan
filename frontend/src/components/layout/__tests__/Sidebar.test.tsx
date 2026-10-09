@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 
@@ -86,6 +86,19 @@ function renderSidebar() {
   return { ...rendered, queryClient }
 }
 
+const row = (id: string, projectName: string, directory: string, containers: unknown[] = []) =>
+  ({ id, projectName, status: 'running', containers, directory, isGitRepo: false, gitDirty: false })
+
+// Sidebar renders its body twice (mobile overlay + desktop aside); scope to one.
+const desktopAside = (container: HTMLElement) => {
+  const aside = container.querySelector<HTMLElement>('aside.hidden')
+  if (!aside) throw new Error('desktop aside not rendered')
+  return aside
+}
+const stackLinks = (aside: HTMLElement) =>
+  within(aside).getAllByRole('link', { name: /^[a-z]+ - (running|stopped)$/ })
+const names = (links: HTMLElement[]) => links.map((l) => l.getAttribute('aria-label')?.split(' - ')[0])
+
 describe('Sidebar', () => {
   it('renders the stack list', async () => {
     renderSidebar()
@@ -129,19 +142,6 @@ describe('Sidebar', () => {
     await waitFor(() => expect(screen.getAllByText(/next in/).length).toBeGreaterThan(0))
     // The footer names the run's kind (agent-os-4zx0).
     expect(screen.getAllByText(/Last backup .* ago/).length).toBeGreaterThan(0)
-  })
-
-  it('pins a stack into a Pinned section when its star is clicked', async () => {
-    renderSidebar()
-    await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
-    expect(screen.queryByText('Pinned')).not.toBeInTheDocument()
-
-    await act(async () => {
-      fireEvent.click(screen.getAllByLabelText('Pin alpha')[0])
-    })
-
-    expect(useUIStore.getState().pinnedStacks).toContain('s1')
-    expect(screen.getAllByText('Pinned').length).toBeGreaterThan(0)
   })
 
   it('runs a bulk start on selected stacks', async () => {
@@ -270,39 +270,55 @@ describe('Sidebar', () => {
     expect(screen.getByLabelText('Search stacks')).toHaveValue('brav')
   })
 
-  it('collapses a tree group and persists collapsed state under the versioned storage key', async () => {
-    const groupedStacks = [
-      { id: 's1', projectName: 'alpha', status: 'running', containers: [], directory: '/stacks/groupA', isGitRepo: false, gitDirty: false },
-      { id: 's2', projectName: 'bravo', status: 'stopped', containers: [], directory: '/stacks/groupB', isGitRepo: false, gitDirty: false },
-    ] as never
-    getConfigMock.mockResolvedValueOnce({ stacksDir: '/stacks', stacksDirectories: ['/stacks'] } as never)
-    listMock.mockResolvedValueOnce(groupedStacks)
-    const { unmount } = renderSidebar()
+  // agent-os-uxhe: the folder tree is gone. More than one configured directory
+  // is the case that used to force grouping (useSidebarData's useGroups).
+  describe('flat list, with the directory as a tooltip', () => {
+    const twoDirs = () =>
+      getConfigMock.mockResolvedValueOnce({ stacksDir: '/srv/a', stacksDirectories: ['/srv/a', '/srv/b'] } as never)
 
-    await waitFor(() => expect(screen.getAllByText('alpha').length).toBeGreaterThan(0))
-    expect(screen.getAllByText('bravo').length).toBeGreaterThan(0)
+    it('renders one alphabetical row per stack and no folder rows with two configured directories', async () => {
+      twoDirs()
+      listMock.mockResolvedValueOnce([
+        row('s1', 'zeta', '/srv/a'),
+        row('s2', 'alpha', '/srv/b'),
+        row('s3', 'mike', '/srv/a'),
+        row('s4', 'bravo', '/srv/b'),
+      ] as never)
+      const { container } = renderSidebar()
+      const aside = desktopAside(container)
+      await waitFor(() => expect(stackLinks(aside)).toHaveLength(4))
 
-    await act(async () => {
-      fireEvent.click(screen.getAllByTitle('/stacks/groupA')[0])
+      // No folder header, chevron, folder icon or per-folder count.
+      expect(aside.querySelectorAll('button[title^="/srv"]')).toHaveLength(0)
+      expect(aside.querySelector('.lucide-folder-open, .lucide-chevron-down, .lucide-chevron-right')).toBeNull()
+      expect(names(stackLinks(aside))).toEqual(['alpha', 'bravo', 'mike', 'zeta'])
     })
 
-    expect(screen.queryByText('alpha')).not.toBeInTheDocument()
-    expect(screen.getAllByText('bravo').length).toBeGreaterThan(0)
+    it('renders two stacks with the same name in different directories as two rows, each titled with its own directory', async () => {
+      twoDirs()
+      listMock.mockResolvedValueOnce([row('s1', 'web', '/srv/a'), row('s2', 'web', '/srv/b')] as never)
+      const { container } = renderSidebar()
+      const aside = desktopAside(container)
+      await waitFor(() => expect(stackLinks(aside)).toHaveLength(2))
 
-    await waitFor(() => {
-      const stored = JSON.parse(localStorage.getItem('sidebar-collapsed:v1') || '[]')
-      expect(stored).toContain('/stacks/groupA')
+      const links = stackLinks(aside)
+      expect(links.map((l) => l.getAttribute('href')).sort()).toEqual(['/stacks/s1', '/stacks/s2'])
+      expect(links.map((l) => l.getAttribute('title')).sort()).toEqual(['/srv/a', '/srv/b'])
     })
 
-    unmount()
+    it('keeps the container-count badge only on stacks that have containers', async () => {
+      listMock.mockResolvedValueOnce([
+        row('s1', 'alpha', '/stacks', [{ id: 'c1' }, { id: 'c2' }]),
+        row('s2', 'bravo', '/stacks'),
+      ] as never)
+      const { container } = renderSidebar()
+      const aside = desktopAside(container)
+      await waitFor(() => expect(stackLinks(aside)).toHaveLength(2))
 
-    // Remount: the collapsed group stays collapsed because state was persisted.
-    getConfigMock.mockResolvedValueOnce({ stacksDir: '/stacks', stacksDirectories: ['/stacks'] } as never)
-    listMock.mockResolvedValueOnce(groupedStacks)
-    renderSidebar()
-
-    await waitFor(() => expect(screen.getAllByText('bravo').length).toBeGreaterThan(0))
-    expect(screen.queryByText('alpha')).not.toBeInTheDocument()
+      const [alpha, bravo] = stackLinks(aside)
+      expect(within(alpha).getByText('2')).toBeInTheDocument()
+      expect(bravo.textContent).toBe('bravo')
+    })
   })
 
   it('renders the collapsed navigation rail with stack count when the sidebar is closed', async () => {
@@ -313,6 +329,79 @@ describe('Sidebar', () => {
     expect(screen.getByLabelText('Dashboard')).toBeInTheDocument()
     expect(screen.getByLabelText('Settings')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByLabelText('Stacks (2)')).toBeInTheDocument())
+  })
+})
+
+// agent-os-eldv: pinning MOVES a stack to the top of the one list. It used to
+// render the stack in a "Pinned" block AND again in the main list.
+describe('Sidebar — pinned stacks move to the top', () => {
+  const five = (statuses: Record<string, string> = {}) =>
+    ['alpha', 'bravo', 'charlie', 'delta', 'echo'].map((n, i) => ({
+      ...row(`s${i + 1}`, n, '/stacks'),
+      status: statuses[n] ?? 'running',
+    })) as never
+
+  it('pinning a stack leaves exactly one row for it, and no Pinned section', async () => {
+    const { container } = renderSidebar()
+    const aside = desktopAside(container)
+    await waitFor(() => expect(stackLinks(aside)).toHaveLength(2))
+
+    await act(async () => {
+      fireEvent.click(within(aside).getByLabelText('Pin alpha'))
+    })
+
+    expect(useUIStore.getState().pinnedStacks).toContain('s1')
+    expect(within(aside).getAllByRole('link', { name: /^alpha - / })).toHaveLength(1)
+    expect(stackLinks(aside)).toHaveLength(2)
+    expect(within(aside).queryByText('Pinned')).not.toBeInTheDocument()
+  })
+
+  it('sorts pinned stacks above every unpinned one, name order inside each group', async () => {
+    useUIStore.setState({ pinnedStacks: ['s4', 's2'] })
+    listMock.mockResolvedValueOnce(five())
+    const { container } = renderSidebar()
+    const aside = desktopAside(container)
+    await waitFor(() => expect(stackLinks(aside).length).toBeGreaterThan(0))
+
+    expect(names(stackLinks(aside))).toEqual(['bravo', 'delta', 'alpha', 'charlie', 'echo'])
+    // The filled pin icon is the only marker: one pin control per row, no section glyph.
+    expect(aside.querySelectorAll('.lucide-pin')).toHaveLength(5)
+    expect(aside.querySelector('.lucide-star')).toBeNull()
+    expect(within(aside).queryByText('Pinned')).not.toBeInTheDocument()
+  })
+
+  it('keeps the status sort inside each group when sorting by status', async () => {
+    localStorage.setItem('sidebar-sort', 'status')
+    useUIStore.setState({ pinnedStacks: ['s4', 's2'] })
+    listMock.mockResolvedValueOnce(five({ alpha: 'stopped', bravo: 'stopped' }))
+    const { container } = renderSidebar()
+    const aside = desktopAside(container)
+    await waitFor(() => expect(stackLinks(aside).length).toBeGreaterThan(0))
+
+    // pinned: delta (running) before bravo (stopped); unpinned: charlie, echo (running) before alpha (stopped)
+    expect(names(stackLinks(aside))).toEqual(['delta', 'bravo', 'charlie', 'echo', 'alpha'])
+  })
+
+  it('hides a pinned stack that fails the search filter instead of floating it to the top', async () => {
+    localStorage.setItem('sidebar-search', 'alp')
+    useUIStore.setState({ pinnedStacks: ['s4'] })
+    listMock.mockResolvedValueOnce(five())
+    const { container } = renderSidebar()
+    const aside = desktopAside(container)
+    await waitFor(() => expect(stackLinks(aside).length).toBeGreaterThan(0))
+
+    expect(names(stackLinks(aside))).toEqual(['alpha'])
+  })
+
+  it('hides a pinned stack that fails the status filter', async () => {
+    localStorage.setItem('sidebar-filter', 'stopped')
+    useUIStore.setState({ pinnedStacks: ['s4'] })
+    listMock.mockResolvedValueOnce(five({ alpha: 'stopped' }))
+    const { container } = renderSidebar()
+    const aside = desktopAside(container)
+    await waitFor(() => expect(stackLinks(aside).length).toBeGreaterThan(0))
+
+    expect(names(stackLinks(aside))).toEqual(['alpha'])
   })
 })
 
