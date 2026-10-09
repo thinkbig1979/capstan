@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes pipefail-grep-q"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes arm-refusal pipefail-grep-q"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -1050,6 +1050,38 @@ check_settings_writes() {
   return 1
 }
 
+# check_arm_refusal delegates to scripts/check-arm-refusal.sh: a scheduler arm
+# function that refuses to arm on an error calls a recorder the UI reads, not
+# only a log line (agent-os-n8b4; the class agent-os-awfh and agent-os-7yjx
+# fixed). Self-test first, same reasoning as ws-registration.
+check_arm_refusal() {
+  local script="$SCRIPT_DIR/check-arm-refusal.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: arm-refusal - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: arm-refusal - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: arm-refusal - ${self#arm-refusal }; ${out#check-arm-refusal: }"
+    return 0
+  fi
+  echo "FAIL: arm-refusal - a scheduler arm function refuses with only a log line (call a record...() function the UI reads, or mark it with a reason):"
+  echo "$out"
+  return 1
+}
+
 # check_compose_parity delegates to scripts/check-compose-parity.sh: dev and
 # prod compose agree on init, the identical-path stacks mount and the env keys
 # (agent-os-qags.6, safe-defaults rule 17). Self-test first, same reasoning as
@@ -1312,6 +1344,7 @@ Valid check names:
   rclone-delete-argv no rclone delete-capable argv (sync, move, purge, ...) outside RcloneManager.Sync and RestoreRepo
   goroutine-sends no bare channel send inside a goroutine body (a select case, or an allowlisted reason)
   settings-writes no handler func with more than one raw SetSetting, or one inside a loop (SetSettings instead)
+  arm-refusal     no scheduler arm function refuses with only a log line (a record...() call, or a reasoned marker)
   pipefail-grep-q no pipe into grep -q in a script that sets pipefail (a here-string instead)
 
 With no arguments, all checks run and a summary is printed.
@@ -1343,6 +1376,7 @@ run_check() {
     rclone-delete-argv) check_rclone_delete_argv ;;
     goroutine-sends) check_goroutine_sends ;;
     settings-writes) check_settings_writes ;;
+    arm-refusal) check_arm_refusal ;;
     pipefail-grep-q) check_pipefail_grep_q ;;
     *) return 2 ;;
   esac

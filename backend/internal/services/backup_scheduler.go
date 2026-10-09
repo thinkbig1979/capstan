@@ -160,7 +160,7 @@ func (s *BackupSchedulerService) startLocked(interval time.Duration) {
 // immediately after every deploy.
 func (s *BackupSchedulerService) StartScheduled(sched DailySchedule) {
 	next, ok := sched.NextAfter(time.Now())
-	if !ok {
+	if !ok { // arm-refusal-ok: unreachable from production, ParseDailySchedule and ParseWeekdays reject an empty day list (see below)
 		// Only reachable from a hand-built DailySchedule with no days:
 		// ParseDailySchedule and ParseWeekdays both reject an empty list, so a
 		// schedule that came through the parser always answers. Refusing to arm
