@@ -505,20 +505,12 @@ func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {
 	}
 
 	applied := gin.H{}
+	var values []database.SettingValue
 	for _, u := range updates {
 		if u.value == nil {
 			continue
 		}
-		if err := h.db.SetSetting(u.key, strconv.Itoa(*u.value)); err != nil {
-			slog.Error("Failed to update retention setting", "setting", u.label, "error", err)
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to update retention setting",
-				err,
-			))
-			return
-		}
+		values = append(values, database.SettingValue{Key: u.key, Value: strconv.Itoa(*u.value)})
 		applied[u.label] = *u.value
 	}
 
@@ -527,6 +519,19 @@ func (h *SettingsHandler) UpdateLogRetention(c *gin.Context) {
 			http.StatusBadRequest,
 			"VALIDATION_ERROR",
 			"At least one retention value is required",
+		))
+		return
+	}
+
+	// One transaction, so a storage fault cannot apply some of the retention
+	// values and not the others (agent-os-u0nd).
+	if err := h.db.SetSettings(values); err != nil {
+		slog.Error("Failed to update retention settings", "error", err)
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to update retention settings",
+			err,
 		))
 		return
 	}
@@ -759,6 +764,8 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	}
 
 	applied := gin.H{"setting": "update_schedule"}
+	var values []database.SettingValue
+	oldInterval := 0
 
 	if req.ScanIntervalMinutes != nil {
 		h.scanIntervalMu.Lock()
@@ -773,49 +780,18 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 			handleError(c, models.NewAppErrorWithCause(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to read the current scan interval", err))
 			return
 		}
-		oldInterval := 0
 		if oldIntervalStr != "" {
 			if v, err := strconv.Atoi(oldIntervalStr); err == nil { //geterrors:ignore the READ above was made fault-bearing by agent-os-1gqn (settingOrFault returns its error), so this parses a value already known to be present and fault-free
 				oldInterval = v
 			}
 		}
 
-		if err := h.db.SetSetting("update_scan_interval", fmt.Sprintf("%d", *req.ScanIntervalMinutes)); err != nil {
-			slog.Error("Failed to update scan interval", "error", err)
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to update scan interval",
-				err,
-			))
-			return
-		}
+		values = append(values, database.SettingValue{Key: "update_scan_interval", Value: strconv.Itoa(*req.ScanIntervalMinutes)})
 		applied["scan_interval"] = *req.ScanIntervalMinutes
-
-		if h.scheduler != nil && *req.ScanIntervalMinutes != oldInterval {
-			if *req.ScanIntervalMinutes > 0 {
-				h.scheduler.Restart(time.Duration(*req.ScanIntervalMinutes) * time.Minute)
-			} else {
-				h.scheduler.Stop()
-			}
-		}
 	}
 
 	if req.GlobalAutoUpdate != nil {
-		autoUpdateVal := "false"
-		if *req.GlobalAutoUpdate {
-			autoUpdateVal = "true"
-		}
-		if err := h.db.SetSetting("auto_update_enabled", autoUpdateVal); err != nil {
-			slog.Error("Failed to update auto-update setting", "error", err)
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to update auto-update setting",
-				err,
-			))
-			return
-		}
+		values = append(values, database.SettingValue{Key: "auto_update_enabled", Value: strconv.FormatBool(*req.GlobalAutoUpdate)})
 		applied["auto_update"] = *req.GlobalAutoUpdate
 	}
 
@@ -824,45 +800,39 @@ func (h *SettingsHandler) UpdateUpdateSettings(c *gin.Context) {
 	// row tell exactly the lie the all-pointer conversion (agent-os-mtbo.8) was
 	// written to stop telling.
 	if req.ApplyMode != nil {
-		if err := h.db.SetSetting("update_apply_mode", *req.ApplyMode); err != nil {
-			slog.Error("Failed to update apply mode", "error", err)
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to update apply mode",
-				err,
-			))
-			return
-		}
+		values = append(values, database.SettingValue{Key: "update_apply_mode", Value: *req.ApplyMode})
 		applied["apply_mode"] = *req.ApplyMode
 	}
 
 	if req.ApplyTime != nil {
-		if err := h.db.SetSetting("update_apply_time", *req.ApplyTime); err != nil {
-			slog.Error("Failed to update apply time", "error", err)
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to update apply time",
-				err,
-			))
-			return
-		}
+		values = append(values, database.SettingValue{Key: "update_apply_time", Value: *req.ApplyTime})
 		applied["apply_time"] = *req.ApplyTime
 	}
 
 	if req.ApplyDays != nil {
-		if err := h.db.SetSetting("update_apply_days", applyDaysCSV); err != nil {
-			slog.Error("Failed to update apply days", "error", err)
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to update apply days",
-				err,
-			))
-			return
-		}
+		values = append(values, database.SettingValue{Key: "update_apply_days", Value: applyDaysCSV})
 		applied["apply_days"] = applyDaysCSV
+	}
+
+	// One transaction, so a storage fault cannot store half a schedule
+	// (agent-os-u0nd). The scheduler is touched only after it commits.
+	if err := h.db.SetSettings(values); err != nil {
+		slog.Error("Failed to update the update settings", "error", err)
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to update the update settings",
+			err,
+		))
+		return
+	}
+
+	if h.scheduler != nil && req.ScanIntervalMinutes != nil && *req.ScanIntervalMinutes != oldInterval {
+		if *req.ScanIntervalMinutes > 0 {
+			h.scheduler.Restart(time.Duration(*req.ScanIntervalMinutes) * time.Minute)
+		} else {
+			h.scheduler.Stop()
+		}
 	}
 
 	// Re-arm on ANY of the three, not just on a changed interval: a schedule
@@ -972,6 +942,7 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 		return
 	}
 
+	var values []database.SettingValue
 	if req.SSHKey != "" {
 		// git_ssh_key is a path to a key file, not key material. Reject pasted
 		// private keys so private-key bytes are never stored in (or echoed back
@@ -984,45 +955,29 @@ func (h *SettingsHandler) UpdateGitSettings(c *gin.Context) {
 			))
 			return
 		}
-		if err := h.db.SetSetting("git_ssh_key", req.SSHKey); err != nil {
-			slog.Error("Failed to update git SSH key setting", "error", err)
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to update git SSH key",
-				err,
-			))
-			return
-		}
+		values = append(values, database.SettingValue{Key: "git_ssh_key", Value: req.SSHKey})
 	}
-
 	if req.HTTPSUser != "" {
-		if err := h.db.SetSetting("git_https_user", req.HTTPSUser); err != nil {
-			slog.Error("Failed to update git HTTPS user setting", "error", err)
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to update git HTTPS user",
-				err,
-			))
-			return
-		}
+		values = append(values, database.SettingValue{Key: "git_https_user", Value: req.HTTPSUser})
+	}
+	if req.HTTPSToken != "" {
+		values = append(values, database.SettingValue{Key: "git_https_token", Value: req.HTTPSToken})
 	}
 
-	if req.HTTPSToken != "" {
-		if err := h.db.SetSetting("git_https_token", req.HTTPSToken); err != nil {
-			if respondIfEncryptionUnavailable(c, err) {
-				return
-			}
-			slog.Error("Failed to update git HTTPS token setting", "error", err)
-			handleError(c, models.NewAppErrorWithCause(
-				http.StatusInternalServerError,
-				"INTERNAL_ERROR",
-				"Failed to update git HTTPS token",
-				err,
-			))
+	// One transaction, so a storage fault cannot leave a new user paired with
+	// the old token (agent-os-u0nd).
+	if err := h.db.SetSettings(values); err != nil {
+		if respondIfEncryptionUnavailable(c, err) {
 			return
 		}
+		slog.Error("Failed to update git settings", "error", err)
+		handleError(c, models.NewAppErrorWithCause(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to update git settings",
+			err,
+		))
+		return
 	}
 
 	slog.Info("Git settings updated")

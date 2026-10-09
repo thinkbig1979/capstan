@@ -69,29 +69,77 @@ func (d *DB) GetSetting(key string) (string, error) {
 }
 
 func (d *DB) SetSetting(key, value string) error {
+	stored, err := d.encodeSetting(key, value)
+	if err != nil {
+		return err
+	}
+	_, err = d.db.Exec(upsertSettingQuery, key, stored)
+	return err
+}
+
+// SettingValue is one key/value pair for SetSettings.
+type SettingValue struct {
+	Key   string
+	Value string
+}
+
+// SetSettings writes every value in one transaction, so a form that saves
+// several settings saves all of them or none (agent-os-u0nd). Every value is
+// encoded first, exactly as SetSetting encodes it, so a sensitive value that
+// cannot be encrypted refuses the whole save before anything is written. The
+// error names the key that failed and wraps its cause.
+func (d *DB) SetSettings(values []SettingValue) error {
+	stored := make([]string, len(values))
+	for i, v := range values {
+		enc, err := d.encodeSetting(v.Key, v.Value)
+		if err != nil {
+			return fmt.Errorf("setting %q: %w", v.Key, err)
+		}
+		stored[i] = enc
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin settings transaction: %w", err)
+	}
+	for i, v := range values {
+		if _, err := tx.Exec(upsertSettingQuery, v.Key, stored[i]); err != nil {
+			_ = tx.Rollback() //nolint:errcheck // The exec error above is already being returned and the tx is abandoned either way.
+			return fmt.Errorf("setting %q: %w", v.Key, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit settings transaction: %w", err)
+	}
+	return nil
+}
+
+const upsertSettingQuery = `INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`
+
+// encodeSetting returns the value as it is stored: encrypted for a sensitive
+// key, unchanged otherwise. It is the one encryption path for every setter.
+func (d *DB) encodeSetting(key, value string) (string, error) {
 	if sensitiveSettingKeys[key] && value != "" {
 		// Fail closed: never persist a secret in plaintext. If no encryptor is
 		// configured (no STORAGE_KEY/JWT_SECRET), refuse rather than silently
 		// storing cleartext (L1).
 		if d.encryptor == nil {
-			return fmt.Errorf("cannot store sensitive setting %q without an encryption key (set STORAGE_KEY or JWT_SECRET)", key)
+			return "", fmt.Errorf("cannot store sensitive setting %q without an encryption key (set STORAGE_KEY or JWT_SECRET)", key)
 		}
 		encrypted, err := d.encryptor.Encrypt(value, settingAAD(key))
 		switch {
 		case err == nil:
-			value = encrypted
+			return encrypted, nil
 		case plaintextTolerantSettingKeys[key] && errors.Is(err, ErrEncryptionUnavailable):
 			// Stored in clear; see plaintextTolerantSettingKeys. A value that
 			// itself begins with the v2 prefix cannot be: it would be read
 			// back as a ciphertext.
 			if IsSealedV2(value) {
-				return fmt.Errorf("setting %q cannot begin with %q", key, SealedV2Prefix)
+				return "", fmt.Errorf("setting %q cannot begin with %q", key, SealedV2Prefix)
 			}
 		default:
-			return fmt.Errorf("failed to encrypt setting: %w", err)
+			return "", fmt.Errorf("failed to encrypt setting: %w", err)
 		}
 	}
-	query := `INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`
-	_, err := d.db.Exec(query, key, value)
-	return err
+	return value, nil
 }

@@ -202,6 +202,32 @@ func scanSettingsKeys(t *testing.T, root string, dirs ...string) settingsKeyScan
 							scan.keys[m[1]] = append(scan.keys[m[1]], fset.Position(x.Pos()).String())
 						}
 					}
+				case *ast.CompositeLit:
+					// A SettingValue literal is a key written through
+					// SetSettings (agent-os-u0nd); its Key field is the key.
+					// In a []SettingValue literal the elements may elide
+					// their type, so those are read through the slice.
+					lits := []*ast.CompositeLit{}
+					if isSettingValueType(x.Type) {
+						lits = append(lits, x)
+					} else if at, ok := x.Type.(*ast.ArrayType); ok && isSettingValueType(at.Elt) {
+						for _, elt := range x.Elts {
+							if cl, ok := elt.(*ast.CompositeLit); ok && cl.Type == nil {
+								lits = append(lits, cl)
+							}
+						}
+					}
+					for _, lit := range lits {
+						settingValueKeys(lit, func(e ast.Expr) {
+							site := fset.Position(e.Pos()).String()
+							if v, ok := resolve(e); ok {
+								scan.keys[v] = append(scan.keys[v], site)
+							} else {
+								k := p.rel + ":" + fn.Name.Name
+								scan.dynamic[k] = append(scan.dynamic[k], site)
+							}
+						})
+					}
 				case *ast.CallExpr:
 					idx, ok := keyArgIndex(x)
 					if !ok || idx >= len(x.Args) {
@@ -239,6 +265,31 @@ func scanSettingsKeys(t *testing.T, root string, dirs ...string) settingsKeyScan
 		}
 	}
 	return scan
+}
+
+// settingValueKeys calls found with the Key field of a SettingValue literal.
+func settingValueKeys(lit *ast.CompositeLit, found func(ast.Expr)) {
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		if id, ok := kv.Key.(*ast.Ident); ok && id.Name == "Key" {
+			found(kv.Value)
+		}
+	}
+}
+
+// isSettingValueType reports whether a composite literal's type is
+// SettingValue, bare inside package database or qualified outside it.
+func isSettingValueType(e ast.Expr) bool {
+	switch t := e.(type) {
+	case *ast.Ident:
+		return t.Name == "SettingValue"
+	case *ast.SelectorExpr:
+		return t.Sel.Name == "SettingValue"
+	}
+	return false
 }
 
 func calleeName(c *ast.CallExpr) string {
@@ -336,6 +387,11 @@ func TestSettingsKeyScanner_ReportsUnclassifiedAndDynamic(t *testing.T) {
 		"\t_, _ = h.db.RetentionDays(\"fake_retention\")\n" +
 		"\t_ = RetentionDays(\"not_a_key\")\n" +
 		"\t_ = db.SetSetting(k, \"x\")\n" +
+		"\t_ = []database.SettingValue{{Key: \"fake_batch_elided\"}}\n" +
+		"\t_ = database.SettingValue{Key: \"fake_batch\", Value: \"x\"}\n" +
+		"}\n\n" +
+		"func g(k string) {\n" +
+		"\t_ = database.SettingValue{Key: k}\n" +
 		"}\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, "internal", "fake", "fake.go"), []byte(src), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "internal", "other"), 0o755))
@@ -348,7 +404,8 @@ func TestSettingsKeyScanner_ReportsUnclassifiedAndDynamic(t *testing.T) {
 		got = append(got, k)
 	}
 	sort.Strings(got)
-	assert.Equal(t, []string{"fake_api_token", "fake_literal", "fake_qualified", "fake_retention",
+	assert.Equal(t, []string{"fake_api_token", "fake_batch", "fake_batch_elided", "fake_literal", "fake_qualified", "fake_retention",
 		"fake_seeded", "fake_variadic_a", "fake_variadic_b"}, got)
 	assert.Contains(t, scan.dynamic, "internal/fake/fake.go:f", "a variable key must be reported, not skipped")
+	assert.Contains(t, scan.dynamic, "internal/fake/fake.go:g", "a variable SettingValue key must be reported, not skipped")
 }

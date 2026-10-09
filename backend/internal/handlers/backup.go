@@ -429,7 +429,6 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 		return
 	}
 
-	db := h.db
 	// scheduleChanged covers EVERY field the scheduler reads, not just the
 	// interval: changing only the mode, time or days would otherwise leave the
 	// running scheduler on its old configuration until the next process
@@ -462,6 +461,7 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 		return
 	}
 
+	var values []database.SettingValue
 	if req.Repository != nil {
 		// Refuse to persist a value still carrying the redaction marker.
 		//
@@ -498,115 +498,66 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 			))
 			return
 		}
-		if err := db.SetSetting("restic_repository", *req.Repository); err != nil {
-			h.internalError(c, "Failed to save repository setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "restic_repository", Value: *req.Repository})
 	}
 	if req.Password != nil && *req.Password != "" {
-		if err := db.SetSetting("restic_password", *req.Password); err != nil {
-			if respondIfEncryptionUnavailable(c, err) {
-				return
-			}
-			h.internalError(c, "Failed to save password setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "restic_password", Value: *req.Password})
 	}
 	if req.KeepDaily != nil {
-		if err := db.SetSetting("backup_keep_daily", strconv.Itoa(*req.KeepDaily)); err != nil {
-			h.internalError(c, "Failed to save keep_daily setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "backup_keep_daily", Value: strconv.Itoa(*req.KeepDaily)})
 	}
 	if req.KeepWeekly != nil {
-		if err := db.SetSetting("backup_keep_weekly", strconv.Itoa(*req.KeepWeekly)); err != nil {
-			h.internalError(c, "Failed to save keep_weekly setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "backup_keep_weekly", Value: strconv.Itoa(*req.KeepWeekly)})
 	}
 	if req.KeepMonthly != nil {
-		if err := db.SetSetting("backup_keep_monthly", strconv.Itoa(*req.KeepMonthly)); err != nil {
-			h.internalError(c, "Failed to save keep_monthly setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "backup_keep_monthly", Value: strconv.Itoa(*req.KeepMonthly)})
 	}
 	if req.KeepYearly != nil {
-		if err := db.SetSetting("backup_keep_yearly", strconv.Itoa(*req.KeepYearly)); err != nil {
-			h.internalError(c, "Failed to save keep_yearly setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "backup_keep_yearly", Value: strconv.Itoa(*req.KeepYearly)})
 	}
 	if req.AutoPrune != nil {
-		val := "false"
-		if *req.AutoPrune {
-			val = "true"
-		}
-		if err := db.SetSetting("backup_auto_prune", val); err != nil {
-			h.internalError(c, "Failed to save auto_prune setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "backup_auto_prune", Value: strconv.FormatBool(*req.AutoPrune)})
 	}
 	if req.ScheduleIntervalMinutes != nil {
 		scheduleChanged = true
-		if err := db.SetSetting("backup_schedule_interval", strconv.Itoa(*req.ScheduleIntervalMinutes)); err != nil {
-			h.internalError(c, "Failed to save schedule_interval setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "backup_schedule_interval", Value: strconv.Itoa(*req.ScheduleIntervalMinutes)})
 	}
 	if req.ScheduleMode != nil {
 		scheduleChanged = true
-		if err := db.SetSetting("backup_schedule_mode", *req.ScheduleMode); err != nil {
-			h.internalError(c, "Failed to save schedule_mode setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "backup_schedule_mode", Value: *req.ScheduleMode})
 	}
 	if req.ScheduleTime != nil {
 		scheduleChanged = true
-		if err := db.SetSetting("backup_schedule_time", *req.ScheduleTime); err != nil {
-			h.internalError(c, "Failed to save schedule_time setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "backup_schedule_time", Value: *req.ScheduleTime})
 	}
 	if req.ScheduleDays != nil {
 		scheduleChanged = true
-		if err := db.SetSetting("backup_schedule_days", scheduleDaysCSV); err != nil {
-			h.internalError(c, "Failed to save schedule_days setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "backup_schedule_days", Value: scheduleDaysCSV})
 	}
 	if req.SyncAfterBackup != nil {
-		val := "false"
-		if *req.SyncAfterBackup {
-			val = "true"
-		}
-		if err := db.SetSetting("backup_sync_after", val); err != nil {
-			h.internalError(c, "Failed to save sync_after setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "backup_sync_after", Value: strconv.FormatBool(*req.SyncAfterBackup)})
 	}
 	if req.RcloneRemote != nil {
-		if err := db.SetSetting("rclone_remote", *req.RcloneRemote); err != nil {
-			h.internalError(c, "Failed to save rclone_remote setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "rclone_remote", Value: *req.RcloneRemote})
 	}
 	if req.RclonePath != nil {
-		if err := db.SetSetting("rclone_path", *req.RclonePath); err != nil {
-			h.internalError(c, "Failed to save rclone_path setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "rclone_path", Value: *req.RclonePath})
 	}
 	if req.RcloneTransfers != nil {
-		if err := db.SetSetting("rclone_transfers", strconv.Itoa(*req.RcloneTransfers)); err != nil {
-			h.internalError(c, "Failed to save rclone_transfers setting", err)
-			return
-		}
+		values = append(values, database.SettingValue{Key: "rclone_transfers", Value: strconv.Itoa(*req.RcloneTransfers)})
 	}
 	if req.Hostname != nil {
-		if err := db.SetSetting("backup_hostname", *req.Hostname); err != nil {
-			h.internalError(c, "Failed to save hostname setting", err)
+		values = append(values, database.SettingValue{Key: "backup_hostname", Value: *req.Hostname})
+	}
+
+	// One transaction: a storage fault part-way leaves every setting as it
+	// was, not the form half-applied (agent-os-u0nd).
+	if err := h.db.SetSettings(values); err != nil {
+		if respondIfEncryptionUnavailable(c, err) {
 			return
 		}
+		h.internalError(c, "Failed to save backup settings", err)
+		return
 	}
 
 	if scheduleChanged {
