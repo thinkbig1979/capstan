@@ -157,3 +157,21 @@ func TestUpdateLogRetention_RejectsEmptyBody(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "At least one retention value is required")
 }
+
+// A body whose earlier field is valid and whose later field is below the floor
+// must change nothing (agent-os-tnjq). Validating and writing one field at a
+// time saved retentionDays before rejecting cleanupHistoryRetentionDays, so a
+// 400 left the request half-applied.
+func TestUpdateLogRetention_MixedValidAndBelowFloorChangesNothing(t *testing.T) {
+	db, router := newRetentionRouter(t)
+
+	w := putRetention(t, router, `{"retentionDays": 30, "cleanupHistoryRetentionDays": 3}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	value, err := db.GetSetting(database.SettingLogRetentionDays)
+	require.NoError(t, err)
+	assert.Equal(t, "90", value, "the valid earlier field must not be saved when a later one is rejected")
+
+	_, err = db.GetSetting(database.SettingCleanupHistoryRetentionDays)
+	assert.ErrorIs(t, err, errdefs.ErrNotFound, "cleanup retention should be untouched")
+}

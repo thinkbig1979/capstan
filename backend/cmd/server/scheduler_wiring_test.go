@@ -95,6 +95,15 @@ type fakeSettings struct {
 	values map[string]string
 	errs   map[string]error
 	reads  []string
+	writes map[string]string
+}
+
+func (f *fakeSettings) SetSetting(key, value string) error {
+	if f.writes == nil {
+		f.writes = map[string]string{}
+	}
+	f.writes[key] = value
+	return nil
 }
 
 func (f *fakeSettings) GetSetting(key string) (string, error) {
@@ -251,5 +260,52 @@ func TestStartUpdateScheduler_UnparseableIntervalIsReported(t *testing.T) {
 	}
 	if got := errs[0].attrs["value"].String(); got != "not-a-number" {
 		t.Fatalf("the ERROR record's value attribute = %q, want the offending setting %q", got, "not-a-number")
+	}
+}
+
+// The two branches that refuse to start the scheduler used to leave only a
+// log line, so the Updates tab showed nothing (agent-os-awfh). Each now writes
+// update_scan_last_error, which the tab shows as "Last scan error".
+func TestStartUpdateScheduler_NotStartedIsRecordedAsLastScanError(t *testing.T) {
+	cases := []struct {
+		name string
+		db   *fakeSettings
+		want string
+	}{
+		{"unreadable interval", &fakeSettings{errs: map[string]error{
+			"update_scan_interval": errSettingsFault,
+			"update_apply_mode":    errSettingsFault,
+		}}, errSettingsFault.Error()},
+		{"interval not a number", &fakeSettings{values: map[string]string{
+			"update_scan_interval": "not-a-number",
+		}}, "not-a-number"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			log, _ := newCaptureLogger()
+			if started := startUpdateScheduler(&recordingScheduler{}, tc.db, log); started {
+				t.Fatal("startUpdateScheduler reported started")
+			}
+			got, ok := tc.db.writes["update_scan_last_error"]
+			if !ok {
+				t.Fatalf("update_scan_last_error was not written; writes = %v", tc.db.writes)
+			}
+			if !strings.Contains(got, "update scheduler was not started") || !strings.Contains(got, tc.want) {
+				t.Fatalf("update_scan_last_error = %q, want it to name the consequence and %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Control: a clean start writes nothing, so a real error from an earlier scan
+// is left for the next scan to clear rather than wiped at boot.
+func TestStartUpdateScheduler_StartLeavesLastScanErrorUntouched(t *testing.T) {
+	db := &fakeSettings{values: map[string]string{"update_scan_interval": "30"}}
+	log, _ := newCaptureLogger()
+	if started := startUpdateScheduler(&recordingScheduler{}, db, log); !started {
+		t.Fatal("control did not start: the fixture is not the readable case it claims to be")
+	}
+	if len(db.writes) != 0 {
+		t.Fatalf("a clean start wrote settings %v, want none", db.writes)
 	}
 }

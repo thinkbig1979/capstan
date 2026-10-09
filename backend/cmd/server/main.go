@@ -189,12 +189,24 @@ func registerIndexRoute(r *gin.Engine, indexHTML string) {
 }
 
 // schedulerSettings is the slice of *database.DB that startUpdateScheduler
-// reads. It is declared here, structurally, so the boot decision can be driven
-// with a fault-injecting fake: update_scan_interval and update_apply_mode come
-// from the SAME source, so a fault reaches both at once and the only way to
-// observe that is to inject one.
+// reads and writes. It is declared here, structurally, so the boot decision can
+// be driven with a fault-injecting fake: update_scan_interval and
+// update_apply_mode come from the SAME source, so a fault reaches both at once
+// and the only way to observe that is to inject one.
 type schedulerSettings interface {
 	GetSetting(key string) (string, error)
+	SetSetting(key, value string) error
+}
+
+// recordUpdateSchedulerNotStarted puts the reason the scheduler did not start
+// where the Updates tab shows it ("Last scan error"), not only in the log
+// (agent-os-awfh). The next successful scan clears it. Best effort: when the
+// read failed, this write to the same store usually fails too, and the log
+// line already written is then the only trace.
+func recordUpdateSchedulerNotStarted(db schedulerSettings, log *slog.Logger, reason string) {
+	if err := db.SetSetting("update_scan_last_error", "the update scheduler was not started at boot: "+reason); err != nil {
+		log.Error("Failed to record why the update scheduler was not started", "error", err)
+	}
 }
 
 // updateScheduler is the *services.SchedulerService surface used at boot. The
@@ -219,6 +231,7 @@ func startUpdateScheduler(sched updateScheduler, db schedulerSettings, log *slog
 		log.Error("The update scan interval could not be read, so the update scheduler was not started; "+
 			"automatic update scans and any scheduled apply stay inactive until this is fixed",
 			"error", err)
+		recordUpdateSchedulerNotStarted(db, log, "the update scan interval could not be read: "+err.Error())
 		return false
 	}
 	scanIntervalMinutes := 0
@@ -229,6 +242,7 @@ func startUpdateScheduler(sched updateScheduler, db schedulerSettings, log *slog
 			// leave the interval at 0 and the scheduler off.
 			log.Error("The update scan interval is not a number, so the update scheduler was not started",
 				"value", intervalStr, "error", convErr)
+			recordUpdateSchedulerNotStarted(db, log, fmt.Sprintf("the update scan interval %q is not a number", intervalStr))
 		} else {
 			scanIntervalMinutes = minutes
 		}

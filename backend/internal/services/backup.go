@@ -373,6 +373,7 @@ func (s *BackupService) StartScheduler() {
 	// repository the operator never configured.
 	bc, err := s.resolveOrRefuse("start scheduler")
 	if err != nil {
+		s.recordSchedulerNotStarted(err)
 		return
 	}
 
@@ -397,6 +398,27 @@ func (s *BackupService) StartScheduler() {
 	}
 
 	s.startIntervalScheduler(bc)
+}
+
+// recordSchedulerNotStarted writes one 'failed' backup_runs row saying the
+// scheduler was not armed, so the refusal shows in the backup history and not
+// only in the log (agent-os-awfh, the sibling of recordUnstartedCycle in
+// backup_scheduler.go). Best effort: when the database is what broke, this
+// write fails too and the log is the only place left to say so.
+func (s *BackupService) recordSchedulerNotStarted(cause error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	run := &models.BackupRun{
+		ID:           uuid.New().String(),
+		Kind:         "backup",
+		Trigger:      TriggerScheduled,
+		Status:       "failed",
+		StartedAt:    now,
+		FinishedAt:   &now,
+		ErrorMessage: fmt.Sprintf("scheduled backups were not started: the backup settings could not be read: %v", cause),
+	}
+	if err := s.db.CreateBackupRun(run); err != nil {
+		s.logger.Error("Could not record the unstarted backup scheduler in the history", "error", err)
+	}
 }
 
 // startIntervalScheduler starts the ticker path, honouring the historical
