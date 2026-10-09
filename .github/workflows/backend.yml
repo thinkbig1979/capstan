@@ -175,6 +175,12 @@ jobs:
       # running a policy gate first would hide a genuine test failure behind
       # it. Runner time is not the constraint here (self-hosted); information
       # per run is.
+      #
+      # The same binary also runs the timebind analyzer
+      # (tools/geterrors/timebind, agent-os-omkb): a time.Time bound raw into
+      # SQL instead of through storedInstant, which the driver stores as
+      # t.String() in the local zone. It shares this module, toolchain pin,
+      # test run and vet run, so it has no step of its own.
       - name: Getter-errors analyzer
         working-directory: backend
         run: |
