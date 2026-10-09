@@ -75,6 +75,9 @@ import type {
   DiskUsageBreakdown,
   DockerCleanupCandidate,
   DockerCleanupPreview,
+  JobTargetType as UpdateJobWireTargetType,
+  Status as UpdateJobWireStatus,
+  Stream as UpdateJobWireStream,
 } from './generated-services'
 import type { Info as VersionInfo } from './generated-version'
 
@@ -109,6 +112,9 @@ export type {
   StackEvent,
   SyncPreflightResponse,
   UpdateResult,
+  UpdateJobWireStatus,
+  UpdateJobWireStream,
+  UpdateJobWireTargetType,
   User,
   VersionInfo,
   WireActionResult,

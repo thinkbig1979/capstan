@@ -35,7 +35,7 @@ func TestUpdateJobManager_Enqueue_ReturnsQueuedJob(t *testing.T) {
 	job := m.Enqueue(spec, run)
 
 	assert.Equal(t, StatusQueued, job.Status)
-	assert.Equal(t, "container", job.TargetType)
+	assert.Equal(t, JobTargetTypeContainer, job.TargetType)
 	assert.Equal(t, "abc123", job.TargetID)
 	assert.Equal(t, "myapp", job.Name)
 	assert.NotEmpty(t, job.ID)

@@ -292,7 +292,7 @@ func (h *ResourcesHandler) updateContainer(c *gin.Context) {
 	}
 
 	spec := services.JobSpec{
-		TargetType: "container",
+		TargetType: services.JobTargetTypeContainer,
 		TargetID:   id,
 		Name:       containerName,
 		StackID:    stackID,
@@ -397,7 +397,7 @@ func (h *ResourcesHandler) enqueueJobWithBroadcasts(
 			BroadcastEvent(models.StackEvent{
 				Type:       "update_job_progress",
 				JobID:      jobID,
-				TargetType: spec.TargetType,
+				TargetType: string(spec.TargetType),
 				TargetID:   spec.TargetID,
 				StackID:    spec.StackID,
 				Name:       spec.Name,
@@ -424,7 +424,7 @@ func (h *ResourcesHandler) enqueueJobWithBroadcasts(
 		BroadcastEvent(models.StackEvent{
 			Type:       "update_job_complete",
 			JobID:      jobID,
-			TargetType: spec.TargetType,
+			TargetType: string(spec.TargetType),
 			TargetID:   spec.TargetID,
 			StackID:    spec.StackID,
 			Name:       spec.Name,
@@ -498,7 +498,7 @@ func (h *ResourcesHandler) updateStack(c *gin.Context) {
 	})
 
 	spec := services.JobSpec{
-		TargetType: "stack",
+		TargetType: services.JobTargetTypeStack,
 		TargetID:   stack.ID,
 		Name:       stack.ProjectName,
 		StackID:    stack.ID,

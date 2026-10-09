@@ -168,7 +168,7 @@ func TestUpdateStack_EnqueuesAJobForOutdatedServices(t *testing.T) {
 
 	job := h.jobManager.Get(jobID)
 	require.NotNil(t, job, "the job must be retrievable by the id we handed the client")
-	assert.Equal(t, "stack", job.TargetType)
+	assert.Equal(t, services.JobTargetTypeStack, job.TargetType)
 	assert.Equal(t, "s1", job.TargetID)
 	assert.Equal(t, "web", job.Name)
 }

@@ -681,7 +681,7 @@ func streamComposeCmd(ctx context.Context, timeout time.Duration, args []string,
 	}
 
 	var wg sync.WaitGroup
-	scanPipe := func(r io.Reader, s LogLineStream) {
+	scanPipe := func(r io.Reader, s Stream) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

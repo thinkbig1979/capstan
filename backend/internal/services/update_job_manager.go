@@ -12,37 +12,17 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/config"
 )
 
-// Status represents the lifecycle state of an update job.
-type Status string
-
-const (
-	StatusQueued     Status = "queued"
-	StatusPulling    Status = "pulling"
-	StatusRecreating Status = "recreating"
-	StatusSuccess    Status = "success"
-	StatusError      Status = "error"
-)
-
-// LogLineStream is one of the three allowed stream values for a LogLine.
-type LogLineStream string
-
-const (
-	StreamStdout LogLineStream = "stdout"
-	StreamStderr LogLineStream = "stderr"
-	StreamStatus LogLineStream = "status"
-)
-
 // LogLine is a single timestamped output line from an update job.
 // JSON field names match the API contract (ts/text/stream).
 type LogLine struct {
-	Ts     time.Time     `json:"ts"`
-	Text   string        `json:"text"`
-	Stream LogLineStream `json:"stream"`
+	Ts     time.Time `json:"ts"`
+	Text   string    `json:"text"`
+	Stream Stream    `json:"stream"`
 }
 
 // JobSpec carries the identifying metadata for a new job.
 type JobSpec struct {
-	TargetType string
+	TargetType JobTargetType
 	TargetID   string
 	Name       string
 	StackID    string
@@ -51,14 +31,14 @@ type JobSpec struct {
 // Job is the in-memory state of a single update job.
 // JSON field names are camelCase to match the API contract.
 type Job struct {
-	ID         string    `json:"id"`
-	TargetType string    `json:"targetType"`
-	TargetID   string    `json:"targetId"`
-	Name       string    `json:"name"`
-	StackID    string    `json:"stackId"`
-	Status     Status    `json:"status"`
-	Lines      []LogLine `json:"lines"`
-	Error      string    `json:"error,omitempty"`
+	ID         string        `json:"id"`
+	TargetType JobTargetType `json:"targetType"`
+	TargetID   string        `json:"targetId"`
+	Name       string        `json:"name"`
+	StackID    string        `json:"stackId"`
+	Status     Status        `json:"status"`
+	Lines      []LogLine     `json:"lines"`
+	Error      string        `json:"error,omitempty"`
 	// Outcome and Reason are set when the job reaches a terminal state.
 	// outcome ∈ {"success","no_change","partial","failed"} — matches truth.Outcome.
 	// omitempty so they are absent from JSON until the job is terminal.

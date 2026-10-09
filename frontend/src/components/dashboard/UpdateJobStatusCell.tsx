@@ -2,6 +2,7 @@ import { RefreshCw, CheckCircle, AlertCircle, AlertTriangle, Info, ChevronDown, 
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 import type { UpdateJob } from '@/stores/updateJobStore'
+import type { Outcome } from '@/types'
 
 // ── Main cell component ───────────────────────────────────────────────────────
 
@@ -34,7 +35,7 @@ const TERMINAL_STATUSES = new Set(['success', 'error'])
  *   outcome='failed'    → update failed                    → show red "Failed"
  *   outcome=undefined   → backend not yet migrated; fall back to status
  */
-function resolveDisplayOutcome(job: UpdateJob): 'success' | 'no_change' | 'partial' | 'failed' | null {
+function resolveDisplayOutcome(job: UpdateJob): Outcome | null {
   if (!TERMINAL_STATUSES.has(job.status)) return null
   // Prefer the explicit outcome when it has arrived.
   if (job.outcome === 'success') return 'success'

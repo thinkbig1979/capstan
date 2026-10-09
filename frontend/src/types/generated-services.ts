@@ -37,3 +37,25 @@ export interface DockerCleanupPreview {
   reclaimableBytes: number /* int64 */;
   minAgeHours: number /* int */;
 }
+/**
+ * Status represents the lifecycle state of an update job.
+ */
+export const StatusQueued = "queued";
+export const StatusPulling = "pulling";
+export const StatusRecreating = "recreating";
+export const StatusSuccess = "success";
+export const StatusError = "error";
+export type Status = typeof StatusQueued | typeof StatusPulling | typeof StatusRecreating | typeof StatusSuccess | typeof StatusError;
+/**
+ * Stream is one of the three allowed stream values for a LogLine.
+ */
+export const StreamStdout = "stdout";
+export const StreamStderr = "stderr";
+export const StreamStatus = "status";
+export type Stream = typeof StreamStdout | typeof StreamStderr | typeof StreamStatus;
+/**
+ * JobTargetType is what an update job updates: one container or a whole stack.
+ */
+export const JobTargetTypeContainer = "container";
+export const JobTargetTypeStack = "stack";
+export type JobTargetType = typeof JobTargetTypeContainer | typeof JobTargetTypeStack;
