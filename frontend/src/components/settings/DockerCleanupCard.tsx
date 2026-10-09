@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { settingsSaveFault } from '@/lib/settings-save-fault'
-import { presentFault } from '@/lib/error-handler'
+import { presentError, presentFault } from '@/lib/error-handler'
 import { Button } from '@/components/ui/button'
 import { NumericField } from '@/components/settings/NumericField'
 import { Label } from '@/components/ui/label'
@@ -17,10 +17,12 @@ import {
   useDockerCleanupPolicy,
   useUpdateDockerCleanupPolicy,
   usePreviewDockerCleanup,
+  useRunDockerCleanup,
   useDockerCleanupHistory,
 } from '@/hooks/useResources'
 import type { DockerCleanupCandidate, DockerCleanupRun } from '@/types'
 import { RefreshFailedNotice } from '@/components/RefreshFailedNotice'
+import { useConfirm } from '@/hooks/useConfirm'
 
 /** What to show for one preview row.
  *
@@ -65,6 +67,8 @@ export function DockerCleanupCard() {
   const { data, isPending, isError, refetch } = useDockerCleanupPolicy()
   const updatePolicy = useUpdateDockerCleanupPolicy()
   const preview = usePreviewDockerCleanup()
+  const runCleanup = useRunDockerCleanup()
+  const { confirm, ConfirmComponent } = useConfirm()
   const history = useDockerCleanupHistory()
   const [draft, setDraft] = useState<PolicyDraft>({})
 
@@ -163,6 +167,35 @@ export function DockerCleanupCard() {
     })
   }
 
+  const handleRun = async () => {
+    if (minAgeHours === null) return
+    // The floor in the sentence is the floor in the request: both read the
+    // same value, so the dialog cannot name one number and the run apply another.
+    const confirmed = await confirm(
+      'Run Docker cleanup now?',
+      `This removes dangling images created more than ${minAgeHours} hours ago and unused build cache last used more than ${minAgeHours} hours ago. Removed images cannot be recovered. It runs even if the schedule is off.`,
+      { confirmText: 'Run cleanup', isDangerous: true },
+    )
+    if (!confirmed) return
+    runCleanup.mutate(minAgeHours, {
+      onSuccess: (run) => {
+        // The candidate list on screen is of images this run just removed.
+        preview.reset()
+        // A failed run normally arrives as a rejection (the server answers 5xx),
+        // but the row's own status is read too, so a failed row is never
+        // announced as a success.
+        if (run.status === 'failed') {
+          presentFault('Cleanup failed', run.errorMessage ?? null)
+          return
+        }
+        toast.success(
+          `Cleanup finished: ${run.imagesDeleted} image${run.imagesDeleted === 1 ? '' : 's'} removed, ${runReclaimed(run)} reclaimed`,
+        )
+      },
+      onError: (error) => presentError(error, { fallback: 'Failed to run the cleanup' }),
+    })
+  }
+
   return (
     <div className="space-y-6">
       <form onSubmit={(e) => { e.preventDefault(); handleSave() }} className="space-y-4">
@@ -252,17 +285,30 @@ export function DockerCleanupCard() {
           </p>
         </div>
 
-        <Button
-          type="button"
-          variant="outline"
-          onClick={handlePreview}
-          // The age floor only. The preview endpoint validates minAgeHours and
-          // nothing else (cleanupMinAgeFromRequest, docker_cleanup.go), so an
-          // interval the PUT would reject is no reason to refuse a preview.
-          disabled={ageEmpty || ageBelowFloor || preview.isPending}
-        >
-          {preview.isPending ? 'Checking…' : 'Preview'}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handlePreview}
+            // The age floor only. The preview endpoint validates minAgeHours and
+            // nothing else (cleanupMinAgeFromRequest, docker_cleanup.go), so an
+            // interval the PUT would reject is no reason to refuse a preview.
+            disabled={ageEmpty || ageBelowFloor || preview.isPending}
+          >
+            {preview.isPending ? 'Checking…' : 'Preview'}
+          </Button>
+          {/* Same floor guard as Preview, plus pending: a second click while a
+              prune is running would start a second prune. Runs whether or not
+              the schedule is on (runCleanup, docker_cleanup.go). */}
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={handleRun}
+            disabled={ageEmpty || ageBelowFloor || runCleanup.isPending}
+          >
+            {runCleanup.isPending ? 'Running…' : 'Run cleanup now'}
+          </Button>
+        </div>
 
         {/* Both branches name the floor the SERVER echoed, never the one in the
             input above. The moment the operator edits that input the two
@@ -390,6 +436,7 @@ export function DockerCleanupCard() {
           </Table>
         )}
       </div>
+      <ConfirmComponent />
     </div>
   )
 }

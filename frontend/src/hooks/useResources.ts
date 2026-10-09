@@ -519,6 +519,35 @@ export function useDockerCleanupHistory(limit = 20) {
   })
 }
 
+/**
+ * Runs a cleanup now. A plain useMutation, NOT useActionMutation: the response
+ * is the recorded DockerCleanupRun (it carries `status`, no `outcome`), so it is
+ * not an ActionResult and safe-defaults rule 8 does not apply. A failed run
+ * answers 5xx and arrives as a rejection.
+ *
+ * Invalidates on settled, not only on success: a run that fails partway has
+ * still recorded a history row and may have removed images before it failed.
+ */
+export function useRunDockerCleanup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (minAgeHours: number) => resourcesApi.runCleanup(minAgeHours),
+    onSettled: () => {
+      for (const key of [
+        queryKeys.settings.dockerCleanupHistory(),
+        queryKeys.resources.images(),
+        queryKeys.dashboardStats(),
+        // The Images-tab readout counts the dangling images this just removed.
+        queryKeys.resources.cleanupPreview(),
+        // A run prunes build cache as well as images.
+        queryKeys.resources.buildCache(),
+      ]) {
+        queryClient.invalidateQueries({ queryKey: key })
+      }
+    },
+  })
+}
+
 export function useUpdateGitSettings() {
   const queryClient = useQueryClient()
   return useMutation({
