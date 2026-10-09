@@ -141,6 +141,41 @@ describe('useExtractToEnv — the atomic compose-env write', () => {
   })
 })
 
+// agent-os-mt33. PutComposeAndEnv answers truth.Partial ("compose write
+// verification failed; rollback also failed", handlers/compose.go) with HTTP 207,
+// which axios RESOLVES, so it arrives as a result, not a rejection. It was sent
+// through toastInvalid, a red error; the precedent (qags.21/.26/.31) is an orange
+// warning carrying the reason, which here names the failed rollback.
+describe('useExtractToEnv — a partial result (agent-os-mt33)', () => {
+  const PARTIAL_REASON = 'compose write verification failed; rollback also failed'
+
+  it('shows the reason as a warning, not an error, and leaves the editor untouched', async () => {
+    stacksApi.updateComposeAndEnv.mockResolvedValue({ outcome: 'partial', reason: PARTIAL_REASON })
+
+    const { result, view } = setup()
+    await act(async () => {
+      await result.current.confirmExtract()
+    })
+
+    expect(toast.warning).toHaveBeenCalledWith(PARTIAL_REASON)
+    expect(toast.error).not.toHaveBeenCalled()
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(view.dispatch).not.toHaveBeenCalled()
+  })
+
+  it('a failed result still shows an error with the reason (control)', async () => {
+    stacksApi.updateComposeAndEnv.mockResolvedValue({ outcome: 'failed', reason: 'could not write' })
+
+    const { result } = setup()
+    await act(async () => {
+      await result.current.confirmExtract()
+    })
+
+    expect(toast.error).toHaveBeenCalledWith('could not write')
+    expect(toast.warning).not.toHaveBeenCalled()
+  })
+})
+
 describe('useExtractToEnv — the success control', () => {
   // Without this arm every assertion above would also pass against a hook that
   // failed unconditionally.
