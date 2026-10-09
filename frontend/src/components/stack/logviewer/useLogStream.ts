@@ -8,6 +8,7 @@ import { MAX_LOG_BUFFER, CONTAINER_COLORS, TIME_RANGE_OPTIONS } from './constant
 import type { LogMessage, DisplayLogMessage } from './types'
 
 // Mirrors handlers.LogLine: three plain strings, none omitempty (agent-os-r4kf).
+/** @knipignore exported for lib/__tests__/wsFrames.test.ts, which drives the validator directly */
 export const parseLogMessage = frameValidator((raw): LogMessage => {
   const f = record(raw)
   return { container: str(f.container), timestamp: str(f.timestamp), message: str(f.message) }

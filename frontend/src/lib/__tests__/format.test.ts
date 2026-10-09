@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   formatBytes,
-  formatDuration,
   formatDurationShort,
   formatDate,
   formatDateFull,
@@ -29,20 +28,6 @@ describe('formatBytes', () => {
 
   it('returns 0 B for negative', () => {
     expect(formatBytes(-1)).toBe('0 B')
-  })
-})
-
-describe('formatDuration', () => {
-  it('formats seconds', () => {
-    expect(formatDuration(5000)).toBe('5s')
-  })
-
-  it('formats minutes and seconds', () => {
-    expect(formatDuration(125000)).toBe('2m 5s')
-  })
-
-  it('formats hours and minutes', () => {
-    expect(formatDuration(7500000)).toBe('2h 5m')
   })
 })
 

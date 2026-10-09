@@ -132,6 +132,7 @@ export type StackEvent =
 const STACK_EVENT_STATUSES = ['running', 'stopped', 'partial', 'paused', 'unknown', 'error'] as const satisfies readonly StackStatus[]
 // `satisfies` only says each listed value is valid; Exact also fails when
 // services.StackStatus grows a value this list does not parse (agent-os-rc69).
+/** @knipignore compile-time wire assertion; exported only because an unused local type fails noUnusedLocals */
 export type StackEventStatusesMatchWire = AssertTrue<Exact<(typeof STACK_EVENT_STATUSES)[number], WireStackStatus>>
 
 const readJobEvent = (f: Record<string, unknown>) => ({
@@ -145,6 +146,7 @@ const readJobEvent = (f: Record<string, unknown>) => ({
 
 // A type this union does not know returns null, so it is dropped with a
 // warning, exactly as the switch below used to ignore it.
+/** @knipignore exported for the wsFrames and useStackEvents tests, which drive the validator directly */
 export const parseStackEvent = frameValidator((raw): StackEvent | null => {
   const f = record(raw)
   const timestamp = str(f.timestamp)

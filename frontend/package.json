@@ -12,7 +12,8 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "doctor": "react-doctor",
-    "knip": "knip --no-progress"
+    "knip": "knip --no-progress",
+    "knip:production": "knip --production --no-progress -c knip.production.jsonc"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

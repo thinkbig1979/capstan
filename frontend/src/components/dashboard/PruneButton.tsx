@@ -50,6 +50,7 @@ function buildPruneSummary(
 
 // Which option controls a given prune surfaces. Docker only supports each flag on
 // certain resources, so each tab opts in to just the controls that apply.
+/** @knipignore exported for dashboard/__tests__/PruneButton.test.tsx, which types its fixtures with it */
 export interface PruneOptionConfig {
   // Show the "remove all unused (not just dangling/anonymous)" toggle, with the
   // given label describing what "all" means for this resource.

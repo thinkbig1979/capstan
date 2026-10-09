@@ -1,10 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render } from '@testing-library/react'
 import {
   StackCardSkeleton,
-  ContainerTableSkeleton,
   EditorSkeleton,
-  GitHistorySkeleton,
   MetricsSkeleton,
   LoadingSpinner,
 } from '../LoadingSkeleton'
@@ -16,21 +14,8 @@ describe('LoadingSkeleton', () => {
     expect(pulses.length).toBeGreaterThan(0)
   })
 
-  it('ContainerTableSkeleton renders header and rows', () => {
-    render(<ContainerTableSkeleton />)
-    expect(screen.getByText('Name')).toBeInTheDocument()
-    expect(screen.getByText('Status')).toBeInTheDocument()
-    expect(screen.getByText('Ports')).toBeInTheDocument()
-  })
-
   it('EditorSkeleton renders code lines', () => {
     const { container } = render(<EditorSkeleton />)
-    const pulses = container.querySelectorAll('.animate-pulse')
-    expect(pulses.length).toBeGreaterThan(0)
-  })
-
-  it('GitHistorySkeleton renders rows', () => {
-    const { container } = render(<GitHistorySkeleton />)
     const pulses = container.querySelectorAll('.animate-pulse')
     expect(pulses.length).toBeGreaterThan(0)
   })

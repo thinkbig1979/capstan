@@ -125,6 +125,7 @@ interface ContainerActionsProps {
 // Wording avoids "network", "invalid" and "validation": classifyError REWRITES the
 // message when it contains any of those, so the operator would see a connection
 // hint instead of this sentence.
+/** @knipignore exported for dashboard/__tests__/ContainersOverviewTab.test.tsx, which asserts the sentinel */
 export const NO_STACK_FOR_PULL =
   'Capstan has no stack record for this compose project, so its images cannot be pulled.'
 

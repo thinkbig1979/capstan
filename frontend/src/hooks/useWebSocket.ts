@@ -16,6 +16,7 @@ export interface UseWebSocketReturn {
   reconnectAttempts: number
 }
 
+/** @knipignore exported for hooks/__tests__/useWebSocket.test.tsx, which tests the base hook; production goes through the JSON and binary wrappers */
 export function useWebSocket(
   path: string,
   onMessage: (data: string | ArrayBuffer) => void,
