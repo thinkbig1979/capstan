@@ -59,3 +59,25 @@ export type Stream = typeof StreamStdout | typeof StreamStderr | typeof StreamSt
 export const JobTargetTypeContainer = "container";
 export const JobTargetTypeStack = "stack";
 export type JobTargetType = typeof JobTargetTypeContainer | typeof JobTargetTypeStack;
+/**
+ * DoneStatus is the status a `done` frame on /ws/jobs carries: the terminal
+ * subset of Status. Values are literals, not DoneStatus(StatusSuccess), because
+ * tygo cannot evaluate a conversion and emits `unknown` for it; a test ties the
+ * set to Status instead (agent-os-rc69).
+ */
+export const DoneStatusSuccess = "success";
+export const DoneStatusError = "error";
+export type DoneStatus = typeof DoneStatusSuccess | typeof DoneStatusError;
+/**
+ * StackStatus is a stack's status as the stacks API and the stack_status frame
+ * on /ws/events report it. models.Stack.Status and models.StackEvent.Status
+ * stay plain strings (models cannot import services); producers convert with
+ * string(StackStatusX) (agent-os-rc69).
+ */
+export const StackStatusRunning = "running";
+export const StackStatusStopped = "stopped";
+export const StackStatusPartial = "partial";
+export const StackStatusPaused = "paused";
+export const StackStatusUnknown = "unknown";
+export const StackStatusError = "error";
+export type StackStatus = typeof StackStatusRunning | typeof StackStatusStopped | typeof StackStatusPartial | typeof StackStatusPaused | typeof StackStatusUnknown | typeof StackStatusError;

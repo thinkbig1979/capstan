@@ -1147,7 +1147,7 @@ func (s *BackupService) observeRunState(stack models.Stack, stackID string) runS
 			"stack", stackID, "cause", statusErr)
 		return runStateUnknown
 	}
-	if status == "running" || status == "partial" {
+	if status == string(StackStatusRunning) || status == string(StackStatusPartial) {
 		return runStateRunning
 	}
 	return runStateStopped

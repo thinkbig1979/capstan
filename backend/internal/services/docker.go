@@ -860,12 +860,12 @@ func BuildStackStatuses(containers []models.DashboardContainerInfo) map[string]L
 
 	result := make(map[string]LiveStatus, len(byProject))
 	for project, list := range byProject {
-		status := "partial"
+		status := string(StackStatusPartial)
 		switch {
 		case allRunning[project]:
-			status = "running"
+			status = string(StackStatusRunning)
 		case allPaused[project]:
-			status = "paused"
+			status = string(StackStatusPaused)
 		}
 		result[project] = LiveStatus{Status: status, Containers: list}
 	}

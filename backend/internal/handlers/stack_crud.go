@@ -223,7 +223,7 @@ func (h *StacksHandler) Create(c *gin.Context) {
 		ComposeFile: "compose.yaml",
 		EnvFile:     envFile,
 		ProjectName: projectName,
-		Status:      "stopped",
+		Status:      string(services.StackStatusStopped),
 		// The response falls back to this literal when the re-read below
 		// fails, so it must send [] like the database readers (agent-os-e5pr).
 		Containers: []models.Container{},
