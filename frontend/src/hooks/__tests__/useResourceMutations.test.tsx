@@ -62,6 +62,8 @@ vi.mock('sonner', () => ({
 
 import {
   useDeleteImage,
+  useDeleteVolume,
+  useDeleteNetwork,
   usePruneImages,
   usePruneVolumes,
   usePruneNetworks,
@@ -304,5 +306,111 @@ describe('resolvePruneSummary', () => {
     }
     const summary = resolvePruneSummary(data, 'image')
     expect(summary).toBe('1 image')
+  })
+})
+
+// ─── Delete hooks through useActionMutation (agent-os-cdsh) ──────────────────
+//
+// The three delete hooks moved from raw useMutation onto useActionMutation.
+// Each row pins what the move had to keep (success text, invalidated keys) and
+// what it changed on purpose: a rejected `failed` result now carries the
+// action as the toast title and the backend reason as its description.
+
+// Each row fires its own hook with its own input, so the table needs no cast.
+interface DeleteProbe { fire: () => void; isSuccess: boolean; isError: boolean }
+interface DeleteRow {
+  name: string
+  use: () => DeleteProbe
+  api: ReturnType<typeof vi.fn>
+  successTitle: string
+  errorTitle: string
+  keys: unknown[][]
+}
+
+function probe(m: { isSuccess: boolean; isError: boolean }, fire: () => void): DeleteProbe {
+  return { fire, isSuccess: m.isSuccess, isError: m.isError }
+}
+
+const DELETE_ROWS: DeleteRow[] = [
+  {
+    name: 'useDeleteImage',
+    use: () => {
+      const m = useDeleteImage()
+      return probe(m, () => m.mutate({ id: 'sha256:abc', force: false }))
+    },
+    api: mockDeleteImage,
+    successTitle: 'Image removed',
+    errorTitle: 'Failed to remove image',
+    keys: [['resources', 'images'], ['dashboard-stats'], ['resources', 'cleanup-preview']],
+  },
+  {
+    name: 'useDeleteVolume',
+    use: () => {
+      const m = useDeleteVolume()
+      return probe(m, () => m.mutate({ name: 'vol-a', force: false }))
+    },
+    api: mockDeleteVolume,
+    successTitle: 'Volume removed',
+    errorTitle: 'Failed to remove volume',
+    keys: [['resources', 'volumes']],
+  },
+  {
+    name: 'useDeleteNetwork',
+    use: () => {
+      const m = useDeleteNetwork()
+      return probe(m, () => m.mutate('net-1'))
+    },
+    api: mockDeleteNetwork,
+    successTitle: 'Network removed',
+    errorTitle: 'Failed to remove network',
+    keys: [['resources', 'networks']],
+  },
+]
+
+describe.each(DELETE_ROWS)('$name — useActionMutation contract', (row) => {
+  function run(qc: QueryClient) {
+    const { result } = renderHook(row.use, { wrapper: wrapper(qc) })
+    act(() => { result.current.fire() })
+    return result
+  }
+
+  it('keeps its success toast text and invalidates exactly its keys', async () => {
+    row.api.mockResolvedValue({ outcome: 'success', reason: 'backend wording' })
+    const qc = makeClient()
+    const spy = vi.spyOn(qc, 'invalidateQueries')
+    const result = run(qc)
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(mockToastSuccess).toHaveBeenCalledTimes(1)
+    expect(mockToastSuccess).toHaveBeenCalledWith(row.successTitle)
+    expect(spy.mock.calls.map((c) => c[0]?.queryKey)).toEqual(row.keys)
+  })
+
+  it('titles a rejected failed result with the action, reason as description', async () => {
+    row.api.mockRejectedValue({ outcome: 'failed', reason: 'daemon said no', status: 500 })
+    const result = run(makeClient())
+    await waitFor(() => expect(result.current.isError).toBe(true))
+
+    expect(mockToastError).toHaveBeenCalledTimes(1)
+    expect(mockToastError).toHaveBeenCalledWith(row.errorTitle, { description: 'daemon said no' })
+  })
+
+  it('keeps the WARNING level for a rejected partial result', async () => {
+    row.api.mockRejectedValue({ outcome: 'partial', reason: 'half done', status: 409 })
+    const result = run(makeClient())
+    await waitFor(() => expect(result.current.isError).toBe(true))
+
+    expect(mockToastWarning).toHaveBeenCalledTimes(1)
+    expect(mockToastWarning).toHaveBeenCalledWith('half done')
+    expect(mockToastError).not.toHaveBeenCalled()
+  })
+
+  it('titles a non-ActionResult rejection with the action', async () => {
+    row.api.mockRejectedValue(new Error('socket hang up'))
+    const result = run(makeClient())
+    await waitFor(() => expect(result.current.isError).toBe(true))
+
+    expect(mockToastError).toHaveBeenCalledTimes(1)
+    expect(mockToastError.mock.calls[0][0]).toBe(row.errorTitle)
   })
 })

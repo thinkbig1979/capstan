@@ -130,66 +130,44 @@ export function useBuildCache() {
 // ActionResult (resource_mutations.go) and non-2xx rejects in axios, so success
 // data is used as-is; isActionResult() only narrows the rejected value.
 
+// A rejected `failed` result is titled with the action and carries the
+// backend reason as its description (errorTitle); a rejected partial or
+// no_change keeps its own toast level (agent-os-cdsh).
 export function useDeleteImage() {
-  const queryClient = useQueryClient()
-  return useMutation({
+  return useActionMutation({
     mutationFn: ({ id, force }: { id: string; force: boolean }) =>
       resourcesApi.deleteImage(id, force),
-    onSuccess: (data) => {
-      // outcome drives the toast:
-      // no_change/partial = untagged-only (image still referenced) → info/warning
-      // success = fully deleted → success (green)
-      toastForResult(data, { successTitle: 'Image removed' })
-      queryClient.invalidateQueries({ queryKey: queryKeys.resources.images() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
+    // outcome drives the toast:
+    // no_change/partial = untagged-only (image still referenced) → info/warning
+    // success = fully deleted → success (green)
+    successTitle: 'Image removed',
+    errorTitle: 'Failed to remove image',
+    invalidate: [
+      queryKeys.resources.images(),
+      queryKeys.dashboardStats(),
       // The Images tab readout counts the dangling images this may have just
       // removed, so it goes stale on exactly the same events as the list.
-      queryClient.invalidateQueries({ queryKey: queryKeys.resources.cleanupPreview() })
-    },
-    onError: (err) => {
-      if (isActionResult(err)) {
-        toastForResult(err)
-      } else {
-        presentError(err, { fallback: 'Failed to remove image' })
-      }
-    },
+      queryKeys.resources.cleanupPreview(),
+    ],
   })
 }
 
 export function useDeleteVolume() {
-  const queryClient = useQueryClient()
-  return useMutation({
+  return useActionMutation({
     mutationFn: ({ name, force }: { name: string; force: boolean }) =>
       resourcesApi.deleteVolume(name, force),
-    onSuccess: (data) => {
-      toastForResult(data, { successTitle: 'Volume removed' })
-      queryClient.invalidateQueries({ queryKey: queryKeys.resources.volumes() })
-    },
-    onError: (err) => {
-      if (isActionResult(err)) {
-        toastForResult(err)
-      } else {
-        presentError(err, { fallback: 'Failed to remove volume' })
-      }
-    },
+    successTitle: 'Volume removed',
+    errorTitle: 'Failed to remove volume',
+    invalidate: [queryKeys.resources.volumes()],
   })
 }
 
 export function useDeleteNetwork() {
-  const queryClient = useQueryClient()
-  return useMutation({
+  return useActionMutation({
     mutationFn: (id: string) => resourcesApi.deleteNetwork(id),
-    onSuccess: (data) => {
-      toastForResult(data, { successTitle: 'Network removed' })
-      queryClient.invalidateQueries({ queryKey: queryKeys.resources.networks() })
-    },
-    onError: (err) => {
-      if (isActionResult(err)) {
-        toastForResult(err)
-      } else {
-        presentError(err, { fallback: 'Failed to remove network' })
-      }
-    },
+    successTitle: 'Network removed',
+    errorTitle: 'Failed to remove network',
+    invalidate: [queryKeys.resources.networks()],
   })
 }
 
