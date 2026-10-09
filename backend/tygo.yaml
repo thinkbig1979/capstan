@@ -94,7 +94,7 @@ packages:
     output_path: "../frontend/src/types/generated-services.ts"
     include_files:
       - "wire_types.go"
-    # enum_style: union turns the update-job Status, LogLineStream and
+    # enum_style: union turns the update-job Status, Stream and
     # JobTargetType constants into literal unions, so the frontend can assert
     # its hand-written copies equal to them (agent-os-th4h). Under the default
     # "const" style each is just `string` and the assertion would be vacuous.
