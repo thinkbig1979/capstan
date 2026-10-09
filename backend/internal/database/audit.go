@@ -28,13 +28,29 @@ func (d *DB) LogAction(log models.ActionLog) error {
 	return err
 }
 
+// actionLogColumns is the one column list every full-row action_log reader
+// selects, in scanActionLog's target order. Three readers used to carry their
+// own copies, which agreed only by convention (agent-os-rh7m, as
+// agent-os-13xd did for backup_runs).
+//
 // detail is nullable, and a NULL scanned into a plain string fails rows.Scan
 // and loses the whole list (agent-os-d1c7). No Capstan writer stores a NULL,
-// so the COALESCE here and in the two other action_log readers guards
-// databases edited or written outside Capstan.
+// so the COALESCE guards databases edited or written outside Capstan.
+const actionLogColumns = `id, user_id, stack_id, action, COALESCE(detail, ''), request_id, created_at`
+
+// scanActionLog reads one row selected with actionLogColumns, from *sql.Row
+// or *sql.Rows. stack_id and request_id are nullable and read back as "".
+func scanActionLog(row interface{ Scan(dest ...any) error }) (models.ActionLog, error) {
+	var action models.ActionLog
+	var stackID, requestID sql.NullString
+	err := row.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &requestID, &action.CreatedAt)
+	action.StackID = stackID.String
+	action.RequestID = requestID.String
+	return action, err
+}
+
 func (d *DB) GetActionsByStack(stackID string, limit int) ([]models.ActionLog, error) {
-	query := `SELECT id, user_id, stack_id, action, COALESCE(detail, ''), request_id, created_at
-	          FROM action_log WHERE stack_id = ? ORDER BY created_at DESC LIMIT ?`
+	query := `SELECT ` + actionLogColumns + ` FROM action_log WHERE stack_id = ? ORDER BY created_at DESC LIMIT ?`
 	rows, err := d.db.Query(query, stackID, limit)
 	if err != nil {
 		return nil, err
@@ -43,14 +59,10 @@ func (d *DB) GetActionsByStack(stackID string, limit int) ([]models.ActionLog, e
 
 	actions := make([]models.ActionLog, 0)
 	for rows.Next() {
-		var action models.ActionLog
-		var stackID, requestID sql.NullString
-		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &requestID, &action.CreatedAt)
+		action, err := scanActionLog(rows)
 		if err != nil {
 			return nil, err
 		}
-		action.StackID = stackID.String
-		action.RequestID = requestID.String
 		actions = append(actions, action)
 	}
 	if err := rows.Err(); err != nil {
@@ -60,8 +72,7 @@ func (d *DB) GetActionsByStack(stackID string, limit int) ([]models.ActionLog, e
 }
 
 func (d *DB) GetRecentActions(limit int) ([]models.ActionLog, error) {
-	query := `SELECT id, user_id, stack_id, action, COALESCE(detail, ''), request_id, created_at
-	          FROM action_log ORDER BY created_at DESC LIMIT ?`
+	query := `SELECT ` + actionLogColumns + ` FROM action_log ORDER BY created_at DESC LIMIT ?`
 	rows, err := d.db.Query(query, limit)
 	if err != nil {
 		return nil, err
@@ -70,14 +81,10 @@ func (d *DB) GetRecentActions(limit int) ([]models.ActionLog, error) {
 
 	actions := make([]models.ActionLog, 0)
 	for rows.Next() {
-		var action models.ActionLog
-		var stackID, requestID sql.NullString
-		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &requestID, &action.CreatedAt)
+		action, err := scanActionLog(rows)
 		if err != nil {
 			return nil, err
 		}
-		action.StackID = stackID.String
-		action.RequestID = requestID.String
 		actions = append(actions, action)
 	}
 	if err := rows.Err(); err != nil {
@@ -185,8 +192,7 @@ func (d *DB) ListActionLogsFiltered(limit, offset int, f ActionLogFilter) ([]mod
 		return nil, 0, err
 	}
 
-	query := `SELECT id, user_id, stack_id, action, COALESCE(detail, ''), request_id, created_at
-	          FROM action_log` + whereClause + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	query := `SELECT ` + actionLogColumns + ` FROM action_log` + whereClause + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	queryArgs := append(append([]interface{}{}, args...), limit, offset)
 	rows, err := d.db.Query(query, queryArgs...)
 	if err != nil {
@@ -196,14 +202,10 @@ func (d *DB) ListActionLogsFiltered(limit, offset int, f ActionLogFilter) ([]mod
 
 	actions := make([]models.ActionLog, 0)
 	for rows.Next() {
-		var action models.ActionLog
-		var stackID, requestID sql.NullString
-		err := rows.Scan(&action.ID, &action.UserID, &stackID, &action.Action, &action.Detail, &requestID, &action.CreatedAt)
+		action, err := scanActionLog(rows)
 		if err != nil {
 			return nil, 0, err
 		}
-		action.StackID = stackID.String
-		action.RequestID = requestID.String
 		actions = append(actions, action)
 	}
 	if err := rows.Err(); err != nil {

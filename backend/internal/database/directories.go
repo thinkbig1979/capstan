@@ -71,12 +71,10 @@ func (d *DB) InsertDirectoryIfAbsent(dir models.Directory) (bool, error) {
 // column is empty if and only if the plaintext token was empty. Callers that
 // need the real token must use GetDirectoryCredentials instead.
 //
-// git_remote and git_branch are nullable; the COALESCE here and in
-// GetDirectory keeps a NULL written outside Capstan from failing rows.Scan and
-// losing the whole list (agent-os-d1c7). No Capstan writer stores one.
+// The column list and the blank-on-read live in directoryColumns and
+// scanDirectory, shared with GetDirectory.
 func (d *DB) ListDirectories() ([]models.Directory, error) {
-	query := `SELECT path, name, root_dir, is_git_repo, COALESCE(git_remote, ''), COALESCE(git_branch, ''), git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at
-	          FROM directories ORDER BY name`
+	query := `SELECT ` + directoryColumns + ` FROM directories ORDER BY name`
 	rows, err := d.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -85,14 +83,10 @@ func (d *DB) ListDirectories() ([]models.Directory, error) {
 
 	directories := make([]models.Directory, 0)
 	for rows.Next() {
-		var dir models.Directory
-		err := rows.Scan(&dir.Path, &dir.Name, &dir.RootDir, &dir.IsGitRepo, &dir.GitRemote, &dir.GitBranch,
-			&dir.GitAuthType, &dir.GitSSHKeyPath, &dir.GitHTTPSUser, &dir.GitHTTPSToken, &dir.ScannedAt)
+		dir, err := scanDirectory(rows)
 		if err != nil {
 			return nil, err
 		}
-		dir.HasHTTPSToken = dir.GitHTTPSToken != ""
-		dir.GitHTTPSToken = ""
 		directories = append(directories, dir)
 	}
 	if err := rows.Err(); err != nil {
@@ -101,19 +95,39 @@ func (d *DB) ListDirectories() ([]models.Directory, error) {
 	return directories, nil
 }
 
+// directoryColumns is the one column list every full-row directories reader
+// selects, in scanDirectory's target order. ListDirectories and GetDirectory
+// used to carry their own copies, which agreed only by convention
+// (agent-os-rh7m, as agent-os-13xd did for backup_runs).
+// GetDirectoryCredentials selects a different subset on purpose and keeps its
+// own list.
+//
+// git_remote and git_branch are nullable; the COALESCEs keep a NULL written
+// outside Capstan from failing rows.Scan and losing the whole list
+// (agent-os-d1c7). No Capstan writer stores one.
+const directoryColumns = `path, name, root_dir, is_git_repo, COALESCE(git_remote, ''), COALESCE(git_branch, ''), ` +
+	`git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at`
+
+// scanDirectory reads one row selected with directoryColumns, from *sql.Row or
+// *sql.Rows, and blanks the token as ListDirectories describes: only
+// HasHTTPSToken leaves this function.
+func scanDirectory(row interface{ Scan(dest ...any) error }) (models.Directory, error) {
+	var dir models.Directory
+	err := row.Scan(&dir.Path, &dir.Name, &dir.RootDir, &dir.IsGitRepo, &dir.GitRemote, &dir.GitBranch,
+		&dir.GitAuthType, &dir.GitSSHKeyPath, &dir.GitHTTPSUser, &dir.GitHTTPSToken, &dir.ScannedAt)
+	dir.HasHTTPSToken = dir.GitHTTPSToken != ""
+	dir.GitHTTPSToken = ""
+	return dir, err
+}
+
 // GetDirectory has the same blank-on-read behaviour as ListDirectories; see
 // its comment. Use GetDirectoryCredentials for the decrypted token.
 func (d *DB) GetDirectory(path string) (*models.Directory, error) {
-	var dir models.Directory
-	query := `SELECT path, name, root_dir, is_git_repo, COALESCE(git_remote, ''), COALESCE(git_branch, ''), git_auth_type, git_ssh_key_path, git_https_user, git_https_token, scanned_at
-	          FROM directories WHERE path = ?`
-	err := d.db.QueryRow(query, path).Scan(&dir.Path, &dir.Name, &dir.RootDir, &dir.IsGitRepo, &dir.GitRemote, &dir.GitBranch,
-		&dir.GitAuthType, &dir.GitSSHKeyPath, &dir.GitHTTPSUser, &dir.GitHTTPSToken, &dir.ScannedAt)
+	query := `SELECT ` + directoryColumns + ` FROM directories WHERE path = ?`
+	dir, err := scanDirectory(d.db.QueryRow(query, path))
 	if err != nil {
 		return nil, notFound(err, "directory", path)
 	}
-	dir.HasHTTPSToken = dir.GitHTTPSToken != ""
-	dir.GitHTTPSToken = ""
 	return &dir, nil
 }
 

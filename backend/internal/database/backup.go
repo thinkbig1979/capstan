@@ -11,9 +11,22 @@ import (
 
 // --- Backup Policies ---
 
+// backupPolicyColumns is the one column list every full-row backup_policies
+// reader selects, in scanBackupPolicy's target order. Three readers used to
+// carry their own copies, which agreed only by convention (agent-os-rh7m, as
+// agent-os-13xd did for backup_runs).
+const backupPolicyColumns = `id, target_type, target_id, enabled, stop_policy, created_at, updated_at`
+
+// scanBackupPolicy reads one row selected with backupPolicyColumns, from
+// *sql.Row or *sql.Rows.
+func scanBackupPolicy(row interface{ Scan(dest ...any) error }) (models.BackupPolicy, error) {
+	var p models.BackupPolicy
+	err := row.Scan(&p.ID, &p.TargetType, &p.TargetID, &p.Enabled, &p.StopPolicy, &p.CreatedAt, &p.UpdatedAt)
+	return p, err
+}
+
 func (d *DB) GetBackupPolicies() ([]models.BackupPolicy, error) {
-	query := `SELECT id, target_type, target_id, enabled, stop_policy, created_at, updated_at
-	          FROM backup_policies ORDER BY target_type, target_id`
+	query := `SELECT ` + backupPolicyColumns + ` FROM backup_policies ORDER BY target_type, target_id`
 	rows, err := d.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -22,8 +35,7 @@ func (d *DB) GetBackupPolicies() ([]models.BackupPolicy, error) {
 
 	var policies []models.BackupPolicy
 	for rows.Next() {
-		var p models.BackupPolicy
-		err := rows.Scan(&p.ID, &p.TargetType, &p.TargetID, &p.Enabled, &p.StopPolicy, &p.CreatedAt, &p.UpdatedAt)
+		p, err := scanBackupPolicy(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -36,10 +48,8 @@ func (d *DB) GetBackupPolicies() ([]models.BackupPolicy, error) {
 }
 
 func (d *DB) GetBackupPolicy(targetID string) (*models.BackupPolicy, error) {
-	var p models.BackupPolicy
-	query := `SELECT id, target_type, target_id, enabled, stop_policy, created_at, updated_at
-	          FROM backup_policies WHERE target_id = ?`
-	err := d.db.QueryRow(query, targetID).Scan(&p.ID, &p.TargetType, &p.TargetID, &p.Enabled, &p.StopPolicy, &p.CreatedAt, &p.UpdatedAt)
+	query := `SELECT ` + backupPolicyColumns + ` FROM backup_policies WHERE target_id = ?`
+	p, err := scanBackupPolicy(d.db.QueryRow(query, targetID))
 	if err != nil {
 		return nil, notFound(err, "backup policy", targetID)
 	}
@@ -47,8 +57,7 @@ func (d *DB) GetBackupPolicy(targetID string) (*models.BackupPolicy, error) {
 }
 
 func (d *DB) GetEnabledBackupPolicies() ([]models.BackupPolicy, error) {
-	query := `SELECT id, target_type, target_id, enabled, stop_policy, created_at, updated_at
-	          FROM backup_policies WHERE enabled = TRUE`
+	query := `SELECT ` + backupPolicyColumns + ` FROM backup_policies WHERE enabled = TRUE`
 	rows, err := d.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -57,8 +66,7 @@ func (d *DB) GetEnabledBackupPolicies() ([]models.BackupPolicy, error) {
 
 	var policies []models.BackupPolicy
 	for rows.Next() {
-		var p models.BackupPolicy
-		err := rows.Scan(&p.ID, &p.TargetType, &p.TargetID, &p.Enabled, &p.StopPolicy, &p.CreatedAt, &p.UpdatedAt)
+		p, err := scanBackupPolicy(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -329,9 +337,26 @@ func (d *DB) AddBackupRunItem(item *models.BackupRunItem) error {
 	return err
 }
 
+// backupRunItemColumns is the one column list every full-row backup_run_items
+// reader selects, in scanBackupRunItem's target order (agent-os-rh7m, as
+// agent-os-13xd did for backup_runs). The names are qualified with the table
+// because GetLatestRunItemForStack joins backup_runs, which also has id,
+// status and error_message columns.
+const backupRunItemColumns = `backup_run_items.id, backup_run_items.run_id, backup_run_items.stack_id, ` +
+	`backup_run_items.status, COALESCE(backup_run_items.snapshot_id, ''), backup_run_items.stop_applied, ` +
+	`COALESCE(backup_run_items.duration_ms, 0), COALESCE(backup_run_items.error_message, '')`
+
+// scanBackupRunItem reads one row selected with backupRunItemColumns, from
+// *sql.Row or *sql.Rows.
+func scanBackupRunItem(row interface{ Scan(dest ...any) error }) (models.BackupRunItem, error) {
+	var item models.BackupRunItem
+	err := row.Scan(&item.ID, &item.RunID, &item.StackID, &item.Status, &item.SnapshotID,
+		&item.StopApplied, &item.DurationMs, &item.ErrorMessage)
+	return item, err
+}
+
 func (d *DB) GetBackupRunItems(runID string) ([]models.BackupRunItem, error) {
-	query := `SELECT id, run_id, stack_id, status, COALESCE(snapshot_id, ''), stop_applied, COALESCE(duration_ms, 0), COALESCE(error_message, '')
-	          FROM backup_run_items WHERE run_id = ? ORDER BY id`
+	query := `SELECT ` + backupRunItemColumns + ` FROM backup_run_items WHERE run_id = ? ORDER BY id`
 	rows, err := d.db.Query(query, runID)
 	if err != nil {
 		return nil, err
@@ -340,9 +365,7 @@ func (d *DB) GetBackupRunItems(runID string) ([]models.BackupRunItem, error) {
 
 	var items []models.BackupRunItem
 	for rows.Next() {
-		var item models.BackupRunItem
-		err := rows.Scan(&item.ID, &item.RunID, &item.StackID, &item.Status, &item.SnapshotID,
-			&item.StopApplied, &item.DurationMs, &item.ErrorMessage)
+		item, err := scanBackupRunItem(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -355,15 +378,13 @@ func (d *DB) GetBackupRunItems(runID string) ([]models.BackupRunItem, error) {
 }
 
 func (d *DB) GetLatestRunItemForStack(stackID string) (*models.BackupRunItem, error) {
-	var item models.BackupRunItem
-	query := `SELECT bri.id, bri.run_id, bri.stack_id, bri.status, COALESCE(bri.snapshot_id, ''), bri.stop_applied, COALESCE(bri.duration_ms, 0), COALESCE(bri.error_message, '')
-	          FROM backup_run_items bri
-	          JOIN backup_runs br ON br.id = bri.run_id
-	          WHERE bri.stack_id = ?
+	query := `SELECT ` + backupRunItemColumns + `
+	          FROM backup_run_items
+	          JOIN backup_runs br ON br.id = backup_run_items.run_id
+	          WHERE backup_run_items.stack_id = ?
 	          ORDER BY br.started_at DESC
 	          LIMIT 1`
-	err := d.db.QueryRow(query, stackID).Scan(&item.ID, &item.RunID, &item.StackID, &item.Status,
-		&item.SnapshotID, &item.StopApplied, &item.DurationMs, &item.ErrorMessage)
+	item, err := scanBackupRunItem(d.db.QueryRow(query, stackID))
 	if err != nil {
 		return nil, notFound(err, "backup run item", stackID)
 	}

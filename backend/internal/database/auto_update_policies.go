@@ -6,9 +6,23 @@ import (
 	"github.com/thinkbig1979/capstan/backend/internal/models"
 )
 
+// autoUpdatePolicyColumns is the one column list every full-row
+// auto_update_policies reader selects, in scanAutoUpdatePolicy's target
+// order. Three readers used to carry their own copies, which agreed only by
+// convention (agent-os-rh7m, as agent-os-13xd did for backup_runs).
+const autoUpdatePolicyColumns = `id, target_type, target_id, enabled, consecutive_failures, paused, created_at, updated_at`
+
+// scanAutoUpdatePolicy reads one row selected with autoUpdatePolicyColumns,
+// from *sql.Row or *sql.Rows.
+func scanAutoUpdatePolicy(row interface{ Scan(dest ...any) error }) (models.AutoUpdatePolicy, error) {
+	var p models.AutoUpdatePolicy
+	err := row.Scan(&p.ID, &p.TargetType, &p.TargetID, &p.Enabled,
+		&p.ConsecutiveFailures, &p.Paused, &p.CreatedAt, &p.UpdatedAt)
+	return p, err
+}
+
 func (d *DB) GetAutoUpdatePolicies() ([]models.AutoUpdatePolicy, error) {
-	query := `SELECT id, target_type, target_id, enabled, consecutive_failures, paused, created_at, updated_at
-	          FROM auto_update_policies ORDER BY target_type, target_id`
+	query := `SELECT ` + autoUpdatePolicyColumns + ` FROM auto_update_policies ORDER BY target_type, target_id`
 	rows, err := d.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -17,9 +31,7 @@ func (d *DB) GetAutoUpdatePolicies() ([]models.AutoUpdatePolicy, error) {
 
 	var policies []models.AutoUpdatePolicy
 	for rows.Next() {
-		var p models.AutoUpdatePolicy
-		err := rows.Scan(&p.ID, &p.TargetType, &p.TargetID, &p.Enabled,
-			&p.ConsecutiveFailures, &p.Paused, &p.CreatedAt, &p.UpdatedAt)
+		p, err := scanAutoUpdatePolicy(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -32,11 +44,8 @@ func (d *DB) GetAutoUpdatePolicies() ([]models.AutoUpdatePolicy, error) {
 }
 
 func (d *DB) GetAutoUpdatePolicy(targetType, targetID string) (*models.AutoUpdatePolicy, error) {
-	var p models.AutoUpdatePolicy
-	query := `SELECT id, target_type, target_id, enabled, consecutive_failures, paused, created_at, updated_at
-	          FROM auto_update_policies WHERE target_type = ? AND target_id = ?`
-	err := d.db.QueryRow(query, targetType, targetID).Scan(&p.ID, &p.TargetType, &p.TargetID,
-		&p.Enabled, &p.ConsecutiveFailures, &p.Paused, &p.CreatedAt, &p.UpdatedAt)
+	query := `SELECT ` + autoUpdatePolicyColumns + ` FROM auto_update_policies WHERE target_type = ? AND target_id = ?`
+	p, err := scanAutoUpdatePolicy(d.db.QueryRow(query, targetType, targetID))
 	if err != nil {
 		return nil, notFound(err, "auto-update policy", targetID)
 	}
@@ -58,8 +67,7 @@ func (d *DB) DeleteAutoUpdatePolicy(targetType, targetID string) error {
 }
 
 func (d *DB) GetEnabledAutoUpdatePolicies() ([]models.AutoUpdatePolicy, error) {
-	query := `SELECT id, target_type, target_id, enabled, consecutive_failures, paused, created_at, updated_at
-	          FROM auto_update_policies WHERE enabled = TRUE AND paused = FALSE`
+	query := `SELECT ` + autoUpdatePolicyColumns + ` FROM auto_update_policies WHERE enabled = TRUE AND paused = FALSE`
 	rows, err := d.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -68,9 +76,7 @@ func (d *DB) GetEnabledAutoUpdatePolicies() ([]models.AutoUpdatePolicy, error) {
 
 	var policies []models.AutoUpdatePolicy
 	for rows.Next() {
-		var p models.AutoUpdatePolicy
-		err := rows.Scan(&p.ID, &p.TargetType, &p.TargetID, &p.Enabled,
-			&p.ConsecutiveFailures, &p.Paused, &p.CreatedAt, &p.UpdatedAt)
+		p, err := scanAutoUpdatePolicy(rows)
 		if err != nil {
 			return nil, err
 		}

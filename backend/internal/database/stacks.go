@@ -43,13 +43,30 @@ func emptyStack() models.Stack {
 	return models.Stack{Containers: []models.Container{}}
 }
 
-// env_file, git_branch and git_commit are nullable; every stack reader
-// COALESCEs them so a NULL written outside Capstan cannot fail rows.Scan and
-// lose the whole list (agent-os-d1c7). No Capstan writer stores one.
+// stackColumns is the one column list every full-row stacks reader selects,
+// in scanStack's target order. Four readers used to carry their own copies; a
+// column moved in one copy put values in the wrong fields with no error, since
+// neighbouring columns share a type (agent-os-rh7m, as agent-os-13xd did for
+// backup_runs).
+//
+// env_file, git_branch and git_commit are nullable; the COALESCEs keep a NULL
+// written outside Capstan from failing rows.Scan and losing the whole list
+// (agent-os-d1c7). No Capstan writer stores one.
+const stackColumns = `id, directory, compose_file, COALESCE(env_file, ''), project_name, status, ` +
+	`is_git_repo, COALESCE(git_branch, ''), COALESCE(git_commit, ''), git_dirty, git_ahead, git_behind`
+
+// scanStack reads one row selected with stackColumns, from *sql.Row or
+// *sql.Rows.
+func scanStack(row interface{ Scan(dest ...any) error }) (models.Stack, error) {
+	stack := emptyStack()
+	err := row.Scan(&stack.ID, &stack.Directory, &stack.ComposeFile, &stack.EnvFile,
+		&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
+		&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind)
+	return stack, err
+}
+
 func (d *DB) ListStacks() ([]models.Stack, error) {
-	query := `SELECT id, directory, compose_file, COALESCE(env_file, ''), project_name, status,
-	           is_git_repo, COALESCE(git_branch, ''), COALESCE(git_commit, ''), git_dirty, git_ahead, git_behind
-	          FROM stacks ORDER BY project_name`
+	query := `SELECT ` + stackColumns + ` FROM stacks ORDER BY project_name`
 	rows, err := d.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -58,10 +75,7 @@ func (d *DB) ListStacks() ([]models.Stack, error) {
 
 	stacks := make([]models.Stack, 0)
 	for rows.Next() {
-		stack := emptyStack()
-		err := rows.Scan(&stack.ID, &stack.Directory, &stack.ComposeFile, &stack.EnvFile,
-			&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
-			&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind)
+		stack, err := scanStack(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -74,13 +88,8 @@ func (d *DB) ListStacks() ([]models.Stack, error) {
 }
 
 func (d *DB) GetStack(id string) (*models.Stack, error) {
-	stack := emptyStack()
-	query := `SELECT id, directory, compose_file, COALESCE(env_file, ''), project_name, status,
-	           is_git_repo, COALESCE(git_branch, ''), COALESCE(git_commit, ''), git_dirty, git_ahead, git_behind
-	          FROM stacks WHERE id = ?`
-	err := d.db.QueryRow(query, id).Scan(&stack.ID, &stack.Directory, &stack.ComposeFile, &stack.EnvFile,
-		&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
-		&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind)
+	query := `SELECT ` + stackColumns + ` FROM stacks WHERE id = ?`
+	stack, err := scanStack(d.db.QueryRow(query, id))
 	if err != nil {
 		return nil, notFound(err, "stack", id)
 	}
@@ -88,9 +97,7 @@ func (d *DB) GetStack(id string) (*models.Stack, error) {
 }
 
 func (d *DB) ListStacksByDirectory(path string) ([]models.Stack, error) {
-	query := `SELECT id, directory, compose_file, COALESCE(env_file, ''), project_name, status,
-	           is_git_repo, COALESCE(git_branch, ''), COALESCE(git_commit, ''), git_dirty, git_ahead, git_behind
-	          FROM stacks WHERE directory = ? ORDER BY project_name`
+	query := `SELECT ` + stackColumns + ` FROM stacks WHERE directory = ? ORDER BY project_name`
 	rows, err := d.db.Query(query, path)
 	if err != nil {
 		return nil, err
@@ -99,10 +106,7 @@ func (d *DB) ListStacksByDirectory(path string) ([]models.Stack, error) {
 
 	stacks := make([]models.Stack, 0)
 	for rows.Next() {
-		stack := emptyStack()
-		err := rows.Scan(&stack.ID, &stack.Directory, &stack.ComposeFile, &stack.EnvFile,
-			&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
-			&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind)
+		stack, err := scanStack(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -203,9 +207,7 @@ func (e *AmbiguousProjectNameError) Is(target error) bool { return target == err
 func (d *DB) GetStackByProjectName(projectName string) (*models.Stack, error) {
 	// Every match, not QueryRow's first: a second row is the ambiguity this
 	// lookup must report rather than resolve (agent-os-z91e.19).
-	query := `SELECT id, directory, compose_file, COALESCE(env_file, ''), project_name, status,
-	           is_git_repo, COALESCE(git_branch, ''), COALESCE(git_commit, ''), git_dirty, git_ahead, git_behind
-	          FROM stacks WHERE project_name = ? ORDER BY id`
+	query := `SELECT ` + stackColumns + ` FROM stacks WHERE project_name = ? ORDER BY id`
 	rows, err := d.db.Query(query, projectName)
 	if err != nil {
 		return nil, err
@@ -214,10 +216,8 @@ func (d *DB) GetStackByProjectName(projectName string) (*models.Stack, error) {
 
 	var matches []models.Stack
 	for rows.Next() {
-		stack := emptyStack()
-		if err := rows.Scan(&stack.ID, &stack.Directory, &stack.ComposeFile, &stack.EnvFile,
-			&stack.ProjectName, &stack.Status, &stack.IsGitRepo, &stack.GitBranch,
-			&stack.GitCommit, &stack.GitDirty, &stack.GitAhead, &stack.GitBehind); err != nil {
+		stack, err := scanStack(rows)
+		if err != nil {
 			return nil, err
 		}
 		matches = append(matches, stack)
