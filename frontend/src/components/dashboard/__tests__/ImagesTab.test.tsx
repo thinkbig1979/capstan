@@ -47,7 +47,7 @@ const POLICY = {
 // PREVIEW was computed at; with both fixtures on the same number, an
 // implementation reading the policy (or hard-coding 168) passes and the test
 // has measured nothing.
-const EMPTY_PREVIEW = { candidates: [], reclaimableBytes: 0, minAgeHours: 72 }
+const EMPTY_PREVIEW = { candidates: [], reclaimableBytes: 0, cacheReclaimableBytes: 0, minAgeHours: 72 }
 
 const image = (over: Partial<DockerImage> = {}): DockerImage => ({
   id: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -93,6 +93,7 @@ describe('ImagesTab — the scheduled-cleanup readout', () => {
         { id: 'sha256:2222222222222222', size: 1024 * 1024 * 1024, created: 1750000001 },
       ],
       reclaimableBytes: 3221225472,
+      cacheReclaimableBytes: 0,
       minAgeHours: 72,
     })
     renderTab()
@@ -108,6 +109,37 @@ describe('ImagesTab — the scheduled-cleanup readout', () => {
     expect(readout).not.toHaveTextContent('168')
     // The floor comes off the response, not out of the policy query.
     await waitFor(() => expect(mockPreviewCleanup).toHaveBeenCalledWith())
+  })
+
+  it('adds the unused build cache a run would also prune (agent-os-nacp)', async () => {
+    mockPreviewCleanup.mockResolvedValue({
+      candidates: [{ id: 'sha256:1111111111111111', size: 1024 * 1024 * 1024, created: 1750000000 }],
+      reclaimableBytes: 1024 * 1024 * 1024,
+      cacheReclaimableBytes: 2 * 1024 * 1024 * 1024,
+      minAgeHours: 72,
+    })
+    renderTab()
+
+    const readout = await screen.findByTestId('cleanup-reclaimable')
+    expect(readout).toHaveTextContent(
+      'Scheduled cleanup would reclaim 1.00 GB from 1 dangling image and 2.00 GB of unused build cache, all older than 72 hours.',
+    )
+  })
+
+  it('reports cache-only reclaim instead of saying there is nothing to reclaim', async () => {
+    mockPreviewCleanup.mockResolvedValue({
+      candidates: [],
+      reclaimableBytes: 0,
+      cacheReclaimableBytes: 2 * 1024 * 1024 * 1024,
+      minAgeHours: 72,
+    })
+    renderTab()
+
+    const readout = await screen.findByTestId('cleanup-reclaimable')
+    expect(readout).toHaveTextContent(
+      'No dangling image is older than 72 hours. Scheduled cleanup would reclaim 2.00 GB of unused build cache.',
+    )
+    expect(readout).not.toHaveTextContent('Nothing for scheduled cleanup to reclaim')
   })
 
   it('names the schedule state and links to its settings', async () => {

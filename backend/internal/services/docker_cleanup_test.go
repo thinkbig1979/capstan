@@ -43,6 +43,18 @@ type fn7x2FakeDocker struct {
 	cachePruneErr error
 
 	cacheReclaimed uint64
+
+	cacheRecords   []*build.CacheRecord
+	cacheListErr   error
+	cacheListCalls int
+}
+
+func (f *fn7x2FakeDocker) ListBuildCache(context.Context) ([]*build.CacheRecord, error) {
+	f.cacheListCalls++
+	if f.cacheListErr != nil {
+		return nil, f.cacheListErr
+	}
+	return f.cacheRecords, nil
 }
 
 func (f *fn7x2FakeDocker) ListImages(context.Context) ([]models.DockerImage, error) {
@@ -214,6 +226,46 @@ func TestDockerCleanupPreviewIsReadOnly(t *testing.T) {
 	}
 	assert.Equal(t, "ghcr.io/example/app", byID["sha256:repodigest"].Repository)
 	assert.Empty(t, byID["sha256:untagged"].Repository, "the fully-untagged form has no repository, and must not report '<none>'")
+}
+
+// TestDockerCleanupPreviewReportsBuildCache pins agent-os-nacp: Execute prunes
+// build cache as well as images, so the preview must report the cache bytes a
+// run would reclaim or the forecast under-reports by exactly the cache. The
+// fixture holds one record per way a record can be spared (in use, inside the
+// floor) next to the one a run would take, so the sum is the old unused
+// record's size and nothing else. A record never used is aged by CreatedAt.
+func TestDockerCleanupPreviewReportsBuildCache(t *testing.T) {
+	ago := func(h int) time.Time { return time.Now().Add(-time.Duration(h) * time.Hour) }
+	usedAgo := func(h int) *time.Time { u := ago(h); return &u }
+	docker := &fn7x2FakeDocker{cacheRecords: []*build.CacheRecord{
+		{ID: "old-unused", Size: 4096, CreatedAt: ago(100), LastUsedAt: usedAgo(48)},
+		{ID: "never-used-old", Size: 1024, CreatedAt: ago(48)},
+		{ID: "old-in-use", Size: 9999, InUse: true, CreatedAt: ago(100), LastUsedAt: usedAgo(48)},
+		{ID: "recently-used", Size: 7777, CreatedAt: ago(100), LastUsedAt: usedAgo(1)},
+		{ID: "recent", Size: 5555, CreatedAt: ago(1)},
+	}}
+	svc := NewDockerCleanupService(docker, &fn7x2FakeStore{})
+
+	preview, err := svc.Preview(context.Background(), 24)
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(4096+1024), preview.CacheReclaimableBytes)
+	assert.Equal(t, int64(0), preview.ReclaimableBytes, "images stay a separate figure")
+	assert.Equal(t, 1, docker.cacheListCalls)
+	assert.Empty(t, docker.cachePruneOpts, "preview must not prune build cache")
+}
+
+// A build-cache listing that fails must fail the preview: a 0 would read as
+// "the cache has nothing to reclaim" when the truth is that nobody looked.
+func TestDockerCleanupPreviewBuildCacheListFailureFailsPreview(t *testing.T) {
+	docker := &fn7x2FakeDocker{cacheListErr: errors.New("daemon went away")}
+	svc := NewDockerCleanupService(docker, &fn7x2FakeStore{})
+
+	preview, err := svc.Preview(context.Background(), 24)
+
+	require.Error(t, err)
+	assert.Nil(t, preview)
+	assert.ErrorContains(t, err, "daemon went away")
 }
 
 // TestDockerCleanupFailureRecorded pins AC6: a failed prune records

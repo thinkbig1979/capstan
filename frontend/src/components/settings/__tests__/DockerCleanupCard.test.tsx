@@ -96,10 +96,11 @@ const FAILED_RUN = {
   errorMessage: 'Cannot connect to the Docker daemon',
 }
 
-function previewOf(candidates: Array<Record<string, unknown>>) {
+function previewOf(candidates: Array<Record<string, unknown>>, cacheReclaimableBytes = 0) {
   return {
     candidates,
     reclaimableBytes: candidates.reduce((sum, c) => sum + (c.size as number), 0),
+    cacheReclaimableBytes,
     minAgeHours: POLICY.minAgeHours,
   }
 }
@@ -252,6 +253,36 @@ describe('DockerCleanupCard', () => {
       // it the list sits under a header naming the input's floor, which stops
       // being the floor it was computed at the moment the operator edits it.
       expect(screen.getByText(/created more than 168 hours ago/)).toBeInTheDocument()
+    })
+  })
+
+  describe('the build cache a run would also prune (agent-os-nacp)', () => {
+    it('shows the cache figure beside the image total', async () => {
+      mockPreviewCleanup.mockResolvedValue(previewOf([REPO_CANDIDATE, ID_CANDIDATE], 5 * 1024 * 1024))
+      renderCard()
+      await clickPreview()
+
+      expect(await screen.findByText(/reclaiming 3\.00 MB/)).toBeInTheDocument()
+      expect(screen.getByTestId('cleanup-cache-reclaimable')).toHaveTextContent(
+        'Unused build cache older than 168 hours: 5.00 MB.',
+      )
+    })
+
+    it('reports cache with no dangling images, beside the nothing-to-remove line', async () => {
+      mockPreviewCleanup.mockResolvedValue(previewOf([], 5 * 1024 * 1024))
+      renderCard()
+      await clickPreview()
+
+      expect(await screen.findByTestId('cleanup-cache-reclaimable')).toHaveTextContent('5.00 MB')
+    })
+
+    it('prints no cache line when a run would prune none', async () => {
+      mockPreviewCleanup.mockResolvedValue(previewOf([REPO_CANDIDATE, ID_CANDIDATE]))
+      renderCard()
+      await clickPreview()
+
+      expect(await screen.findByText(/reclaiming 3\.00 MB/)).toBeInTheDocument()
+      expect(screen.queryByTestId('cleanup-cache-reclaimable')).not.toBeInTheDocument()
     })
   })
 

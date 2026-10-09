@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { EmptyState, NoDirectories, NoStacks, NoContainers, NoLogs, NoEnvVars } from '../EmptyState'
+import { EmptyState } from '../EmptyState'
 
 describe('EmptyState', () => {
   it('renders title', () => {
@@ -31,41 +31,5 @@ describe('EmptyState', () => {
   it('renders action when provided', () => {
     render(<EmptyState title="Empty" action={<button>Action</button>} />)
     expect(screen.getByRole('button', { name: 'Action' })).toBeInTheDocument()
-  })
-})
-
-describe('NoDirectories', () => {
-  it('renders scan button that calls onScan', () => {
-    const onScan = vi.fn()
-    render(<NoDirectories onScan={onScan} />)
-    expect(screen.getByText('Scan Directories')).toBeInTheDocument()
-  })
-})
-
-describe('NoStacks', () => {
-  it('renders no stacks message', () => {
-    render(<NoStacks />)
-    expect(screen.getByText('No stacks found')).toBeInTheDocument()
-  })
-})
-
-describe('NoContainers', () => {
-  it('renders no containers message', () => {
-    render(<NoContainers />)
-    expect(screen.getByText('No containers')).toBeInTheDocument()
-  })
-})
-
-describe('NoLogs', () => {
-  it('renders no logs message', () => {
-    render(<NoLogs />)
-    expect(screen.getByText('No logs')).toBeInTheDocument()
-  })
-})
-
-describe('NoEnvVars', () => {
-  it('renders no env vars message', () => {
-    render(<NoEnvVars />)
-    expect(screen.getByText('No environment variables')).toBeInTheDocument()
   })
 })

@@ -33,6 +33,7 @@ const MinCleanupAgeHours = 1
 // are the entire safety property.
 type dockerCleanupPruner interface {
 	ListImages(ctx context.Context) ([]models.DockerImage, error)
+	ListBuildCache(ctx context.Context) ([]*build.CacheRecord, error)
 	PruneImages(ctx context.Context, opts PruneOptions) (image.PruneReport, error)
 	PruneBuildCache(ctx context.Context, opts PruneOptions) (*build.CachePruneReport, error)
 }
@@ -122,8 +123,38 @@ func danglingRepository(repoTags []string) (string, bool) {
 	return "", false
 }
 
+// cacheReclaimableBytes estimates what PruneBuildCache would free under the same
+// age floor: records not in use whose last use (creation, if never used) is
+// strictly before the cutoff.
+//
+// It is an estimate, and says so. Docker applies the until filter and decides
+// what counts as unused inside the daemon; this mirrors that from the listing
+// and does not reproduce record types the daemon may also spare. INFERRED from
+// the prune options (All=false, until=<floor>h), not tested against a daemon:
+// a prune cannot be run read-only.
+func cacheReclaimableBytes(records []*build.CacheRecord, cutoff time.Time) int64 {
+	var total int64
+	for _, rec := range records {
+		if rec == nil || rec.InUse {
+			continue
+		}
+		last := rec.CreatedAt
+		if rec.LastUsedAt != nil {
+			last = *rec.LastUsedAt
+		}
+		if !last.Before(cutoff) {
+			continue
+		}
+		total += rec.Size
+	}
+	return total
+}
+
 // Preview reports what a run would remove without removing anything. It calls
 // no prune method -- that is asserted, not merely intended.
+//
+// The build-cache figure comes from a second Docker read. If that read fails
+// the preview fails: a 0 would read as "no cache to reclaim" when nobody looked.
 func (s *DockerCleanupService) Preview(ctx context.Context, minAgeHours int) (*DockerCleanupPreview, error) {
 	floor := clampCleanupAgeHours(minAgeHours)
 	images, err := s.docker.ListImages(ctx)
@@ -134,7 +165,8 @@ func (s *DockerCleanupService) Preview(ctx context.Context, minAgeHours int) (*D
 	// The same boundary the Until filter applies: created strictly before this
 	// instant. Computed once so every candidate is judged against one cutoff
 	// rather than against a clock that moves during the loop.
-	cutoff := time.Now().Add(-time.Duration(floor) * time.Hour).Unix()
+	cutoffTime := time.Now().Add(-time.Duration(floor) * time.Hour)
+	cutoff := cutoffTime.Unix()
 
 	preview := &DockerCleanupPreview{
 		Candidates:  []DockerCleanupCandidate{},
@@ -153,6 +185,12 @@ func (s *DockerCleanupService) Preview(ctx context.Context, minAgeHours int) (*D
 		})
 		preview.ReclaimableBytes += img.Size
 	}
+
+	records, err := s.docker.ListBuildCache(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing build cache for cleanup preview: %w", err)
+	}
+	preview.CacheReclaimableBytes = cacheReclaimableBytes(records, cutoffTime)
 	return preview, nil
 }
 

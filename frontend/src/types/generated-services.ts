@@ -31,10 +31,15 @@ export interface DockerCleanupCandidate {
 /**
  * DockerCleanupPreview is what a run WOULD remove. Producing it must not remove
  * anything.
+ * ReclaimableBytes is the dangling images only; CacheReclaimableBytes is the
+ * build cache a run would also prune. They are separate because the history
+ * row records them separately (bytesReclaimed, cacheBytesReclaimed), and the
+ * operator-facing figure is their sum.
  */
 export interface DockerCleanupPreview {
   candidates: DockerCleanupCandidate[];
   reclaimableBytes: number /* int64 */;
+  cacheReclaimableBytes: number /* int64 */;
   minAgeHours: number /* int */;
 }
 /**

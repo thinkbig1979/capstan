@@ -277,6 +277,63 @@ func TestRenderDockerResult_DockerUnavailableBodyPinsWireKeys(t *testing.T) {
 	}
 }
 
+// TestRenderResult_FailedBodyPinsWireKeys is the key-pinning sibling of
+// TestRenderResult_FailedLogsCauseAndReason: same result, same renderer
+// (renderResult this time, not renderDockerResult), but the expectation is a
+// literal. The sibling compares the body to renderedBody, which re-marshals the
+// struct the renderer wrote, so a json tag rename moves both sides and it stays
+// green; this arm goes red (agent-os-nhrm).
+func TestRenderResult_FailedBodyPinsWireKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	captureHandlerLogs(t)
+
+	r := truth.Failed("failed to write env file", errors.New("cause-sentinel-nhrm-a1"), truth.KV("id", "stack-1"))
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	renderResult(c, r)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	if got, want := strings.TrimSpace(w.Body.String()), goldenFailedBody(t, "failed to write env file", `{"id":"stack-1"}`); got != want {
+		t.Fatalf("wire keys moved:\n got %s\nwant %s", got, want)
+	}
+}
+
+// TestRenderResult_NonFailedBodiesPinWireKeys is the key-pinning sibling of
+// TestRenderResult_NonFailedOutcomesStaySilent. Each want is a literal, so the
+// outcome and reason key names and the outcome VALUES come from this file, not
+// from truth.ActionResult's struct tags (agent-os-nhrm).
+func TestRenderResult_NonFailedBodiesPinWireKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name   string
+		r      truth.ActionResult
+		status int
+		want   string
+	}{
+		{"success", truth.Success("quiet-sentinel-nhrm-ok"), http.StatusOK,
+			`{"outcome":"success","reason":"quiet-sentinel-nhrm-ok"}`},
+		{"no_change", truth.NoChange("quiet-sentinel-nhrm-nochange"), http.StatusOK,
+			`{"outcome":"no_change","reason":"quiet-sentinel-nhrm-nochange"}`},
+		{"partial", truth.Partial("quiet-sentinel-nhrm-partial", truth.KV("rollbackError", "x")), http.StatusMultiStatus,
+			`{"outcome":"partial","reason":"quiet-sentinel-nhrm-partial","details":{"rollbackError":"x"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			captureHandlerLogs(t)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			renderResult(c, tc.r)
+
+			require.Equal(t, tc.status, w.Code)
+			if got := strings.TrimSpace(w.Body.String()); got != tc.want {
+				t.Fatalf("wire keys moved:\n got %s\nwant %s", got, tc.want)
+			}
+		})
+	}
+}
+
 // actionLogFixture drives the real Delete handler end to end (real DB,
 // scanner, linter, opLock) with only the Docker service faked, so a test can
 // reach a truth.Failed site or an ActionResult literal on the actual handler
