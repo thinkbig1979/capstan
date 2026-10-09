@@ -120,8 +120,11 @@ BEGIN {
   n = split(SIGS, L, "\n")
   for (i = 1; i <= n; i++) {
     split(L[i], p, " ")
-    if (p[1] == "COL") col[p[3]] = (p[3] in col ? col[p[3]] "/" : "") p[2]
-    if (p[1] == "SCAN") { scn[p[3]] = (p[3] in scn ? scn[p[3]] "/" : "") p[2]; owner[p[2]] = 1 }
+    # The "in" test runs before the assignment, never on its right-hand
+    # side: mawk (the awk on CI) creates the key before evaluating the RHS, so
+    # `a[k] = (k in a ? ...)` always takes the true branch there.
+    if (p[1] == "COL") { sep = (p[3] in col) ? "/" : ""; col[p[3]] = col[p[3]] sep p[2] }
+    if (p[1] == "SCAN") { sep = (p[3] in scn) ? "/" : ""; scn[p[3]] = scn[p[3]] sep p[2]; owner[p[2]] = 1 }
   }
 }
 FNR == 1 { fn = ""; pendsel = 0; pendscan = ""; ign = 0; prevign = 0 }
