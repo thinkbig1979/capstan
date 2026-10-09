@@ -80,8 +80,20 @@ const isFn = (n: ts.Node): n is FnLike =>
 const sources = import.meta.glob<string>('/src/**/*.{ts,tsx}', { query: '?raw', import: 'default', eager: true })
 const API_PATH = '/src/lib/api.ts'
 
+// Parsed once per (file, source): a planted row re-scans the whole tree with one file
+// changed, and re-parsing 100+ unchanged files per scope timed out at vitest's 5 s
+// under load (agent-os-eg0t). Safe to share across scans: scan() only reads the AST
+// and keeps its own state (scopes, seen, work) local to each call. The two per-file
+// walks below are cached on the same terms, keyed by the SourceFile they walked.
+const PARSE_CACHE = new Map<string, ts.SourceFile>()
 function parse(file: string, source: string): ts.SourceFile {
-  return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+  const key = `${file}\0${source}`
+  let sf = PARSE_CACHE.get(key)
+  if (!sf) {
+    sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+    PARSE_CACHE.set(key, sf)
+  }
+  return sf
 }
 
 // api object name -> its ActionResult members.
@@ -225,6 +237,64 @@ function isDeclarationName(id: ts.Identifier): boolean {
   )
 }
 
+// What one file contributes before any route is followed: its references to a pinned
+// route (refs) and the hits that need no following. Depends only on the file's parsed
+// contents, so it is computed once per SourceFile and shared by every scan.
+const FIRST_PASS = new WeakMap<ts.SourceFile, { hits: string[]; refs: Ref[] }>()
+function firstPass(file: string, sf: ts.SourceFile): { hits: string[]; refs: Ref[] } {
+  const cached = FIRST_PASS.get(sf)
+  if (cached) return cached
+  const hits: string[] = []
+  const refs: Ref[] = []
+  const visit = (n: ts.Node) => {
+    if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && ROUTES.get(n.expression.text)?.has(n.name.text)) {
+      refs.push({ file, node: n, route: `${n.expression.text}.${n.name.text}` })
+    } else if (ts.isElementAccessExpression(n) && ts.isIdentifier(n.expression) && ROUTES.has(n.expression.text)) {
+      refs.push({ file, node: n, route: `${n.expression.text}[*]` })
+    } else if (ts.isIdentifier(n) && ROUTES.has(n.text) && !isDeclarationName(n)) {
+      const p = n.parent
+      const accessed = (ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === n
+      if (!accessed) hits.push(`${at(file, n)} ${n.text} is aliased or destructured, so its ActionResult routes cannot be followed`)
+    }
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText(sf) === 'apiClient') {
+      const t = n.typeArguments?.[0]
+      if (t && ts.isTypeReferenceNode(t) && RESULT_TYPES.has(t.typeName.getText(sf))) {
+        hits.push(`${at(file, n)} apiClient call typed ${t.typeName.getText(sf)} outside lib/api.ts: add it to an api object instead`)
+      }
+    }
+    if (ts.isStringLiteralLike(n) || ts.isTemplateExpression(n)) {
+      if (ROUTE.test(n.getText(sf))) hits.push(`${at(file, n)} direct call to a stack lifecycle route outside lib/api.ts`)
+    }
+    ts.forEachChild(n, visit)
+  }
+  visit(sf)
+  const pass = { hits, refs }
+  FIRST_PASS.set(sf, pass)
+  return pass
+}
+
+// Every identifier in a file that is a reference (not a declaration name), by name, in
+// document order: followName looks a function up across the whole tree.
+const IDENTIFIERS = new WeakMap<ts.SourceFile, Map<string, ts.Identifier[]>>()
+function referencesNamed(sf: ts.SourceFile, name: string): ts.Identifier[] {
+  let index = IDENTIFIERS.get(sf)
+  if (!index) {
+    const built = new Map<string, ts.Identifier[]>()
+    const visit = (n: ts.Node) => {
+      if (ts.isIdentifier(n) && !isDeclarationName(n)) {
+        const list = built.get(n.text)
+        if (list) list.push(n)
+        else built.set(n.text, [n])
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(sf)
+    index = built
+    IDENTIFIERS.set(sf, index)
+  }
+  return index.get(name) ?? []
+}
+
 function scan(
   files: Record<string, string>,
   rawAllowed: (file: string) => boolean = (file) => file in RAW_OK,
@@ -238,28 +308,9 @@ function scan(
   const notRead = (r: Ref, n: ts.Node, rule: string) => hits.push(`${at(r.file, n)} ${r.route} is not read as an ActionResult: ${rule}`)
 
   for (const { file, sf } of parsed) {
-    const visit = (n: ts.Node) => {
-      if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && ROUTES.get(n.expression.text)?.has(n.name.text)) {
-        work.push({ file, node: n, route: `${n.expression.text}.${n.name.text}` })
-      } else if (ts.isElementAccessExpression(n) && ts.isIdentifier(n.expression) && ROUTES.has(n.expression.text)) {
-        work.push({ file, node: n, route: `${n.expression.text}[*]` })
-      } else if (ts.isIdentifier(n) && ROUTES.has(n.text) && !isDeclarationName(n)) {
-        const p = n.parent
-        const accessed = (ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === n
-        if (!accessed) hits.push(`${at(file, n)} ${n.text} is aliased or destructured, so its ActionResult routes cannot be followed`)
-      }
-      if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText(sf) === 'apiClient') {
-        const t = n.typeArguments?.[0]
-        if (t && ts.isTypeReferenceNode(t) && RESULT_TYPES.has(t.typeName.getText(sf))) {
-          hits.push(`${at(file, n)} apiClient call typed ${t.typeName.getText(sf)} outside lib/api.ts: add it to an api object instead`)
-        }
-      }
-      if (ts.isStringLiteralLike(n) || ts.isTemplateExpression(n)) {
-        if (ROUTE.test(n.getText(sf))) hits.push(`${at(file, n)} direct call to a stack lifecycle route outside lib/api.ts`)
-      }
-      ts.forEachChild(n, visit)
-    }
-    visit(sf)
+    const pass = firstPass(file, sf)
+    hits.push(...pass.hits)
+    work.push(...pass.refs)
   }
 
   const addScope = (r: Ref, node: ts.Node, kind: Scope['kind']) => {
@@ -278,11 +329,7 @@ function scan(
 
   const followName = (r: Ref, name: string) => {
     for (const { file, sf } of parsed) {
-      const visit = (n: ts.Node) => {
-        if (ts.isIdentifier(n) && n.text === name && !isDeclarationName(n)) work.push({ file, node: n, route: `${r.route.replace(/ \(via .*\)$/, '')} (via ${name})` })
-        ts.forEachChild(n, visit)
-      }
-      visit(sf)
+      for (const n of referencesNamed(sf, name)) work.push({ file, node: n, route: `${r.route.replace(/ \(via .*\)$/, '')} (via ${name})` })
     }
   }
 
