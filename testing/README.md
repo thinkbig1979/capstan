@@ -45,6 +45,34 @@ The specs split across *two* backends, which cannot be the same one:
 | `network-settle-guard.spec.ts` | None — no backend, no frontend, no browser. Its eight tests drive a stub page object to assert the settle guard in `helpers/network-settle.ts` still refuses the orders that defeated an earlier revision of it. Runs in the backup-flow CI job because that job selects everything except `auth-session`, not because it needs that job's backend |
 | `terminal-flow.spec.ts` | `AUTH_DISABLED=true` and a Docker daemon — it starts the `test-app` stack itself and opens a real shell into its container. Runs in the backup-flow CI job (same backend) |
 
+### Running `backup-flow.spec.ts` with auth on
+
+CI runs it with `AUTH_DISABLED=true`. It also works against a backend with auth on:
+leave `AUTH_DISABLED` unset (or `false`) for both the backend and the spec, and set
+`CAPSTAN_TEST_USER` / `CAPSTAN_TEST_PASSWORD` to an account that already exists.
+The login route allows 5 requests a minute per (IP, account), and the API login and
+the UI login form share that bucket. The spec therefore logs in once, in `BACKUP-PW-001`, and plants that session cookie in each test's browser
+(`loginIfNeeded`). It falls back to the login form only if the cookie is not
+accepted, for example when `CAPSTAN_API_URL` and `CAPSTAN_BASE_URL` are on different
+hosts. Run the whole file, not one test at a time: tests after `001` read the
+session it saved.
+
+`dashboard-backups.spec.ts` still logs in through the form in each of its tests, so
+an auth-on local run of it can hit the same limit.
+
+## Type-checking the Playwright config and specs
+
+`tsconfig.e2e.json` at the repo root covers `playwright.config.ts` and
+`testing/tests/playwright/`. Nothing else does: `frontend`'s `tsc -b` only reads
+`frontend/`. CI runs it in the `backup-flow` job, after both `pnpm install` steps:
+
+```bash
+./frontend/node_modules/.bin/tsc -p tsconfig.e2e.json
+```
+
+The root installs only Playwright, so node's types come from `frontend/node_modules/@types`
+(`typeRoots` in the tsconfig). Run `pnpm install --frozen-lockfile` in `frontend/` first.
+
 ## Browser checks against the production bundle
 
 To check the built frontend in a browser (instead of the `vite` dev server), build
