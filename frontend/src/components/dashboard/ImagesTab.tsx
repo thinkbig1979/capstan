@@ -24,7 +24,7 @@ import { TablePagination } from '@/components/dashboard/TablePagination'
 import { usePagination } from '@/hooks/usePagination'
 import { useConfirm } from '@/hooks/useConfirm'
 import { useTextFilter } from '@/hooks/useTextFilter'
-import type { DockerImage } from '@/types'
+import type { DockerCleanupPreview, DockerImage } from '@/types'
 import { formatBytes, formatDate } from '@/lib/format'
 import { queryKeys } from '@/lib/query-keys'
 
@@ -36,6 +36,28 @@ const IMAGE_SEARCH_FIELDS = [
   (img: DockerImage) => img.repoTags.join(' '),
   (img: DockerImage) => img.id,
 ]
+
+// What a scheduled run would reclaim: dangling images plus unused build cache.
+// With no cache to reclaim the sentence is the images-only one, unchanged; a
+// cache figure of 0 is not printed beside real image bytes. "older than" in the
+// combined sentences because images are aged by creation time and cache records
+// by last use; one phrase has to cover both.
+function scheduledCleanupSentence(preview: DockerCleanupPreview): string {
+  const images = preview.candidates.length
+  const cache = preview.cacheReclaimableBytes
+  if (cache > 0) {
+    return images === 0
+      ? `No dangling image is older than ${preview.minAgeHours} hours. Scheduled cleanup would reclaim ${formatBytes(cache)} of unused build cache.`
+      : `Scheduled cleanup would reclaim ${formatBytes(preview.reclaimableBytes)} from ${images} dangling image${
+          images === 1 ? '' : 's'
+        } and ${formatBytes(cache)} of unused build cache, all older than ${preview.minAgeHours} hours.`
+  }
+  return images === 0
+    ? `Nothing for scheduled cleanup to reclaim: no dangling image was created more than ${preview.minAgeHours} hours ago.`
+    : `Scheduled cleanup would reclaim ${formatBytes(preview.reclaimableBytes)} from ${images} dangling image${
+        images === 1 ? '' : 's'
+      } created more than ${preview.minAgeHours} hours ago.`
+}
 
 export function ImagesTab() {
   const { confirm, ConfirmComponent } = useConfirm()
@@ -175,11 +197,7 @@ export function ImagesTab() {
           time. */}
       {cleanupPreview.data && (
         <p data-testid="cleanup-reclaimable" className="text-sm text-muted-foreground">
-          {cleanupPreview.data.candidates.length === 0
-            ? `Nothing for scheduled cleanup to reclaim: no dangling image was created more than ${cleanupPreview.data.minAgeHours} hours ago.`
-            : `Scheduled cleanup would reclaim ${formatBytes(cleanupPreview.data.reclaimableBytes)} from ${cleanupPreview.data.candidates.length} dangling image${
-                cleanupPreview.data.candidates.length === 1 ? '' : 's'
-              } created more than ${cleanupPreview.data.minAgeHours} hours ago.`}
+          {scheduledCleanupSentence(cleanupPreview.data)}
           {cleanupPolicy.data && (
             <>
               {' '}

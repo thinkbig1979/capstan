@@ -269,35 +269,46 @@ export function DockerCleanupCard() {
             diverge, and the list on screen belongs to the floor it was actually
             computed at — a stale list under a new number is a list of images
             the operator did not ask about. */}
-        {preview.data &&
-          (preview.data.candidates.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nothing to remove: no dangling image was created more than{' '}
-              {preview.data.minAgeHours} hours ago.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              <p className="text-sm">
-                {preview.data.candidates.length} image
-                {preview.data.candidates.length === 1 ? '' : 's'} created more than{' '}
-                {preview.data.minAgeHours} hours ago, reclaiming{' '}
-                {formatBytes(preview.data.reclaimableBytes)}.
+        {preview.data && (
+          <div className="space-y-2">
+            {preview.data.candidates.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Nothing to remove: no dangling image was created more than{' '}
+                {preview.data.minAgeHours} hours ago.
               </p>
-              <ul className="space-y-1">
-                {preview.data.candidates.map((candidate) => (
-                  <li
-                    key={candidate.id}
-                    className="flex items-center justify-between gap-4 font-mono text-xs"
-                  >
-                    <span className="truncate">{candidateLabel(candidate)}</span>
-                    <span className="shrink-0 text-muted-foreground">
-                      {formatBytes(candidate.size)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+            ) : (
+              <>
+                <p className="text-sm">
+                  {preview.data.candidates.length} image
+                  {preview.data.candidates.length === 1 ? '' : 's'} created more than{' '}
+                  {preview.data.minAgeHours} hours ago, reclaiming{' '}
+                  {formatBytes(preview.data.reclaimableBytes)}.
+                </p>
+                <ul className="space-y-1">
+                  {preview.data.candidates.map((candidate) => (
+                    <li
+                      key={candidate.id}
+                      className="flex items-center justify-between gap-4 font-mono text-xs"
+                    >
+                      <span className="truncate">{candidateLabel(candidate)}</span>
+                      <span className="shrink-0 text-muted-foreground">
+                        {formatBytes(candidate.size)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {/* Build cache is a second figure, shown only when a run would
+                prune some; a run records it apart from the images. */}
+            {preview.data.cacheReclaimableBytes > 0 && (
+              <p className="text-sm" data-testid="cleanup-cache-reclaimable">
+                Unused build cache older than {preview.data.minAgeHours} hours:{' '}
+                {formatBytes(preview.data.cacheReclaimableBytes)}.
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="space-y-3 pt-4 border-t">

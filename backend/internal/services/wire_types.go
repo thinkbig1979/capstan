@@ -29,10 +29,16 @@ type DockerCleanupCandidate struct {
 
 // DockerCleanupPreview is what a run WOULD remove. Producing it must not remove
 // anything.
+//
+// ReclaimableBytes is the dangling images only; CacheReclaimableBytes is the
+// build cache a run would also prune. They are separate because the history
+// row records them separately (bytesReclaimed, cacheBytesReclaimed), and the
+// operator-facing figure is their sum.
 type DockerCleanupPreview struct {
-	Candidates       []DockerCleanupCandidate `json:"candidates"`
-	ReclaimableBytes int64                    `json:"reclaimableBytes"`
-	MinAgeHours      int                      `json:"minAgeHours"`
+	Candidates            []DockerCleanupCandidate `json:"candidates"`
+	ReclaimableBytes      int64                    `json:"reclaimableBytes"`
+	CacheReclaimableBytes int64                    `json:"cacheReclaimableBytes"`
+	MinAgeHours           int                      `json:"minAgeHours"`
 }
 
 // The three value sets below are served inside update-job payloads (Job,
