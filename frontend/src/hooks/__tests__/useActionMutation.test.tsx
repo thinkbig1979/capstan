@@ -105,7 +105,8 @@ describe('useActionMutation — success outcome', () => {
     })
 
     await waitFor(() => expect(hook.current.isSuccess).toBe(true))
-    expect(onResult).toHaveBeenCalledWith(result)
+    // The second argument is the mutation's variables (undefined here).
+    expect(onResult).toHaveBeenCalledWith(result, undefined)
   })
 })
 
@@ -463,5 +464,156 @@ describe('useActionMutation — silentWhen', () => {
     })
     await waitFor(() => expect(bare.current.isError).toBe(true))
     expect(toast.error).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ─── Additions for stack and prune mutations (agent-os-cdsh) ──────────────────
+//
+// Three optional hooks the wrapper gained so useStackActions and PruneButton
+// can move onto it without losing behaviour: a success title derived from the
+// result, the mutation variables on onResult, and an onError callback. Plus
+// the empty-reason guard on the SUCCESS path (the onError path already had it).
+
+describe('useActionMutation — successTitle as a function of the result', () => {
+  it('titles the success toast from the result', async () => {
+    const { result: hook } = renderHook(
+      () =>
+        useActionMutation({
+          mutationFn: vi.fn().mockResolvedValue({
+            outcome: 'success',
+            reason: 'pruned 3 image(s)',
+            details: { deleted: ['a', 'b', 'c'] },
+          } satisfies ActionResult),
+          successTitle: (r) => `Pruned ${(r.details?.deleted as string[]).length} images`,
+        }),
+      { wrapper: wrapper(makeClient()) },
+    )
+    await act(async () => {
+      hook.current.mutate(undefined as unknown as never)
+    })
+    await waitFor(() => expect(hook.current.isSuccess).toBe(true))
+    expect(toast.success).toHaveBeenCalledWith('Pruned 3 images')
+  })
+
+  it('does not apply the title to no_change or partial, which keep their own text and level', async () => {
+    const title = vi.fn(() => 'TITLE')
+    for (const outcome of ['no_change', 'partial'] as const) {
+      vi.clearAllMocks()
+      const { result: hook } = renderHook(
+        () =>
+          useActionMutation({
+            mutationFn: vi.fn().mockResolvedValue({ outcome, reason: `reason ${outcome}` }),
+            successTitle: title,
+          }),
+        { wrapper: wrapper(makeClient()) },
+      )
+      await act(async () => {
+        hook.current.mutate(undefined as unknown as never)
+      })
+      await waitFor(() => expect(hook.current.isSuccess).toBe(true))
+      expect(toast.success).not.toHaveBeenCalled()
+      expect((outcome === 'partial' ? toast.warning : toast.info)).toHaveBeenCalledWith(`reason ${outcome}`)
+    }
+  })
+})
+
+describe('useActionMutation — onResult receives the mutation variables', () => {
+  it('passes the variables as the second argument, after the toast and the invalidations', async () => {
+    const order: string[] = []
+    const queryClient = makeClient()
+    vi.spyOn(queryClient, 'invalidateQueries').mockImplementation(() => {
+      order.push('invalidate')
+      return Promise.resolve()
+    })
+    vi.mocked(toast.success).mockImplementation(() => {
+      order.push('toast')
+      return 1
+    })
+    const onResult = vi.fn(() => order.push('onResult'))
+    const { result: hook } = renderHook(
+      () =>
+        useActionMutation<string>({
+          mutationFn: vi.fn().mockResolvedValue({ outcome: 'success', reason: 'ok' }),
+          invalidate: [['stacks']],
+          onResult,
+        }),
+      { wrapper: wrapper(queryClient) },
+    )
+    await act(async () => {
+      hook.current.mutate('stack-7')
+    })
+    await waitFor(() => expect(hook.current.isSuccess).toBe(true))
+    expect(onResult).toHaveBeenCalledWith({ outcome: 'success', reason: 'ok' }, 'stack-7')
+    expect(order).toEqual(['toast', 'invalidate', 'onResult'])
+  })
+})
+
+describe('useActionMutation — onError callback', () => {
+  class Cancelled extends Error {}
+
+  it('runs after the error toast, with the error and the variables', async () => {
+    const order: string[] = []
+    vi.mocked(toast.error).mockImplementation(() => {
+      order.push('toast')
+      return 1
+    })
+    const onError = vi.fn(() => order.push('onError'))
+    const boom = { outcome: 'failed', reason: 'Docker is down' }
+    const { result: hook } = renderHook(
+      () => useActionMutation<string>({ mutationFn: vi.fn().mockRejectedValue(boom), onError }),
+      { wrapper: wrapper(makeClient()) },
+    )
+    await act(async () => {
+      hook.current.mutate('stack-7')
+    })
+    await waitFor(() => expect(hook.current.isError).toBe(true))
+    expect(onError).toHaveBeenCalledWith(boom, 'stack-7')
+    expect(order).toEqual(['toast', 'onError'])
+  })
+
+  it('still runs when silentWhen swallows the toast, so a caller can reset its own state', async () => {
+    const onError = vi.fn()
+    const { result: hook } = renderHook(
+      () =>
+        useActionMutation<string>({
+          mutationFn: vi.fn().mockRejectedValue(new Cancelled('declined')),
+          silentWhen: (err) => err instanceof Cancelled,
+          onError,
+        }),
+      { wrapper: wrapper(makeClient()) },
+    )
+    await act(async () => {
+      hook.current.mutate('stack-7')
+    })
+    await waitFor(() => expect(hook.current.isError).toBe(true))
+    expect(toast.error).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useActionMutation — a 2xx failed result with no reason never toasts nothing (agent-os-cdsh)', () => {
+  async function fire(data: ActionResult, errorTitle?: string) {
+    const { result: hook } = renderHook(
+      () => useActionMutation({ mutationFn: vi.fn().mockResolvedValue(data), errorTitle }),
+      { wrapper: wrapper(makeClient()) },
+    )
+    await act(async () => {
+      hook.current.mutate(undefined as unknown as never)
+    })
+    await waitFor(() => expect(hook.current.isSuccess).toBe(true))
+  }
+
+  it('shows the reason when there is one', async () => {
+    await fire({ outcome: 'failed', reason: 'Container exited with code 1' })
+    expect(toast.error).toHaveBeenCalledWith('Container exited with code 1')
+  })
+
+  it('falls back to the errorTitle, then to a generic sentence, when the reason is empty', async () => {
+    await fire({ outcome: 'failed', reason: '' }, 'Failed to prune images')
+    expect(toast.error).toHaveBeenCalledWith('Failed to prune images')
+
+    vi.clearAllMocks()
+    await fire({ outcome: 'failed', reason: '' })
+    expect(toast.error).toHaveBeenCalledWith('Action failed')
   })
 })

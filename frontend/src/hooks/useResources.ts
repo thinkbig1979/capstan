@@ -1,11 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
-import { resourcesApi, settingsApi, autoUpdateApi, type PruneOptions } from '@/lib/api'
+import { resourcesApi, settingsApi, autoUpdateApi } from '@/lib/api'
 import { useUpdateScanStore } from '@/stores/updateScanStore'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
-import { isActionResult, toastForResult, type ActionResult } from '@/lib/action-result'
-import { presentError, presentFault } from '@/lib/error-handler'
+import { presentFault } from '@/lib/error-handler'
 import { useActionMutation } from '@/hooks/useActionMutation'
 import type { UpdateHistoryFilters } from '@/types'
 import { queryKeys } from '@/lib/query-keys'
@@ -186,143 +185,6 @@ export function useCreateNetwork() {
     },
     errorTitle: 'Failed to create network',
     invalidate: [queryKeys.resources.networks()],
-  })
-}
-
-/**
- * Derives a human-readable prune summary from an Action Truth Contract result.
- *
- * Backend detail key alignment (confirmed from resource_mutations.go):
- *  - Image prune: details.imagesDeleted (number), details.spaceReclaimed
- *  - Volume/container/build-cache prune: details.deleted (array), details.spaceReclaimed
- *  - Network prune: details.deleted (array)
- */
-export function resolvePruneSummary(
-  data: ActionResult<{
-    // Image prune field (classifyImagePruneReport)
-    imagesDeleted?: number
-    tagsRemoved?: number
-    // Generic list field (volume/network/build-cache prune)
-    deleted?: string[]
-    // Shared space field
-    spaceReclaimed?: number
-  }>,
-  resourceLabel: string,
-): string {
-  const details = data.details
-  // Image prune uses imagesDeleted; others use deleted.length
-  const count = details?.imagesDeleted ?? details?.deleted?.length ?? 0
-  const space = details?.spaceReclaimed
-  const tags = details?.tagsRemoved ?? 0
-  let label = `${count} ${resourceLabel}${count !== 1 ? 's' : ''}`
-  // Image prune that only removed tags (no full images) would otherwise show
-  // "0 images" — surface the tags so the toast reflects the real effect (B3).
-  if (tags > 0) {
-    label += `, ${tags} tag${tags !== 1 ? 's' : ''}`
-  }
-  return space ? `${label}, ${formatPruneBytes(space)} reclaimed` : label
-}
-
-function formatPruneBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`
-}
-
-export function usePruneImages() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (opts?: PruneOptions) => resourcesApi.pruneImages(opts),
-    onSuccess: (data) => {
-      if (data.outcome === 'no_change') {
-        toast.info(data.reason || 'No images to prune')
-      } else {
-        const summary = resolvePruneSummary(data, 'image')
-        toastForResult(data, { successTitle: `Pruned ${summary}` })
-      }
-      queryClient.invalidateQueries({ queryKey: queryKeys.resources.images() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
-    },
-    onError: (err) => {
-      if (isActionResult(err)) {
-        toastForResult(err)
-      } else {
-        presentError(err, { fallback: 'Failed to prune images' })
-      }
-    },
-  })
-}
-
-export function usePruneVolumes() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (opts?: PruneOptions) => resourcesApi.pruneVolumes(opts),
-    onSuccess: (data) => {
-      if (data.outcome === 'no_change') {
-        toast.info(data.reason || 'No volumes to prune')
-      } else {
-        const summary = resolvePruneSummary(data, 'volume')
-        toastForResult(data, { successTitle: `Pruned ${summary}` })
-      }
-      queryClient.invalidateQueries({ queryKey: queryKeys.resources.volumes() })
-    },
-    onError: (err) => {
-      if (isActionResult(err)) {
-        toastForResult(err)
-      } else {
-        presentError(err, { fallback: 'Failed to prune volumes' })
-      }
-    },
-  })
-}
-
-export function usePruneNetworks() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (opts?: PruneOptions) => resourcesApi.pruneNetworks(opts),
-    onSuccess: (data) => {
-      if (data.outcome === 'no_change') {
-        toast.info(data.reason || 'No networks to prune')
-      } else {
-        const details = data.details as { deleted?: string[] } | undefined
-        const count = details?.deleted?.length ?? 0
-        toastForResult(data, { successTitle: `Pruned ${count} network${count !== 1 ? 's' : ''}` })
-      }
-      queryClient.invalidateQueries({ queryKey: queryKeys.resources.networks() })
-    },
-    onError: (err) => {
-      if (isActionResult(err)) {
-        toastForResult(err)
-      } else {
-        presentError(err, { fallback: 'Failed to prune networks' })
-      }
-    },
-  })
-}
-
-export function usePruneBuildCache() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (opts?: PruneOptions) => resourcesApi.pruneBuildCache(opts),
-    onSuccess: (data) => {
-      if (data.outcome === 'no_change') {
-        toast.info(data.reason || 'No build cache to prune')
-      } else {
-        const summary = resolvePruneSummary(data, 'cache entry')
-        toastForResult(data, { successTitle: `Pruned ${summary}` })
-      }
-      queryClient.invalidateQueries({ queryKey: queryKeys.resources.buildCache() })
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboardStats() })
-    },
-    onError: (err) => {
-      if (isActionResult(err)) {
-        toastForResult(err)
-      } else {
-        presentError(err, { fallback: 'Failed to prune build cache' })
-      }
-    },
   })
 }
 

@@ -17,6 +17,12 @@
  *  - the sibling onSuccess of a raw useMutation, when the mutationFn returns the
  *    result;
  *  - otherwise the enclosing function.
+ * A raw useMutation over a pinned route is itself a hit (agent-os-cdsh): the
+ * wrapper owns the success toast LEVEL, the empty-reason fallback and the
+ * rejection presenter, and a raw site re-implements each of them. A site that
+ * cannot use the wrapper is named in RAW_OK below, by its exact path and with
+ * the reason; any other file, new ones included, is flagged. An entry that no
+ * longer holds a raw site is itself a failure, so the list cannot go stale.
  * A result RETURNED from a named function makes that function a derived route
  * (lib/stack-delete.ts), and one returned into a JSX attribute makes the prop a
  * derived route inside the component (PruneButton's pruneFn); their references
@@ -58,6 +64,13 @@ const PINNED_ROUTES = [
   'stacksApi.create', 'stacksApi.createEnv', 'stacksApi.delete', 'stacksApi.pull', 'stacksApi.restart',
   'stacksApi.start', 'stacksApi.stop', 'stacksApi.updateComposeAndEnv', 'stacksApi.updateEnv',
 ]
+
+// Files allowed to consume a pinned route through a raw useMutation, keyed by
+// exact path, each with the reason the wrapper cannot take it.
+const RAW_OK: Record<string, string> = {
+  '/src/hooks/useCreateStack.ts':
+    'the success toast is one of three levels chosen from the lint results, and useActionMutation fires toastForResult before onResult, so a wrapper would double-toast; onSuccess reads data.outcome (agent-os-cdsh, ruling R8)',
+}
 
 type FnLike = ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration
 
@@ -212,12 +225,16 @@ function isDeclarationName(id: ts.Identifier): boolean {
   )
 }
 
-function scan(files: Record<string, string>): { hits: string[]; scopes: Scope[] } {
+function scan(
+  files: Record<string, string>,
+  rawAllowed: (file: string) => boolean = (file) => file in RAW_OK,
+): { hits: string[]; scopes: Scope[]; rawFiles: Set<string> } {
   const parsed = Object.entries(files).map(([file, src]) => ({ file, sf: parse(file, src) }))
   const hits: string[] = []
   const scopes = new Map<ts.Node, Scope>()
   const work: Ref[] = []
   const seen = new Set<string>()
+  const rawFiles = new Set<string>()
   const notRead = (r: Ref, n: ts.Node, rule: string) => hits.push(`${at(r.file, n)} ${r.route} is not read as an ActionResult: ${rule}`)
 
   for (const { file, sf } of parsed) {
@@ -321,6 +338,10 @@ function scan(files: Record<string, string>): { hits: string[]; scopes: Scope[] 
     }
     const from = returnedFrom(value)
     if (m?.hook === 'useMutation' && (direct || from === fn)) {
+      rawFiles.add(r.file)
+      if (!rawAllowed(r.file)) {
+        notRead(r, r.node, 'consumed by a raw useMutation; use useActionMutation, or name the file in RAW_OK with the reason')
+      }
       const onSuccess = propertyValue(m.options, 'onSuccess')
       if (onSuccess) addScope(r, onSuccess, 'onSuccess')
       else notRead(r, r.node, 'raw useMutation with no onSuccess; use useActionMutation')
@@ -357,14 +378,17 @@ function scan(files: Record<string, string>): { hits: string[]; scopes: Scope[] 
     else notRead(r, r.node, 'called at module level')
   }
 
-  return { hits, scopes: [...scopes.values()] }
+  return { hits, scopes: [...scopes.values()], rawFiles }
 }
+
+// The outcome-reading rules are tested on their own: a raw useMutation is allowed here.
+const anyRaw = () => true
 
 function findUnguarded(source: string, file = 'fixture.tsx'): string[] {
-  return scan({ [file]: source }).hits
+  return scan({ [file]: source }, anyRaw).hits
 }
 
-const scanHits = (files: Record<string, string>) => scan(files).hits
+const scanHits = (files: Record<string, string>) => scan(files, anyRaw).hits
 
 // Plant `toast.success('PLANTED')` at the start of a scope, in memory only.
 function plant(source: string, s: Scope): { source: string; line: number } {
@@ -492,5 +516,44 @@ describe('every ActionResult route is guarded at each of its consumers (agent-os
         expect.stringMatching(new RegExp(`^${s.file.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}:${planted.line} .*toast\\.success before`)),
       )
     }
+  })
+})
+
+describe('a pinned route is consumed through useActionMutation, not a raw useMutation (agent-os-cdsh)', () => {
+  // Reads the outcome and toasts correctly, so only the raw-site rule can flag it.
+  const rawPrune = `useMutation({ mutationFn: (o) => resourcesApi.pruneImages(o), onSuccess: (d) => toastForResult(d) })`
+
+  it('CONTROL: flags a raw useMutation over a pinned route in a file that is not named in RAW_OK', () => {
+    expect(scan({ '/src/components/NewPrune.tsx': rawPrune }).hits).toEqual([
+      expect.stringMatching(/^\/src\/components\/NewPrune\.tsx:1 resourcesApi\.pruneImages .*raw useMutation/),
+    ])
+  })
+
+  it('CONTROL: flags the same raw site when it is a bare mutationFn reference and when it reaches the route through a wrapper', () => {
+    expect(scan({ '/f.ts': `useMutation({ mutationFn: stacksApi.restart, onSuccess: (d) => toastForResult(d) })` }).hits)
+      .toEqual([expect.stringMatching(/stacksApi\.restart .*raw useMutation/)])
+    const files = {
+      '/w.ts': `export async function wrap(id) { return await stacksApi.delete(id) }`,
+      '/c.tsx': `useMutation({ mutationFn: (id) => wrap(id), onSuccess: (d) => toastForResult(d) })`,
+    }
+    expect(scan(files).hits).toEqual([expect.stringMatching(/^\/c\.tsx:1 stacksApi\.delete \(via wrap\) .*raw useMutation/)])
+  })
+
+  it('CONTROL: passes the same site through useActionMutation, and a raw useMutation over a route that is not pinned', () => {
+    expect(scan({ '/f.ts': `useActionMutation({ mutationFn: (o) => resourcesApi.pruneImages(o) })` }).hits).toEqual([])
+    expect(scan({ '/f.ts': `useMutation({ mutationFn: (n) => resourcesApi.restartContainer(n), onSuccess: () => toast.success('ok') })` }).hits).toEqual([])
+  })
+
+  it('CONTROL: an allowed file is exempt only by its exact path', () => {
+    const [allowed] = Object.keys(RAW_OK)
+    expect(scan({ [allowed]: rawPrune }).hits).toEqual([])
+    expect(scan({ [`/src/elsewhere${allowed.slice('/src'.length)}`]: rawPrune }).hits).toHaveLength(1)
+  })
+
+  it('every raw site in src is named in RAW_OK, and every RAW_OK entry still holds one', () => {
+    // A glob that matched nothing would make the first assertion vacuous.
+    expect(Object.keys(tree).length).toBeGreaterThan(100)
+    expect(treeScan.hits.filter((h) => h.includes('raw useMutation'))).toEqual([])
+    expect([...scan(tree, anyRaw).rawFiles].sort()).toEqual(Object.keys(RAW_OK).sort())
   })
 })

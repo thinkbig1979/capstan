@@ -1,15 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
-import { useMutation, useQueryClient, type QueryKey } from '@tanstack/react-query'
+import type { QueryKey } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { Scissors, CheckCircle2, XCircle, Loader2, AlertTriangle } from 'lucide-react'
-import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { presentError } from '@/lib/error-handler'
+import { useActionMutation } from '@/hooks/useActionMutation'
 import { formatBytes } from '@/lib/format'
-import { isActionResult, toastForResult } from '@/lib/action-result'
 import type { PruneOptions, PruneResult } from '@/lib/api'
 
 /**
@@ -91,7 +89,6 @@ export function PruneButton({
   options,
   onPruneComplete,
 }: PruneButtonProps) {
-  const queryClient = useQueryClient()
   const [phase, setPhase] = useState<'idle' | 'pruning' | 'done' | 'error'>('idle')
   const [open, setOpen] = useState(false)
   const [all, setAll] = useState(false)
@@ -105,38 +102,28 @@ export function PruneButton({
     }
   }, [])
 
-  const mutation = useMutation({
+  const mutation = useActionMutation<PruneOptions, PruneResult>({
     mutationFn: pruneFn,
-    onSuccess: (data) => {
+    invalidate: invalidateKeys,
+    // Only a `success` outcome takes this title. A `no_change` ("nothing to
+    // prune") stays an info toast with the backend's reason, so a no-op never
+    // reads as a "Pruned 0" success.
+    successTitle: (data) => {
+      const { count, spaceReclaimed, tagsRemoved } = extractPruneMetrics(data)
+      return buildPruneSummary(resourceType, count, spaceReclaimed, tagsRemoved)
+    },
+    errorTitle: `Failed to prune ${resourceType}`,
+    onResult: (data) => {
       setResult(data)
       setPhase('done')
-
-      if (data.outcome === 'no_change') {
-        // Honest: nothing was pruned. Show info, NOT success.
-        toast.info(data.reason || `No ${resourceType}s to prune`)
-      } else {
-        const { count, spaceReclaimed, tagsRemoved } = extractPruneMetrics(data)
-        toastForResult(data, {
-          successTitle: buildPruneSummary(resourceType, count, spaceReclaimed, tagsRemoved),
-        })
-      }
-
-      for (const key of invalidateKeys) {
-        queryClient.invalidateQueries({ queryKey: key })
-      }
       onPruneComplete?.()
       timerRef.current = setTimeout(() => {
         setPhase('idle')
         setResult(null)
       }, 5000)
     },
-    onError: (err) => {
+    onError: () => {
       setPhase('error')
-      if (isActionResult(err)) {
-        toastForResult(err)
-      } else {
-        presentError(err, { fallback: `Failed to prune ${resourceType}` })
-      }
       timerRef.current = setTimeout(() => setPhase('idle'), 4000)
     },
   })

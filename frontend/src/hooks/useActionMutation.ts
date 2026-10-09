@@ -6,8 +6,12 @@ export interface UseActionMutationOptions<TVars, TData extends ActionResult> {
   mutationFn: (vars: TVars) => Promise<TData>
   /** Query keys to invalidate after a successful mutation. */
   invalidate?: QueryKey[]
-  /** Override the success toast title (defaults to result.reason). */
-  successTitle?: string
+  /**
+   * Override the success toast title (defaults to result.reason). A function
+   * derives it from the result (a prune's "Pruned 3 images" reads the details).
+   * Only a `success` outcome takes it: no_change and partial keep their reason.
+   */
+  successTitle?: string | ((r: TData) => string)
   /**
    * The action context for a FAILED rejection: becomes the toast title, with the
    * cause as its description (presentError's shape). Unset, the cause alone is
@@ -15,8 +19,14 @@ export interface UseActionMutationOptions<TVars, TData extends ActionResult> {
    * rejected `partial` / `no_change` keeps its toast LEVEL through toastForResult.
    */
   errorTitle?: string
-  /** Called after toastForResult and invalidations on success. */
-  onResult?: (r: TData) => void
+  /** Called after toastForResult and invalidations on success, with the variables the mutation ran with. */
+  onResult?: (r: TData, vars: TVars) => void
+  /**
+   * Called after the error toast, with the rejection and the variables. It runs
+   * when `silentWhen` swallowed the toast too, so a caller can still reset its
+   * own state after a cancel.
+   */
+  onError?: (err: unknown, vars: TVars) => void
   /**
    * A rejection the caller handles itself (a user cancel is not a failure):
    * when this returns true, onError toasts nothing. Unset, every rejection toasts.
@@ -42,48 +52,62 @@ export function useActionMutation<TVars, TData extends ActionResult = ActionResu
 
   return useMutation<TData, unknown, TVars>({
     mutationFn: opts.mutationFn,
-    onSuccess: (data) => {
-      toastForResult(data, { successTitle: opts.successTitle })
+    onSuccess: (data, vars) => {
+      // A 2xx body can carry `failed` with no reason (the backend answers 5xx
+      // for a failed action, but nothing here enforces that). toastForResult's
+      // failed arm has no fallback, so an empty reason would render an empty
+      // error toast; the onError path below guards the same hole (agent-os-cdsh).
+      const shown = data.outcome === 'failed' && !data.reason
+        ? { ...data, reason: opts.errorTitle ?? 'Action failed' }
+        : data
+      toastForResult(shown, {
+        successTitle: typeof opts.successTitle === 'function' ? opts.successTitle(data) : opts.successTitle,
+      })
       for (const key of opts.invalidate ?? []) {
         queryClient.invalidateQueries({ queryKey: key })
       }
-      opts.onResult?.(data)
+      opts.onResult?.(data, vars)
     },
-    onError: (err) => {
-      if (opts.silentWhen?.(err)) return
-      // A FAILED action answers 5xx, so axios rejects and api.ts's interceptor
-      // hands us {...body, status} — the ActionResult itself. classifyError
-      // cannot read it: it looks for data.error / data.message / err.message
-      // and an ActionResult carries none of them, so the cause fell through to
-      // the 5xx branch and was replaced by a bare status string (agent-os-ug4t).
-      // Worst case was the Docker outage, whose reason IS the recovery.
-      //
-      // `err.reason` is checked, not just the type: toastForResult's failed arm
-      // is toast.error(r.reason) with no fallback, so an empty reason would
-      // render an empty toast — worse than the generic sentence.
-      //
-      // With `errorTitle` set, a `failed` rejection skips this branch and takes
-      // presentError below, which renders the same reason as the description
-      // under the action's title. Every other outcome still lands here: the
-      // title is only ever an ERROR title, so it must not turn a `partial` or
-      // `no_change` into an error toast.
-      if (isActionResult(err) && err.reason && !(opts.errorTitle && err.outcome === 'failed')) {
-        toastForResult(err)
-        return
-      }
-      if (opts.errorTitle) {
-        presentError(err, { fallback: opts.errorTitle })
-        return
-      }
-      // presentCause, NOT presentError (agent-os-5g8a). This wrapper does not
-      // know WHICH action failed, so it has no action context to put in a
-      // title and a fixed one would be a lie -- the cause IS the message here.
-      // The ActionResult branch above stays where it is for the same reason it
-      // was written: toastForResult maps OUTCOME to toast LEVEL, so routing it
-      // through any presenter would turn every `partial` into an error toast
-      // and every `no_change` into an error toast. truth.Partial is real and
-      // reachable (handlers/compose.go, handlers/env.go).
-      presentCause(err)
+    onError: (err, vars) => {
+      if (!opts.silentWhen?.(err)) toastRejection(err, opts.errorTitle)
+      opts.onError?.(err, vars)
     },
   })
+}
+
+/** The toast for a rejected mutation; see useActionMutation's `errorTitle`. */
+function toastRejection(err: unknown, errorTitle: string | undefined): void {
+  // A FAILED action answers 5xx, so axios rejects and api.ts's interceptor
+  // hands us {...body, status} — the ActionResult itself. classifyError
+  // cannot read it: it looks for data.error / data.message / err.message
+  // and an ActionResult carries none of them, so the cause fell through to
+  // the 5xx branch and was replaced by a bare status string (agent-os-ug4t).
+  // Worst case was the Docker outage, whose reason IS the recovery.
+  //
+  // `err.reason` is checked, not just the type: toastForResult's failed arm
+  // is toast.error(r.reason) with no fallback, so an empty reason would
+  // render an empty toast — worse than the generic sentence.
+  //
+  // With `errorTitle` set, a `failed` rejection skips this branch and takes
+  // presentError below, which renders the same reason as the description
+  // under the action's title. Every other outcome still lands here: the
+  // title is only ever an ERROR title, so it must not turn a `partial` or
+  // `no_change` into an error toast.
+  if (isActionResult(err) && err.reason && !(errorTitle && err.outcome === 'failed')) {
+    toastForResult(err)
+    return
+  }
+  if (errorTitle) {
+    presentError(err, { fallback: errorTitle })
+    return
+  }
+  // presentCause, NOT presentError (agent-os-5g8a). This wrapper does not
+  // know WHICH action failed, so it has no action context to put in a
+  // title and a fixed one would be a lie -- the cause IS the message here.
+  // The ActionResult branch above stays where it is for the same reason it
+  // was written: toastForResult maps OUTCOME to toast LEVEL, so routing it
+  // through any presenter would turn every `partial` into an error toast
+  // and every `no_change` into an error toast. truth.Partial is real and
+  // reachable (handlers/compose.go, handlers/env.go).
+  presentCause(err)
 }

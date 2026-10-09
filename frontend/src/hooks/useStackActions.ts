@@ -1,8 +1,5 @@
-import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { stacksApi, type LifecycleResult, type StackDeleteResult } from '@/lib/api'
-import { toast } from 'sonner'
-import { toastForResult, isActionResult } from '@/lib/action-result'
-import { classifyError } from '@/lib/error-handler'
+import { useActionMutation } from '@/hooks/useActionMutation'
 import { queryKeys } from '@/lib/query-keys'
 import { deleteStackWithCollateralConfirm, StackDeleteCancelledError, type ConfirmFn } from '@/lib/stack-delete'
 
@@ -44,42 +41,22 @@ interface UseStackActionsOptions {
 type AnyLifecycleResult = LifecycleResult | StackDeleteResult
 
 /**
- * Extract the best error message from a rejected mutation value.
- *
- * The axios interceptor in api.ts rejects with `error.response?.data` directly
- * (the parsed response body), so for a 500 ActionResult the rejected value IS
- * {outcome:'failed', reason:'...'} — no unwrapping needed.
- *
- * Priority:
- *  1. ActionResult body with a reason  → use reason (server-authored, specific)
- *  2. Anything else                    → classifyError for a human-readable fallback
- */
-function errorMessage(action: StackAction, err: unknown): string {
-  if (isActionResult(err)) {
-    return err.reason || `Failed to ${action} stack`
-  }
-  return classifyError(err).message || `Failed to ${action} stack`
-}
-
-function invalidateAll(queryClient: QueryClient) {
-  for (const key of INVALIDATE_KEYS) {
-    queryClient.invalidateQueries({ queryKey: [...key] })
-  }
-}
-
-/**
  * A single lifecycle-action mutation. Extracted as its own custom hook (rather
- * than a plain factory function that calls `useMutation` internally) so each of
- * the four mutations below is a direct, unconditional hook call at the top of
- * `useStackActions` — the call order is a fixed sequence of statements, not
- * indirection through a helper, so React can verify hook-call safety.
+ * than a plain factory function that calls `useActionMutation` internally) so
+ * each of the four mutations below is a direct, unconditional hook call at the
+ * top of `useStackActions` — the call order is a fixed sequence of statements,
+ * not indirection through a helper, so React can verify hook-call safety.
+ *
+ * All four actions (start/stop/restart/delete) return a typed ActionResult
+ * body, so useActionMutation derives the toast level from the outcome
+ * (success→success, no_change→info, partial→warning, failed→error): a
+ * crash-loop or no-op start NEVER shows as green success. A rejected `failed`
+ * result (a 5xx ActionResult body, which api.ts's interceptor hands over as the
+ * rejection itself) is titled with the action, the server-authored reason as
+ * its description; a rejected partial keeps its warning level.
  */
-function useStackActionMutation(
-  action: StackAction,
-  queryClient: QueryClient,
-  options?: UseStackActionsOptions,
-) {
-  return useMutation<AnyLifecycleResult, unknown, string>({
+function useStackActionMutation(action: StackAction, options?: UseStackActionsOptions) {
+  return useActionMutation<string, AnyLifecycleResult>({
     mutationFn: (id: string): Promise<AnyLifecycleResult> => {
       if (action === 'delete') {
         return options?.confirmCollateral
@@ -88,40 +65,27 @@ function useStackActionMutation(
       }
       return stacksApi[action](id)
     },
-    onSuccess: (data, id) => {
-      // All four actions (start/stop/restart/delete) return a typed
-      // ActionResult body: derive the toast level from outcome.
-      // success→toast.success, no_change→toast.info,
-      // partial→toast.warning, failed→toast.error.
-      // A crash-loop or no-op start will NEVER show as green success.
-      toastForResult(data, { successTitle: ACTION_SUCCESS_TITLES[action] })
-      invalidateAll(queryClient)
+    successTitle: ACTION_SUCCESS_TITLES[action],
+    errorTitle: `Failed to ${action} stack`,
+    // Broad prefix in INVALIDATE_KEYS reaches every ['stack', id, …] entry.
+    invalidate: INVALIDATE_KEYS.map((key) => [...key]),
+    // A declined collateral confirmation is a user cancel, not a failure: no
+    // error toast, but the caller's onError still fires (wrapper contract) so
+    // it can reset local "deleting" state (see DashboardPage/StackPage).
+    silentWhen: (err) => err instanceof StackDeleteCancelledError,
+    onResult: (_result, id) => {
       options?.onSuccess?.(action, id)
       options?.onResult?.(action, id)
     },
-    onError: (err, id) => {
-      // A declined collateral confirmation is a user cancel, not a failure —
-      // no error toast, but the caller's onError still fires so it can reset
-      // local "deleting" state (see DashboardPage/StackPage).
-      if (!(err instanceof StackDeleteCancelledError)) {
-        // A 500 `failed` ActionResult body is the rejected value directly
-        // (the axios interceptor strips the AxiosError wrapper). Surface the
-        // server-authored reason when available so the user sees a specific
-        // message rather than the generic fallback.
-        toast.error(errorMessage(action, err))
-      }
-      options?.onError?.(action, id)
-    },
+    onError: (_err, id) => options?.onError?.(action, id),
   })
 }
 
 export function useStackActions(options?: UseStackActionsOptions) {
-  const queryClient = useQueryClient()
-
-  const start = useStackActionMutation('start', queryClient, options)
-  const stop = useStackActionMutation('stop', queryClient, options)
-  const restart = useStackActionMutation('restart', queryClient, options)
-  const deleteAction = useStackActionMutation('delete', queryClient, options)
+  const start = useStackActionMutation('start', options)
+  const stop = useStackActionMutation('stop', options)
+  const restart = useStackActionMutation('restart', options)
+  const deleteAction = useStackActionMutation('delete', options)
 
   return { start, stop, restart, delete: deleteAction }
 }
