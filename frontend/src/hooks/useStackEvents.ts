@@ -5,7 +5,13 @@ import { queryClient } from '@/lib/query-client'
 import { resolveUpdateScanSuccess, resolveUpdateScanError } from './useResources'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
 import type { Stack } from '@/types'
-import type { UpdateJobProgressEvent, UpdateJobCompleteEvent, UpdateJobOutcome } from '@/stores/updateJobStore'
+import type {
+  UpdateJobProgressEvent,
+  UpdateJobCompleteEvent,
+  UpdateJobOutcome,
+  UpdateJobStatus,
+  UpdateJobTargetType,
+} from '@/stores/updateJobStore'
 import { queryKeys } from '@/lib/query-keys'
 import { frameValidator, omitemptyStr, oneOf, optOneOf, optStr, record, str } from '@/lib/wsFrames'
 import { JOB_OUTCOMES, JOB_STATUSES, JOB_TARGET_TYPES } from './useUpdateJobStream'
@@ -41,21 +47,21 @@ interface UpdateScanCompleteEvent {
 export interface UpdateJobProgressStackEvent {
   type: 'update_job_progress'
   jobId: string
-  targetType: 'container' | 'stack'
+  targetType: UpdateJobTargetType
   targetId: string
   stackId: string
   name: string
-  status: 'queued' | 'pulling' | 'recreating' | 'success' | 'error'
+  status: UpdateJobStatus
 }
 
 export interface UpdateJobCompleteStackEvent {
   type: 'update_job_complete'
   jobId: string
-  targetType: 'container' | 'stack'
+  targetType: UpdateJobTargetType
   targetId: string
   stackId: string
   name: string
-  status: 'queued' | 'pulling' | 'recreating' | 'success' | 'error'
+  status: UpdateJobStatus
   error?: string
   outcome?: UpdateJobOutcome
   reason?: string

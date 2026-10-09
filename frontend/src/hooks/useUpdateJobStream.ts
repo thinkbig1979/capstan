@@ -3,10 +3,17 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useWebSocketJSON } from './useWebSocket'
 import { useUpdateJobStore } from '@/stores/updateJobStore'
 import { reconcileOnClose } from '@/lib/ws-reconcile'
-import type { UpdateJob, JobLine, UpdateJobStatus, UpdateJobOutcome } from '@/stores/updateJobStore'
+import type {
+  UpdateJob,
+  JobLine,
+  JobLineStream,
+  UpdateJobStatus,
+  UpdateJobOutcome,
+  UpdateJobTargetType,
+} from '@/stores/updateJobStore'
 import { queryKeys } from '@/lib/query-keys'
 import type { AssertTrue, Exact } from '@/lib/action-result'
-import type { Outcome } from '@/types'
+import type { Outcome, UpdateJobWireStatus, UpdateJobWireStream, UpdateJobWireTargetType } from '@/types'
 import { arrayOf, frameValidator, oneOf, optOneOf, optStr, record, str } from '@/lib/wsFrames'
 
 // ── WS frame shapes (per api-contract.md) ────────────────────────────────────
@@ -56,8 +63,19 @@ export const JOB_OUTCOMES = ['success', 'no_change', 'partial', 'failed'] as con
 // the same way action-result.ts's ActionOutcomeMatchesWire does.
 export type JobOutcomesMatchWire = AssertTrue<Exact<(typeof JOB_OUTCOMES)[number], Outcome>>
 export type UpdateJobOutcomeMatchesWire = AssertTrue<Exact<UpdateJobOutcome, Outcome>>
-export const JOB_TARGET_TYPES = ['container', 'stack'] as const
-const LINE_STREAMS = ['stdout', 'stderr', 'status'] as const satisfies readonly JobLine['stream'][]
+export const JOB_TARGET_TYPES = ['container', 'stack'] as const satisfies readonly UpdateJobTargetType[]
+const LINE_STREAMS = ['stdout', 'stderr', 'status'] as const satisfies readonly JobLineStream[]
+// Status, stream and target type are Go consts (services.Status, services.Stream,
+// services.JobTargetType), emitted as unions into generated-services.ts. The
+// hand-written unions and the runtime arrays above are each proved equal to
+// them (agent-os-th4h). `satisfies` only says every listed value is valid; Exact
+// also fails when the backend grows a value the frontend does not list.
+export type UpdateJobStatusMatchesWire = AssertTrue<Exact<UpdateJobStatus, UpdateJobWireStatus>>
+export type JobStatusesMatchWire = AssertTrue<Exact<(typeof JOB_STATUSES)[number], UpdateJobWireStatus>>
+export type JobLineStreamMatchesWire = AssertTrue<Exact<JobLineStream, UpdateJobWireStream>>
+export type LineStreamsMatchWire = AssertTrue<Exact<(typeof LINE_STREAMS)[number], UpdateJobWireStream>>
+export type UpdateJobTargetTypeMatchesWire = AssertTrue<Exact<UpdateJobTargetType, UpdateJobWireTargetType>>
+export type JobTargetTypesMatchWire = AssertTrue<Exact<(typeof JOB_TARGET_TYPES)[number], UpdateJobWireTargetType>>
 
 const readLine = (raw: unknown): JobLine => {
   const f = record(raw)

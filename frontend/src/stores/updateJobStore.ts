@@ -5,15 +5,20 @@ export type UpdateJobStatus = 'queued' | 'pulling' | 'recreating' | 'success' | 
 /** Typed outcome from the backend job — present once the job reaches a terminal state. */
 export type UpdateJobOutcome = 'success' | 'no_change' | 'partial' | 'failed'
 
+/** Which of a job's two targets the update runs against. */
+export type UpdateJobTargetType = 'container' | 'stack'
+
+export type JobLineStream = 'stdout' | 'stderr' | 'status'
+
 export interface JobLine {
   ts: string
   text: string
-  stream: 'stdout' | 'stderr' | 'status'
+  stream: JobLineStream
 }
 
 export interface UpdateJob {
   id: string
-  targetType: 'container' | 'stack'
+  targetType: UpdateJobTargetType
   targetId: string
   name: string
   stackId: string
@@ -32,7 +37,7 @@ export interface UpdateJob {
 // Payloads from the global stack-events bus
 export interface UpdateJobProgressEvent {
   jobId: string
-  targetType: 'container' | 'stack'
+  targetType: UpdateJobTargetType
   targetId: string
   stackId: string
   name: string
@@ -41,7 +46,7 @@ export interface UpdateJobProgressEvent {
 
 export interface UpdateJobCompleteEvent {
   jobId: string
-  targetType: 'container' | 'stack'
+  targetType: UpdateJobTargetType
   targetId: string
   stackId: string
   name: string

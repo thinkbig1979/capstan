@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, useEffect } from 'react'
 import { WSClient } from '@/lib/ws'
 import { reconcileOnClose } from '@/lib/ws-reconcile'
 import { messageOrNull } from '@/lib/narrow'
+import type { Outcome } from '@/types'
 
 /**
  * OperationStatus mirrors the Action Truth Contract outcomes for stack
@@ -35,7 +36,7 @@ interface OperationLine {
    * Typed outcome from the Action Truth Contract done frame.
    * Present when the backend has been migrated to emit outcome/reason.
    */
-  outcome?: 'success' | 'no_change' | 'partial' | 'failed'
+  outcome?: Outcome
   /** Human-readable description of the outcome. */
   reason?: unknown
 }
