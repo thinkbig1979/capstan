@@ -103,7 +103,7 @@ func TestStreamComposeCmd_RedactsEveryLine(t *testing.T) {
 				compose = append(compose, l.Text)
 			}
 			require.Len(t, compose, 3, "expected the secret line from each pipe and the diagnosis: %q", compose)
-			for _, st := range []LogLineStream{StreamStdout, StreamStderr} {
+			for _, st := range []Stream{StreamStdout, StreamStderr} {
 				found := false
 				for _, l := range lines {
 					found = found || (l.Stream == st && strings.Contains(l.Text, sdbrRedactedURL))
