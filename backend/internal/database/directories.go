@@ -26,6 +26,7 @@ func (d *DB) UpsertDirectory(dir models.Directory) error {
 	              git_remote = excluded.git_remote,
 	              git_branch = excluded.git_branch,
 	              scanned_at = excluded.scanned_at`
+	//timebind:ignore no text consumer; read back only via Scan; converting = a migration (agent-os-omkb R6)
 	_, err := d.db.Exec(query, dir.Path, dir.Name, dir.RootDir, dir.IsGitRepo, dir.GitRemote, dir.GitBranch, dir.ScannedAt)
 	return err
 }
@@ -49,6 +50,7 @@ func (d *DB) InsertDirectoryIfAbsent(dir models.Directory) (bool, error) {
 	query := `INSERT INTO directories (path, name, root_dir, is_git_repo, git_remote, git_branch, scanned_at)
 	          VALUES (?, ?, ?, ?, ?, ?, ?)
 	          ON CONFLICT(path) DO NOTHING`
+	//timebind:ignore no text consumer; read back only via Scan; converting = a migration (agent-os-omkb R6)
 	res, err := d.db.Exec(query, dir.Path, dir.Name, dir.RootDir, dir.IsGitRepo, dir.GitRemote, dir.GitBranch, dir.ScannedAt)
 	if err != nil {
 		return false, err

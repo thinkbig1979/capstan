@@ -124,13 +124,28 @@ func canonicalFinishedAt(finishedAt *string) interface{} {
 	return canonicalTimestamp(*finishedAt)
 }
 
+// backupRunColumns is the one column list every full-row backup_runs reader
+// selects, in scanBackupRun's target order. Three readers used to carry their
+// own copies, which agreed only by convention; a column moved in one copy put
+// values in the wrong fields with no error, since neighbouring columns share a
+// type (agent-os-13xd).
+//
 // error_message is nullable, and a NULL scanned into a plain string fails
 // rows.Scan and loses the whole list (agent-os-1m58). No Capstan writer stores
-// a NULL, so the COALESCE here and in the two other backup_runs readers guards
-// databases edited or written outside Capstan.
+// a NULL, so the COALESCE guards databases edited or written outside Capstan.
+const backupRunColumns = `id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, COALESCE(error_message, '')`
+
+// scanBackupRun reads one row selected with backupRunColumns, from *sql.Row or
+// *sql.Rows.
+func scanBackupRun(row interface{ Scan(dest ...any) error }) (models.BackupRun, error) {
+	var r models.BackupRun
+	err := row.Scan(&r.ID, &r.Kind, &r.Trigger, &r.Status, &r.StartedAt, &r.FinishedAt,
+		&r.StacksTotal, &r.StacksOK, &r.StacksFailed, &r.BytesAdded, &r.ErrorMessage)
+	return r, err
+}
+
 func (d *DB) GetBackupRuns(limit int) ([]models.BackupRun, error) {
-	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, COALESCE(error_message, '')
-	          FROM backup_runs ORDER BY started_at DESC LIMIT ?`
+	query := `SELECT ` + backupRunColumns + ` FROM backup_runs ORDER BY started_at DESC LIMIT ?`
 	rows, err := d.db.Query(query, limit)
 	if err != nil {
 		return nil, err
@@ -139,9 +154,7 @@ func (d *DB) GetBackupRuns(limit int) ([]models.BackupRun, error) {
 
 	var runs []models.BackupRun
 	for rows.Next() {
-		var r models.BackupRun
-		err := rows.Scan(&r.ID, &r.Kind, &r.Trigger, &r.Status, &r.StartedAt, &r.FinishedAt,
-			&r.StacksTotal, &r.StacksOK, &r.StacksFailed, &r.BytesAdded, &r.ErrorMessage)
+		r, err := scanBackupRun(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -227,11 +240,7 @@ func (d *DB) GetBackupRunsFiltered(filters models.BackupHistoryFilters) ([]model
 	}
 	offset := (page - 1) * limit
 
-	// Column order must stay identical to the Scan targets below, and to
-	// GetBackupRuns' list, which this deliberately repeats rather than shares:
-	// that function keeps its existing callers and is left untouched here.
-	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, COALESCE(error_message, '')
-	          FROM backup_runs ` + whereClause + ` ORDER BY started_at DESC LIMIT ? OFFSET ?`
+	query := `SELECT ` + backupRunColumns + ` FROM backup_runs ` + whereClause + ` ORDER BY started_at DESC LIMIT ? OFFSET ?`
 	queryArgs := append(args, limit, offset)
 
 	rows, err := d.db.Query(query, queryArgs...)
@@ -242,9 +251,7 @@ func (d *DB) GetBackupRunsFiltered(filters models.BackupHistoryFilters) ([]model
 
 	var runs []models.BackupRun
 	for rows.Next() {
-		var r models.BackupRun
-		err := rows.Scan(&r.ID, &r.Kind, &r.Trigger, &r.Status, &r.StartedAt, &r.FinishedAt,
-			&r.StacksTotal, &r.StacksOK, &r.StacksFailed, &r.BytesAdded, &r.ErrorMessage)
+		r, err := scanBackupRun(rows)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -261,13 +268,8 @@ func (d *DB) GetBackupRunsFiltered(filters models.BackupHistoryFilters) ([]model
 // (agent-os-ymyc). It used to return the driver's sql.ErrNoRows, and this
 // comment used to claim that error was wrapped; it was returned bare.
 func (d *DB) GetBackupRunByID(id string) (*models.BackupRun, error) {
-	query := `SELECT id, kind, trigger, status, started_at, finished_at, stacks_total, stacks_ok, stacks_failed, bytes_added, COALESCE(error_message, '')
-	          FROM backup_runs WHERE id = ?`
-	var r models.BackupRun
-	err := d.db.QueryRow(query, id).Scan(
-		&r.ID, &r.Kind, &r.Trigger, &r.Status, &r.StartedAt, &r.FinishedAt,
-		&r.StacksTotal, &r.StacksOK, &r.StacksFailed, &r.BytesAdded, &r.ErrorMessage,
-	)
+	query := `SELECT ` + backupRunColumns + ` FROM backup_runs WHERE id = ?`
+	r, err := scanBackupRun(d.db.QueryRow(query, id))
 	if err != nil {
 		return nil, notFound(err, "backup run", id)
 	}
