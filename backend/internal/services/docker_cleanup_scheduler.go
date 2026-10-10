@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -425,6 +426,13 @@ func (s *DockerCleanupSchedulerService) runCycle(ctx context.Context) {
 	defer cancel()
 
 	run, err := s.runner.Execute(cycleCtx, TriggerScheduled, policy.MinAgeHours)
+	if errors.Is(err, ErrCleanupInProgress) {
+		// A manual run holds the guard. That run is the cleanup this tick would
+		// have done and it records its own row, so this is a skip like the
+		// tick-overlap one in beginCycle, not a failure (agent-os-yicu).
+		s.logger.Warn("Docker cleanup already running (manual run); skipping tick")
+		return
+	}
 	if err != nil {
 		s.logger.Error("Scheduled Docker cleanup failed", "error", err)
 		if run == nil {

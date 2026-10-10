@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types/build"
@@ -25,6 +27,11 @@ import (
 // reachable by passing a zero value, so cleanupPruneOptions clamps rather than
 // trusting its argument.
 const MinCleanupAgeHours = 1
+
+// ErrCleanupInProgress means another cleanup run holds the single-flight guard.
+// It means "not now", not "something failed": nothing was pruned and no history
+// row was written, because no run happened (agent-os-yicu).
+var ErrCleanupInProgress = errors.New("a Docker cleanup is already running")
 
 // dockerCleanupPruner is the slice of DockerService this service needs, declared
 // here on the consumer side so tests can drive the cleanup paths without a
@@ -48,6 +55,13 @@ type dockerCleanupStore interface {
 type DockerCleanupService struct {
 	docker dockerCleanupPruner
 	store  dockerCleanupStore
+
+	// mu guards running, the single-flight flag Execute takes for the whole run.
+	// It lives here, not in either caller, because the scheduler tick and the
+	// manual-run handler both reach the prune only through Execute: a guard in
+	// one caller left the other free to start a second prune (agent-os-yicu).
+	mu      sync.Mutex
+	running bool
 }
 
 func NewDockerCleanupService(docker dockerCleanupPruner, store dockerCleanupStore) *DockerCleanupService {
@@ -200,7 +214,25 @@ func (s *DockerCleanupService) Preview(ctx context.Context, minAgeHours int) (*D
 // A run that fails partway is recorded with whatever it had already reclaimed
 // rather than with zeroes: the bytes are gone either way, and a history row
 // claiming zero would misreport the disk.
+//
+// Single-flight: while a run is in progress, a second call returns
+// (nil, ErrCleanupInProgress) at once, prunes nothing and records nothing. It
+// refuses rather than waits so the manual caller can say so instead of hanging,
+// and because a prune queued behind another reclaims next to nothing.
 func (s *DockerCleanupService) Execute(ctx context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error) {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		return nil, ErrCleanupInProgress
+	}
+	s.running = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.running = false
+		s.mu.Unlock()
+	}()
+
 	opts := cleanupPruneOptions(minAgeHours)
 	run := &models.DockerCleanupRun{
 		ID:      uuid.New().String(),
@@ -232,7 +264,8 @@ func (s *DockerCleanupService) Execute(ctx context.Context, trigger string, minA
 }
 
 // record finalises the run row and stores it. It is the single exit from
-// Execute so that no path can return without a history row.
+// Execute once a run has started, so no run can return without a history row;
+// the single-flight refusal returns before a run exists.
 func (s *DockerCleanupService) record(run *models.DockerCleanupRun, runErr error) (*models.DockerCleanupRun, error) {
 	finished := time.Now().UTC().Format(time.RFC3339)
 	run.FinishedAt = &finished

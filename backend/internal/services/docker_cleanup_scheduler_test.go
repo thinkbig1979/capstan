@@ -514,3 +514,77 @@ func TestDockerCleanupStartFromPolicyReadableWritesNoHistoryRow(t *testing.T) {
 		})
 	}
 }
+
+// yicuBlockingRunner holds Execute open until released, so a test can land a
+// second tick while the first cycle is still inside Execute.
+type yicuBlockingRunner struct {
+	entered chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	calls   int
+}
+
+func (f *yicuBlockingRunner) Execute(_ context.Context, _ string, minAgeHours int) (*models.DockerCleanupRun, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+	f.entered <- struct{}{}
+	<-f.release
+	return &models.DockerCleanupRun{ID: "yicu-run", Status: "success", MinAgeHours: minAgeHours}, nil
+}
+
+// TestDockerCleanupTickSkipsWhileACycleRuns pins the scheduler's own
+// single-flight guard (agent-os-yicu): a tick that lands while a cycle is in
+// Execute logs and skips, it does not start a second cycle and does not error.
+// No test covered this before the service-level guard was added beside it.
+func TestDockerCleanupTickSkipsWhileACycleRuns(t *testing.T) {
+	db := fn7x3MemoryDB(t)
+	require.NoError(t, db.SetSetting(SettingDockerCleanupEnabled, "true"))
+	runner := &yicuBlockingRunner{entered: make(chan struct{}, 2), release: make(chan struct{})}
+	s, buf := fn7x3Scheduler(t, db, runner)
+
+	require.True(t, s.beginCycle(context.Background()), "the first tick must start a cycle")
+	<-runner.entered
+
+	started := s.beginCycle(context.Background())
+
+	close(runner.release)
+	s.wg.Wait()
+
+	require.False(t, started, "a tick during a running cycle started a second one")
+	runner.mu.Lock()
+	calls := runner.calls
+	runner.mu.Unlock()
+	require.Equal(t, 1, calls, "Execute ran once per started cycle, and only one may start")
+	require.Contains(t, buf.String(), "Docker cleanup cycle still running; skipping tick")
+	require.NotContains(t, buf.String(), "level=ERROR", "a skipped tick is not a failure: %s", buf.String())
+}
+
+// TestDockerCleanupTickSkipsWhenAManualRunHoldsTheGuard: when the service refuses
+// because a manual run holds its guard, the tick is a skip. It writes no history
+// row (the manual run writes its own) and logs no error (agent-os-yicu).
+//
+// Two-sided: the same fake with a different error does leave the row, which is
+// TestDockerCleanupExecuteErrorLeavesExactlyOneRow's first arm; repeated here so
+// the zero below is shown against an instrument that fires.
+func TestDockerCleanupTickSkipsWhenAManualRunHoldsTheGuard(t *testing.T) {
+	db := fn7x3MemoryDB(t)
+	require.NoError(t, db.SetSetting(SettingDockerCleanupEnabled, "true"))
+	s, buf := fn7x3Scheduler(t, db, &fn7x3FakeCleanupRunner{err: ErrCleanupInProgress})
+
+	s.runCycle(context.Background())
+
+	runs, err := db.GetDockerCleanupRuns(10)
+	require.NoError(t, err)
+	require.Empty(t, runs, "a tick refused by the guard wrote a history row for a run that never happened")
+	require.Contains(t, buf.String(), "skipping tick")
+	require.NotContains(t, buf.String(), "level=ERROR", "a guard refusal is not a failure: %s", buf.String())
+
+	control := fn7x3MemoryDB(t)
+	require.NoError(t, control.SetSetting(SettingDockerCleanupEnabled, "true"))
+	cs, _ := fn7x3Scheduler(t, control, &fn7x3FakeCleanupRunner{err: errors.New("yicu-other-failure")})
+	cs.runCycle(context.Background())
+	controlRuns, err := control.GetDockerCleanupRuns(10)
+	require.NoError(t, err)
+	require.Len(t, controlRuns, 1, "control: any other runner error with no run must still leave a row")
+}

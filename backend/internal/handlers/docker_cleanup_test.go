@@ -522,3 +522,28 @@ func TestDockerCleanupPolicyRearmsOnlyOnATickerChange(t *testing.T) {
 			"changing the interval did not re-arm, so the new period would not take effect until the next process restart -- this arm is also the control proving the counter can move in this fixture")
 	})
 }
+
+// TestDockerCleanupRunRefusesWhileARunIsInProgress: when the service's
+// single-flight guard refuses, the route answers 409 CLEANUP_IN_PROGRESS with
+// the sentence the card shows, and leaves no audit row, because nothing ran
+// (agent-os-yicu). The success arm on the same router is
+// TestDockerCleanupRunUsesThePolicyFloorAndAudits.
+func TestDockerCleanupRunRefusesWhileARunIsInProgress(t *testing.T) {
+	db := fn7x3MemoryDB(t)
+	r, cleanup, _ := fn7x3Router(t, db)
+	cleanup.executeErr = services.ErrCleanupInProgress
+
+	w := fn7x3Do(t, r, http.MethodPost, "/api/resources/cleanup/run", "")
+	require.Equal(t, http.StatusConflict, w.Code, "body = %s", w.Body.String())
+
+	var body struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), "body = %s", w.Body.String())
+	require.Equal(t, "CLEANUP_IN_PROGRESS", body.Code)
+	require.Equal(t, "A Docker cleanup is already running. Wait for it to finish, then check the history.", body.Message)
+
+	require.Len(t, cleanup.executed(), 1)
+	require.Empty(t, auditEntries(t, db, services.ActionPrune), "a refused run left an audit row for a prune that never happened")
+}
