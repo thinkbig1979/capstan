@@ -9,6 +9,11 @@ interface AuthState {
   isAuthenticated: boolean
   authDisabled: boolean
   needsSetup: boolean
+  // True when the boot session probe could not get an answer about the session
+  // (no response, 429, 5xx, or any non-401 status) even after retrying. It
+  // never grants access: isAuthenticated stays false. App renders an error
+  // screen with Retry for it instead of the login form (agent-os-kd68).
+  sessionCheckFailed: boolean
   login: (username: string, password: string) => Promise<void>
   setup: (username: string, password: string) => Promise<void>
   logout: () => Promise<void>
@@ -107,6 +112,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
   isAuthenticated: false,
   authDisabled: false,
   needsSetup: false,
+  sessionCheckFailed: false,
 
   login: async (username: string, password: string) => {
     const { authApi } = await import('@/lib/api')
@@ -117,6 +123,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
       token: 'cookie',
       user: response.user,
       isAuthenticated: true,
+      sessionCheckFailed: false,
     })
   },
 
@@ -145,6 +152,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
       token: null,
       user: null,
       isAuthenticated: false,
+      sessionCheckFailed: false,
     })
     // agent-os-n4ca.8 (safe-defaults rule 16): an identity change resets
     // per-identity client state, whatever the API call returned. The server
@@ -171,12 +179,22 @@ export const useAuthStore = create<AuthState>()((set) => ({
     // boot -- the common case, not an edge case -- gets a genuine 401
     // SESSION_EXPIRED. A 401 is a definitive answer the server already gave;
     // retrying it cannot change the outcome, it can only cost extra requests
-    // and delay the login page. Only a failure that carries no response at
-    // all (network error, timeout) is worth a retry. `status` below follows
+    // and delay the login page. A failure that carries no response at all
+    // (network error, timeout) is worth a retry, and so are 429 and 5xx (see
+    // agent-os-kd68 below). `status` below follows
     // this codebase's own convention for telling the two apart
     // (error-handler.ts:70, classifyError): the api.ts interceptor rejects
     // with a flat object carrying `status` only when error.response existed;
     // `status === undefined` means the server never answered.
+    //
+    // agent-os-kd68: only a 401 means "no valid session". A 429 (the
+    // per-user rate limit on the protected group) or a 5xx (a backend
+    // restarting) says nothing about the session, so those are retried like a
+    // no-response failure. If the session still can't be read, the store ends
+    // in sessionCheckFailed rather than logged out: the login page would tell a
+    // user with a valid cookie that they are logged out, and a login form
+    // can't work against a backend that isn't answering anyway. Fail closed
+    // either way (safe-defaults rule 10): isAuthenticated stays false.
     //
     // agent-os-lqsa: de-duplicated. A call made while one is already in
     // flight (StrictMode's double-invoke, chiefly) returns that SAME
@@ -194,14 +212,19 @@ export const useAuthStore = create<AuthState>()((set) => ({
             token: 'cookie',
             user,
             isAuthenticated: true,
+            sessionCheckFailed: false,
           })
           return
         } catch (error) {
           const err = error as { status?: number; response?: { status?: number } }
           const status = err?.status ?? err?.response?.status
-          const gotResponse = status !== undefined
 
-          if (!gotResponse && attempt < retryDelaysMs.length) {
+          if (status === 401) {
+            set({ token: null, user: null, isAuthenticated: false, sessionCheckFailed: false })
+            return
+          }
+          const retryable = status === undefined || status === 429 || status >= 500
+          if (retryable && attempt < retryDelaysMs.length) {
             await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
             continue
           }
@@ -209,7 +232,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
           if (isDev) {
             console.error('Auth check failed:', error)
           }
-          set({ token: null, user: null, isAuthenticated: false })
+          set({ token: null, user: null, isAuthenticated: false, sessionCheckFailed: true })
           return
         }
       }

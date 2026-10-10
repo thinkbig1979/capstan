@@ -5,10 +5,12 @@ import { Toaster } from 'sonner'
 import { queryClient } from '@/lib/query-client'
 import { setAuthCallbacks } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { useAuthStore } from '@/stores/authStore'
 import { useEnvUnlockCacheSync } from '@/hooks/useEnvUnlockCacheSync'
 import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { LoadingSpinner } from '@/components/LoadingSkeleton'
+import { LoadFailedNotice } from '@/components/LoadFailedNotice'
 import { LoginPage } from '@/pages/LoginPage'
 import { SetupPage } from '@/pages/SetupPage'
 
@@ -62,6 +64,7 @@ function AuthenticatedLayout() {
 
 function App() {
   const { authDisabled, needsSetup, isAuthenticated, checkStatus, checkAuth } = useAuth()
+  const sessionCheckFailed = useAuthStore((state) => state.sessionCheckFailed)
   const [statusChecked, setStatusChecked] = useState(false)
 
   // Purges cached plaintext secrets when the env-unlock window closes.
@@ -166,11 +169,35 @@ function App() {
     )
   }
 
+  // agent-os-kd68: the session probe got no usable answer (no response, 429,
+  // 5xx, or another non-401 status) even after retrying. Neither the login
+  // form (it would claim a valid session is gone) nor a protected page
+  // (nothing proved the session): an error with Retry. checkAuth clears the
+  // flag when it gets an answer.
+  if (sessionCheckFailed) {
+    return (
+      <div className="flex items-center justify-center min-h-dvh p-4">
+        <LoadFailedNotice
+          what="your session"
+          consequence="Your login could not be checked. Try again in a moment."
+          onRetry={() => void checkAuth()}
+          className="w-full max-w-md"
+        />
+      </div>
+    )
+  }
+
+  // agent-os-d3yd: a signed-in user who opens /login or an unknown path goes
+  // to the dashboard, the same as the auth-disabled tree. Before this, both
+  // landed on the login form although the session was valid.
   return (
     <QueryClientProvider client={queryClient}>
       <ErrorBoundary>
         <Routes>
-          <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/login"
+            element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />}
+          />
           <Route element={<AuthenticatedLayout />}>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/stacks/:id" element={<StackPage />} />
@@ -178,7 +205,10 @@ function App() {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/:section" element={<SettingsPage />} />
           </Route>
-          <Route path="*" element={<Navigate to="/login" replace />} />
+          <Route
+            path="*"
+            element={<Navigate to={isAuthenticated ? '/' : '/login'} replace />}
+          />
         </Routes>
       </ErrorBoundary>
       <Toaster />

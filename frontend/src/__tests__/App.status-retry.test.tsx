@@ -107,7 +107,11 @@ describe('App boot status probe recovers from a transient failure', () => {
     // back to false so a dead network can never open the app, and the user lands
     // somewhere real rather than on the spinner.
     mockStatus.mockRejectedValue(new Error('Network error'))
-    mockMe.mockRejectedValue(new Error('Unauthorized'))
+    // A real 401, the shape api.ts's interceptor rejects with. A plain Error
+    // has no status, which since agent-os-kd68 means "no answer" and ends on
+    // the session error screen; this arm is about checkStatus, and a
+    // logged-out /auth/me is what puts it on the login path.
+    mockMe.mockRejectedValue({ status: 401, code: 'SESSION_EXPIRED', message: 'Unauthorized' })
 
     renderWithProviders(<App />, { route: '/' })
 
