@@ -57,8 +57,10 @@ accepted, for example when `CAPSTAN_API_URL` and `CAPSTAN_BASE_URL` are on diffe
 hosts. Run the whole file, not one test at a time: tests after `001` read the
 session it saved.
 
-`dashboard-backups.spec.ts` still logs in through the form in each of its tests, so
-an auth-on local run of it can hit the same limit.
+`dashboard-backups.spec.ts` does the same: its first test's `beforeEach` makes the one
+API login, and every test plants that cookie, so an auth-on run makes one
+`POST /auth/login`. Run the whole file for that; a single test run alone logs in once
+for itself.
 
 ## Type-checking the Playwright config and specs
 

@@ -109,13 +109,13 @@ async function expandBackupSection(page: Page): Promise<void> {
  * re-bootstraps the whole app — the auth probe, settings/config,
  * resources/updates, dashboard/stats, backups/status, stacks, plus the events
  * and dashboard-metrics websockets — and CI runs AUTH_DISABLED=true, where
- * there is no login step at all. Landing on /dashboard and letting the caller
+ * there is no login step at all. Landing on the dashboard ('/') and letting the caller
  * immediately navigate elsewhere therefore paid for a full boot that nothing
  * asserted on. Callers run their API-only setup (ensureCsrf, stack-id lookup,
  * the mutation under test) BEFORE calling this, so the single load already
  * reflects the state they are about to assert on.
  */
-async function loginIfNeeded(page: Page, target = '/dashboard'): Promise<void> {
+async function loginIfNeeded(page: Page, target = '/'): Promise<void> {
   if (AUTH_DISABLED) {
     await page.goto(`${BASE_URL}${target}`)
     await page.waitForLoadState('networkidle')
@@ -345,7 +345,7 @@ test.describe.serial('Backup flow E2E', () => {
     // BackupToggle mounts in StackDetail (frontend/src/components/stack/
     // StackDetail.tsx) and in the non-default Updates tab — never on the
     // dashboard. `/dashboard` is not even a route: App.tsx's catch-all
-    // redirects it to `/`. This load used to go there, so the toggle was
+    // redirects it to `/` (AUTH_DISABLED) or to `/login` (auth on). This load used to go there, so the toggle was
     // absent every time and the assertions below were skipped in favour of an
     // API check that could not fail. The policy is already enabled, so the
     // first load renders the ON state.
@@ -769,7 +769,10 @@ test.describe.serial('Backup flow E2E', () => {
 
   test('BACKUP-PW-007: post-restore state verification', async ({ page, request }) => {
     // ── Dashboard accessible ───────────────────────────────────────────────
-    await loginIfNeeded(page, '/dashboard')
+    // '/' is the dashboard route. This used to be '/dashboard', which is not a route:
+    // with auth on, App.tsx's catch-all sends it to /login even for a valid session,
+    // which cost a form login here (agent-os-o76k). AUTH_DISABLED sends it to '/'.
+    await loginIfNeeded(page, '/')
     // Look only for crash/error-boundary phrases — a bare word like "Error"
     // legitimately appears in the dashboard's status-filter chips, so the old
     // /error|crash|broken/i was too broad and matched normal UI chrome.
