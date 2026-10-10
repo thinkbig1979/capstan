@@ -41,6 +41,7 @@ var notSensitiveSettingKeys = map[string]string{
 	"backup_schedule_mode":               "enum",
 	"backup_schedule_time":               "HH:MM",
 	"backup_sync_after":                  "boolean flag",
+	"backup_verify_weekly":               "boolean flag (agent-os-ffaj)",
 	"default_stacks_dir":                 "directory path",
 	"docker_cleanup_enabled":             "boolean flag",
 	"docker_cleanup_interval_hours":      "hours",

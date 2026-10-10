@@ -148,6 +148,17 @@ export function useRunBackup() {
   })
 }
 
+export function useRunVerify() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => backupApi.runVerify(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
+    },
+  })
+}
+
 export function useRestore() {
   const queryClient = useQueryClient()
   return useMutation({

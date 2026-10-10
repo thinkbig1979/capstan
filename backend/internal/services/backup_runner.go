@@ -675,37 +675,39 @@ func (reg *BackupRunnerRegistry) execPrune(dr *durableRun, dryRun bool) {
 
 // LaunchVerify pre-creates a running BackupRun row and starts a repository
 // integrity verification. subset is the share of pack data to read; the empty
-// string means DefaultVerifyReadDataSubset.
+// string means DefaultVerifyReadDataSubset. trigger is TriggerManual for the
+// HTTP route and TriggerScheduled for the weekly check (agent-os-ffaj). done
+// is closed when the run has finished, which is what the scheduler waits on.
 //
 // It is validated here as well as inside the service so that a bad subset is a
 // launch error the HTTP caller sees, rather than a run row that is created and
 // then immediately fails (agent-os-j1jw).
-func (reg *BackupRunnerRegistry) LaunchVerify(subset string) (string, error) {
-	subset, err := ValidateVerifySubset(subset)
+func (reg *BackupRunnerRegistry) LaunchVerify(subset, trigger string) (runID string, done <-chan struct{}, err error) {
+	subset, err = ValidateVerifySubset(subset)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
-	runID := uuid.New().String()
+	runID = uuid.New().String()
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	row := &models.BackupRun{
 		ID:        runID,
 		Kind:      string(RunKindVerify),
-		Trigger:   TriggerManual,
+		Trigger:   trigger,
 		Status:    "running",
 		StartedAt: now,
 	}
 	if err := reg.db.CreateBackupRun(row); err != nil {
-		return "", fmt.Errorf("persist verify run record: %w", err)
+		return "", nil, fmt.Errorf("persist verify run record: %w", err)
 	}
 
 	dr := &durableRun{runID: runID, kind: RunKindVerify, done: make(chan struct{})}
 	if err := reg.registerAndAdd(dr); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	go reg.execVerify(dr, subset)
-	return runID, nil
+	return runID, dr.done, nil
 }
 
 func (reg *BackupRunnerRegistry) execVerify(dr *durableRun, subset string) {
@@ -721,6 +723,17 @@ func (reg *BackupRunnerRegistry) execVerify(dr *durableRun, subset string) {
 	err := reg.svc.VerifyRepositoryData(ctx, subset, out)
 	finish()
 
+	if errors.Is(err, ErrBackupBusy) {
+		// Lost the backup lock to an operation that started after the handler's
+		// busy pre-check (or, for the scheduled check, after the backup before
+		// it). Nothing was read, so this is a skip and never a failed check: a
+		// failed one raises the "integrity check failed" banner.
+		dr.outcome = RunStatusSkipped
+		dr.reason = "repository check skipped: another backup operation was in progress"
+		reg.finaliseRunStatus(dr.runID, RunStatusSkipped, dr.reason)
+		reg.logger.Warn("durable verify skipped: backup lock held", "run_id", dr.runID)
+		return
+	}
 	if err != nil {
 		dr.outcome = "failed"
 		dr.reason = err.Error()

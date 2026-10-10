@@ -30,7 +30,7 @@ func TestBackupScheduler_UnstartedCycleLeavesARunRow(t *testing.T) {
 			name:       "another operation in progress",
 			cause:      ErrBackupBusy,
 			wantStatus: RunStatusSkipped,
-			wantMsg:    "scheduled backup skipped: another backup, sync or restore was in progress",
+			wantMsg:    "scheduled backup skipped: another backup, sync, restore or repository check was in progress",
 		},
 		{
 			name:       "engine unavailable",
@@ -57,7 +57,7 @@ func TestBackupScheduler_UnstartedCycleLeavesARunRow(t *testing.T) {
 			name:       "wrapped busy",
 			cause:      fmt.Errorf("run backup: %w", ErrBackupBusy),
 			wantStatus: RunStatusSkipped,
-			wantMsg:    "scheduled backup skipped: another backup, sync or restore was in progress",
+			wantMsg:    "scheduled backup skipped: another backup, sync, restore or repository check was in progress",
 		},
 	}
 

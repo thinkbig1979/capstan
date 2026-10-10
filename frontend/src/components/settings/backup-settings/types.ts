@@ -26,6 +26,7 @@ export interface Draft {
   serverTimezone: string
   serverTimeOffset: string
   syncAfterBackup: boolean
+  verifyWeekly: boolean
   rcloneRemote: string
   rclonePath: string
   rcloneTransfers: number | null

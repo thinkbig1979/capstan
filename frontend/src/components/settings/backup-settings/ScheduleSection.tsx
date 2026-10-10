@@ -55,6 +55,21 @@ export function ScheduleSection({ draft, onChange }: ScheduleSectionProps) {
           </p>
         </div>
       </div>
+
+      <div className="flex items-center gap-3">
+        <Switch
+          id="backup-verify-weekly"
+          checked={draft.verifyWeekly}
+          onCheckedChange={(v) => onChange('verifyWeekly', v)}
+        />
+        <div>
+          <Label htmlFor="backup-verify-weekly">Check the repository weekly</Label>
+          <p className="text-xs text-muted-foreground">
+            After a scheduled backup, once a week, read 5% of the backup data to confirm it can
+            be restored. A failed check shows a warning; backups keep running.
+          </p>
+        </div>
+      </div>
     </div>
   )
 }

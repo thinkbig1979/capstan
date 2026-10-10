@@ -884,7 +884,7 @@ export const backupApi = {
     return response.data
   },
 
-  updateSettings: async (data: Partial<Pick<BackupSettings, 'repository' | 'keepDaily' | 'keepWeekly' | 'keepMonthly' | 'keepYearly' | 'autoPrune' | 'scheduleIntervalMinutes' | 'scheduleMode' | 'scheduleTime' | 'scheduleDays' | 'syncAfterBackup' | 'rcloneRemote' | 'rclonePath' | 'rcloneTransfers' | 'hostname'>> & { password?: string }) => {
+  updateSettings: async (data: Partial<Pick<BackupSettings, 'repository' | 'keepDaily' | 'keepWeekly' | 'keepMonthly' | 'keepYearly' | 'autoPrune' | 'scheduleIntervalMinutes' | 'scheduleMode' | 'scheduleTime' | 'scheduleDays' | 'syncAfterBackup' | 'verifyWeekly' | 'rcloneRemote' | 'rclonePath' | 'rcloneTransfers' | 'hostname'>> & { password?: string }) => {
     const response = await apiClient.put<BackupSettings>('/settings/backup', data)
     return response.data
   },
@@ -986,6 +986,13 @@ export const backupApi = {
 
   prune: async (data?: { dryRun?: boolean }) => {
     const response = await apiClient.post<BackupOperationResult>('/backups/prune', data ?? {})
+    return response.data
+  },
+
+  // Repository integrity check. No readDataSubset is sent, so the server's
+  // default (5%) applies: the UI does not expose the depth (agent-os-ffaj).
+  runVerify: async () => {
+    const response = await apiClient.post<BackupOperationResult>('/backups/verify', {})
     return response.data
   },
 }

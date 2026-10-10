@@ -82,6 +82,7 @@ function makeSettings(overrides: Partial<{
     serverTimezone: 'UTC',
     serverTimeOffset: '+00:00',
     syncAfterBackup: false,
+    verifyWeekly: true,
     rcloneRemote: '',
     rclonePath: '',
     rcloneTransfers: 4,
@@ -605,6 +606,30 @@ describe('BackupSettingsContent — draft editing and discard', () => {
         }),
       )
     })
+  })
+
+  // agent-os-ffaj: the weekly repository check is on by default (D68.3), the
+  // switch shows the stored value, and turning it off is what Save sends. The
+  // payload is compared whole for that key alone, so a form that always sent
+  // verifyWeekly, or never did, fails one of the two arms.
+  it('shows the weekly repository check as on and saves it as off when switched', async () => {
+    const wrapper = createWrapper()
+    render(<BackupSettingsContent />, { wrapper })
+
+    const toggle = await screen.findByRole('switch', { name: /check the repository weekly/i })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+    // Control: an unrelated edit does not carry the untouched setting.
+    fireEvent.change(screen.getByLabelText('Interval (minutes)'), { target: { value: '30' } })
+    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
+    await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledTimes(1))
+    expect(mockUpdateSettings.mock.calls[0][0]).not.toHaveProperty('verifyWeekly')
+
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    fireEvent.click(screen.getByRole('button', { name: /save backup settings/i }))
+    await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledTimes(2))
+    expect(mockUpdateSettings.mock.calls[1][0]).toMatchObject({ verifyWeekly: false })
   })
 
   it('Discard reverts an edited field and re-hides the unsaved-changes indicator', async () => {

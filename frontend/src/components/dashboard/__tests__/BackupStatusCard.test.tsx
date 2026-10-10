@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { BackupStatusCard } from '../BackupStatusCard'
@@ -10,6 +10,10 @@ import type { BackupRun, BackupStatus } from '@/types'
 // the API layer so tests don't depend on react-query internals or WS streaming.
 
 const mockRunBackupMutate = vi.fn()
+const mockRunVerifyMutate = vi.fn()
+const mockConnect = vi.fn()
+// Read at render time, so a test can put the shared stream mid-run.
+let mockStreamStatus = 'idle'
 
 vi.mock('@/hooks/useBackup', () => ({
   useBackupStatus: vi.fn(),
@@ -17,11 +21,15 @@ vi.mock('@/hooks/useBackup', () => ({
     mutate: mockRunBackupMutate,
     isPending: false,
   }),
+  useRunVerify: () => ({
+    mutate: mockRunVerifyMutate,
+    isPending: false,
+  }),
   useBackupStreaming: () => ({
-    status: 'idle',
+    status: mockStreamStatus,
     lines: [],
     error: null,
-    connect: vi.fn(),
+    connect: mockConnect,
     reset: vi.fn(),
   }),
 }))
@@ -83,6 +91,7 @@ function renderCard() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockStreamStatus = 'idle'
 })
 
 describe('BackupStatusCard — zero-stack backup badge', () => {
@@ -319,9 +328,62 @@ describe('BackupStatusCard — the "Last check" readout', () => {
     expect(screen.getByText('Success')).toBeInTheDocument()
   })
 
-  it('renders no cell at all when no verify has ever run — the operator has no trigger yet, so "Never" would be noise', () => {
+  // agent-os-ffaj replaced the old "no cell at all" rule: that rule existed
+  // because the operator had no trigger, and "Check backups" is one.
+  it('says Never when no verify has ever run', () => {
     renderWith({ lastVerify: null })
 
-    expect(screen.queryByText('Last check')).not.toBeInTheDocument()
+    const cell = screen.getByText('Last check').parentElement as HTMLElement
+    expect(cell).toHaveTextContent('Never')
+  })
+})
+
+/**
+ * agent-os-ffaj (D68.1): "Check backups" sits next to "Back up now" and is
+ * gated the same way: the repository must answer `ok`, and nothing may be
+ * streaming. It starts a check (the hook sends no readDataSubset; see
+ * lib/__tests__/backupApiVerify.test.ts) and streams it over the run's wsUrl.
+ */
+describe('BackupStatusCard — Check backups', () => {
+  function renderWithState(overrides: Partial<BackupStatus> = {}) {
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeStatus(null, overrides),
+      isPending: false,
+    })
+    renderCard()
+    return screen.getByRole('button', { name: /check backups/i }) as HTMLButtonElement
+  }
+
+  it('is enabled when the repository is reachable and initialised (control)', () => {
+    expect(renderWithState({ repoState: 'ok' }).disabled).toBe(false)
+  })
+
+  it.each([
+    ['the repository is not initialised', { repoState: 'uninitialized' as const }],
+    ['the repository is unreachable', { repoState: 'unreachable' as const }],
+    ['restic is absent', { resticAvailable: false, repoState: 'ok' as const }],
+  ])('is disabled when %s', (_label, overrides) => {
+    expect(renderWithState(overrides).disabled).toBe(true)
+  })
+
+  it('is disabled, like Back up now, while a run is streaming', () => {
+    mockStreamStatus = 'running'
+    expect(renderWithState().disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /back up now/i }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('starts a check, not a backup, and streams the run it started', () => {
+    fireEvent.click(renderWithState())
+
+    expect(mockRunVerifyMutate).toHaveBeenCalledTimes(1)
+    expect(mockRunBackupMutate).not.toHaveBeenCalled()
+
+    const [, options] = mockRunVerifyMutate.mock.calls[0] as [
+      unknown,
+      { onSuccess: (r: { runId: string; wsUrl: string }) => void },
+    ]
+    options.onSuccess({ runId: 'v1', wsUrl: '/ws/backups/verify/v1' })
+    expect(mockConnect).toHaveBeenCalledTimes(1)
+    expect(mockConnect.mock.calls[0][0]).toBe('/ws/backups/verify/v1')
   })
 })

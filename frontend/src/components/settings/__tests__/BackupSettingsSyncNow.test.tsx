@@ -58,6 +58,7 @@ function settings(rcloneRemote: string) {
     serverTimezone: 'UTC',
     serverTimeOffset: '+00:00',
     syncAfterBackup: true,
+    verifyWeekly: true,
     rcloneRemote,
     rclonePath: 'bucket/backups',
     rcloneTransfers: 4,

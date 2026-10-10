@@ -78,7 +78,13 @@ type BackupSchedulerService struct {
 	// landing while Stop() is unwinding. Routing both Add and the stopped
 	// check through mu gives them the real happens-before edge that was
 	// missing (agent-os-o26).
-	stopped      bool
+	stopped bool
+	// verifier starts the weekly repository check; nil means off (it is set
+	// by SetVerifier from main.go, pinned by TestMain_BackupSchedulerVerifierIsWired).
+	// verifying is true while a cycle waits on that check, so a fire skipped
+	// meanwhile is recorded as skipped for that reason. Both guarded by mu.
+	verifier     VerifyLauncher
+	verifying    bool
 	wg           sync.WaitGroup
 	parentCtx    context.Context
 	parentCancel context.CancelFunc
@@ -309,7 +315,17 @@ func (s *BackupSchedulerService) beginCycle(parentCtx context.Context) bool {
 		return false
 	}
 	if s.running {
+		verifying := s.verifying
 		s.mu.Unlock()
+		if verifying {
+			// The check holds restic's exclusive lock, so this backup would
+			// fail with exit 11 if it ran now. Skip it with a history row, not
+			// only a log line: the operator must be able to see that a backup
+			// fell due and did not run (agent-os-ffaj).
+			s.recordUnstartedCycle(errVerifyInProgress)
+			s.logger.Warn("Scheduled backup skipped: the weekly repository check is still running")
+			return false
+		}
 		s.logger.Warn("Backup cycle still running; skipping tick")
 		return false
 	}
@@ -491,6 +507,11 @@ func (s *BackupSchedulerService) runCycle(ctx context.Context) {
 			"stacks_failed", run.StacksFailed,
 		)
 	}
+
+	// After the backup, never alongside it: the backup has released restic's
+	// lock by now, and this cycle still holds the single-flight flag, so the
+	// next scheduled backup cannot start while the check reads the repository.
+	s.maybeVerify(ctx)
 }
 
 // RunStatusSkipped is the backup_runs.status of a scheduled backup that never
@@ -511,7 +532,10 @@ func (s *BackupSchedulerService) recordUnstartedCycle(cause error) {
 	switch {
 	case errors.Is(cause, ErrBackupBusy):
 		status = RunStatusSkipped
-		msg = "scheduled backup skipped: another backup, sync or restore was in progress"
+		msg = "scheduled backup skipped: another backup, sync, restore or repository check was in progress"
+	case errors.Is(cause, errVerifyInProgress):
+		status = RunStatusSkipped
+		msg = "scheduled backup skipped: " + errVerifyInProgress.Error()
 	case errors.Is(cause, ErrBackupUnavailable):
 		status = RunStatusSkipped
 		msg = "scheduled backup skipped: backup engine unavailable"
