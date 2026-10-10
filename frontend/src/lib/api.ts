@@ -44,6 +44,7 @@ import type {
   DockerCleanupPolicy,
   DockerCleanupPreview,
   DockerCleanupHistory,
+  DockerCleanupRun,
 } from '@/types'
 
 /**
@@ -839,6 +840,20 @@ export const resourcesApi = {
   getCleanupHistory: async (limit: number) => {
     const response = await apiClient.get<DockerCleanupHistory>('/resources/cleanup/history', {
       params: { limit },
+    })
+    return response.data
+  },
+
+  /**
+   * A cleanup now. DESTRUCTIVE: a real prune of dangling images and build cache.
+   * The age floor is sent explicitly so the run applies the number the confirm
+   * dialog named, not whatever the stored policy holds by the time it lands.
+   * The server records the run with trigger "manual" (runCleanup,
+   * docker_cleanup.go) and answers the recorded run row.
+   */
+  runCleanup: async (minAgeHours: number) => {
+    const response = await apiClient.post<DockerCleanupRun>('/resources/cleanup/run', {
+      minAgeHours,
     })
     return response.data
   },

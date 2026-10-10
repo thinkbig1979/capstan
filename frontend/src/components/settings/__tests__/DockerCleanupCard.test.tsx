@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { queryKeys } from '@/lib/query-keys'
 import type { ReactNode } from 'react'
 import { DockerCleanupCard } from '../DockerCleanupCard'
 
@@ -14,6 +16,7 @@ const mockGetCleanupPolicy = vi.fn()
 const mockUpdateCleanupPolicy = vi.fn()
 const mockPreviewCleanup = vi.fn()
 const mockGetCleanupHistory = vi.fn()
+const mockRunCleanup = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   resourcesApi: {
@@ -21,6 +24,7 @@ vi.mock('@/lib/api', () => ({
     updateCleanupPolicy: (...args: unknown[]) => mockUpdateCleanupPolicy(...args),
     previewCleanup: (...args: unknown[]) => mockPreviewCleanup(...args),
     getCleanupHistory: (...args: unknown[]) => mockGetCleanupHistory(...args),
+    runCleanup: (...args: unknown[]) => mockRunCleanup(...args),
   },
 }))
 
@@ -524,5 +528,141 @@ describe('DockerCleanupCard — a cleared numeric field is empty, not 0 (agent-o
     await waitFor(() =>
       expect(mockUpdateCleanupPolicy).toHaveBeenCalledWith({ intervalHours: 48 }),
     )
+  })
+
+  // agent-os-1xo3: "Run cleanup now". The endpoint is a real prune, so the tests
+  // below are about ORDER (confirm before the call), REFUSAL (cancel calls
+  // nothing), and what the operator is told afterwards.
+  describe('Run cleanup now (agent-os-1xo3)', () => {
+    const RAN = { ...SUCCESS_RUN, id: 'run-9', trigger: 'manual', minAgeHours: 168 }
+
+    function renderWithClient() {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      })
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+      render(
+        <QueryClientProvider client={queryClient}>
+          <DockerCleanupCard />
+        </QueryClientProvider>,
+      )
+      return { invalidate }
+    }
+
+    async function clickRun() {
+      fireEvent.click(await screen.findByRole('button', { name: 'Run cleanup now' }))
+    }
+
+    beforeEach(() => {
+      mockRunCleanup.mockResolvedValue(RAN)
+    })
+
+    it('asks first, naming the age floor, and calls nothing until confirmed', async () => {
+      renderWithClient()
+      await clickRun()
+
+      expect(await screen.findByText('Run Docker cleanup now?')).toBeInTheDocument()
+      expect(screen.getByText(/created more than 168 hours ago/)).toBeInTheDocument()
+      expect(mockRunCleanup).not.toHaveBeenCalled()
+    })
+
+    it('calls nothing when the dialog is cancelled', async () => {
+      renderWithClient()
+      await clickRun()
+      fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(mockRunCleanup).not.toHaveBeenCalled()
+      expect(screen.queryByText('Run Docker cleanup now?')).toBeNull()
+    })
+
+    it('runs once, at the floor on screen, when confirmed', async () => {
+      renderWithClient()
+      // 72, deliberately not the stored 168: the request must carry the number
+      // the dialog named, which is the input's, not the saved policy's.
+      fireEvent.change(await screen.findByLabelText('Age floor (hours)'), { target: { value: '72' } })
+      await clickRun()
+      expect(await screen.findByText(/created more than 72 hours ago/)).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Run cleanup' }))
+
+      await waitFor(() => expect(mockRunCleanup).toHaveBeenCalledTimes(1))
+      expect(mockRunCleanup).toHaveBeenCalledWith(72)
+    })
+
+    it('is disabled while the run is in progress', async () => {
+      mockRunCleanup.mockReturnValue(new Promise(() => {}))
+      renderWithClient()
+      await clickRun()
+      fireEvent.click(await screen.findByRole('button', { name: 'Run cleanup' }))
+
+      const running = await screen.findByRole('button', { name: 'Running…' })
+      expect(running).toBeDisabled()
+      fireEvent.click(running)
+      expect(mockRunCleanup).toHaveBeenCalledTimes(1)
+    })
+
+    it('is disabled while the age floor is empty', async () => {
+      renderWithClient()
+      fireEvent.change(await screen.findByLabelText('Age floor (hours)'), { target: { value: '' } })
+
+      expect(screen.getByRole('button', { name: 'Run cleanup now' })).toBeDisabled()
+    })
+
+    it('refreshes history, images, dashboard stats, the cleanup readout and build cache', async () => {
+      const { invalidate } = renderWithClient()
+      await clickRun()
+      fireEvent.click(await screen.findByRole('button', { name: 'Run cleanup' }))
+
+      await waitFor(() => expect(mockRunCleanup).toHaveBeenCalled())
+      const keys = [
+        queryKeys.settings.dockerCleanupHistory(),
+        queryKeys.resources.images(),
+        queryKeys.dashboardStats(),
+        queryKeys.resources.cleanupPreview(),
+        queryKeys.resources.buildCache(),
+      ]
+      for (const key of keys) {
+        await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: key }))
+      }
+    })
+
+    it('tells the operator what the run removed, and drops the stale preview', async () => {
+      mockPreviewCleanup.mockResolvedValue(previewOf([REPO_CANDIDATE]))
+      renderWithClient()
+      await clickPreview()
+      expect(await screen.findByText(REPO_CANDIDATE.repository)).toBeInTheDocument()
+
+      await clickRun()
+      fireEvent.click(await screen.findByRole('button', { name: 'Run cleanup' }))
+
+      await waitFor(() =>
+        expect(toast.success).toHaveBeenCalledWith(
+          'Cleanup finished: 3 images removed, 7.00 MB reclaimed',
+        ),
+      )
+      expect(screen.queryByText(REPO_CANDIDATE.repository)).toBeNull()
+    })
+
+    it('shows a rejected run as a failure and never as a success', async () => {
+      mockRunCleanup.mockRejectedValue(new Error('Docker cleanup failed'))
+      renderWithClient()
+      await clickRun()
+      fireEvent.click(await screen.findByRole('button', { name: 'Run cleanup' }))
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalled())
+      expect(toast.success).not.toHaveBeenCalled()
+      // The button comes back so the operator can try again.
+      expect(await screen.findByRole('button', { name: 'Run cleanup now' })).toBeEnabled()
+    })
+
+    it('shows a failed run row as a failure when the server answered 200', async () => {
+      mockRunCleanup.mockResolvedValue({ ...FAILED_RUN, minAgeHours: 168 })
+      renderWithClient()
+      await clickRun()
+      fireEvent.click(await screen.findByRole('button', { name: 'Run cleanup' }))
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalled())
+      expect(toast.success).not.toHaveBeenCalled()
+    })
   })
 })
