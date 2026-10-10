@@ -14,14 +14,14 @@ import (
 	dockerclient "github.com/docker/docker/client"
 )
 
-// TestResolveContainerImage_Integration pulls alpine:3.20, creates a container
+// TestResolveContainerImage_Integration pulls public.ecr.aws/docker/library/alpine:3.20, creates a container
 // from it, calls ResolveContainerImage with a real *client.Client, and asserts
 // that the returned values are populated and consistent with docker inspect.
 //
 // Run with: go test -tags=integration ./internal/truth/ -run TestResolveContainerImage_Integration
 func TestResolveContainerImage_Integration(t *testing.T) {
 	const (
-		ref          = "alpine:3.20"
+		ref          = "public.ecr.aws/docker/library/alpine:3.20"
 		containerRef = "truth-test-resolve-" // will append test ID
 	)
 
@@ -30,10 +30,7 @@ func TestResolveContainerImage_Integration(t *testing.T) {
 
 	// Pull the image first so we have a known local copy.
 	t.Logf("Pulling %s ...", ref)
-	pullOut, err := exec.CommandContext(ctx, "docker", "pull", ref).CombinedOutput()
-	if err != nil {
-		t.Fatalf("docker pull %s: %v\n%s", ref, err, pullOut)
-	}
+	pullWithRetry(ctx, t, ref)
 
 	// Create a non-running container so we can inspect it without starting it.
 	containerName := fmt.Sprintf("%s%d", containerRef, time.Now().UnixNano())

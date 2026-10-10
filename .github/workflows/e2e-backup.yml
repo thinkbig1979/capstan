@@ -213,9 +213,17 @@ jobs:
           cat > /tmp/capstan-e2e/stacks/test-app/compose.yaml <<'EOF'
           services:
             web:
-              image: nginx:1.25-alpine
+              image: public.ecr.aws/docker/library/nginx:1.25-alpine
               restart: unless-stopped
           EOF
+
+      # The test-app image, from the ECR Public mirror (not Docker Hub, whose
+      # anonymous limit GitHub's shared runner IPs exhaust; agent-os-an6d),
+      # pulled with a bounded retry for the mirror's one-pull-per-second
+      # limit. Capstan starts the stack with `docker compose up` and the
+      # default pull_policy, so it uses this local copy and never pulls.
+      - name: Pre-pull the test-app image (bounded retry)
+        run: bash scripts/pull-with-retry.sh public.ecr.aws/docker/library/nginx:1.25-alpine
 
       - name: Start backend
         working-directory: backend

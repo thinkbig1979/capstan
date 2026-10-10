@@ -13,7 +13,7 @@ import (
 // alive long enough for assertions before cleanup tears it down.
 const smokeComposeYAML = `services:
   sleeper:
-    image: alpine:3.21
+    image: public.ecr.aws/docker/library/alpine:3.21
     command: ["sleep", "3600"]
     restart: "no"
 `
@@ -65,7 +65,7 @@ func TestSmoke_HarnessEnd2End(t *testing.T) {
 func TestSmoke_ImageRepoDigests(t *testing.T) {
 	RequireDocker(t)
 
-	const ref = "alpine:3.21"
+	const ref = "public.ecr.aws/docker/library/alpine:3.21"
 
 	PullPinnedImage(t, ref)
 

@@ -1,7 +1,13 @@
+# Every base image is pulled from the AWS ECR Public mirror of the Docker
+# Official Images (public.ecr.aws/docker/library/<image>), not Docker Hub: the
+# GitHub-hosted runners share an IP pool whose anonymous Docker Hub allowance
+# runs out (429, agent-os-an6d). Same images, same digests. No Docker Hub
+# reference may return here (scripts/check-dockerhub-pulls.sh).
+
 # Frontend build stage — runs on the build host's native arch ($BUILDPLATFORM),
 # not the target arch, because the compiled output (static JS/CSS in dist/) is
 # architecture-neutral. This avoids slow QEMU emulation of the Node build.
-FROM --platform=$BUILDPLATFORM node:22-trixie-slim AS frontend-build
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/node:22-trixie-slim AS frontend-build
 
 WORKDIR /app/frontend
 
@@ -23,7 +29,7 @@ RUN npm run build
 # Backend build stage — also pinned to $BUILDPLATFORM. Go cross-compiles
 # natively (CGO disabled), so we build on the fast host arch and emit a binary
 # for the requested $TARGETARCH. TARGETOS/TARGETARCH are provided by Buildx.
-FROM --platform=$BUILDPLATFORM golang:1.27.2-trixie AS backend-build
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.27.2-trixie AS backend-build
 
 WORKDIR /app
 
@@ -74,7 +80,7 @@ RUN set -eu; \
 # cannot be executed in this stage, so the `restic version` / `rclone version`
 # smoke checks moved to the runtime stage, where they exercise the exact
 # binaries that ship rather than a copy in a throwaway stage.
-FROM --platform=$BUILDPLATFORM debian:trixie-slim AS backup-tools
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/debian:trixie-slim AS backup-tools
 
 # Pinned versions — bump here when upgrading.
 # Note: use RESTIC_VER / RCLONE_VER (not RESTIC_VERSION / RCLONE_VERSION) to
@@ -145,10 +151,10 @@ RUN set -eu; \
 # Pinned by index digest, not just by tag: the tag moves and a silently swapped
 # CLI is the kind of change that only shows up in production. Dependabot tracks
 # this FROM line like any other.
-FROM docker:29-cli@sha256:b1805116a6a86cc591b5d5f60a910a0715cdcc9d18d866ad68b1457ead25c35c AS docker-cli
+FROM public.ecr.aws/docker/library/docker:29-cli@sha256:b1805116a6a86cc591b5d5f60a910a0715cdcc9d18d866ad68b1457ead25c35c AS docker-cli
 
 # Runtime stage
-FROM debian:trixie-slim
+FROM public.ecr.aws/docker/library/debian:trixie-slim
 
 WORKDIR /app
 

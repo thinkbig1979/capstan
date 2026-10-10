@@ -83,8 +83,16 @@ jobs:
       # works correctly (this is the version-independent digest lookup used by
       # the truth package — the exact command that was broken by buildx v0.23
       # on the VPS). Pinning to a recent version avoids the --format bug.
+      #
+      # driver: docker uses the runner's own daemon as the builder. The default
+      # docker-container driver would first pull moby/buildkit from Docker Hub,
+      # which is rate-limited for GitHub's shared runner IPs (agent-os-an6d),
+      # and this job only needs `imagetools inspect`, which talks to the
+      # registry directly and works with any driver.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker
 
       # go-version-file reads backend/go.mod and, from setup-go v6, prefers
       # its `toolchain` directive over the `go` directive — so this workflow
@@ -114,9 +122,27 @@ jobs:
       # else — ./internal/services/, ./internal/handlers/ — will NOT run in
       # this job. Add its package to the list below when that happens.
       #
+      # -p 1 runs the two packages one after the other, not side by side, so
+      # their registry calls never overlap (ECR Public: one anonymous pull per
+      # second; agent-os-an6d). Neither package uses t.Parallel.
+      #
       # -count=1 disables the test cache so each run exercises real Docker.
       # -v produces per-test output, useful for CI log triage. It does not
       # suppress the exit code, so one invocation both logs and gates.
+      # Every image the integration tests pull, from the ECR Public mirror
+      # (not Docker Hub, agent-os-an6d), pulled one at a time with a bounded
+      # retry so the mirror's one-pull-per-second limit costs seconds, not a
+      # red job. The tests' own `docker pull`s and registry lookups retry too
+      # (integrationtest.RetryRegistry, truth's retryRegistry), and compose
+      # starts the stacks from these local copies. The list is checked against
+      # the refs the tests name by scripts/check-dockerhub-pulls.sh.
+      - name: Pre-pull test images (bounded retry)
+        run: |
+          bash scripts/pull-with-retry.sh \
+            public.ecr.aws/docker/library/alpine:3.21 \
+            public.ecr.aws/docker/library/alpine:3.20 \
+            public.ecr.aws/docker/library/debian:stable-slim
+
       - name: Run integration tests
         working-directory: backend
         env:
@@ -130,6 +156,7 @@ jobs:
           CAPSTAN_ALLOW_DESTRUCTIVE_IMAGE_PRUNE: "1"
         run: |
           go test -tags=integration \
+            -p 1 \
             -count=1 \
             -timeout 8m \
             -v \

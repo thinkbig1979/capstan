@@ -40,12 +40,12 @@ import (
 //	compose labels present AND db resolves the stack -> updateCompose*Streaming
 //	anything else                                    -> updateStandalone*
 //
-// alpine:3.21 is the harness's standard test image, so the pull is a no-op
+// public.ecr.aws/docker/library/alpine:3.21 is the harness's standard test image, so the pull is a no-op
 // against the local cache and the "update" converges to no_change — which is the
 // honest outcome for an image that is already current, and still executes every
 // statement in the apply path.
 
-const updateTestImage = "alpine:3.21"
+const updateTestImage = "public.ecr.aws/docker/library/alpine:3.21"
 
 // stackByProject is a DashboardDB that resolves exactly one project name. It is
 // what flips UpdateContainerStreaming onto the compose branch.

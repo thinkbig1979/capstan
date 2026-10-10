@@ -10,7 +10,7 @@ import (
 
 // realResticSnapshotsJSON is the VERBATIM stdout of `restic snapshots --json`,
 // captured from restic 0.18.0 against a real repository holding one snapshot of
-// exactly 200000 bytes. The pinned version is 0.19.1 (docker/Dockerfile:82).
+// exactly 200000 bytes. The pinned version is 0.19.1 (docker/Dockerfile:88).
 //
 // It is pasted literally rather than produced by json.Marshal(resticSnapshot{...}),
 // because marshalling our own struct and unmarshalling it back is a tautology:

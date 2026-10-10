@@ -58,7 +58,7 @@ func buildMinimalImage(t *testing.T, tag string) string {
 	t.Helper()
 
 	dir := t.TempDir()
-	dockerfile := `FROM alpine:3.21
+	dockerfile := `FROM public.ecr.aws/docker/library/alpine:3.21
 LABEL capstan.test="` + tag + `"
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0644))
@@ -156,7 +156,7 @@ func upsertDirectoryAndStack(t *testing.T, db *database.DB, stackDir, stackID, p
 
 func Test_Resource_ImageDelete_UntaggedOnly_NoChange(t *testing.T) {
 	RequireDocker(t)
-	PullPinnedImage(t, "alpine:3.21")
+	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
 	// Build an isolated test image (unique label) so it has no other references.
 	ts := fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
@@ -226,7 +226,7 @@ func Test_Resource_ImagePrune_CountsUntaggedEntries(t *testing.T) {
 		t.Skip("skipping: this test prunes ALL dangling images on the Docker daemon, not just its own fixtures — set CAPSTAN_ALLOW_DESTRUCTIVE_IMAGE_PRUNE=1 to opt in (see TESTING.md), or leave unset and run the rest of the suite with -skip Test_Resource_ImagePrune_CountsUntaggedEntries")
 	}
 
-	PullPinnedImage(t, "alpine:3.21")
+	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
 	// Strategy: build image A with tag T (adding a unique RUN layer), then
 	// build image B (different content) with the same tag T. This moves the tag
@@ -238,7 +238,7 @@ func Test_Resource_ImagePrune_CountsUntaggedEntries(t *testing.T) {
 	// Build first image.
 	dir1 := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir1, "Dockerfile"),
-		[]byte("FROM alpine:3.21\nRUN echo first-"+ts), 0644))
+		[]byte("FROM public.ecr.aws/docker/library/alpine:3.21\nRUN echo first-"+ts), 0644))
 	out1, err1 := exec.Command("docker", "build", "-t", tag, dir1).CombinedOutput()
 	require.NoError(t, err1, "build first: %s", out1)
 	t.Cleanup(func() { dockerRmiForce(tag) })
@@ -246,7 +246,7 @@ func Test_Resource_ImagePrune_CountsUntaggedEntries(t *testing.T) {
 	// Build second image with SAME tag — moves the tag, leaving first dangling.
 	dir2 := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir2, "Dockerfile"),
-		[]byte("FROM alpine:3.21\nRUN echo second-"+ts), 0644))
+		[]byte("FROM public.ecr.aws/docker/library/alpine:3.21\nRUN echo second-"+ts), 0644))
 	out2, err2 := exec.Command("docker", "build", "-t", tag, dir2).CombinedOutput()
 	require.NoError(t, err2, "build second: %s", out2)
 
@@ -280,7 +280,7 @@ func Test_Resource_StackDelete_RemovesDirAndDBRow(t *testing.T) {
 	require.NoError(t, os.MkdirAll(stackDir, 0755))
 	composeContent := `services:
   svc:
-    image: alpine:3.21
+    image: public.ecr.aws/docker/library/alpine:3.21
     command: ["sleep", "1"]
     restart: "no"
 `
@@ -338,21 +338,21 @@ func Test_Resource_StackDelete_RemovesDirAndDBRow(t *testing.T) {
 
 const crashDeployYAML = `services:
   crasher:
-    image: alpine:3.21
+    image: public.ecr.aws/docker/library/alpine:3.21
     command: ["sh", "-c", "exit 1"]
     restart: "no"
 `
 
 const healthyDeployYAML = `services:
   sleeper:
-    image: alpine:3.21
+    image: public.ecr.aws/docker/library/alpine:3.21
     command: ["sleep", "3600"]
     restart: "no"
 `
 
 func Test_Resource_CreateWithDeploy_CrashLoop_IsPartial(t *testing.T) {
 	RequireDocker(t)
-	PullPinnedImage(t, "alpine:3.21")
+	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
 	ts := fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
 	project := sanitizeProjectName("it-b3-crash-" + ts)
@@ -405,7 +405,7 @@ func Test_Resource_CreateWithDeploy_CrashLoop_IsPartial(t *testing.T) {
 
 func Test_Resource_CreateWithDeploy_HealthyService_IsSuccess(t *testing.T) {
 	RequireDocker(t)
-	PullPinnedImage(t, "alpine:3.21")
+	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
 	ts := fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
 	project := sanitizeProjectName("it-b3-healthy-" + ts)

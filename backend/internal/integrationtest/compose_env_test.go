@@ -460,7 +460,7 @@ func TestComposeEnv_Atomic_Success(t *testing.T) {
 	}
 
 	// Seed both files.
-	composeOrig := "services:\n  web:\n    image: alpine:3.21\n"
+	composeOrig := "services:\n  web:\n    image: public.ecr.aws/docker/library/alpine:3.21\n"
 	envOrig := "PORT=8080\n"
 	writeFileRaw(t, filepath.Join(stackDir, "compose.yaml"), composeOrig)
 	writeFileRaw(t, filepath.Join(stackDir, ".env"), envOrig)
@@ -473,7 +473,7 @@ func TestComposeEnv_Atomic_Success(t *testing.T) {
 	stack := insertTestStack(t, db, stackDir, stacksDir, ".env")
 	router, _ := setupComposeHandlerRouter(t, stacksDir, db)
 
-	composeNew := "services:\n  web:\n    image: alpine:3.21\n  # updated\n"
+	composeNew := "services:\n  web:\n    image: public.ecr.aws/docker/library/alpine:3.21\n  # updated\n"
 	envNew := "PORT=9090\n"
 
 	reqBody := map[string]interface{}{
@@ -517,7 +517,7 @@ func TestComposeEnv_Atomic_EnvValidationFails_ComposeUnchanged(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	composeOrig := "services:\n  web:\n    image: alpine:3.21\n"
+	composeOrig := "services:\n  web:\n    image: public.ecr.aws/docker/library/alpine:3.21\n"
 	envOrig := "GOOD=yes\n"
 	writeFileRaw(t, filepath.Join(stackDir, "compose.yaml"), composeOrig)
 	writeFileRaw(t, filepath.Join(stackDir, ".env"), envOrig)
@@ -532,7 +532,7 @@ func TestComposeEnv_Atomic_EnvValidationFails_ComposeUnchanged(t *testing.T) {
 
 	// Bad env: entry with empty key + non-empty value.
 	reqBody := map[string]interface{}{
-		"composeContent": "services:\n  web:\n    image: alpine:3.21\n  # new\n",
+		"composeContent": "services:\n  web:\n    image: public.ecr.aws/docker/library/alpine:3.21\n  # new\n",
 		"envEntries": []map[string]interface{}{
 			{"key": "", "value": "corrupt", "line": 1, "comment": false},
 		},
@@ -579,7 +579,7 @@ func TestComposeEnv_Atomic_EnvRestoredOnComposeWriteFailure(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	composeOrig := "services:\n  web:\n    image: alpine:3.21\n"
+	composeOrig := "services:\n  web:\n    image: public.ecr.aws/docker/library/alpine:3.21\n"
 	envOrig := "ORIGINAL=yes\nPORT=8080\n"
 	composePath := filepath.Join(stackDir, "compose.yaml")
 	envPath := filepath.Join(stackDir, ".env")
@@ -611,7 +611,7 @@ func TestComposeEnv_Atomic_EnvRestoredOnComposeWriteFailure(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(composePath, 0644) })
 
 	reqBody := map[string]interface{}{
-		"composeContent": "services:\n  web:\n    image: alpine:3.21\n  # new\n",
+		"composeContent": "services:\n  web:\n    image: public.ecr.aws/docker/library/alpine:3.21\n  # new\n",
 		"envRaw":         "UPDATED=yes\nPORT=9090\n",
 	}
 	body, _ := json.Marshal(reqBody)
@@ -670,7 +670,7 @@ func TestComposeEnv_Atomic_EnvKeeps0600Mode(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	composeOrig := "services:\n  web:\n    image: alpine:3.21\n"
+	composeOrig := "services:\n  web:\n    image: public.ecr.aws/docker/library/alpine:3.21\n"
 	envPath := filepath.Join(stackDir, ".env")
 	writeFileRaw(t, filepath.Join(stackDir, "compose.yaml"), composeOrig)
 	if err := os.WriteFile(envPath, []byte("PORT=8080\n"), 0600); err != nil {
