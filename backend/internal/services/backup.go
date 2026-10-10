@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -1959,26 +1958,6 @@ func stream(out chan<- StreamLine, typ, line string) {
 	select {
 	case out <- StreamLine{Type: typ, Line: line}:
 	default:
-	}
-}
-
-// --- concurrent policy resolution helper ---
-
-// resolveAllEnabled is a thin alias used by the scheduler to fetch all enabled
-// policies without specifying individual stack IDs.
-func (s *BackupService) resolveAllEnabled() ([]models.BackupPolicy, error) {
-	return s.db.GetEnabledBackupPolicies()
-}
-
-// --- mutex-guarded multi-stack drain helpers ---
-
-// drainOut reads lines from src and forwards them to dst until src is closed.
-// Used when a caller wants to multiplex per-stack channels into the caller's
-// channel.
-func drainOut(wg *sync.WaitGroup, src <-chan StreamLine, dst chan<- StreamLine) {
-	defer wg.Done()
-	for line := range src {
-		stream(dst, line.Type, line.Line)
 	}
 }
 

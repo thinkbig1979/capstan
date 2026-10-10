@@ -166,7 +166,7 @@ func gitServiceWithStoredToken(t *testing.T) *GitService {
 // a directory-scoped git credential for dirPath (encrypted at rest, exactly
 // as UpdateDirectoryCredentials stores it), plus a DIFFERENT, invalid global
 // settings token. A test using this must fail unless the directory-scoped
-// credential — not merely "some" credential — is the one gitCmd used.
+// credential — not merely "some" credential — is the one gitCmdWithCreds used.
 func gitServiceWithDirectoryCredential(t *testing.T, dirPath, authType, user, token string) *GitService {
 	t.Helper()
 	db := newTestDBWithEncryptor(t)
@@ -187,7 +187,7 @@ func gitServiceWithDirectoryCredential(t *testing.T, dirPath, authType, user, to
 
 // TestPull_UsesDirectoryHTTPSToken is the regression test for agent-os-qll's
 // first defect (no read path): a per-directory credential saved via
-// UpdateDirectoryCredentials must be the one gitCmd actually uses for that
+// UpdateDirectoryCredentials must be the one gitCmdWithCreds actually uses for that
 // directory, in preference to whatever is stored globally.
 func TestPull_UsesDirectoryHTTPSToken(t *testing.T) {
 	local, advance := authenticatedHTTPRepo(t)
@@ -368,10 +368,11 @@ func TestGitCmd_DirectoryToken_TravelsInEnvNotArgv(t *testing.T) {
 	dirPath := "/stacks/https-repo"
 	svc := gitServiceWithDirectoryCredential(t, dirPath, "https", testGitUser, testGitToken)
 
-	cmd, token := svc.gitCmd(context.Background(), dirPath, "pull", "--ff-only")
+	user, credToken := svc.httpsCredentials(dirPath)
+	cmd, token := svc.gitCmdWithCreds(context.Background(), dirPath, user, credToken, "pull", "--ff-only")
 
 	if token != testGitToken {
-		t.Errorf("gitCmd returned token %q, want the directory-scoped one", token)
+		t.Errorf("gitCmdWithCreds returned token %q, want the directory-scoped one", token)
 	}
 	for i, arg := range cmd.Args {
 		if strings.Contains(arg, testGitToken) {
@@ -460,10 +461,12 @@ func TestPull_TokenNeverPersistsToGitConfig(t *testing.T) {
 func TestGitCmd_TokenTravelsInEnvNotArgv(t *testing.T) {
 	svc := gitServiceWithStoredToken(t)
 
-	cmd, token := svc.gitCmd(context.Background(), t.TempDir(), "pull", "--ff-only")
+	dir := t.TempDir()
+	user, credToken := svc.httpsCredentials(dir)
+	cmd, token := svc.gitCmdWithCreds(context.Background(), dir, user, credToken, "pull", "--ff-only")
 
 	if token != testGitToken {
-		t.Errorf("gitCmd returned token %q, want the stored one", token)
+		t.Errorf("gitCmdWithCreds returned token %q, want the stored one", token)
 	}
 	for i, arg := range cmd.Args {
 		if strings.Contains(arg, testGitToken) {
@@ -494,7 +497,9 @@ func TestGitCmd_TokenTravelsInEnvNotArgv(t *testing.T) {
 func TestGitCmd_NoCredentialWhenNoneConfigured(t *testing.T) {
 	svc := NewGitService(&config.Config{}, newTestDBWithEncryptor(t))
 
-	cmd, token := svc.gitCmd(context.Background(), t.TempDir(), "status", "--porcelain")
+	dir := t.TempDir()
+	user, credToken := svc.httpsCredentials(dir)
+	cmd, token := svc.gitCmdWithCreds(context.Background(), dir, user, credToken, "status", "--porcelain")
 
 	if token != "" {
 		t.Errorf("expected no token, got %q", token)
@@ -520,7 +525,9 @@ func TestGitCmdWithCreds_StripsCapstanSecrets(t *testing.T) {
 	t.Setenv("JWT_SECRET", "sentinel-jwt-secret")
 
 	svc := gitServiceWithStoredToken(t)
-	cmd, _ := svc.gitCmd(context.Background(), t.TempDir(), "status", "--porcelain")
+	dir := t.TempDir()
+	user, token := svc.httpsCredentials(dir)
+	cmd, _ := svc.gitCmdWithCreds(context.Background(), dir, user, token, "status", "--porcelain")
 
 	var sawSecret, sawPrompt, sawUser, sawToken bool
 	for _, kv := range cmd.Env {
@@ -603,7 +610,7 @@ func TestGetStatusCLI_DirectoryHTTPSEmptyToken_LogsWarnOnce(t *testing.T) {
 // gitCmdWithCreds sets CAPSTAN_GIT_USERNAME/CAPSTAN_GIT_PASSWORD in the child
 // environment on every invocation once a token is configured (regardless of
 // whether that particular git subcommand needs to contact a remote — see
-// gitCmd's doc comment), so this observes the resolved credential landing on
+// gitCmdWithCreds's doc comment), so this observes the resolved credential landing on
 // each of getStatusCLI's internal git processes directly, rather than inferring
 // it from a log line.
 //

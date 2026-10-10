@@ -94,7 +94,7 @@ func setupTestRouterWithAuth(handler *AuthHandler, jwtSecret string) *gin.Engine
 		authHeader := c.GetHeader("Authorization")
 		if authHeader != "" {
 			token := strings.TrimPrefix(authHeader, "Bearer ")
-			claims, err := parseJWT(token, jwtSecret)
+			claims, err := middleware.ValidateJWT(token, jwtSecret)
 			if err == nil {
 				if sub, ok := claims["sub"].(string); ok {
 					c.Set("userID", sub)

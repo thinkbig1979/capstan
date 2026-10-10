@@ -427,6 +427,7 @@ func (s *BackupSchedulerService) IsRunning() bool {
 
 // nextFireAt reports the instant the scheduled-mode timer is working towards.
 // ok is false in interval mode and once the scheduler has been stopped.
+// Only tests call it, to observe the armed timer.
 func (s *BackupSchedulerService) nextFireAt() (time.Time, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

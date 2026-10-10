@@ -141,6 +141,8 @@ func (h *ResourcesHandler) SetCleanupScheduler(s dockerCleanupArmer) {
 
 // NewResourcesHandler delegates to NewResourcesHandlerWithJobManager (nil
 // jobManager) so the nil-check below has exactly one copy to keep correct.
+// Only tests call it; production (cmd/server/main.go) calls
+// NewResourcesHandlerWithJobManager.
 //
 // Both constructors keep *services.SchedulerService as their parameter type
 // (production callers, e.g. cmd/server/main.go, are unaffected) and nil-check

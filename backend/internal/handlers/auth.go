@@ -439,7 +439,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	// after parsing the token and validating the session row (middleware/auth.go).
 	// This deliberately does NOT re-read the Authorization header: that is what
 	// this handler used to do, and the browser never sends that header — App.tsx
-	// registers `() => null` as getToken so api.ts never sets it — so parseJWT("")
+	// registers `() => null` as getToken so api.ts never sets it — so parsing ""
 	// errored and DeleteSession was never reached, leaving every UI logout
 	// client-side only while still returning 204 (agent-os-h9o). Reading the
 	// already-validated jti removes the second parse and makes the transport
@@ -641,25 +641,6 @@ func generateJWT(userID, username, sessionID, secret string) (string, error) {
 
 	token := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims)
 	return token.SignedString([]byte(secret))
-}
-
-func parseJWT(token, secret string) (jwtv5.MapClaims, error) {
-	parsedToken, err := jwtv5.Parse(token, func(token *jwtv5.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwtv5.SigningMethodHMAC); !ok {
-			return nil, jwtv5.ErrSignatureInvalid
-		}
-		return []byte(secret), nil
-	}, jwtv5.WithIssuer(jwtIssuer))
-
-	if err != nil {
-		return nil, err
-	}
-
-	if claims, ok := parsedToken.Claims.(jwtv5.MapClaims); ok && parsedToken.Valid {
-		return claims, nil
-	}
-
-	return nil, jwtv5.ErrInvalidKey
 }
 
 func setAuthCookies(c *gin.Context, token string, csrfToken string) {

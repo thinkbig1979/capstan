@@ -2101,33 +2101,6 @@ func TestStartScheduler_DoesNotStartWhenIntervalZero(t *testing.T) {
 }
 
 // ============================================================
-// drainOut helper
-// ============================================================
-
-func TestDrainOut_ForwardsAllLines(t *testing.T) {
-	t.Parallel()
-
-	src := make(chan StreamLine, 4)
-	dst := make(chan StreamLine, 4)
-
-	src <- StreamLine{Type: "info", Line: "a"}
-	src <- StreamLine{Type: "info", Line: "b"}
-	close(src)
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	drainOut(&wg, src, dst)
-	wg.Wait()
-
-	close(dst)
-	var got []string
-	for l := range dst {
-		got = append(got, l.Line)
-	}
-	assert.Equal(t, []string{"a", "b"}, got)
-}
-
-// ============================================================
 // NextRunAt
 // ============================================================
 
@@ -2260,37 +2233,6 @@ func TestRepoSizeBytes_ReturnsSizeOnSuccess(t *testing.T) {
 	result := svc.RepoSizeBytes(context.Background())
 	require.NotNil(t, result)
 	assert.Equal(t, int64(2097152), *result)
-}
-
-// ============================================================
-// resolveAllEnabled (used by scheduler)
-// ============================================================
-
-func TestResolveAllEnabled_ReturnsOnlyEnabled(t *testing.T) {
-	t.Parallel()
-
-	db := newBackupTestDB(t)
-	docker := &fakeDocker{}
-	runner := &fakeRunner{}
-	svc := buildSvc(t, db, docker, runner, runner)
-
-	seedStack(t, db, "en", "stop")
-
-	// Add a disabled policy.
-	dir2 := models.Directory{Path: "/opt/stacks/dis", Name: "dis", RootDir: "/opt/stacks"}
-	require.NoError(t, db.UpsertDirectory(dir2))
-	st2 := models.Stack{ID: "dis", Directory: "/opt/stacks/dis", ProjectName: "dis", Status: "stopped"}
-	require.NoError(t, db.UpsertStack(st2))
-	p2 := models.BackupPolicy{
-		ID: "bp-dis", TargetType: "stack", TargetID: "dis", Enabled: false,
-		StopPolicy: "stop", CreatedAt: time.Now().Format(time.RFC3339), UpdatedAt: time.Now().Format(time.RFC3339),
-	}
-	require.NoError(t, db.UpsertBackupPolicy(&p2))
-
-	policies, err := svc.resolveAllEnabled()
-	require.NoError(t, err)
-	require.Len(t, policies, 1)
-	assert.Equal(t, "en", policies[0].TargetID)
 }
 
 // ============================================================

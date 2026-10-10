@@ -45,7 +45,7 @@ func TestNilMonitorService_RefusesInsteadOfPanicking(t *testing.T) {
 
 	// main.go leaves the Docker client nil when it cannot be constructed, and
 	// StreamStats spawns a goroutine that would dereference it.
-	svc := NewMonitorService(nil)
+	svc := NewMonitorServiceWithDB(nil, nil)
 	ctx := context.Background()
 
 	require.NotPanics(t, func() {

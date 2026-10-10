@@ -203,6 +203,8 @@ func (cm *ConnectionManager) Remove(id string) {
 	}
 }
 
+// Get, Count and CountByUser are read-only views of the manager's state for
+// tests: production never reads them, the per-user cap is enforced inside Add.
 func (cm *ConnectionManager) Get(id string) (*Connection, bool) {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()

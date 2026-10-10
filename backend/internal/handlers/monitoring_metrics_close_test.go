@@ -114,7 +114,7 @@ func newFakeMonitorService(t *testing.T, srv *httptest.Server) *services.Monitor
 	t.Helper()
 	cli, err := client.NewClientWithOpts(client.WithHost("tcp://" + srv.Listener.Addr().String()))
 	require.NoError(t, err)
-	return services.NewMonitorService(cli)
+	return services.NewMonitorServiceWithDB(cli, nil)
 }
 
 // streamingStatsHandler keeps writing one stats frame per tick until the

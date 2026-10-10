@@ -122,7 +122,7 @@ func TestGitGetStatus_NonRepoAnswers200(t *testing.T) {
 	plain := filepath.Join(stacksDir, "plain")
 	require.NoError(t, os.MkdirAll(plain, 0o750))
 
-	// Arm 2: a stack nested inside a parent repo. gitCmd sets cmd.Dir without
+	// Arm 2: a stack nested inside a parent repo. gitCmdWithCreds sets cmd.Dir without
 	// GIT_CEILING_DIRECTORIES, so git walks UP and serves this directory from
 	// the parent's .git — which is why no frontend gate on stack.isGitRepo can
 	// fix this bug: resolveGitState stats the stack's OWN directory and reports
