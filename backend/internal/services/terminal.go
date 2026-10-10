@@ -121,12 +121,6 @@ func (s *TerminalService) SessionCount() int {
 	return len(s.sessions)
 }
 
-func (s *TerminalService) GetSession(sessionID string) *TerminalSession {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.sessions[sessionID]
-}
-
 func (s *TerminalService) ResizeSession(sessionID string, cols, rows uint16) error {
 	s.mu.Lock()
 	session := s.sessions[sessionID]
