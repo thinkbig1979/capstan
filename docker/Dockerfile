@@ -7,7 +7,7 @@
 # Frontend build stage — runs on the build host's native arch ($BUILDPLATFORM),
 # not the target arch, because the compiled output (static JS/CSS in dist/) is
 # architecture-neutral. This avoids slow QEMU emulation of the Node build.
-FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/node:22-trixie-slim AS frontend-build
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/node:26-trixie-slim AS frontend-build
 
 WORKDIR /app/frontend
 
