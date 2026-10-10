@@ -320,7 +320,7 @@ func sanitizeChars(name string) string {
 // characters, and collision-safe under truncation.
 //
 // This is used directly by the tests that build their own project names
-// outside of NewTempStack (lifecycle_test.go, resources_test.go). Its
+// outside of NewTempStack (resources_test.go). Its
 // historical form was a plain truncate-to-40, so two names agreeing on their
 // first 40 sanitized characters mapped to one project and each test's
 // `docker compose down -v` could destroy the other's containers mid-run

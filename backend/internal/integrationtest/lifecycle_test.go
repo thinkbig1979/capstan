@@ -27,7 +27,9 @@ package integrationtest
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,10 +80,15 @@ func newDockerService(t *testing.T, dir string) *services.DockerService {
 
 // tempStack creates a temp directory with compose.yaml and a minimal Stack model.
 // EnvFile is left empty so buildComposeArgs does not reference a missing .env.
-func tempStack(t *testing.T, yaml, project string) (models.Stack, func()) {
+//
+// The stack's ProjectName is the one NewTempStack returns, because that is the
+// name its cleanup runs `compose down` under. Callers read stack.ProjectName
+// and never pick a second name: a stack started under a different name than
+// the cleanup's is never taken down (agent-os-6e64).
+func tempStack(t *testing.T, yaml string) (models.Stack, func()) {
 	t.Helper()
 
-	dir, _, cleanup := NewTempStack(t, yaml)
+	dir, project, cleanup := NewTempStack(t, yaml)
 
 	// NewTempStack already writes compose.yaml; rewrite with the exact content
 	// passed (belt-and-suspenders — same bytes, but guarantees our YAML wins).
@@ -120,8 +127,7 @@ func Test_Lifecycle_Start_Success(t *testing.T) {
 	RequireDocker(t)
 	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
-	project := sanitizeProjectName("it-lifecycle-start-" + t.Name())
-	stack, cleanup := tempStack(t, healthyStackYAML, project)
+	stack, cleanup := tempStack(t, healthyStackYAML)
 	defer cleanup()
 
 	svc := newDockerService(t, stack.Directory)
@@ -133,7 +139,7 @@ func Test_Lifecycle_Start_Success(t *testing.T) {
 		"starting a healthy stack must report outcome=success")
 	assert.Nil(t, ar.Err, "Err must be nil on success")
 
-	AssertContainerState(t, stack.Directory, project, "sleeper", true)
+	AssertContainerState(t, stack.Directory, stack.ProjectName, "sleeper", true)
 }
 
 // ---- Test_Lifecycle_Start_CrashLoop (immediate exit) ----
@@ -142,8 +148,7 @@ func Test_Lifecycle_Start_CrashLoop(t *testing.T) {
 	RequireDocker(t)
 	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
-	project := sanitizeProjectName("it-lifecycle-crash-" + t.Name())
-	stack, cleanup := tempStack(t, crashLoopStackYAML, project)
+	stack, cleanup := tempStack(t, crashLoopStackYAML)
 	defer cleanup()
 
 	svc := newDockerService(t, stack.Directory)
@@ -152,7 +157,7 @@ func Test_Lifecycle_Start_CrashLoop(t *testing.T) {
 	assertCrashOutcome(t, ar, "StartVerified(immediate-exit)")
 	_ = output
 
-	AssertContainerState(t, stack.Directory, project, "crasher", false)
+	AssertContainerState(t, stack.Directory, stack.ProjectName, "crasher", false)
 }
 
 // ---- Test_Lifecycle_Start_SlowCrash (sleep 0.7; exit 1) ----
@@ -162,8 +167,7 @@ func Test_Lifecycle_Start_SlowCrash(t *testing.T) {
 	RequireDocker(t)
 	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
-	project := sanitizeProjectName("it-lifecycle-slowcrash-" + t.Name())
-	stack, cleanup := tempStack(t, slowCrashStackYAML, project)
+	stack, cleanup := tempStack(t, slowCrashStackYAML)
 	defer cleanup()
 
 	svc := newDockerService(t, stack.Directory)
@@ -172,7 +176,7 @@ func Test_Lifecycle_Start_SlowCrash(t *testing.T) {
 	assertCrashOutcome(t, ar, "StartVerified(slow-crash)")
 	_ = output
 
-	AssertContainerState(t, stack.Directory, project, "slowcrasher", false)
+	AssertContainerState(t, stack.Directory, stack.ProjectName, "slowcrasher", false)
 }
 
 // ---- Test_Lifecycle_Stop_Success ----
@@ -181,8 +185,7 @@ func Test_Lifecycle_Stop_Success(t *testing.T) {
 	RequireDocker(t)
 	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
-	project := sanitizeProjectName("it-lifecycle-stop-" + t.Name())
-	stack, cleanup := tempStack(t, healthyStackYAML, project)
+	stack, cleanup := tempStack(t, healthyStackYAML)
 	defer cleanup()
 
 	svc := newDockerService(t, stack.Directory)
@@ -191,7 +194,7 @@ func Test_Lifecycle_Stop_Success(t *testing.T) {
 	require.Equal(t, truth.OutcomeSuccess, startAR.Outcome,
 		"prerequisite: stack must start successfully before stop test")
 
-	AssertContainerState(t, stack.Directory, project, "sleeper", true)
+	AssertContainerState(t, stack.Directory, stack.ProjectName, "sleeper", true)
 
 	ar, output := svc.StopVerified(stack)
 	t.Logf("StopVerified outcome=%s reason=%q output_len=%d", ar.Outcome, ar.Reason, len(output))
@@ -200,7 +203,7 @@ func Test_Lifecycle_Stop_Success(t *testing.T) {
 		"stopping a running stack must report outcome=success")
 	assert.Nil(t, ar.Err, "Err must be nil on success")
 
-	AssertContainerState(t, stack.Directory, project, "sleeper", false)
+	AssertContainerState(t, stack.Directory, stack.ProjectName, "sleeper", false)
 }
 
 // ---- Test_Lifecycle_Streaming_CrashLoop (immediate exit) ----
@@ -209,8 +212,7 @@ func Test_Lifecycle_Streaming_CrashLoop(t *testing.T) {
 	RequireDocker(t)
 	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
-	project := sanitizeProjectName("it-streaming-crash-" + t.Name())
-	stack, cleanup := tempStack(t, crashLoopStackYAML, project)
+	stack, cleanup := tempStack(t, crashLoopStackYAML)
 	defer cleanup()
 
 	svc := newDockerService(t, stack.Directory)
@@ -229,8 +231,7 @@ func Test_Lifecycle_Streaming_SlowCrash(t *testing.T) {
 	RequireDocker(t)
 	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
-	project := sanitizeProjectName("it-streaming-slowcrash-" + t.Name())
-	stack, cleanup := tempStack(t, slowCrashStackYAML, project)
+	stack, cleanup := tempStack(t, slowCrashStackYAML)
 	defer cleanup()
 
 	svc := newDockerService(t, stack.Directory)
@@ -275,4 +276,64 @@ func assertStreamingCrashDone(t *testing.T, frame services.StreamLine, label str
 		"%s: done frame outcome must not be success for a crashing service", label)
 	assert.NotEmpty(t, frame.Reason,
 		"%s: done frame must carry a reason string", label)
+}
+
+// ---- Test_Lifecycle_TempStackCleanupRemovesStartedStack ----
+
+// composeProjectResources returns the container IDs labelled with the compose
+// project and whether its <project>_default network exists.
+func composeProjectResources(t *testing.T, project string) (containers []string, hasNetwork bool) {
+	t.Helper()
+
+	out, err := exec.Command("docker", "ps", "-a", "-q",
+		"--filter", "label=com.docker.compose.project="+project).CombinedOutput()
+	require.NoError(t, err, "docker ps: %s", out)
+	containers = strings.Fields(string(out))
+
+	out, err = exec.Command("docker", "network", "ls",
+		"--filter", "name="+project+"_default", "--format", "{{.Name}}").CombinedOutput()
+	require.NoError(t, err, "docker network ls: %s", out)
+	for _, name := range strings.Fields(string(out)) {
+		if name == project+"_default" {
+			hasNetwork = true
+		}
+	}
+	return containers, hasNetwork
+}
+
+// A temp stack started under stack.ProjectName must be gone once the cleanup
+// tempStack returned has run. Before agent-os-6e64 tempStack discarded
+// NewTempStack's project name, so the cleanup downed a project that never
+// started and every Test_Lifecycle_* run left containers and a
+// <project>_default network behind.
+func Test_Lifecycle_TempStackCleanupRemovesStartedStack(t *testing.T) {
+	RequireDocker(t)
+	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
+
+	stack, cleanup := tempStack(t, healthyStackYAML)
+	// Safety net for the failing case only: a leak found below must not outlive
+	// this test. Registered after tempStack's own cleanup, so it runs first.
+	t.Cleanup(func() {
+		down := exec.Command("docker", "compose", "-p", stack.ProjectName,
+			"-f", filepath.Join(stack.Directory, "compose.yaml"),
+			"down", "-v", "--remove-orphans")
+		down.Dir = stack.Directory
+		_ = down.Run()
+	})
+
+	RunCompose(t, stack.Directory, stack.ProjectName, "up", "-d")
+
+	// Control: the instrument must see the started stack before cleanup, or a
+	// "gone" result after cleanup proves nothing.
+	containers, hasNetwork := composeProjectResources(t, stack.ProjectName)
+	require.NotEmpty(t, containers, "started stack must have a container under project %q", stack.ProjectName)
+	require.True(t, hasNetwork, "started stack must have network %s_default", stack.ProjectName)
+
+	cleanup()
+
+	containers, hasNetwork = composeProjectResources(t, stack.ProjectName)
+	assert.Empty(t, containers,
+		"cleanup must remove every container of project %q it was asked to tear down", stack.ProjectName)
+	assert.False(t, hasNetwork,
+		"cleanup must remove network %s_default", stack.ProjectName)
 }

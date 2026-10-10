@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-// These tests guard against agent-os-whs2: eight tests in lifecycle_test.go
-// and resources_test.go build their compose project names through
-// sanitizeProjectName directly (not via NewTempStack), and its historical
+// These tests guard against agent-os-whs2: sanitizeProjectName's historical
 // plain truncate-to-40 gave two names agreeing on their first 40 sanitized
 // characters the same project — with each test's cleanup running
 // `docker compose -p <project> down -v`, one test then destroys the other's
-// containers mid-run with no error raised.
+// containers mid-run with no error raised. The two tests in resources_test.go
+// still call sanitizeProjectName directly; the lifecycle tests now take their
+// name from NewTempStack (agent-os-6e64).
 //
 // None of these tests touch Docker: they call only the pure name helpers.
 
@@ -27,24 +27,17 @@ func legacyTruncate40(name string) string {
 	return s
 }
 
-// directCallSiteInputs mirrors the raw strings the eight direct call sites
-// pass to sanitizeProjectName at HEAD (literal prefix + t.Name(), or a
-// timestamp of the same shape resources_test.go generates). Keep in step
-// with those sites.
+// directCallSiteInputs mirrors the raw strings the two direct call sites in
+// resources_test.go pass to sanitizeProjectName (a literal prefix + a
+// timestamp of the shape that file generates). Keep in step with those sites.
 var directCallSiteInputs = []string{
-	"it-lifecycle-start-Test_Lifecycle_Start_Success",
-	"it-lifecycle-crash-Test_Lifecycle_Start_CrashLoop",
-	"it-lifecycle-slowcrash-Test_Lifecycle_Start_SlowCrash",
-	"it-lifecycle-stop-Test_Lifecycle_Stop_Success",
-	"it-streaming-crash-Test_Lifecycle_Streaming_CrashLoop",
-	"it-streaming-slowcrash-Test_Lifecycle_Streaming_SlowCrash",
 	"it-b3-crash-123456",
 	"it-b3-healthy-123456",
 }
 
 // TestSanitizeProjectName_DistinctForNamesCollidingOnFirst40Chars is the
 // failing arm: two different raw names whose sanitized forms agree on their
-// first 40 characters (a rename of one lifecycle test is enough) must map to
+// first 40 characters (a long enough test name is enough) must map to
 // different projects.
 func TestSanitizeProjectName_DistinctForNamesCollidingOnFirst40Chars(t *testing.T) {
 	a := "it-lifecycle-start-" + "Test_Lifecycle_Start_Success"
@@ -77,8 +70,8 @@ func TestSanitizeProjectName_StaysValidAndBounded(t *testing.T) {
 		t.Fatal("positive control failed: isValidComposeProjectName should reject the empty string")
 	}
 
-	// The longest service name any direct call site uses is "slowcrasher"
-	// (11 chars), so "-slowcrasher-1" (14) is the real worst case.
+	// The longest service name in the integration fixtures is "slowcrasher"
+	// (11 chars, lifecycle_test.go), so "-slowcrasher-1" (14) is the real worst case.
 	const serviceSuffix = "-slowcrasher-1"
 
 	for _, in := range append(directCallSiteInputs, "", "!!!") {
@@ -95,14 +88,15 @@ func TestSanitizeProjectName_StaysValidAndBounded(t *testing.T) {
 	}
 }
 
-// TestSanitizeProjectName_Deterministic pins one real call-site name so a
-// leaked container stays traceable to the test that created it, and checks
-// every direct call-site input maps to the same value on a second call.
+// TestSanitizeProjectName_Deterministic pins one representative name (the
+// pure function's output, not a live call site) so a change that renames
+// containers is deliberate, and checks every direct call-site input maps to
+// the same value on a second call.
 func TestSanitizeProjectName_Deterministic(t *testing.T) {
 	const in = "it-lifecycle-start-Test_Lifecycle_Start_Success"
 	const golden = "it-lifecycle-start-test-lifecyc-35bd36c5"
 	if got := sanitizeProjectName(in); got != golden {
-		t.Errorf("sanitizeProjectName(%q) = %q, want pinned %q (a change here renames real containers; update deliberately)", in, got, golden)
+		t.Errorf("sanitizeProjectName(%q) = %q, want pinned %q (a change here renames containers; update deliberately)", in, got, golden)
 	}
 
 	for _, in := range directCallSiteInputs {
