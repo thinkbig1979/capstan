@@ -41,7 +41,7 @@ import (
 // never a candidate shell process.
 const terminalReapStackYAML = `services:
   target:
-    image: alpine:3.21
+    image: public.ecr.aws/docker/library/alpine:3.21
     command: ["sleep", "3600"]
     restart: "no"
 `
@@ -223,7 +223,7 @@ func waitForCommandCount(t *testing.T, containerName, comm string, want int, msg
 // /dev/null` keeps the container alive with a distinct, uninvolved comm name.
 const terminalReapChildStackYAML = `services:
   target:
-    image: alpine:3.21
+    image: public.ecr.aws/docker/library/alpine:3.21
     command: ["tail", "-f", "/dev/null"]
     restart: "no"
 `
@@ -267,9 +267,10 @@ func TestCloseSession_ReapsBackgroundedChildInsideContainer(t *testing.T) {
 	waitForCommandCount(t, containerName, "sleep", 0, "backgrounded child must be reaped too, not just the shell that spawned it")
 }
 
-// terminalReapNoPsStackYAML uses debian:stable-slim, a mainstream base image
-// that ships a shell but NOT a `ps` binary (verified live: `docker exec <c>
-// ps` exits 126, "executable file not found"). A `ps`-based reap
+// terminalReapNoPsStackYAML uses debian:stable-slim (from the ECR Public
+// mirror), a mainstream base image that ships a shell but NOT a `ps` binary
+// (verified live: `docker exec <c> ps` exits 126, "executable file not
+// found"). A `ps`-based reap
 // implementation silently applies no fix to a container built on this image
 // — exactly the regression TestCloseSession_ReapsShellOnImageWithoutPs below
 // exists to catch. debian's /bin/sh (dash) reports its own `comm` as "sh"
@@ -277,7 +278,7 @@ func TestCloseSession_ReapsBackgroundedChildInsideContainer(t *testing.T) {
 // dockerTopShellCount/dockerTopCommandCount need no image-specific handling.
 const terminalReapNoPsStackYAML = `services:
   target:
-    image: debian:stable-slim
+    image: public.ecr.aws/docker/library/debian:stable-slim
     command: ["sleep", "3600"]
     restart: "no"
 `

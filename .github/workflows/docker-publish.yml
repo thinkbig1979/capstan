@@ -129,14 +129,54 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Docker Hub pulls on this runner go through mirror.gcr.io (D58): the
+      # BuildKit image setup-buildx pulls keeps its docker.io name, which is
+      # the only name buildx verifies, while the bytes come from the mirror.
+      # Before anything uses the daemon, because the script restarts it.
+      - name: Route Docker Hub pulls through mirror.gcr.io
+        run: bash scripts/docker-registry-mirror.sh
+
       # QEMU only emulates the runtime-stage steps (apt-get install, user setup)
       # for arm64; the heavy Go/Node builds cross-compile on the host. Note that
       # since the move to Debian bases this leg is slower than it was under
       # Alpine — dpkg/apt under emulation costs more than apk did.
+      #
+      # Registry pulls in this job get ONE bounded retry each (agent-os-an6d):
+      # QEMU setup pulls the binfmt image (from mirror.gcr.io, Google's
+      # Docker Hub cache: not on ECR Public, D57), Buildx setup pulls the BuildKit
+      # image, and the build pulls the Dockerfile's base images from the ECR
+      # Public mirror, which allows one anonymous pull per second. BuildKit
+      # resolves those bases in parallel (two platforms) and does not read the
+      # local image store, so a pre-pull cannot pace them; a throttled attempt
+      # is retried after a pause instead. The build retry reuses the gha cache.
       - name: Set up QEMU
+        id: qemu
+        continue-on-error: true
         uses: docker/setup-qemu-action@v4
+        with:
+          image: mirror.gcr.io/tonistiigi/binfmt:latest
+
+      - name: Pause before retrying QEMU setup
+        if: steps.qemu.outcome == 'failure'
+        run: sleep 30
+
+      - name: Set up QEMU (retry)
+        if: steps.qemu.outcome == 'failure'
+        uses: docker/setup-qemu-action@v4
+        with:
+          image: mirror.gcr.io/tonistiigi/binfmt:latest
 
       - name: Set up Docker Buildx
+        id: buildx
+        continue-on-error: true
+        uses: docker/setup-buildx-action@v4
+
+      - name: Pause before retrying Buildx setup
+        if: steps.buildx.outcome == 'failure'
+        run: sleep 30
+
+      - name: Set up Docker Buildx (retry)
+        if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
@@ -161,6 +201,37 @@ jobs:
             latest=auto
 
       - name: Build and push
+        id: build
+        continue-on-error: true
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Build identity stamped into the binary via -ldflags. These come from
+          # the same metadata-action step that names the image tag, so
+          # GET /api/v1/version matches the tag the image was published under:
+          # outputs.version is "1.2.3" for a v1.2.3 tag and "manual-<sha>" for a
+          # dispatch run. org.opencontainers.image.created is metadata-action's
+          # own build timestamp, reused so the label and the API agree.
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Same inputs as above. A retried push re-sends tags that may already be
+      # up, which the registry accepts as a no-op.
+      - name: Pause before retrying the build
+        if: steps.build.outcome == 'failure'
+        run: sleep 30
+
+      - name: Build and push (retry)
+        if: steps.build.outcome == 'failure'
         uses: docker/build-push-action@v7
         with:
           context: .

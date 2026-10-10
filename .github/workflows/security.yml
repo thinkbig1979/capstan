@@ -406,7 +406,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Docker Hub pulls on this runner go through mirror.gcr.io (D58): the
+      # BuildKit image setup-buildx pulls keeps its docker.io name, which is
+      # the only name buildx verifies, while the bytes come from the mirror.
+      # Before anything uses the daemon, because the script restarts it.
+      - name: Route Docker Hub pulls through mirror.gcr.io
+        run: bash scripts/docker-registry-mirror.sh
+
+      # Registry pulls in this job get ONE bounded retry each (agent-os-an6d).
+      # Setting up the builder pulls the BuildKit image, and the build pulls
+      # the Dockerfile's base images from the ECR Public mirror, which allows
+      # one anonymous pull per second. BuildKit resolves those bases in
+      # parallel and does not read the local image store, so a pre-pull cannot
+      # pace them; instead a throttled attempt is retried after a pause. The
+      # retry reuses the gha layer cache, so it costs little.
       - name: Set up Docker Buildx
+        id: buildx
+        continue-on-error: true
+        uses: docker/setup-buildx-action@v4
+
+      - name: Pause before retrying Buildx setup
+        if: steps.buildx.outcome == 'failure'
+        run: sleep 30
+
+      - name: Set up Docker Buildx (retry)
+        if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@v4
 
       # Single platform and `load: true` so the image lands in the local daemon
@@ -414,6 +438,25 @@ jobs:
       # but the OS packages and vendored binaries are the same on both arches, so
       # scanning amd64 covers the same advisory surface at half the build cost.
       - name: Build image
+        id: build
+        continue-on-error: true
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: capstan:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Pause before retrying the image build
+        if: steps.build.outcome == 'failure'
+        run: sleep 30
+
+      - name: Build image (retry)
+        if: steps.build.outcome == 'failure'
         uses: docker/build-push-action@v7
         with:
           context: .

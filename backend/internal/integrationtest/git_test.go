@@ -54,7 +54,7 @@ func newGitRepo(t *testing.T) (localDir, remoteDir string) {
 
 	// Create an initial commit so HEAD exists.
 	initialFile := filepath.Join(localDir, "compose.yaml")
-	writeFile(t, initialFile, "services:\n  web:\n    image: alpine:3.21\n    command: sleep 600\n")
+	writeFile(t, initialFile, "services:\n  web:\n    image: public.ecr.aws/docker/library/alpine:3.21\n    command: sleep 600\n")
 	mustGit(t, localDir, "add", ".")
 	mustGit(t, localDir, "commit", "-m", "initial")
 	mustGit(t, localDir, "push", "origin", "main")
@@ -74,7 +74,7 @@ func advanceRemote(t *testing.T, remoteDir string, localDir string) {
 	mustGit(t, clone2, "config", "user.name", "Test")
 
 	writeFile(t, filepath.Join(clone2, "compose.yaml"),
-		"services:\n  web:\n    image: alpine:3.21\n    command: sleep 600\n# changed\n")
+		"services:\n  web:\n    image: public.ecr.aws/docker/library/alpine:3.21\n    command: sleep 600\n# changed\n")
 	mustGit(t, clone2, "add", ".")
 	mustGit(t, clone2, "commit", "-m", "advance remote")
 	mustGit(t, clone2, "push", "origin", "main")
@@ -180,7 +180,7 @@ func TestGit_PullVerified_PartialOnFailedRedeploy(t *testing.T) {
 	// Step 1: commit the crash-looping compose into localDir and push it so the
 	// working tree is clean. This is what the remote will fast-forward INTO when
 	// the next commit is pulled.
-	crashYAML := "services:\n  app:\n    image: alpine:3.21\n    command: [\"sh\",\"-c\",\"exit 1\"]\n    restart: \"no\"\n"
+	crashYAML := "services:\n  app:\n    image: public.ecr.aws/docker/library/alpine:3.21\n    command: [\"sh\",\"-c\",\"exit 1\"]\n    restart: \"no\"\n"
 	writeFile(t, filepath.Join(localDir, "compose.yaml"), crashYAML)
 	mustGit(t, localDir, "add", ".")
 	mustGit(t, localDir, "commit", "-m", "switch to crash-loop service")
@@ -303,7 +303,7 @@ func TestGit_PullVerified_SuccessWithRedeploy(t *testing.T) {
 	localDir, remoteDir := newGitRepo(t)
 	// newGitRepo creates localDir with a healthy initial compose.yaml already committed.
 
-	goodYAML := "services:\n  web:\n    image: alpine:3.21\n    command: [\"sleep\",\"600\"]\n    restart: \"no\"\n"
+	goodYAML := "services:\n  web:\n    image: public.ecr.aws/docker/library/alpine:3.21\n    command: [\"sleep\",\"600\"]\n    restart: \"no\"\n"
 
 	// Step 1: commit the healthy compose into localDir so the tree is clean before pull.
 	writeFile(t, filepath.Join(localDir, "compose.yaml"), goodYAML)

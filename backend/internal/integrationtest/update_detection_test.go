@@ -41,8 +41,8 @@ import (
 func Test_UpToDateImage_NotDetectedAsUpdate(t *testing.T) {
 	RequireDocker(t)
 
-	// Use alpine:3.21 as a small, stable, multi-arch image.
-	const ref = "alpine:3.21"
+	// Use public.ecr.aws/docker/library/alpine:3.21 as a small, stable, multi-arch image.
+	const ref = "public.ecr.aws/docker/library/alpine:3.21"
 
 	// Pull the image so it is present locally.
 	PullPinnedImage(t, ref)
@@ -56,7 +56,11 @@ func Test_UpToDateImage_NotDetectedAsUpdate(t *testing.T) {
 
 	// Fetch the remote digest via truth.RemoteRegistryDigest — the version-
 	// independent implementation that fixes the buildx --format bug.
-	remote, err := truth.RemoteRegistryDigest(ctx, ref)
+	var remote string
+	err := RetryRegistry(t, "RemoteRegistryDigest", func() (err error) {
+		remote, err = truth.RemoteRegistryDigest(ctx, ref)
+		return err
+	})
 	require.NoError(t, err, "RemoteRegistryDigest must succeed for a public image")
 	require.NotEmpty(t, remote, "remote digest must be non-empty")
 
@@ -71,7 +75,12 @@ func Test_UpToDateImage_NotDetectedAsUpdate(t *testing.T) {
 			"if this fails the buildx --format phantom-update bug is present")
 
 	// Cross-check via ImageUpToDate helper.
-	upToDate, localD, remoteD, err := truth.ImageUpToDate(ctx, ref, digests)
+	var upToDate bool
+	var localD, remoteD string
+	err = RetryRegistry(t, "ImageUpToDate", func() (err error) {
+		upToDate, localD, remoteD, err = truth.ImageUpToDate(ctx, ref, digests)
+		return err
+	})
 	require.NoError(t, err)
 	assert.True(t, upToDate,
 		"ImageUpToDate must return true for a freshly-pulled image; local=%s remote=%s",
@@ -92,7 +101,7 @@ func Test_UpToDateImage_NotDetectedAsUpdate(t *testing.T) {
 func Test_DigestComparison_StaleVsUpToDate(t *testing.T) {
 	RequireDocker(t)
 
-	const ref = "alpine:3.21"
+	const ref = "public.ecr.aws/docker/library/alpine:3.21"
 	PullPinnedImage(t, ref)
 
 	digests := ImageRepoDigests(t, ref)
@@ -105,7 +114,11 @@ func Test_DigestComparison_StaleVsUpToDate(t *testing.T) {
 	staleDigest := "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 	// With the stale digest, ImageUpToDate must return false.
-	remote, err := truth.RemoteRegistryDigest(ctx, ref)
+	var remote string
+	err := RetryRegistry(t, "RemoteRegistryDigest", func() (err error) {
+		remote, err = truth.RemoteRegistryDigest(ctx, ref)
+		return err
+	})
 	require.NoError(t, err)
 
 	upToDate := staleDigest == remote
@@ -114,7 +127,11 @@ func Test_DigestComparison_StaleVsUpToDate(t *testing.T) {
 			"this confirms detectability of stale images")
 
 	// With the real local digest, ImageUpToDate must return true.
-	upToDateReal, _, _, err := truth.ImageUpToDate(ctx, ref, digests)
+	var upToDateReal bool
+	err = RetryRegistry(t, "ImageUpToDate", func() (err error) {
+		upToDateReal, _, _, err = truth.ImageUpToDate(ctx, ref, digests)
+		return err
+	})
 	require.NoError(t, err)
 	assert.True(t, upToDateReal,
 		"ImageUpToDate must return true for the real local digest (convergence check)")
@@ -174,18 +191,25 @@ func Test_LocalRepoDigest_RepoMatched(t *testing.T) {
 func Test_RemoteRegistryDigest_ReturnsConsistentDigest(t *testing.T) {
 	RequireDocker(t)
 
-	const ref = "alpine:3.21"
+	const ref = "public.ecr.aws/docker/library/alpine:3.21"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	digest1, err := truth.RemoteRegistryDigest(ctx, ref)
+	var digest1, digest2 string
+	err := RetryRegistry(t, "RemoteRegistryDigest", func() (err error) {
+		digest1, err = truth.RemoteRegistryDigest(ctx, ref)
+		return err
+	})
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(digest1, "sha256:"),
 		"RemoteRegistryDigest must return a sha256: prefixed digest, got %q", digest1)
 
 	// Second call must return the same value (registry digest is stable for a pinned tag).
-	digest2, err := truth.RemoteRegistryDigest(ctx, ref)
+	err = RetryRegistry(t, "RemoteRegistryDigest", func() (err error) {
+		digest2, err = truth.RemoteRegistryDigest(ctx, ref)
+		return err
+	})
 	require.NoError(t, err)
 	assert.Equal(t, digest1, digest2,
 		"RemoteRegistryDigest must return a consistent value for the same ref")

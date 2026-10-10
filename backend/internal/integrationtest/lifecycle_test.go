@@ -42,7 +42,7 @@ import (
 // healthyStackYAML is a small single-service stack that runs indefinitely.
 const healthyStackYAML = `services:
   sleeper:
-    image: alpine:3.21
+    image: public.ecr.aws/docker/library/alpine:3.21
     command: ["sleep", "3600"]
     restart: "no"
 `
@@ -51,7 +51,7 @@ const healthyStackYAML = `services:
 // docker compose up exits 0, but the container lands in "exited" state.
 const crashLoopStackYAML = `services:
   crasher:
-    image: alpine:3.21
+    image: public.ecr.aws/docker/library/alpine:3.21
     command: ["sh", "-c", "exit 1"]
     restart: "no"
 `
@@ -61,7 +61,7 @@ const crashLoopStackYAML = `services:
 // and incorrectly reports success. The dwell window must catch this.
 const slowCrashStackYAML = `services:
   slowcrasher:
-    image: alpine:3.21
+    image: public.ecr.aws/docker/library/alpine:3.21
     command: ["sh", "-c", "sleep 0.7; exit 1"]
     restart: "no"
 `
@@ -118,7 +118,7 @@ func assertCrashOutcome(t *testing.T, ar truth.ActionResult, label string) {
 
 func Test_Lifecycle_Start_Success(t *testing.T) {
 	RequireDocker(t)
-	PullPinnedImage(t, "alpine:3.21")
+	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
 	project := sanitizeProjectName("it-lifecycle-start-" + t.Name())
 	stack, cleanup := tempStack(t, healthyStackYAML, project)
@@ -140,7 +140,7 @@ func Test_Lifecycle_Start_Success(t *testing.T) {
 
 func Test_Lifecycle_Start_CrashLoop(t *testing.T) {
 	RequireDocker(t)
-	PullPinnedImage(t, "alpine:3.21")
+	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
 	project := sanitizeProjectName("it-lifecycle-crash-" + t.Name())
 	stack, cleanup := tempStack(t, crashLoopStackYAML, project)
@@ -160,7 +160,7 @@ func Test_Lifecycle_Start_CrashLoop(t *testing.T) {
 
 func Test_Lifecycle_Start_SlowCrash(t *testing.T) {
 	RequireDocker(t)
-	PullPinnedImage(t, "alpine:3.21")
+	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
 	project := sanitizeProjectName("it-lifecycle-slowcrash-" + t.Name())
 	stack, cleanup := tempStack(t, slowCrashStackYAML, project)
@@ -179,7 +179,7 @@ func Test_Lifecycle_Start_SlowCrash(t *testing.T) {
 
 func Test_Lifecycle_Stop_Success(t *testing.T) {
 	RequireDocker(t)
-	PullPinnedImage(t, "alpine:3.21")
+	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
 	project := sanitizeProjectName("it-lifecycle-stop-" + t.Name())
 	stack, cleanup := tempStack(t, healthyStackYAML, project)
@@ -207,7 +207,7 @@ func Test_Lifecycle_Stop_Success(t *testing.T) {
 
 func Test_Lifecycle_Streaming_CrashLoop(t *testing.T) {
 	RequireDocker(t)
-	PullPinnedImage(t, "alpine:3.21")
+	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
 	project := sanitizeProjectName("it-streaming-crash-" + t.Name())
 	stack, cleanup := tempStack(t, crashLoopStackYAML, project)
@@ -227,7 +227,7 @@ func Test_Lifecycle_Streaming_CrashLoop(t *testing.T) {
 
 func Test_Lifecycle_Streaming_SlowCrash(t *testing.T) {
 	RequireDocker(t)
-	PullPinnedImage(t, "alpine:3.21")
+	PullPinnedImage(t, "public.ecr.aws/docker/library/alpine:3.21")
 
 	project := sanitizeProjectName("it-streaming-slowcrash-" + t.Name())
 	stack, cleanup := tempStack(t, slowCrashStackYAML, project)

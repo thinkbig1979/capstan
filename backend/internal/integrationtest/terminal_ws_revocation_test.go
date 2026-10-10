@@ -10,7 +10,7 @@
 // nothing exercised it before.
 //
 // It is NOT new coverage of the reap itself. terminal_reap_test.go already
-// covers CreateSession/CloseSession directly on alpine:3.21
+// covers CreateSession/CloseSession directly on public.ecr.aws/docker/library/alpine:3.21
 // (TestCloseSession_ReapsShellInsideContainer) and on an image with no `ps`
 // binary (TestCloseSession_ReapsShellOnImageWithoutPs). What those cannot show
 // is that a revocation arriving from ConnectionManager.CloseForSession ever

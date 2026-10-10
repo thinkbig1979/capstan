@@ -27,7 +27,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes full-row-selects arm-refusal pipefail-grep-q awk-portability analysis-caches"
+CHECK_NAMES="readme-size contributing readme-clean docs-tree links navigation env-coverage line-continuation networkidle-probes locator-count-guard ws-registration close-reason getter-errors ws-read-deadline path-containment trusted-networks compose-parity ticker-stop project-name-lookup stack-write-callers rclone-delete-argv goroutine-sends settings-writes full-row-selects arm-refusal pipefail-grep-q awk-portability analysis-caches dockerhub-pulls"
 
 REQUIRED_DOCS="docs/getting-started.md
 docs/how-to/deploy-production.md
@@ -1424,6 +1424,38 @@ check_awk_portability() {
   return 0
 }
 
+# check_dockerhub_pulls delegates to scripts/check-dockerhub-pulls.sh: CI and
+# the release build pull no image from Docker Hub outside a reasoned
+# allowlist, and every pull from the ECR Public mirror is paced or retried
+# (agent-os-an6d). Self-test first, same reasoning as ws-registration.
+check_dockerhub_pulls() {
+  local script="$SCRIPT_DIR/check-dockerhub-pulls.sh"
+  if [ ! -f "$script" ]; then
+    echo "FAIL: dockerhub-pulls - $script not found"
+    return 1
+  fi
+
+  local self status
+  self=$(bash "$script" --self-test 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: dockerhub-pulls - the check's own self-test failed, so its verdict on the tree cannot be trusted:"
+    echo "$self"
+    return 1
+  fi
+
+  local out
+  out=$(bash "$script" 2>&1)
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "PASS: dockerhub-pulls - ${self#dockerhub-pulls }; ${out#check-dockerhub-pulls: }"
+    return 0
+  fi
+  echo "FAIL: dockerhub-pulls - CI pulls from Docker Hub, or pulls from the ECR Public mirror without pacing or a retry:"
+  echo "$out"
+  return 1
+}
+
 # check_analysis_caches delegates to scripts/check-analysis-caches.sh: on a
 # self-hosted runner every golangci-lint, go vet and staticcheck step runs over
 # a per-run GOCACHE under RUNNER_TEMP, so an analyzer verdict never comes from
@@ -1494,6 +1526,7 @@ Valid check names:
   pipefail-grep-q no pipe into grep -q in a script that sets pipefail (a here-string instead)
   awk-portability every awk-using check-*.sh --self-test also passes under mawk, the awk on CI
   analysis-caches every golangci-lint, go vet and staticcheck step on a self-hosted job runs over a per-run GOCACHE
+  dockerhub-pulls no CI or release image pull from Docker Hub; ECR Public mirror pulls paced or retried
 
 With no arguments, all checks run and a summary is printed.
 USAGE
@@ -1529,6 +1562,7 @@ run_check() {
     pipefail-grep-q) check_pipefail_grep_q ;;
     awk-portability) check_awk_portability ;;
     analysis-caches) check_analysis_caches ;;
+    dockerhub-pulls) check_dockerhub_pulls ;;
     *) return 2 ;;
   esac
 }

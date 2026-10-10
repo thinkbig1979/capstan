@@ -110,7 +110,8 @@ updates:
           - patch
 
   # ---------------------------------------------------------------------------
-  # Covers the Dockerfile's pinned bases: node:22-trixie-slim,
+  # Covers the Dockerfile's pinned bases (pulled from the ECR Public mirror,
+  # public.ecr.aws/docker/library/...): node:22-trixie-slim,
   # golang:<version>-trixie, debian:trixie-slim, and the digest-pinned docker:29-cli
   # stage the runtime lifts the Docker CLI binaries out of.
   #
@@ -152,8 +153,16 @@ updates:
     #
     # This encodes the existing policy rather than setting a new one. Moving to
     # the next LTS is a deliberate change across all three files, not a bot PR.
+    #
+    # The Dockerfile now names its bases by their ECR Public mirror path
+    # (public.ecr.aws/docker/library/<image>, agent-os-an6d). Whether
+    # Dependabot reports the dependency as `node` or by that full path is NOT
+    # TESTED, so the rule is stated for both names.
     ignore:
       - dependency-name: node
+        update-types:
+          - version-update:semver-major
+      - dependency-name: public.ecr.aws/docker/library/node
         update-types:
           - version-update:semver-major
 

@@ -11,8 +11,10 @@
 //   - `docker compose` sub-command available (Compose v2 plugin, not the
 //     legacy `docker-compose` binary — matches what the production code uses)
 //   - `docker buildx` available for PullPinnedImage / ImageRepoDigests
-//   - The test runner must have pull access to docker.io/library/alpine
-//     (used as the lightweight test image; no other registry is required)
+//   - The test runner must have pull access to public.ecr.aws/docker/library
+//     (the ECR Public mirror of Docker Official Images; alpine is the
+//     lightweight test image). Docker Hub is not used: anonymous pulls from
+//     shared CI IPs hit its 429 limit (agent-os-an6d).
 //
 // These conditions are met on standard ubuntu-latest GitHub Actions runners
 // and on any developer machine with Docker Desktop or Docker Engine installed.
@@ -170,21 +172,52 @@ func AssertContainerState(t *testing.T, dir, project, service string, wantRunnin
 	}
 }
 
-// PullPinnedImage pulls the given image reference (e.g. "alpine:3.21") using
-// `docker pull`. Tests that need a specific image pre-pulled before asserting
-// digest values should call this. The test is failed if the pull fails.
+// PullPinnedImage pulls the given image reference (e.g.
+// "public.ecr.aws/docker/library/alpine:3.21") using `docker pull`. Tests that
+// need a specific image pre-pulled before asserting digest values should call
+// this. The test is failed if every attempt fails.
 func PullPinnedImage(t *testing.T, ref string) {
 	t.Helper()
 
 	var out bytes.Buffer
-	cmd := exec.Command("docker", "pull", ref)
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-
-	if err := cmd.Run(); err != nil {
+	err := RetryRegistry(t, "docker pull "+ref, func() error {
+		out.Reset()
+		cmd := exec.Command("docker", "pull", ref)
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		return cmd.Run()
+	})
+	if err != nil {
 		t.Fatalf("PullPinnedImage(%q): %v\n%s", ref, err, out.String())
 	}
 }
+
+// RetryRegistry runs op, a call that reaches the image registry, up to
+// registryAttempts times with a growing pause, and returns the last error.
+//
+// ECR Public allows one anonymous pull per second per IP, and `docker pull`
+// asks the registry even when the image is already local, so a throttled call
+// is retried a bounded number of times instead of failing the run. Only the
+// transport is retried: callers still assert on what op produced.
+func RetryRegistry(t *testing.T, what string, op func() error) error {
+	t.Helper()
+
+	var err error
+	for attempt := 1; attempt <= registryAttempts; attempt++ {
+		if err = op(); err == nil {
+			return nil
+		}
+		t.Logf("%s: attempt %d/%d: %v", what, attempt, registryAttempts, err)
+		if attempt < registryAttempts {
+			time.Sleep(time.Duration(2*attempt) * time.Second)
+		}
+	}
+	return err
+}
+
+// registryAttempts bounds RetryRegistry: at most 2+4+6+8 s of waiting, well
+// past the mirror's one-second window.
+const registryAttempts = 5
 
 // ImageRepoDigests returns the RepoDigests slice for a locally present image
 // by running `docker inspect --format {{json .RepoDigests}} <ref>`.
