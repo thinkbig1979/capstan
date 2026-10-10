@@ -93,6 +93,17 @@ jobs:
       - name: Toolchain and pin lockstep
         run: bash scripts/check-toolchain-lockstep.sh
 
+      # The comment above "Install Trivy" in security.yml states the
+      # setup-trivy and trivy-action pins and two `gh api` commands that verify
+      # them. Dependabot bumps either action and cannot touch the comment; this
+      # fails until whoever merges the bump re-runs those commands and updates
+      # it. Offline, so it does not read trivy-action's internal pin itself.
+      # Same job and placement reasoning as the step above. agent-os-028z.
+      - name: Trivy pin comment lockstep
+        run: |
+          bash scripts/check-trivy-lockstep.sh --self-test
+          bash scripts/check-trivy-lockstep.sh
+
       # go-version-file reads backend/go.mod, and from v6 setup-go prefers its
       # `toolchain` directive over the `go` directive — so CI installs exactly
       # the toolchain the code is pinned to. The v6 pin is load-bearing: v5
