@@ -64,6 +64,11 @@ jobs:
             // This workflow's own jobs appear as check runs on the same commit;
             // waiting on ourselves would deadlock until the timeout.
             const SELF = new Set(['verify-checks', 'build-and-push'])
+            // Dependabot's update jobs also post check runs, named "Dependabot",
+            // on the main commit they ran against. They report whether a
+            // registry answered (ECR Public rate-limits them, agent-os-u7z8),
+            // not whether the commit is healthy, so they never gate a release.
+            const IGNORED = new Set(['Dependabot'])
             // neutral/skipped are how path-filtered and advisory jobs report a
             // legitimate no-op. Only an actual bad conclusion should block.
             const OK = new Set(['success', 'skipped', 'neutral'])
@@ -76,7 +81,7 @@ jobs:
                 ref: context.sha,
                 per_page: 100,
               })
-              const relevant = runs.filter(c => !SELF.has(c.name))
+              const relevant = runs.filter(c => !SELF.has(c.name) && !IGNORED.has(c.name))
 
               // No checks at all means the tagged commit never ran CI — e.g. a
               // tag on a commit that was never pushed to a branch. Refusing is

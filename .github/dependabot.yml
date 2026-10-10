@@ -23,6 +23,12 @@
 #
 # Schedules are spread across the week rather than all landing Monday, so a
 # quiet week produces four small PRs on four days instead of one wall.
+#
+# open-pull-requests-limit is 1 per entry (agent-os-u7z8). Editing this file
+# makes Dependabot run every entry at once; on 2026-10-10 that opened four PRs
+# within four minutes, and their CI (about 11 runs) jammed the three
+# self-hosted runners ahead of main's own CI. With 1, an entry waits until its
+# open PR is merged or closed.
 
 version: 2
 
@@ -35,7 +41,7 @@ updates:
       day: monday
       time: '05:00'
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     commit-message:
       prefix: chore
       include: scope
@@ -97,7 +103,7 @@ updates:
       day: tuesday
       time: '05:00'
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     commit-message:
       prefix: chore
       include: scope
@@ -133,7 +139,7 @@ updates:
       day: wednesday
       time: '05:00'
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     commit-message:
       prefix: chore
       include: scope
@@ -154,15 +160,13 @@ updates:
     # This encodes the existing policy rather than setting a new one. Moving to
     # the next LTS is a deliberate change across all three files, not a bot PR.
     #
-    # The Dockerfile now names its bases by their ECR Public mirror path
-    # (public.ecr.aws/docker/library/<image>, agent-os-an6d). Whether
-    # Dependabot reports the dependency as `node` or by that full path is NOT
-    # TESTED, so the rule is stated for both names.
+    # The Dockerfile names its bases by their ECR Public mirror path
+    # (public.ecr.aws/docker/library/<image>, agent-os-an6d), and Dependabot
+    # reports that dependency as `docker/library/node`: PR #621 "Bump
+    # docker/library/node from 22-trixie-slim to 26-trixie-slim" got through
+    # when this rule named only `node` and the full mirror path (agent-os-u7z8).
     ignore:
-      - dependency-name: node
-        update-types:
-          - version-update:semver-major
-      - dependency-name: public.ecr.aws/docker/library/node
+      - dependency-name: docker/library/node
         update-types:
           - version-update:semver-major
 
@@ -206,7 +210,7 @@ updates:
       day: friday
       time: '05:00'
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     commit-message:
       prefix: chore
       include: scope
@@ -228,7 +232,7 @@ updates:
       day: thursday
       time: '05:00'
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     commit-message:
       prefix: chore
       include: scope
