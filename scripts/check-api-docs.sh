@@ -145,6 +145,10 @@ extract_route_calls() {
     files+=("$f")
   done < <(command find "$HANDLERS_DIR" -maxdepth 1 -type f -name '*.go' ! -name '*_test.go' | command sort)
 
+  # awk with no file operands reads stdin, which hangs CI on an empty handlers
+  # dir instead of reaching check_api_docs's "extracted zero routes" failure.
+  [ "${#files[@]}" -eq 0 ] && return 0
+
   command awk '
     FNR == 1 { fn = "" }
     /^func \(h \*[A-Za-z]+\) Register[A-Za-z]*\(/ {
@@ -276,17 +280,160 @@ check_api_docs() {
 
 usage() {
   cat <<USAGE >&2
-Usage: $(basename "$0") [--list]
+Usage: $(basename "$0") [--list | --self-test]
 
 With no arguments, runs the coverage check and prints one PASS/FAIL line.
 --list prints the extracted route table (one "METHOD /path" per line) and
 exits 0, for debugging what the extractor sees.
+--self-test runs the check over fixture handler dirs and docs (red and green
+controls) and exits non-zero if any control misbehaves.
 USAGE
+}
+
+ST_RUN=0
+ST_FAILS=0
+
+# selftest_case NAME WANT_STATUS WANT_OUTPUT_REGEX HANDLERS_DIR DOC [ROUTE_INCLUDE [ROUTE_ALLOW]]
+# Points the check's globals at fixtures inside a subshell, so the real tables
+# and paths are untouched afterwards. The awk that runs is the real extractor.
+selftest_case() {
+  local name="$1" want="$2" pat="$3" out status
+  ST_RUN=$((ST_RUN + 1))
+  out=$(
+    HANDLERS_DIR="$4"
+    DOC="$5"
+    ROUTE_INCLUDE="${6-}"
+    ROUTE_ALLOW="${7-}"
+    check_api_docs 2>&1
+  )
+  status=$?
+  if [ "$status" -ne "$want" ] || ! command grep -qE -- "$pat" <<<"$out"; then
+    ST_FAILS=$((ST_FAILS + 1))
+    echo "FAIL: api-docs self-test case \"$name\": want exit $want matching /$pat/, got exit $status:"
+    echo "$out"
+  fi
+}
+
+# write_handlers DIR writes a handler tree the extractor must read fully:
+# every verb, a path-less call, a second Register method, and three files it
+# must ignore (a _test.go, a non-Register method, a call after the closing
+# brace). auth.go:RegisterRoutes and settings.go:RegisterRoutes are real
+# PREFIX_MAP keys, so the fixture reuses the real mapping.
+write_handlers() {
+  mkdir -p "$1"
+  cat > "$1/auth.go" <<'EOF'
+package handlers
+
+func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup) {
+	group.GET("/me", h.Me)
+	group.POST("/login", h.Login)
+	group.PUT("/profile", h.Profile)
+	group.PATCH("/password", h.Password)
+	group.DELETE("/session", h.Logout)
+	group.GET("", h.Root)
+}
+
+func (h *AuthHandler) helper(group *gin.RouterGroup) {
+	group.GET("/not-a-route", h.X)
+}
+EOF
+  cat > "$1/settings.go" <<'EOF'
+package handlers
+
+func (h *SettingsHandler) RegisterRoutes(group *gin.RouterGroup) {
+	group.GET("/settings", h.Get)
+}
+EOF
+  cat > "$1/auth_test.go" <<'EOF'
+package handlers
+
+func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup) {
+	group.GET("/from-a-test", h.X)
+}
+EOF
+}
+
+# write_doc FILE ROUTE... writes a doc holding each ROUTE as a backticked entry.
+write_doc() {
+  local f="$1" r
+  shift
+  : > "$f"
+  for r in "$@"; do
+    printf '| `%s` | documented |\n' "$r" >> "$f"
+  done
+}
+
+# write_doc_except FILE EXCLUDE ROUTE... is write_doc minus the one ROUTE equal
+# to EXCLUDE. Exact match on purpose: a ${arr[@]/pat} substitution would also
+# rewrite the longer routes that merely start with the pattern.
+write_doc_except() {
+  local f="$1" skip="$2" r
+  shift 2
+  : > "$f"
+  for r in "$@"; do
+    [ "$r" = "$skip" ] || printf '| `%s` | documented |\n' "$r" >> "$f"
+  done
+}
+
+selftest() {
+  local tmp
+  tmp=$(mktemp -d) || { echo "FAIL: api-docs self-test - could not create a temp directory"; return 2; }
+  trap 'rm -rf "$tmp"' RETURN
+  local h="$tmp/handlers" inc="POST /api/v1/compose/lint|fixture"
+  write_handlers "$h"
+  local -a all=("GET /api/v1/auth/me" "POST /api/v1/auth/login" "PUT /api/v1/auth/profile"
+    "PATCH /api/v1/auth/password" "DELETE /api/v1/auth/session" "GET /api/v1/auth"
+    "GET /api/v1/settings" "POST /api/v1/compose/lint")
+
+  # GREEN: every verb, the path-less call and the ROUTE_INCLUDE row are
+  # documented. 7 handler routes + 1 include = 8; the helper, the _test.go
+  # and the non-Register method add nothing.
+  write_doc "$tmp/doc-full.md" "${all[@]}"
+  selftest_case "all routes documented" 0 "PASS: api-docs - all 8 extracted route" "$h" "$tmp/doc-full.md" "$inc"
+
+  # RED: one route missing from the doc is named, and only that one.
+  write_doc_except "$tmp/doc-no-del.md" "DELETE /api/v1/auth/session" "${all[@]}"
+  selftest_case "undocumented DELETE" 1 "registered but not documented.*DELETE /api/v1/auth/session" "$h" "$tmp/doc-no-del.md" "$inc"
+
+  # RED: the ROUTE_INCLUDE route is checked like any other.
+  write_doc_except "$tmp/doc-no-lint.md" "POST /api/v1/compose/lint" "${all[@]}"
+  selftest_case "undocumented ROUTE_INCLUDE row" 1 "not documented.*POST /api/v1/compose/lint" "$h" "$tmp/doc-no-lint.md" "$inc"
+
+  # RED: a documented route that merely CONTAINS the registered one as a
+  # prefix does not count (doc has GET /api/v1/auth/me, not GET /api/v1/auth);
+  # the doc match is on the whole backticked METHOD+PATH.
+  write_doc_except "$tmp/doc-prefix.md" "GET /api/v1/auth" "${all[@]}"
+  selftest_case "longer doc entry is not documentation of its prefix" 1 "not documented.*GET /api/v1/auth( |$)" "$h" "$tmp/doc-prefix.md" "$inc"
+
+  # GREEN: an allowlisted route may be absent from the doc, and is counted.
+  selftest_case "allowlisted route" 0 "PASS: api-docs - all 8 .*\(1 allowlisted\)" "$h" "$tmp/doc-no-del.md" "$inc" "DELETE /api/v1/auth/session|fixture reason"
+
+  # RED: a Register method whose file:func has no PREFIX_MAP row fails
+  # rather than guessing a prefix.
+  mkdir -p "$tmp/unmapped"
+  printf 'package handlers\n\nfunc (h *NewHandler) RegisterRoutes(group *gin.RouterGroup) {\n\tgroup.GET("/x", h.X)\n}\n' > "$tmp/unmapped/brandnew.go"
+  selftest_case "file:func missing from PREFIX_MAP" 1 "no PREFIX_MAP entry: UNMAPPED brandnew\.go:RegisterRoutes GET /x" "$tmp/unmapped" "$tmp/doc-full.md" "$inc"
+
+  # RED: zero extracted routes is a broken extractor, not a pass.
+  mkdir -p "$tmp/empty"
+  selftest_case "zero routes extracted" 1 "extracted zero routes" "$tmp/empty" "$tmp/doc-full.md" ""
+
+  # RED: missing handlers dir and missing doc are named, not read as clean.
+  selftest_case "handlers dir missing" 1 "api-docs - .*/nope not found" "$tmp/nope" "$tmp/doc-full.md" "$inc"
+  selftest_case "doc missing" 1 "api\.md does not exist" "$h" "$tmp/nope.md" "$inc"
+
+  if [ "$ST_FAILS" -ne 0 ]; then
+    echo "FAIL: api-docs self-test - $ST_FAILS of $ST_RUN control(s) failed"
+    return 1
+  fi
+  echo "api-docs self-test: $ST_RUN control(s) passed (2 green, 7 red)"
+  return 0
 }
 
 main() {
   if [ "$#" -gt 0 ]; then
     case "$1" in
+      --self-test) selftest; exit $? ;;
       --list)
         local -a routes
         build_routes
