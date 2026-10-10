@@ -71,8 +71,11 @@ jobs:
     # these are required by branch protection, and a skipped required check
     # blocks a PR forever rather than failing it honestly.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'self-hosted' }}
-    # The suite takes well under a minute; this is a hang guard, not a budget.
-    timeout-minutes: 10
+    # A hang guard with headroom, not a budget. The suite took 6.5-9.6 min on
+    # the self-hosted runners in October 2026 (internal/services and
+    # internal/handlers about 230 s each), and a 10-minute limit cancelled it
+    # twice in one morning under load (agent-os-6pjm).
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
