@@ -167,6 +167,10 @@ var RemoteRegistryDigest = func(ctx context.Context, ref string) (string, error)
 //   - remote: the digest fetched from the registry
 //   - err: non-nil if either digest cannot be resolved; callers must not
 //     silently treat an error as "up to date" or "update available"
+//
+// Only tests call it (internal/integrationtest/update_detection_test.go uses
+// it as a cross-check). Production compares the same two digests itself, in
+// services.DockerService.CheckForUpdates via selectUpdates.
 func ImageUpToDate(ctx context.Context, imageRef string, repoDigests []string) (upToDate bool, local string, remote string, err error) {
 	local, ok := LocalRepoDigest(imageRef, repoDigests)
 	if !ok {

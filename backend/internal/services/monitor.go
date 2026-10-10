@@ -47,12 +47,6 @@ type Database interface {
 	GetStackByProjectName(projectName string) (*models.Stack, error)
 }
 
-func NewMonitorService(dockerClient *client.Client) *MonitorService {
-	return &MonitorService{
-		client: dockerClient,
-	}
-}
-
 func NewMonitorServiceWithDB(dockerClient *client.Client, db Database) *MonitorService {
 	return &MonitorService{
 		client: dockerClient,

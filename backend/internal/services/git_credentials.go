@@ -47,7 +47,7 @@ const defaultGitHTTPSUser = "oauth2"
 //     directory, which is the exact failure mode being fixed (agent-os-qll):
 //     a feature that reports "configured" while doing something else.
 //  2. directory authType "ssh" — no HTTPS credential applies. SSH key auth
-//     is a separate, currently unimplemented path (nothing in gitCmd consumes
+//     is a separate, currently unimplemented path (nothing in gitCmdWithCreds consumes
 //     GitSSHKeyPath); this only makes sure "ssh" never falls through to the
 //     https credential below.
 //  3. directory authType "" or "inherit" (or no directory row at all) — the
@@ -81,9 +81,9 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 			// cred.GitAuthType, so an "ssh" directory would receive an HTTPS token
 			// in violation of case 2 above.
 			//
-			// No error is propagated: httpsCredentials feeds gitCmd, which every
+			// No error is propagated: httpsCredentials feeds gitCmdWithCreds, which every
 			// git invocation goes through, including purely local ones like
-			// `git log` and `git diff` that never contact a remote. gitCmd attaches
+			// `git log` and `git diff` that never contact a remote. gitCmdWithCreds attaches
 			// a credential helper only for a non-empty token, so those keep working
 			// and remote operations fail with git's own auth error instead.
 			//
@@ -218,27 +218,23 @@ func (s *GitService) httpsCredentials(dirPath string) (user, token string) {
 	return user, token
 }
 
-// gitCmd builds the git child process for dirPath with the HTTPS credential
-// attached when one is configured. It also returns the token it used, so the
-// caller can redact it from output without resolving (and decrypting) it twice.
+// gitCmdWithCreds builds the git child process for dirPath with the HTTPS
+// credential attached when one is configured. It also returns the token it
+// used, so the caller can redact it from output without resolving (and
+// decrypting) it twice.
 //
 // The credential is applied to every invocation rather than to a hand-picked
 // list of remote-contacting subcommands: pull, fetch, clone, ls-remote and
 // `status` with a configured upstream can all reach the network, and an
 // omission from such a list is exactly the failure mode being fixed here. git
 // only runs the helper when a remote actually challenges it.
-func (s *GitService) gitCmd(ctx context.Context, dirPath string, args ...string) (*exec.Cmd, string) {
-	user, token := s.httpsCredentials(dirPath)
-	return s.gitCmdWithCreds(ctx, dirPath, user, token, args...)
-}
-
-// gitCmdWithCreds is gitCmd with credential resolution factored out: it takes
-// an already-resolved (user, token) pair instead of calling httpsCredentials
-// itself. A single logical git operation (status, pull, log, diff) issues
-// several of these; resolving once at the top of that operation and passing
-// the result to every call here — instead of letting each one re-resolve via
-// gitCmd — is what turns N DB reads/decrypt attempts and N duplicate log lines
-// per operation into one (agent-os-9ha). It intentionally carries no memoizing
+//
+// It takes an already-resolved (user, token) pair instead of calling
+// httpsCredentials itself. A single logical git operation (status, pull, log,
+// diff) issues several of these; resolving once at the top of that operation
+// and passing the result to every call here — instead of letting each one
+// re-resolve — is what turns N DB reads/decrypt attempts and N duplicate log
+// lines per operation into one (agent-os-9ha). It intentionally carries no memoizing
 // state of its own: see the doc comment on GitService for why a shared cache
 // was rejected.
 //

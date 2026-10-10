@@ -1032,7 +1032,7 @@ func (s *GitService) GetLog(dirPath string, limit, offset int) (*models.LogResul
 // first command is a log of a caller-supplied hash, which fails with
 // "bad object" for a perfectly good repo.
 //
-// The probe must be the git CLI, not go-git. gitCmd sets cmd.Dir without
+// The probe must be the git CLI, not go-git. gitCmdWithCreds sets cmd.Dir without
 // GIT_CEILING_DIRECTORIES, so git walks up to a parent .git: a directory nested
 // inside a repo, and a bare repo, both serve logs correctly today. go-git's
 // PlainOpen reports neither as a repository, so a go-git probe would turn two

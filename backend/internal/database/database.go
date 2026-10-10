@@ -146,6 +146,9 @@ func NewWithEncryptor(dataDir string, encryptor TokenEncryptor) (*DB, error) {
 	return &DB{db: db, encryptor: encryptor}, nil
 }
 
+// NewWithMigrations is NewWithMigrationsAndEncryptor with the fail-closed
+// noEncryptor. Only tests call it; production (cmd/server/main.go) passes a
+// real encryptor to NewWithMigrationsAndEncryptor.
 func NewWithMigrations(dataDir string) (*DB, error) {
 	return NewWithMigrationsAndEncryptor(dataDir, noEncryptor{})
 }
