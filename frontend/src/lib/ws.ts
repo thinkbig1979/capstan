@@ -55,8 +55,7 @@ export const MAX_RECONNECT_DELAY_MS = 30000
  *  inside its docker-event loop, so a quiet host sends NOTHING after open. A
  *  message-gated reset would count every genuine reconnect there as a failed
  *  attempt and give up after five in one page lifetime. */
-/** @knipignore exported for lib/__tests__/ws-close-policy.test.ts, which asserts the reset window */
-export const RECONNECT_RESET_AFTER_MS = 5000
+const RECONNECT_RESET_AFTER_MS = 5000
 
 export class WSClient {
   private ws: WebSocket | null = null
