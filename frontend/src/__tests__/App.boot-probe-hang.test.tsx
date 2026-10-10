@@ -121,7 +121,14 @@ describe('App boot probes are bounded per attempt when the backend accepts but n
       await vi.advanceTimersByTimeAsync(BOOT_BUDGET_MS)
     })
 
-    expect(screen.getByText('Enter your credentials to access Capstan')).toBeInTheDocument()
+    // agent-os-kd68: a hung /auth/me is a no-response failure, so after its
+    // retries the app shows the session error screen, not the login form (a
+    // login form can't work against a backend that never answers). Still a
+    // rendered branch, still no protected page.
+    expect(screen.getByText(/Could not load your session/)).toBeInTheDocument()
+    expect(screen.queryByText('Enter your credentials to access Capstan')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('app-shell')).not.toBeInTheDocument()
+    expect(useAuthStore.getState().isAuthenticated).toBe(false)
     // agent-os-6hux's fail-closed default survives a hang, exactly as it
     // survives a rejection: an unreadable probe never opens the app.
     expect(useAuthStore.getState().authDisabled).toBe(false)
