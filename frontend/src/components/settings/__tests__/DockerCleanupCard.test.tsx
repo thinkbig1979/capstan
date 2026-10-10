@@ -655,6 +655,21 @@ describe('DockerCleanupCard — a cleared numeric field is empty, not 0 (agent-o
       expect(await screen.findByRole('button', { name: 'Run cleanup now' })).toBeEnabled()
     })
 
+    it('shows the server refusal when another cleanup is already running (agent-os-yicu)', async () => {
+      // The real backend body (handlers/docker_cleanup.go runCleanup): 409
+      // CLEANUP_IN_PROGRESS from NewAppError, so no details.
+      const refusal = 'A Docker cleanup is already running. Wait for it to finish, then check the history.'
+      mockRunCleanup.mockRejectedValue({ code: 'CLEANUP_IN_PROGRESS', message: refusal, status: 409 })
+      renderWithClient()
+      await clickRun()
+      fireEvent.click(await screen.findByRole('button', { name: 'Run cleanup' }))
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1))
+      expect(toast.error).toHaveBeenCalledWith('Failed to run the cleanup', { description: refusal })
+      expect(toast.success).not.toHaveBeenCalled()
+      expect(await screen.findByRole('button', { name: 'Run cleanup now' })).toBeEnabled()
+    })
+
     it('shows a failed run row as a failure when the server answered 200', async () => {
       mockRunCleanup.mockResolvedValue({ ...FAILED_RUN, minAgeHours: 168 })
       renderWithClient()

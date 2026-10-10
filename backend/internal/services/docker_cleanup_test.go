@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -502,4 +503,113 @@ func TestDockerCleanupPreviewForecastsEveryReclaimFigure(t *testing.T) {
 
 	assert.Equal(t, int64(run.ImagesDeleted), int64(len(preview.Candidates)))
 	assert.Equal(t, run.BytesReclaimed, preview.ReclaimableBytes)
+}
+
+// yicuBlockingPruner holds PruneImages open until released and counts how many
+// prunes were entered, and the most that were in flight at once.
+type yicuBlockingPruner struct {
+	fn7x2FakeDocker
+	entered chan struct{}
+	release chan struct{}
+
+	mu          sync.Mutex
+	prunes      int
+	inFlight    int
+	maxInFlight int
+}
+
+func (f *yicuBlockingPruner) PruneImages(ctx context.Context, opts PruneOptions) (image.PruneReport, error) {
+	f.mu.Lock()
+	f.prunes++
+	f.inFlight++
+	if f.inFlight > f.maxInFlight {
+		f.maxInFlight = f.inFlight
+	}
+	f.mu.Unlock()
+	f.entered <- struct{}{}
+	<-f.release
+	f.mu.Lock()
+	f.inFlight--
+	f.mu.Unlock()
+	return image.PruneReport{}, nil
+}
+
+func (f *yicuBlockingPruner) PruneBuildCache(context.Context, PruneOptions) (*build.CachePruneReport, error) {
+	return &build.CachePruneReport{}, nil
+}
+
+// yicuLockedStore is fn7x2FakeStore made safe for concurrent writers, so that on
+// unguarded code the test fails on its prune assertion, not on a race inside
+// the fake.
+type yicuLockedStore struct {
+	mu   sync.Mutex
+	runs []models.DockerCleanupRun
+}
+
+func (s *yicuLockedStore) CreateDockerCleanupRun(r *models.DockerCleanupRun) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runs = append(s.runs, *r)
+	return nil
+}
+
+func (s *yicuLockedStore) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.runs)
+}
+
+// TestDockerCleanupExecuteIsSingleFlight pins agent-os-yicu: the scheduler tick
+// and the manual-run handler both reach the prune through Execute, so Execute
+// itself refuses a second call while a run is in progress. The second call
+// returns ErrCleanupInProgress with no run, prunes nothing and records nothing.
+//
+// The second call is made while the first is provably INSIDE PruneImages (the
+// entered channel), so this is not a timing race the test can win by luck.
+func TestDockerCleanupExecuteIsSingleFlight(t *testing.T) {
+	docker := &yicuBlockingPruner{entered: make(chan struct{}, 2), release: make(chan struct{})}
+	store := &yicuLockedStore{}
+	svc := NewDockerCleanupService(docker, store)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := svc.Execute(context.Background(), TriggerScheduled, 24)
+		firstDone <- err
+	}()
+	<-docker.entered
+
+	secondDone := make(chan struct{})
+	var secondRun *models.DockerCleanupRun
+	var secondErr error
+	go func() {
+		defer close(secondDone)
+		secondRun, secondErr = svc.Execute(context.Background(), TriggerManual, 24)
+	}()
+
+	// On the unguarded code the second call blocks inside the fake's prune, so
+	// give it a bounded chance to arrive there before releasing both.
+	select {
+	case <-secondDone:
+	case <-docker.entered:
+	case <-time.After(2 * time.Second):
+	}
+	close(docker.release)
+	require.NoError(t, <-firstDone)
+	<-secondDone
+
+	docker.mu.Lock()
+	prunes, maxInFlight := docker.prunes, docker.maxInFlight
+	docker.mu.Unlock()
+	require.Equal(t, 1, maxInFlight, "two prunes ran at the same time")
+	require.Equal(t, 1, prunes, "the refused call still pruned")
+	require.ErrorIs(t, secondErr, ErrCleanupInProgress)
+	require.Nil(t, secondRun, "a refusal is not a run and must not look like one")
+	require.Equal(t, 1, store.count(), "a refused call wrote a history row for a run that never happened")
+
+	// The guard is released when the run ends: a later call runs normally.
+	docker.release = make(chan struct{})
+	close(docker.release)
+	_, err := svc.Execute(context.Background(), TriggerManual, 24)
+	require.NoError(t, err, "the guard was not released after the first run finished")
+	require.Equal(t, 2, store.count())
 }

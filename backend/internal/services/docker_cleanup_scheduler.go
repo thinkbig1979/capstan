@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -45,10 +46,11 @@ const (
 	// no use case for housekeeping this coarse.
 	MinCleanupIntervalHours = 1
 
-	// dockerCleanupCycleTimeout bounds one cleanup cycle. A prune of a badly
-	// overgrown image store is slow but not hour-slow; the bound exists so a
-	// wedged daemon cannot hold the scheduler forever.
-	dockerCleanupCycleTimeout = 30 * time.Minute
+	// DockerCleanupRunTimeout bounds one cleanup run, scheduled or manual. A
+	// prune of a badly overgrown image store is slow but not hour-slow; the
+	// bound exists so a wedged daemon cannot hold the scheduler, or the
+	// single-flight guard every run takes, forever (agent-os-yicu).
+	DockerCleanupRunTimeout = 30 * time.Minute
 )
 
 // dockerCleanupRunner is the narrow interface the scheduler needs from
@@ -421,10 +423,17 @@ func (s *DockerCleanupSchedulerService) runCycle(ctx context.Context) {
 		return
 	}
 
-	cycleCtx, cancel := context.WithTimeout(ctx, dockerCleanupCycleTimeout)
+	cycleCtx, cancel := context.WithTimeout(ctx, DockerCleanupRunTimeout)
 	defer cancel()
 
 	run, err := s.runner.Execute(cycleCtx, TriggerScheduled, policy.MinAgeHours)
+	if errors.Is(err, ErrCleanupInProgress) {
+		// A manual run holds the guard. That run is the cleanup this tick would
+		// have done and it records its own row, so this is a skip like the
+		// tick-overlap one in beginCycle, not a failure (agent-os-yicu).
+		s.logger.Warn("Docker cleanup already running (manual run); skipping tick")
+		return
+	}
 	if err != nil {
 		s.logger.Error("Scheduled Docker cleanup failed", "error", err)
 		if run == nil {

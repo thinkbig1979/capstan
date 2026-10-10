@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -43,6 +44,12 @@ const (
 	// database. agent-os-s21h is the open bug from /updates/history having no
 	// maximum.
 	maxCleanupHistoryLimit = 100
+
+	// cleanupInProgressCode and its message answer a manual run that lands while
+	// another cleanup holds DockerCleanupService's single-flight guard. The
+	// message is what the card shows, so it says what to do next.
+	cleanupInProgressCode    = "CLEANUP_IN_PROGRESS"
+	cleanupInProgressMessage = "A Docker cleanup is already running. Wait for it to finish, then check the history."
 )
 
 // cleanupPolicyResponse is the wire shape of GET/PUT /resources/cleanup/policy.
@@ -263,7 +270,21 @@ func (h *ResourcesHandler) runCleanup(c *gin.Context) {
 		return
 	}
 
-	run, err := h.cleanup.Execute(c.Request.Context(), services.TriggerManual, minAge)
+	// The run's lifetime belongs to the run, not to the request (safe-defaults
+	// rule 15): closing the tab must not abort a prune halfway, leaving the
+	// build-cache half undone. The timeout is what bounds it instead, and it
+	// matters more now that Execute holds a single-flight guard: an unbounded
+	// manual run would block every scheduled tick behind it (agent-os-yicu).
+	runCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), services.DockerCleanupRunTimeout)
+	defer cancel()
+	run, err := h.cleanup.Execute(runCtx, services.TriggerManual, minAge)
+	if errors.Is(err, services.ErrCleanupInProgress) {
+		// Another run (scheduled or manual) holds the guard. Nothing ran and
+		// nothing was recorded, so this is a refusal, not a failure
+		// (agent-os-yicu).
+		handleError(c, models.NewAppError(http.StatusConflict, cleanupInProgressCode, cleanupInProgressMessage))
+		return
+	}
 	if err != nil {
 		// Execute records a failed run row before returning, so the history is
 		// already honest; this only turns the error into a response.
