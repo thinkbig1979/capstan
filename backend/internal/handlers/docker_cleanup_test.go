@@ -40,6 +40,11 @@ type fn7x3FakeCleanup struct {
 	preview    *services.DockerCleanupPreview
 	previewErr error
 	executeErr error
+
+	// What Execute saw of its context, read at the moment it was called.
+	executeCtxErr      error
+	executeHasDeadline bool
+	executeDeadline    time.Time
 }
 
 func (f *fn7x3FakeCleanup) Preview(_ context.Context, minAgeHours int) (*services.DockerCleanupPreview, error) {
@@ -58,9 +63,11 @@ func (f *fn7x3FakeCleanup) Preview(_ context.Context, minAgeHours int) (*service
 	}, nil
 }
 
-func (f *fn7x3FakeCleanup) Execute(_ context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error) {
+func (f *fn7x3FakeCleanup) Execute(ctx context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.executeCtxErr = ctx.Err()
+	f.executeDeadline, f.executeHasDeadline = ctx.Deadline()
 	f.executeCalls = append(f.executeCalls, fn7x3HandlerExecuteCall{trigger: trigger, minAgeHours: minAgeHours})
 	if f.executeErr != nil {
 		return nil, f.executeErr
@@ -546,4 +553,33 @@ func TestDockerCleanupRunRefusesWhileARunIsInProgress(t *testing.T) {
 
 	require.Len(t, cleanup.executed(), 1)
 	require.Empty(t, auditEntries(t, db, services.ActionPrune), "a refused run left an audit row for a prune that never happened")
+}
+
+// TestDockerCleanupRunOutlivesTheRequest: a manual run is detached from the
+// request that started it (safe-defaults rule 15), so a closed tab does not
+// cancel the prune, and it runs under DockerCleanupRunTimeout instead, so it
+// cannot hold the single-flight guard forever (agent-os-yicu).
+//
+// The request's context is cancelled BEFORE it is served, the strongest form of
+// "the tab closed": a handler passing c.Request.Context() through hands Execute
+// an already-cancelled context with no deadline.
+func TestDockerCleanupRunOutlivesTheRequest(t *testing.T) {
+	db := fn7x3MemoryDB(t)
+	r, cleanup, _ := fn7x3Router(t, db)
+
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	cancelReq()
+	req := httptest.NewRequest(http.MethodPost, "/api/resources/cleanup/run", nil).WithContext(reqCtx)
+	w := httptest.NewRecorder()
+	before := time.Now()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "body = %s", w.Body.String())
+
+	cleanup.mu.Lock()
+	defer cleanup.mu.Unlock()
+	require.Len(t, cleanup.executeCalls, 1)
+	require.NoError(t, cleanup.executeCtxErr, "the closed request cancelled the prune's context")
+	require.True(t, cleanup.executeHasDeadline, "a detached run with no deadline could hold the cleanup guard forever")
+	require.WithinDuration(t, before.Add(services.DockerCleanupRunTimeout), cleanup.executeDeadline, time.Minute,
+		"the manual run is not bounded by the shared run timeout")
 }
