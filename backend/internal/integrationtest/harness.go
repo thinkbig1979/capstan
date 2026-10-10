@@ -185,10 +185,14 @@ func PullPinnedImage(t *testing.T, ref string) {
 		cmd := exec.Command("docker", "pull", ref)
 		cmd.Stdout = &out
 		cmd.Stderr = &out
-		return cmd.Run()
+		if err := cmd.Run(); err != nil {
+			// The output says why (a 429 reads "toomanyrequests").
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(out.String()))
+		}
+		return nil
 	})
 	if err != nil {
-		t.Fatalf("PullPinnedImage(%q): %v\n%s", ref, err, out.String())
+		t.Fatalf("PullPinnedImage(%q): %v", ref, err)
 	}
 }
 

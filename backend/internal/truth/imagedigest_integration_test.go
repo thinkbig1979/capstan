@@ -5,6 +5,7 @@ package truth
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -85,13 +86,16 @@ func TestRemoteRegistryDigestMatchesLocal(t *testing.T) {
 func pullWithRetry(ctx context.Context, t *testing.T, ref string) {
 	t.Helper()
 
-	var out []byte
-	err := retryRegistry(t, "docker pull "+ref, func() (err error) {
-		out, err = exec.CommandContext(ctx, "docker", "pull", ref).CombinedOutput()
-		return err
+	err := retryRegistry(t, "docker pull "+ref, func() error {
+		out, err := exec.CommandContext(ctx, "docker", "pull", ref).CombinedOutput()
+		if err != nil {
+			// The output says why (a 429 reads "toomanyrequests").
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
 	})
 	if err != nil {
-		t.Fatalf("docker pull %s: %v\n%s", ref, err, out)
+		t.Fatalf("docker pull %s: %v", ref, err)
 	}
 }
 
