@@ -68,7 +68,7 @@
  *     asserts that precondition up front and names the actual cause.
  */
 
-import { test, expect, Page, APIRequestContext } from 'playwright/test'
+import { test, expect, Page, APIRequestContext, BrowserContext } from 'playwright/test'
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -84,6 +84,13 @@ const BACKUP_REPO_PATH = process.env.CAPSTAN_BACKUP_REPO ?? '/tmp/capstan-e2e-re
 const BACKUP_PASSPHRASE = process.env.CAPSTAN_BACKUP_PASSPHRASE ?? 'capstan-e2e-playwright-passphrase'
 
 let authToken = ''
+// The session cookie the one API login in beforeEach received. Each test's `page` is
+// a fresh browser context, so loginIfNeeded() plants this instead of logging in
+// through the form again: the login bucket is 5/min per (IP, account) and is shared
+// by /auth/login and the UI form, and this file used to spend six logins per auth-on
+// run (an API login in each beforeEach plus a form login in each test), which is
+// more than the bucket holds (agent-os-geqm). Empty when AUTH_DISABLED.
+let sessionCookies: Parameters<BrowserContext['addCookies']>[0] = []
 let testStackId = ''
 // CSRF double-submit token. The backend (middleware/csrf.go) sets a
 // `capstan_csrf` cookie on any GET and requires the same value echoed in the
@@ -213,10 +220,23 @@ async function ensureBackupEngine(request: APIRequestContext): Promise<void> {
 
 // ─── Page helpers ────────────────────────────────────────────────────────────
 
-/** Log in via the UI if auth is on, then land on `target` (default: the dashboard). */
+/**
+ * Land on `target` (default: the dashboard), signed in if auth is on.
+ *
+ * With auth on, the session from beforeEach's one API login is planted in this
+ * page's context, so no form login (and no login-bucket request) happens. The form
+ * is the fallback for when that cookie is not accepted, e.g. the API and the UI are
+ * on different hosts, so the cookie jar does not carry over.
+ */
 async function loginIfNeeded(page: Page, target = '/'): Promise<void> {
   if (!AUTH_DISABLED) {
-    await page.goto(`${BASE_URL}/login`)
+    if (sessionCookies.length > 0) {
+      await page.context().addCookies(sessionCookies)
+      await page.goto(`${BASE_URL}${target}`)
+      if (!page.url().includes('login')) return
+    } else {
+      await page.goto(`${BASE_URL}/login`)
+    }
     // A session cookie may have skipped the form entirely.
     if (page.url().includes('login')) {
       await page.getByLabel('Username', { exact: true }).fill(TEST_USER)
@@ -256,7 +276,9 @@ async function clickAwaitingPolicyPut(page: Page, click: () => Promise<void>) {
 
 test.describe('Dashboard backups tab and stack toggles E2E', () => {
   test.beforeEach(async ({ request }) => {
-    if (!AUTH_DISABLED) {
+    // One API login per run: the first test's beforeEach logs in and keeps the
+    // cookie, the later ones reuse it. A single test run alone (-g) logs in too.
+    if (!AUTH_DISABLED && sessionCookies.length === 0) {
       const loginResp = await request.post(`${API_URL}/api/v1/auth/login`, {
         data: { username: TEST_USER, password: TEST_PASSWORD },
       })
@@ -268,7 +290,8 @@ test.describe('Dashboard backups tab and stack toggles E2E', () => {
       // token in the body (agent-os-n4ca.2). Read it from this context's
       // jar so later tests, each with a fresh jar, can send it as Bearer.
       const state = await request.storageState()
-      authToken = state.cookies.find((c) => c.name === 'capstan_token')?.value ?? ''
+      sessionCookies = state.cookies.filter((c) => c.name === 'capstan_token')
+      authToken = sessionCookies[0]?.value ?? ''
     }
     await ensureCsrf(request)
 
