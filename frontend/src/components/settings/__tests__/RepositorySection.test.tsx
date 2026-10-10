@@ -22,6 +22,7 @@ function makeSettings(overrides: Partial<BackupSettings> = {}): BackupSettings {
     autoPrune: true,
     scheduleIntervalMinutes: 0,
     syncAfterBackup: false,
+    verifyWeekly: true,
     rcloneRemote: '',
     rclonePath: '',
     rcloneTransfers: 4,

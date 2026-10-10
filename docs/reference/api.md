@@ -130,7 +130,9 @@ password is checked.
   engine settings (repository, schedule, retention). On PUT, an
   `rcloneRemote` starting with `-` answers **400 `VALIDATION_ERROR` "rclone
   remote must not start with '-'"** and nothing in the request is saved
-  (agent-os-tyl6; rclone parsed such a value as a flag)
+  (agent-os-tyl6; rclone parsed such a value as a flag). `verifyWeekly`
+  (boolean, default `true` when never saved) turns the weekly repository check
+  on or off; see `POST /api/v1/backups/verify` below
 
 ## Directories
 
@@ -345,7 +347,16 @@ Direct Docker resource management, independent of any stack.
   instance, onto a fresh host)
 - `POST /api/v1/backups/prune` — apply retention and prune old snapshots
 - `POST /api/v1/backups/verify` — verify repository integrity by reading pack
-  data (`readDataSubset` defaults to 5%; `100%` reads every pack)
+  data (`readDataSubset` defaults to 5%; `100%` reads every pack). Answers
+  **409 `BACKUP_BUSY`** while a backup, sync, restore, prune or another check
+  runs: `restic check` locks the repository exclusively, so the two cannot
+  overlap. A check that loses that race after the 202 is recorded as
+  `skipped`, never `failed`. With `verifyWeekly` on, the scheduler also runs
+  one check (trigger `scheduled`, default subset) at the end of a scheduled
+  backup cycle when no check ended in `success` or `failed` in the last 7
+  days; a scheduled backup that falls due while it runs is recorded as
+  `skipped`. A failed check is reported on `lastVerify` and never stops later
+  backups
 - `POST /api/v1/backups/repo/init` — initialize the restic repository
 - `POST /api/v1/backups/cloud/test` — test the configured cloud remote's
   connectivity/credentials

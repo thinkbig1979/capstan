@@ -31,6 +31,21 @@ A run that saves every stack but fails to capture the database is reported as
 
 Backups can be triggered manually (Settings, Backup tab) or run on a schedule.
 
+## Checking that backups can be restored
+
+A backup that completes is not proof the repository can restore it: pack files
+can go missing or rot on the storage underneath. **Check backups** on the
+dashboard's backup card reads 5% of the backup data and confirms it is intact.
+It cannot run while a backup, sync, restore or prune is running, because the
+check locks the repository.
+
+The same check also runs once a week, after a scheduled backup, unless you turn
+off **Check the repository weekly** in Settings, Backup. It only runs when
+scheduled backups are on. A failed check shows a red warning on the dashboard;
+backups keep running either way. A scheduled backup that falls due while the
+check is still running is skipped and shows as **Skipped** in the backup
+history.
+
 > **`STORAGE_KEY` is not in the backup, and that is deliberate.** The secrets
 > inside `capstan.db` are encrypted with a key derived from it, so a stolen
 > backup does not yield your git tokens. The corollary is that restoring onto a

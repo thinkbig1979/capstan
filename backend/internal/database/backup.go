@@ -174,6 +174,30 @@ func (d *DB) GetBackupRuns(limit int) ([]models.BackupRun, error) {
 	return runs, nil
 }
 
+// HasFinishedVerifySince reports whether a repository verification that ended
+// in success or failed started at or after since. It is the "already checked
+// this week" test for the scheduled verification (agent-os-ffaj).
+//
+// Only success and failed count: an interrupted check (shutdown, crash) and a
+// skipped one (it lost the backup lock) never read the repository to the end,
+// so they must not push the next scheduled check back a week. A running one
+// does not count either; the scheduled launch is then refused by the backup
+// lock and leaves a skipped row.
+//
+// since is bound in started_at's own spelling, UTC RFC3339 to the second (how
+// every LaunchX writes it), as GetBackupRunsFiltered below does. The column is
+// compared as text, so a bound in any other spelling (storedInstant's
+// millisecond layout included) compares by spelling, not by instant.
+func (d *DB) HasFinishedVerifySince(since time.Time) (bool, error) {
+	var found bool
+	err := d.db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM backup_runs
+		  WHERE kind = 'verify' AND status IN ('success', 'failed') AND started_at >= ?)`,
+		since.UTC().Format(time.RFC3339),
+	).Scan(&found)
+	return found, err
+}
+
 // GetBackupRunsFiltered returns one page of backup runs plus the total number
 // of runs matching the filters (ignoring the page window), for GET
 // /backups/history.

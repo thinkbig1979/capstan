@@ -404,6 +404,8 @@ export interface BackupSettings {
   autoPrune: boolean
   scheduleIntervalMinutes: number
   syncAfterBackup: boolean
+  /** The weekly repository check after a scheduled backup (default on). */
+  verifyWeekly: boolean
   rcloneRemote: string
   rclonePath: string
   rcloneTransfers: number

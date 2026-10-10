@@ -731,6 +731,11 @@ func main() {
 	backupSched := services.NewBackupScheduler(backupSvc, db, slog.Default())
 	backupSvc.SetScheduler(backupSched)
 	backupHandler := handlers.NewBackupHandler(backupSvc, db, slog.Default())
+	// The weekly repository check runs through the handler's run registry, so
+	// it gets a history row and the shutdown drain below (StopWithTimeout).
+	// Without this call scheduled cycles never check (agent-os-ffaj); pinned
+	// by TestMain_BackupSchedulerVerifierIsWired.
+	backupSched.SetVerifier(backupHandler.VerifyLauncher())
 	// Registers the five /ws/backups/* connections with the shared manager, so
 	// they are reachable from allConnectionManagers above like every other WS
 	// route — previously wsAttach registered with nothing (agent-os-teop).

@@ -122,6 +122,14 @@ func (h *BackupHandler) StopWithTimeout(timeout time.Duration) bool {
 	return h.registry.StopWithTimeout(timeout)
 }
 
+// VerifyLauncher is the registry the backup scheduler's weekly repository
+// check launches through, so a scheduled check gets the same run row, stream
+// and shutdown drain as a manual one (agent-os-ffaj). main.go passes it to
+// BackupSchedulerService.SetVerifier.
+func (h *BackupHandler) VerifyLauncher() services.VerifyLauncher {
+	return h.registry
+}
+
 // RegisterRoutes registers all backup REST routes under the authenticated
 // protected group.
 func (h *BackupHandler) RegisterRoutes(group *gin.RouterGroup) {
@@ -266,7 +274,7 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	// no rclone remote — out of a database that answered nothing, and the
 	// operator's next Save wrote that page over their real configuration.
 	//
-	// One call rather than eleven guards is deliberate: eleven fault-capable
+	// One call rather than twelve guards is deliberate: twelve fault-capable
 	// reads cannot be pinned individually by a fixture that faults all of them
 	// (agent-os-a6bc), and one can.
 	bs, err := readSettings(db,
@@ -277,6 +285,7 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 		"backup_auto_prune",
 		"backup_schedule_interval",
 		"backup_sync_after",
+		services.SettingBackupVerifyWeekly,
 		"rclone_remote",
 		"rclone_path",
 		"rclone_transfers",
@@ -296,6 +305,7 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 	autoPrune := bs["backup_auto_prune"]
 	scheduleInterval := bs["backup_schedule_interval"]
 	syncAfterBackup := bs["backup_sync_after"]
+	verifyWeekly := bs[services.SettingBackupVerifyWeekly]
 	rcloneRemote := bs["rclone_remote"]
 	rclonePath := bs["rclone_path"]
 	rcloneTransfers := bs["rclone_transfers"]
@@ -345,6 +355,7 @@ func (h *BackupHandler) getSettings(c *gin.Context) {
 		"serverTimezone":          tzName,
 		"serverTimeOffset":        tzOffset,
 		"syncAfterBackup":         settingBoolOrDefault(syncAfterBackup, false),
+		"verifyWeekly":            settingBoolOrDefault(verifyWeekly, services.DefaultVerifyWeekly),
 		"rcloneRemote":            rcloneRemote,
 		"rclonePath":              rclonePath,
 		"rcloneTransfers":         settingIntOrDefault(rcloneTransfers, 4),
@@ -372,6 +383,7 @@ type backupSettingsRequest struct {
 	ScheduleTime            *string `json:"scheduleTime"`
 	ScheduleDays            *[]int  `json:"scheduleDays"`
 	SyncAfterBackup         *bool   `json:"syncAfterBackup"`
+	VerifyWeekly            *bool   `json:"verifyWeekly"`
 	RcloneRemote            *string `json:"rcloneRemote"`
 	RclonePath              *string `json:"rclonePath"`
 	RcloneTransfers         *int    `json:"rcloneTransfers"`
@@ -536,6 +548,11 @@ func (h *BackupHandler) updateSettings(c *gin.Context) {
 	}
 	if req.SyncAfterBackup != nil {
 		values = append(values, database.SettingValue{Key: "backup_sync_after", Value: strconv.FormatBool(*req.SyncAfterBackup)})
+	}
+	// Not a schedule change: the scheduler reads it at the end of each cycle,
+	// so no restart is needed for it to take effect.
+	if req.VerifyWeekly != nil {
+		values = append(values, database.SettingValue{Key: services.SettingBackupVerifyWeekly, Value: strconv.FormatBool(*req.VerifyWeekly)})
 	}
 	if req.RcloneRemote != nil {
 		values = append(values, database.SettingValue{Key: "rclone_remote", Value: *req.RcloneRemote})
@@ -1474,11 +1491,17 @@ func (h *BackupHandler) runVerify(c *gin.Context) {
 		return
 	}
 
+	// requireAvailable also answers 409 BACKUP_BUSY while another backup
+	// operation runs, before a run row exists. That matters for a check:
+	// `restic check` locks the repository exclusively, so one started now
+	// either fails on that lock (a false "integrity check failed") or makes the
+	// running backup fail; see services.VerifyRepositoryData. A launch that
+	// loses the race after this is finalised skipped, never failed.
 	if err := h.requireAvailable(c); err != nil {
 		return
 	}
 
-	runID, err := h.registry.LaunchVerify(req.ReadDataSubset)
+	runID, _, err := h.registry.LaunchVerify(req.ReadDataSubset, services.TriggerManual)
 	if err != nil {
 		h.respondForLaunchError(c, "verify", err)
 		return

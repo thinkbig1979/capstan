@@ -1795,15 +1795,20 @@ func (s *BackupService) Prune(ctx context.Context, dryRun bool, out chan<- Strea
 // result instead: the run is persisted as a failed "verify" run and surfaced
 // as lastVerify on GET /backups/status.
 //
-// It deliberately does NOT take the global backup lock that Prune and
-// RunBackup take. That lock is acquired non-blocking (tryAcquireGlobal) and a
-// caller that loses it gets ErrBackupBusy immediately, so holding it for the
-// minutes a data read can take would make a scheduled backup FAIL for the
-// duration — the exact blocking this design rejects. The overlap that would
-// actually be unsafe is restic's to refuse, and it does: OBSERVED with restic
-// 0.18.0, `restic prune` against a repository being read by a running
-// `restic check --read-data` exits 11 with "repository is already locked
-// exclusively", while the check itself completes normally.
+// It takes the global backup lock that Prune and RunBackup take, and returns
+// ErrBackupBusy when another operation holds it (agent-os-ffaj). This used to
+// be avoided on the theory that holding the lock for the minutes a data read
+// takes would make a concurrent backup fail. A concurrent backup fails anyway:
+// `restic check` holds the repository's EXCLUSIVE lock (`"exclusive":true` in
+// its lock file), and a `restic backup` started while it runs exits 11
+// ("unable to create lock"), OBSERVED with restic 0.18.0 and 0.19.1 on
+// 2026-10-10. `restic prune` is refused the same way. Taking the lock changes
+// HOW the overlap fails, not WHETHER: a scheduled backup that meets a running
+// check is recorded as skipped, and a check that meets a running backup is
+// refused with 409 before it starts, instead of a backup failing with exit 11
+// or a check failing on a lock and raising a false "integrity check failed".
+// The warn-not-block rule above is untouched: nothing reads the OUTCOME of a
+// check, so a failed one never stops a later backup.
 func (s *BackupService) VerifyRepositoryData(ctx context.Context, subset string, out chan<- StreamLine) error {
 	if s.resticBin == "" {
 		return ErrBackupUnavailable
@@ -1813,6 +1818,11 @@ func (s *BackupService) VerifyRepositoryData(ctx context.Context, subset string,
 	if err != nil {
 		return err
 	}
+
+	if !s.tryAcquireGlobal() {
+		return ErrBackupBusy
+	}
+	defer s.releaseGlobal()
 
 	bc, err := s.resolveOrRefuse("verify repository")
 	if err != nil {

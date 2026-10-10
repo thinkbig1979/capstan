@@ -67,6 +67,7 @@ export function buildPayload(
   if (draft.scheduleTime !== schedule.scheduleTime) payload.scheduleTime = draft.scheduleTime
   if (!sameDays(draft.scheduleDays, schedule.scheduleDays)) payload.scheduleDays = draft.scheduleDays
   if (draft.syncAfterBackup !== remote.syncAfterBackup) payload.syncAfterBackup = draft.syncAfterBackup
+  if (draft.verifyWeekly !== remote.verifyWeekly) payload.verifyWeekly = draft.verifyWeekly
   if (draft.rcloneRemote !== remote.rcloneRemote) payload.rcloneRemote = draft.rcloneRemote
   if (draft.rclonePath !== remote.rclonePath) payload.rclonePath = draft.rclonePath
   if (draft.rcloneTransfers !== null && draft.rcloneTransfers !== remote.rcloneTransfers)
@@ -88,6 +89,7 @@ export function toDraft(s: BackupSettings): Draft {
     serverTimezone: s.serverTimezone ?? 'UTC',
     serverTimeOffset: s.serverTimeOffset ?? '+00:00',
     syncAfterBackup: s.syncAfterBackup,
+    verifyWeekly: s.verifyWeekly,
     rcloneRemote: s.rcloneRemote ?? '',
     rclonePath: s.rclonePath ?? '',
     rcloneTransfers: s.rcloneTransfers ?? 4,

@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -12,10 +12,11 @@ import {
   Clock,
   HardDrive,
   CircleDashed,
+  ShieldCheck,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { presentError } from '@/lib/error-handler'
-import { useBackupStatus, useRunBackup, useBackupStreaming } from '@/hooks/useBackup'
+import { useBackupStatus, useRunBackup, useRunVerify, useBackupStreaming } from '@/hooks/useBackup'
 import { queryKeys } from '@/lib/query-keys'
 import { useQueryClient } from '@tanstack/react-query'
 import { formatRelativeTime, formatBytes } from '@/lib/format'
@@ -156,27 +157,35 @@ function LastRunBadge({
 export function BackupStatusCard() {
   const { data: statusData, isPending } = useBackupStatus()
   const runBackupMutation = useRunBackup()
+  const runVerifyMutation = useRunVerify()
   const streaming = useBackupStreaming()
   const queryClient = useQueryClient()
   const logEndRef = useRef<HTMLDivElement>(null)
+  // Which operation the one shared stream belongs to, so the busy label and
+  // the refused-stream sentence name the right one.
+  const [activeKind, setActiveKind] = useState<'backup' | 'verify'>('backup')
 
-  const isBusy = runBackupMutation.isPending || streaming.status === 'running'
+  const isBusy =
+    runBackupMutation.isPending || runVerifyMutation.isPending || streaming.status === 'running'
 
   // Auto-scroll log to bottom as new lines arrive
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [streaming.lines])
 
+  // Invalidate after the stream completes so the card shows the new run.
+  const refreshAfterRun = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
+    queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
+  }
+
   const handleBackUpNow = () => {
     streaming.reset()
+    setActiveKind('backup')
     runBackupMutation.mutate(undefined, {
       onSuccess: (result) => {
         if (result.wsUrl) {
-          streaming.connect(result.wsUrl, () => {
-            // Invalidate after stream completes so status card refreshes
-            queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
-            queryClient.invalidateQueries({ queryKey: queryKeys.backup.historyAll() })
-          })
+          streaming.connect(result.wsUrl, refreshAfterRun)
         } else {
           toast.success('Backup started')
           queryClient.invalidateQueries({ queryKey: queryKeys.backup.status() })
@@ -189,6 +198,22 @@ export function BackupStatusCard() {
         // with, so the backend's cause was discarded for every real API
         // failure and only a thrown Error ever got its message through.
         presentError(err, { fallback: 'Failed to start backup' })
+      },
+    })
+  }
+
+  // agent-os-ffaj: the repository check, streamed like a backup. The server
+  // answers 409 while another backup operation runs (restic's check locks
+  // the repository exclusively), and presentError shows its sentence.
+  const handleCheckNow = () => {
+    streaming.reset()
+    setActiveKind('verify')
+    runVerifyMutation.mutate(undefined, {
+      onSuccess: (result) => {
+        streaming.connect(result.wsUrl, refreshAfterRun)
+      },
+      onError: (err) => {
+        presentError(err, { fallback: 'Failed to start the backup check' })
       },
     })
   }
@@ -233,26 +258,49 @@ export function BackupStatusCard() {
             <DatabaseBackup className="h-4 w-4" />
             Backup Status
           </CardTitle>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs"
-            onClick={handleBackUpNow}
-            disabled={isBusy || engineUnavailable}
-            aria-label="Back up now"
-          >
-            {isBusy ? (
-              <>
-                <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
-                Running...
-              </>
-            ) : (
-              <>
-                <DatabaseBackup className="mr-1 h-3 w-3" />
-                Back up now
-              </>
-            )}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={handleCheckNow}
+              disabled={isBusy || engineUnavailable}
+              aria-label="Check backups"
+              title="Reads 5% of the backup data to confirm it can be restored"
+            >
+              {isBusy && activeKind === 'verify' ? (
+                <>
+                  <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
+                  Checking...
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="mr-1 h-3 w-3" />
+                  Check backups
+                </>
+              )}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={handleBackUpNow}
+              disabled={isBusy || engineUnavailable}
+              aria-label="Back up now"
+            >
+              {isBusy && activeKind === 'backup' ? (
+                <>
+                  <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
+                  Running...
+                </>
+              ) : (
+                <>
+                  <DatabaseBackup className="mr-1 h-3 w-3" />
+                  Back up now
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       </CardHeader>
 
@@ -311,12 +359,11 @@ export function BackupStatusCard() {
               )}
             </div>
 
-            {/* Last check. Rendered only when a verify has actually run: there
-                is no trigger UI yet, so a "Never" cell would be noise the
-                operator cannot act on. */}
-            {statusData.lastVerify && (
-              <div className="space-y-0.5">
-                <p className="text-xs text-muted-foreground">Last check</p>
+            {/* Last check. "Never" is actionable now that "Check backups"
+                exists (agent-os-ffaj). */}
+            <div className="space-y-0.5">
+              <p className="text-xs text-muted-foreground">Last check</p>
+              {statusData.lastVerify ? (
                 <div className="flex flex-col gap-0.5">
                   <LastRunBadge
                     kind={statusData.lastVerify.kind}
@@ -327,8 +374,10 @@ export function BackupStatusCard() {
                     {formatRelativeTime(statusData.lastVerify.startedAt)}
                   </span>
                 </div>
-              </div>
-            )}
+              ) : (
+                <p className="text-muted-foreground">Never</p>
+              )}
+            </div>
 
             {/* Next scheduled run */}
             {statusData.nextRunAt && (
@@ -412,7 +461,8 @@ export function BackupStatusCard() {
             still going, this viewer was turned away at the per-run limit. */}
         {streaming.status === 'unavailable' && streaming.error && (
           <p className="text-xs text-muted-foreground">
-            Live output unavailable: {streaming.error} The backup continues on the server.
+            Live output unavailable: {streaming.error}{' '}
+            {activeKind === 'verify' ? 'The check' : 'The backup'} continues on the server.
           </p>
         )}
       </CardContent>

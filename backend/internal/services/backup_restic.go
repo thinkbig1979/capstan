@@ -277,6 +277,12 @@ func (m *ResticManager) CheckRepository(ctx context.Context) error {
 // much silent bitrot one run can find.
 const DefaultVerifyReadDataSubset = "5%"
 
+// verifyTimeout bounds one `restic check`. Twice backupCycleTimeout: a 100%
+// read of a large remote repository is legitimately long, and in exchange a
+// hung check, which holds the backup lock, costs at most four hours of
+// scheduled backups (each one skipped with a history row), never a whole day.
+const verifyTimeout = 4 * time.Hour
+
 // verifySubsetPattern accepts the three forms `restic check --read-data-subset`
 // documents: a percentage ("5%", "2.5%"), a group selector ("1/12"), or a size
 // ("5G"). The value is validated rather than passed through because it is the
@@ -327,12 +333,15 @@ func (m *ResticManager) VerifyRepositoryData(ctx context.Context, subset string,
 	}
 	defer cleanup()
 
-	// No context timeout here, unlike CheckRepository's 30s: this reads pack
-	// data and legitimately runs for minutes. Cancellation is the caller's,
-	// carried by ctx.
+	// Hours, not CheckRepository's 30s: this reads pack data and legitimately
+	// runs for minutes. But it is bounded: the check holds the backup lock (see
+	// BackupService.VerifyRepositoryData), so a hung one would otherwise stop
+	// every backup until the server restarts.
+	ctx, cancel := withCommandDeadline(ctx, verifyTimeout)
+	defer cancel()
 	args := []string{"check", "--read-data-subset=" + subset}
 	if err := m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out); err != nil {
-		return fmt.Errorf("repository integrity check failed: %w", err)
+		return fmt.Errorf("repository integrity check failed: %w", timeoutError(ctx, err, "restic check"))
 	}
 	return nil
 }
