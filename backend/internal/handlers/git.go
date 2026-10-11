@@ -157,8 +157,8 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 		//
 		// agent-os-4a4a added the second arm, for the same reason and with a
 		// different answer. A `git init`'d directory with no commits is also
-		// normal configuration, also asked about on every page load, and also
-		// painted a red console entry — but a repository with no commits IS a
+		// normal configuration, also asked about once per StackPage visit, and
+		// also painted a red console entry — but a repository with no commits IS a
 		// repository, so x40a's `{isRepo: false}` would be factually wrong
 		// here. It says there is no git where there is some.
 		//
