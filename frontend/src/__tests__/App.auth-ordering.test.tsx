@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen } from '@testing-library/react'
 import { renderWithProviders } from '@/test/utils'
+import { APP_FIND_TIMEOUT } from '@/test/timeouts'
 import { App } from '../App'
 
 // Pins the ORDER in which AuthenticatedLayout composes AuthGuard and AppShell.
@@ -101,7 +102,11 @@ describe('AuthenticatedLayout query ordering', () => {
     // enough to mount the shell if it were going to -- without it, an absent
     // shell would only mean the render died somewhere earlier.
     expect(
-      await screen.findByText('Enter your credentials to access Capstan'),
+      await screen.findByText(
+        'Enter your credentials to access Capstan',
+        {},
+        { timeout: APP_FIND_TIMEOUT },
+      ),
     ).toBeInTheDocument()
     // The mount spy is what actually catches the bug. The DOM check below is
     // NOT load-bearing -- verified 2026-09-02 that it passes under the broken
@@ -117,7 +122,9 @@ describe('AuthenticatedLayout query ordering', () => {
 
     renderWithProviders(<App />, { route: '/' })
 
-    expect(await screen.findByTestId('app-shell')).toBeInTheDocument()
+    expect(
+      await screen.findByTestId('app-shell', {}, { timeout: APP_FIND_TIMEOUT }),
+    ).toBeInTheDocument()
     expect(appShellMounts).toHaveBeenCalled()
   })
 })
