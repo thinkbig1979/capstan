@@ -87,6 +87,10 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+          # Off on the capstan runners, on for the GitHub-hosted fork-PR fallback.
+          # setup-go's cache restore took 8m50s on capstan-2 (agent-os-nzxh) although
+          # the runner's own Go caches persist; a hosted runner starts cold.
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       # The only line in the log that states what actually compiled, rather
       # than what was requested. GOTOOLCHAIN=auto re-execs invisibly.

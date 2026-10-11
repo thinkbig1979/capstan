@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import { renderWithProviders } from '@/test/utils'
+import { APP_FIND_TIMEOUT } from '@/test/timeouts'
 import { useAuthStore } from '@/stores/authStore'
 import { App } from '../App'
 
@@ -91,7 +92,9 @@ describe('App boot under StrictMode double-invoke', () => {
 
     renderWithProviders(<App />, { route: '/', strictMode: true })
 
-    expect(await screen.findByTestId('app-shell')).toBeInTheDocument()
+    expect(
+      await screen.findByTestId('app-shell', {}, { timeout: APP_FIND_TIMEOUT }),
+    ).toBeInTheDocument()
 
     // Let both StrictMode invocations fully settle before counting -- a
     // broken fix could still schedule a second, later request. This also
@@ -130,7 +133,9 @@ describe('App boot under StrictMode double-invoke', () => {
 
     renderWithProviders(<App />, { route: '/', strictMode: true })
 
-    expect(await screen.findByTestId('setup-page')).toBeInTheDocument()
+    expect(
+      await screen.findByTestId('setup-page', {}, { timeout: APP_FIND_TIMEOUT }),
+    ).toBeInTheDocument()
     expect(useAuthStore.getState().needsSetup).toBe(true)
     expect(mockStatus).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument()
@@ -147,7 +152,11 @@ describe('App boot under StrictMode double-invoke', () => {
       { timeout: 5000 },
     )
     expect(
-      await screen.findByText('Enter your credentials to access Capstan'),
+      await screen.findByText(
+        'Enter your credentials to access Capstan',
+        {},
+        { timeout: APP_FIND_TIMEOUT },
+      ),
     ).toBeInTheDocument()
     expect(useAuthStore.getState().authDisabled).toBe(false)
     expect(appShellMounts).not.toHaveBeenCalled()

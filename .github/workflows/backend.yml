@@ -104,6 +104,14 @@ jobs:
           bash scripts/check-trivy-lockstep.sh --self-test
           bash scripts/check-trivy-lockstep.sh
 
+      # Every setup-go step must say whether it caches (agent-os-nzxh): the
+      # default restore took 8m50s on a capstan runner and timed out PR #632's
+      # job. Same job and placement reasoning as the steps above.
+      - name: setup-go cache is explicit
+        run: |
+          bash scripts/check-setup-go-cache.sh --self-test
+          bash scripts/check-setup-go-cache.sh
+
       # go-version-file reads backend/go.mod, and from v6 setup-go prefers its
       # `toolchain` directive over the `go` directive — so CI installs exactly
       # the toolchain the code is pinned to. The v6 pin is load-bearing: v5
@@ -122,6 +130,10 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+          # Off on the capstan runners, on for the GitHub-hosted fork-PR fallback.
+          # setup-go's cache restore took 8m50s on capstan-2 (agent-os-nzxh) although
+          # the runner's own Go caches persist; a hosted runner starts cold.
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       # Record the toolchain that actually compiles. Keep this even though the
       # setup step now resolves correctly: it is the only line in the log that
@@ -294,6 +306,10 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+          # Off on the capstan runners, on for the GitHub-hosted fork-PR fallback.
+          # setup-go's cache restore took 8m50s on capstan-2 (agent-os-nzxh) although
+          # the runner's own Go caches persist; a hosted runner starts cold.
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       - name: Report Go version
         working-directory: backend
