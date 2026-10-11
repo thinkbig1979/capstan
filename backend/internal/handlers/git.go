@@ -130,7 +130,7 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 		// expected answer about a resource, and this endpoint modelled it as an
 		// ERROR. Every symptom followed from that one decision — the browser
 		// console showed a red failed request on every non-git stack, because
-		// the frontend asks this of EVERY stack it renders.
+		// the frontend asks this once per StackPage visit of a stack.
 		//
 		// The discrimination happens HERE and not in the service on purpose.
 		// handlers/git.go is the ONLY caller of GitService.GetStatus, while
