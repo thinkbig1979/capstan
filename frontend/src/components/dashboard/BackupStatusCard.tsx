@@ -160,7 +160,7 @@ export function BackupStatusCard() {
   const runVerifyMutation = useRunVerify()
   const streaming = useBackupStreaming()
   const queryClient = useQueryClient()
-  const logEndRef = useRef<HTMLDivElement>(null)
+  const logViewportRef = useRef<HTMLDivElement>(null)
   // Which operation the one shared stream belongs to, so the busy label and
   // the refused-stream sentence name the right one.
   const [activeKind, setActiveKind] = useState<'backup' | 'verify'>('backup')
@@ -168,9 +168,11 @@ export function BackupStatusCard() {
   const isBusy =
     runBackupMutation.isPending || runVerifyMutation.isPending || streaming.status === 'running'
 
-  // Auto-scroll log to bottom as new lines arrive
+  // Follow new lines inside the log box only: scrollIntoView would also scroll
+  // the page to the card on every line.
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const viewport = logViewportRef.current
+    if (viewport) viewport.scrollTop = viewport.scrollHeight
   }, [streaming.lines])
 
   // Invalidate after the stream completes so the card shows the new run.
@@ -429,14 +431,13 @@ export function BackupStatusCard() {
         {streaming.lines.length > 0 && (
           <div className="space-y-1">
             <p className="text-xs font-medium text-muted-foreground">Live output</p>
-            <ScrollArea className="h-40 rounded-md border bg-muted/30">
+            <ScrollArea viewportRef={logViewportRef} className="h-40 rounded-md border bg-muted/30">
               <div className="p-2 font-mono text-xs">
                 {streaming.lines.map((line, i) => (
                   <div key={i} className="leading-relaxed whitespace-pre-wrap break-all">
                     {line}
                   </div>
                 ))}
-                <div ref={logEndRef} />
               </div>
             </ScrollArea>
             {streaming.status !== 'running' && (

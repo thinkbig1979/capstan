@@ -14,6 +14,7 @@ const mockRunVerifyMutate = vi.fn()
 const mockConnect = vi.fn()
 // Read at render time, so a test can put the shared stream mid-run.
 let mockStreamStatus = 'idle'
+let mockStreamLines: string[] = []
 
 vi.mock('@/hooks/useBackup', () => ({
   useBackupStatus: vi.fn(),
@@ -27,7 +28,7 @@ vi.mock('@/hooks/useBackup', () => ({
   }),
   useBackupStreaming: () => ({
     status: mockStreamStatus,
-    lines: [],
+    lines: mockStreamLines,
     error: null,
     connect: mockConnect,
     reset: vi.fn(),
@@ -92,6 +93,7 @@ function renderCard() {
 beforeEach(() => {
   vi.clearAllMocks()
   mockStreamStatus = 'idle'
+  mockStreamLines = []
 })
 
 describe('BackupStatusCard — zero-stack backup badge', () => {
@@ -385,5 +387,34 @@ describe('BackupStatusCard — Check backups', () => {
     options.onSuccess({ runId: 'v1', wsUrl: '/ws/backups/verify/v1' })
     expect(mockConnect).toHaveBeenCalledTimes(1)
     expect(mockConnect.mock.calls[0][0]).toBe('/ws/backups/verify/v1')
+  })
+})
+
+describe('BackupStatusCard — the live log follows new lines without moving the page', () => {
+  it('scrolls the log viewport to the bottom and never calls scrollIntoView', () => {
+    // scrollIntoView scrolls every scrollable ancestor, the document included,
+    // so a backup streaming on /settings/backup dragged the whole page down.
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView')
+    ;(useBackupStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeStatus(makeRun({})),
+      isPending: false,
+    })
+    mockStreamStatus = 'running'
+    mockStreamLines = ['line 1']
+
+    const { container, rerender } = renderCard()
+    const viewport = container.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement
+    expect(viewport).not.toBeNull()
+    // jsdom has no layout: give the viewport a height and a plain scrollTop,
+    // after the first render so that run of the effect cannot hide a miss.
+    Object.defineProperty(viewport, 'scrollHeight', { value: 500, configurable: true })
+    Object.defineProperty(viewport, 'scrollTop', { value: 0, configurable: true, writable: true })
+
+    mockStreamLines = ['line 1', 'line 2']
+    rerender(<BackupStatusCard />)
+
+    expect(scrollIntoView).not.toHaveBeenCalled()
+    expect(viewport.scrollTop).toBe(500)
+    scrollIntoView.mockRestore()
   })
 })
