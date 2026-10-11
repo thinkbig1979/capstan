@@ -242,6 +242,61 @@ func runDrained(ctx context.Context, runner commandRunner, name string, args, en
 	return runner.Run(ctx, name, args, env, out)
 }
 
+// resticExitRepoLocked is restic's exit code for "repository is already
+// locked" (`restic help forget|prune|check|backup`, restic 0.18.0: "Exit status
+// is 11 if the repository is already locked.").
+const resticExitRepoLocked = 11
+
+// unlockTimeout bounds one `restic unlock`, which only lists and deletes small
+// lock files.
+const unlockTimeout = 2 * time.Minute
+
+// runLocking runs a restic command that takes a repository lock while
+// Capstan's global backup lock is held: forget, prune and check, which need
+// the exclusive lock, and backup, which a stale exclusive lock refuses. On
+// exit 11 it runs `restic unlock` and retries once (agent-os-zp01).
+//
+// restic never clears a stale lock by itself. OBSERVED with restic 0.18.0: a
+// lock left by a SIGKILLed `restic backup` still made `restic forget` exit 11;
+// `restic unlock` then printed "successfully removed 1 locks" and forget
+// exited 0. In production (2026-10-11) two such locks, dated August, made
+// retention exit 11 for every stack while the run still read "success".
+//
+// Plain unlock, never --remove-all: restic removes only locks it judges stale,
+// i.e. older than 30 minutes (live holders refresh theirs every 5) or made on
+// this host by a process that no longer exists (restic v0.18.0
+// internal/restic/lock.go, Lock.Stale). OBSERVED: a lock held by a live
+// `restic backup` survived `restic unlock`, and forget still exited 11. So a
+// real concurrent operation, such as an external restic or one of Capstan's
+// own unguarded read-only calls, keeps its lock, the retry fails again, and
+// that is reported as a lock held by another process.
+func (m *ResticManager) runLocking(ctx context.Context, args, env []string, out chan<- StreamLine) error {
+	err := m.runner.Run(ctx, "restic", args, env, out)
+	if !isExitCode(err, resticExitRepoLocked) {
+		return err
+	}
+	// Logged, not written to out: Backup forwards its raw channel to the
+	// caller's out with a blocking send, so a line written here hung a run
+	// whose out is nil. `restic unlock` reports what it removed on out itself.
+	m.logger.Warn("restic: repository is locked; removing stale locks (restic unlock) and retrying once",
+		"subcommand", args[0])
+	if unlockErr := m.unlockStale(ctx, env, out); unlockErr != nil {
+		return fmt.Errorf("%w; removing stale locks failed: %w", err, unlockErr)
+	}
+	retryErr := m.runner.Run(ctx, "restic", args, env, out)
+	if isExitCode(retryErr, resticExitRepoLocked) {
+		return fmt.Errorf("repository is locked by another restic process (not a stale lock): %w", retryErr)
+	}
+	return retryErr
+}
+
+// unlockStale runs `restic unlock` under its own deadline.
+func (m *ResticManager) unlockStale(ctx context.Context, env []string, out chan<- StreamLine) error {
+	ctx, cancel := withCommandDeadline(ctx, unlockTimeout)
+	defer cancel()
+	return timeoutError(ctx, m.runner.Run(ctx, "restic", []string{"unlock"}, env, out), "restic unlock")
+}
+
 // CheckRepository runs `restic snapshots --quiet` to verify the repository
 // is accessible. Returns nil on success.
 func (m *ResticManager) CheckRepository(ctx context.Context) error {
@@ -340,7 +395,7 @@ func (m *ResticManager) VerifyRepositoryData(ctx context.Context, subset string,
 	ctx, cancel := withCommandDeadline(ctx, verifyTimeout)
 	defer cancel()
 	args := []string{"check", "--read-data-subset=" + subset}
-	if err := m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out); err != nil {
+	if err := m.runLocking(ctx, args, m.resticEnv(pwFile), out); err != nil {
 		return fmt.Errorf("repository integrity check failed: %w", timeoutError(ctx, err, "restic check"))
 	}
 	return nil
@@ -452,7 +507,7 @@ func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []stri
 		}
 	}()
 
-	runErr := m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), raw)
+	runErr := m.runLocking(ctx, args, m.resticEnv(pwFile), raw)
 	close(raw)
 	<-translateDone
 
@@ -582,7 +637,7 @@ func (m *ResticManager) ApplyRetention(ctx context.Context, tag string, out chan
 		args = append(args, "--prune")
 	}
 
-	return m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out)
+	return m.runLocking(ctx, args, m.resticEnv(pwFile), out)
 }
 
 // Prune runs `restic prune` (optionally with --dry-run). It streams output to out.
@@ -598,7 +653,7 @@ func (m *ResticManager) Prune(ctx context.Context, dryRun bool, out chan<- Strea
 		args = append(args, "--dry-run")
 	}
 
-	return m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out)
+	return m.runLocking(ctx, args, m.resticEnv(pwFile), out)
 }
 
 // resticSnapshot is the JSON shape returned by `restic snapshots --json`.
