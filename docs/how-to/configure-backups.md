@@ -54,6 +54,28 @@ history.
 > manager as the restic repository password. All three are needed for a complete
 > recovery.
 
+## Stale repository locks
+
+restic locks the repository while it works. A restic process that is killed
+part-way (a container restart in the middle of a backup or a check, for
+example) leaves its lock behind, and restic does not remove it on its own.
+Such a stale lock blocks the cleanup of old snapshots, the weekly check, and
+prune, and a stale lock from an interrupted check or prune blocks backups too.
+
+Capstan handles this itself. When a backup, cleanup, check or prune finds the
+repository locked, Capstan runs `restic unlock` once and retries. `restic
+unlock` only removes locks restic considers stale: older than 30 minutes, or
+left by a process on this machine that no longer exists. A lock held by a
+restic process that is still running is left alone, and the operation reports
+that the repository is locked by another restic process.
+
+If the cleanup of old snapshots still fails, the new snapshot is kept: each
+stack keeps **success** and shows the cleanup error, and the run shows
+**partial**:
+"old snapshots were not cleaned up for stack(s) ...". Check whether another
+restic process is using the repository before running `restic unlock
+--remove-all` by hand.
+
 ## Configuration
 
 The quickest path is the **Settings UI** (Settings, Backup). All fields save to the

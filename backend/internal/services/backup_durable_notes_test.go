@@ -180,6 +180,7 @@ func TestRunBackup_StackReasonsAreDurable(t *testing.T) {
 		wantItemStatus string
 		wantItemMsg    string
 		wantRunStatus  string
+		wantRunMsg     string
 		wantOK         int
 		wantFailed     int
 	}{
@@ -217,8 +218,11 @@ func TestRunBackup_StackReasonsAreDurable(t *testing.T) {
 			docker:         &fakeDocker{statusStr: "running"},
 			wantItemStatus: "success",
 			wantItemMsg:    "retention warning: forget refused",
-			wantRunStatus:  "success",
-			wantOK:         1,
+			// agent-os-zp01: the snapshot is good, so the item stays success,
+			// but old snapshots were not cleaned up and the run says so.
+			wantRunStatus: "partial",
+			wantRunMsg:    "old snapshots were not cleaned up for stack(s) " + uwfuStack + ": retention failed (see per-stack details)",
+			wantOK:        1,
 		},
 		{
 			// Call 1 is Verify's own listing, call 2 the snapshot-id read-back.
@@ -262,8 +266,9 @@ func TestRunBackup_StackReasonsAreDurable(t *testing.T) {
 				// All stacks failed: the run names the first failure, as before.
 				assert.Equal(t, tc.wantItemMsg, stored.ErrorMessage)
 			} else {
-				// Warnings stay on the item; they do not change the run.
-				assert.Empty(t, stored.ErrorMessage)
+				// Warnings stay on the item; only a retention failure also
+				// reaches the run (agent-os-zp01).
+				assert.Equal(t, tc.wantRunMsg, stored.ErrorMessage)
 			}
 		})
 	}

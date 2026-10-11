@@ -864,6 +864,8 @@ func (s *BackupService) executeBackupRun(
 	// (see withRunNotes). stream() alone drops them when no client is attached.
 	var runNotes []string
 	restartIncomplete := false
+	// Stacks whose snapshot succeeded but whose retention failed.
+	var retentionFailed []string
 
 	// The database goes first, deliberately. It is the artifact without which a
 	// restore produces an empty Capstan, and capturing it before the per-stack
@@ -911,6 +913,9 @@ func (s *BackupService) executeBackupRun(
 		if res.restartIncomplete != "" {
 			restartIncomplete = true
 			runNotes = append(runNotes, fmt.Sprintf("stack %s: %s", stackID, res.restartIncomplete))
+		}
+		if res.retentionFailed {
+			retentionFailed = append(retentionFailed, stackID)
 		}
 	}
 
@@ -987,6 +992,21 @@ func (s *BackupService) executeBackupRun(
 		case run.StacksOK == 0:
 			run.Status = "failed"
 		case run.Status == "success":
+			run.Status = "partial"
+		}
+		runReasons = append(runReasons, msg)
+	}
+
+	// Retention that failed left old snapshots in place. It used to stay a
+	// warning on the item while the run read "success", and a stale restic lock
+	// stopped all retention for two months unnoticed (agent-os-zp01). The items
+	// keep "success" because their snapshots are good; the run says what was
+	// not done.
+	if len(retentionFailed) > 0 {
+		msg := fmt.Sprintf("old snapshots were not cleaned up for stack(s) %s: retention failed (see per-stack details)",
+			strings.Join(retentionFailed, ", "))
+		stream(out, "error", msg)
+		if run.Status == "success" {
 			run.Status = "partial"
 		}
 		runReasons = append(runReasons, msg)
@@ -1187,6 +1207,10 @@ type stackResult struct {
 	// did not fully come back afterwards (agent-os-5gou). The stack is down or
 	// degraded now, so the run must not read as a clean success.
 	restartIncomplete string
+	// retentionFailed is set when the snapshot was taken but `restic forget`
+	// failed, so old snapshots were not cleaned up (agent-os-zp01). The item
+	// keeps "success"; the run must not read as a clean one.
+	retentionFailed bool
 }
 
 // backupStack performs the full backup cycle for a single stack (stop, backup,
@@ -1316,6 +1340,7 @@ func (s *BackupService) backupStack(
 	// Apply retention policy.
 	if retentionErr := restic.ApplyRetention(ctx, stackID, out); retentionErr != nil {
 		warn(fmt.Sprintf("retention warning: %v", retentionErr))
+		res.retentionFailed = true
 	}
 
 	// Retrieve the latest snapshot ID for the run item record.
