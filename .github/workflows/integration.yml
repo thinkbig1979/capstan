@@ -105,6 +105,9 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+          # Only runs on ubuntu-latest, which starts with no Go caches: the
+          # restore saves a cold compile (agent-os-nzxh).
+          cache: true
 
       # Sanity-check: confirm Docker daemon is up and compose v2 is available.
       - name: Verify Docker environment

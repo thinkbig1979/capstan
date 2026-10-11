@@ -161,6 +161,9 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+          # Only runs on ubuntu-latest, which starts with no Go caches: the
+          # restore saves a cold compile (agent-os-nzxh).
+          cache: true
 
       # Root is pnpm-managed as of agent-os-l78 and carries the Playwright
       # devDependency; frontend/ is a separate pnpm project with its own
@@ -424,6 +427,10 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+          # Off on the capstan runners, on for the GitHub-hosted fork-PR fallback.
+          # setup-go's cache restore took 8m50s on capstan-2 (agent-os-nzxh) although
+          # the runner's own Go caches persist; a hosted runner starts cold.
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       - name: Install root dependencies (Playwright)
         run: pnpm install --frozen-lockfile
