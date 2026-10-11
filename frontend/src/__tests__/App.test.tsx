@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { renderWithProviders } from '@/test/utils'
+import { APP_FIND_TIMEOUT } from '@/test/timeouts'
 import { App } from '../App'
 
 const mockUseAuth = {
@@ -37,10 +38,13 @@ describe('App', () => {
 
   it('rehydrates session on mount by calling checkAuth after checkStatus', async () => {
     render(<App />)
-    await waitFor(() => {
-      expect(mockUseAuth.checkStatus).toHaveBeenCalledTimes(1)
-      expect(mockUseAuth.checkAuth).toHaveBeenCalledTimes(1)
-    })
+    await waitFor(
+      () => {
+        expect(mockUseAuth.checkStatus).toHaveBeenCalledTimes(1)
+        expect(mockUseAuth.checkAuth).toHaveBeenCalledTimes(1)
+      },
+      { timeout: APP_FIND_TIMEOUT },
+    )
   })
 
   // Pins the boot effect's try/catch/finally independently of the store's own
@@ -59,7 +63,11 @@ describe('App', () => {
     // Positive anchor first: reaching the login page is what proves the app got
     // somewhere. The spinner check below only names the symptom on failure.
     expect(
-      await screen.findByText('Enter your credentials to access Capstan'),
+      await screen.findByText(
+        'Enter your credentials to access Capstan',
+        {},
+        { timeout: APP_FIND_TIMEOUT },
+      ),
     ).toBeInTheDocument()
     expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
   })

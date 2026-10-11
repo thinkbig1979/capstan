@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import { renderWithProviders } from '@/test/utils'
+import { APP_FIND_TIMEOUT } from '@/test/timeouts'
 import { useAuthStore } from '@/stores/authStore'
 import { App } from '../App'
 
@@ -73,7 +74,7 @@ describe('App boot when the status probe fails', () => {
 
     renderWithProviders(<App />, { route: '/' })
 
-    await waitFor(() => expect(mockStatus).toHaveBeenCalled())
+    await waitFor(() => expect(mockStatus).toHaveBeenCalled(), { timeout: APP_FIND_TIMEOUT })
     // agent-os-2cp3 (pre-existing flake from agent-os-a4eh, fixed here). This
     // races checkStatus's own ~1s retry budget ([250, 750]ms) against RTL's
     // default 1000ms waitFor timeout -- marginal even before this file's
@@ -85,7 +86,11 @@ describe('App boot when the status probe fails', () => {
       { timeout: 5000 },
     )
     expect(
-      await screen.findByText('Enter your credentials to access Capstan'),
+      await screen.findByText(
+        'Enter your credentials to access Capstan',
+        {},
+        { timeout: APP_FIND_TIMEOUT },
+      ),
     ).toBeInTheDocument()
 
     // An unreadable probe must never open the shell: canAccess is
@@ -101,7 +106,9 @@ describe('App boot when the status probe fails', () => {
 
     renderWithProviders(<App />, { route: '/' })
 
-    expect(await screen.findByTestId('app-shell')).toBeInTheDocument()
+    expect(
+      await screen.findByTestId('app-shell', {}, { timeout: APP_FIND_TIMEOUT }),
+    ).toBeInTheDocument()
     expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
     expect(appShellMounts).toHaveBeenCalled()
   })
