@@ -130,7 +130,7 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 		// expected answer about a resource, and this endpoint modelled it as an
 		// ERROR. Every symptom followed from that one decision — the browser
 		// console showed a red failed request on every non-git stack, because
-		// the frontend asks this of EVERY stack it renders.
+		// the frontend asks this once per StackPage visit of a stack.
 		//
 		// The discrimination happens HERE and not in the service on purpose.
 		// handlers/git.go is the ONLY caller of GitService.GetStatus, while
@@ -157,8 +157,8 @@ func (h *GitHandler) GetStatus(c *gin.Context) {
 		//
 		// agent-os-4a4a added the second arm, for the same reason and with a
 		// different answer. A `git init`'d directory with no commits is also
-		// normal configuration, also asked about on every page load, and also
-		// painted a red console entry — but a repository with no commits IS a
+		// normal configuration, also asked about once per StackPage visit, and
+		// also painted a red console entry — but a repository with no commits IS a
 		// repository, so x40a's `{isRepo: false}` would be factually wrong
 		// here. It says there is no git where there is some.
 		//

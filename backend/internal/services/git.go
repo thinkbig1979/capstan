@@ -137,11 +137,11 @@ func (s *GitService) getStatusCLI(dirPath string) (*models.GitStatusResult, erro
 			// free.
 			//
 			// A repository with no commits is a routine negative answer — the
-			// state `git init` leaves behind, asked about on every page visit
-			// like the non-repo case — but ErrNotFound is ALSO the genuine
-			// "Stack not found" client error at 20 sites, so listing ErrNotFound
-			// as routine would silence those too. The codes have to separate
-			// before the levels can.
+			// state `git init` leaves behind, asked about once per StackPage
+			// visit of that stack like the non-repo case — but ErrNotFound is
+			// ALSO the genuine "Stack not found" client error at 20 sites, so
+			// listing ErrNotFound as routine would silence those too. The codes
+			// have to separate before the levels can.
 			//
 			// The other way to mark a routine outcome, calling
 			// middleware.MarkRoutineOutcome at the response site the way

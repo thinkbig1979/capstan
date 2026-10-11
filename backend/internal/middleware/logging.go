@@ -28,10 +28,11 @@ const RoutineOutcomeKey = "routineOutcome"
 // that ONE endpoint: rather than logging its routine 404 more quietly, it
 // stopped calling the condition an error at all and answers 200
 // `{"isRepo": false}`, because a 404 also put a red failed request in the
-// browser console of every non-git stack. The endpoint is asked of every stack
-// the frontend renders, so it was the loudest instance and is now not an
-// instance at all. GIT_NOT_REPO is still minted, still routine, and still
-// reaches this marker from the two paths above.
+// browser console of every non-git stack. The endpoint is asked once per
+// StackPage visit of a stack (StackPage -> GitStatus -> useGitStatus), so it
+// was the loudest instance and is now not an instance at all. GIT_NOT_REPO is
+// still minted, still routine, and still reaches this marker from the two
+// paths above.
 //
 // EXPORTED, and deliberately not folded into handlers.handleError, because
 // handleError is not the only way a 4xx leaves this server. handleError covers

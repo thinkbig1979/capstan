@@ -61,12 +61,15 @@ func renderResultWithStatus(c *gin.Context, status int, r truth.ActionResult) {
 //
 // EVERY MEMBER IS LISTED EXPLICITLY, one code at a time. This is the class
 // boundary, and it is never inferred from the status or the request path:
-// GET /api/v1/git answers 404 for BOTH "this directory is not a git
-// repository" (routine — the frontend asks it of every stack, and most hosts
-// have no git-backed stack at all) and "stack not found" for an unknown
-// stackId (git.go's resolvePathFromStack, models.ErrStackNotFound — a real
-// client error). Same endpoint, same status, opposite answers; only the code
-// separates them.
+// GET /api/v1/git/log and /git/diff answer 404 for BOTH "this directory is not
+// a git repository" (routine — the frontend asks it of each stack whose
+// Activity tab is opened, and most hosts have no git-backed stack at all) and
+// "stack not found" for an unknown stackId (git.go's resolvePathFromStack,
+// models.ErrStackNotFound — a real client error). Same endpoint, same status,
+// opposite answers; only the code separates them. GET /api/v1/git itself no
+// longer answers the first as a 404: handlers/git.go GetStatus renders it 200
+// `{"isRepo": false}` (agent-os-x40a), so only its stack-not-found answer is
+// left a 404 there.
 //
 // The list lives here rather than in middleware so middleware carries no
 // opinion about which codes are routine. That is a design preference, not an
