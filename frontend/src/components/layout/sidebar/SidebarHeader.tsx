@@ -90,6 +90,8 @@ export function SidebarHeader({
           id="sidebar-stack-search"
           type="text"
           placeholder="Search stacks..."
+          autoComplete="off"
+          data-bwignore="true"
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
           className="w-full h-7 pl-7 pr-2 text-xs rounded-md border bg-background focus:outline-hidden focus:ring-1 focus:ring-ring"
