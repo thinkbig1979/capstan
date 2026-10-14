@@ -148,6 +148,14 @@ func TestDockerCleanupRunRecorded(t *testing.T) {
 		CacheBytesReclaimed: 987654321,
 		MinAgeHours:         168,
 		ErrorMessage:        "",
+		// Migration 24's five columns (agent-os-8hdg), distinct from each
+		// other and from the integers above, so a shifted bind or Scan swaps
+		// a visible value.
+		Categories:          "dangling_images,build_cache,volumes",
+		ContainersDeleted:   3,
+		VolumesDeleted:      5,
+		NetworksDeleted:     11,
+		OtherBytesReclaimed: 55555,
 	}
 	oldest := &models.DockerCleanupRun{
 		ID:           "run-oldest",
@@ -206,6 +214,59 @@ func TestDockerCleanupRunRecorded(t *testing.T) {
 	require.Len(t, withNull, 3)
 	assert.Equal(t, "run-null-error", withNull[0].ID)
 	assert.Equal(t, "", withNull[0].ErrorMessage)
+	assert.Equal(t, "dangling_images,build_cache", withNull[0].Categories,
+		"a writer that omits the categories column gets the migration-24 default")
+}
+
+// TestMigration24_CleanupRunsCategoriesPreserveOldRows pins migration 24
+// (agent-os-8hdg): a run row written before the five columns existed survives,
+// reads back as having removed dangling images and build cache (what every
+// earlier run removed), and counts zero for the new categories.
+//
+// The pre-migration arm makes it discriminating: the columns must be ABSENT at
+// v23, or the post-migration assertions would hold with migration 24 deleted.
+func TestMigration24_CleanupRunsCategoriesPreserveOldRows(t *testing.T) {
+	db, err := New(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	applyMigrationsThrough(t, db, 23)
+	cols := func() string {
+		rows := dumpRows(t, db, `SELECT group_concat(name, ',') FROM pragma_table_info('docker_cleanup_runs')`)
+		require.Len(t, rows, 1)
+		return rows[0][0]
+	}
+	require.NotContains(t, cols(), "categories", "the column must not exist before migration 24")
+
+	_, err = db.db.Exec(`INSERT INTO docker_cleanup_runs
+		(id, trigger, status, started_at, finished_at, images_deleted, bytes_reclaimed, cache_bytes_reclaimed, min_age_hours, error_message)
+		VALUES ('pre-24', 'scheduled', 'success', '2026-09-01T00:00:00Z', '2026-09-01T00:01:00Z', 4, 4000, 900, 168, '')`)
+	require.NoError(t, err)
+
+	require.NoError(t, RunMigrations(db))
+	for _, c := range []string{"categories", "containers_deleted", "volumes_deleted", "networks_deleted", "other_bytes_reclaimed"} {
+		assert.Contains(t, cols(), c)
+	}
+
+	runs, err := db.GetDockerCleanupRuns(10)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	r := runs[0]
+	assert.Equal(t, "pre-24", r.ID)
+	assert.Equal(t, 4, r.ImagesDeleted, "the old figures survive")
+	assert.Equal(t, int64(4000), r.BytesReclaimed)
+	assert.Equal(t, int64(900), r.CacheBytesReclaimed)
+	assert.Equal(t, 168, r.MinAgeHours)
+	assert.Equal(t, "dangling_images,build_cache", r.Categories)
+	assert.Zero(t, r.ContainersDeleted)
+	assert.Zero(t, r.VolumesDeleted)
+	assert.Zero(t, r.NetworksDeleted)
+	assert.Zero(t, r.OtherBytesReclaimed)
+
+	// A 'skipped' status needs no rebuild: the column has no CHECK.
+	require.NoError(t, db.CreateDockerCleanupRun(&models.DockerCleanupRun{
+		ID: "skipped-run", Trigger: "scheduled", Status: "skipped", StartedAt: "2026-10-01T00:00:00Z", MinAgeHours: 168,
+	}))
 }
 
 // TestDockerCleanupRunTimestamp pins the WRITE-side spelling of

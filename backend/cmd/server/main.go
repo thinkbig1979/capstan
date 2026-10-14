@@ -678,6 +678,12 @@ func main() {
 		// Arms only if an operator opted in; logs at ERROR and arms nothing if
 		// the policy cannot be read. Disabled is the default and stays silent.
 		cleanupSched.StartFromPolicy()
+
+		// Same typed-nil rule: NewHostSpaceService returns nil when the
+		// client is missing, and the host routes then answer 503.
+		if hostSpace := services.NewHostSpaceService(dockerService, db); hostSpace != nil {
+			resourcesHandler.SetHostSpaceService(hostSpace)
+		}
 	}
 
 	resourcesHandler.RegisterRoutes(protected)

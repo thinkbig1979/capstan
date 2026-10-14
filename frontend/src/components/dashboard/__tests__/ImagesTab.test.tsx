@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import type { ReactNode } from 'react'
@@ -55,6 +55,7 @@ const image = (over: Partial<DockerImage> = {}): DockerImage => ({
   size: 1024 * 1024,
   created: 1754640000,
   containers: 0,
+  containersKnown: true,
   ...over,
 })
 
@@ -241,6 +242,19 @@ describe('ImagesTab — the table', () => {
     expect(screen.getByText('0')).toBeInTheDocument()
   })
 
+  // agent-os-qczn: the server could not count (its DiskUsage read failed). A
+  // "0" here would read as "unused, safe to remove".
+  it('shows "unknown", not 0, when the server could not count containers', async () => {
+    mockGetImages.mockResolvedValue([
+      image({ id: 'sha256:a', repoTags: ['mystery'], containers: 0, containersKnown: false }),
+    ])
+    renderTab()
+
+    const row = (await screen.findByText('mystery')).closest('tr') as HTMLElement
+    expect(row).toHaveTextContent('unknown')
+    expect(within(row).queryByText('0')).not.toBeInTheDocument()
+  })
+
   it('summarises the count and total size in the header', async () => {
     mockGetImages.mockResolvedValue([
       image({ id: 'sha256:a', size: 1024 * 1024 }),
@@ -314,24 +328,56 @@ describe('ImagesTab — filtering and sorting', () => {
 })
 
 describe('ImagesTab — deleting', () => {
-  it('asks before removing, and force-removes an image that is in use', async () => {
+  // agent-os-qczn: once counts are real, the old "force-remove an in-use
+  // image" path would have force-removed every image a container runs from.
+  it('disables Delete for an image in use, and says why in a tooltip', async () => {
     mockGetImages.mockResolvedValue([
       image({ id: 'sha256:aaa', repoTags: ['nginx:latest'], containers: 2 }),
     ])
     renderTab()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove image nginx:latest' }))
+    const button = await screen.findByRole('button', {
+      name: 'Remove image nginx:latest (used by 2 containers, cannot be removed)',
+    })
+    expect(button).toBeDisabled()
 
+    fireEvent.focus(button.parentElement as HTMLElement)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Used by 2 containers')
+
+    fireEvent.click(button)
+    expect(screen.queryByText('Remove Image "nginx:latest"?')).not.toBeInTheDocument()
+    expect(mockDeleteImage).not.toHaveBeenCalled()
+  })
+
+  it('says "1 container", not "1 containers"', async () => {
+    mockGetImages.mockResolvedValue([
+      image({ id: 'sha256:aaa', repoTags: ['nginx:latest'], containers: 1 }),
+    ])
+    renderTab()
+
+    const button = await screen.findByRole('button', {
+      name: 'Remove image nginx:latest (used by 1 container, cannot be removed)',
+    })
+    fireEvent.focus(button.parentElement as HTMLElement)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Used by 1 container')
+  })
+
+  it('never forces: an image with an unknown count is removed with force false', async () => {
+    mockGetImages.mockResolvedValue([
+      image({ id: 'sha256:aaa', repoTags: ['nginx:latest'], containers: 0, containersKnown: false }),
+    ])
+    renderTab()
+
+    const button = await screen.findByRole('button', { name: 'Remove image nginx:latest' })
+    expect(button).toBeEnabled()
+    fireEvent.click(button)
     expect(await screen.findByText('Remove Image "nginx:latest"?')).toBeInTheDocument()
-    expect(
-      screen.getByText(/used by containers and will be force-removed/),
-    ).toBeInTheDocument()
-
+    expect(screen.queryByText(/force-removed/)).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
 
-    await waitFor(() =>
-      expect(mockDeleteImage).toHaveBeenCalledWith('sha256:aaa', true),
-    )
+    await waitFor(() => expect(mockDeleteImage).toHaveBeenCalledTimes(1))
+    // Every call, not "some call": toHaveBeenCalledWith matches any one of them.
+    expect(mockDeleteImage.mock.calls.map((c) => c[1])).toEqual([false])
   })
 
   it('does not force-remove an unused image', async () => {
@@ -344,7 +390,8 @@ describe('ImagesTab — deleting', () => {
     expect(await screen.findByText(/This image will be removed/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
 
-    await waitFor(() => expect(mockDeleteImage).toHaveBeenCalledWith('sha256:aaa', false))
+    await waitFor(() => expect(mockDeleteImage).toHaveBeenCalledTimes(1))
+    expect(mockDeleteImage.mock.calls.map((c) => c[1])).toEqual([false])
   })
 
   it('deletes nothing when the confirmation is dismissed', async () => {

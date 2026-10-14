@@ -202,10 +202,13 @@ export type UpdateHistoryEntry = Omit<WireUpdateHistoryEntry, 'status' | 'trigge
   trigger: 'manual' | 'auto'
 }
 
-// narrows models.DockerCleanupRun.Trigger and .Status, both Go strings
+// narrows models.DockerCleanupRun.Trigger and .Status, both Go strings.
+// 'skipped' is reserved for a scheduled run that finds its turn held and
+// removes nothing (errorMessage names the holder). No run writes it yet; the
+// category runs that take that turn are agent-os-lr7x.
 export type DockerCleanupRun = Omit<WireDockerCleanupRun, 'trigger' | 'status'> & {
   trigger: 'scheduled' | 'manual'
-  status: 'success' | 'failed'
+  status: 'success' | 'failed' | 'skipped'
 }
 
 // narrows models.UpdateSettingsResponse.ApplyMode, a Go string.
@@ -490,10 +493,25 @@ export interface BackupOperationResult {
   wsUrl: string
 }
 
+// One switch per category automatic cleanup may remove (D98-A).
+export interface DockerCleanupCategories {
+  danglingImages: boolean
+  unusedImages: boolean
+  buildCache: boolean
+  containers: boolean
+  volumes: boolean
+  networks: boolean
+}
+
 export interface DockerCleanupPolicy {
   enabled: boolean
   minAgeHours: number
   intervalHours: number
+  categories: DockerCleanupCategories
+  // Bytes; 0 turns the dashboard alert off (D98-C).
+  alertThresholdBytes: number
+  // RFC3339. Omitted (never null) unless cleanup is enabled and scheduled.
+  nextRunAt?: string
   minAllowedAgeHours: number
   minAllowedIntervalHours: number
 }

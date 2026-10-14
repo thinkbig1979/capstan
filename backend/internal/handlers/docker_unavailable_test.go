@@ -94,6 +94,10 @@ func TestResourcesHandler_NoDocker_RefusesEveryDockerRoute(t *testing.T) {
 		// becoming a route list that silently stopped keeping up.
 		{"previewCleanup", http.MethodPost, "/api/resources/cleanup/preview"},
 		{"runCleanup", http.MethodPost, "/api/resources/cleanup/run"},
+		// agent-os-p8sm / agent-os-yyat: the Docker host page.
+		{"getHostSummary", http.MethodGet, "/api/resources/host/summary"},
+		{"getHostCandidates", http.MethodGet, "/api/resources/host/candidates"},
+		{"freeSpace", http.MethodPost, "/api/resources/host/free-space"},
 	}
 
 	for _, rt := range routes {

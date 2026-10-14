@@ -33,6 +33,7 @@ const volume = (over: Partial<DockerVolume> = {}): DockerVolume => ({
   size: 1024 * 1024,
   sizeKnown: true,
   inUse: false,
+  inUseKnown: true,
   created: '2026-08-01T00:00:00Z',
   stack: '',
   ...over,
@@ -80,11 +81,15 @@ describe('VolumesTab — the table', () => {
     expect(screen.getByText('/var/lib/docker/volumes/app-data/_data')).toBeInTheDocument()
   })
 
-  it('shows an em dash when the size was never calculated', async () => {
+  // agent-os-gkgr: Docker's -1 "not computed" arrives as sizeKnown false. It
+  // reads "size unknown", the Host page's wording, never a byte count.
+  it('says "size unknown" when the size was never calculated', async () => {
     mockGetVolumes.mockResolvedValue([volume({ sizeKnown: false, size: 0 })])
     renderTab()
 
-    expect(await screen.findByTitle('Size not calculated')).toHaveTextContent('—')
+    await screen.findByText('app-data')
+    const sizeCell = screen.getAllByRole('row')[1].querySelectorAll('td')[2]
+    expect(sizeCell).toHaveTextContent(/^size unknown$/)
   })
 
   it('badges the owning stack, or a dash when the volume is unattached', async () => {
@@ -155,6 +160,21 @@ describe('VolumesTab — filtering and sorting', () => {
     expect(screen.getAllByRole('row').slice(1)[0]).toHaveTextContent('alpha')
   })
 
+  it('sorts a volume of unknown size after every known size', async () => {
+    mockGetVolumes.mockResolvedValue([
+      volume({ name: 'known-small', size: 10 }),
+      volume({ name: 'unknown', size: 0, sizeKnown: false }),
+      volume({ name: 'known-empty', size: 0 }),
+      volume({ name: 'known-big', size: 999 }),
+    ])
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Size' }))
+
+    const order = screen.getAllByRole('row').slice(1).map((r) => r.querySelector('td')?.textContent)
+    expect(order).toEqual(['known-big', 'known-small', 'known-empty', 'unknown'])
+  })
+
   it('switches the count display while filtering', async () => {
     mockGetVolumes.mockResolvedValue(TWO)
     renderTab()
@@ -202,6 +222,22 @@ describe('VolumesTab — deleting', () => {
 
     fireEvent.click(button)
     expect(mockDeleteVolume).not.toHaveBeenCalled()
+  })
+
+  // agent-os-gkgr: inUse false with inUseKnown false means nobody counted the
+  // volume's references, so it must not be offered as safe to delete.
+  it('disables removal when the in-use state is unknown, and says why', async () => {
+    mockGetVolumes.mockResolvedValue([volume({ name: 'unchecked', inUse: false, inUseKnown: false })])
+    renderTab()
+
+    const button = await screen.findByRole('button', {
+      name: 'Remove volume unchecked (in-use state unknown, cannot be removed)',
+    })
+    expect(button).toBeDisabled()
+
+    fireEvent.click(button)
+    expect(mockDeleteVolume).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Remove Volume/)).not.toBeInTheDocument()
   })
 })
 

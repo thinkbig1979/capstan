@@ -17,7 +17,6 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -676,24 +675,6 @@ func (s *DockerService) logUnmanagedProjects(unmanaged map[string]string) {
 	}
 }
 
-func (s *DockerService) GetImageDiskUsage(ctx context.Context) (int64, error) {
-	if s == nil {
-		return 0, ErrDockerUnavailable
-	}
-
-	images, err := s.client.ImageList(ctx, image.ListOptions{})
-	if err != nil {
-		return 0, err
-	}
-
-	var total int64
-	for _, img := range images {
-		total += img.Size
-	}
-
-	return total, nil
-}
-
 func (s *DockerService) GetDiskUsage(ctx context.Context) (*DiskUsageBreakdown, error) {
 	if s == nil {
 		return nil, ErrDockerUnavailable
@@ -704,27 +685,8 @@ func (s *DockerService) GetDiskUsage(ctx context.Context) (*DiskUsageBreakdown, 
 		return nil, fmt.Errorf("getting disk usage: %w", err)
 	}
 
-	var imagesTotal, containersTotal, volumesTotal, buildCacheTotal int64
-	for _, img := range du.Images {
-		imagesTotal += img.Size
-	}
-	for _, ctr := range du.Containers {
-		containersTotal += ctr.SizeRw
-	}
-	for _, vol := range du.Volumes {
-		volumesTotal += vol.UsageData.Size
-	}
-	for _, bc := range du.BuildCache {
-		buildCacheTotal += bc.Size
-	}
-
-	return &DiskUsageBreakdown{
-		Images:     imagesTotal,
-		Containers: containersTotal,
-		Volumes:    volumesTotal,
-		BuildCache: buildCacheTotal,
-		Total:      imagesTotal + containersTotal + volumesTotal + buildCacheTotal,
-	}, nil
+	summary := summarizeDiskUsage(du)
+	return &summary, nil
 }
 
 func (s *DockerService) GetRunningContainerIDs(ctx context.Context) ([]string, error) {

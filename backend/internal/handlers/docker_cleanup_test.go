@@ -30,6 +30,7 @@ import (
 type fn7x3HandlerExecuteCall struct {
 	trigger     string
 	minAgeHours int
+	categories  services.DockerCleanupCategories
 }
 
 type fn7x3FakeCleanup struct {
@@ -63,12 +64,12 @@ func (f *fn7x3FakeCleanup) Preview(_ context.Context, minAgeHours int) (*service
 	}, nil
 }
 
-func (f *fn7x3FakeCleanup) Execute(ctx context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error) {
+func (f *fn7x3FakeCleanup) Execute(ctx context.Context, trigger string, minAgeHours int, categories services.DockerCleanupCategories) (*models.DockerCleanupRun, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.executeCtxErr = ctx.Err()
 	f.executeDeadline, f.executeHasDeadline = ctx.Deadline()
-	f.executeCalls = append(f.executeCalls, fn7x3HandlerExecuteCall{trigger: trigger, minAgeHours: minAgeHours})
+	f.executeCalls = append(f.executeCalls, fn7x3HandlerExecuteCall{trigger: trigger, minAgeHours: minAgeHours, categories: categories})
 	if f.executeErr != nil {
 		return nil, f.executeErr
 	}
@@ -99,6 +100,14 @@ func (f *fn7x3FakeCleanup) executed() []fn7x3HandlerExecuteCall {
 type fn7x3FakeArmer struct {
 	mu    sync.Mutex
 	calls int
+	// next is what NextRunAt reports; zero means "not armed".
+	next time.Time
+}
+
+func (a *fn7x3FakeArmer) NextRunAt() time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.next
 }
 
 func (a *fn7x3FakeArmer) StartFromPolicy() {
@@ -582,4 +591,168 @@ func TestDockerCleanupRunOutlivesTheRequest(t *testing.T) {
 	require.True(t, cleanup.executeHasDeadline, "a detached run with no deadline could hold the cleanup guard forever")
 	require.WithinDuration(t, before.Add(services.DockerCleanupRunTimeout), cleanup.executeDeadline, time.Minute,
 		"the manual run is not bounded by the shared run timeout")
+}
+
+// agent-os-8hdg — categories, alert threshold and nextRunAt on the policy
+// routes.
+
+// cleanupPolicyKeys is every settings key the policy PUT can write.
+var cleanupPolicyKeys = []string{
+	services.SettingDockerCleanupEnabled,
+	services.SettingDockerCleanupMinAgeHours,
+	services.SettingDockerCleanupIntervalHours,
+	services.SettingDockerCleanupDanglingImages,
+	services.SettingDockerCleanupUnusedImages,
+	services.SettingDockerCleanupBuildCache,
+	services.SettingDockerCleanupContainers,
+	services.SettingDockerCleanupVolumes,
+	services.SettingDockerCleanupNetworks,
+	services.SettingDockerCleanupAlertThresholdBytes,
+}
+
+// storedPolicyKeys returns the policy keys that have a row, with their values.
+func storedPolicyKeys(t *testing.T, db *database.DB) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, k := range cleanupPolicyKeys {
+		if v, err := db.GetSetting(k); err == nil {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func TestCleanupPolicyCategories(t *testing.T) {
+	const path = "/api/resources/cleanup/policy"
+
+	t.Run("a partial categories PUT stores only that key", func(t *testing.T) {
+		db := fn7x3MemoryDB(t)
+		r, _, _ := fn7x3Router(t, db)
+
+		w := fn7x3Do(t, r, http.MethodPut, path, `{"categories":{"volumes":true}}`)
+		require.Equal(t, http.StatusOK, w.Code, "body = %s", w.Body.String())
+		require.Equal(t, map[string]string{services.SettingDockerCleanupVolumes: "true"}, storedPolicyKeys(t, db))
+
+		var got cleanupPolicyResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		require.Equal(t, services.DockerCleanupCategories{DanglingImages: true, BuildCache: true, Volumes: true}, got.Categories,
+			"the other switches keep their defaults")
+		require.Equal(t, services.DefaultCleanupAlertThresholdBytes, got.AlertThresholdBytes)
+	})
+
+	t.Run("enabled with every category off is refused and stores nothing", func(t *testing.T) {
+		db := fn7x3MemoryDB(t)
+		r, _, armer := fn7x3Router(t, db)
+
+		w := fn7x3Do(t, r, http.MethodPut, path,
+			`{"enabled":true,"categories":{"danglingImages":false,"unusedImages":false,"buildCache":false,"containers":false,"volumes":false,"networks":false}}`)
+		require.Equal(t, http.StatusBadRequest, w.Code, "body = %s", w.Body.String())
+		require.Contains(t, w.Body.String(), "Turn on at least one category, or turn automatic cleanup off")
+		require.Empty(t, storedPolicyKeys(t, db))
+		require.Zero(t, armer.armCalls())
+
+		// Positive side, same shape: one category left on is accepted.
+		w = fn7x3Do(t, r, http.MethodPut, path,
+			`{"enabled":true,"categories":{"danglingImages":false,"unusedImages":false,"buildCache":false,"containers":false,"volumes":false,"networks":true}}`)
+		require.Equal(t, http.StatusOK, w.Code, "body = %s", w.Body.String())
+	})
+
+	t.Run("the all-off check merges the request over the stored policy", func(t *testing.T) {
+		// Enabled is stored, not sent: switching off the two default categories
+		// alone leaves an enabled policy that removes nothing.
+		db := fn7x3MemoryDB(t)
+		require.NoError(t, db.SetSetting(services.SettingDockerCleanupEnabled, "true"))
+		r, _, _ := fn7x3Router(t, db)
+
+		w := fn7x3Do(t, r, http.MethodPut, path, `{"categories":{"danglingImages":false,"buildCache":false}}`)
+		require.Equal(t, http.StatusBadRequest, w.Code, "body = %s", w.Body.String())
+		require.Equal(t, map[string]string{services.SettingDockerCleanupEnabled: "true"}, storedPolicyKeys(t, db))
+
+		// And the same switches are fine once cleanup is off.
+		w = fn7x3Do(t, r, http.MethodPut, path, `{"enabled":false,"categories":{"danglingImages":false,"buildCache":false}}`)
+		require.Equal(t, http.StatusOK, w.Code, "body = %s", w.Body.String())
+	})
+
+	t.Run("alertThresholdBytes out of range is refused and stores nothing", func(t *testing.T) {
+		db := fn7x3MemoryDB(t)
+		r, _, _ := fn7x3Router(t, db)
+
+		for _, bad := range []string{"-1", fmt.Sprint(services.MaxCleanupAlertThresholdBytes + 1)} {
+			w := fn7x3Do(t, r, http.MethodPut, path, `{"minAgeHours":48,"alertThresholdBytes":`+bad+`}`)
+			require.Equal(t, http.StatusBadRequest, w.Code, "alertThresholdBytes=%s: body = %s", bad, w.Body.String())
+			require.Empty(t, storedPolicyKeys(t, db), "a refused request stored its other field")
+		}
+
+		// Both ends of the range are accepted, and 0 (alert off) is stored, not
+		// treated as absent.
+		for _, good := range []int64{0, services.MaxCleanupAlertThresholdBytes} {
+			w := fn7x3Do(t, r, http.MethodPut, path, fmt.Sprintf(`{"alertThresholdBytes":%d}`, good))
+			require.Equal(t, http.StatusOK, w.Code, "body = %s", w.Body.String())
+			var got cleanupPolicyResponse
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+			require.Equal(t, good, got.AlertThresholdBytes)
+		}
+	})
+
+	t.Run("nextRunAt is present only when enabled and armed", func(t *testing.T) {
+		db := fn7x3MemoryDB(t)
+		r, _, armer := fn7x3Router(t, db)
+		next := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+		armer.mu.Lock()
+		armer.next = next
+		armer.mu.Unlock()
+
+		w := fn7x3Do(t, r, http.MethodGet, path, "")
+		require.Equal(t, http.StatusOK, w.Code)
+		require.NotContains(t, w.Body.String(), "nextRunAt", "disabled: an armed-looking scheduler must not leak a next run")
+
+		w = fn7x3Do(t, r, http.MethodPut, path, `{"enabled":true}`)
+		require.Equal(t, http.StatusOK, w.Code, "body = %s", w.Body.String())
+		require.Contains(t, w.Body.String(), `"nextRunAt":"2026-10-15T09:00:00Z"`, "the PUT reports it too")
+		w = fn7x3Do(t, r, http.MethodGet, path, "")
+		require.Contains(t, w.Body.String(), `"nextRunAt":"2026-10-15T09:00:00Z"`)
+
+		// Enabled but not armed: nothing to promise.
+		armer.mu.Lock()
+		armer.next = time.Time{}
+		armer.mu.Unlock()
+		w = fn7x3Do(t, r, http.MethodGet, path, "")
+		require.Contains(t, w.Body.String(), `"enabled":true`)
+		require.NotContains(t, w.Body.String(), "nextRunAt")
+	})
+
+	t.Run("a categories PUT over an unreadable policy is refused before writing", func(t *testing.T) {
+		db, hide, restore := hiddenTableDB(t, "settings")
+		h := NewResourcesHandler(nil, db, nil)
+		r := gin.New()
+		h.RegisterRoutes(r.Group("/api"))
+
+		hide()
+		w := fn7x3Do(t, r, http.MethodPut, path, `{"categories":{"volumes":true}}`)
+		require.Equal(t, http.StatusInternalServerError, w.Code)
+		// The read refusal, not the write failure that would follow it: the
+		// two answer with different messages.
+		require.Contains(t, w.Body.String(), "Failed to read the Docker cleanup policy", "body = %s", w.Body.String())
+
+		restore()
+		w = fn7x3Do(t, r, http.MethodPut, path, `{"categories":{"volumes":true}}`)
+		require.Equal(t, http.StatusOK, w.Code, "body = %s", w.Body.String())
+	})
+
+	t.Run("a manual run removes the stored categories", func(t *testing.T) {
+		db := fn7x3MemoryDB(t)
+		require.NoError(t, db.SetSettings([]database.SettingValue{
+			{Key: services.SettingDockerCleanupDanglingImages, Value: "false"},
+			{Key: services.SettingDockerCleanupNetworks, Value: "true"},
+		}))
+		r, cleanup, _ := fn7x3Router(t, db)
+
+		w := fn7x3Do(t, r, http.MethodPost, "/api/resources/cleanup/run", `{"minAgeHours":48}`)
+		require.Equal(t, http.StatusOK, w.Code, "body = %s", w.Body.String())
+		calls := cleanup.executed()
+		require.Len(t, calls, 1)
+		require.Equal(t, 48, calls[0].minAgeHours)
+		require.Equal(t, services.DockerCleanupCategories{BuildCache: true, Networks: true}, calls[0].categories,
+			"the body supplied the floor; the categories still come from the policy")
+	})
 }

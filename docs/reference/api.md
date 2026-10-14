@@ -288,18 +288,60 @@ Direct Docker resource management, independent of any stack.
 - `POST /api/v1/resources/networks/prune` — prune unused networks
 - `GET /api/v1/resources/build-cache` — inspect Docker build cache usage
 - `POST /api/v1/resources/build-cache/prune` — prune the build cache
+- `GET /api/v1/resources/host/summary` — per-category counts and sizes of what
+  Docker keeps on disk, and what can be freed. `disk.reclaimable` is what the
+  Free-up-space defaults remove (unused images, build cache, stopped containers
+  outside any compose project); `disk.reclaimableAll` adds unattached volumes.
+  Served from a snapshot up to 30 s old (`measuredAt`). Nothing a stack uses or
+  owns is counted as reclaimable, whether the stack is running or not. 503 when
+  Docker is unavailable, never a zeroed body
+- `GET /api/v1/resources/host/candidates` — the items behind those figures:
+  images, containers, volumes and networks as `{id, label, size?, detail?}`
+  lists, and build cache as `{count, bytes}`. Read fresh on every call. `size`
+  is omitted when Docker did not report it. Removes nothing
+- `POST /api/v1/resources/host/free-space` — remove the listed items, body
+  `{images?, containers?, volumes?, networks?: string[], buildCache?: bool}`
+  (IDs as `candidates` returns them, at most 1000 per category). Waits for no
+  stack: it answers 409 `OPERATION_IN_PROGRESS` while any stack operation runs,
+  and blocks stack operations while it runs. The candidates are read again
+  first, and a requested ID that is no longer one (in use, owned by a stack, or
+  gone) is skipped, never removed. Nothing is forced. Returns an action result
+  whose `details` has `{removed, failed: [{id, reason}], skipped: [{id,
+  reason}]}` per category, `buildCache: {requested, removed, spaceReclaimed,
+  failed?, skipped?}`, and `spaceReclaimed`, Docker's disk use before minus
+  after (omitted when it could not be measured). Outcome `success`, `partial`
+  (207), `no_change`, or `failed` (500) when every removal failed. 400
+  `VALIDATION_ERROR` for an empty request, too many IDs, or an ID that is not a
+  Docker ID or name. Carries on if the browser disconnects (15 min limit)
 - `GET /api/v1/resources/cleanup/policy` — the scheduled Docker cleanup policy,
-  plus the server-enforced minimum image age the API will accept
+  plus the server-enforced minimum image age the API will accept. `categories`
+  holds one switch per category (`danglingImages`, `unusedImages`,
+  `buildCache`, `containers`, `volumes`, `networks`); with no stored value,
+  dangling images and build cache are on and the rest off.
+  `alertThresholdBytes` is the dashboard alert threshold (default 5 GiB, 0 =
+  off). `nextRunAt` (RFC3339) is the next scheduled run, present only while
+  cleanup is enabled and scheduled
 - `PUT /api/v1/resources/cleanup/policy` — enable or disable scheduled cleanup
-  and set its interval and minimum image age. A minimum age below the server
-  floor is rejected, not clamped: a prune is irreversible, so an operator who
-  asked for 0 must not be told 1 was stored
+  and set its interval, minimum image age, categories and alert threshold.
+  Every field is optional; `categories` may be partial, and a switch it leaves
+  out keeps its stored value. A minimum age below the server floor is
+  rejected, not clamped: a prune is irreversible, so an operator who asked for
+  0 must not be told 1 was stored. `alertThresholdBytes` must be between 0 and
+  1 TiB. An enabled policy with every category off is rejected with 400 "Turn
+  on at least one category, or turn automatic cleanup off". Everything is
+  validated before anything is stored, and the changed keys are stored together
 - `POST /api/v1/resources/cleanup/preview` — what a cleanup would remove.
   Removes nothing
 - `POST /api/v1/resources/cleanup/run` — run a cleanup now, independently of
-  the schedule and whether the schedule is enabled
+  the schedule and whether the schedule is enabled. It removes the categories
+  the policy has switched on. Today a run removes dangling images and build
+  cache only; the other categories are stored but not yet acted on
 - `GET /api/v1/resources/cleanup/history` — recent cleanup runs. `limit`
-  defaults to 50 and is capped at 100
+  defaults to 50 and is capped at 100. Each run records the `categories` it
+  acted on (comma-separated), per-category counts (`containersDeleted`,
+  `volumesDeleted`, `networksDeleted`) and `otherBytesReclaimed`. `status` is
+  `success` or `failed`; `skipped` is reserved for a scheduled run that finds
+  another operation holding its turn, which no run writes yet
 
 ## Terminal
 

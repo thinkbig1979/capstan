@@ -22,6 +22,31 @@ const (
 	SettingDockerCleanupEnabled       = "docker_cleanup_enabled"
 	SettingDockerCleanupMinAgeHours   = "docker_cleanup_min_age_hours"
 	SettingDockerCleanupIntervalHours = "docker_cleanup_interval_hours"
+
+	// One key per category automatic cleanup may remove (D98-A), and the
+	// dashboard alert threshold (D98-C). An absent row resolves to the default
+	// below, so an install that predates these keys keeps exactly the behaviour
+	// it had: dangling images and build cache, nothing else.
+	SettingDockerCleanupDanglingImages      = "docker_cleanup_dangling_images"
+	SettingDockerCleanupUnusedImages        = "docker_cleanup_unused_images"
+	SettingDockerCleanupBuildCache          = "docker_cleanup_build_cache"
+	SettingDockerCleanupContainers          = "docker_cleanup_containers"
+	SettingDockerCleanupVolumes             = "docker_cleanup_volumes"
+	SettingDockerCleanupNetworks            = "docker_cleanup_networks"
+	SettingDockerCleanupAlertThresholdBytes = "docker_cleanup_alert_threshold_bytes"
+)
+
+// Category names as recorded in docker_cleanup_runs.categories, a
+// comma-separated list in this order. Migration 24 backfills
+// "dangling_images,build_cache" for every row written before the column
+// existed, because that is what every earlier run removed.
+const (
+	CleanupCategoryDanglingImages = "dangling_images"
+	CleanupCategoryUnusedImages   = "unused_images"
+	CleanupCategoryBuildCache     = "build_cache"
+	CleanupCategoryContainers     = "containers"
+	CleanupCategoryVolumes        = "volumes"
+	CleanupCategoryNetworks       = "networks"
 )
 
 const (
@@ -51,6 +76,14 @@ const (
 	// bound exists so a wedged daemon cannot hold the scheduler, or the
 	// single-flight guard every run takes, forever (agent-os-yicu).
 	DockerCleanupRunTimeout = 30 * time.Minute
+
+	// DefaultCleanupAlertThresholdBytes is the dashboard alert threshold when
+	// the setting is unset: 5 GiB (D98-C). 0 turns the alert off.
+	DefaultCleanupAlertThresholdBytes int64 = 5 << 30
+
+	// MaxCleanupAlertThresholdBytes is the largest threshold the API accepts:
+	// 1 TiB.
+	MaxCleanupAlertThresholdBytes int64 = 1 << 40
 )
 
 // dockerCleanupRunner is the narrow interface the scheduler needs from
@@ -64,15 +97,39 @@ const (
 // check existed. A one-method interface a fake cannot accidentally fail to
 // satisfy removes that whole failure mode.
 type dockerCleanupRunner interface {
-	Execute(ctx context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error)
+	Execute(ctx context.Context, trigger string, minAgeHours int, categories DockerCleanupCategories) (*models.DockerCleanupRun, error)
+}
+
+// DockerCleanupCategories is what automatic cleanup may remove, one switch per
+// category (D98-A).
+type DockerCleanupCategories struct {
+	DanglingImages bool `json:"danglingImages"`
+	UnusedImages   bool `json:"unusedImages"`
+	BuildCache     bool `json:"buildCache"`
+	Containers     bool `json:"containers"`
+	Volumes        bool `json:"volumes"`
+	Networks       bool `json:"networks"`
+}
+
+// DefaultDockerCleanupCategories is the policy an install gets with no category
+// rows: what cleanup removed before the categories existed.
+func DefaultDockerCleanupCategories() DockerCleanupCategories {
+	return DockerCleanupCategories{DanglingImages: true, BuildCache: true}
+}
+
+// AnyOn reports whether at least one category is switched on.
+func (c DockerCleanupCategories) AnyOn() bool {
+	return c.DanglingImages || c.UnusedImages || c.BuildCache || c.Containers || c.Volumes || c.Networks
 }
 
 // DockerCleanupPolicy is the operator-facing cleanup policy, resolved from
 // settings.
 type DockerCleanupPolicy struct {
-	Enabled       bool `json:"enabled"`
-	MinAgeHours   int  `json:"minAgeHours"`
-	IntervalHours int  `json:"intervalHours"`
+	Enabled             bool                    `json:"enabled"`
+	MinAgeHours         int                     `json:"minAgeHours"`
+	IntervalHours       int                     `json:"intervalHours"`
+	Categories          DockerCleanupCategories `json:"categories"`
+	AlertThresholdBytes int64                   `json:"alertThresholdBytes"`
 }
 
 // ResolveDockerCleanupPolicy reads the three policy keys, falling back to the
@@ -103,10 +160,44 @@ func ResolveDockerCleanupPolicy(db *database.DB) (DockerCleanupPolicy, error) {
 	if err != nil {
 		return DockerCleanupPolicy{}, err
 	}
+
+	// One call per key, spelled with its constant, so the settings-key
+	// classification guard (database/settings_classification_test.go) sees
+	// every key this reads. A loop over a table hides them from it.
+	defaults := DefaultDockerCleanupCategories()
+	var cats DockerCleanupCategories
+	if cats.DanglingImages, err = resolveBoolSetting(db, SettingDockerCleanupDanglingImages, "", defaults.DanglingImages); err != nil {
+		return DockerCleanupPolicy{}, err
+	}
+	if cats.UnusedImages, err = resolveBoolSetting(db, SettingDockerCleanupUnusedImages, "", defaults.UnusedImages); err != nil {
+		return DockerCleanupPolicy{}, err
+	}
+	if cats.BuildCache, err = resolveBoolSetting(db, SettingDockerCleanupBuildCache, "", defaults.BuildCache); err != nil {
+		return DockerCleanupPolicy{}, err
+	}
+	if cats.Containers, err = resolveBoolSetting(db, SettingDockerCleanupContainers, "", defaults.Containers); err != nil {
+		return DockerCleanupPolicy{}, err
+	}
+	if cats.Volumes, err = resolveBoolSetting(db, SettingDockerCleanupVolumes, "", defaults.Volumes); err != nil {
+		return DockerCleanupPolicy{}, err
+	}
+	if cats.Networks, err = resolveBoolSetting(db, SettingDockerCleanupNetworks, "", defaults.Networks); err != nil {
+		return DockerCleanupPolicy{}, err
+	}
+
+	// resolveIntSetting returns a Go int, which is 64 bits on both shipped
+	// platforms (linux/amd64, linux/arm64 in docker-publish.yml), so the 1 TiB
+	// maximum fits.
+	threshold, err := resolveIntSetting(db, SettingDockerCleanupAlertThresholdBytes, "", int(DefaultCleanupAlertThresholdBytes))
+	if err != nil {
+		return DockerCleanupPolicy{}, err
+	}
 	return DockerCleanupPolicy{
-		Enabled:       enabled,
-		MinAgeHours:   minAge,
-		IntervalHours: interval,
+		Enabled:             enabled,
+		MinAgeHours:         minAge,
+		IntervalHours:       interval,
+		Categories:          cats,
+		AlertThresholdBytes: int64(threshold),
 	}, nil
 }
 
@@ -149,6 +240,14 @@ type DockerCleanupSchedulerService struct {
 	wg           sync.WaitGroup
 	parentCtx    context.Context
 	parentCancel context.CancelFunc
+
+	// armedAt and interval describe the armed ticker, so NextRunAt can say when
+	// it fires next. Set under mu by startLocked and zeroed by stopLocked, so
+	// they end when the ticker does. now is the clock they are read against;
+	// tests replace it.
+	armedAt  time.Time
+	interval time.Duration
+	now      func() time.Time
 }
 
 // NewDockerCleanupScheduler constructs the scheduler. *DockerCleanupService
@@ -165,6 +264,7 @@ func NewDockerCleanupScheduler(runner dockerCleanupRunner, db *database.DB, logg
 		logger:       logger.With("component", "docker-cleanup-scheduler"),
 		parentCtx:    ctx,
 		parentCancel: cancel,
+		now:          time.Now,
 	}
 }
 
@@ -197,6 +297,8 @@ func (s *DockerCleanupSchedulerService) startLocked(interval time.Duration) {
 	done, parentCtx := s.resetLocked()
 
 	s.ticker = time.NewTicker(interval)
+	s.armedAt = s.now()
+	s.interval = interval
 	// Captured as a local so the goroutine never reads the struct fields Stop()
 	// zeroes.
 	ticker := s.ticker
@@ -353,6 +455,8 @@ func (s *DockerCleanupSchedulerService) stopLocked() {
 		s.ticker.Stop()
 		s.ticker = nil
 	}
+	s.armedAt = time.Time{}
+	s.interval = 0
 	if s.done != nil {
 		select {
 		case <-s.done:
@@ -384,6 +488,28 @@ func (s *DockerCleanupSchedulerService) IsRunning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ticker != nil
+}
+
+// NextRunAt reports when the armed ticker fires next, or the zero time when it
+// is not armed (cleanup disabled, the policy unreadable, or stopped).
+//
+// A time.Ticker keeps its phase: it fires at armedAt + k*interval and drops
+// ticks a slow receiver missed rather than shifting later ones. So the next
+// fire is the first multiple of the interval after now. At exactly a multiple
+// the tick is due now and the next one is a full interval later, hence k is at
+// least 1 and rounds up past an exact boundary.
+func (s *DockerCleanupSchedulerService) NextRunAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ticker == nil || s.interval <= 0 {
+		return time.Time{}
+	}
+	elapsed := s.now().Sub(s.armedAt)
+	k := elapsed/s.interval + 1
+	if elapsed < 0 {
+		k = 1
+	}
+	return s.armedAt.Add(k * s.interval)
 }
 
 // runCycle is one tick: re-resolve the policy, then prune only if an operator
@@ -426,7 +552,7 @@ func (s *DockerCleanupSchedulerService) runCycle(ctx context.Context) {
 	cycleCtx, cancel := context.WithTimeout(ctx, DockerCleanupRunTimeout)
 	defer cancel()
 
-	run, err := s.runner.Execute(cycleCtx, TriggerScheduled, policy.MinAgeHours)
+	run, err := s.runner.Execute(cycleCtx, TriggerScheduled, policy.MinAgeHours, policy.Categories)
 	if errors.Is(err, ErrCleanupInProgress) {
 		// A manual run holds the guard. That run is the cleanup this tick would
 		// have done and it records its own row, so this is a skip like the
@@ -476,6 +602,8 @@ func (s *DockerCleanupSchedulerService) recordUnstartedCycle(minAgeHours int, ca
 		FinishedAt:   &now,
 		MinAgeHours:  minAgeHours,
 		ErrorMessage: fmt.Sprintf("scheduled Docker cleanup did not run: %v", cause),
+		// Categories stays empty: nothing was attempted, and the column's
+		// default would claim dangling images and build cache were.
 	}
 	if err := s.db.CreateDockerCleanupRun(run); err != nil {
 		s.logger.Error("Could not record the unstarted scheduled Docker cleanup in the history",

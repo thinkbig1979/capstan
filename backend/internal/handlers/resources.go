@@ -38,14 +38,16 @@ type updateScanner interface {
 // run handlers are testable without a Docker daemon.
 type dockerCleanupService interface {
 	Preview(ctx context.Context, minAgeHours int) (*services.DockerCleanupPreview, error)
-	Execute(ctx context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error)
+	Execute(ctx context.Context, trigger string, minAgeHours int, categories services.DockerCleanupCategories) (*models.DockerCleanupRun, error)
 }
 
 // dockerCleanupArmer is the slice of *services.DockerCleanupSchedulerService the
 // policy PUT needs: re-arm the tick from the freshly stored policy, so an
-// operator who opts in does not have to restart the process.
+// operator who opts in does not have to restart the process. NextRunAt is what
+// the policy GET and PUT report as nextRunAt.
 type dockerCleanupArmer interface {
 	StartFromPolicy()
+	NextRunAt() time.Time
 }
 
 // resourcePruner is the slice of *services.DockerService the four cross-stack
@@ -117,6 +119,10 @@ type ResourcesHandler struct {
 	// stack (agent-os-a1ye.4). Injected by SetOperationLock like the two
 	// above; nil (test-built handlers) means no locking.
 	opLock *services.OperationLock
+	// hostSpace serves the Docker host summary and cleanup candidates and
+	// runs free-space. Injected by SetHostSpaceService; nil on a Docker-less
+	// host, and the host routes then answer 503.
+	hostSpace hostSpaceService
 }
 
 // SetOperationLock installs the per-stack operation lock shared with the
@@ -203,6 +209,11 @@ func (h *ResourcesHandler) RegisterRoutes(r *gin.RouterGroup) {
 
 	r.GET("/resources/build-cache", h.listBuildCache)
 	r.POST("/resources/build-cache/prune", h.pruneBuildCache)
+
+	// Docker host page (agent-os-p8sm). Handlers in host_space.go.
+	r.GET("/resources/host/summary", h.getHostSummary)
+	r.GET("/resources/host/candidates", h.getHostCandidates)
+	r.POST("/resources/host/free-space", h.freeSpace)
 
 	// Scheduled Docker cleanup (agent-os-fn7x.3). Handlers in docker_cleanup.go.
 	r.GET("/resources/cleanup/policy", h.getCleanupPolicy)

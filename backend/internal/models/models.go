@@ -208,6 +208,9 @@ type DockerImage struct {
 	Size       int64    `json:"size"`
 	Created    int64    `json:"created"`
 	Containers int      `json:"containers"`
+	// ContainersKnown is false when Docker's disk-usage read failed or had no
+	// count for this image; Containers is then 0 and means nothing.
+	ContainersKnown bool `json:"containersKnown"`
 }
 
 type DockerVolume struct {
@@ -217,20 +220,27 @@ type DockerVolume struct {
 	Size       int64  `json:"size"`
 	SizeKnown  bool   `json:"sizeKnown"`
 	InUse      bool   `json:"inUse"`
+	// InUseKnown is false when Docker did not count the volume's references
+	// (disk-usage read failed, or RefCount -1); InUse is then false and means
+	// nothing, so the volume must not be offered as safe to delete.
+	InUseKnown bool   `json:"inUseKnown"`
 	Created    string `json:"created"`
 	Stack      string `json:"stack"`
 }
 
 type DockerNetwork struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	Driver     string   `json:"driver"`
-	Scope      string   `json:"scope"`
-	Internal   bool     `json:"internal"`
-	Containers int      `json:"containers"`
-	Labels     []string `json:"labels"`
-	Created    string   `json:"created"`
-	Stack      string   `json:"stack"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Driver     string `json:"driver"`
+	Scope      string `json:"scope"`
+	Internal   bool   `json:"internal"`
+	Containers int    `json:"containers"`
+	// ContainersKnown is false when inspecting the network failed; Containers is
+	// then 0 and means nothing, so the network must not read as unused.
+	ContainersKnown bool     `json:"containersKnown"`
+	Labels          []string `json:"labels"`
+	Created         string   `json:"created"`
+	Stack           string   `json:"stack"`
 }
 
 type ContainerUpdateInfo struct {
@@ -458,7 +468,7 @@ type BackupSnapshot struct {
 type DockerCleanupRun struct {
 	ID                  string  `json:"id"`
 	Trigger             string  `json:"trigger"` // "scheduled" | "manual"
-	Status              string  `json:"status"`  // "success" | "failed"
+	Status              string  `json:"status"`  // "success" | "failed" | "skipped"
 	StartedAt           string  `json:"startedAt"`
 	FinishedAt          *string `json:"finishedAt,omitempty"`
 	ImagesDeleted       int     `json:"imagesDeleted"`
@@ -466,4 +476,15 @@ type DockerCleanupRun struct {
 	CacheBytesReclaimed int64   `json:"cacheBytesReclaimed"`
 	MinAgeHours         int     `json:"minAgeHours"`
 	ErrorMessage        string  `json:"errorMessage,omitempty"`
+	// Categories is the comma-separated list of categories the run acted on
+	// (services.CleanupCategory*), recorded per row for the reason MinAgeHours
+	// is. Empty when the run attempted nothing. Rows from before migration 24 read
+	// "dangling_images,build_cache", which is what every earlier run removed.
+	Categories        string `json:"categories"`
+	ContainersDeleted int    `json:"containersDeleted"`
+	VolumesDeleted    int    `json:"volumesDeleted"`
+	NetworksDeleted   int    `json:"networksDeleted"`
+	// OtherBytesReclaimed is container and volume bytes. Freed in total is
+	// BytesReclaimed + CacheBytesReclaimed + OtherBytesReclaimed.
+	OtherBytesReclaimed int64 `json:"otherBytesReclaimed"`
 }

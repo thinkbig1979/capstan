@@ -909,6 +909,24 @@ UPDATE update_history SET completed_at = started_at
 			tStringToStoredInstantSQL("sessions", "created_at") +
 			tStringToStoredInstantSQL("action_log", "created_at"),
 	},
+	{
+		Version: 24,
+		Name:    "docker_cleanup_runs_categories",
+		SQL: `
+-- Automatic cleanup gains per-category switches (D98-A, agent-os-8hdg), so a
+-- run row records which categories it acted on and what each removed.
+-- Additive columns with defaults: an older binary that does not know them
+-- keeps reading and writing the table. The categories default is true for
+-- every existing row, because every run before this removed exactly dangling
+-- images and build cache. status gains 'skipped' with no rebuild: migration 17
+-- gave the column no CHECK constraint.
+ALTER TABLE docker_cleanup_runs ADD COLUMN categories TEXT NOT NULL DEFAULT 'dangling_images,build_cache';
+ALTER TABLE docker_cleanup_runs ADD COLUMN containers_deleted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE docker_cleanup_runs ADD COLUMN volumes_deleted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE docker_cleanup_runs ADD COLUMN networks_deleted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE docker_cleanup_runs ADD COLUMN other_bytes_reclaimed INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // ReencryptSecrets rewrites every stored secret that is not yet in the v2

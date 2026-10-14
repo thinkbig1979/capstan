@@ -13,8 +13,9 @@ import (
 // the caller (uuid.New().String() at the service layer), the same split
 // CreateBackupRun uses -- internal/database generates no ids of its own.
 func (d *DB) CreateDockerCleanupRun(r *models.DockerCleanupRun) error {
-	query := `INSERT INTO docker_cleanup_runs (id, trigger, status, started_at, finished_at, images_deleted, bytes_reclaimed, cache_bytes_reclaimed, min_age_hours, error_message)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO docker_cleanup_runs (id, trigger, status, started_at, finished_at, images_deleted, bytes_reclaimed, cache_bytes_reclaimed, min_age_hours, error_message,
+	              categories, containers_deleted, volumes_deleted, networks_deleted, other_bytes_reclaimed)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	// agent-os-fn7x.8: started_at and finished_at are ORDERed and compared as
 	// TEXT -- GetDockerCleanupRuns below sorts on started_at -- so a row
 	// written in a local-offset or sub-second spelling does not sort by
@@ -41,13 +42,15 @@ func (d *DB) CreateDockerCleanupRun(r *models.DockerCleanupRun) error {
 	}
 
 	_, err := d.db.Exec(query, r.ID, r.Trigger, r.Status, startedAt, finishedAt,
-		r.ImagesDeleted, r.BytesReclaimed, r.CacheBytesReclaimed, r.MinAgeHours, r.ErrorMessage)
+		r.ImagesDeleted, r.BytesReclaimed, r.CacheBytesReclaimed, r.MinAgeHours, r.ErrorMessage,
+		r.Categories, r.ContainersDeleted, r.VolumesDeleted, r.NetworksDeleted, r.OtherBytesReclaimed)
 	return err
 }
 
 // GetDockerCleanupRuns returns the most recent cleanup runs, newest first.
 func (d *DB) GetDockerCleanupRuns(limit int) ([]models.DockerCleanupRun, error) {
-	query := `SELECT id, trigger, status, started_at, finished_at, images_deleted, bytes_reclaimed, cache_bytes_reclaimed, min_age_hours, error_message
+	query := `SELECT id, trigger, status, started_at, finished_at, images_deleted, bytes_reclaimed, cache_bytes_reclaimed, min_age_hours, error_message,
+	                 categories, containers_deleted, volumes_deleted, networks_deleted, other_bytes_reclaimed
 	          FROM docker_cleanup_runs ORDER BY started_at DESC LIMIT ?`
 	rows, err := d.db.Query(query, limit)
 	if err != nil {
@@ -63,7 +66,8 @@ func (d *DB) GetDockerCleanupRuns(limit int) ([]models.DockerCleanupRun, error) 
 		// by a future writer that omits the column) from failing the scan.
 		var errorMessage sql.NullString
 		err := rows.Scan(&r.ID, &r.Trigger, &r.Status, &r.StartedAt, &r.FinishedAt,
-			&r.ImagesDeleted, &r.BytesReclaimed, &r.CacheBytesReclaimed, &r.MinAgeHours, &errorMessage)
+			&r.ImagesDeleted, &r.BytesReclaimed, &r.CacheBytesReclaimed, &r.MinAgeHours, &errorMessage,
+			&r.Categories, &r.ContainersDeleted, &r.VolumesDeleted, &r.NetworksDeleted, &r.OtherBytesReclaimed)
 		if err != nil {
 			return nil, err
 		}

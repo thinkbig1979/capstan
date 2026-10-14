@@ -332,10 +332,10 @@ const exclusiveGateHelper = "acquireExclusiveLock"
 
 // exclusiveGatedInterfaces are the handler-side interfaces whose every method
 // takes the exclusive turn first: resourcePruner (the four prunes,
-// agent-os-qags.27/.30) and resourceDeleter (the single network, volume and
-// image deletes, agent-os-qags.33). Both must exist, so a rename cannot empty
-// the guard.
-var exclusiveGatedInterfaces = map[string]bool{"resourcePruner": true, "resourceDeleter": true}
+// agent-os-qags.27/.30), resourceDeleter (the single network, volume and
+// image deletes, agent-os-qags.33) and hostSpaceFreer (the Free-up-space
+// removal, agent-os-yyat). All must exist, so a rename cannot empty the guard.
+var exclusiveGatedInterfaces = map[string]bool{"resourcePruner": true, "resourceDeleter": true, "hostSpaceFreer": true}
 
 // exclusiveGateViolations is containerLockViolations for the cross-stack
 // removals: the method set comes from the resourcePruner and resourceDeleter
@@ -496,6 +496,9 @@ type resourcePruner interface {
 type resourceDeleter interface {
 	DeleteNetwork(id string) error
 }
+type hostSpaceFreer interface {
+	FreeSpace(req string) error
+}
 `
 	cases := []struct {
 		name string
@@ -589,6 +592,194 @@ type resourceDeleter interface {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, _, sites := exclusiveGateViolations(t, map[string]string{
+				"iface.go": iface,
+				"h.go":     "package handlers\n" + tc.body + "\n",
+			})
+			require.Len(t, got, len(tc.want), "violations: %v (sites %d)", got, sites)
+			for i, w := range tc.want {
+				require.Contains(t, got[i], w)
+			}
+		})
+	}
+}
+
+// hostSpaceInvalidator is the call every Docker removal route defers, so the
+// host summary's 30 s snapshot never shows what was just removed
+// (agent-os-yyat).
+const hostSpaceInvalidator = "invalidateHostSpace"
+
+// hostSpaceExtraRemovals are the removals that are not on an exclusive-gated
+// interface: the single-container delete (behind lockContainerStack), the
+// build-cache prune (called on *services.DockerService directly) and the
+// manual cleanup run (dockerCleanupService.Execute). Each must still have a use
+// in the handler sources, so a rename cannot silently drop it from the guard.
+var hostSpaceExtraRemovals = []string{"DeleteContainer", "PruneBuildCache", "Execute"}
+
+// hostSpaceInvalidateViolations returns one line per non-test handler function
+// that uses a removal method (the exclusive-gated set plus
+// hostSpaceExtraRemovals) without a `defer h.invalidateHostSpace()` among the
+// statements of its own body. A deferred call at the top level runs on every
+// exit path; a plain call, or a defer inside an if or a closure, does not, so
+// both count as missing. sites is how many functions it checked, seen which of
+// the extra methods it found a use of.
+//
+// Blind spots: matching is by method name on any receiver (a same-named
+// method elsewhere is flagged, failing closed), a removal reached through a
+// helper outside the set is not seen, and code outside the handlers package is
+// not read (the scheduled cleanup has no handle on the host-space service; that
+// is agent-os-lr7x's).
+func hostSpaceInvalidateViolations(t *testing.T, sources map[string]string) (violations []string, sites int, seen map[string]bool) {
+	t.Helper()
+	_, gated, _ := exclusiveGateViolations(t, sources)
+	set := map[string]bool{}
+	for _, m := range gated {
+		set[m] = true
+	}
+	for _, m := range hostSpaceExtraRemovals {
+		set[m] = true
+	}
+
+	fset := token.NewFileSet()
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	seen = map[string]bool{}
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, sources[name], 0)
+		require.NoErrorf(t, err, "parse %s", name)
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			var used []string
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok && set[sel.Sel.Name] {
+					used = append(used, sel.Sel.Name)
+					seen[sel.Sel.Name] = true
+				}
+				return true
+			})
+			if len(used) == 0 {
+				continue
+			}
+			sites++
+			deferred := false
+			for _, stmt := range fn.Body.List {
+				d, ok := stmt.(*ast.DeferStmt)
+				if !ok {
+					continue
+				}
+				if sel, ok := d.Call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == hostSpaceInvalidator {
+					deferred = true
+				}
+			}
+			if !deferred {
+				violations = append(violations, fmt.Sprintf("%s (uses %s) at %s has no top-level `defer h.%s()`",
+					fn.Name.Name, strings.Join(used, ", "), fset.Position(fn.Pos()), hostSpaceInvalidator))
+			}
+		}
+	}
+	return violations, sites, seen
+}
+
+// TestHostSpaceGuard_EveryRemovalRouteInvalidates keeps every handler that
+// removes Docker objects on invalidateHostSpace, so the sidebar badge, header
+// pill and Host page never show for up to 30 s what was just removed. Sources
+// come from go:embed, so a `go test -overlay` mutant is what it reads.
+func TestHostSpaceGuard_EveryRemovalRouteInvalidates(t *testing.T) {
+	entries, err := handlerSources.ReadDir(".")
+	require.NoError(t, err)
+	sources := map[string]string{}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		b, err := handlerSources.ReadFile(e.Name())
+		require.NoError(t, err)
+		sources[e.Name()] = string(b)
+	}
+
+	violations, sites, seen := hostSpaceInvalidateViolations(t, sources)
+	for _, m := range hostSpaceExtraRemovals {
+		require.Truef(t, seen[m], "no use of %s in the handler sources; drop it from hostSpaceExtraRemovals or find what it was renamed to", m)
+	}
+	require.Positive(t, sites, "no removal route found; the guard is blind")
+	t.Logf("checked %d removal route(s)", sites)
+	require.Emptyf(t, violations, "Docker removal route without invalidating the host summary snapshot (agent-os-yyat):\n  %s",
+		strings.Join(violations, "\n  "))
+}
+
+// TestHostSpaceGuard_CheckerSeesTheShapes: each row that must fail does, and
+// the rows that must pass do, on the same instrument.
+func TestHostSpaceGuard_CheckerSeesTheShapes(t *testing.T) {
+	const iface = `package handlers
+type resourcePruner interface {
+	PruneContainers(id string) error
+}
+type resourceDeleter interface {
+	DeleteNetwork(id string) error
+}
+type hostSpaceFreer interface {
+	FreeSpace(req string) error
+}
+`
+	cases := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{"deferred at the top", `func (h *H) prune(c int) {
+	defer h.invalidateHostSpace()
+	h.pruner.PruneContainers("x")
+}`, nil},
+		{"deferred after an early return", `func (h *H) prune(c int) {
+	if c > 0 { return }
+	defer h.invalidateHostSpace()
+	h.pruner.PruneContainers("x")
+}`, nil},
+		{"no invalidate", `func (h *H) prune(c int) {
+	h.pruner.PruneContainers("x")
+}`, []string{"prune (uses PruneContainers)"}},
+		{"called, not deferred", `func (h *H) prune(c int) {
+	h.pruner.PruneContainers("x")
+	h.invalidateHostSpace()
+}`, []string{"prune (uses PruneContainers)"}},
+		{"deferred only inside an if", `func (h *H) prune(c int) {
+	if c > 0 { defer h.invalidateHostSpace() }
+	h.pruner.PruneContainers("x")
+}`, []string{"prune (uses PruneContainers)"}},
+		{"deferred only inside a closure", `func (h *H) prune(c int) {
+	func() { defer h.invalidateHostSpace() }()
+	h.pruner.PruneContainers("x")
+}`, []string{"prune (uses PruneContainers)"}},
+		{"a delete", `func (h *H) del(c int) {
+	h.deleterSeam().DeleteNetwork("x")
+}`, []string{"del (uses DeleteNetwork)"}},
+		{"free space", `func (h *H) free(c int) {
+	h.hostSpace.FreeSpace("x")
+}`, []string{"free (uses FreeSpace)"}},
+		{"a container delete", `func (h *H) del(c int) {
+	h.containerOps.DeleteContainer("x")
+}`, []string{"del (uses DeleteContainer)"}},
+		{"a build cache prune", `func (h *H) prune(c int) {
+	h.docker.PruneBuildCache("x")
+}`, []string{"prune (uses PruneBuildCache)"}},
+		{"a cleanup run", `func (h *H) run(c int) {
+	h.cleanup.Execute("x")
+}`, []string{"run (uses Execute)"}},
+		{"no removal needs no invalidate", `func (h *H) list(c int) {
+	h.docker.ListImages("x")
+}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, sites, _ := hostSpaceInvalidateViolations(t, map[string]string{
 				"iface.go": iface,
 				"h.go":     "package handlers\n" + tc.body + "\n",
 			})

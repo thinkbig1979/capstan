@@ -134,7 +134,7 @@ func TestDockerCleanupNeverPrunesAll(t *testing.T) {
 	store := &fn7x2FakeStore{}
 	svc := NewDockerCleanupService(docker, store)
 
-	_, err := svc.Execute(context.Background(), "scheduled", 24)
+	_, err := svc.Execute(context.Background(), "scheduled", 24, DefaultDockerCleanupCategories())
 	require.NoError(t, err)
 
 	require.Len(t, docker.imagePruneOpts, 1, "the image prune must actually have been called")
@@ -167,7 +167,7 @@ func TestDockerCleanupAgeFloor(t *testing.T) {
 	store := &fn7x2FakeStore{}
 	svc := NewDockerCleanupService(docker, store)
 
-	run, err := svc.Execute(context.Background(), "manual", 24)
+	run, err := svc.Execute(context.Background(), "manual", 24, DefaultDockerCleanupCategories())
 	require.NoError(t, err)
 
 	require.Len(t, docker.imagePruneOpts, 1)
@@ -279,7 +279,7 @@ func TestDockerCleanupFailureRecorded(t *testing.T) {
 	store := &fn7x2FakeStore{}
 	svc := NewDockerCleanupService(docker, store)
 
-	run, err := svc.Execute(context.Background(), "scheduled", 24)
+	run, err := svc.Execute(context.Background(), "scheduled", 24, DefaultDockerCleanupCategories())
 	require.Error(t, err, "a failed prune must be reported to the caller, not swallowed")
 
 	require.Len(t, store.runs, 1, "a failed run must still be recorded exactly once")
@@ -317,7 +317,7 @@ func TestDockerCleanupAgeFloorCannotBeBypassed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			docker := &fn7x2FakeDocker{}
 			svc := NewDockerCleanupService(docker, &fn7x2FakeStore{})
-			_, err := svc.Execute(context.Background(), "scheduled", tc.asked)
+			_, err := svc.Execute(context.Background(), "scheduled", tc.asked, DefaultDockerCleanupCategories())
 			require.NoError(t, err)
 			require.Len(t, docker.imagePruneOpts, 1)
 			assert.Equal(t, tc.want, docker.imagePruneOpts[0].Until)
@@ -373,7 +373,7 @@ func TestDockerCleanupReclaimedBytesNeverNegative(t *testing.T) {
 	store := &fn7x2FakeStore{}
 	svc := NewDockerCleanupService(docker, store)
 
-	_, err := svc.Execute(context.Background(), "scheduled", 24)
+	_, err := svc.Execute(context.Background(), "scheduled", 24, DefaultDockerCleanupCategories())
 	require.NoError(t, err)
 	require.Len(t, store.runs, 1)
 	assert.GreaterOrEqual(t, store.runs[0].CacheBytesReclaimed, int64(0), "a history row must never report negative bytes reclaimed")
@@ -427,6 +427,20 @@ var notReclaimFigures = map[string]string{
 	"FinishedAt":   "timestamp",
 	"MinAgeHours":  "the floor applied, echoed by Preview as MinAgeHours; not an amount reclaimed",
 	"ErrorMessage": "failure text",
+	"Categories":   "which categories the run acted on; not an amount reclaimed",
+}
+
+// pendingReclaimFigures are reclaim figures Execute does not produce yet: the
+// columns exist (migration 24, agent-os-8hdg) but removing containers, volumes
+// and networks is agent-os-lr7x. TestDockerCleanupPendingReclaimFiguresStayZero
+// pins that Execute leaves them at 0, so a figure cannot start being reported
+// while it sits here. agent-os-lr7x moves each one to runToPreview with a
+// Preview counterpart in the same change that makes Execute set it.
+var pendingReclaimFigures = map[string]string{
+	"ContainersDeleted":   "agent-os-lr7x",
+	"VolumesDeleted":      "agent-os-lr7x",
+	"NetworksDeleted":     "agent-os-lr7x",
+	"OtherBytesReclaimed": "agent-os-lr7x",
 }
 
 func TestDockerCleanupEveryRunFieldIsClassified(t *testing.T) {
@@ -437,10 +451,14 @@ func TestDockerCleanupEveryRunFieldIsClassified(t *testing.T) {
 	for i := 0; i < runType.NumField(); i++ {
 		name := runType.Field(i).Name
 		seen[name] = true
-		_, paired := runToPreview[name]
-		_, excluded := notReclaimFigures[name]
-		assert.True(t, paired != excluded,
-			"DockerCleanupRun.%s must be in exactly one of runToPreview / notReclaimFigures: "+
+		classified := 0
+		for _, table := range []map[string]string{runToPreview, notReclaimFigures, pendingReclaimFigures} {
+			if _, ok := table[name]; ok {
+				classified++
+			}
+		}
+		assert.Equal(t, 1, classified,
+			"DockerCleanupRun.%s must be in exactly one of runToPreview / notReclaimFigures / pendingReclaimFigures: "+
 				"if Execute reports it as a reclaim figure, Preview needs a counterpart (agent-os-q1kh)", name)
 	}
 
@@ -453,6 +471,75 @@ func TestDockerCleanupEveryRunFieldIsClassified(t *testing.T) {
 	}
 	for name := range notReclaimFigures {
 		assert.True(t, seen[name], "notReclaimFigures names DockerCleanupRun.%s, which does not exist", name)
+	}
+	for name := range pendingReclaimFigures {
+		assert.True(t, seen[name], "pendingReclaimFigures names DockerCleanupRun.%s, which does not exist", name)
+	}
+}
+
+// TestDockerCleanupPendingReclaimFiguresStayZero is what keeps
+// pendingReclaimFigures honest: with every category switched on, Execute still
+// reports 0 for each pending figure. A figure Execute starts setting fails here
+// until it moves to runToPreview with a Preview counterpart.
+func TestDockerCleanupPendingReclaimFiguresStayZero(t *testing.T) {
+	docker := &fn7x2FakeDocker{
+		images:         []models.DockerImage{{ID: "sha256:old", Size: 1000, Created: hoursAgo(100)}},
+		cacheReclaimed: 4096,
+	}
+	all := DockerCleanupCategories{DanglingImages: true, UnusedImages: true, BuildCache: true, Containers: true, Volumes: true, Networks: true}
+	run, err := NewDockerCleanupService(docker, &fn7x2FakeStore{}).Execute(context.Background(), TriggerManual, 24, all)
+	require.NoError(t, err)
+
+	require.Len(t, pendingReclaimFigures, 4)
+	runValue := reflect.ValueOf(*run)
+	for name := range pendingReclaimFigures {
+		assert.Zero(t, reclaimAmount(t, runValue.FieldByName(name)), "Execute now reports %s; move it to runToPreview with a Preview counterpart", name)
+	}
+	// Positive side on the same run: the figures Execute does produce are not
+	// zero, so the zeros above are not a run that did nothing.
+	assert.Positive(t, run.ImagesDeleted)
+	assert.Positive(t, run.CacheBytesReclaimed)
+}
+
+// TestDockerCleanupCategoriesSwitchOffPrunes: a category switched off is not
+// pruned and is not recorded, and the run records exactly what it ran
+// (agent-os-8hdg). The four categories Execute cannot run yet are never
+// recorded, even when switched on.
+func TestDockerCleanupCategoriesSwitchOffPrunes(t *testing.T) {
+	cases := []struct {
+		name           string
+		cats           DockerCleanupCategories
+		wantImagePrune int
+		wantCachePrune int
+		wantCategories string
+	}{
+		{"defaults run both", DefaultDockerCleanupCategories(), 1, 1, "dangling_images,build_cache"},
+		{"dangling images off", DockerCleanupCategories{BuildCache: true}, 0, 1, "build_cache"},
+		{"build cache off", DockerCleanupCategories{DanglingImages: true}, 1, 0, "dangling_images"},
+		{"only unexecuted categories on", DockerCleanupCategories{UnusedImages: true, Containers: true, Volumes: true, Networks: true}, 0, 0, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			docker := &fn7x2FakeDocker{images: []models.DockerImage{
+				{ID: "sha256:old", Size: 1000, Created: hoursAgo(100)},
+			}, cacheReclaimed: 4096}
+			store := &fn7x2FakeStore{}
+			run, err := NewDockerCleanupService(docker, store).Execute(context.Background(), TriggerScheduled, 24, tc.cats)
+			require.NoError(t, err)
+
+			assert.Len(t, docker.imagePruneOpts, tc.wantImagePrune, "image prune calls")
+			assert.Len(t, docker.cachePruneOpts, tc.wantCachePrune, "build cache prune calls")
+			assert.Equal(t, tc.wantCategories, run.Categories)
+			require.Len(t, store.runs, 1)
+			assert.Equal(t, tc.wantCategories, store.runs[0].Categories, "the stored row records the same categories")
+			if tc.wantImagePrune == 0 {
+				assert.Zero(t, run.ImagesDeleted)
+				assert.Zero(t, run.BytesReclaimed)
+			}
+			if tc.wantCachePrune == 0 {
+				assert.Zero(t, run.CacheBytesReclaimed)
+			}
+		})
 	}
 }
 
@@ -486,7 +573,7 @@ func TestDockerCleanupPreviewForecastsEveryReclaimFigure(t *testing.T) {
 	}
 	svc := NewDockerCleanupService(docker, &fn7x2FakeStore{})
 
-	run, err := svc.Execute(context.Background(), TriggerManual, 24)
+	run, err := svc.Execute(context.Background(), TriggerManual, 24, DefaultDockerCleanupCategories())
 	require.NoError(t, err)
 	preview, err := svc.Preview(context.Background(), 24)
 	require.NoError(t, err)
@@ -573,7 +660,7 @@ func TestDockerCleanupExecuteIsSingleFlight(t *testing.T) {
 
 	firstDone := make(chan error, 1)
 	go func() {
-		_, err := svc.Execute(context.Background(), TriggerScheduled, 24)
+		_, err := svc.Execute(context.Background(), TriggerScheduled, 24, DefaultDockerCleanupCategories())
 		firstDone <- err
 	}()
 	<-docker.entered
@@ -583,7 +670,7 @@ func TestDockerCleanupExecuteIsSingleFlight(t *testing.T) {
 	var secondErr error
 	go func() {
 		defer close(secondDone)
-		secondRun, secondErr = svc.Execute(context.Background(), TriggerManual, 24)
+		secondRun, secondErr = svc.Execute(context.Background(), TriggerManual, 24, DefaultDockerCleanupCategories())
 	}()
 
 	// On the unguarded code the second call blocks inside the fake's prune, so
@@ -609,7 +696,7 @@ func TestDockerCleanupExecuteIsSingleFlight(t *testing.T) {
 	// The guard is released when the run ends: a later call runs normally.
 	docker.release = make(chan struct{})
 	close(docker.release)
-	_, err := svc.Execute(context.Background(), TriggerManual, 24)
+	_, err := svc.Execute(context.Background(), TriggerManual, 24, DefaultDockerCleanupCategories())
 	require.NoError(t, err, "the guard was not released after the first run finished")
 	require.Equal(t, 2, store.count())
 }

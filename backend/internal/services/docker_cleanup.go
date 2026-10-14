@@ -211,6 +211,12 @@ func (s *DockerCleanupService) Preview(ctx context.Context, minAgeHours int) (*D
 // Execute prunes dangling images and build cache under the age floor and
 // records the run. trigger is "scheduled" or "manual".
 //
+// Each prune runs only when its category is switched on, and the run records
+// exactly the categories it ran, so turning a category off is honoured even
+// though only these two are executed yet. The other four categories are
+// accepted by the policy but not executed here: removing them is agent-os-lr7x,
+// and until then they are neither run nor recorded.
+//
 // A run that fails partway is recorded with whatever it had already reclaimed
 // rather than with zeroes: the bytes are gone either way, and a history row
 // claiming zero would misreport the disk.
@@ -219,7 +225,7 @@ func (s *DockerCleanupService) Preview(ctx context.Context, minAgeHours int) (*D
 // (nil, ErrCleanupInProgress) at once, prunes nothing and records nothing. It
 // refuses rather than waits so the manual caller can say so instead of hanging,
 // and because a prune queued behind another reclaims next to nothing.
-func (s *DockerCleanupService) Execute(ctx context.Context, trigger string, minAgeHours int) (*models.DockerCleanupRun, error) {
+func (s *DockerCleanupService) Execute(ctx context.Context, trigger string, minAgeHours int, categories DockerCleanupCategories) (*models.DockerCleanupRun, error) {
 	s.mu.Lock()
 	if s.running {
 		s.mu.Unlock()
@@ -244,23 +250,43 @@ func (s *DockerCleanupService) Execute(ctx context.Context, trigger string, minA
 		// normaliser.
 		StartedAt:   time.Now().UTC().Format(time.RFC3339),
 		MinAgeHours: clampCleanupAgeHours(minAgeHours),
+		Categories:  executedCategories(categories),
 	}
 
-	imgReport, err := s.docker.PruneImages(ctx, opts)
-	if err != nil {
-		return s.record(run, fmt.Errorf("pruning dangling images: %w", err))
+	if categories.DanglingImages {
+		imgReport, err := s.docker.PruneImages(ctx, opts)
+		if err != nil {
+			return s.record(run, fmt.Errorf("pruning dangling images: %w", err))
+		}
+		run.ImagesDeleted = len(imgReport.ImagesDeleted)
+		run.BytesReclaimed = reclaimedBytes(imgReport.SpaceReclaimed)
 	}
-	run.ImagesDeleted = len(imgReport.ImagesDeleted)
-	run.BytesReclaimed = reclaimedBytes(imgReport.SpaceReclaimed)
 
-	cacheReport, err := s.docker.PruneBuildCache(ctx, opts)
-	if err != nil {
-		return s.record(run, fmt.Errorf("pruning build cache: %w", err))
-	}
-	if cacheReport != nil {
-		run.CacheBytesReclaimed = reclaimedBytes(cacheReport.SpaceReclaimed)
+	if categories.BuildCache {
+		cacheReport, err := s.docker.PruneBuildCache(ctx, opts)
+		if err != nil {
+			return s.record(run, fmt.Errorf("pruning build cache: %w", err))
+		}
+		if cacheReport != nil {
+			run.CacheBytesReclaimed = reclaimedBytes(cacheReport.SpaceReclaimed)
+		}
 	}
 	return s.record(run, nil)
+}
+
+// executedCategories is the docker_cleanup_runs.categories value for a run:
+// the categories Execute acts on, in the column's fixed order. Only the two it
+// can execute are listed, so a history row never claims a category nothing
+// removed.
+func executedCategories(c DockerCleanupCategories) string {
+	var names []string
+	if c.DanglingImages {
+		names = append(names, CleanupCategoryDanglingImages)
+	}
+	if c.BuildCache {
+		names = append(names, CleanupCategoryBuildCache)
+	}
+	return strings.Join(names, ",")
 }
 
 // record finalises the run row and stores it. It is the single exit from

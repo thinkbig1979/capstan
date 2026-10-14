@@ -691,6 +691,11 @@ export interface DockerImage {
   size: number /* int64 */;
   created: number /* int64 */;
   containers: number /* int */;
+  /**
+   * ContainersKnown is false when Docker's disk-usage read failed or had no
+   * count for this image; Containers is then 0 and means nothing.
+   */
+  containersKnown: boolean;
 }
 export interface DockerVolume {
   name: string;
@@ -699,6 +704,12 @@ export interface DockerVolume {
   size: number /* int64 */;
   sizeKnown: boolean;
   inUse: boolean;
+  /**
+   * InUseKnown is false when Docker did not count the volume's references
+   * (disk-usage read failed, or RefCount -1); InUse is then false and means
+   * nothing, so the volume must not be offered as safe to delete.
+   */
+  inUseKnown: boolean;
   created: string;
   stack: string;
 }
@@ -709,6 +720,11 @@ export interface DockerNetwork {
   scope: string;
   internal: boolean;
   containers: number /* int */;
+  /**
+   * ContainersKnown is false when inspecting the network failed; Containers is
+   * then 0 and means nothing, so the network must not read as unused.
+   */
+  containersKnown: boolean;
   labels: string[];
   created: string;
   stack: string;
@@ -950,7 +966,7 @@ export interface BackupSnapshot {
 export interface DockerCleanupRun {
   id: string;
   trigger: string; // "scheduled" | "manual"
-  status: string; // "success" | "failed"
+  status: string; // "success" | "failed" | "skipped"
   startedAt: string;
   finishedAt?: string;
   imagesDeleted: number /* int */;
@@ -958,4 +974,19 @@ export interface DockerCleanupRun {
   cacheBytesReclaimed: number /* int64 */;
   minAgeHours: number /* int */;
   errorMessage?: string;
+  /**
+   * Categories is the comma-separated list of categories the run acted on
+   * (services.CleanupCategory*), recorded per row for the reason MinAgeHours
+   * is. Empty when the run attempted nothing. Rows from before migration 24 read
+   * "dangling_images,build_cache", which is what every earlier run removed.
+   */
+  categories: string;
+  containersDeleted: number /* int */;
+  volumesDeleted: number /* int */;
+  networksDeleted: number /* int */;
+  /**
+   * OtherBytesReclaimed is container and volume bytes. Freed in total is
+   * BytesReclaimed + CacheBytesReclaimed + OtherBytesReclaimed.
+   */
+  otherBytesReclaimed: number /* int64 */;
 }

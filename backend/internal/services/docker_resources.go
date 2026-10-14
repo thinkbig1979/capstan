@@ -39,6 +39,35 @@ func (s *DockerService) ListImages(ctx context.Context) ([]models.DockerImage, e
 		return nil, fmt.Errorf("listing images: %w", err)
 	}
 
+	// ImageList always reports Containers as -1: the client has no parameter
+	// that asks for the count. DiskUsage (docker system df) computes it, keyed
+	// by ID, as ListVolumes does for sizes. A failure degrades to "unknown".
+	var usage *dockertypes.DiskUsage
+	if du, duErr := s.client.DiskUsage(ctx, dockertypes.DiskUsageOptions{
+		Types: []dockertypes.DiskUsageObject{dockertypes.ImageObject},
+	}); duErr == nil {
+		usage = &du
+	} else {
+		slog.Warn("Failed to compute image container counts; counts unavailable", "error", duErr)
+	}
+
+	return toDockerImages(images, usage), nil
+}
+
+// toDockerImages builds the served image list, taking each image's container
+// count from usage. A nil usage (the read failed), an image missing from it
+// (created between the two calls) or a negative count leaves ContainersKnown
+// false and Containers 0, never a count the UI could read as "unused".
+func toDockerImages(images []image.Summary, usage *dockertypes.DiskUsage) []models.DockerImage {
+	counts := make(map[string]int64)
+	if usage != nil {
+		for _, img := range usage.Images {
+			if img != nil && img.Containers >= 0 {
+				counts[img.ID] = img.Containers
+			}
+		}
+	}
+
 	result := make([]models.DockerImage, 0, len(images))
 	for _, img := range images {
 		repoTags := img.RepoTags
@@ -46,16 +75,18 @@ func (s *DockerService) ListImages(ctx context.Context) ([]models.DockerImage, e
 			repoTags = []string{"<none>"}
 		}
 
+		count, known := counts[img.ID]
 		result = append(result, models.DockerImage{
-			ID:         img.ID,
-			RepoTags:   repoTags,
-			Size:       img.Size,
-			Created:    img.Created,
-			Containers: int(img.Containers),
+			ID:              img.ID,
+			RepoTags:        repoTags,
+			Size:            img.Size,
+			Created:         img.Created,
+			Containers:      int(count),
+			ContainersKnown: known,
 		})
 	}
 
-	return result, nil
+	return result
 }
 
 func (s *DockerService) DeleteImage(ctx context.Context, imageID string, force bool) ([]image.DeleteResponse, error) {
@@ -95,20 +126,13 @@ func (s *DockerService) ListVolumes(ctx context.Context) ([]models.DockerVolume,
 
 	// VolumeList does not populate UsageData, so size comes back as zero and there is no way
 	// to tell which volumes are in use. DiskUsage (docker system df) computes both, keyed by
-	// name. It is heavier, so a failure here degrades to "size unknown" rather than erroring.
-	type volUsage struct {
-		size     int64
-		refCount int64
-	}
-	usageByName := make(map[string]volUsage)
-	usageComputed := false
+	// name. It is heavier, so a failure here degrades to "unknown" rather than erroring.
+	usageByName := make(map[string]volumeUsage)
 	if du, duErr := s.client.DiskUsage(ctx, dockertypes.DiskUsageOptions{}); duErr == nil {
-		usageComputed = true
 		for _, v := range du.Volumes {
-			if v == nil || v.UsageData == nil {
-				continue
+			if v != nil {
+				usageByName[v.Name] = volumeUsageOf(v)
 			}
-			usageByName[v.Name] = volUsage{size: v.UsageData.Size, refCount: v.UsageData.RefCount}
 		}
 	} else {
 		slog.Warn("Failed to compute volume disk usage; size and in-use state unavailable", "error", duErr)
@@ -125,21 +149,51 @@ func (s *DockerService) ListVolumes(ctx context.Context) ([]models.DockerVolume,
 			stack = vol.Labels["com.docker.compose.project"]
 		}
 
-		u, hasUsage := usageByName[vol.Name]
+		// A volume missing from the snapshot (failed read, or created between the
+		// two calls) gets the zero volumeUsage: both halves unknown.
+		u := usageByName[vol.Name]
 
 		result = append(result, models.DockerVolume{
 			Name:       vol.Name,
 			Driver:     vol.Driver,
 			Mountpoint: vol.Mountpoint,
 			Size:       u.size,
-			SizeKnown:  usageComputed && hasUsage,
+			SizeKnown:  u.sizeKnown,
 			InUse:      u.refCount > 0,
+			InUseKnown: u.refCountKnown,
 			Created:    vol.CreatedAt,
 			Stack:      stack,
 		})
 	}
 
 	return result, nil
+}
+
+// volumeUsage is a volume's disk usage with Docker's "not computed" sentinel
+// resolved: a known flag false means the matching value is 0 and means nothing.
+type volumeUsage struct {
+	size          int64
+	sizeKnown     bool
+	refCount      int64
+	refCountKnown bool
+}
+
+// volumeUsageOf reads a volume's UsageData. Docker leaves UsageData nil, or
+// reports Size or RefCount as -1, when it did not compute them; copied through,
+// -1 renders as a size and a RefCount of -1 reads as "not in use", which made an
+// unchecked volume look safe to delete (agent-os-gkgr).
+func volumeUsageOf(v *volume.Volume) volumeUsage {
+	var u volumeUsage
+	if v == nil || v.UsageData == nil {
+		return u
+	}
+	if v.UsageData.Size >= 0 {
+		u.size, u.sizeKnown = v.UsageData.Size, true
+	}
+	if v.UsageData.RefCount >= 0 {
+		u.refCount, u.refCountKnown = v.UsageData.RefCount, true
+	}
+	return u
 }
 
 func (s *DockerService) DeleteVolume(ctx context.Context, volumeName string, force bool) error {
@@ -188,19 +242,23 @@ func (s *DockerService) ListNetworks(ctx context.Context) ([]models.DockerNetwor
 		}
 
 		// NetworkList does not populate net.Containers, so inspect each network to
-		// get the real attachment count that the in-use delete guard relies on.
-		containerCount := networkContainerCount(ctx, s.client, net.ID, len(net.Containers))
+		// get the real attachment count that the in-use delete guard relies on. A
+		// failed inspect is unknown, never the list's empty 0 (agent-os-gkgr).
+		containerCount := networkContainerCount(ctx, s.client, net.ID, -1)
+		containersKnown := containerCount >= 0
+		containerCount = max(containerCount, 0)
 
 		result = append(result, models.DockerNetwork{
-			ID:         net.ID,
-			Name:       net.Name,
-			Driver:     net.Driver,
-			Scope:      net.Scope,
-			Internal:   net.Internal,
-			Containers: containerCount,
-			Labels:     labelStrs,
-			Created:    net.Created.Format(time.RFC3339),
-			Stack:      stack,
+			ID:              net.ID,
+			Name:            net.Name,
+			Driver:          net.Driver,
+			Scope:           net.Scope,
+			Internal:        net.Internal,
+			Containers:      containerCount,
+			ContainersKnown: containersKnown,
+			Labels:          labelStrs,
+			Created:         net.Created.Format(time.RFC3339),
+			Stack:           stack,
 		})
 	}
 
@@ -215,7 +273,8 @@ type networkInspector interface {
 
 // networkContainerCount returns the number of containers attached to a network.
 // NetworkList does not populate the Containers map, so we inspect the network;
-// on inspect failure we fall back to whatever the list reported (typically 0).
+// on inspect failure it returns listFallback. Callers pass -1 so a failure stays
+// distinguishable from a network with nothing attached.
 func networkContainerCount(ctx context.Context, inspector networkInspector, networkID string, listFallback int) int {
 	inspected, err := inspector.NetworkInspect(ctx, networkID, network.InspectOptions{})
 	if err != nil {

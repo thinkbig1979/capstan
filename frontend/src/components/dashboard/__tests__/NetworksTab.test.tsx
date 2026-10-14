@@ -39,6 +39,7 @@ const network = (over: Partial<DockerNetwork> = {}): DockerNetwork => ({
   scope: 'local',
   internal: false,
   containers: 0,
+  containersKnown: true,
   labels: [],
   created: '2026-08-01T00:00:00Z',
   stack: '',
@@ -213,6 +214,34 @@ describe('NetworksTab — deleting', () => {
     const button = await screen.findByRole('button', { name: /Remove network busy/ })
     expect(button).toBeDisabled()
     expect(button).toHaveAccessibleName(/In use by 2 containers/)
+  })
+
+  // agent-os-gkgr (p8sm F1): a failed inspect arrives as containersKnown false
+  // with containers 0. It must not read as "0 attached" or offer Delete.
+  it('refuses to remove a network whose attachments are unknown, and says so', async () => {
+    mockGetNetworks.mockResolvedValue([network({ name: 'unchecked', containers: 0, containersKnown: false })])
+    renderTab()
+
+    const button = await screen.findByRole('button', { name: /Remove network unchecked/ })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAccessibleName(/Attached containers unknown/)
+
+    const containersCell = screen.getAllByRole('row')[1].querySelectorAll('td')[5]
+    expect(containersCell).toHaveTextContent(/^unknown$/)
+  })
+
+  it('sorts a network with an unknown count after every known count', async () => {
+    mockGetNetworks.mockResolvedValue([
+      network({ id: 'a', name: 'one', containers: 1 }),
+      network({ id: 'b', name: 'unchecked', containers: 0, containersKnown: false }),
+      network({ id: 'c', name: 'none', containers: 0 }),
+    ])
+    renderTab()
+
+    await screen.findByText('one')
+    fireEvent.click(screen.getByRole('button', { name: 'Containers' }))
+    const order = screen.getAllByRole('row').slice(1).map((r) => r.querySelector('td')?.textContent)
+    expect(order).toEqual(['one', 'none', 'unchecked'])
   })
 
   it('uses singular wording for a single attached container', async () => {
