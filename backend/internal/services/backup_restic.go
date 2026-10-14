@@ -482,7 +482,9 @@ func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []stri
 	args = append(args, "--tag", dateTag)
 
 	if m.cfg.BackupHostname != "" {
-		args = append(args, "--hostname", m.cfg.BackupHostname)
+		// --host, not --hostname: restic 0.18.0 prints "Flag --hostname has
+		// been deprecated, use --host".
+		args = append(args, "--host", m.cfg.BackupHostname)
 	}
 
 	args = append(args, stackDir)
@@ -496,17 +498,22 @@ func (m *ResticManager) Backup(ctx context.Context, stackDir string, tags []stri
 	go func() {
 		defer close(translateDone)
 		for sl := range raw {
-			if sl.Type != "data" {
-				out <- sl
-				continue
-			}
-			if line, handled := resticJSONToLine(sl.Line, summary); handled {
-				if line != "" {
-					out <- StreamLine{Type: "data", Line: line}
+			if sl.Type == "data" {
+				line, handled := resticJSONToLine(sl.Line, summary)
+				switch {
+				case !handled:
+					// Non-JSON line (e.g. a stderr warning) — forward verbatim.
+				case line == "":
+					continue
+				default:
+					sl = StreamLine{Type: "data", Line: line}
 				}
-			} else {
-				// Non-JSON line (e.g. a stderr warning) — forward verbatim.
-				out <- StreamLine{Type: "data", Line: sl.Line}
+			}
+			// A nil out means nobody is listening, as for stream(): a send
+			// on it would block forever, and the summary still has to be
+			// read.
+			if out != nil {
+				out <- sl
 			}
 		}
 	}()
@@ -537,10 +544,7 @@ func resticJSONToLine(raw string, summary *ResticBackupSummary) (line string, ha
 		summary.FilesNew = msg.FilesNew
 		summary.FilesChanged = msg.FilesChanged
 
-		short := msg.SnapshotID
-		if len(short) > 8 {
-			short = short[:8]
-		}
+		short := shortSnapshotID(msg.SnapshotID)
 		if msg.DataAdded == 0 {
 			return fmt.Sprintf("No change: nothing new to back up; snapshot %s saved", short), true
 		}
@@ -573,28 +577,69 @@ func humanizeBytes(n int64) string {
 	return fmt.Sprintf("%.3f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
-// Verify confirms the most recent snapshot for tag is readable by running
-// `restic ls` on it. For a deeper check pass tag and rely on restic check.
-func (m *ResticManager) Verify(ctx context.Context, tag string, out chan<- StreamLine) error {
-	snapshots, err := m.ListSnapshots(ctx, tag, 1)
-	if err != nil {
-		return fmt.Errorf("verify: list snapshots: %w", err)
+// shortSnapshotID is restic's short form of a snapshot id: its first 8
+// characters, what `restic snapshots` prints as short_id.
+func shortSnapshotID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
 	}
-	if len(snapshots) == 0 {
-		return fmt.Errorf("verify: no snapshots found for tag %q", tag)
-	}
+	return id
+}
 
+// snapshotVerifyTimeout bounds the post-backup `restic ls` of one snapshot.
+const snapshotVerifyTimeout = 10 * time.Minute
+
+// Verify confirms the snapshot snapshotID is readable by running `restic ls`
+// on it, and returns how many entries it listed.
+//
+// The caller passes the id restic printed for the backup it just took
+// (agent-os-wdlf). It used to look the snapshot up with `snapshots --tag X
+// --latest 1`, which returns the latest snapshot PER host and path: once the
+// host changed, element [0] was an earlier host's snapshot, and that is what
+// got verified.
+//
+// The listing is counted, never forwarded: it is every file name in the
+// snapshot, and the run output it used to reach is logged line by line (1476
+// lines in one production run). Only the last line that is not a path is
+// kept, so a failure still says what restic reported.
+func (m *ResticManager) Verify(ctx context.Context, snapshotID string) (entries int, err error) {
 	pwFile, cleanup, err := m.withPasswordFile()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	ctx, cancel := withCommandDeadline(ctx, snapshotVerifyTimeout)
 	defer cancel()
 
-	args := []string{"ls", snapshots[0].ShortID}
-	return m.runner.Run(ctx, "restic", args, m.resticEnv(pwFile), out)
+	lines := make(chan StreamLine, 32)
+	counted := make(chan struct{})
+	var lastNote string
+	go func() {
+		defer close(counted)
+		for l := range lines {
+			// restic ls prints each entry as an absolute path; any other
+			// line is its header or a message.
+			if l.Line != "" && l.Line[0] == '/' {
+				entries++
+			} else {
+				lastNote = l.Line
+			}
+		}
+	}()
+	// "--" stops flag parsing, as in RestorePreview.
+	runErr := m.runner.Run(ctx, "restic", []string{"ls", "--", snapshotID}, m.resticEnv(pwFile), lines)
+	close(lines)
+	<-counted
+
+	if runErr != nil {
+		runErr = timeoutError(ctx, runErr, "restic ls")
+		if lastNote != "" {
+			return entries, fmt.Errorf("verify snapshot %s: %w (restic: %s)", shortSnapshotID(snapshotID), runErr, lastNote)
+		}
+		return entries, fmt.Errorf("verify snapshot %s: %w", shortSnapshotID(snapshotID), runErr)
+	}
+	return entries, nil
 }
 
 // retentionTimeout bounds a plain `restic forget`, which only rewrites
@@ -627,12 +672,17 @@ func (m *ResticManager) ApplyRetention(ctx context.Context, tag string, out chan
 	}
 	defer cleanup()
 
-	args := []string{"forget", "--verbose"}
+	// Grouped by path only, with no host filter (agent-os-wdlf). restic
+	// groups forget by host and path by default, and the host used to be the
+	// container id, which changes on every redeploy: each deploy's snapshots
+	// became a group of their own that a `--hostname <current>` filter never
+	// reached again. Not grouped by tags either: every snapshot carries a
+	// date tag (Backup), so grouping by tags makes one group per day and
+	// keeps every snapshot (OBSERVED, restic 0.18.0 dry-run). The tag filter
+	// keeps the policy to this stack's snapshots.
+	args := []string{"forget", "--verbose", "--group-by", "paths"}
 	if tag != "" {
 		args = append(args, "--tag", tag)
-	}
-	if m.cfg.BackupHostname != "" {
-		args = append(args, "--hostname", m.cfg.BackupHostname)
 	}
 
 	hasRetention := false

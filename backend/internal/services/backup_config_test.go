@@ -1,7 +1,6 @@
 package services
 
 import (
-	"os"
 	"testing"
 
 	"github.com/thinkbig1979/capstan/backend/internal/config"
@@ -78,8 +77,8 @@ func TestResolveBackupConfig_Defaults(t *testing.T) {
 	if bc.RcloneTransfers != 4 {
 		t.Errorf("RcloneTransfers = %d; want 4", bc.RcloneTransfers)
 	}
-	if bc.BackupHostname == "" {
-		t.Error("BackupHostname should default to system hostname (non-empty)")
+	if bc.BackupHostname != DefaultBackupHostname {
+		t.Errorf("BackupHostname = %q; want %q", bc.BackupHostname, DefaultBackupHostname)
 	}
 }
 
@@ -252,22 +251,23 @@ func TestResolveBackupConfig_DBPasswordOverridesEnv(t *testing.T) {
 	}
 }
 
-// TestResolveBackupConfig_HostnameFromOS verifies the OS hostname is used when
-// neither DB nor env provide a value.
-func TestResolveBackupConfig_HostnameFromOS(t *testing.T) {
+// TestResolveBackupConfig_DefaultHostnameIsStable: with neither a DB value nor
+// BACKUP_HOSTNAME, the host is the constant DefaultBackupHostname. It used to
+// be os.Hostname(), the container id, which changed on every redeploy and
+// split each stack's snapshots into one restic host group per deploy
+// (agent-os-wdlf).
+func TestResolveBackupConfig_DefaultHostnameIsStable(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
 	cfg := baseCfg("/data")
 	// No cfg.BackupHostname set.
 
-	sysHostname, _ := os.Hostname() //nolint:errcheck // Mirrors the production site under test: the empty string is a valid outcome there, so the test must accept it here too.
 	bc, err := resolveBackupConfig(db, cfg)
 	if err != nil {
 		t.Fatalf("resolveBackupConfig: %v", err)
 	}
-
-	if bc.BackupHostname != sysHostname {
-		t.Errorf("BackupHostname = %q; want system hostname %q", bc.BackupHostname, sysHostname)
+	if bc.BackupHostname != "capstan" {
+		t.Errorf("BackupHostname = %q; want \"capstan\"", bc.BackupHostname)
 	}
 }
 

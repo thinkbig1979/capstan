@@ -145,7 +145,7 @@ yet.
 | `BACKUP_SCHEDULE_TIME` | `02:00` | No | Time of day for `scheduled` mode, as 24-hour zero-padded `HH:MM`. Ignored in `interval` mode. An unparseable value falls back to `interval` mode with a logged error, so backups keep running. |
 | `BACKUP_SCHEDULE_DAYS` | `0,1,2,3,4,5,6` | No | Weekdays for `scheduled` mode, comma-separated, `0` is Sunday through `6` is Saturday. Ignored in `interval` mode. An empty or invalid list falls back to `interval` mode with a logged error. |
 | `BACKUP_SYNC_AFTER` | `false` | No | Whether an rclone sync runs automatically after each local backup. Only the literal string `true` is treated as true. |
-| `BACKUP_HOSTNAME` | system hostname | No | Value passed as `--hostname` to restic `backup`/`forget`. |
+| `BACKUP_HOSTNAME` | `capstan` | No | Host name passed as `--host` to restic `backup`. Keep it fixed: restic picks a backup's parent snapshot per host. Retention does not filter by host; it groups each stack's snapshots by path. |
 
 ## Cloud sync & rclone
 

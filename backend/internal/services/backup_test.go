@@ -649,16 +649,17 @@ func TestRunBackup_PerStackFailureIsolation_Partial(t *testing.T) {
 		responses: []multiCallResponse{
 			// database snapshot → success
 			{binary: "restic", argPrefix: "backup", err: nil},
+			// database retention (agent-os-wdlf) → success. Without this
+			// entry the database forget would match stack-b's forget below
+			// and skip the script past stack-a's injected failure.
+			{binary: "restic", argPrefix: "forget", err: nil},
 			// stack-a backup call → error
 			{binary: "restic", argPrefix: "backup", err: errors.New("disk full")},
-			// stack-b backup call → success
+			// stack-b backup call → success; its verify `ls` matches no
+			// entry and succeeds.
 			{binary: "restic", argPrefix: "backup", err: nil},
-			// stack-b verify call → success (snapshots output)
-			{binary: "restic", argPrefix: "snapshots", output: snapshotJSON("abc", "ab1", "stack-b")},
 			// stack-b forget → success
 			{binary: "restic", argPrefix: "forget", err: nil},
-			// stack-b ListSnapshots → return snapshot for run item
-			{binary: "restic", argPrefix: "snapshots", output: snapshotJSON("abc", "ab1", "stack-b")},
 		},
 	}
 	_ = runner
@@ -2453,6 +2454,9 @@ func (m *multiCallRunner) Run(ctx context.Context, name string, args []string, e
 		firstArg = args[0]
 	}
 	resp := m.next(name, firstArg)
+	if resp.err == nil {
+		emitBackupSummary(name, args, out)
+	}
 	return resp.err
 }
 

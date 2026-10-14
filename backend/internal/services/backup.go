@@ -866,17 +866,28 @@ func (s *BackupService) executeBackupRun(
 	restartIncomplete := false
 	// Stacks whose snapshot succeeded but whose retention failed.
 	var retentionFailed []string
+	// Stacks whose snapshot succeeded but was not verified.
+	var verifyFailed []string
 
 	// The database goes first, deliberately. It is the artifact without which a
 	// restore produces an empty Capstan, and capturing it before the per-stack
 	// loop means a stack failure part-way through still leaves it in the
 	// repository. See backupDatabase for the full rationale (agent-os-36o).
 	dbReason := ""
+	dbRetentionReason := ""
 	if dbBytes, dbErr := s.backupDatabase(ctx, restic, dryRun, out); dbErr != nil {
 		dbReason = fmt.Sprintf("database snapshot failed: %v", dbErr)
 		stream(out, "error", dbReason)
 	} else {
 		totalBytesAdded += dbBytes
+		// The database snapshot gets the same retention as a stack's. It
+		// used to get none: one copy per run, kept forever (agent-os-wdlf).
+		if !dryRun {
+			if retErr := restic.ApplyRetention(ctx, DatabaseBackupTag, out); retErr != nil {
+				dbRetentionReason = fmt.Sprintf("old database snapshots were not cleaned up: retention failed: %v", retErr)
+				stream(out, "error", dbRetentionReason)
+			}
+		}
 	}
 
 	// Stacks never started because the run's context ended first (the scheduled
@@ -916,6 +927,9 @@ func (s *BackupService) executeBackupRun(
 		}
 		if res.retentionFailed {
 			retentionFailed = append(retentionFailed, stackID)
+		}
+		if res.verifyFailed {
+			verifyFailed = append(verifyFailed, stackID)
 		}
 	}
 
@@ -1005,6 +1019,27 @@ func (s *BackupService) executeBackupRun(
 	if len(retentionFailed) > 0 {
 		msg := fmt.Sprintf("old snapshots were not cleaned up for stack(s) %s: retention failed (see per-stack details)",
 			strings.Join(retentionFailed, ", "))
+		stream(out, "error", msg)
+		if run.Status == "success" {
+			run.Status = "partial"
+		}
+		runReasons = append(runReasons, msg)
+	}
+
+	if dbRetentionReason != "" {
+		if run.Status == "success" {
+			run.Status = "partial"
+		}
+		runReasons = append(runReasons, dbRetentionReason)
+	}
+
+	// A snapshot that was taken but not verified reads green on its item and
+	// used to read green on the run too (agent-os-3st7). Same shape as
+	// retention above: the items keep "success", the run says what was not
+	// done.
+	if len(verifyFailed) > 0 {
+		msg := fmt.Sprintf("snapshot not verified for stack(s) %s: verify failed (see per-stack details)",
+			strings.Join(verifyFailed, ", "))
 		stream(out, "error", msg)
 		if run.Status == "success" {
 			run.Status = "partial"
@@ -1211,6 +1246,10 @@ type stackResult struct {
 	// failed, so old snapshots were not cleaned up (agent-os-zp01). The item
 	// keeps "success"; the run must not read as a clean one.
 	retentionFailed bool
+	// verifyFailed is set when the snapshot was taken but not verified: its
+	// `restic ls` failed, or restic reported no snapshot id to verify
+	// (agent-os-3st7). Same shape as retentionFailed.
+	verifyFailed bool
 }
 
 // backupStack performs the full backup cycle for a single stack (stop, backup,
@@ -1331,32 +1370,28 @@ func (s *BackupService) backupStack(
 		res.bytesAdded = summary.BytesAdded
 	}
 
-	// Verify the snapshot we just created.
-	if verifyErr := restic.Verify(ctx, stackID, out); verifyErr != nil {
-		// Verification failure is non-fatal: log and continue.
-		warn(fmt.Sprintf("verify warning: %v", verifyErr))
+	// Record and verify the snapshot THIS backup wrote, by the id restic
+	// printed for it (agent-os-wdlf). Looking it up again with `snapshots
+	// --latest 1` returned the latest snapshot per host, so after a host
+	// change it named an earlier deploy's snapshot. Without an id there is
+	// nothing to verify, and no re-listing stands in for one.
+	if summary == nil || summary.SnapshotID == "" {
+		warn("snapshot not verified: restic reported no snapshot id for this backup")
+		res.verifyFailed = true
+	} else {
+		snapshotID = shortSnapshotID(summary.SnapshotID)
+		if entries, verifyErr := restic.Verify(ctx, summary.SnapshotID); verifyErr != nil {
+			warn(fmt.Sprintf("verify warning: %v", verifyErr))
+			res.verifyFailed = true
+		} else {
+			stream(out, "info", fmt.Sprintf("[%s] verified snapshot %s: %d entries readable", stackID, snapshotID, entries))
+		}
 	}
 
 	// Apply retention policy.
 	if retentionErr := restic.ApplyRetention(ctx, stackID, out); retentionErr != nil {
 		warn(fmt.Sprintf("retention warning: %v", retentionErr))
 		res.retentionFailed = true
-	}
-
-	// Retrieve the latest snapshot ID for the run item record.
-	//
-	// The read-back is best-effort, but its FAILURE is not the same fact as an
-	// empty repository (agent-os-qyg7.2): both leave snapshotID empty and
-	// the item still records "success", so a snapshot that exists but
-	// could not be listed was indistinguishable in the run history from one
-	// that was never taken. Warned rather than returned, because the backup
-	// itself did succeed -- the same shape as the verify and retention
-	// warnings above.
-	snaps, listErr := restic.ListSnapshots(ctx, stackID, 1)
-	if listErr != nil {
-		warn(fmt.Sprintf("snapshot id unavailable: %v", listErr))
-	} else if len(snaps) > 0 {
-		snapshotID = snaps[0].ShortID
 	}
 
 	stream(out, "info", fmt.Sprintf("[%s] completed successfully", stackID))

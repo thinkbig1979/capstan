@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -47,7 +48,9 @@ func (c *cancellingRunner) Run(ctx context.Context, name string, args []string, 
 		}
 	}
 	err := c.multiCallRunner.Run(ctx, name, args, env, out)
-	if name == "restic" && first == "forget" && c.cancelAfterForget {
+	// The database snapshot's forget runs before the stacks (agent-os-wdlf);
+	// only a stack's forget ends the context.
+	if name == "restic" && first == "forget" && c.cancelAfterForget && !slices.Contains(args, DatabaseBackupTag) {
 		c.cancel()
 	}
 	return err
@@ -126,10 +129,9 @@ func TestRunBackup_StacksLeftAfterContextEndIsPartialNotSuccess(t *testing.T) {
 	runner := &cancellingRunner{
 		multiCallRunner: &multiCallRunner{responses: []multiCallResponse{
 			{binary: "restic", argPrefix: "backup"}, // capstan.db
-			{binary: "restic", argPrefix: "backup"}, // stack-a
-			{binary: "restic", argPrefix: "snapshots", output: snapshotJSON("abc", "ab1", "stack-a")},
-			{binary: "restic", argPrefix: "forget"},
-			{binary: "restic", argPrefix: "snapshots", output: snapshotJSON("abc", "ab1", "stack-a")},
+			{binary: "restic", argPrefix: "forget"}, // capstan.db retention (agent-os-wdlf)
+			{binary: "restic", argPrefix: "backup"}, // stack-a; its verify `ls` matches no entry
+			{binary: "restic", argPrefix: "forget"}, // stack-a retention, then the context ends
 		}},
 		cancel:            cancel,
 		cancelAfterForget: true,
