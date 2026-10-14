@@ -28,10 +28,11 @@ export function RetentionSection({ draft, onChange }: RetentionSectionProps) {
           href="https://github.com/thinkbig1979/capstan/blob/main/docs/reference/configuration.md#backups--restic"
         >
           <p>
-            After a backup, restic can thin out old snapshots, keeping a set number per day,
-            week, month, and year. Set a level to 0 to keep none there.
+            After every backup, old snapshots are removed from the list, keeping a set number
+            per day, week, month, and year. A level set to 0 is switched off. If all four are
+            0, nothing is removed.
           </p>
-          <p>Snapshots are only removed when auto-prune is on or you prune by hand.</p>
+          <p>Disk space is freed only when auto-prune is on or you prune by hand.</p>
         </HelpHint>
       </div>
 
@@ -50,7 +51,7 @@ export function RetentionSection({ draft, onChange }: RetentionSectionProps) {
         ))}
       </div>
       <p className="text-xs text-muted-foreground">
-        Number of snapshots to keep at each interval. 0 = keep none for that interval.
+        Number of snapshots to keep at each interval. 0 switches that interval off; with all four at 0, nothing is removed.
       </p>
 
       <div className="flex items-center gap-3">
@@ -62,7 +63,7 @@ export function RetentionSection({ draft, onChange }: RetentionSectionProps) {
         <div>
           <Label htmlFor="backup-auto-prune">Auto-prune after backup</Label>
           <p className="text-xs text-muted-foreground">
-            Automatically apply the retention policy after each backup run.
+            Free the disk space of removed snapshots after each backup. Off: they leave the list, but space is only freed by a manual prune.
           </p>
         </div>
       </div>

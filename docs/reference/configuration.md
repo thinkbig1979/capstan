@@ -135,11 +135,11 @@ yet.
 | --- | --- | --- | --- |
 | `RESTIC_REPOSITORY` | `{DATA_DIR}/restic-repo` | No | Path to the local restic repository. |
 | `RESTIC_PASSWORD` | none | No, but backups will fail without one (DB or env) | Restic repository encryption password. Never logged. |
-| `BACKUP_KEEP_DAILY` | `7` | No | Daily snapshots to retain (`restic forget --keep-daily`). Non-numeric values are ignored and fall back to the default. |
+| `BACKUP_KEEP_DAILY` | `7` | No | Daily snapshots to retain (`restic forget --keep-daily`). Retention runs after every backup. `0` leaves that `--keep-*` flag off; with all four `BACKUP_KEEP_*` at `0`, no `forget` runs and nothing is removed. Non-numeric values are ignored and fall back to the default. |
 | `BACKUP_KEEP_WEEKLY` | `4` | No | Weekly snapshots to retain. |
 | `BACKUP_KEEP_MONTHLY` | `6` | No | Monthly snapshots to retain. |
 | `BACKUP_KEEP_YEARLY` | `0` | No | Yearly snapshots to retain. |
-| `BACKUP_AUTO_PRUNE` | `true` | No | Whether `--prune` is appended to the retention `forget` command. Only the literal string `true` (case-sensitive) is treated as true. |
+| `BACKUP_AUTO_PRUNE` | `true` | No | Whether `--prune` is appended to the retention `forget` command. Without it, snapshots still leave the list after every backup, but their disk space is only freed by a manual prune. Only the literal string `true` (case-sensitive) is treated as true. |
 | `BACKUP_SCHEDULE_INTERVAL` | `0` (disabled) | No | Backup scheduler tick, in minutes. `0` disables the scheduler. For a clock-time schedule set in Settings → Backup (e.g. `03:00`), the zone that time is read in comes from [`TZ`](#paths-volumes--container-user), which defaults to `UTC`. |
 | `BACKUP_SCHEDULE_MODE` | `interval` | No | How scheduled backups are timed. `interval` runs every `BACKUP_SCHEDULE_INTERVAL` minutes from process start. `scheduled` runs at `BACKUP_SCHEDULE_TIME` on the weekdays in `BACKUP_SCHEDULE_DAYS`, read against [`TZ`](#paths-volumes--container-user). Any other value falls back to `interval` with a logged error. |
 | `BACKUP_SCHEDULE_TIME` | `02:00` | No | Time of day for `scheduled` mode, as 24-hour zero-padded `HH:MM`. Ignored in `interval` mode. An unparseable value falls back to `interval` mode with a logged error, so backups keep running. |
