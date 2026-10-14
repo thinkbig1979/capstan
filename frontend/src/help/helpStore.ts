@@ -26,6 +26,11 @@ interface HelpState {
   openForPage: (ref: HelpRef | null) => void
   /** Open at a topic chosen elsewhere (a field hint, the palette). */
   openAt: (ref: HelpRef) => void
+  /**
+   * Show search results for q, opening the panel if needed. The first call
+   * from another view keeps that view for Back; later calls only change q.
+   */
+  openSearch: (q: string) => void
   /** Navigate inside the panel; stops following the page. */
   navigate: (view: HelpView) => void
   /** The page changed: follow it if the panel is still on the page's topic. */
@@ -56,6 +61,15 @@ export const useHelpStore = create<HelpState>()((set) => ({
       current: ref,
       history: s.open ? [...s.history, s.current] : [],
       focusHeading: true,
+    })),
+
+  openSearch: (q) =>
+    set((s) => ({
+      open: true,
+      followPage: false,
+      current: { kind: 'search', q },
+      history: !s.open ? [] : 'kind' in s.current && s.current.kind === 'search' ? s.history : [...s.history, s.current],
+      focusHeading: false,
     })),
 
   navigate: (view) =>

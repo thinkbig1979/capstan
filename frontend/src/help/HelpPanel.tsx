@@ -1,19 +1,19 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { ArrowLeft, Keyboard, MapPin, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { LoadFailedNotice } from '@/components/LoadFailedNotice'
 import { loadHelpLibrary, type HelpDoc } from './content'
 import type { HelpRef } from './registry'
 import { HELP_INDEX, useHelpStore, usePageHelpRef, type HelpView } from './helpStore'
+import { DEVELOPER_DOCS, searchHelp, type SearchResult } from './search'
 
 // react-markdown and the docs stay out of the entry chunk: the renderer is
 // lazy here and the docs sit behind loadHelpLibrary()'s dynamic import.
 const HelpMarkdown = lazy(() => import('./HelpMarkdown').then((m) => ({ default: m.HelpMarkdown })))
 
 // Developer-facing docs get their own group so operators meet them last (D93-1).
-const DEVELOPER_DOCS = new Set(['reference/api', 'explanation/architecture'])
-
 const INDEX_GROUPS: { label: string; matches: (doc: HelpDoc) => boolean }[] = [
   { label: 'Getting started', matches: (d) => d.group === 'start' },
   { label: 'Page help', matches: (d) => d.group === 'help' },
@@ -53,6 +53,39 @@ function useHelpLibrary(enabled: boolean) {
 
 function isDocRef(view: HelpView): view is HelpRef {
   return 'doc' in view
+}
+
+function SearchResults({ q, results, onOpen }: { q: string; results: SearchResult[]; onOpen: (r: SearchResult) => void }) {
+  if (results.length === 0) {
+    return (
+      <p data-testid="help-search-empty" className="text-sm text-muted-foreground">
+        No help matches “{q.trim()}”
+      </p>
+    )
+  }
+  return (
+    <>
+      <p aria-live="polite" className="sr-only">
+        {results.length} {results.length === 1 ? 'result' : 'results'}
+      </p>
+      <ul aria-label="Search results" className="space-y-1">
+        {results.map((r) => (
+          <li key={`${r.docId}#${r.anchor}`}>
+            <button
+              type="button"
+              data-testid="help-search-result"
+              className="w-full rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => onOpen(r)}
+            >
+              <span className="block text-sm font-medium">{r.heading}</span>
+              <span className="block text-xs text-muted-foreground">{r.docTitle}</span>
+              <span className="mt-0.5 block text-xs">{r.snippet}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
+  )
 }
 
 function LoadingHelp() {
@@ -142,7 +175,7 @@ function GuideIndex({
  * reading, so clicks outside do not close it; Escape and Close do.
  */
 export function HelpPanel() {
-  const { open, current, history, focusHeading, followPage, close, navigate, back, openForPage, syncPage, setShortcutsOpen } =
+  const { open, current, history, focusHeading, followPage, close, navigate, back, openForPage, openAt, openSearch, syncPage, setShortcutsOpen } =
     useHelpStore()
   const pageRef = usePageHelpRef()
   const { state, retry } = useHelpLibrary(open)
@@ -165,6 +198,8 @@ export function HelpPanel() {
   const onNavigate = useCallback((view: HelpView) => navigate(view), [navigate])
 
   const docs = state.status === 'ready' ? state.docs : []
+  const query = 'kind' in current && current.kind === 'search' ? current.q : ''
+  const results = useMemo(() => (state.status === 'ready' ? searchHelp(state.docs, query) : []), [state, query])
   const doc = isDocRef(current) ? docs.find((d) => d.id === current.doc) : undefined
   const section = isDocRef(current) && current.anchor ? doc?.sections.find((s) => s.anchor === current.anchor) : undefined
   const anchorMissing = Boolean(doc && isDocRef(current) && current.anchor && !section)
@@ -195,6 +230,8 @@ export function HelpPanel() {
         </Suspense>
       </>
     )
+  } else if ('kind' in current && current.kind === 'search' && query.trim() !== '') {
+    body = <SearchResults q={query} results={results} onOpen={(r) => openAt({ doc: r.docId, anchor: r.anchor })} />
   } else {
     body = (
       <>
@@ -280,6 +317,16 @@ export function HelpPanel() {
                 All guides
               </Button>
             </div>
+            <Input
+              type="search"
+              data-testid="help-panel-search-input"
+              aria-label="Search help"
+              placeholder="Search all help"
+              className="mt-2 h-9"
+              value={query}
+              disabled={state.status !== 'ready'}
+              onChange={(e) => openSearch(e.target.value)}
+            />
           </div>
 
           <div ref={bodyRef} data-testid="help-panel-body" className="relative flex-1 overflow-y-auto px-4 py-4">

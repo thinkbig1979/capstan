@@ -239,3 +239,92 @@ describe('HelpPanel guide index', () => {
     expect(Object.values(byLabel).flat()).toHaveLength(docs.length)
   })
 })
+
+describe('HelpPanel search', () => {
+  const searchInput = () => screen.findByTestId('help-panel-search-input')
+  const type = async (value: string) => fireEvent.change(await searchInput(), { target: { value } })
+
+  it('rclone lists "Cloud sync (optional)" in Configuring Backups; clicking opens that heading, focused', async () => {
+    renderPanel('/settings/backup')
+    await openFromButton()
+    await topic()
+    await type('rclone')
+
+    const results = await screen.findAllByTestId('help-search-result')
+    const hit = results.find((r) => r.textContent?.includes('Cloud sync (optional)'))
+    expect(hit).toBeDefined()
+    expect(hit).toHaveTextContent('Configuring Backups')
+
+    fireEvent.click(hit!)
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Cloud sync (optional)' })
+    await waitFor(() => expect(heading).toHaveFocus())
+    expect(await topic()).toHaveTextContent('Cloud sync (optional)')
+    expect(screen.queryAllByTestId('help-search-result')).toHaveLength(0)
+  })
+
+  it('Back from a result returns to the results with the query still in the box', async () => {
+    renderPanel('/settings/backup')
+    await openFromButton()
+    await topic()
+    await type('rclone')
+    fireEvent.click((await screen.findAllByTestId('help-search-result'))[0])
+    await topic()
+
+    fireEvent.click(screen.getByTestId('help-panel-back-button'))
+    expect((await screen.findAllByTestId('help-search-result')).length).toBeGreaterThan(0)
+    expect(screen.getByTestId('help-panel-search-input')).toHaveValue('rclone')
+  })
+
+  it('a query with no match shows the empty state naming the query', async () => {
+    renderPanel('/settings/backup')
+    await openFromButton()
+    await topic()
+    await type('zzqx')
+
+    expect(await screen.findByTestId('help-search-empty')).toHaveTextContent('No help matches “zzqx”')
+    expect(screen.queryAllByTestId('help-search-result')).toHaveLength(0)
+  })
+
+  it('clearing the box shows the guide index, not an empty-results message', async () => {
+    renderPanel('/settings/backup')
+    await openFromButton()
+    await topic()
+    await type('rclone')
+    await screen.findAllByTestId('help-search-result')
+    await type('')
+
+    expect(await screen.findByTestId('help-panel-index')).toBeInTheDocument()
+    expect(screen.queryByTestId('help-search-empty')).toBeNull()
+  })
+
+  it('opens in search mode with the query filled when the store says so (palette entry)', async () => {
+    renderPanel('/')
+    act(() => useHelpStore.getState().openSearch('retention'))
+    expect(await screen.findByTestId('help-panel-search-input')).toHaveValue('retention')
+    const results = await screen.findAllByTestId('help-search-result')
+    expect(results.some((r) => r.textContent?.includes('Retention and pruning'))).toBe(true)
+  })
+
+  it('the box is disabled until the library has loaded, and no results are made up meanwhile', async () => {
+    const pending = deferred<HelpDoc[]>()
+    loadMock.mockImplementation(() => pending.promise)
+    renderPanel('/settings/backup')
+    await openFromButton()
+
+    expect(await searchInput()).toBeDisabled()
+    expect(screen.queryByTestId('help-search-empty')).toBeNull()
+
+    await act(async () => pending.resolve(await loader.actual!()))
+    await waitFor(() => expect(screen.getByTestId('help-panel-search-input')).toBeEnabled())
+  })
+
+  it('a failed load shows Retry, not "No help matches"', async () => {
+    loadMock.mockImplementationOnce(() => Promise.reject(new Error('no docs bundled')))
+    renderPanel('/settings/backup')
+    await openFromButton()
+    act(() => useHelpStore.getState().openSearch('rclone'))
+
+    expect(await screen.findByText('Could not load help.')).toBeInTheDocument()
+    expect(screen.queryByTestId('help-search-empty')).toBeNull()
+  })
+})
